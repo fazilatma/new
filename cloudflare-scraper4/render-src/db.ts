@@ -249,6 +249,10 @@ export async function reapStalledJobs(minutes = 30): Promise<number> {
   const result = await pool.query(`UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog',finished_at=now(),updated_at=now() WHERE status='running' AND updated_at < now()-make_interval(mins=>$1)`, [Math.max(5,minutes)]);
   return result.rowCount || 0;
 }
+export async function recoverFailedAndStalledJobs(minutes = 30): Promise<number> {
+  const result = await pool.query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=false,error=NULL,finished_at=NULL,updated_at=now() WHERE status IN ('failed','stopped') OR (status='running' AND updated_at < now()-make_interval(mins=>$1))`, [Math.max(1, minutes)]);
+  return result.rowCount || 0;
+}
 
 export async function enqueueDueProfiles(): Promise<number> {
   const { rows } = await pool.query(`SELECT id,data FROM profiles p WHERE enabled=true AND interval_minutes>0
