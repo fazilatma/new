@@ -24,7 +24,8 @@
     "worker:deploy": "node scripts/deploy-cloudflare.mjs",
     "worker:db:local": "wrangler d1 migrations apply DB --local",
     "worker:db:remote": "wrangler d1 migrations apply DB --remote",
-    "deploy:universal": "node scripts/universal-deployer.mjs"
+    "deploy:universal": "node scripts/universal-deployer.mjs",
+    "deployer:ui": "node scripts/local-deployer-ui.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.1",
