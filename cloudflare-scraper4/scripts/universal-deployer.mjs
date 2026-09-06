@@ -25,11 +25,17 @@
  *   # open the forwarded port from the Codespaces Ports panel
  *
  * Termux / Android, offline bundle workflow:
- *   pkg update && pkg install -y nodejs git tar gzip
- *   git clone https://github.com/fazilatma/new.git
- *   cd new/cloudflare-scraper4
+ *   # Paste plain text only; do not paste Markdown links like [https://...](https://...).
+ *   cd "$HOME"
+ *   pkg update -y && pkg upgrade -y
+ *   pkg install -y git nodejs-lts python make clang tar gzip
+ *   rm -rf "$HOME/new"
+ *   git config --global --unset-all credential.helper || true
+ *   git clone --depth 1 --branch arena/01a0765b-new https://github.com/fazilatma/new.git "$HOME/new"
+ *   cd "$HOME/new/cloudflare-scraper4"
  *   npm install --ignore-scripts
  *   node scripts/universal-deployer.mjs --env termux-offline --mode prepare --out .deploy/termux
+ *   # If GitHub asks for a password, passwords are unsupported; use gh auth login or SSH.
  *   # copy/use the generated files from .deploy/termux
  *
  * Cloudflare Workers deployment:

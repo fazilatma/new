@@ -247,15 +247,27 @@ function page(token) { return `<!doctype html>
 <div id="dash" class="panel active"><div class="card"><h2>Project status</h2><p class="muted">Start here. This deployer runs first; the scraper only starts when you click the local scraper button.</p><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">npm ci</button><button onclick="run('localBuild')">Build local scraper</button><button onclick="run('test')">Run tests</button><button onclick="run('build')">Build Worker</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
 <div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">This starts the real local Node/Render scraper, not Cloudflare: <span class="kbd">npm run render:build && npm run render:start</span> on port ${scraperPort}. Start it first, then manually press Open scraper dashboard to open a new browser window.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><p class="muted small">If the scraper page says database is not configured, start PostgreSQL locally and set DATABASE_URL, or use the Docker command in the Guide tab.</p><pre id="scraperLog"></pre></div></div>
 <div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div>
-<div id="guide" class="panel"><div class="card"><h2>Full copy-paste local commands</h2><pre># 1) Run deployer first
-git clone https://github.com/fazilatma/new.git
+<div id="guide" class="panel"><div class="card"><h2>Full copy-paste local commands</h2><pre># 1) Run deployer first on desktop/Codespaces
+git clone --branch arena/01a0765b-new https://github.com/fazilatma/new.git
 cd new
-git checkout arena/01a0765b-new
-git pull origin arena/01a0765b-new
+git pull --ff-only origin arena/01a0765b-new
 npm install
 cd cloudflare-scraper4
 npm install
 npm run deployer:ui
+
+# Termux / Android: run from HOME and paste plain URLs, not Markdown links
+cd "$HOME"
+pkg update -y
+pkg upgrade -y
+pkg install -y git nodejs-lts python make clang
+rm -rf "$HOME/new"
+git config --global --unset-all credential.helper || true
+git clone --depth 1 --branch arena/01a0765b-new https://github.com/fazilatma/new.git "$HOME/new"
+cd "$HOME/new/cloudflare-scraper4"
+npm install --ignore-scripts
+npm run deployer:ui
+# If GitHub asks for a password, use gh auth login or SSH; passwords are not supported.
 
 # 2) Optional PostgreSQL with Docker for real local data
 docker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16

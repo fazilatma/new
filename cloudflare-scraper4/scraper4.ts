@@ -31,13 +31,20 @@
  *   # open the forwarded port from the Codespaces Ports panel
  *
  * Termux / Android local mode:
- *   pkg update && pkg install -y nodejs git
- *   git clone https://github.com/fazilatma/new.git
- *   cd new/cloudflare-scraper4
+ *   # Paste plain text only; do not paste Markdown links like [https://...](https://...).
+ *   # Run from Termux HOME, not /storage/emulated/0.
+ *   cd "$HOME"
+ *   pkg update -y && pkg upgrade -y
+ *   pkg install -y git nodejs-lts python make clang
+ *   rm -rf "$HOME/new"
+ *   git config --global --unset-all credential.helper || true
+ *   git clone --depth 1 --branch arena/01a0765b-new https://github.com/fazilatma/new.git "$HOME/new"
+ *   cd "$HOME/new/cloudflare-scraper4"
  *   npm install --ignore-scripts
  *   npm run render:build
  *   PORT=3000 npm run render:start
  *   # open http://127.0.0.1:3000 in the phone browser
+ *   # If GitHub asks for a password, passwords are unsupported; use gh auth login or SSH.
  *   # Note: desktop Chromium for Playwright/Puppeteer may not be available in Termux.
  *
  * Cloudflare Worker local development:
