@@ -1,0 +1,64 @@
+{
+  "profiles": {
+    "snappshop-kitchen-auto": {
+      "id": "snappshop-kitchen-auto",
+      "name": "SnappShop Kitchen Appliances — Auto",
+      "url": "https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1",
+      "enabled": true,
+      "pages": 3,
+      "pagination": "query_page",
+      "extractionEngine": "auto",
+      "paginationValue": "page",
+      "selectors": {
+        "container": "a[href*=\"/product/\"], [data-testid*=\"product\"], article, li",
+        "title": "[data-testid*=\"title\"], [class*=\"title\"], [class*=\"name\"], h2, h3",
+        "price": "[data-testid*=\"price\"], [class*=\"price\"], [class*=\"amount\"]",
+        "link": "a[href]",
+        "image": "img"
+      },
+      "syncWoo": false,
+      "syncBasalam": false,
+      "intervalMinutes": 0
+    },
+    "snappshop-kitchen-next-data": {
+      "id": "snappshop-kitchen-next-data",
+      "name": "SnappShop Kitchen Appliances — Next.js Data",
+      "url": "https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1",
+      "enabled": true,
+      "pages": 3,
+      "pagination": "query_page",
+      "extractionEngine": "next_data",
+      "paginationValue": "page",
+      "selectors": {
+        "container": "a[href*=\"/product/\"], [data-testid*=\"product\"], article, li",
+        "title": "[data-testid*=\"title\"], [class*=\"title\"], [class*=\"name\"], h2, h3",
+        "price": "[data-testid*=\"price\"], [class*=\"price\"], [class*=\"amount\"]",
+        "link": "a[href]",
+        "image": "img"
+      },
+      "syncWoo": false,
+      "syncBasalam": false,
+      "intervalMinutes": 0
+    },
+    "snappshop-kitchen-heuristic": {
+      "id": "snappshop-kitchen-heuristic",
+      "name": "SnappShop Kitchen Appliances — Heuristic Cards",
+      "url": "https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1",
+      "enabled": true,
+      "pages": 3,
+      "pagination": "query_page",
+      "extractionEngine": "heuristic",
+      "paginationValue": "page",
+      "selectors": {
+        "container": "a[href*=\"/product/\"], [data-testid*=\"product\"], article, li",
+        "title": "[data-testid*=\"title\"], [class*=\"title\"], [class*=\"name\"], h2, h3",
+        "price": "[data-testid*=\"price\"], [class*=\"price\"], [class*=\"amount\"]",
+        "link": "a[href]",
+        "image": "img"
+      },
+      "syncWoo": false,
+      "syncBasalam": false,
+      "intervalMinutes": 0
+    }
+  }
+}
