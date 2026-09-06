@@ -18,9 +18,9 @@
 
 const DEPLOY_VERSION = "1.0.0";
 const DEFAULTS = {
-  repo: "fazilatma/code",
-  branch: "arena/01a0176d-code",
-  path: "scraper4.worker.js",
+  repo: "fazilatma/new",
+  branch: "arena/01a0765b-new",
+  path: "cloudflare-scraper4/scraper4.worker.js",
   worker: "scraper4-cloudflare",
   compatibilityDate: "2026-08-19"
 };
@@ -31,6 +31,26 @@ const SECURITY_HEADERS = {
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
   "cache-control": "no-store"
 };
+
+
+if (typeof process !== "undefined" && Array.isArray(process.argv) && /deploy-worker\.ts$/.test(process.argv[1] || "")) {
+  console.log(`deploy-worker.ts is a Cloudflare Worker source file, not a Node.js CLI command.
+
+Nothing else happened because this file exports a Worker handler:
+
+  export default { fetch(request, env) { ... } }
+
+Use one of these instead:
+
+  cd cloudflare-scraper4
+  npm run deploy:universal -- --help
+  npm run deploy:universal -- --env cloudflare-worker --mode plan
+  npm run worker:dev
+  npm run worker:deploy
+
+If you want to use this deployer panel, create a separate Cloudflare Worker, paste/upload this file there, set DEPLOY_PASSWORD as a secret, then open that Worker URL in your browser.
+`);
+}
 
 export default {
   async fetch(request, env) {
