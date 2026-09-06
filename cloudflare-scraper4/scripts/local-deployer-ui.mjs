@@ -20,7 +20,7 @@ Open the printed URL in your browser. In GitHub Codespaces, forward the printed 
 
 const projectDir = resolve(process.cwd());
 const pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8'));
-const port = Number(process.env.DEPLOYER_UI_PORT || process.env.PORT || 8790);
+let port = Number(process.env.DEPLOYER_UI_PORT || process.env.PORT || 8790);
 const host = process.env.DEPLOYER_UI_HOST || '0.0.0.0';
 const token = process.env.DEPLOYER_UI_TOKEN || randomBytes(18).toString('base64url');
 const scraperPort = Number(process.env.SCRAPER_PORT || 8787);
@@ -198,12 +198,30 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, host, () => {
-  console.log(`\nLocal Deployer UI is running:`);
-  console.log(`  http://localhost:${port}/?token=${token}`);
-  console.log(`\nCodespaces: open forwarded port ${port}; keep the token in the URL.`);
-  console.log(`Project: ${projectDir}\n`);
-});
+function listenWithRetry(attempt = 0) {
+  server.once('error', error => {
+    if (error?.code === 'EADDRINUSE' && attempt < 10) {
+      console.log(`Port ${port} is busy, trying ${port + 1}...`);
+      port += 1;
+      listenWithRetry(attempt + 1);
+      return;
+    }
+    console.error(`Local Deployer UI failed to start: ${error?.message || error}`);
+    console.error('Try another port, for example: DEPLOYER_UI_PORT=8791 npm run deployer:ui');
+    process.exit(1);
+  });
+  server.listen(port, host, () => {
+    console.log(`
+Local Deployer UI is running:`);
+    console.log(`  http://localhost:${port}/?token=${token}`);
+    console.log(`
+Codespaces: open forwarded port ${port}; keep the token in the URL.`);
+    console.log(`Project: ${projectDir}
+`);
+  });
+}
+
+listenWithRetry();
 
 process.on('SIGINT', () => { stopScraper(); server.close(() => process.exit(0)); });
 process.on('SIGTERM', () => { stopScraper(); server.close(() => process.exit(0)); });
@@ -222,14 +240,14 @@ function page(token) { return `<!doctype html>
 npm ci
 npm run deployer:ui
 
-Open the printed URL. In Codespaces, forward port ${port} and keep ?token=... in the URL.
+Open the printed URL. In Codespaces, forward port ${port} and keep ?token=... in the URL. If port 8790 is busy, the server automatically tries the next ports.
 
 To run manually without UI:
 npm run worker:dev
 npm run deploy:universal -- --help</pre></div></div></section></main>
 <script>
 const TOKEN=${JSON.stringify(token)};let activeJob='';
-async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'content-type':'application/json','x-local-deployer-token':TOKEN,...(opt.headers||{})}});return r.json()}
+async function api(path,opt={}){try{const r=await fetch(path,{...opt,headers:{'content-type':'application/json','x-local-deployer-token':TOKEN,...(opt.headers||{})}});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d}catch(e){const el=document.getElementById('log')||document.getElementById('scraperLog');if(el)el.textContent='UI/API error: '+(e.message||e);throw e}}
 function tab(id,btn){document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
 function body(action){return JSON.stringify({action,env:env.value,scrapingLibs:libs.value,packageManager:pm.value,name:name.value,port:port.value,dryRun:true})}
 async function run(action){activeJob=action;document.getElementById('log').textContent='Starting '+action+'...';tab('jobs',document.querySelectorAll('.tabs button')[2]);await api('/api/job',{method:'POST',body:body(action)});pollJobs()}
