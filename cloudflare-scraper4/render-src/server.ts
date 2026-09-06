@@ -218,7 +218,7 @@ function legacyProducts(raw: unknown): Product[] {
 }
 function normalizeProfile(raw: any): Profile {
   const url = new URL(String(raw.url || '')); if (!['http:','https:'].includes(url.protocol)) throw new Error('Invalid profile URL');
-  const now = new Date().toISOString(); const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine; const selectors = { ...DEFAULT_SELECTORS, ...(typeof raw.selectors === 'string' ? JSON.parse(raw.selectors) : raw.selectors || {}) };
+  const now = new Date().toISOString(); const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine; const rawMaster=String(raw.extractionEngineMaster||raw.fetch_engine_master||raw.engineMaster||'') as ExtractionEngine; const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined); const selectors = { ...DEFAULT_SELECTORS, ...(typeof raw.selectors === 'string' ? JSON.parse(raw.selectors) : raw.selectors || {}) };
   for (const key of ['container','title','price','link','image']) if (!selectors[key]) throw new Error(`selectors.${key} is required`);
   return { id: String(raw.id || idFromUrl(url.href)), name: String(raw.name || url.hostname), url: url.href, enabled: raw.enabled !== false,
     pages: Math.min(100,Math.max(1,Number(raw.pages)||1)), pagination: ['query_page','path_page','none'].includes(raw.pagination || raw.pagType) ? raw.pagination || raw.pagType : 'query_page',

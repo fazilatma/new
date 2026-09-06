@@ -24,6 +24,9 @@ export type Profile = {
   pages: number;
   pagination: 'query_page' | 'path_page' | 'none';
   extractionEngine: ExtractionEngine;
+  extractionEngineMaster?: ExtractionEngine;
+  extractionEngineHost?: string;
+  extractionEngineMs?: number;
   paginationValue: string;
   selectors: Selectors;
   titleSuffix: string;

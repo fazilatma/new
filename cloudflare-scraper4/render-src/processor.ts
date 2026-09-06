@@ -1,5 +1,5 @@
-import { allProducts, claimJob, getProfile, markMissingProducts, markProfileRun, stopRequested, updateJob, upsertProduct } from './db.js';
-import { mapLimit, pageUrl, scrapeDetails, scrapeList, transformProduct } from './scraper.js';
+import { allProducts, claimJob, getProfile, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
+import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import type { Job, Product } from './types.js';
 
@@ -22,7 +22,16 @@ export async function processOneJob(): Promise<boolean> {
       for (let page = 1; page <= profile.pages; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
-        const list = await scrapeList(url, profile.selectors, profile.extractionEngine); if (!list.length) { append(job, 'محصولی پیدا نشد', 'warning'); break; }
+        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster);
+        const list = scraped.products;
+        if (scraped.usedEngine && list.length && (profile.extractionEngine === 'auto' || profile.extractionEngineMaster !== scraped.usedEngine)) {
+          profile.extractionEngineMaster = scraped.usedEngine;
+          profile.extractionEngineHost = new URL(url).hostname;
+          profile.extractionEngineMs = scraped.elapsedMs;
+          await saveProfile({...profile, updatedAt: new Date().toISOString()});
+          append(job, `موتور مستر این پروفایل: ${scraped.usedEngine}${scraped.elapsedMs ? ` · ${scraped.elapsedMs}ms` : ''}`);
+        }
+        if (!list.length) { append(job, 'محصولی پیدا نشد', 'warning'); break; }
         for (const raw of list) { const p = transformProduct(raw, profile); if (!profile.minPrice || p.price >= profile.minPrice) found.set(p.sourceKey, p); }
         job.total = found.size; job.processed += list.length; await save(job);
       }

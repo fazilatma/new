@@ -31,8 +31,7 @@ export function pageUrl(profile: Profile, page: number): string {
   return url.href;
 }
 
-async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Product[]> {
-  const { text, url: finalUrl } = await safeText(url);
+function scrapeListCheerioFromHtml(text: string, finalUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(text); const products: Product[] = [];
   $(selectors.container).each((_index, element) => {
     const root = $(element); const title = firstText(root, selectors.title); if (!title) return;
@@ -46,14 +45,25 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
   });
   return products;
 }
-
-export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto'): Promise<Product[]> {
-  if (engine === 'cheerio' || engine === 'htmlrewriter') return scrapeListCheerio(url, selectors);
-  if (engine === 'playwright') return scrapeListWithPlaywright(url, selectors);
-  if (engine === 'puppeteer') return scrapeListWithPuppeteer(url, selectors);
-  if (engine === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, selectors);
+async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Product[]> {
   const { text, url: finalUrl } = await safeText(url);
+  return scrapeListCheerioFromHtml(text, finalUrl, selectors);
+}
+
+export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number};
+const RENDER_AUTO_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','playwright','puppeteer','crawlee_playwright'];
+function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine):ExtractionEngine[]{const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};if(requested!=='auto'){add(requested);return out}add(master);for(const engine of RENDER_AUTO_ENGINES)add(engine);return out}
+
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine): Promise<ScrapeListResult> {
+  const started=Date.now();
+  let sourcePromise:Promise<{text:string;url:string}>|null=null;
+  const source=()=>sourcePromise ||= safeText(url);
   const pick = async (name: ExtractionEngine) => {
+    if (name === 'playwright') return scrapeListWithPlaywright(url, selectors);
+    if (name === 'puppeteer') return scrapeListWithPuppeteer(url, selectors);
+    if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, selectors);
+    const { text, url: finalUrl } = await source();
+    if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, selectors);
     if (name === 'jsonld') return jsonLdProducts(text, finalUrl);
     if (name === 'next_data') return nextDataProducts(text, finalUrl);
     if (name === 'metadata') return metadataProduct(text, finalUrl);
@@ -61,13 +71,17 @@ export async function scrapeList(url: string, selectors: Selectors, engine: Extr
     if (name === 'heuristic') return heuristicProducts(text, finalUrl);
     return [] as Product[];
   };
-  if (engine !== 'auto') return dedupe(await pick(engine));
-  for (const name of ['jsonld','next_data','script_json','heuristic','metadata'] as ExtractionEngine[]) {
-    const products = dedupe(await pick(name));
-    if (products.length) return products;
+  for(const name of engineOrder(engine,master)){
+    try{
+      const products=dedupe(await pick(name));
+      if(products.length||engine!=='auto')return{products,usedEngine:name,elapsedMs:Date.now()-started};
+    }catch(error){
+      if(engine!=='auto')throw error;
+    }
   }
-  return scrapeListCheerio(url, selectors);
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started};
 }
+export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto'): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine)).products; }
 
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
   if (driver === 'playwright') {

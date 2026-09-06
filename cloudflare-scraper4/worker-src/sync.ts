@@ -55,6 +55,11 @@ function cartesian(groups:VariationGroup[]):Array<Array<{name:string;option:stri
   return rows;
 }
 
+function basalamPrice(product:Product,percent=0):number{
+  const base=Math.round(product.price*(1+percent/100));
+  return /(?:ریال|rial|irr)/i.test(product.priceText||'')?base:base*10;
+}
+
 export async function syncBasalam(product:Product,profile:Profile):Promise<Array<{shop:string;action:'created'|'updated';id:number}>>{
   const c=(await loadConnections()).basalam;
   if(!c.token||!c.vendorId)throw new Error('تنظیمات باسلام کامل نیست');
@@ -64,7 +69,7 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Array
   for(const account of accounts){
     const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     let existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;
-    const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`,price=Math.round(product.price*(1+(account.pricePercent||0)/100));
+    const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`,price=basalamPrice(product,account.pricePercent||0);
     const payload:any={name:product.title,price,stock:product.stock??c.stock,description:(product.longDesc||product.shortDesc||'')+(product.variations?.length?`\n\nتنوع‌ها: ${product.variations.join('، ')}`:''),photo:product.image||undefined,category_id:categories[0]||undefined,weight:product.weight||c.weight,package_weight:c.packageWeight,preparation_days:c.preparationDays};
     let response:Response|undefined,body:any={};
     const attempts=categories.length?categories:[undefined];

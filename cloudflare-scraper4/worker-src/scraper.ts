@@ -417,18 +417,29 @@ class NextLinkHandler {
   constructor(private baseUrl:string){}
   element(element:HtmlElement):void{if(!this.url)this.url=canonicalUrl(firstAttribute(element,LINK_ATTRS),this.baseUrl)}
 }
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto'):Promise<{products:Product[];nextUrl:string;url:string}>{
+type EngineResult={products:Product[];usedEngine:ExtractionEngine};
+const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+const WORKER_AUTO_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','htmlrewriter'];
+function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine):ExtractionEngine[]{
+  const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
+  if(requested!=='auto'){add(requested);return out}
+  if(master&&!NODE_ONLY_ENGINES.has(master))add(master);
+  for(const engine of WORKER_AUTO_ENGINES)add(engine);
+  return out;
+}
+
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number}>{
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
-  const products=await parseByEngine(page.text,page.url,selectors,engine);
-  return {products,nextUrl:next.url,url:page.url};
+  const started=Date.now(),result=await parseByEngine(page.text,page.url,selectors,engine,master);
+  return {products:result.products,nextUrl:next.url,url:page.url,usedEngine:result.usedEngine,elapsedMs:Date.now()-started};
 }
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
 
-async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine):Promise<Product[]>{
-  if(['playwright','puppeteer','crawlee_playwright'].includes(engine))throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
-  if(engine==='htmlrewriter')return parseCards(html,baseUrl,selectors);
+async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine):Promise<EngineResult>{
+  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
+    if(name==='htmlrewriter')return parseCards(html,baseUrl,selectors);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);
     if(name==='next_data')return extractNextDataProducts(html,baseUrl);
     if(name==='metadata')return extractMetadataProduct(html,baseUrl);
@@ -436,12 +447,11 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
     if(name==='heuristic')return extractHeuristicProducts(html,baseUrl);
     return [];
   };
-  if(engine!=='auto')return dedupeProducts(await tryOne(engine));
-  for(const name of ['jsonld','next_data','script_json','heuristic','metadata'] as ExtractionEngine[]){
+  for(const name of engineOrder(engine,master)){
     const products=dedupeProducts(await tryOne(name));
-    if(products.length)return products;
+    if(products.length||engine!=='auto')return{products,usedEngine:name};
   }
-  return parseCards(html,baseUrl,selectors);
+  return{products:[],usedEngine:engine};
 }
 function dedupeProducts(products:Product[]):Product[]{const seen=new Set<string>(),out:Product[]=[];for(const p of products){const key=p.sourceKey||p.url||p.title;if(!key||seen.has(key))continue;seen.add(key);out.push(p)}return out}
 function productFromObject(obj:any,baseUrl:string):Product|null{if(!obj||typeof obj!=='object')return null;const title=cleanText(String(obj.name||obj.title||obj.productName||obj.label||''));const offer=Array.isArray(obj.offers)?obj.offers[0]:obj.offers||obj.offer||{};const priceText=cleanText(String(obj.price||obj.finalPrice||obj.salePrice||obj.sellingPrice||obj.priceText||offer.price||offer.lowPrice||offer.highPrice||''));const rawUrl=String(obj.url||obj.href||obj.link||obj.webUrl||obj.canonicalUrl||(typeof obj.slug==='string'?(obj.slug.startsWith('/')?obj.slug:`/product/${obj.slug}`):'')||'');const url=canonicalUrl(rawUrl,baseUrl);const image=imageUrl(firstImageValue(obj.image||obj.images||obj.thumbnail||obj.cover||obj.imageUrl||obj.picture),baseUrl);if(!title||(!url&&!image&&!priceText))return null;return{sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:cleanText(String(obj.sku||obj.id||'')),shortDesc:cleanText(String(obj.description||'')),longDesc:'',brand:cleanText(String(typeof obj.brand==='object'?obj.brand?.name:obj.brand||'')),stock:undefined,weight:undefined,category:cleanText(String(obj.category||'')),tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}}

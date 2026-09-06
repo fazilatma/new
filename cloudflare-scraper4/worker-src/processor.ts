@@ -1,4 +1,4 @@
-import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, setState, stopRequested, updateJob, upsertProduct } from './db.js';
+import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
@@ -67,7 +67,12 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   if(!checkpoint.products){
     job.phase='list';
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
-    const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine);
+    const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+    if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
+      profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;
+      await saveProfile({...profile,updatedAt:new Date().toISOString()});
+      append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
+    }
     checkpoint.url=page.url;checkpoint.nextUrl=page.nextUrl;checkpoint.index=0;
     const pageProducts=page.products.map(raw=>transformProduct(raw,profile)).filter(product=>!profile.minPrice||product.price>=profile.minPrice);
     checkpoint.products=pageProducts.filter(product=>!checkpoint.seen.includes(product.sourceKey));

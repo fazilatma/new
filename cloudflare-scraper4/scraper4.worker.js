@@ -14427,20 +14427,34 @@ var NextLinkHandler = class {
     if (!this.url) this.url = canonicalUrl(firstAttribute(element, LINK_ATTRS), this.baseUrl);
   }
 };
-async function scrapeListPage(url, selectors, nextSelector = "", indirect = false, engine = "auto") {
+var NODE_ONLY_ENGINES = /* @__PURE__ */ new Set(["playwright", "puppeteer", "crawlee_playwright"]);
+var WORKER_AUTO_ENGINES = ["jsonld", "next_data", "script_json", "heuristic", "metadata", "htmlrewriter"];
+function engineOrder(requested, master) {
+  const out = [], add = (engine) => {
+    if (engine && !out.includes(engine)) out.push(engine);
+  };
+  if (requested !== "auto") {
+    add(requested);
+    return out;
+  }
+  if (master && !NODE_ONLY_ENGINES.has(master)) add(master);
+  for (const engine of WORKER_AUTO_ENGINES) add(engine);
+  return out;
+}
+async function scrapeListPage(url, selectors, nextSelector = "", indirect = false, engine = "auto", master) {
   const page = await sourceText(url, indirect), next = new NextLinkHandler(page.url);
   if (nextSelector) {
     const rewriter = new HTMLRewriter();
     for (const selector of selectorParts(nextSelector)) safeOn(rewriter, selector, next);
     await rewriter.transform(new Response(page.text)).text();
   }
-  const products = await parseByEngine(page.text, page.url, selectors, engine);
-  return { products, nextUrl: next.url, url: page.url };
+  const started = Date.now(), result = await parseByEngine(page.text, page.url, selectors, engine, master);
+  return { products: result.products, nextUrl: next.url, url: page.url, usedEngine: result.usedEngine, elapsedMs: Date.now() - started };
 }
-async function parseByEngine(html, baseUrl, selectors, engine) {
-  if (["playwright", "puppeteer", "crawlee_playwright"].includes(engine)) throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
-  if (engine === "htmlrewriter") return parseCards(html, baseUrl, selectors);
+async function parseByEngine(html, baseUrl, selectors, engine, master) {
+  if (engine !== "auto" && NODE_ONLY_ENGINES.has(engine)) throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
   const tryOne = async (name) => {
+    if (name === "htmlrewriter") return parseCards(html, baseUrl, selectors);
     if (name === "jsonld") return parseJsonLdProducts(html, baseUrl);
     if (name === "next_data") return extractNextDataProducts(html, baseUrl);
     if (name === "metadata") return extractMetadataProduct(html, baseUrl);
@@ -14448,12 +14462,11 @@ async function parseByEngine(html, baseUrl, selectors, engine) {
     if (name === "heuristic") return extractHeuristicProducts(html, baseUrl);
     return [];
   };
-  if (engine !== "auto") return dedupeProducts(await tryOne(engine));
-  for (const name of ["jsonld", "next_data", "script_json", "heuristic", "metadata"]) {
+  for (const name of engineOrder(engine, master)) {
     const products = dedupeProducts(await tryOne(name));
-    if (products.length) return products;
+    if (products.length || engine !== "auto") return { products, usedEngine: name };
   }
-  return parseCards(html, baseUrl, selectors);
+  return { products: [], usedEngine: engine };
 }
 function dedupeProducts(products) {
   const seen = /* @__PURE__ */ new Set(), out = [];
@@ -14765,6 +14778,10 @@ function cartesian(groups) {
   for (const group of groups) rows2 = rows2.flatMap((row) => group.values.slice(0, 100).map((value) => [...row, { name: group.name, option: value, value }])).slice(0, 100);
   return rows2;
 }
+function basalamPrice(product, percent = 0) {
+  const base = Math.round(product.price * (1 + percent / 100));
+  return /(?:ریال|rial|irr)/i.test(product.priceText || "") ? base : base * 10;
+}
 async function syncBasalam(product, profile) {
   const c = (await loadConnections()).basalam;
   if (!c.token || !c.vendorId) throw new Error("\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0628\u0627\u0633\u0644\u0627\u0645 \u06A9\u0627\u0645\u0644 \u0646\u06CC\u0633\u062A");
@@ -14774,7 +14791,7 @@ async function syncBasalam(product, profile) {
   for (const account of accounts) {
     const accountKey = String(account.vendorId), legacy = account === accounts[0] ? await getRemoteId(profile.id, product.sourceKey, "basalam") : null;
     let existing = await getDestinationId(profile.id, product.sourceKey, "basalam", accountKey) || legacy;
-    const base = `${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`, price = Math.round(product.price * (1 + (account.pricePercent || 0) / 100));
+    const base = `${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`, price = basalamPrice(product, account.pricePercent || 0);
     const payload = { name: product.title, price, stock: product.stock ?? c.stock, description: (product.longDesc || product.shortDesc || "") + (product.variations?.length ? `
 
 \u062A\u0646\u0648\u0639\u200C\u0647\u0627: ${product.variations.join("\u060C ")}` : ""), photo: product.image || void 0, category_id: categories[0] || void 0, weight: product.weight || c.weight, package_weight: c.packageWeight, preparation_days: c.preparationDays };
@@ -14905,7 +14922,14 @@ async function runScrapeChunk(job, profile) {
   if (!checkpoint.products) {
     job.phase = "list";
     append(job, `\u0635\u0641\u062D\u0647 ${checkpoint.page}: ${checkpoint.url}`);
-    const page = await scrapeListPage(checkpoint.url, profile.selectors, profile.pagination === "next_selector" ? profile.paginationValue : "", Boolean(profile.networkIndirect), profile.extractionEngine);
+    const page = await scrapeListPage(checkpoint.url, profile.selectors, profile.pagination === "next_selector" ? profile.paginationValue : "", Boolean(profile.networkIndirect), profile.extractionEngine, profile.extractionEngineMaster);
+    if (page.usedEngine && page.products.length && (profile.extractionEngine === "auto" || profile.extractionEngineMaster !== page.usedEngine)) {
+      profile.extractionEngineMaster = page.usedEngine;
+      profile.extractionEngineHost = new URL(page.url).hostname;
+      profile.extractionEngineMs = page.elapsedMs || 0;
+      await saveProfile({ ...profile, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+      append(job, `\u0645\u0648\u062A\u0648\u0631 \u0645\u0633\u062A\u0631 \u0627\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644: ${page.usedEngine}${page.elapsedMs ? ` \xB7 ${page.elapsedMs}ms` : ""}`);
+    }
     checkpoint.url = page.url;
     checkpoint.nextUrl = page.nextUrl;
     checkpoint.index = 0;
@@ -16789,6 +16813,8 @@ function normalizeProfile(raw2) {
   }
   const pagination = String(raw2.pagination || raw2.pagType || "query_page");
   const engine = String(raw2.extractionEngine || raw2.scrapingEngine || raw2.engine || "auto");
+  const rawMaster = String(raw2.extractionEngineMaster || raw2.fetch_engine_master || raw2.engineMaster || "");
+  const master = ["htmlrewriter", "jsonld", "next_data", "metadata", "script_json", "heuristic", "playwright", "puppeteer", "crawlee_playwright"].includes(rawMaster) ? rawMaster : void 0;
   const target = String(sync.target || "");
   const indirect = on(raw2.networkIndirect ?? raw2.net_indirect);
   const fallbackIds = raw2.basalamFallbackCategoryIds ?? raw2.bslFallbackCatIds;
@@ -16800,6 +16826,9 @@ function normalizeProfile(raw2) {
     pages: Math.min(100, Math.max(1, Number(raw2.pages) || 1)),
     pagination: ["query_page", "query_custom", "path_page", "path_pattern", "full_pattern", "next_selector", "none"].includes(pagination) ? pagination : "query_page",
     extractionEngine: ["auto", "htmlrewriter", "jsonld", "next_data", "metadata", "script_json", "heuristic", "playwright", "puppeteer", "crawlee_playwright"].includes(engine) ? engine : "auto",
+    extractionEngineMaster: master,
+    extractionEngineHost: String(raw2.extractionEngineHost || raw2.fetch_engine_host || ""),
+    extractionEngineMs: Math.max(0, Number(raw2.extractionEngineMs || raw2.fetch_engine_ms) || 0),
     paginationValue: String(raw2.paginationValue || raw2.pagVal || "page"),
     selectors,
     gallery: gallery || void 0,

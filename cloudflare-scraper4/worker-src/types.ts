@@ -42,6 +42,9 @@ export type Profile = {
   pages: number;
   pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none';
   extractionEngine: ExtractionEngine;
+  extractionEngineMaster?: ExtractionEngine;
+  extractionEngineHost?: string;
+  extractionEngineMs?: number;
   paginationValue: string;
   selectors: Selectors;
   gallery?: GalleryConfig;
