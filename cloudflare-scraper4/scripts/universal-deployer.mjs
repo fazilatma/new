@@ -21,7 +21,7 @@ const SCRAPING_LIBRARY_GROUPS = {
   },
   browser: {
     description: 'JavaScript rendering engines for Node.js hosts, not Cloudflare Workers',
-    deps: ['playwright', 'puppeteer-core']
+    deps: ['playwright', 'puppeteer', 'puppeteer-core']
   },
   crawler: {
     description: 'Crawler scheduling, rate limiting, robots and queue helpers',

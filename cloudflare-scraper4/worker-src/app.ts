@@ -455,7 +455,7 @@ export function normalizeProfile(raw:any):Profile {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(1,Number(raw.pages)||1)),
     pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
-    extractionEngine:['auto','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic'].includes(engine)?engine:'auto',
+    extractionEngine:['auto','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
     priceMode:['none','add','percent','multiply'].includes(raw.priceMode)?raw.priceMode:'none',priceValue:Number(raw.priceValue??raw.priceVal)||0,
     roundPrice:Math.max(0,Number(raw.roundPrice)||0),minPrice:Math.max(0,Number(raw.minPrice)||0),wooCategoryId:Number(raw.wooCategoryId)||0,

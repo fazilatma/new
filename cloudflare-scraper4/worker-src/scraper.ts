@@ -426,6 +426,7 @@ export async function scrapeListPage(url:string,selectors:Selectors,nextSelector
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
 
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine):Promise<Product[]>{
+  if(['playwright','puppeteer','crawlee_playwright'].includes(engine))throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
   if(engine==='htmlrewriter')return parseCards(html,baseUrl,selectors);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);

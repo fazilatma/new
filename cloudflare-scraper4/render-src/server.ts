@@ -9,7 +9,7 @@ import { config, assertConfig } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { createBackup, createJob, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, migrate, pool, profileStats, reapStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, updateJob, upsertProduct } from './db.js';
-import { DEFAULT_SELECTORS, type Product, type Profile } from './types.js';
+import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
@@ -218,10 +218,11 @@ function legacyProducts(raw: unknown): Product[] {
 }
 function normalizeProfile(raw: any): Profile {
   const url = new URL(String(raw.url || '')); if (!['http:','https:'].includes(url.protocol)) throw new Error('Invalid profile URL');
-  const now = new Date().toISOString(); const selectors = { ...DEFAULT_SELECTORS, ...(typeof raw.selectors === 'string' ? JSON.parse(raw.selectors) : raw.selectors || {}) };
+  const now = new Date().toISOString(); const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine; const selectors = { ...DEFAULT_SELECTORS, ...(typeof raw.selectors === 'string' ? JSON.parse(raw.selectors) : raw.selectors || {}) };
   for (const key of ['container','title','price','link','image']) if (!selectors[key]) throw new Error(`selectors.${key} is required`);
   return { id: String(raw.id || idFromUrl(url.href)), name: String(raw.name || url.hostname), url: url.href, enabled: raw.enabled !== false,
     pages: Math.min(100,Math.max(1,Number(raw.pages)||1)), pagination: ['query_page','path_page','none'].includes(raw.pagination || raw.pagType) ? raw.pagination || raw.pagType : 'query_page',
+    extractionEngine: ['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
     paginationValue: String(raw.paginationValue || raw.pagVal || 'page'), selectors, titleSuffix: String(raw.titleSuffix || ''),
     priceMode: ['none','add','percent','multiply'].includes(raw.priceMode) ? raw.priceMode : 'none', priceValue: Number(raw.priceValue ?? raw.priceVal) || 0,
     roundPrice: Math.max(0,Number(raw.roundPrice)||0), minPrice: Math.max(0,Number(raw.minPrice)||0), wooCategoryId: Number(raw.wooCategoryId)||0,

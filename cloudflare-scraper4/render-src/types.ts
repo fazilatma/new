@@ -14,6 +14,8 @@ export type Selectors = {
   gallery?: string;
 };
 
+export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
+
 export type Profile = {
   id: string;
   name: string;
@@ -21,6 +23,7 @@ export type Profile = {
   enabled: boolean;
   pages: number;
   pagination: 'query_page' | 'path_page' | 'none';
+  extractionEngine: ExtractionEngine;
   paginationValue: string;
   selectors: Selectors;
   titleSuffix: string;
