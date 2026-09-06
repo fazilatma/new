@@ -66,8 +66,10 @@ function currentGitInfo() {
 function updateFromGit({ force = false } = {}) {
   const branch = currentGitInfo().branch || 'arena/01a0765b-new';
   const steps = [];
+  steps.push(runSync('git', ['config', '--local', '--unset-all', 'credential.helper']));
+  steps.push(runSync('gh', ['auth', 'setup-git']));
   steps.push(runSync('git', ['fetch', 'origin', branch]));
-  if (!steps.at(-1).ok) return { ok: false, branch, steps };
+  if (!steps.at(-1).ok) return { ok: false, branch, steps, hint: 'If Termux still asks for a GitHub password, run: gh auth setup-git && git config --local --replace-all credential.helper "!gh auth git-credential"' };
   steps.push(force
     ? runSync('git', ['reset', '--hard', `origin/${branch}`])
     : runSync('git', ['pull', '--ff-only', 'origin', branch]));
@@ -264,11 +266,16 @@ pkg install -y git gh openssh nodejs-lts python make clang
 rm -rf "$HOME/new"
 git config --global --unset-all credential.helper || true
 gh auth login --web -h github.com -p https
+gh auth setup-git
 gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
+cd "$HOME/new"
+git config --local --unset-all credential.helper || true
+git config --local --replace-all credential.helper "!gh auth git-credential"
+git pull --ff-only origin arena/01a0765b-new
 cd "$HOME/new/cloudflare-scraper4"
 npm install --ignore-scripts
 npm run deployer:ui
-# If GitHub asks for a password, use gh auth login or SSH; passwords are not supported.
+# If git pull asks for a password, run: gh auth setup-git && git config --local --replace-all credential.helper "!gh auth git-credential"
 
 # 2) Optional PostgreSQL with Docker for real local data
 docker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16
