@@ -1,4 +1,69 @@
 #!/usr/bin/env node
+/**
+ * UNIVERSAL DEPLOYER — RUN INSTRUCTIONS
+ * =====================================
+ * This file is a real Node.js CLI deployer. It does not require Cloudflare
+ * unless you choose the `cloudflare-worker` environment.
+ *
+ * Common setup, after cloning/pulling the repository:
+ *   cd new/cloudflare-scraper4
+ *   npm install
+ *   node scripts/universal-deployer.mjs --help
+ *
+ * VS Code / local desktop:
+ *   cd new/cloudflare-scraper4
+ *   npm install
+ *   node scripts/universal-deployer.mjs --env vscode --mode prepare
+ *   npm run deployer:ui
+ *   # then open the printed http://localhost:8790 style URL
+ *
+ * GitHub Codespaces:
+ *   cd /workspaces/new/cloudflare-scraper4
+ *   npm install
+ *   node scripts/universal-deployer.mjs --env vscode --mode prepare
+ *   npm run deployer:ui
+ *   # open the forwarded port from the Codespaces Ports panel
+ *
+ * Termux / Android, offline bundle workflow:
+ *   pkg update && pkg install -y nodejs git tar gzip
+ *   git clone https://github.com/fazilatma/new.git
+ *   cd new/cloudflare-scraper4
+ *   npm install --ignore-scripts
+ *   node scripts/universal-deployer.mjs --env termux-offline --mode prepare --out .deploy/termux
+ *   # copy/use the generated files from .deploy/termux
+ *
+ * Cloudflare Workers deployment:
+ *   cd new/cloudflare-scraper4
+ *   npm ci
+ *   npm run worker:test
+ *   npx wrangler login
+ *   npm run worker:deploy
+ *   # or set CLOUDFLARE_API_TOKEN in your shell/CI, never commit it
+ *
+ * Render preparation:
+ *   cd new/cloudflare-scraper4
+ *   npm ci
+ *   node scripts/universal-deployer.mjs --env render --mode prepare
+ *   npm run render:build
+ *   PORT=3000 npm run render:start
+ *
+ * VPS server preparation:
+ *   sudo apt update && sudo apt install -y nodejs npm nginx
+ *   git clone https://github.com/fazilatma/new.git /opt/scraper4
+ *   cd /opt/scraper4/cloudflare-scraper4
+ *   npm ci
+ *   node scripts/universal-deployer.mjs --env vps --mode prepare --out .deploy/vps
+ *   # review generated systemd/Nginx installer files before running them as root
+ *
+ * Useful profiles:
+ *   --scraping-profile minimal   Cloudflare/edge-friendly parsers only
+ *   --scraping-profile node      Node HTTP + DOM scraping stack
+ *   --scraping-profile browser   Playwright/Puppeteer/Crawlee for Node/Render/VPS
+ *   --scraping-profile full      Everything curated by this deployer
+ *
+ * Safety note: proxy-related packages are for authorized networks only. Do not
+ * use this deployer or scraper to bypass access controls, terms, or robots rules.
+ */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { readdir, cp, rm } from 'node:fs/promises';

@@ -1,19 +1,94 @@
 /*
- * Scraper 4 — Cloudflare Workers single-file TypeScript edition
- * ------------------------------------------------------------------
- * No binding is required: strict single-file mode uses the Workers Cache API.
- * Optional durable upgrade: bind a KV namespace as SCRAPER_KV.
- * Recommended secrets:
- *   ADMIN_TOKEN, WOO_URL, WOO_KEY, WOO_SECRET, BASALAM_TOKEN, BASALAM_VENDOR_ID
+ * Scraper 4 — RUN INSTRUCTIONS
+ * ============================
+ * This file is the single-file Cloudflare Workers TypeScript edition. The same
+ * repository also contains a real Node/Render/VPS server in `render-src/` for
+ * running fully locally without depending on Cloudflare.
  *
- * Example wrangler.toml (kept out of this file intentionally):
- *   main = "scraper4.ts"
- *   compatibility_date = "2026-08-18"
- *   [[kv_namespaces]]
- *   binding = "SCRAPER_KV"
- *   id = "..."
- *   [triggers]
- *   crons = ["every fifteen minutes"] // use the equivalent cron expression
+ * Quick repository setup:
+ *   git clone https://github.com/fazilatma/new.git
+ *   cd new/cloudflare-scraper4
+ *   npm install
+ *
+ * VS Code / local desktop, no Cloudflare dependency:
+ *   cd new/cloudflare-scraper4
+ *   npm install
+ *   npx playwright install chromium        # optional, only for browser engines
+ *   npm run render:build
+ *   PORT=3000 npm run render:start
+ *   # open http://localhost:3000
+ *
+ * VS Code local deployer UI:
+ *   cd new/cloudflare-scraper4
+ *   npm run deployer:ui
+ *   # open the printed http://localhost:8790 style URL
+ *
+ * GitHub Codespaces:
+ *   cd /workspaces/new/cloudflare-scraper4
+ *   npm install
+ *   npm run render:build
+ *   PORT=3000 npm run render:start
+ *   # open the forwarded port from the Codespaces Ports panel
+ *
+ * Termux / Android local mode:
+ *   pkg update && pkg install -y nodejs git
+ *   git clone https://github.com/fazilatma/new.git
+ *   cd new/cloudflare-scraper4
+ *   npm install --ignore-scripts
+ *   npm run render:build
+ *   PORT=3000 npm run render:start
+ *   # open http://127.0.0.1:3000 in the phone browser
+ *   # Note: desktop Chromium for Playwright/Puppeteer may not be available in Termux.
+ *
+ * Cloudflare Worker local development:
+ *   cd new/cloudflare-scraper4
+ *   npm ci
+ *   npm run worker:db:local
+ *   npm run worker:dev
+ *   # open the local Wrangler URL, usually http://localhost:8787
+ *
+ * Cloudflare Worker deployment:
+ *   cd new/cloudflare-scraper4
+ *   npm ci
+ *   npm run worker:test
+ *   npx wrangler login
+ *   npm run worker:deploy
+ *   # or set CLOUDFLARE_API_TOKEN in CI; never commit secrets.
+ *
+ * VPS server:
+ *   sudo apt update && sudo apt install -y nodejs npm nginx
+ *   git clone https://github.com/fazilatma/new.git /opt/scraper4
+ *   cd /opt/scraper4/cloudflare-scraper4
+ *   npm ci
+ *   npx playwright install --with-deps chromium   # optional browser engines
+ *   npm run render:build
+ *   PORT=3000 npm run render:start
+ *   # for production, create a systemd service and reverse proxy with Nginx.
+ *   # The universal deployer can generate examples:
+ *   node scripts/universal-deployer.mjs --env vps --mode prepare --out .deploy/vps
+ *
+ * Engine compatibility:
+ *   Cloudflare Worker: auto, htmlrewriter, jsonld, next_data, metadata,
+ *     script_json, heuristic.
+ *   Local Node/Render/VPS: all above plus playwright, puppeteer,
+ *     crawlee_playwright.
+ *
+ * Original single-file Worker notes:
+ *   No binding is required: strict single-file mode uses the Workers Cache API.
+ *   Optional durable upgrade: bind a KV namespace as SCRAPER_KV.
+ *   Recommended secrets:
+ *     ADMIN_TOKEN, WOO_URL, WOO_KEY, WOO_SECRET, BASALAM_TOKEN, BASALAM_VENDOR_ID
+ *   Example wrangler.toml:
+ *     main = "scraper4.ts"
+ *     compatibility_date = "2026-08-18"
+ *     [[kv_namespaces]]
+ *     binding = "SCRAPER_KV"
+ *     id = "..."
+ *     [triggers]
+ *     crons = ["every fifteen minutes"] // use equivalent cron expression
+ *
+ * Safety note: scrape only sites and APIs where you have permission. Do not use
+ * this code to bypass access controls, anti-bot systems, terms, or robots rules.
  */
 
 import { Hono } from "hono";
