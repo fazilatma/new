@@ -23,7 +23,10 @@ const pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8'));
 let port = Number(process.env.DEPLOYER_UI_PORT || process.env.PORT || 8790);
 const host = process.env.DEPLOYER_UI_HOST || '0.0.0.0';
 const token = process.env.DEPLOYER_UI_TOKEN || randomBytes(18).toString('base64url');
-const scraperPort = Number(process.env.SCRAPER_PORT || 8787);
+const scraperPort = Number(process.env.SCRAPER_PORT || 3000);
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const scraperCommand = process.env.LOCAL_SCRAPER_COMMAND || `${npmCommand} run render:build && ${npmCommand} run render:start`;
+const defaultDatabaseUrl = 'postgresql://postgres:postgres@localhost:5432/scraper4';
 const maxLog = 120_000;
 const jobs = new Map();
 let scraper = null;
@@ -90,7 +93,7 @@ function runJob(name, command, args = [], options = {}) {
   if (existing?.running) return existing;
   const job = { name, command: [command, ...args].join(' '), running: true, exitCode: null, startedAt: new Date().toISOString(), finishedAt: null, log: '' };
   jobs.set(name, job);
-  const child = spawn(command, args, { cwd: projectDir, shell: false, env: { ...process.env, ...options.env } });
+  const child = spawn(command, args, { cwd: projectDir, shell: Boolean(options.shell), env: { ...process.env, ...options.env } });
   job.pid = child.pid;
   child.stdout.on('data', d => appendLog(name, d.toString()));
   child.stderr.on('data', d => appendLog(name, d.toString()));
@@ -102,9 +105,16 @@ function runJob(name, command, args = [], options = {}) {
 function startScraper() {
   if (scraper?.child && !scraper.child.killed) return scraper;
   scraperLog = '';
-  const child = spawn('npm', ['run', 'worker:dev'], { cwd: projectDir, shell: false, env: { ...process.env, PORT: String(scraperPort) } });
-  scraper = { running: true, pid: child.pid, startedAt: new Date().toISOString(), exitCode: null, child };
+  const env = {
+    ...process.env,
+    PORT: String(scraperPort),
+    RUN_WORKER_IN_WEB: process.env.RUN_WORKER_IN_WEB || 'true',
+    DATABASE_URL: process.env.DATABASE_URL || defaultDatabaseUrl
+  };
+  const child = spawn(scraperCommand, { cwd: projectDir, shell: true, env });
+  scraper = { running: true, pid: child.pid, startedAt: new Date().toISOString(), exitCode: null, child, command: scraperCommand, port: scraperPort };
   const add = d => { scraperLog += d.toString(); if (scraperLog.length > maxLog) scraperLog = scraperLog.slice(-maxLog); };
+  add(`[local scraper] ${scraperCommand}\n[local scraper] PORT=${scraperPort} DATABASE_URL=${env.DATABASE_URL.replace(/:[^:@/]+@/, ':***@')}\n\n`);
   child.stdout.on('data', add); child.stderr.on('data', add);
   child.on('exit', code => { scraper.running = false; scraper.exitCode = code ?? 0; add(`\n[scraper exited with code ${scraper.exitCode}]\n`); });
   child.on('error', e => { scraper.running = false; scraper.exitCode = 1; add(`\nERROR: ${e.message}\n`); });
@@ -159,7 +169,7 @@ function status() {
       staticHtmlDeployer: existsSync(join(projectDir, 'deploy-setup/static-universal-deployer.html'))
     },
     jobs: [...jobs.values()].map(({ child, ...j }) => j),
-    scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort } : { running: false, port: scraperPort }
+    scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort, command: scraper.command || scraperCommand } : { running: false, port: scraperPort, command: scraperCommand }
   };
 }
 
@@ -183,6 +193,7 @@ const server = http.createServer(async (req, res) => {
         install: ['npm', ['ci']],
         test: ['npm', ['run', 'worker:test']],
         build: ['npm', ['run', 'worker:build']],
+        localBuild: ['npm', ['run', 'render:build']],
         deployerPlan: ['node', universalArgs(body, 'plan')],
         deployerPrepare: ['node', universalArgs(body, 'prepare')]
       };
@@ -233,18 +244,35 @@ function page(token) { return `<!doctype html>
 <body><header><div class="wrap hero"><div class="title"><div class="logo"></div><div><h1>Scraper4 Local Deployer</h1><div class="muted">Advanced local UI for VS Code and GitHub Codespaces</div></div></div><div class="row"><span class="pill">Node ${process.version}</span><span class="pill">Protected by local token</span></div></div></header>
 <main class="wrap grid"><aside class="card"><h2>Wizard</h2><label>Environment</label><select id="env"><option value="vscode">VS Code</option><option value="termux-offline">Termux offline</option><option value="cloudflare-worker">Cloudflare Worker</option><option value="vercel">Vercel</option><option value="render">Render</option><option value="vps">VPS</option></select><label>Scraping libraries</label><select id="libs"><option value="minimal">Minimal</option><option value="edge">Edge / Cloudflare-friendly</option><option value="node" selected>Node scraping stack</option><option value="browser">Browser rendering stack</option><option value="full">Full stack</option></select><label>Package manager</label><select id="pm"><option>npm</option><option>pnpm</option><option>yarn</option><option>bun</option></select><label>Service name</label><input id="name" value="${pkg.name || 'scraper4-cloudflare'}"><label>Port</label><input id="port" value="3000"><div class="row" style="margin-top:14px"><button onclick="run('deployerPlan')">Plan</button><button class="secondary" onclick="run('deployerPrepare')">Prepare</button></div><p class="muted small">Plan is read-only. Prepare writes generated helper files under <span class="kbd">.deploy/</span> and may create project config files depending on the selected environment.</p></aside>
 <section><div class="tabs row"><button class="active" onclick="tab('dash',this)">Dashboard</button><button onclick="tab('scraper',this)">Local scraper</button><button onclick="tab('jobs',this)">Logs</button><button onclick="tab('guide',this)">Guide</button></div>
-<div id="dash" class="panel active"><div class="card"><h2>Project status</h2><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">npm ci</button><button onclick="run('test')">Run tests</button><button onclick="run('build')">Build Worker</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
-<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">This starts <span class="kbd">npm run worker:dev</span>, which launches Wrangler on port 8787. In Codespaces, open forwarded port 8787.</p><div class="row"><button class="success" onclick="scraperStart()">Start local scraper</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button><a class="pill" href="http://localhost:8787/health" target="_blank">Open /health</a><a class="pill" href="http://localhost:8787/" target="_blank">Open dashboard</a></div><pre id="scraperLog"></pre></div></div>
+<div id="dash" class="panel active"><div class="card"><h2>Project status</h2><p class="muted">Start here. This deployer runs first; the scraper only starts when you click the local scraper button.</p><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">npm ci</button><button onclick="run('localBuild')">Build local scraper</button><button onclick="run('test')">Run tests</button><button onclick="run('build')">Build Worker</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
+<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">This starts the real local Node/Render scraper, not Cloudflare: <span class="kbd">npm run render:build && npm run render:start</span> on port ${scraperPort}. Start it first, then manually press Open scraper dashboard to open a new browser window.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><p class="muted small">If the scraper page says database is not configured, start PostgreSQL locally and set DATABASE_URL, or use the Docker command in the Guide tab.</p><pre id="scraperLog"></pre></div></div>
 <div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div>
-<div id="guide" class="panel"><div class="card"><h2>Quick start</h2><pre>cd cloudflare-scraper4
-npm ci
+<div id="guide" class="panel"><div class="card"><h2>Full copy-paste local commands</h2><pre># 1) Run deployer first
+git clone https://github.com/fazilatma/new.git
+cd new
+git checkout arena/01a0765b-new
+git pull origin arena/01a0765b-new
+npm install
+cd cloudflare-scraper4
+npm install
 npm run deployer:ui
 
-Open the printed URL. In Codespaces, forward port ${port} and keep ?token=... in the URL. If port 8790 is busy, the server automatically tries the next ports.
+# 2) Optional PostgreSQL with Docker for real local data
+docker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16
 
-To run manually without UI:
-npm run worker:dev
-npm run deploy:universal -- --help</pre></div></div></section></main>
+# 3) Start local scraper from another terminal
+cd new/cloudflare-scraper4
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4
+npm run render:build
+PORT=3000 npm run render:start
+
+# 4) Browser engines, optional
+npx playwright install chromium
+
+# 5) Universal deployer examples
+node scripts/universal-deployer.mjs --env vscode --mode prepare
+node scripts/universal-deployer.mjs --env termux-offline --mode prepare --out .deploy/termux
+node scripts/universal-deployer.mjs --env vps --mode prepare --out .deploy/vps</pre></div></div></section></main>
 <script>
 const TOKEN=${JSON.stringify(token)};let activeJob='';
 async function api(path,opt={}){try{const r=await fetch(path,{...opt,headers:{'content-type':'application/json','x-local-deployer-token':TOKEN,...(opt.headers||{})}});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d}catch(e){const el=document.getElementById('log')||document.getElementById('scraperLog');if(el)el.textContent='UI/API error: '+(e.message||e);throw e}}
@@ -253,6 +281,8 @@ function body(action){return JSON.stringify({action,env:env.value,scrapingLibs:l
 async function run(action){activeJob=action;document.getElementById('log').textContent='Starting '+action+'...';tab('jobs',document.querySelectorAll('.tabs button')[2]);await api('/api/job',{method:'POST',body:body(action)});pollJobs()}
 async function pollJobs(){const data=await api('/api/jobs');const job=data.jobs.find(j=>j.name===activeJob)||data.jobs.at(-1);if(job)document.getElementById('log').textContent='$ '+job.command+String.fromCharCode(10,10)+job.log;if(job?.running)setTimeout(pollJobs,1200);refresh()}
 async function scraperStart(){await api('/api/scraper/start',{method:'POST',body:'{}'});scraperLogs()}
+function scraperUrl(path='/'){const h=location.hostname;const proto=location.protocol||'http:';if(h==='localhost'||h==='127.0.0.1')return proto+'//'+h+':${scraperPort}'+path;return 'http://localhost:${scraperPort}'+path}
+function openScraper(path='/'){window.open(scraperUrl(path),'_blank','noopener,noreferrer')}
 async function scraperStop(){await api('/api/scraper/stop',{method:'POST',body:'{}'});scraperLogs()}
 async function scraperLogs(){const d=await api('/api/scraper/logs');document.getElementById('scraperLog').textContent=d.log||'No logs yet.';refresh();if(d.scraper?.running)setTimeout(scraperLogs,1500)}
 async function updateCode(force){if(force&&!confirm('Force update discards local uncommitted changes. Continue?'))return;document.getElementById('log').textContent='Updating from GitHub...';tab('jobs',document.querySelectorAll('.tabs button')[2]);const d=await api('/api/update',{method:'POST',body:JSON.stringify({force,restart:true})});document.getElementById('log').textContent=JSON.stringify(d,null,2)+String.fromCharCode(10,10)+'If update succeeded, wait a few seconds and refresh this page.';setTimeout(()=>location.reload(),3500)}
