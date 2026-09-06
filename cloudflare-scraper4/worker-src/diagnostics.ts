@@ -9,7 +9,7 @@ export async function runDiagnostics(){
   const env=getEnv(),checks:DiagnosticCheck[]=[],start=Date.now();
   const add=(name:string,ok:boolean,detail:string,severity:DiagnosticCheck['severity']='error',data?:unknown)=>checks.push({name,ok,severity,detail,...(data===undefined?{}:{data})});
   add('runtime',typeof crypto?.subtle?.deriveKey==='function'&&typeof fetch==='function','Web Crypto, PBKDF2 and Fetch are available.');
-  add('vault-secret',validSecret(env.VAULT_SECRET),validSecret(env.VAULT_SECRET)?'VAULT_SECRET is configured with at least 8 characters.':'VAULT_SECRET is missing or shorter than 8 characters.');
+  {const hasVaultSecret=validSecret(env.VAULT_SECRET),hasVaultToken=validSecret((env as any).VAULT_TOKEN);add('vault-secret',hasVaultSecret||hasVaultToken,hasVaultSecret?'VAULT_SECRET is configured with at least 8 characters.':hasVaultToken?'VAULT_TOKEN alias is configured; it works, but VAULT_SECRET is the recommended exact Secret name.':'VAULT_SECRET is missing or shorter than 8 characters. Create it as a Secret and redeploy the Worker.');}
   add('vault-kdf',VAULT_KDF_ITERATIONS<=100_000,`PBKDF2 iterations=${VAULT_KDF_ITERATIONS}; Cloudflare maximum=100000.`);
   add('d1-binding',Boolean(env.DB),env.DB?'D1 binding DB is present.':'D1 binding DB is missing.');
   add('queue-binding',Boolean(env.JOBS),env.JOBS?'Producer binding JOBS is present.':'Producer binding JOBS is missing.');

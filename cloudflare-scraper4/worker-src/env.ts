@@ -25,6 +25,8 @@ export type Env = {
   JOBS_DLQ?: QueueProducer<JobMessage>;
   BACKUPS?: R2Bucket;
   VAULT_SECRET?: string;
+  /** Backward-compatible alias accepted when a user created VAULT_TOKEN by mistake. Prefer VAULT_SECRET. */
+  VAULT_TOKEN?: string;
   ALLOW_INSECURE?: string;
   REQUEST_TIMEOUT_MS?: string;
   DETAIL_CONCURRENCY?: string;
