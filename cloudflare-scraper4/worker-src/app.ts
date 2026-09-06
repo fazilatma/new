@@ -17,7 +17,7 @@ import { enqueueJob } from './processor.js';
 import { diagnoseExtraction, numberFromText, suggestSelectors, testGallery, testSelector, testVariations } from './scraper.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { syncBasalam, syncWoo } from './sync.js';
-import { DEFAULT_SELECTORS, type Product, type Profile } from './types.js';
+import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { basicAuth, byteLength, escapeHtml, message } from './utils.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, resetBackgroundRun, retryAiTestPart, startAiTestRun, startAllUnapprovedCategoryRun, startDedupRun } from './background.js';
@@ -447,6 +447,7 @@ export function normalizeProfile(raw:any):Profile {
   if(gallery){selectors.gallery=gallerySelector(gallery);selectors.galleryMax=gallery.max;selectors.gallerySkipFirst=gallery.skip_first}
   if(!selectors.container){if(noExtract)selectors.container='body';else throw new Error('selectors.container is required')}
   const pagination=String(raw.pagination||raw.pagType||'query_page') as Profile['pagination'];
+  const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine;
   const target=String(sync.target||'');
   const indirect=on(raw.networkIndirect??raw.net_indirect);
   const fallbackIds=raw.basalamFallbackCategoryIds??raw.bslFallbackCatIds;
@@ -454,6 +455,7 @@ export function normalizeProfile(raw:any):Profile {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(1,Number(raw.pages)||1)),
     pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
+    extractionEngine:['auto','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic'].includes(engine)?engine:'auto',
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
     priceMode:['none','add','percent','multiply'].includes(raw.priceMode)?raw.priceMode:'none',priceValue:Number(raw.priceValue??raw.priceVal)||0,
     roundPrice:Math.max(0,Number(raw.roundPrice)||0),minPrice:Math.max(0,Number(raw.minPrice)||0),wooCategoryId:Number(raw.wooCategoryId)||0,

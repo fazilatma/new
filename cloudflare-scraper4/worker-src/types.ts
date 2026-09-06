@@ -32,6 +32,8 @@ export type GalleryConfig = {
   skip_first: boolean;
 };
 
+export type ExtractionEngine = 'auto' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic';
+
 export type Profile = {
   id: string;
   name: string;
@@ -39,6 +41,7 @@ export type Profile = {
   enabled: boolean;
   pages: number;
   pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none';
+  extractionEngine: ExtractionEngine;
   paginationValue: string;
   selectors: Selectors;
   gallery?: GalleryConfig;

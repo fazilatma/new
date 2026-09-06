@@ -1,7 +1,7 @@
 import { loadConnections } from './connections.js';
 import { safeText, safeTextViaWorker } from './network.js';
 import { escapeHtml, sha256 } from './utils.js';
-import type { Product, Profile, Selectors, VariationGroup } from './types.js';
+import type { ExtractionEngine, Product, Profile, Selectors, VariationGroup } from './types.js';
 
 type SelectorMap=Partial<Selectors>;
 
@@ -417,13 +417,43 @@ class NextLinkHandler {
   constructor(private baseUrl:string){}
   element(element:HtmlElement):void{if(!this.url)this.url=canonicalUrl(firstAttribute(element,LINK_ATTRS),this.baseUrl)}
 }
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false):Promise<{products:Product[];nextUrl:string;url:string}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto'):Promise<{products:Product[];nextUrl:string;url:string}>{
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
-  const products=await parseCards(page.text,page.url,selectors);
+  const products=await parseByEngine(page.text,page.url,selectors,engine);
   return {products,nextUrl:next.url,url:page.url};
 }
-export async function scrapeList(url:string,selectors:Selectors,indirect=false):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect)).products}
+export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
+
+async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine):Promise<Product[]>{
+  if(engine==='htmlrewriter')return parseCards(html,baseUrl,selectors);
+  const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
+    if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);
+    if(name==='next_data')return extractNextDataProducts(html,baseUrl);
+    if(name==='metadata')return extractMetadataProduct(html,baseUrl);
+    if(name==='script_json')return extractScriptJsonProducts(html,baseUrl);
+    if(name==='heuristic')return extractHeuristicProducts(html,baseUrl);
+    return [];
+  };
+  if(engine!=='auto')return dedupeProducts(await tryOne(engine));
+  for(const name of ['jsonld','next_data','script_json','heuristic','metadata'] as ExtractionEngine[]){
+    const products=dedupeProducts(await tryOne(name));
+    if(products.length)return products;
+  }
+  return parseCards(html,baseUrl,selectors);
+}
+function dedupeProducts(products:Product[]):Product[]{const seen=new Set<string>(),out:Product[]=[];for(const p of products){const key=p.sourceKey||p.url||p.title;if(!key||seen.has(key))continue;seen.add(key);out.push(p)}return out}
+function productFromObject(obj:any,baseUrl:string):Product|null{if(!obj||typeof obj!=='object')return null;const title=cleanText(String(obj.name||obj.title||obj.productName||obj.label||''));const offer=Array.isArray(obj.offers)?obj.offers[0]:obj.offers||obj.offer||{};const priceText=cleanText(String(obj.price||obj.finalPrice||obj.salePrice||obj.sellingPrice||obj.priceText||offer.price||offer.lowPrice||offer.highPrice||''));const rawUrl=String(obj.url||obj.href||obj.link||obj.webUrl||obj.canonicalUrl||(typeof obj.slug==='string'?(obj.slug.startsWith('/')?obj.slug:`/product/${obj.slug}`):'')||'');const url=canonicalUrl(rawUrl,baseUrl);const image=imageUrl(firstImageValue(obj.image||obj.images||obj.thumbnail||obj.cover||obj.imageUrl||obj.picture),baseUrl);if(!title||(!url&&!image&&!priceText))return null;return{sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:cleanText(String(obj.sku||obj.id||'')),shortDesc:cleanText(String(obj.description||'')),longDesc:'',brand:cleanText(String(typeof obj.brand==='object'?obj.brand?.name:obj.brand||'')),stock:undefined,weight:undefined,category:cleanText(String(obj.category||'')),tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}}
+function firstImageValue(value:any):string{if(!value)return'';if(typeof value==='string')return value;if(Array.isArray(value))return firstImageValue(value[0]);if(typeof value==='object')return String(value.url||value.src||value.href||value.original||value.medium||value.large||'');return''}
+async function finalizeFound(products:Product[],baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const p of products){const identity=p.url?canonicalUrl(p.url,baseUrl,true):`${p.title}|${p.priceText}`;p.sourceKey=await sourceKey(identity);out.push(p)}return dedupeProducts(out)}
+function walkObjects(value:any,baseUrl:string,out:Product[],depth=0):void{if(!value||depth>12||out.length>1000)return;if(Array.isArray(value)){for(const item of value)walkObjects(item,baseUrl,out,depth+1);return}if(typeof value!=='object')return;const p=productFromObject(value,baseUrl);if(p)out.push(p);for(const [key,v] of Object.entries(value))if(/product|item|result|data|pageProps|props|list|card|entity|catalog/i.test(key))walkObjects(v,baseUrl,out,depth+1)}
+async function extractNextDataProducts(html:string,baseUrl:string):Promise<Product[]>{const m=html.match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);if(!m)return[];try{const out:Product[]=[];walkObjects(JSON.parse(decodeHtml(m[1])),baseUrl,out);return finalizeFound(out,baseUrl)}catch{return[]}}
+function decodeHtml(value:string):string{return value.replace(/&quot;/g,'"').replace(/&#34;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}
+function stripHtml(value:string):string{return cleanText(decodeHtml(value.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')))}
+function metaContent(html:string,key:string):string{const escaped=key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');const re=new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${escaped}["'])[^>]*content=["']([^"']+)["'][^>]*>`,'i');return decodeHtml(html.match(re)?.[1]||'')}
+async function extractMetadataProduct(html:string,baseUrl:string):Promise<Product[]>{const title=metaContent(html,'og:title')||metaContent(html,'twitter:title')||stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'');if(!title)return[];const priceText=metaContent(html,'product:price:amount')||metaContent(html,'og:price:amount')||'';const url=canonicalUrl(metaContent(html,'og:url')||baseUrl,baseUrl);const image=imageUrl(metaContent(html,'og:image')||metaContent(html,'twitter:image'),baseUrl);return finalizeFound([{sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}],baseUrl)}
+async function extractScriptJsonProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)){const body=decodeHtml(m[1].trim());if(!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body))continue;for(const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)){try{walkObjects(JSON.parse(j[1]),baseUrl,out)}catch{}}}return finalizeFound(out,baseUrl)}
+async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||!/(product|products|\/p\/|\/pd\/|kala|sku)/i.test(url))continue;const chunk=m[0]+html.slice(Math.max(0,m.index||0),Math.min(html.length,(m.index||0)+1800));const title=stripHtml(m[2])||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''));if(!title||title.length<3)continue;const image=imageUrl(decodeHtml(chunk.match(/<img\b[^>]*(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i)?.[1]||''),baseUrl);const priceText=cleanText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.\s]{3,}\s*(?:تومان|ریال|IRR)?/i)?.[0]||'');out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
 
 /** Runs the same network, list parser and detail parser used by real jobs, but never writes or syncs products. */
 export async function diagnoseExtraction(profile:Profile,urlOverride=''){

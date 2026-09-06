@@ -67,7 +67,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   if(!checkpoint.products){
     job.phase='list';
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
-    const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect));
+    const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine);
     checkpoint.url=page.url;checkpoint.nextUrl=page.nextUrl;checkpoint.index=0;
     const pageProducts=page.products.map(raw=>transformProduct(raw,profile)).filter(product=>!profile.minPrice||product.price>=profile.minPrice);
     checkpoint.products=pageProducts.filter(product=>!checkpoint.seen.includes(product.sourceKey));

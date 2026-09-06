@@ -57,9 +57,11 @@ type SelectorMap = {
   shortDesc?: string; longDesc?: string; sku?: string; brand?: string;
   stock?: string; weight?: string; category?: string;
 };
+type ExtractionEngine = "auto" | "htmlrewriter" | "jsonld" | "next_data" | "metadata" | "script_json" | "heuristic";
 type Profile = {
   id: string; name: string; url: string; enabled: boolean; pages: number;
   pagination: "query_page" | "path_page" | "next" | "none";
+  extractionEngine: ExtractionEngine;
   paginationValue?: string; selectors: SelectorMap;
   titleSuffix?: string; priceMode?: "none" | "add" | "percent" | "multiply";
   priceValue?: number; roundPrice?: number; minPrice?: number;
@@ -88,6 +90,7 @@ const DEFAULT_SELECTORS: SelectorMap = {
   container: "li.product", title: "h2, h3, .woocommerce-loop-product__title",
   price: ".price, .amount", link: "a[href]", image: "img"
 };
+const EXTRACTION_ENGINES: ExtractionEngine[] = ["auto", "htmlrewriter", "jsonld", "next_data", "metadata", "script_json", "heuristic"];
 
 type HonoBindings = { Bindings: Env };
 const hono = new Hono<HonoBindings>();
@@ -417,6 +420,7 @@ function normalizeProfile(raw: Record<string, any>): Profile {
     id: safeId(String(raw.id || profileKey(url))), name: String(raw.name || new URL(url).hostname).trim(), url,
     enabled: raw.enabled !== false, pages: Math.min(100, Math.max(1, Number(raw.pages) || 1)),
     pagination: ["query_page", "path_page", "next", "none"].includes(raw.pagination) ? raw.pagination : "query_page",
+    extractionEngine: EXTRACTION_ENGINES.includes(raw.extractionEngine) ? raw.extractionEngine : "auto",
     paginationValue: String(raw.paginationValue || "page"), selectors,
     titleSuffix: String(raw.titleSuffix || ""), priceMode: raw.priceMode || "none", priceValue: Number(raw.priceValue) || 0,
     roundPrice: Math.max(0, Number(raw.roundPrice) || 0), minPrice: Math.max(0, Number(raw.minPrice) || 0),
@@ -486,7 +490,7 @@ function scopedSelector(container: string, child: string): string {
   const children = child.split(",").map(x => x.trim()).filter(Boolean);
   return parents.flatMap(parent => children.map(value => `${parent} ${value}`)).join(",");
 }
-async function extractProducts(pageUrl: string, selectors: SelectorMap, env: Env): Promise<Product[]> {
+async function extractProductsHtmlRewriter(pageUrl: string, selectors: SelectorMap, env: Env): Promise<Product[]> {
   const response = await safeFetch(pageUrl, env); if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const titles = new TextCollector(5000), prices = new TextCollector(5000);
   const links = new AttrCollector(["href", "data-href", "data-url", "data-product-url"], 5000);
@@ -506,6 +510,118 @@ async function extractProducts(pageUrl: string, selectors: SelectorMap, env: Env
     products.push({ key: productKey(link, title), title, price: numberFromText(priceText), priceText, url: link, image, images: image ? [image] : [], sourcePage: pageUrl, scrapedAt: Date.now() });
   }
   return products;
+}
+
+async function extractProducts(pageUrl: string, selectors: SelectorMap, env: Env, engine: ExtractionEngine = "auto"): Promise<Product[]> {
+  if (engine === "htmlrewriter") return extractProductsHtmlRewriter(pageUrl, selectors, env);
+  const response = await safeFetch(pageUrl, env); if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await responseTextLimited(response);
+  const finalUrl = response.url || pageUrl;
+  const run = (name: ExtractionEngine): Product[] => {
+    if (name === "jsonld") return extractJsonLdProducts(html, finalUrl);
+    if (name === "next_data") return extractNextDataProducts(html, finalUrl);
+    if (name === "metadata") return extractMetadataProduct(html, finalUrl);
+    if (name === "script_json") return extractScriptJsonProducts(html, finalUrl);
+    if (name === "heuristic") return extractHeuristicProducts(html, finalUrl);
+    return [];
+  };
+  if (engine !== "auto") return run(engine);
+  for (const name of ["jsonld", "next_data", "script_json", "heuristic", "metadata"] as ExtractionEngine[]) {
+    const products = dedupeProducts(run(name));
+    if (products.length) return products;
+  }
+  return extractProductsHtmlRewriter(pageUrl, selectors, env);
+}
+function dedupeProducts(products: Product[]): Product[] {
+  const seen = new Set<string>(), out: Product[] = [];
+  for (const p of products) { const key = p.url || p.key || p.title; if (!key || seen.has(key)) continue; seen.add(key); out.push(p); }
+  return out;
+}
+function productFromObject(obj: any, baseUrl: string, source = baseUrl): Product | null {
+  if (!obj || typeof obj !== "object") return null;
+  const title = normalizeText(String(obj.name || obj.title || obj.productName || obj.label || ""));
+  const offer = Array.isArray(obj.offers) ? obj.offers[0] : obj.offers || obj.offer || {};
+  const priceText = String(obj.price || obj.finalPrice || obj.salePrice || obj.sellingPrice || obj.priceText || offer.price || offer.lowPrice || offer.highPrice || "");
+  const price = typeof obj.price === "number" ? obj.price : numberFromText(priceText);
+  let rawUrl = String(obj.url || obj.href || obj.link || obj.webUrl || obj.canonicalUrl || "");
+  if (!rawUrl && typeof obj.slug === "string") rawUrl = obj.slug.startsWith("/") ? obj.slug : `/product/${obj.slug}`;
+  const url = absoluteUrl(rawUrl, baseUrl);
+  const imageValue = firstImageValue(obj.image || obj.images || obj.thumbnail || obj.cover || obj.imageUrl || obj.picture);
+  const image = absoluteUrl(imageValue, baseUrl);
+  if (!title || (!price && !url && !image)) return null;
+  return { key: productKey(url, title), title, price, priceText, url, image, images: image ? [image] : [], sourcePage: source, scrapedAt: Date.now() };
+}
+function firstImageValue(value: any): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return firstImageValue(value[0]);
+  if (typeof value === "object") return String(value.url || value.src || value.href || value.original || value.medium || value.large || "");
+  return "";
+}
+function walkProducts(value: any, baseUrl: string, out: Product[], depth = 0): void {
+  if (!value || depth > 12 || out.length > 1000) return;
+  if (Array.isArray(value)) { for (const item of value) walkProducts(item, baseUrl, out, depth + 1); return; }
+  if (typeof value !== "object") return;
+  const product = productFromObject(value, baseUrl); if (product) out.push(product);
+  for (const key of Object.keys(value)) {
+    if (/product|item|result|data|pageProps|props|list|card|entity|catalog/i.test(key)) walkProducts(value[key], baseUrl, out, depth + 1);
+  }
+}
+function parseLooseJson(raw: string): any | null { try { return JSON.parse(raw); } catch { return null; } }
+function htmlDecode(s: string): string { return s.replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"); }
+function stripTags(s: string): string { return normalizeText(htmlDecode(s.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " "))); }
+function extractJsonLdProducts(html: string, baseUrl: string): Product[] {
+  const out: Product[] = [];
+  for (const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    const data = parseLooseJson(htmlDecode(m[1].trim())); if (!data) continue;
+    const nodes = Array.isArray(data) ? data : [data, ...(Array.isArray(data["@graph"]) ? data["@graph"] : [])];
+    for (const node of nodes) {
+      const type = Array.isArray(node?.["@type"]) ? node["@type"].join(" ") : String(node?.["@type"] || "");
+      if (/Product/i.test(type)) { const p = productFromObject(node, baseUrl); if (p) out.push(p); }
+      if (Array.isArray(node?.itemListElement)) for (const item of node.itemListElement) { const p = productFromObject(item.item || item, baseUrl); if (p) out.push(p); }
+    }
+  }
+  return dedupeProducts(out);
+}
+function extractNextDataProducts(html: string, baseUrl: string): Product[] {
+  const m = html.match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i); if (!m) return [];
+  const data = parseLooseJson(htmlDecode(m[1].trim())); const out: Product[] = []; walkProducts(data, baseUrl, out); return dedupeProducts(out);
+}
+function metaContent(html: string, key: string): string {
+  const re = new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'])[^>]*content=["']([^"']+)["'][^>]*>`, "i");
+  return htmlDecode(html.match(re)?.[1] || "");
+}
+function extractMetadataProduct(html: string, baseUrl: string): Product[] {
+  const title = metaContent(html, "og:title") || metaContent(html, "twitter:title") || stripTags(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
+  const priceText = metaContent(html, "product:price:amount") || metaContent(html, "og:price:amount") || "";
+  const image = absoluteUrl(metaContent(html, "og:image") || metaContent(html, "twitter:image"), baseUrl);
+  const url = absoluteUrl(metaContent(html, "og:url") || baseUrl, baseUrl);
+  return title ? [{ key: productKey(url, title), title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: Date.now() }] : [];
+}
+function extractScriptJsonProducts(html: string, baseUrl: string): Product[] {
+  const out: Product[] = [];
+  for (const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = htmlDecode(m[1].trim()); if (!/(product|products|price|نام|کالا|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body)) continue;
+    for (const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)) {
+      const data = parseLooseJson(j[1]); if (data) walkProducts(data, baseUrl, out);
+    }
+  }
+  return dedupeProducts(out);
+}
+function extractHeuristicProducts(html: string, baseUrl: string): Product[] {
+  const out: Product[] = [];
+  const anchorRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi;
+  for (const m of html.matchAll(anchorRe)) {
+    const url = absoluteUrl(htmlDecode(m[1]), baseUrl); if (!url || !/(product|products|\/p\/|\/pd\/|kala|sku)/i.test(url)) continue;
+    const chunk = m[0] + html.slice(Math.max(0, m.index || 0), Math.min(html.length, (m.index || 0) + 1800));
+    const alt = htmlDecode(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || "");
+    const title = stripTags(m[2]) || normalizeText(alt);
+    if (!title || title.length < 3) continue;
+    const img = absoluteUrl(htmlDecode(chunk.match(/<img\b[^>]*(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i)?.[1] || ""), baseUrl);
+    const priceText = normalizeText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.\s]{3,}\s*(?:تومان|ریال|IRR)?/i)?.[0] || "");
+    out.push({ key: productKey(url, title), title, price: numberFromText(priceText), priceText, url, image: img, images: img ? [img] : [], sourcePage: baseUrl, scrapedAt: Date.now() });
+  }
+  return dedupeProducts(out);
 }
 async function extractDetails(product: Product, selectors: SelectorMap, env: Env): Promise<Product> {
   if (!product.url) return product;
@@ -543,7 +659,7 @@ async function runScrape(profile: Profile, job: Job, env: Env, syncAfter: boolea
     for (let page = 1; page <= profile.pages; page++) {
       if (await stopped(env, job)) { job.status = "stopped"; break; }
       const u = pageUrl(profile, page); jobLog(job, `صفحه ${page}: ${u}`);
-      const products = await extractProducts(u, profile.selectors, env);
+      const products = await extractProducts(u, profile.selectors, env, profile.extractionEngine);
       if (!products.length) { jobLog(job, "محصولی در صفحه پیدا نشد", "warning"); break; }
       for (const p of products) {
         const transformed = transformProduct(p, profile);
@@ -682,8 +798,8 @@ const DASHBOARD = `<!doctype html><html lang="fa" dir="rtl"><head><meta charset=
 :root{color-scheme:dark;--bg:#07111f;--card:#101d30;--line:#263b56;--text:#e7eef8;--muted:#91a4bd;--blue:#38bdf8;--green:#34d399;--red:#fb7185}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#102b48,var(--bg) 36%);font:14px Tahoma,Arial;color:var(--text)}main{max-width:1100px;margin:auto;padding:24px}.head{display:flex;align-items:center;justify-content:space-between;gap:12px}h1{font-size:25px;margin:0}h1 b{color:var(--blue)}.badge{background:#12304a;border:1px solid #1e597d;border-radius:20px;padding:7px 12px;color:#8bdcff}.card{background:rgba(16,29,48,.95);border:1px solid var(--line);border-radius:15px;padding:18px;margin-top:16px;box-shadow:0 14px 40px #0003}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:11px}.five{grid-template-columns:2fr 1fr 1fr 1fr 1fr}label{color:var(--muted);font-size:12px;display:block;margin-bottom:5px}input,select,textarea,button{width:100%;border:1px solid #314a67;border-radius:9px;padding:10px;background:#091525;color:var(--text);font:inherit}button{cursor:pointer;background:#075985;border-color:#0ea5e9;font-weight:bold}button:hover{filter:brightness(1.2)}button.red{background:#881337;border-color:#e11d48}button.green{background:#065f46;border-color:#10b981}.actions{display:flex;gap:7px}.actions button{width:auto}.profiles{display:grid;gap:9px}.profile{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;background:#091525;border:1px solid #203954;border-radius:10px}.profile small{display:block;color:var(--muted);direction:ltr;text-align:right;margin-top:5px}.log{white-space:pre-wrap;direction:rtl;background:#050c16;border-radius:10px;padding:12px;min-height:75px;color:#b8c8db}.ok{color:var(--green)}.err{color:var(--red)}@media(max-width:700px){.grid,.five{grid-template-columns:1fr}.profile,.head{align-items:stretch;flex-direction:column}.actions{flex-wrap:wrap}}
 </style></head><body><main><div class="head"><h1>اسکرپر <b>۴</b> — Cloudflare Worker</h1><span class="badge">TypeScript · KV · v${VERSION}</span></div>
 <div class="card"><div class="grid"><div><label>توکن مدیریت (اگر ADMIN_TOKEN تنظیم شده)</label><input id="token" type="password" placeholder="Bearer token"></div><div style="align-self:end"><button onclick="loadAll()">اتصال و بارگذاری</button></div></div></div>
-<div class="card"><h2>پروفایل استخراج</h2><div class="grid"><div><label>نام</label><input id="name" placeholder="فروشگاه مبدأ"></div><div><label>URL</label><input id="url" dir="ltr" placeholder="https://example.com/shop?page=1"></div></div><div class="grid five" style="margin-top:10px"><div><label>سلکتور محصول</label><input id="container" dir="ltr" value="li.product"></div><div><label>عنوان</label><input id="title" dir="ltr" value="h2"></div><div><label>قیمت</label><input id="price" dir="ltr" value=".price"></div><div><label>لینک</label><input id="link" dir="ltr" value="a[href]"></div><div><label>تصویر</label><input id="image" dir="ltr" value="img"></div></div><div class="grid" style="margin-top:10px"><div><label>تعداد صفحه</label><input id="pages" type="number" value="1" min="1" max="100"></div><div><label>صفحه‌بندی</label><select id="pagination"><option value="query_page">پارامتر page</option><option value="path_page">/page/2/</option><option value="none">بدون صفحه‌بندی</option></select></div></div><button class="green" style="margin-top:12px" onclick="saveProfile()">ذخیره پروفایل</button></div>
+<div class="card"><h2>پروفایل استخراج</h2><div class="grid"><div><label>نام</label><input id="name" placeholder="فروشگاه مبدأ"></div><div><label>URL</label><input id="url" dir="ltr" placeholder="https://example.com/shop?page=1"></div></div><div class="grid" style="margin-top:10px"><div><label>موتور استخراج</label><select id="extractionEngine"><option value="auto">Auto — JSON-LD / Next.js / Script JSON / Heuristic / HTMLRewriter</option><option value="htmlrewriter">Cloudflare HTMLRewriter selectors</option><option value="jsonld">JSON-LD Product</option><option value="next_data">Next.js __NEXT_DATA__</option><option value="metadata">OpenGraph / meta tags</option><option value="script_json">Inline script JSON state</option><option value="heuristic">Heuristic product links/cards</option></select></div><div><label>راهنما</label><input disabled value="برای سایت‌های مدرن مثل Next.js حالت Auto یا Next.js را امتحان کنید"></div></div><div class="grid five" style="margin-top:10px"><div><label>سلکتور محصول</label><input id="container" dir="ltr" value="li.product"></div><div><label>عنوان</label><input id="title" dir="ltr" value="h2"></div><div><label>قیمت</label><input id="price" dir="ltr" value=".price"></div><div><label>لینک</label><input id="link" dir="ltr" value="a[href]"></div><div><label>تصویر</label><input id="image" dir="ltr" value="img"></div></div><div class="grid" style="margin-top:10px"><div><label>تعداد صفحه</label><input id="pages" type="number" value="1" min="1" max="100"></div><div><label>صفحه‌بندی</label><select id="pagination"><option value="query_page">پارامتر page</option><option value="path_page">/page/2/</option><option value="none">بدون صفحه‌بندی</option></select></div></div><button class="green" style="margin-top:12px" onclick="saveProfile()">ذخیره پروفایل</button></div>
 <div class="card"><div class="head"><h2>پروفایل‌ها</h2><button style="width:auto" onclick="loadProfiles()">تازه‌سازی</button></div><div id="profiles" class="profiles"></div></div>
 <div class="card"><h2>وضعیت</h2><div id="status" class="log">آماده</div></div></main><script>
-const $=id=>document.getElementById(id);let timer=null;function headers(){const t=$('token').value;localStorage.s4token=t;return {'content-type':'application/json',...(t?{authorization:'Bearer '+t}:{})}}async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{...headers(),...(opt.headers||{})}});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}function out(s,err=false){$('status').className='log '+(err?'err':'ok');$('status').textContent=typeof s==='string'?s:JSON.stringify(s,null,2)}async function loadProfiles(){try{const d=await api('/api/profiles');$('profiles').innerHTML=d.profiles.map(p=>'<div class="profile"><div><b>'+esc(p.name)+'</b><small>'+esc(p.url)+'</small></div><div class="actions"><button onclick="run(\''+p.id+'\')">استخراج</button><button class="green" onclick="sync(\''+p.id+'\')">همگام‌سازی</button><button class="red" onclick="delp(\''+p.id+'\')">حذف</button></div></div>').join('')||'<span>هنوز پروفایلی نیست.</span>'}catch(e){out(e.message,true)}}async function saveProfile(){try{const body={name:$('name').value,url:$('url').value,pages:+$('pages').value,pagination:$('pagination').value,selectors:{container:$('container').value,title:$('title').value,price:$('price').value,link:$('link').value,image:$('image').value}};await api('/api/profiles',{method:'POST',body:JSON.stringify(body)});out('پروفایل ذخیره شد');loadProfiles()}catch(e){out(e.message,true)}}async function run(id){try{const d=await api('/api/scrape',{method:'POST',body:JSON.stringify({profileId:id})});out(d.job);watch(d.job.id)}catch(e){out(e.message,true)}}function watch(id){clearInterval(timer);timer=setInterval(async()=>{try{const d=await api('/api/jobs/'+id);out(d.job);if(!['queued','running'].includes(d.job.status))clearInterval(timer)}catch(e){clearInterval(timer);out(e.message,true)}},1800)}async function sync(id){try{out('در حال همگام‌سازی…');out((await api('/api/sync',{method:'POST',body:JSON.stringify({profileId:id,target:'both'})})).result)}catch(e){out(e.message,true)}}async function delp(id){if(!confirm('حذف شود؟'))return;try{await api('/api/profiles/'+id,{method:'DELETE'});loadProfiles()}catch(e){out(e.message,true)}}function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}async function loadAll(){$('token').value=$('token').value||localStorage.s4token||'';await loadProfiles();try{out(await api('/api/status'))}catch(e){out(e.message,true)}}$('token').value=localStorage.s4token||'';loadAll();
+const $=id=>document.getElementById(id);let timer=null;function headers(){const t=$('token').value;localStorage.s4token=t;return {'content-type':'application/json',...(t?{authorization:'Bearer '+t}:{})}}async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{...headers(),...(opt.headers||{})}});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}function out(s,err=false){$('status').className='log '+(err?'err':'ok');$('status').textContent=typeof s==='string'?s:JSON.stringify(s,null,2)}async function loadProfiles(){try{const d=await api('/api/profiles');$('profiles').innerHTML=d.profiles.map(p=>'<div class="profile"><div><b>'+esc(p.name)+'</b><small>'+esc(p.url)+' · engine: '+esc(p.extractionEngine||'auto')+'</small></div><div class="actions"><button onclick="run(\''+p.id+'\')">استخراج</button><button class="green" onclick="sync(\''+p.id+'\')">همگام‌سازی</button><button class="red" onclick="delp(\''+p.id+'\')">حذف</button></div></div>').join('')||'<span>هنوز پروفایلی نیست.</span>'}catch(e){out(e.message,true)}}async function saveProfile(){try{const body={name:$('name').value,url:$('url').value,pages:+$('pages').value,pagination:$('pagination').value,extractionEngine:$('extractionEngine').value,selectors:{container:$('container').value,title:$('title').value,price:$('price').value,link:$('link').value,image:$('image').value}};await api('/api/profiles',{method:'POST',body:JSON.stringify(body)});out('پروفایل ذخیره شد');loadProfiles()}catch(e){out(e.message,true)}}async function run(id){try{const d=await api('/api/scrape',{method:'POST',body:JSON.stringify({profileId:id})});out(d.job);watch(d.job.id)}catch(e){out(e.message,true)}}function watch(id){clearInterval(timer);timer=setInterval(async()=>{try{const d=await api('/api/jobs/'+id);out(d.job);if(!['queued','running'].includes(d.job.status))clearInterval(timer)}catch(e){clearInterval(timer);out(e.message,true)}},1800)}async function sync(id){try{out('در حال همگام‌سازی…');out((await api('/api/sync',{method:'POST',body:JSON.stringify({profileId:id,target:'both'})})).result)}catch(e){out(e.message,true)}}async function delp(id){if(!confirm('حذف شود؟'))return;try{await api('/api/profiles/'+id,{method:'DELETE'});loadProfiles()}catch(e){out(e.message,true)}}function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}async function loadAll(){$('token').value=$('token').value||localStorage.s4token||'';await loadProfiles();try{out(await api('/api/status'))}catch(e){out(e.message,true)}}$('token').value=localStorage.s4token||'';loadAll();
 </script></body></html>`;
