@@ -85,3 +85,17 @@ DEPLOYER_UI_PORT=8790 DEPLOYER_UI_TOKEN=my-local-token npm run deployer:ui
 ## Security note
 
 This UI is intended for local development. It is token-protected, but you should still avoid exposing the forwarded port publicly. It does not store Cloudflare, GitHub, Vercel, or Render credentials.
+
+## Updating without typing pull commands every time
+
+A browser refresh only reloads the code that already exists inside the running Codespace or local folder. It does not automatically download new commits from GitHub.
+
+To avoid typing `git pull` every time, the Local Deployer UI now includes:
+
+```text
+Dashboard → Update from GitHub
+```
+
+That button runs a safe fast-forward update from the current branch and then restarts the local UI with the same token. After it finishes, wait a few seconds and refresh the browser page.
+
+You still need to pull once if your current Codespace does not yet have `npm run deployer:ui`. After that first update, you can use the UI button for later changes.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -34,6 +34,55 @@ function appendLog(name, chunk) {
   if (!job) return;
   job.log += chunk;
   if (job.log.length > maxLog) job.log = job.log.slice(-maxLog);
+}
+
+
+function runSync(command, args = []) {
+  const result = spawnSync(command, args, { cwd: projectDir, encoding: 'utf8', env: process.env });
+  return {
+    command: [command, ...args].join(' '),
+    status: result.status ?? 0,
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+    ok: (result.status ?? 0) === 0
+  };
+}
+
+function currentGitInfo() {
+  const branch = runSync('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const commit = runSync('git', ['log', '-1', '--oneline']);
+  const dirty = runSync('git', ['status', '--short']);
+  return {
+    branch: branch.ok ? branch.stdout.trim() : '',
+    commit: commit.ok ? commit.stdout.trim() : '',
+    dirty: dirty.ok ? dirty.stdout.trim() : '',
+    ok: branch.ok && commit.ok && dirty.ok
+  };
+}
+
+function updateFromGit({ force = false } = {}) {
+  const branch = currentGitInfo().branch || 'arena/01a0765b-new';
+  const steps = [];
+  steps.push(runSync('git', ['fetch', 'origin', branch]));
+  if (!steps.at(-1).ok) return { ok: false, branch, steps };
+  steps.push(force
+    ? runSync('git', ['reset', '--hard', `origin/${branch}`])
+    : runSync('git', ['pull', '--ff-only', 'origin', branch]));
+  return { ok: steps.every(step => step.ok), branch, force, steps, git: currentGitInfo() };
+}
+
+function restartUiSoon() {
+  setTimeout(() => {
+    const child = spawn(process.execPath, [process.argv[1]], {
+      cwd: projectDir,
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, DEPLOYER_UI_PORT: String(port), DEPLOYER_UI_HOST: host, DEPLOYER_UI_TOKEN: token }
+    });
+    child.unref();
+    stopScraper();
+    server.close(() => process.exit(0));
+  }, 800);
 }
 
 function runJob(name, command, args = [], options = {}) {
@@ -103,6 +152,7 @@ function status() {
     projectDir,
     package: { name: pkg.name, version: pkg.version, scripts: pkg.scripts },
     node: process.version,
+    git: currentGitInfo(),
     files: {
       wrangler: existsSync(join(projectDir, 'wrangler.toml')),
       packageLock: existsSync(join(projectDir, 'package-lock.json')),
@@ -121,6 +171,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, status());
     if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, { ok: true, jobs: [...jobs.values()].map(({ child, ...j }) => j) });
     if (req.method === 'GET' && url.pathname === '/api/scraper/logs') return send(res, 200, { ok: true, log: scraperLog, scraper: status().scraper });
+    if (req.method === 'POST' && url.pathname === '/api/update') {
+      const body = await readJson(req);
+      const result = updateFromGit({ force: Boolean(body.force) });
+      if (result.ok && body.restart !== false) restartUiSoon();
+      return send(res, 200, { ...result, restarting: Boolean(result.ok && body.restart !== false), message: result.ok ? 'Project updated from GitHub. Refresh this page after a few seconds.' : 'Update failed. See step output.' });
+    }
     if (req.method === 'POST' && url.pathname === '/api/job') {
       const body = await readJson(req);
       const map = {
@@ -159,7 +215,7 @@ function page(token) { return `<!doctype html>
 <body><header><div class="wrap hero"><div class="title"><div class="logo"></div><div><h1>Scraper4 Local Deployer</h1><div class="muted">Advanced local UI for VS Code and GitHub Codespaces</div></div></div><div class="row"><span class="pill">Node ${process.version}</span><span class="pill">Protected by local token</span></div></div></header>
 <main class="wrap grid"><aside class="card"><h2>Wizard</h2><label>Environment</label><select id="env"><option value="vscode">VS Code</option><option value="termux-offline">Termux offline</option><option value="cloudflare-worker">Cloudflare Worker</option><option value="vercel">Vercel</option><option value="render">Render</option><option value="vps">VPS</option></select><label>Scraping libraries</label><select id="libs"><option value="minimal">Minimal</option><option value="edge">Edge / Cloudflare-friendly</option><option value="node" selected>Node scraping stack</option><option value="browser">Browser rendering stack</option><option value="full">Full stack</option></select><label>Package manager</label><select id="pm"><option>npm</option><option>pnpm</option><option>yarn</option><option>bun</option></select><label>Service name</label><input id="name" value="${pkg.name || 'scraper4-cloudflare'}"><label>Port</label><input id="port" value="3000"><div class="row" style="margin-top:14px"><button onclick="run('deployerPlan')">Plan</button><button class="secondary" onclick="run('deployerPrepare')">Prepare</button></div><p class="muted small">Plan is read-only. Prepare writes generated helper files under <span class="kbd">.deploy/</span> and may create project config files depending on the selected environment.</p></aside>
 <section><div class="tabs row"><button class="active" onclick="tab('dash',this)">Dashboard</button><button onclick="tab('scraper',this)">Local scraper</button><button onclick="tab('jobs',this)">Logs</button><button onclick="tab('guide',this)">Guide</button></div>
-<div id="dash" class="panel active"><div class="card"><h2>Project status</h2><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">npm ci</button><button onclick="run('test')">Run tests</button><button onclick="run('build')">Build Worker</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
+<div id="dash" class="panel active"><div class="card"><h2>Project status</h2><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">npm ci</button><button onclick="run('test')">Run tests</button><button onclick="run('build')">Build Worker</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
 <div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">This starts <span class="kbd">npm run worker:dev</span>, which launches Wrangler on port 8787. In Codespaces, open forwarded port 8787.</p><div class="row"><button class="success" onclick="scraperStart()">Start local scraper</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button><a class="pill" href="http://localhost:8787/health" target="_blank">Open /health</a><a class="pill" href="http://localhost:8787/" target="_blank">Open dashboard</a></div><pre id="scraperLog"></pre></div></div>
 <div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div>
 <div id="guide" class="panel"><div class="card"><h2>Quick start</h2><pre>cd cloudflare-scraper4
@@ -181,6 +237,7 @@ async function pollJobs(){const data=await api('/api/jobs');const job=data.jobs.
 async function scraperStart(){await api('/api/scraper/start',{method:'POST',body:'{}'});scraperLogs()}
 async function scraperStop(){await api('/api/scraper/stop',{method:'POST',body:'{}'});scraperLogs()}
 async function scraperLogs(){const d=await api('/api/scraper/logs');document.getElementById('scraperLog').textContent=d.log||'No logs yet.';refresh();if(d.scraper?.running)setTimeout(scraperLogs,1500)}
-async function refresh(){const d=await api('/api/status');const s=d.scraper;document.getElementById('status').innerHTML='<div class="metric"><span class="dot ok"></span> '+d.package.name+'</div><div class="metric">Version: '+(d.package.version||'-')+'</div><div class="metric">Wrangler: '+(d.files.wrangler?'yes':'no')+'</div><div class="metric">Scraper: '+(s.running?'running on '+s.port:'stopped')+'</div><div class="metric">Project: <span class="small">'+d.projectDir+'</span></div>'}
+async function updateCode(force){if(force&&!confirm('Force update discards local uncommitted changes. Continue?'))return;document.getElementById('log').textContent='Updating from GitHub...';tab('jobs',document.querySelectorAll('.tabs button')[2]);const d=await api('/api/update',{method:'POST',body:JSON.stringify({force,restart:true})});document.getElementById('log').textContent=JSON.stringify(d,null,2)+'\n\nIf update succeeded, wait a few seconds and refresh this page.';setTimeout(()=>location.reload(),3500)}
+async function refresh(){const d=await api('/api/status');const s=d.scraper;document.getElementById('status').innerHTML='<div class="metric"><span class="dot ok"></span> '+d.package.name+'</div><div class="metric">Version: '+(d.package.version||'-')+'</div><div class="metric">Wrangler: '+(d.files.wrangler?'yes':'no')+'</div><div class="metric">Scraper: '+(s.running?'running on '+s.port:'stopped')+'</div><div class="metric">Git: <span class="small">'+(d.git?.commit||'-')+'</span></div><div class="metric">Project: <span class="small">'+d.projectDir+'</span></div>'}
 refresh();setInterval(refresh,5000);
 </script></body></html>`; }
