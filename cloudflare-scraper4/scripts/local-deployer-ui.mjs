@@ -260,10 +260,11 @@ npm run deployer:ui
 cd "$HOME"
 pkg update -y
 pkg upgrade -y
-pkg install -y git nodejs-lts python make clang
+pkg install -y git gh openssh nodejs-lts python make clang
 rm -rf "$HOME/new"
 git config --global --unset-all credential.helper || true
-git clone --depth 1 --branch arena/01a0765b-new https://github.com/fazilatma/new.git "$HOME/new"
+gh auth login --web -h github.com -p https
+gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
 cd "$HOME/new/cloudflare-scraper4"
 npm install --ignore-scripts
 npm run deployer:ui
@@ -284,7 +285,11 @@ npx playwright install chromium
 # 5) Universal deployer examples
 node scripts/universal-deployer.mjs --env vscode --mode prepare
 node scripts/universal-deployer.mjs --env termux-offline --mode prepare --out .deploy/termux
-node scripts/universal-deployer.mjs --env vps --mode prepare --out .deploy/vps</pre></div></div></section></main>
+node scripts/universal-deployer.mjs --env vps --mode prepare --out .deploy/vps
+# API endpoint examples
+curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{"target":"none","pages":1}'
+curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{"target":"both","extract":false,"limit":100}'
+</pre></div></div></section></main>
 <script>
 const TOKEN=${JSON.stringify(token)};let activeJob='';
 async function api(path,opt={}){try{const r=await fetch(path,{...opt,headers:{'content-type':'application/json','x-local-deployer-token':TOKEN,...(opt.headers||{})}});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d}catch(e){const el=document.getElementById('log')||document.getElementById('scraperLog');if(el)el.textContent='UI/API error: '+(e.message||e);throw e}}

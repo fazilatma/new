@@ -35,16 +35,17 @@
  *   # Run from Termux HOME, not /storage/emulated/0.
  *   cd "$HOME"
  *   pkg update -y && pkg upgrade -y
- *   pkg install -y git nodejs-lts python make clang
+ *   pkg install -y git gh openssh nodejs-lts python make clang
  *   rm -rf "$HOME/new"
  *   git config --global --unset-all credential.helper || true
- *   git clone --depth 1 --branch arena/01a0765b-new https://github.com/fazilatma/new.git "$HOME/new"
+ *   gh auth login --web -h github.com -p https
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm install --ignore-scripts
  *   npm run render:build
  *   PORT=3000 npm run render:start
  *   # open http://127.0.0.1:3000 in the phone browser
- *   # If GitHub asks for a password, passwords are unsupported; use gh auth login or SSH.
+ *   # If GitHub asks for a password, passwords are unsupported; use gh auth login (above) or SSH.
  *   # Note: desktop Chromium for Playwright/Puppeteer may not be available in Termux.
  *
  * Cloudflare Worker local development:

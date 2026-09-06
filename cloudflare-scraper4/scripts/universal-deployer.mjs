@@ -28,14 +28,15 @@
  *   # Paste plain text only; do not paste Markdown links like [https://...](https://...).
  *   cd "$HOME"
  *   pkg update -y && pkg upgrade -y
- *   pkg install -y git nodejs-lts python make clang tar gzip
+ *   pkg install -y git gh openssh nodejs-lts python make clang tar gzip
  *   rm -rf "$HOME/new"
  *   git config --global --unset-all credential.helper || true
- *   git clone --depth 1 --branch arena/01a0765b-new https://github.com/fazilatma/new.git "$HOME/new"
+ *   gh auth login --web -h github.com -p https
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm install --ignore-scripts
  *   node scripts/universal-deployer.mjs --env termux-offline --mode prepare --out .deploy/termux
- *   # If GitHub asks for a password, passwords are unsupported; use gh auth login or SSH.
+ *   # If GitHub asks for a password, passwords are unsupported; use gh auth login (above) or SSH.
  *   # copy/use the generated files from .deploy/termux
  *
  * Cloudflare Workers deployment:
