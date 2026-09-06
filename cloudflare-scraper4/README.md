@@ -1,24 +1,36 @@
-# cloudflare-scraper4
+# Scraper 4
 
-Imported from `fazilatma/code` because no exact directory named `cloudflare-scraper4` was found there; the closest matching project/file is `scraper4.php`.
+نسخهٔ Cloudflare Workers اسکرپر محصولات، همگام‌سازی WooCommerce/Basalam، اتوماسیون، AI، اعلان‌ها و ابزارهای نگهداری.
 
-Source repository: https://github.com/fazilatma/code
-Source commit: `0bfbf7cb2ae316772e05f9e901f66df5bcd2b1ea`
-Source path: `scraper4.php`
+## استقرار بدون terminal
 
-## What it is
+راهنمای کامل dashboard-only در [CLOUDFLARE-WORKER.md](CLOUDFLARE-WORKER.md) است. در Workers Builds کافی است repository را با نام Worker دقیق `scraper4-cloudflare` متصل کنید و این مقادیر را بگذارید:
 
-`scraper4.php` is a monolithic Persian PHP tool for scraping/synchronizing products and managing WooCommerce/Basalam workflows. It also includes Cloudflare-related AI/DoH integration code.
-
-## Run
-
-Place `scraper4.php` on a PHP-enabled host or run from CLI, for example:
-
-```bash
-php scraper4.php whoami
-php scraper4.php cron_run
-php scraper4.php cron_run detail
-php scraper4.php backup
+```text
+Build variable: SKIP_DEPENDENCY_INSTALL=1
+Build command:  npm ci && npm run worker:test
+Deploy command: npm run worker:deploy
 ```
 
-Runtime configuration, queues, logs, backups, and uploaded images are intentionally ignored by Git in this folder.
+این استقرار به R2، subscription یا کارت بانکی نیاز ندارد. deploy نخست D1، Queue اصلی، DLQ، Queue consumer، Cron و schema دیتابیس را خودکار ایجاد و متصل می‌کند؛ ساخت دستی resource یا paste کردن UUID لازم نیست. backup کامل از `/api/backup` به‌صورت فایل JSON دانلود می‌شود. ورود پنل و API فعلاً به `ADMIN_TOKEN` نیاز ندارد. فقط `VAULT_SECRET` باید پس از deploy با حداقل طول ۸ کاراکتر و به‌صورت Secret در Dashboard ثبت شود تا اطلاعات اتصال رمزگذاری شوند.
+
+## توسعهٔ محلی اختیاری
+
+```bash
+npm install
+npm run worker:test
+npm run worker:db:local
+npm run worker:dev
+```
+
+- source اصلی Worker: `worker-src/`
+- entrypoint: `worker-src/main.ts`
+- تنظیمات و bindingهای declarative Cloudflare: `wrangler.toml`
+- deploy و migration خودکار: `scripts/deploy-cloudflare.mjs`
+- migrationهای D1: `migrations/`
+- bundle آمادهٔ Direct Upload: `scraper4.worker.js`
+- مرجع رفتاری PHP: `scraper4.php`
+- گزارش تطبیق 178/178 عملیات و نتیجه تست‌ها: [`CLOUDFLARE-PARITY.md`](CLOUDFLARE-PARITY.md)
+- matrix ماشینی تطبیق: `parity-manifest.json` و `parity-audit.json`
+
+Vault با AES-256-GCM و PBKDF2 برابر سقف Cloudflare یعنی 100,000 iteration کار می‌کند. فایل settings قدیمی از مسیر داشبورد وارد می‌شود؛ envelope ناسازگار با iteration بیشتر به‌جای crash با پیام مهاجرت روشن رد می‌شود.

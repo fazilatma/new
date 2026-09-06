@@ -1,10 +1,10 @@
-# Runtime/generated state created by scraper4.php
-*.json
-!.gitignore
-!README.md
-/uploads/
-/_backups/
-*.log
-*.csv
-*.zip
+node_modules/
+.wrangler/
+.dev.vars
 .env
+.env.*
+*.log
+coverage/
+render-dist/
+worker-dist/
+dist/
