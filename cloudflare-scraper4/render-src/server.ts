@@ -8,7 +8,7 @@ import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrder
 import { config, assertConfig } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
-import { createBackup, createJob, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, updateJob, upsertProduct } from './db.js';
+import { createBackup, createJob, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
@@ -172,7 +172,7 @@ app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id'))
 app.post('/api/extract/:id',async c=>runProfileApi(c,c.req.param('id')));
 app.get('/api/jobs', async c => c.json({ ok: true, jobs: await listJobs(Math.min(200, Number(c.req.query('limit')) || 50)) }));
 app.get('/api/jobs/:id', async c => { const job = await getJob(c.req.param('id')); return job ? c.json({ ok: true, job }) : c.json({ ok: false, error: 'Job not found' }, 404); });
-app.post('/api/jobs/:id/stop', async c => { await updateJob(c.req.param('id'), { stopRequested: true }); return c.json({ ok: true }); });
+app.post('/api/jobs/:id/stop', async c => { const job=await stopJob(c.req.param('id')); if(job)return c.json({ok:true,job,forced:true}); await updateJob(c.req.param('id'), { stopRequested: true }); return c.json({ ok: true, forced:false }); });
 app.post('/api/jobs/:id/retry',async c=>{const job=await retryJob(c.req.param('id'));return job?c.json({ok:true,job}):c.json({ok:false,error:'Job cannot be retried'},409)});
 app.delete('/api/jobs/:id',async c=>c.json({ok:await deleteJob(c.req.param('id'))}));
 app.delete('/api/jobs',async c=>c.json({ok:true,deleted:await clearFinishedJobs()}));

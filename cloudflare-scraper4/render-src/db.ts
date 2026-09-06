@@ -117,6 +117,7 @@ export async function createJob(profileId: string, kind: Job['kind'], target: Jo
   return jobFromRow(rows[0]);
 }
 
+export async function stopJob(id:string):Promise<Job|null>{await deleteState(`job_checkpoint:${id}`);const {rows}=await pool.query(`UPDATE jobs SET status='stopped',phase='finished',stop_requested=true,error='Stopped manually',finished_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running') RETURNING *`,[id]);return rows[0]?jobFromRow(rows[0]):null}
 export async function retryJob(id:string):Promise<Job|null>{const {rows}=await pool.query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=false,error=NULL,started_at=NULL,finished_at=NULL,processed=0,added=0,updated=0,failed=0,updated_at=now() WHERE id=$1 AND status IN ('failed','stopped','done') RETURNING *`,[id]);return rows[0]?jobFromRow(rows[0]):null}
 export async function deleteJob(id:string):Promise<boolean>{const result=await pool.query(`DELETE FROM jobs WHERE id=$1 AND status NOT IN ('running')`,[id]);return Boolean(result.rowCount)}
 export async function clearFinishedJobs():Promise<number>{const result=await pool.query(`DELETE FROM jobs WHERE status IN ('done','failed','stopped')`);return result.rowCount||0}
@@ -217,6 +218,7 @@ export async function getState<T>(key: string, fallback: T): Promise<T> {
 export async function setState(key: string, value: unknown): Promise<void> {
   await pool.query(`INSERT INTO app_state(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`, [key, JSON.stringify(value)]);
 }
+export async function deleteState(key: string): Promise<void> { await pool.query('DELETE FROM app_state WHERE key=$1', [key]); }
 
 export async function createBackup(): Promise<Record<string, unknown>> {
   const [profiles,products,jobs,states,maps,learning,autoreply] = await Promise.all([
@@ -250,7 +252,7 @@ export async function reapStalledJobs(minutes = 30): Promise<number> {
   return result.rowCount || 0;
 }
 export async function recoverFailedAndStalledJobs(minutes = 30): Promise<number> {
-  const result = await pool.query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=false,error=NULL,finished_at=NULL,updated_at=now() WHERE status IN ('failed','stopped') OR (status='running' AND updated_at < now()-make_interval(mins=>$1))`, [Math.max(1, minutes)]);
+  const result = await pool.query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=false,error=NULL,finished_at=NULL,updated_at=now() WHERE status='failed' OR (status='running' AND updated_at < now()-make_interval(mins=>$1))`, [Math.max(1, minutes)]);
   return result.rowCount || 0;
 }
 

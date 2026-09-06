@@ -1,4 +1,4 @@
-import { allProducts, claimJob, getProfile, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
+import { allProducts, claimJob, getJob, getProfile, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import type { Job, Product } from './types.js';
@@ -10,7 +10,7 @@ function append(job: Job, message: string, level = 'info'): void {
   job.log.push({ at: new Date().toISOString(), level, message });
   if (job.log.length > 200) job.log = job.log.slice(-200);
 }
-async function save(job: Job): Promise<void> { await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); }
+async function save(job: Job): Promise<void> { const current=await getJob(job.id); if(current?.status==='stopped'&&job.status!=='stopped')return; if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')} await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); }
 
 export async function processOneJob(): Promise<boolean> {
   const job = await claimJob(); if (!job) return false;
