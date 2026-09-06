@@ -23,7 +23,8 @@
     "worker:test": "npm run worker:typecheck && npm run worker:build && node --test worker-tests/*.test.mjs",
     "worker:deploy": "node scripts/deploy-cloudflare.mjs",
     "worker:db:local": "wrangler d1 migrations apply DB --local",
-    "worker:db:remote": "wrangler d1 migrations apply DB --remote"
+    "worker:db:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy:universal": "node scripts/universal-deployer.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.1",
