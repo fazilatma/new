@@ -128,3 +128,59 @@ Use `--project-dir`:
 node scripts/universal-deployer.mjs --project-dir ../some-next-app --env vercel
 node scripts/universal-deployer.mjs --project-dir ../some-node-app --env vps --start "npm start"
 ```
+
+## Scraping library installer
+
+The deployer can now install curated scraping-library profiles into this project or any other target project.
+
+List all groups and profiles:
+
+```bash
+npm run deploy:universal -- --env vscode --scraping-libs list
+```
+
+Generate scripts only, without installing:
+
+```bash
+npm run deploy:universal -- --env vscode --scraping-libs node --dry-run
+```
+
+Install the Node scraping profile:
+
+```bash
+npm run deploy:universal -- --env vscode --scraping-libs node
+```
+
+Install the browser-rendering profile:
+
+```bash
+npm run deploy:universal -- --env vscode --scraping-libs browser
+```
+
+Install the full curated set:
+
+```bash
+npm run deploy:universal -- --env vscode --scraping-libs full
+```
+
+Profiles:
+
+- `minimal`: small HTML/DOM parsing helpers.
+- `edge`: Cloudflare-friendly parsing, JSONPath, structured-data, and Persian normalization helpers.
+- `node`: general Node.js scraping stack with HTTP, DOM, metadata, XML, CSV, Excel, queues, and rate limiting.
+- `browser`: Node scraping plus Playwright/Puppeteer rendering.
+- `full`: all curated groups, including media/document helpers and proxy-agent plumbing for authorized networks.
+
+Do not install the `browser` or `full` profile into a Cloudflare Worker-only runtime unless you understand the bundle/runtime impact. Playwright and Puppeteer must run on Node.js hosts such as VPS, Render, local Termux, or external browser-rendering services.
+
+## Offline HTML deployer
+
+A no-server HTML helper is available here:
+
+```text
+deploy-setup/static-universal-deployer.html
+```
+
+Open it directly in a browser. It can generate commands, shell scripts, and deployment notes without running a server.
+
+Important browser limitation: static HTML cannot directly install a project or write into arbitrary local folders, because browsers are sandboxed. It generates scripts for you to download and run in a terminal.

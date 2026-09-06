@@ -8,3 +8,4 @@ coverage/
 render-dist/
 worker-dist/
 dist/
+.deploy/

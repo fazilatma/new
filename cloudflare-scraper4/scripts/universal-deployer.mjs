@@ -10,6 +10,49 @@ import { Readable } from 'node:stream';
 
 const ENVIRONMENTS = new Set(['termux-offline', 'vscode', 'cloudflare-worker', 'vercel', 'render', 'vps']);
 
+const SCRAPING_LIBRARY_GROUPS = {
+  edge: {
+    description: 'Cloudflare/edge-compatible parsers and query helpers',
+    deps: ['htmlparser2', 'parse5', 'node-html-parser', 'linkedom', 'css-select', 'domutils', 'entities', 'he', 'jsonpath-plus', 'secure-json-parse']
+  },
+  node: {
+    description: 'Node.js HTTP clients, DOM parsers, metadata, XML, CSV and spreadsheet tools',
+    deps: ['undici', 'got', 'axios', 'cheerio', 'jsdom', 'happy-dom', 'xpath', 'fontoxpath', 'html-metadata-parser', 'metascraper', 'metascraper-title', 'metascraper-image', 'metascraper-description', 'fast-xml-parser', 'xml2js', 'rss-parser', 'sitemap', 'csv-parse', 'papaparse', 'fast-csv', 'read-excel-file', 'exceljs', 'xlsx', 'sanitize-html', 'html-to-text', 'turndown', 'normalize-url']
+  },
+  browser: {
+    description: 'JavaScript rendering engines for Node.js hosts, not Cloudflare Workers',
+    deps: ['playwright', 'puppeteer-core']
+  },
+  crawler: {
+    description: 'Crawler scheduling, rate limiting, robots and queue helpers',
+    deps: ['crawlee', 'p-queue', 'bottleneck', 'robots-parser']
+  },
+  data: {
+    description: 'Structured data, JSON search and content extraction helpers',
+    deps: ['jsonpath-plus', 'jmespath', 'object-scan', 'schema-dts', '@mozilla/readability', 'unfluff']
+  },
+  media: {
+    description: 'Image and document inspection. Some packages may need native support on mobile/VPS.',
+    deps: ['probe-image-size', 'image-size', 'file-type', 'pdf-parse', 'pdfjs-dist', 'mammoth']
+  },
+  locale: {
+    description: 'Persian/Arabic text, dates, entities and normalization helpers',
+    deps: ['persian-tools', 'jalaali-js', 'dayjs', 'slugify', 'xregexp']
+  },
+  proxy: {
+    description: 'Proxy agent plumbing for authorized networks only; not an anti-bot bypass kit',
+    deps: ['proxy-agent', 'https-proxy-agent', 'socks-proxy-agent', 'proxy-chain', 'user-agents']
+  }
+};
+
+const SCRAPING_LIBRARY_PROFILES = {
+  minimal: ['edge'],
+  edge: ['edge', 'data', 'locale'],
+  node: ['edge', 'node', 'crawler', 'data', 'locale'],
+  browser: ['node', 'browser', 'crawler', 'data', 'locale'],
+  full: ['edge', 'node', 'browser', 'crawler', 'data', 'media', 'locale', 'proxy']
+};
+
 function usage() {
   return `Universal deployer for Node.js/Next.js/Cloudflare Worker projects.
 
@@ -38,6 +81,9 @@ Options:
   --include-node-modules    Include node_modules in Termux/VPS archive if present.
   --skip-tests              Do not run tests before deploy.
   --yes                     Non-interactive confirmation for deploy mode.
+  --scraping-libs <profile>  Install or print scraping libraries: minimal, edge, node, browser, full, list.
+  --package-manager <name>   npm, pnpm, yarn, or bun. Default: npm.
+  --dry-run                  Print install commands without running package-manager installs.
 
 Examples:
   node scripts/universal-deployer.mjs --env termux-offline --project-dir . --include-node-modules
@@ -46,11 +92,13 @@ Examples:
   node scripts/universal-deployer.mjs --env vercel --mode prepare
   node scripts/universal-deployer.mjs --env render --mode prepare
   node scripts/universal-deployer.mjs --env vps --name scraper4-cloudflare --port 3000
+  node scripts/universal-deployer.mjs --env vscode --scraping-libs node
+  node scripts/universal-deployer.mjs --env vscode --scraping-libs list
 `;
 }
 
 function parseArgs(argv) {
-  const args = { projectDir: process.cwd(), mode: 'prepare', port: '3000', includeNodeModules: false, skipTests: false, yes: false };
+  const args = { projectDir: process.cwd(), mode: 'prepare', port: '3000', includeNodeModules: false, skipTests: false, yes: false, packageManager: 'npm', dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') args.help = true;
@@ -65,6 +113,9 @@ function parseArgs(argv) {
     else if (a === '--include-node-modules') args.includeNodeModules = true;
     else if (a === '--skip-tests') args.skipTests = true;
     else if (a === '--yes' || a === '-y') args.yes = true;
+    else if (a === '--scraping-libs') args.scrapingLibs = argv[++i];
+    else if (a === '--package-manager') args.packageManager = argv[++i];
+    else if (a === '--dry-run') args.dryRun = true;
     else throw new Error(`Unknown argument: ${a}`);
   }
   return args;
@@ -83,6 +134,62 @@ function sh(command, cwd, env = {}) {
 function commandExists(command) {
   const result = spawnSync(process.platform === 'win32' ? 'where' : 'command', [process.platform === 'win32' ? command : '-v', command], { shell: true, stdio: 'ignore' });
   return result.status === 0;
+}
+
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function scrapingLibraries(profile = 'node') {
+  if (profile === 'list') return [];
+  const groups = SCRAPING_LIBRARY_PROFILES[profile];
+  if (!groups) throw new Error(`Unknown scraping library profile: ${profile}. Use one of: ${Object.keys(SCRAPING_LIBRARY_PROFILES).join(', ')}, list`);
+  return unique(groups.flatMap(group => SCRAPING_LIBRARY_GROUPS[group]?.deps || []));
+}
+
+function scrapingInstallCommand(packages, packageManager = 'npm') {
+  const list = packages.join(' ');
+  if (!list) return '';
+  if (packageManager === 'pnpm') return `pnpm add ${list}`;
+  if (packageManager === 'yarn') return `yarn add ${list}`;
+  if (packageManager === 'bun') return `bun add ${list}`;
+  return `npm install ${list}`;
+}
+
+function printScrapingLibraryList() {
+  console.log('Scraping library groups:');
+  for (const [name, group] of Object.entries(SCRAPING_LIBRARY_GROUPS)) {
+    console.log(`\n[${name}] ${group.description}`);
+    console.log(group.deps.join(' '));
+  }
+  console.log('\nProfiles:');
+  for (const [name, groups] of Object.entries(SCRAPING_LIBRARY_PROFILES)) {
+    console.log(`${name}: ${groups.join(', ')}`);
+  }
+  console.log('\nNote: browser/profile packages such as Playwright and Puppeteer require a Node.js host and cannot run inside Cloudflare Workers. Proxy packages are only for authorized networks and must not be used to bypass access controls.');
+}
+
+function maybeInstallScrapingLibraries(args) {
+  if (!args.scrapingLibs) return;
+  if (args.scrapingLibs === 'list') {
+    printScrapingLibraryList();
+    return;
+  }
+  const packages = scrapingLibraries(args.scrapingLibs);
+  const command = scrapingInstallCommand(packages, args.packageManager);
+  console.log(`Scraping profile: ${args.scrapingLibs}`);
+  console.log(`Packages (${packages.length}): ${packages.join(' ')}`);
+  console.log(`Install command: ${command}`);
+  if (args.mode === 'plan') return;
+  const out = ensureOut(args);
+  writeExecutable(join(out, `install-scraping-libs-${args.scrapingLibs}.sh`), `#!/usr/bin/env bash
+set -euo pipefail
+cd "${args.projectDir}"
+${command}
+`);
+  writeFileSync(join(out, `scraping-libs-${args.scrapingLibs}.json`), JSON.stringify({ profile: args.scrapingLibs, packages, command }, null, 2));
+  if (!args.dryRun && args.mode !== 'plan') sh(command, args.projectDir);
 }
 
 function infer(projectDir, args) {
@@ -430,9 +537,11 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log(usage()); return; }
   if (!args.env || !ENVIRONMENTS.has(args.env)) throw new Error(`Choose --env: ${[...ENVIRONMENTS].join(', ')}`);
+  if (args.scrapingLibs === 'list') { printScrapingLibraryList(); return; }
   if (!['plan', 'prepare', 'deploy'].includes(args.mode)) throw new Error('--mode must be plan, prepare, or deploy');
   args.projectDir = resolve(args.projectDir);
   const meta = infer(args.projectDir, args);
+  maybeInstallScrapingLibraries(args);
   if (args.mode === 'plan') { printPlan(args, meta); return; }
   if (args.env === 'termux-offline') await termuxOffline(args, meta);
   else if (args.env === 'vscode') await vscode(args, meta);
