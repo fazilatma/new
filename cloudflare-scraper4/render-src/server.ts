@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.58.0'; } catch { return process.env.npm_package_version || '1.58.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.59.0'; } catch { return process.env.npm_package_version || '1.59.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -34,7 +34,7 @@ function nodeLibraryProbe(){
   const npm=(name:string)=>item(name,resolvePackage(name),String(deps[name]||''),'npm dependency');
   const groups=[
     {label:'Node runtime',items:[item('Node.js',true,process.version,'runtime'),item('node:sqlite',true,process.versions.node,'built-in'),item('undici/fetch',typeof fetch==='function',process.versions.node,'built-in')]},
-    {label:'Installed npm scraping/runtime libraries',items:['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg'].map(npm)},
+    {label:'Installed npm scraping/runtime libraries',items:['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg','@basalam/sdk','@basalam/node-sdk','basalam-sdk','basalam'].map(npm)},
     {label:'Build/deploy dependencies',items:['typescript','esbuild','wrangler'].map(npm)},
     {label:'System browser/tools',items:['chromium','chromium-browser','google-chrome','git','gh','psql'].map(name=>{const path=command(name);return item(name,Boolean(path),path,'system command')})},
     {label:'Storage configuration',items:[item(databaseLabel,true,databaseDriver,'database'),item('DATABASE_URL',Boolean(process.env.DATABASE_URL),'configured','environment'),item('RUN_WORKER_IN_WEB',config.runWorkerInWeb,'configured','environment')]}
