@@ -10,7 +10,7 @@
     main{max-width:1100px;margin:auto;padding:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
     section,.card{background:rgba(17,24,39,.88);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 12px 30px #0005}
     h1,h2{margin:.2rem 0 1rem}label{display:block;margin:.6rem 0 .2rem;color:#cbd5e1}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;background:#020617;color:var(--text);padding:10px;font:inherit}
-    textarea{min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}button{border:0;border-radius:10px;background:var(--accent);color:#00111a;padding:10px 14px;font-weight:700;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#334155;color:#e2e8f0}.muted{color:var(--muted);font-size:14px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:3px;color:#bae6fd}.warn{border-left:4px solid #f59e0b;padding-left:12px}.ok{border-left:4px solid #22c55e;padding-left:12px}code{background:#020617;border:1px solid var(--line);border-radius:6px;padding:1px 5px}
+    textarea{min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}button{border:0;border-radius:10px;background:var(--accent);color:#00111a;padding:10px 14px;font-weight:700;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#334155;color:#e2e8f0}.muted{color:var(--muted);font-size:14px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:3px;color:#bae6fd}.warn{border-left:4px solid #f59e0b;padding-left:12px}.ok{border-left:4px solid #22c55e;padding-left:12px}code{background:#020617;border:1px solid var(--line);border-radius:6px;padding:1px 5px}.lib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px}.lib-card{border:1px solid var(--line);border-radius:14px;background:#07111f;padding:12px}.lib-card h3{margin:0 0 6px;color:#bae6fd}.lib-card small{color:var(--muted);display:block;margin-bottom:7px}.lib-card code{display:inline-block;margin:2px}
   </style>
 </head>
 <body>
@@ -53,6 +53,12 @@
   </div>
 
   <section style="margin-top:16px">
+    <h2>Installed libraries by type</h2>
+    <p class="muted">These are the libraries already included in the Scraper4 project, grouped by their role. Optional profiles above can generate extra install commands.</p>
+    <div id="installedLibraries" class="lib-grid"></div>
+  </section>
+
+  <section style="margin-top:16px">
     <h2>Generated output</h2>
     <button onclick="generate()">Generate</button>
     <button class="secondary" onclick="copyOut()">Copy</button>
@@ -67,6 +73,15 @@
   </section>
 </main>
 <script>
+const installedLibraries=[
+ ['Runtime / API',['hono','@hono/node-server']],
+ ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
+ ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
+ ['Data import / backup',['read-excel-file','fflate']],
+ ['Storage / queue',['pg','node:sqlite','Cloudflare D1','Cloudflare Queues']],
+ ['Build / deploy / types',['wrangler','esbuild','typescript','@types/node','@types/pg']],
+ ['Termux system packages',['git','gh','openssh','nodejs-lts','python','make','clang','chromium']]
+];
 const groups={
  edge:['htmlparser2','parse5','node-html-parser','linkedom','css-select','domutils','entities','he','jsonpath-plus','secure-json-parse'],
  node:['undici','got','axios','cheerio','jsdom','happy-dom','xpath','fontoxpath','html-metadata-parser','metascraper','metascraper-title','metascraper-image','metascraper-description','fast-xml-parser','xml2js','rss-parser','sitemap','csv-parse','papaparse','fast-csv','read-excel-file','exceljs','xlsx','sanitize-html','html-to-text','turndown','normalize-url'],
@@ -86,8 +101,9 @@ function generate(){out.value=`#!/usr/bin/env bash\nset -euo pipefail\n\n# Gener
 function notes(){return `# Deployment notes\n\nProject: ${name.value}\nEnvironment: ${env.value}\nScraping profile: ${profile.value}\n\nPackages:\n\n${pkgs().map(x=>`- ${x}`).join('\n')}\n\nInstall command:\n\n\`\`\`bash\n${addCmd(pkgs())}\n\`\`\`\n\nSecurity note: do not use proxies, browser engines, or scraping APIs to bypass access controls. Use authorized sources and respect robots.txt and terms.\n`}
 async function copyOut(){await navigator.clipboard.writeText(out.value)}
 function download(filename,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function renderInstalledLibraries(){document.getElementById('installedLibraries').innerHTML=installedLibraries.map(([type,items])=>`<div class="lib-card"><h3>${type}</h3><small>${items.length} items</small>${items.map(x=>`<code>${x}</code>`).join(' ')}</div>`).join('')}
 function renderGroups(){document.getElementById('groups').innerHTML=Object.entries(groups).map(([k,v])=>`<div><span class="pill">${k}</span><span class="muted">${v.length} packages</span></div>`).join('')}
-profile.onchange=generate;env.onchange=generate;pm.onchange=generate;renderGroups();generate();
+profile.onchange=generate;env.onchange=generate;pm.onchange=generate;renderGroups();renderInstalledLibraries();generate();
 </script>
 </body>
 </html>

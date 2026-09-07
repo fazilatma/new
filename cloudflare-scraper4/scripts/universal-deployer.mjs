@@ -90,6 +90,31 @@ import { Readable } from 'node:stream';
 
 const ENVIRONMENTS = new Set(['termux-offline', 'vscode', 'cloudflare-worker', 'vercel', 'render', 'vps']);
 
+
+const INSTALLED_PROJECT_LIBRARY_GROUPS = [
+  ['Runtime / API', ['hono', '@hono/node-server']],
+  ['Extraction / HTML parsing', ['cheerio', 'linkedom', 'undici']],
+  ['Browser rendering / crawling', ['playwright', 'puppeteer', 'crawlee']],
+  ['Data import / backup', ['read-excel-file', 'fflate']],
+  ['Storage / queue', ['pg', 'node:sqlite', 'Cloudflare D1', 'Cloudflare Queues']],
+  ['Build / deploy / types', ['wrangler', 'esbuild', 'typescript', '@types/node', '@types/pg']],
+  ['Termux system packages', ['git', 'gh', 'openssh', 'nodejs-lts', 'python', 'make', 'clang', 'chromium']]
+];
+function printInstalledProjectLibraryList(projectDir = process.cwd()) {
+  let projectPkg = {};
+  try { projectPkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8')); } catch {}
+  const deps = { ...(projectPkg.dependencies || {}), ...(projectPkg.devDependencies || {}) };
+  console.log('Installed project libraries by type:');
+  for (const [type, items] of INSTALLED_PROJECT_LIBRARY_GROUPS) {
+    console.log(`
+[${type}]`);
+    for (const name of items) {
+      const version = deps[name] || (name.startsWith('Cloudflare ') || name.startsWith('node:') ? 'runtime' : 'system');
+      console.log(`- ${name}${version ? ` (${version})` : ''}`);
+    }
+  }
+}
+
 const SCRAPING_LIBRARY_GROUPS = {
   edge: {
     description: 'Cloudflare/edge-compatible parsers and query helpers',
@@ -238,7 +263,8 @@ function scrapingInstallCommand(packages, packageManager = 'npm') {
 }
 
 function printScrapingLibraryList() {
-  console.log('Scraping library groups:');
+  printInstalledProjectLibraryList(process.cwd());
+  console.log('\nAvailable optional scraping library groups:');
   for (const [name, group] of Object.entries(SCRAPING_LIBRARY_GROUPS)) {
     console.log(`\n[${name}] ${group.description}`);
     console.log(group.deps.join(' '));
@@ -616,8 +642,8 @@ Review the systemd and Nginx files before enabling them in production.
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log(usage()); return; }
-  if (!args.env || !ENVIRONMENTS.has(args.env)) throw new Error(`Choose --env: ${[...ENVIRONMENTS].join(', ')}`);
   if (args.scrapingLibs === 'list') { printScrapingLibraryList(); return; }
+  if (!args.env || !ENVIRONMENTS.has(args.env)) throw new Error(`Choose --env: ${[...ENVIRONMENTS].join(', ')}`);
   if (!['plan', 'prepare', 'deploy'].includes(args.mode)) throw new Error('--mode must be plan, prepare, or deploy');
   args.projectDir = resolve(args.projectDir);
   const meta = infer(args.projectDir, args);
