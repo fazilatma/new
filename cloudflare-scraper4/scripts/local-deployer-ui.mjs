@@ -26,7 +26,28 @@ const token = process.env.DEPLOYER_UI_TOKEN || randomBytes(18).toString('base64u
 const scraperPort = Number(process.env.SCRAPER_PORT || 3000);
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const scraperCommand = process.env.LOCAL_SCRAPER_COMMAND || `${npmCommand} run render:build && ${npmCommand} run render:start`;
-const defaultDatabaseUrl = 'postgresql://postgres:postgres@localhost:5432/scraper4';
+function shellValue(command, args = []) {
+  const result = spawnSync(command, args, { cwd: projectDir, encoding: 'utf8', env: process.env });
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+function currentOsUser() {
+  return process.env.USER || process.env.LOGNAME || process.env.USERNAME || shellValue('whoami') || 'postgres';
+}
+function termuxDatabaseUrl() {
+  return `postgresql://${currentOsUser()}@localhost:5432/scraper4`;
+}
+function dockerDatabaseUrl() {
+  return 'postgresql://postgres:postgres@localhost:5432/scraper4';
+}
+function normalizeDatabaseUrl(value = '') {
+  const detected = detectEnvironment();
+  const raw = String(value || '').trim();
+  if (detected.id === 'termux') {
+    if (!raw || /@HOST(?::|\/|$)/i.test(raw) || /postgres(?::postgres)?@(?:localhost|127\.0\.0\.1):5432\/scraper4/i.test(raw)) return termuxDatabaseUrl();
+  }
+  if (!raw || /@HOST(?::|\/|$)/i.test(raw)) return detected.id === 'termux' ? termuxDatabaseUrl() : dockerDatabaseUrl();
+  return raw;
+}
 function parseDotEnvFile(file) {
   if (!existsSync(file)) return {};
   const out = {};
@@ -59,7 +80,7 @@ function databaseInstallPlan() {
   const detected = detectEnvironment();
   if (detected.id === 'termux') return {
     ...detected,
-    command: `pkg install -y postgresql && mkdir -p "$PREFIX/var/lib/postgresql" && ([ -f "$PREFIX/var/lib/postgresql/PG_VERSION" ] || initdb "$PREFIX/var/lib/postgresql") && (pg_ctl -D "$PREFIX/var/lib/postgresql" -l "$HOME/scraper4-postgres.log" start || true) && (createdb scraper4 || true) && node -e "import {writeFileSync} from 'node:fs';import {execSync} from 'node:child_process';const user=execSync('whoami').toString().trim();writeFileSync('.env.local', 'DATABASE_URL=postgresql://'+user+'@localhost:5432/scraper4\\nRUN_WORKER_IN_WEB=true\\n');console.log('Wrote .env.local for Termux PostgreSQL user '+user)"`,
+    command: `pkg install -y postgresql && mkdir -p "$PREFIX/var/lib/postgresql" && ([ -f "$PREFIX/var/lib/postgresql/PG_VERSION" ] || initdb "$PREFIX/var/lib/postgresql") && (pg_ctl -D "$PREFIX/var/lib/postgresql" -l "$HOME/scraper4-postgres.log" start || true) && sleep 2 && (createdb scraper4 || true) && node -e "import {writeFileSync} from 'node:fs';import {execSync} from 'node:child_process';const user=execSync('whoami').toString().trim();writeFileSync('.env.local', 'DATABASE_URL=postgresql://'+user+'@localhost:5432/scraper4\\nRUN_WORKER_IN_WEB=true\\n');console.log('Wrote .env.local for Termux PostgreSQL user '+user+'. Do not use postgres:postgres on Termux unless you created that role manually.')"`,
     instructions: 'Termux can install PostgreSQL with pkg. If pkg cannot find postgresql, use a remote PostgreSQL and put its DATABASE_URL in .env.local.'
   };
   if (detected.method === 'docker') return {
@@ -157,11 +178,12 @@ function runJob(name, command, args = [], options = {}) {
 function startScraper() {
   if (scraper?.child && !scraper.child.killed) return scraper;
   scraperLog = '';
+  const baseEnv = localEnv();
   const env = {
-    ...localEnv(),
+    ...baseEnv,
     PORT: String(scraperPort),
-    RUN_WORKER_IN_WEB: process.env.RUN_WORKER_IN_WEB || 'true',
-    DATABASE_URL: process.env.DATABASE_URL || defaultDatabaseUrl
+    RUN_WORKER_IN_WEB: baseEnv.RUN_WORKER_IN_WEB || 'true',
+    DATABASE_URL: normalizeDatabaseUrl(baseEnv.DATABASE_URL)
   };
   const child = spawn(scraperCommand, { cwd: projectDir, shell: true, env });
   scraper = { running: true, pid: child.pid, startedAt: new Date().toISOString(), exitCode: null, child, command: scraperCommand, port: scraperPort };
@@ -215,7 +237,7 @@ function status() {
     package: { name: pkg.name, version: pkg.version, scripts: pkg.scripts },
     node: process.version,
     environment: detectEnvironment(),
-    database: { configured: Boolean(localEnv().DATABASE_URL), maskedUrl: String(localEnv().DATABASE_URL || '').replace(/:[^:@/]+@/, ':***@') },
+    database: { configured: Boolean(localEnv().DATABASE_URL), effectiveUrl: normalizeDatabaseUrl(localEnv().DATABASE_URL), maskedUrl: String(normalizeDatabaseUrl(localEnv().DATABASE_URL) || '').replace(/:[^:@/]+@/, ':***@'), rawHasPlaceholder: /@HOST(?::|\/|$)/i.test(String(localEnv().DATABASE_URL || '')) },
     git: currentGitInfo(),
     files: {
       wrangler: existsSync(join(projectDir, 'wrangler.toml')),
