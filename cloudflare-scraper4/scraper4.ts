@@ -10,6 +10,13 @@
  *   cd new/cloudflare-scraper4
  *   npm install
  *
+ * Automatic updates after this version:
+ *   Keep using npm run deployer:ui as the entry point on Termux/local/VPS.
+ *   The local deployer now checks GitHub at startup and then every 10 minutes.
+ *   If origin/arena/01a0765b-new has a newer commit, it runs fetch/reset and
+ *   npm install automatically, then restarts the deployer. Disable only with:
+ *     LOCAL_DEPLOYER_AUTO_UPDATE=false npm run deployer:ui
+ *
  * Update existing code on any local clone:
  *   cd "$HOME/new"                         # Termux
  *   # or: cd /workspaces/new                # Codespaces
@@ -22,13 +29,13 @@
  *   cd cloudflare-scraper4
  *   npm install --ignore-scripts --no-audit --prefer-online
  *   grep version package.json | head -1
- *   # Expected: 1.50.0
+ *   # Expected: 1.51.0
  *
  * Cloudflare Worker update from Dashboard:
  *   1) Push/pull this branch: arena/01a0765b-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
- *   4) Open /health and verify version is 1.50.0.
+ *   4) Open /health and verify version is 1.51.0.
  *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4

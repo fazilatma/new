@@ -105,7 +105,8 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   }
   checkpoint.seen=[...new Set(checkpoint.seen)];
   if(checkpoint.index<checkpoint.products.length){await setState(key,checkpoint);await save(job);return true}
-  const hasNext=checkpoint.page<profile.pages&&(profile.pagination==='next_selector'?Boolean(checkpoint.nextUrl):profile.pagination!=='none');
+  const pageLimit=profile.pages>0?profile.pages:100;
+  const hasNext=checkpoint.page<pageLimit&&(profile.pagination==='next_selector'?Boolean(checkpoint.nextUrl):profile.pagination!=='none');
   if(hasNext){checkpoint.page++;checkpoint.url=profile.pagination==='next_selector'?checkpoint.nextUrl:pageUrl(profile,checkpoint.page);checkpoint.nextUrl='';checkpoint.index=0;delete checkpoint.products;await setState(key,checkpoint);await save(job);return true}
   await finishScrape(job,profile,checkpoint);return false;
 }
