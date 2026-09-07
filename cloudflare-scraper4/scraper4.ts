@@ -51,7 +51,7 @@
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm config set fetch-retries 5
  *   npm config set fetch-retry-mintimeout 20000
- *   npm config set fetch-retry-maxtimeout 120000
+ *   npm config set fetch-retry-maxtimeout 90000
  *   npm install --ignore-scripts --no-audit --prefer-online
  *
  *   # Termux PostgreSQL database setup.
