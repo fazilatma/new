@@ -20,6 +20,7 @@ export const config = {
 };
 
 export function assertConfig(): void {
-  if (!config.databaseUrl) throw new Error('DATABASE_URL is required');
+  // v1.55.0 parity with scraper4.php v10.170: local/Termux can run without PostgreSQL.
+  // When DATABASE_URL is empty, render-src/db.ts opens a local SQLite database automatically.
   if (!config.adminToken) console.warn('WARNING: ADMIN_TOKEN is empty; the dashboard and API are public.');
 }

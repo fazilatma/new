@@ -1,16 +1,89 @@
 import pg from 'pg';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { config } from './config.js';
 import type { Job, Product, Profile } from './types.js';
 
 const { Pool } = pg;
-export const pool = new Pool({
+const useSqlite = !config.databaseUrl || config.databaseUrl.startsWith('sqlite:') || config.databaseUrl.startsWith('file:');
+const pgPool = useSqlite ? null : new Pool({
   connectionString: config.databaseUrl,
   ssl: config.databaseUrl.includes('localhost') ? false : { rejectUnauthorized: false },
   max: Math.max(2, Number(process.env.DB_POOL_SIZE || 10)),
   idleTimeoutMillis: 30_000
 });
+let sqliteDb: any = null;
+export const databaseDriver = useSqlite ? 'sqlite' : 'postgres';
+export const databaseLabel = useSqlite ? 'local SQLite' : 'PostgreSQL';
+function sqlitePath(): string {
+  const raw = process.env.SCRAPER4_SQLITE_PATH || config.databaseUrl.replace(/^sqlite:/, '').replace(/^file:/, '') || 'data/scraper4.sqlite';
+  return resolve(raw || 'data/scraper4.sqlite');
+}
+async function getSqliteDb(): Promise<any> {
+  if (sqliteDb) return sqliteDb;
+  const file = sqlitePath();
+  mkdirSync(dirname(file), { recursive: true });
+  const mod: any = await import('node:sqlite');
+  sqliteDb = new mod.DatabaseSync(file);
+  sqliteDb.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+  return sqliteDb;
+}
+function normalizeSqliteParam(value: unknown): unknown {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (value instanceof Date) return value.toISOString();
+  if (value && typeof value === 'object') return JSON.stringify(value);
+  return value;
+}
+function sqliteSql(sql: string, params: unknown[]): { sql: string; params: unknown[] } {
+  const ordered: unknown[] = [];
+  const converted = sql
+    .replace(/\$(\d+)(::text\[\])?/g, (_m, n) => { ordered.push(normalizeSqliteParam(params[Number(n) - 1])); return '?'; })
+    .replace(/now\(\)/g, "datetime('now')")
+    .replace(/EXCLUDED\./g, 'excluded.');
+  return { sql: converted, params: ordered.length ? ordered : params.map(normalizeSqliteParam) };
+}
+async function query(sql: string, params: unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+  if (!useSqlite) return pgPool!.query(sql, params) as any;
+  const db = await getSqliteDb();
+  const tx = sqliteSql(sql, params);
+  const text = tx.sql.trim();
+  if (!text) return { rows: [], rowCount: 0 };
+  if (/^(select|pragma)\b/i.test(text) || /\breturning\b/i.test(text)) {
+    const rows = db.prepare(text).all(...tx.params);
+    return { rows, rowCount: rows.length };
+  }
+  const info = db.prepare(text).run(...tx.params);
+  return { rows: [], rowCount: Number(info.changes || 0) };
+}
+export const pool = {
+  query,
+  async connect() {
+    if (!useSqlite) return pgPool!.connect();
+    return { query, release() {} };
+  },
+  async end() { if (!useSqlite) await pgPool!.end(); else if (sqliteDb) { sqliteDb.close(); sqliteDb = null; } }
+};
+function now(): string { return new Date().toISOString(); }
+function parseJson<T>(value: unknown, fallback: T): T { if (typeof value !== 'string') return (value ?? fallback) as T; try { return JSON.parse(value) as T; } catch { return fallback; } }
+function sqliteCutoff(minutes: number): string { return new Date(Date.now() - minutes * 60_000).toISOString().slice(0, 19).replace('T', ' '); }
 
 export async function migrate(): Promise<void> {
+  if (useSqlite) {
+    const db = await getSqliteDb();
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS profiles (id text PRIMARY KEY,data text NOT NULL,enabled integer NOT NULL DEFAULT 1,interval_minutes integer NOT NULL DEFAULT 0,last_run_at text,created_at text NOT NULL DEFAULT (datetime('now')),updated_at text NOT NULL DEFAULT (datetime('now')));
+      CREATE TABLE IF NOT EXISTS products (profile_id text NOT NULL,source_key text NOT NULL,data text NOT NULL,title text NOT NULL,price integer NOT NULL DEFAULT 0,source_url text NOT NULL DEFAULT '',remote_woo_id integer,remote_basalam_id integer,created_at text NOT NULL DEFAULT (datetime('now')),updated_at text NOT NULL DEFAULT (datetime('now')),active integer NOT NULL DEFAULT 1,missing_since text,PRIMARY KEY(profile_id,source_key));
+      CREATE INDEX IF NOT EXISTS products_profile_updated_idx ON products(profile_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS products_title_idx ON products(title);
+      CREATE TABLE IF NOT EXISTS jobs (id text PRIMARY KEY,profile_id text NOT NULL,kind text NOT NULL,target text NOT NULL DEFAULT 'none',status text NOT NULL DEFAULT 'queued',phase text NOT NULL DEFAULT 'waiting',total integer NOT NULL DEFAULT 0,processed integer NOT NULL DEFAULT 0,added integer NOT NULL DEFAULT 0,updated integer NOT NULL DEFAULT 0,failed integer NOT NULL DEFAULT 0,stop_requested integer NOT NULL DEFAULT 0,error text,log text NOT NULL DEFAULT '[]',created_at text NOT NULL DEFAULT (datetime('now')),started_at text,finished_at text,updated_at text NOT NULL DEFAULT (datetime('now')));
+      CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, created_at);
+      CREATE TABLE IF NOT EXISTS destination_map (profile_id text NOT NULL,source_key text NOT NULL,target text NOT NULL,account_key text NOT NULL DEFAULT 'default',remote_id integer NOT NULL,updated_at text NOT NULL DEFAULT (datetime('now')),PRIMARY KEY(profile_id,source_key,target,account_key));
+      CREATE TABLE IF NOT EXISTS category_learning (phrase text NOT NULL, category_id integer NOT NULL, category_name text NOT NULL DEFAULT '', hits integer NOT NULL DEFAULT 1, updated_at text NOT NULL DEFAULT (datetime('now')), PRIMARY KEY(phrase,category_id));
+      CREATE TABLE IF NOT EXISTS autoreply_log (id integer PRIMARY KEY AUTOINCREMENT, chat_id integer, customer text NOT NULL DEFAULT '', input_text text NOT NULL, output_text text NOT NULL, source text NOT NULL, created_at text NOT NULL DEFAULT (datetime('now')));
+      CREATE TABLE IF NOT EXISTS app_state (key text PRIMARY KEY,value text NOT NULL,updated_at text NOT NULL DEFAULT (datetime('now')));
+    `);
+    return;
+  }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS profiles (
       id text PRIMARY KEY,
@@ -82,8 +155,10 @@ export async function migrate(): Promise<void> {
   `);
 }
 
+function dateValue(value: any): string { return value?.toISOString?.() || String(value || now()); }
 function profileFromRow(row: any): Profile {
-  return { ...row.data, lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at || null, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString() };
+  const data = parseJson<Partial<Profile>>(row.data, row.data || {});
+  return { ...data, lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at || null, createdAt: dateValue(row.created_at), updatedAt: dateValue(row.updated_at) } as Profile;
 }
 
 export async function listProfiles(): Promise<Profile[]> {
@@ -133,6 +208,16 @@ export async function listJobs(limit = 50): Promise<Job[]> {
 }
 
 export async function claimJob(): Promise<Job | null> {
+  if (useSqlite) {
+    await query('BEGIN IMMEDIATE');
+    try {
+      const { rows } = await query(`SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1`);
+      if (!rows[0]) { await query('COMMIT'); return null; }
+      const result = await query(`UPDATE jobs SET status='running',phase='starting',started_at=datetime('now'),updated_at=datetime('now') WHERE id=$1 AND status='queued' RETURNING *`, [rows[0].id]);
+      await query('COMMIT');
+      return result.rows[0] ? jobFromRow(result.rows[0]) : null;
+    } catch (error) { await query('ROLLBACK'); throw error; }
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -168,22 +253,35 @@ export async function upsertProduct(profileId: string, product: Product): Promis
 }
 
 export async function listProducts(profileId: string, limit = 100, offset = 0, q = ''): Promise<{ products: Product[]; total: number }> {
+  if (useSqlite) {
+    const like = `%${q}%`;
+    const where = q ? 'profile_id=? AND title LIKE ?' : 'profile_id=?';
+    const params = q ? [profileId, like] : [profileId];
+    const count = await query(`SELECT count(*) total FROM products WHERE ${where}`, params);
+    const { rows } = await query(`SELECT data FROM products WHERE ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    return { products: rows.map(row => parseJson<Product>(row.data, row.data)), total: Number(count.rows[0]?.total || 0) };
+  }
   const params: unknown[] = [profileId]; let where = 'profile_id=$1';
   if (q) { params.push(`%${q}%`); where += ` AND title ILIKE $${params.length}`; }
   const count = await pool.query(`SELECT count(*)::int total FROM products WHERE ${where}`, params);
   params.push(limit, offset);
   const { rows } = await pool.query(`SELECT data FROM products WHERE ${where} ORDER BY updated_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
-  return { products: rows.map(row => row.data), total: count.rows[0].total };
+  return { products: rows.map(row => parseJson<Product>(row.data, row.data)), total: Number(count.rows[0].total || 0) };
 }
 
 export async function allProducts(profileId: string): Promise<Product[]> {
   const { rows } = await pool.query('SELECT data FROM products WHERE profile_id=$1 ORDER BY updated_at', [profileId]);
-  return rows.map(row => row.data);
+  return rows.map(row => parseJson<Product>(row.data, row.data));
 }
-export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const {rows}=await pool.query('SELECT data FROM products WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);return rows[0]?.data||null}
+export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const {rows}=await pool.query('SELECT data FROM products WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);return rows[0]?.data ? parseJson<Product>(rows[0].data, rows[0].data) : null}
 
-export async function markMissingProducts(profileId:string,seenKeys:string[]):Promise<number>{if(!seenKeys.length)return 0;const result=await pool.query(`UPDATE products SET active=false,missing_since=COALESCE(missing_since,now()),updated_at=now() WHERE profile_id=$1 AND active=true AND NOT(source_key=ANY($2::text[]))`,[profileId,seenKeys]);return result.rowCount||0}
-export async function maintenanceRows(profileId=''):Promise<any[]>{const {rows}=await pool.query(`SELECT p.profile_id,p.source_key,p.data,p.title,p.price,p.source_url,p.remote_woo_id,p.remote_basalam_id,p.active,p.missing_since,COALESCE(json_agg(dm) FILTER(WHERE dm.remote_id IS NOT NULL),'[]') maps FROM products p LEFT JOIN destination_map dm ON dm.profile_id=p.profile_id AND dm.source_key=p.source_key WHERE ($1='' OR p.profile_id=$1) GROUP BY p.profile_id,p.source_key ORDER BY p.updated_at DESC`,[profileId]);return rows}
+export async function markMissingProducts(profileId:string,seenKeys:string[]):Promise<number>{
+  if(!seenKeys.length)return 0;
+  if(useSqlite){const placeholders=seenKeys.map(()=>'?').join(',');const result=await query(`UPDATE products SET active=0,missing_since=COALESCE(missing_since,datetime('now')),updated_at=datetime('now') WHERE profile_id=? AND active=1 AND source_key NOT IN (${placeholders})`,[profileId,...seenKeys]);return result.rowCount||0}
+  const result=await pool.query(`UPDATE products SET active=false,missing_since=COALESCE(missing_since,now()),updated_at=now() WHERE profile_id=$1 AND active=true AND NOT(source_key=ANY($2::text[]))`,[profileId,seenKeys]);return result.rowCount||0}
+export async function maintenanceRows(profileId=''):Promise<any[]>{
+  if(useSqlite){const products=(await query(`SELECT * FROM products WHERE (?='' OR profile_id=?) ORDER BY updated_at DESC`,[profileId,profileId])).rows;const maps=(await query('SELECT * FROM destination_map')).rows;return products.map(p=>({...p,data:parseJson<Product>(p.data,p.data),active:Boolean(p.active),maps:maps.filter(m=>m.profile_id===p.profile_id&&m.source_key===p.source_key)}))}
+  const {rows}=await pool.query(`SELECT p.profile_id,p.source_key,p.data,p.title,p.price,p.source_url,p.remote_woo_id,p.remote_basalam_id,p.active,p.missing_since,COALESCE(json_agg(dm) FILTER(WHERE dm.remote_id IS NOT NULL),'[]') maps FROM products p LEFT JOIN destination_map dm ON dm.profile_id=p.profile_id AND dm.source_key=p.source_key WHERE ($1='' OR p.profile_id=$1) GROUP BY p.profile_id,p.source_key ORDER BY p.updated_at DESC`,[profileId]);return rows}
 
 export async function setRemoteId(profileId: string, sourceKey: string, target: 'woo'|'basalam', id: number): Promise<void> {
   const column = target === 'woo' ? 'remote_woo_id' : 'remote_basalam_id';
@@ -212,7 +310,7 @@ function normalizeLearning(value:string){return value.toLowerCase().replace(/[ي
 
 export async function getState<T>(key: string, fallback: T): Promise<T> {
   const { rows } = await pool.query('SELECT value FROM app_state WHERE key=$1', [key]);
-  return rows[0]?.value ?? fallback;
+  return rows[0] ? parseJson<T>(rows[0].value, fallback) : fallback;
 }
 
 export async function setState(key: string, value: unknown): Promise<void> {
@@ -243,20 +341,24 @@ export async function restoreBackup(bundle: any): Promise<{ profiles: number; pr
 }
 
 export async function profileStats(): Promise<any[]> {
+  if(useSqlite){const {rows}=await query(`SELECT p.id,p.data,count(pr.source_key) products,count(pr.remote_woo_id) woo_mapped,count(pr.remote_basalam_id) basalam_mapped,max(pr.updated_at) last_product_at FROM profiles p LEFT JOIN products pr ON pr.profile_id=p.id GROUP BY p.id,p.data ORDER BY p.id`);return rows.map(r=>({...r,name:parseJson<Partial<Profile>>(r.data,{}).name||r.id}))}
   const { rows } = await pool.query(`SELECT p.id,p.data->>'name' name,count(pr.*)::int products,count(pr.remote_woo_id)::int woo_mapped,count(pr.remote_basalam_id)::int basalam_mapped,max(pr.updated_at) last_product_at FROM profiles p LEFT JOIN products pr ON pr.profile_id=p.id GROUP BY p.id,p.data ORDER BY name`);
   return rows;
 }
 
 export async function reapStalledJobs(minutes = 30): Promise<number> {
+  if(useSqlite){const cutoff=sqliteCutoff(Math.max(5,minutes));const result=await query(`UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog',finished_at=datetime('now'),updated_at=datetime('now') WHERE status='running' AND updated_at < ?`,[cutoff]);return result.rowCount||0}
   const result = await pool.query(`UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog',finished_at=now(),updated_at=now() WHERE status='running' AND updated_at < now()-make_interval(mins=>$1)`, [Math.max(5,minutes)]);
   return result.rowCount || 0;
 }
 export async function recoverFailedAndStalledJobs(minutes = 30): Promise<number> {
+  if(useSqlite){const cutoff=sqliteCutoff(Math.max(1,minutes));const result=await query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=0,error=NULL,finished_at=NULL,updated_at=datetime('now') WHERE status='failed' OR (status='running' AND updated_at < ?)`,[cutoff]);return result.rowCount||0}
   const result = await pool.query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=false,error=NULL,finished_at=NULL,updated_at=now() WHERE status='failed' OR (status='running' AND updated_at < now()-make_interval(mins=>$1))`, [Math.max(1, minutes)]);
   return result.rowCount || 0;
 }
 
 export async function enqueueDueProfiles(): Promise<number> {
+  if(useSqlite){const {rows}=await query(`SELECT id,data FROM profiles p WHERE enabled=1 AND interval_minutes>0 AND (last_run_at IS NULL OR last_run_at < datetime('now','-'||interval_minutes||' minutes')) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.profile_id=p.id AND j.status IN ('queued','running'))`);for(const row of rows){const p=parseJson<Profile>(row.data,row.data);await createJob(row.id,'scrape',p.syncWoo&&p.syncBasalam?'both':p.syncWoo?'woo':p.syncBasalam?'basalam':'none');await markProfileRun(row.id)}return rows.length}
   const { rows } = await pool.query(`SELECT id,data FROM profiles p WHERE enabled=true AND interval_minutes>0
     AND (last_run_at IS NULL OR last_run_at < now() - make_interval(mins => interval_minutes))
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.profile_id=p.id AND j.status IN ('queued','running'))`);
@@ -269,7 +371,7 @@ export async function enqueueDueProfiles(): Promise<number> {
 
 function jobFromRow(row: any): Job {
   return { id: row.id, profileId: row.profile_id, kind: row.kind, target: row.target, status: row.status, phase: row.phase,
-    total: row.total, processed: row.processed, added: row.added, updated: row.updated, failed: row.failed,
-    stopRequested: row.stop_requested, error: row.error, log: row.log || [], createdAt: row.created_at.toISOString(),
-    startedAt: row.started_at?.toISOString() || null, finishedAt: row.finished_at?.toISOString() || null, updatedAt: row.updated_at.toISOString() };
+    total: Number(row.total || 0), processed: Number(row.processed || 0), added: Number(row.added || 0), updated: Number(row.updated || 0), failed: Number(row.failed || 0),
+    stopRequested: Boolean(row.stop_requested), error: row.error, log: parseJson(row.log, row.log || []), createdAt: dateValue(row.created_at),
+    startedAt: row.started_at?.toISOString?.() || row.started_at || null, finishedAt: row.finished_at?.toISOString?.() || row.finished_at || null, updatedAt: dateValue(row.updated_at) };
 }
