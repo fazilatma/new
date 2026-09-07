@@ -98,6 +98,7 @@ test('JSON-LD completes partially rendered cards and provides detail variants wi
 test('pagination URL construction matches every PHP mode and drops stale path query strings',()=>{
   const profile=(pagination,paginationValue,url='https://shop.test/catalog?sort=asc#items')=>({url,pagination,paginationValue});
   assert.equal(scraper.pageUrl(profile('query_page','wrong'),3),'https://shop.test/catalog?sort=asc&page=3');
+  assert.equal(scraper.pageUrl(profile('query_page','wrong','https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=336'),2),'https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=337');
   assert.equal(scraper.pageUrl(profile('query_custom','paged'),2),'https://shop.test/catalog?sort=asc&paged=2');
   assert.equal(scraper.pageUrl(profile('query_custom',''),4),'https://shop.test/catalog?sort=asc&paged=4');
   assert.equal(scraper.pageUrl(profile('path_pattern','/p/{page}/','https://shop.test/catalog/page/7/?sort=asc#items'),5),'https://shop.test/catalog/p/5/');
@@ -204,7 +205,8 @@ test('mobile RTL redesign keeps the requested bottom navigation order and touch-
 
 test('workflow panes match the reference hierarchy and every new control is operationally wired',async()=>{
   const source=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8');
-  for(const id of ['releaseBanner','homeProfile','homeAutoMode','homeManualMode','homeScrape','homeDiagnose','homeBackend','homeJobs','settingsProfile','savePriceSettings','sendProfile','quickWoo','quickBasalam','destinationJobs','importProfile','importFile','importAnalyze','importExecute','importResult'])assert.equal((source.match(new RegExp(`id="${id}"`,'g'))||[]).length,1,`${id} must be unique`);
+  for(const id of ['releaseBanner','homeProfile','homeExtractionEngine','homeAutoMode','homeManualMode','homeScrape','homeDiagnose','homeBackend','homeJobs','settingsProfile','savePriceSettings','sendProfile','quickWoo','quickBasalam','destinationJobs','importProfile','importFile','importAnalyze','importExecute','importResult'])assert.equal((source.match(new RegExp(`id="${id}"`,'g'))||[]).length,1,`${id} must be unique`);
+  assert.doesNotMatch(source.slice(source.indexOf('function renderProfiles'),source.indexOf('async function profileEngineChange')),/profile-engine-select/,'profile cards must not show the engine dropdown');
   for(const id of ['titleSuffix','priceMode','priceValue','roundPrice','minPrice','wooCategoryId','basalamCategoryId','basalamFallbackCategoryIds','enabled','networkIndirect','noExtract','syncWoo','syncBasalam'])assert.equal((source.match(new RegExp(`id="${id}"`,'g'))||[]).length,1,`${id} moved to settings without duplication`);
   const settings=source.slice(source.indexOf('<section id="pane-settings"'),source.indexOf('<nav class="main-tabs"'));assert.match(settings,/مدیریت قیمت/);assert.match(settings,/دسته‌بندی جداگانه برای هر مقصد/);assert.match(settings,/settings-help/);
   const destination=source.slice(source.indexOf('<section id="pane-destination"'),source.indexOf('<section id="pane-jobs"'));assert.match(destination,/ارسال سریع محصولات/);assert.match(destination,/مدیریت جامع مقصد/);

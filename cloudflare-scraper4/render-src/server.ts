@@ -1,5 +1,6 @@
 import { serve } from '@hono/node-server';
 import { timingSafeEqual } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -22,8 +23,31 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.53.0'; } catch { return process.env.npm_package_version || '1.53.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.54.0'; } catch { return process.env.npm_package_version || '1.54.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
+const localScraperAutoUpdate = process.env.LOCAL_SCRAPER_AUTO_UPDATE !== 'false' && process.env.RENDER !== 'true';
+const localScraperAutoUpdateMs = Math.max(60_000, Number(process.env.LOCAL_SCRAPER_AUTO_UPDATE_MS || 600_000));
+let localScraperUpdateRunning = false;
+function runLocal(command: string, args: string[] = []) { return spawnSync(command, args, { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env }); }
+function maybeAutoUpdateLocalScraper(reason = 'timer') {
+  if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
+  localScraperUpdateRunning = true;
+  try {
+    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0765b-new').trim() || 'arena/01a0765b-new';
+    const before = (runLocal('git', ['rev-parse', 'HEAD']).stdout || '').trim();
+    const fetched = runLocal('git', ['fetch', 'origin', branch]);
+    if (fetched.status !== 0) return console.warn(`[auto-update:${reason}] git fetch failed: ${fetched.stderr || fetched.stdout}`);
+    const remote = (runLocal('git', ['rev-parse', `origin/${branch}`]).stdout || '').trim();
+    if (!before || !remote || before === remote) return;
+    console.log(`[auto-update:${reason}] New scraper code found ${before.slice(0,7)} -> ${remote.slice(0,7)}. Updating and restarting local scraper...`);
+    runLocal('git', ['config', '--local', '--replace-all', 'credential.helper', '!gh auth git-credential']);
+    const reset = runLocal('git', ['reset', '--hard', `origin/${branch}`]);
+    if (reset.status !== 0) return console.warn(`[auto-update:${reason}] git reset failed: ${reset.stderr || reset.stdout}`);
+    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--ignore-scripts', '--no-audit', '--prefer-online']);
+    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'render:build']);
+    setTimeout(() => process.exit(75), 500);
+  } finally { localScraperUpdateRunning = false; }
+}
 let databaseReady = false;
 let databaseError = '';
 async function initializeDatabase(): Promise<boolean> {
@@ -59,6 +83,7 @@ app.get('/health', c => c.json({
   runtime: process.version,
   version: runtimeVersion(),
   packageVersion: PACKAGE_VERSION,
+  autoUpdate: { enabled: localScraperAutoUpdate, intervalMs: localScraperAutoUpdateMs, running: localScraperUpdateRunning },
   databaseReady,
   databaseError: databaseReady ? null : databaseError,
   workerInWeb: config.runWorkerInWeb,
@@ -243,6 +268,10 @@ function startBackground(): void {
   void schedule(); scheduler = setInterval(schedule, 60_000); scheduler.unref();
 }
 startBackground();
+if (localScraperAutoUpdate) {
+  setTimeout(() => maybeAutoUpdateLocalScraper('startup'), 10_000).unref();
+  setInterval(() => maybeAutoUpdateLocalScraper('timer'), localScraperAutoUpdateMs).unref();
+}
 const databaseRetry = setInterval(async () => { if (!databaseReady && config.databaseUrl && await initializeDatabase()) startBackground(); }, 30_000);
 databaseRetry.unref();
 const shutdown = async () => { requestWorkerStop(); clearInterval(databaseRetry); if (scheduler) clearInterval(scheduler); server.close(); await pool.end(); process.exit(0); };
@@ -263,11 +292,12 @@ function legacyProducts(raw: unknown): Product[] {
 async function runProfileApi(c:any,id:string){
   const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);
   const body=await c.req.json().catch(()=>({})) as any,target=validTarget(body.target||(body.sync?'both':'none')),persist=body.persist!==false,withDetails=body.details!==false,extract=body.extract!==false&&!Boolean((profile as any).noExtract);
-  const pages=Math.min(100,Math.max(1,Number(body.pages)||profile.pages||100)),limit=Math.min(2000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||1000));
+  const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(2000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||1000));
   const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0;
   if(extract){
-    for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,profile.extractionEngine,profile.extractionEngineMaster);pagesScanned++;usedEngine=scraped.usedEngine||usedEngine;engineMs+=scraped.elapsedMs||0;if(scraped.usedEngine&&scraped.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==scraped.usedEngine)){profile.extractionEngineMaster=scraped.usedEngine;profile.extractionEngineHost=new URL(pageUrl(profile,pageNo)).hostname;profile.extractionEngineMs=scraped.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}for(const raw of scraped.products){const product=transformProduct(raw,profile);if((profile.minPrice&&product.price<profile.minPrice)||seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}}catch(error){errors.push(`page ${pageNo}: ${error instanceof Error?error.message:String(error)}`)}
-    if(withDetails)await mapLimit(products,Math.min(4,Math.max(1,Number(process.env.DETAIL_CONCURRENCY||2))),async product=>{try{Object.assign(product,await scrapeDetails(product,profile.selectors))}catch(error){errors.push(`${product.title}: details: ${error instanceof Error?error.message:String(error)}`)}});
+    for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,profile.extractionEngine,profile.extractionEngineMaster);pagesScanned++;usedEngine=scraped.usedEngine||usedEngine;engineMs+=scraped.elapsedMs||0;if(scraped.usedEngine&&scraped.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==scraped.usedEngine)){profile.extractionEngineMaster=scraped.usedEngine;profile.extractionEngineHost=new URL(pageUrl(profile,pageNo)).hostname;profile.extractionEngineMs=scraped.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}const before=products.length;for(const raw of scraped.products){const product=transformProduct(raw,profile);if((profile.minPrice&&product.price<profile.minPrice)||seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}if(products.length===before){if(pageNo===1)throw new Error('در صفحهٔ اول هیچ محصول تازه‌ای استخراج نشد؛ این اجرا موفقِ صفرمحصول محسوب نمی‌شود. سلکتورها، موتور استخراج و محدودیت دسترسی/ضدربات سایت را بررسی کنید.');break}}catch(error){errors.push(`page ${pageNo}: ${error instanceof Error?error.message:String(error)}`);if(pageNo===1)break}
+    if(!products.length&&errors.length)throw new Error(errors[0]);
+    if(withDetails&&products.length)await mapLimit(products,Math.min(4,Math.max(1,Number(process.env.DETAIL_CONCURRENCY||2))),async product=>{try{Object.assign(product,await scrapeDetails(product,profile.selectors))}catch(error){errors.push(`${product.title}: details: ${error instanceof Error?error.message:String(error)}`)}});
     if(persist)for(const product of products)try{(await upsertProduct(profile.id,product))==='added'?added++:updated++}catch(error){errors.push(`${product.title}: save: ${error instanceof Error?error.message:String(error)}`)}
     if(persist)await markProfileRun(profile.id);
   }else products.push(...(await listProducts(profile.id,limit,0,String(body.q||''))).products);
@@ -275,7 +305,7 @@ async function runProfileApi(c:any,id:string){
   return c.json({ok:errors.length===0,mode:'inline-api',profileId:profile.id,target,engine:{requested:profile.extractionEngine,master:profile.extractionEngineMaster,used:usedEngine||profile.extractionEngineMaster||profile.extractionEngine,elapsedMs:engineMs,pagesScanned},summary:{total:products.length,added,updated,synced:syncResults.length,failed:errors.length,persisted:persist,details:withDetails},products,syncResults,errors},errors.length?207:200);
 }
 function normalizeProfile(raw: any): Profile {
-  const url = new URL(String(raw.url || '')); if (!['http:','https:'].includes(url.protocol)) throw new Error('Invalid profile URL');
+  const url = new URL(String(raw.url || '').replace(/&amp;/g, '&')); if (!['http:','https:'].includes(url.protocol)) throw new Error('Invalid profile URL');
   const now = new Date().toISOString(); const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine; const rawMaster=String(raw.extractionEngineMaster||raw.fetch_engine_master||raw.engineMaster||'') as ExtractionEngine; const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined); const selectors = { ...DEFAULT_SELECTORS, ...(typeof raw.selectors === 'string' ? JSON.parse(raw.selectors) : raw.selectors || {}) };
   for (const key of ['container','title','price','link','image']) if (!selectors[key]) throw new Error(`selectors.${key} is required`);
   return { id: String(raw.id || idFromUrl(url.href)), name: String(raw.name || url.hostname), url: url.href, enabled: raw.enabled !== false,

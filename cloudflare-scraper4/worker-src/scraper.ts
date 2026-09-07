@@ -503,13 +503,15 @@ export function transformProduct(product:Product,profile:Profile):Product{
 }
 export function pageUrl(profile:Profile,page:number):string{
   const url=new URL(profile.url);if(page<=1||profile.pagination==='none'||profile.pagination==='next_selector')return url.href;
-  if(profile.pagination==='full_pattern')return profile.paginationValue.split('{page}').join(String(page));
+  const pageNumber=(base:number)=>Math.max(1,base)+(page-1);
+  if(profile.pagination==='full_pattern')return profile.paginationValue.split('{page}').join(String(pageNumber(1)));
   if(profile.pagination==='path_page'||profile.pagination==='path_pattern'){
+    const next=profile.pagination==='path_page'?pageNumber(Number(url.pathname.match(/\/page\/(\d+)\/?$/i)?.[1]||1)):page;
     const pattern=profile.pagination==='path_page'?'/page/{page}/':(profile.paginationValue||'/page/{page}/');
     const basePath=url.pathname.replace(/\/page\/\d+\/?$/i,'').replace(/\/$/,'');
-    return url.origin+basePath+pattern.split('{page}').join(String(page));
+    return url.origin+basePath+pattern.split('{page}').join(String(next));
   }
-  url.hash='';url.searchParams.set(profile.pagination==='query_custom'?(profile.paginationValue||'paged'):'page',String(page));return url.href;
+  const param=profile.pagination==='query_custom'?(profile.paginationValue||'paged'):'page',current=Number(url.searchParams.get(param)||1);url.hash='';url.searchParams.set(param,String(pageNumber(current)));return url.href;
 }
 export async function mapLimit<T>(items:T[],limit:number,fn:(item:T,index:number)=>Promise<void>):Promise<void>{
   let next=0;await Promise.all(Array.from({length:Math.min(Math.max(1,limit),items.length)},async()=>{while(true){const index=next++;if(index>=items.length)return;await fn(items[index],index)}}));

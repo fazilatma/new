@@ -23,11 +23,15 @@ function firstAttr($root: cheerio.Cheerio<any>, selector: string, attrs: string[
 export function pageUrl(profile: Profile, page: number): string {
   const url = new URL(profile.url);
   if (page <= 1 || profile.pagination === 'none') return url.href;
+  const pageNumber = (base: number) => Math.max(1, base) + (page - 1);
   if (profile.pagination === 'path_page') {
-    url.pathname = url.pathname.replace(/\/page\/\d+\/?$/i, '').replace(/\/$/, '') + `/page/${page}/`;
+    const current = Number(url.pathname.match(/\/page\/(\d+)\/?$/i)?.[1] || 1);
+    url.pathname = url.pathname.replace(/\/page\/\d+\/?$/i, '').replace(/\/$/, '') + `/page/${pageNumber(current)}/`;
     return url.href;
   }
-  url.searchParams.set(profile.paginationValue || 'page', String(page));
+  const param = profile.paginationValue || 'page';
+  const current = Number(url.searchParams.get(param) || 1);
+  url.searchParams.set(param, String(pageNumber(current)));
   return url.href;
 }
 
@@ -83,10 +87,16 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto'): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine)).products; }
 
+function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined {
+  const env = process.env;
+  return env.BROWSER_EXECUTABLE_PATH || (driver === 'playwright' ? env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH : env.PUPPETEER_EXECUTABLE_PATH) || env.CHROME_BIN || undefined;
+}
+function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
+  const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
     const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true, executablePath, args: browserLaunchArgs() });
     try {
       const page = await browser.newPage({ locale: 'fa-IR' });
       await page.goto(url, { waitUntil: 'networkidle', timeout: 60_000 });
@@ -97,7 +107,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     } finally { await browser.close(); }
   }
   const puppeteer = await import('puppeteer');
-  const browser = await puppeteer.default.launch({ headless: true, args: ['--no-sandbox','--disable-setuid-sandbox'] });
+  const browser = await puppeteer.default.launch({ headless: true, executablePath, args: browserLaunchArgs() });
   try {
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });

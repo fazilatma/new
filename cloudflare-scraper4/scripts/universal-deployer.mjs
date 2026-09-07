@@ -28,7 +28,7 @@
  *   # Paste plain text only; do not paste Markdown links like [https://...](https://...).
  *   cd "$HOME"
  *   pkg update -y && pkg upgrade -y
- *   pkg install -y git gh openssh nodejs-lts python make clang tar gzip
+ *   pkg install -y git gh openssh nodejs-lts python make clang tar gzip chromium
  *   rm -rf "$HOME/new"
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
@@ -40,6 +40,9 @@
  *   git pull --ff-only origin arena/01a0765b-new
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm install --ignore-scripts
+ *   npm run browsers:install || true
+ *   CHROME_BIN="$(command -v chromium-browser || command -v chromium || true)"
+ *   if [ -n "$CHROME_BIN" ]; then printf "BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n" >> .env.local; fi
  *   node scripts/universal-deployer.mjs --env termux-offline --mode prepare --out .deploy/termux
  *   # If GitHub asks for a password, passwords are unsupported; use gh auth login (above) or SSH.
  *   # copy/use the generated files from .deploy/termux
@@ -370,7 +373,7 @@ async function termuxOffline(args, meta) {
 set -euo pipefail
 APP_NAME="${meta.name}"
 ARCHIVE="${meta.name}-termux-offline.tar.gz"
-pkg install -y nodejs-lts tar || true
+pkg install -y nodejs-lts tar chromium || true
 mkdir -p "$HOME/apps"
 tar -xzf "$ARCHIVE" -C "$HOME/apps"
 cd "$HOME/apps/$APP_NAME"
