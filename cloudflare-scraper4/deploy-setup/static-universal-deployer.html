@@ -73,15 +73,44 @@
   </section>
 </main>
 <script>
-const installedLibraries=[
- ['Runtime / API',['hono','@hono/node-server']],
- ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
- ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
- ['Data import / backup',['read-excel-file','fflate']],
- ['Storage / queue',['pg','node:sqlite','Cloudflare D1','Cloudflare Queues']],
- ['Build / deploy / types',['wrangler','esbuild','typescript','@types/node','@types/pg']],
- ['Termux system packages',['git','gh','openssh','nodejs-lts','python','make','clang','chromium']]
-];
+const installedLibrariesByEnv={
+ 'cloudflare-worker':[
+  ['Runtime / API',['Cloudflare Workers runtime','hono']],
+  ['Extraction / edge parsing',['HTMLRewriter','JSON-LD parser','__NEXT_DATA__ parser','metadata parser','inline-script JSON parser','heuristic product-card parser','linkedom-compatible selectors']],
+  ['Storage / queue',['Cloudflare D1','Cloudflare Queues','Cron Triggers','Web Crypto vault']],
+  ['Build bundle only',['wrangler','esbuild','typescript']]
+ ],
+ vscode:[
+  ['Runtime / API',['hono','@hono/node-server']],
+  ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
+  ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
+  ['Data import / backup',['read-excel-file','fflate']],
+  ['Storage',['pg','node:sqlite']],
+  ['Build / deploy / types',['wrangler','esbuild','typescript','@types/node','@types/pg']]
+ ],
+ render:[
+  ['Runtime / API',['hono','@hono/node-server']],
+  ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
+  ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
+  ['Data import / backup',['read-excel-file','fflate']],
+  ['Storage',['pg','node:sqlite fallback']],
+  ['Build / deploy / types',['esbuild','typescript']]
+ ],
+ vps:[
+  ['System packages',['git','curl','nginx','build-essential','postgresql','nodejs']],
+  ['Node scraper libraries',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],
+  ['Storage',['PostgreSQL','node:sqlite fallback']]
+ ],
+ 'termux-offline':[
+  ['Termux system packages',['git','gh','openssh','nodejs-lts','python','make','clang','chromium']],
+  ['Node scraping runtime',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],
+  ['Storage',['node:sqlite','PostgreSQL optional']]
+ ],
+ vercel:[
+  ['Serverless-compatible',['Node runtime','hono','cheerio','linkedom','undici']],
+  ['Not installed for Vercel runtime',['Playwright runtime','Puppeteer runtime','long crawler workers']]
+ ]
+};
 const groups={
  edge:['htmlparser2','parse5','node-html-parser','linkedom','css-select','domutils','entities','he','jsonpath-plus','secure-json-parse'],
  node:['undici','got','axios','cheerio','jsdom','happy-dom','xpath','fontoxpath','html-metadata-parser','metascraper','metascraper-title','metascraper-image','metascraper-description','fast-xml-parser','xml2js','rss-parser','sitemap','csv-parse','papaparse','fast-csv','read-excel-file','exceljs','xlsx','sanitize-html','html-to-text','turndown','normalize-url'],
@@ -101,9 +130,9 @@ function generate(){out.value=`#!/usr/bin/env bash\nset -euo pipefail\n\n# Gener
 function notes(){return `# Deployment notes\n\nProject: ${name.value}\nEnvironment: ${env.value}\nScraping profile: ${profile.value}\n\nPackages:\n\n${pkgs().map(x=>`- ${x}`).join('\n')}\n\nInstall command:\n\n\`\`\`bash\n${addCmd(pkgs())}\n\`\`\`\n\nSecurity note: do not use proxies, browser engines, or scraping APIs to bypass access controls. Use authorized sources and respect robots.txt and terms.\n`}
 async function copyOut(){await navigator.clipboard.writeText(out.value)}
 function download(filename,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-function renderInstalledLibraries(){document.getElementById('installedLibraries').innerHTML=installedLibraries.map(([type,items])=>`<div class="lib-card"><h3>${type}</h3><small>${items.length} items</small>${items.map(x=>`<code>${x}</code>`).join(' ')}</div>`).join('')}
+function renderInstalledLibraries(){const list=installedLibrariesByEnv[env.value]||installedLibrariesByEnv.vscode;document.getElementById('installedLibraries').innerHTML=list.map(([type,items])=>`<div class="lib-card"><h3>${type}</h3><small>${items.length} items for ${env.value}</small>${items.map(x=>`<code>${x}</code>`).join(' ')}</div>`).join('')}
 function renderGroups(){document.getElementById('groups').innerHTML=Object.entries(groups).map(([k,v])=>`<div><span class="pill">${k}</span><span class="muted">${v.length} packages</span></div>`).join('')}
-profile.onchange=generate;env.onchange=generate;pm.onchange=generate;renderGroups();renderInstalledLibraries();generate();
+profile.onchange=generate;env.onchange=()=>{renderInstalledLibraries();generate()};pm.onchange=generate;renderGroups();renderInstalledLibraries();generate();
 </script>
 </body>
 </html>

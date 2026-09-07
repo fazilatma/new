@@ -91,26 +91,59 @@ import { Readable } from 'node:stream';
 const ENVIRONMENTS = new Set(['termux-offline', 'vscode', 'cloudflare-worker', 'vercel', 'render', 'vps']);
 
 
-const INSTALLED_PROJECT_LIBRARY_GROUPS = [
-  ['Runtime / API', ['hono', '@hono/node-server']],
-  ['Extraction / HTML parsing', ['cheerio', 'linkedom', 'undici']],
-  ['Browser rendering / crawling', ['playwright', 'puppeteer', 'crawlee']],
-  ['Data import / backup', ['read-excel-file', 'fflate']],
-  ['Storage / queue', ['pg', 'node:sqlite', 'Cloudflare D1', 'Cloudflare Queues']],
-  ['Build / deploy / types', ['wrangler', 'esbuild', 'typescript', '@types/node', '@types/pg']],
-  ['Termux system packages', ['git', 'gh', 'openssh', 'nodejs-lts', 'python', 'make', 'clang', 'chromium']]
-];
-function printInstalledProjectLibraryList(projectDir = process.cwd()) {
+const INSTALLED_PROJECT_LIBRARY_GROUPS_BY_ENV = {
+  'cloudflare-worker': [
+    ['Runtime / API', ['Cloudflare Workers runtime', 'hono']],
+    ['Extraction / edge parsing', ['HTMLRewriter', 'JSON-LD parser', '__NEXT_DATA__ parser', 'metadata parser', 'inline-script JSON parser', 'heuristic product-card parser', 'linkedom-compatible selectors']],
+    ['Storage / queue', ['Cloudflare D1', 'Cloudflare Queues', 'Cron Triggers', 'Web Crypto vault']],
+    ['Build bundle only', ['wrangler', 'esbuild', 'typescript']]
+  ],
+  vscode: [
+    ['Runtime / API', ['hono', '@hono/node-server']],
+    ['Extraction / HTML parsing', ['cheerio', 'linkedom', 'undici']],
+    ['Browser rendering / crawling', ['playwright', 'puppeteer', 'crawlee']],
+    ['Data import / backup', ['read-excel-file', 'fflate']],
+    ['Storage', ['pg', 'node:sqlite']],
+    ['Build / deploy / types', ['wrangler', 'esbuild', 'typescript', '@types/node', '@types/pg']]
+  ],
+  render: [
+    ['Runtime / API', ['hono', '@hono/node-server']],
+    ['Extraction / HTML parsing', ['cheerio', 'linkedom', 'undici']],
+    ['Browser rendering / crawling', ['playwright', 'puppeteer', 'crawlee']],
+    ['Data import / backup', ['read-excel-file', 'fflate']],
+    ['Storage', ['pg', 'node:sqlite fallback']],
+    ['Build / deploy / types', ['esbuild', 'typescript']]
+  ],
+  vps: [
+    ['System packages', ['git', 'curl', 'nginx', 'build-essential', 'postgresql', 'nodejs']],
+    ['Node scraper libraries', ['hono', '@hono/node-server', 'cheerio', 'linkedom', 'undici', 'playwright', 'puppeteer', 'crawlee', 'read-excel-file', 'fflate', 'pg']],
+    ['Storage', ['PostgreSQL', 'node:sqlite fallback']]
+  ],
+  'termux-offline': [
+    ['Termux system packages', ['git', 'gh', 'openssh', 'nodejs-lts', 'python', 'make', 'clang', 'chromium']],
+    ['Node scraping runtime', ['hono', '@hono/node-server', 'cheerio', 'linkedom', 'undici', 'playwright', 'puppeteer', 'crawlee', 'read-excel-file', 'fflate', 'pg']],
+    ['Storage', ['node:sqlite', 'PostgreSQL optional']]
+  ],
+  vercel: [
+    ['Serverless-compatible', ['Node runtime', 'hono', 'cheerio', 'linkedom', 'undici']],
+    ['Not installed for Vercel runtime', ['Playwright runtime', 'Puppeteer runtime', 'long crawler workers']]
+  ]
+};
+function printInstalledProjectLibraryList(projectDir = process.cwd(), env = '') {
   let projectPkg = {};
   try { projectPkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8')); } catch {}
   const deps = { ...(projectPkg.dependencies || {}), ...(projectPkg.devDependencies || {}) };
-  console.log('Installed project libraries by type:');
-  for (const [type, items] of INSTALLED_PROJECT_LIBRARY_GROUPS) {
+  const envs = env && INSTALLED_PROJECT_LIBRARY_GROUPS_BY_ENV[env] ? [env] : Object.keys(INSTALLED_PROJECT_LIBRARY_GROUPS_BY_ENV);
+  for (const envName of envs) {
     console.log(`
+Installed libraries for ${envName}:`);
+    for (const [type, items] of INSTALLED_PROJECT_LIBRARY_GROUPS_BY_ENV[envName]) {
+      console.log(`
 [${type}]`);
-    for (const name of items) {
-      const version = deps[name] || (name.startsWith('Cloudflare ') || name.startsWith('node:') ? 'runtime' : 'system');
-      console.log(`- ${name}${version ? ` (${version})` : ''}`);
+      for (const name of items) {
+        const version = deps[name] || (name.startsWith('Cloudflare ') || name.startsWith('node:') || name.includes('runtime') ? 'runtime' : name.includes('optional') || name.includes('fallback') ? '' : 'system');
+        console.log(`- ${name}${version ? ` (${version})` : ''}`);
+      }
     }
   }
 }
@@ -263,7 +296,7 @@ function scrapingInstallCommand(packages, packageManager = 'npm') {
 }
 
 function printScrapingLibraryList() {
-  printInstalledProjectLibraryList(process.cwd());
+  printInstalledProjectLibraryList(process.cwd(), parseArgs(process.argv.slice(2)).env || "");
   console.log('\nAvailable optional scraping library groups:');
   for (const [name, group] of Object.entries(SCRAPING_LIBRARY_GROUPS)) {
     console.log(`\n[${name}] ${group.description}`);
