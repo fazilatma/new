@@ -8,6 +8,7 @@ import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrder
 import { config, assertConfig } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
+import { fontFile, fontStylesheet } from './fonts.js';
 import { createBackup, createJob, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
@@ -58,8 +59,16 @@ app.get('/health', c => c.json({
   workerInWeb: config.runWorkerInWeb,
   time: new Date().toISOString()
 }));
-app.get('/', c => c.html(databaseReady ? DASHBOARD : setupPage(databaseError)));
+app.get('/', c => c.html(DASHBOARD));
+app.get('/setup', c => c.html(setupPage(databaseError || 'Database is ready.')));
 app.get('/dashboard.js', c => c.body(DASHBOARD_JS, 200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' }));
+app.get('/assets/fonts/:file', async c => {
+  const file = c.req.param('file');
+  const css = file.match(/^([a-z]+)\.css$/i);
+  const woff = file.match(/^([a-z]+)-(\d+)\.woff2$/i);
+  if (css) return fontStylesheet(css[1]);
+  return woff ? fontFile(woff[1], woff[2]) : c.notFound();
+});
 app.get('/visual', async c => {
   try {
     const content = await renderVisualSelector(c.req.query('ticket') || '');
@@ -89,6 +98,32 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
+app.get('/api/version', c => c.json({ ok: true, version: process.env.WORKER_VERSION || '1.47.0', runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
+app.get('/api/activity', async c => {
+  const [profiles, jobs] = await Promise.all([listProfiles(), listJobs(Math.min(30, Number(c.req.query('limit')) || 15))]);
+  const active = jobs.filter((j: any) => ['queued', 'running'].includes(j.status));
+  return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: process.env.WORKER_VERSION || '1.47.0', counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
+});
+app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: [] }));
+app.get('/api/ai/test-results', async c => c.json({ ok: true, results: [], leaderboard: await getLeaderboard() }));
+app.get('/api/ai/test-runs/current', c => c.json({ ok: true, run: null }));
+app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; return c.json({ ok: true, results: await testAllModels(String(body.prompt || 'سلام'), Boolean(body.onlyCandidates)) }); });
+app.post('/api/ai/test-runs/control', c => c.json({ ok: true, status: 'noop' }));
+app.post('/api/ai/test-runs/reset', c => c.json({ ok: true }));
+app.post('/api/ai/test-runs/retry', c => c.json({ ok: false, error: 'Retry individual AI test parts is only available on Cloudflare Worker runtime.' }, 501));
+app.post('/api/ai/chat', async c => { const body = await c.req.json().catch(() => ({})) as any, providers = await aiProviders(); const key = String(body.providerId || body.provider || '').split('::')[0]; const provider = providers.find((p: any) => p.id === key) || providers[0]; if (!provider) return c.json({ ok: false, error: 'No AI provider configured' }, 400); const messages = Array.isArray(body.messages) ? body.messages : []; const prompt = messages.map((m: any) => `${m.role || 'user'}: ${m.content || ''}`).join('\n') || String(body.prompt || 'سلام'); return c.json(await aiCall(provider, String(body.model || provider.models?.[0] || ''), prompt)); });
+app.get('/api/agent/templates', c => c.json({ ok: true, templates: [] }));
+app.get('/api/agent/tools', c => c.json({ ok: true, tools: [] }));
+app.get('/api/agent/models', c => c.json({ ok: true, models: [] }));
+app.get('/api/agent/prompts', c => c.json({ ok: true, prompts: [] }));
+app.post('/api/agent/prompts', c => c.json({ ok: false, error: 'Agent prompts are only available on Cloudflare Worker runtime.' }, 501));
+app.delete('/api/agent/prompts/:id', c => c.json({ ok: true }));
+app.get('/api/agent/runs', c => c.json({ ok: true, runs: [] }));
+app.get('/api/agent/runs/current', c => c.json({ ok: true, run: null }));
+app.post('/api/agent/runs', c => c.json({ ok: false, error: 'Agent runs are only available on Cloudflare Worker runtime.' }, 501));
+app.post('/api/agent/runs/control', c => c.json({ ok: true, status: 'noop' }));
+app.post('/api/agent/runs/reset', c => c.json({ ok: true }));
+
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES}));
 app.get('/api/connections', async c => c.json({ok:true,connections:await loadConnections(true)}));
