@@ -311,22 +311,140 @@ function page(token) {
 <div id="guide" class="panel"><div class="card"><h2>One-click copy commands</h2><p class="muted">Each environment has its own copy button. Paste only plain text into Termux; never paste Markdown links.</p><div id="guideCards" class="guide-grid"></div></div></div>
 <div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div></section></section></main>
 <script>
-const TOKEN=${JSON.stringify(token)};const COMMANDS=${JSON.stringify(commands)};let activeJob='';
-async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'content-type':'application/json','x-local-deployer-token':TOKEN,...(opt.headers||{})}});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d}
-function tab(id,btn){document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
-function body(action){return JSON.stringify({action,env:env.value,scrapingLibs:libs.value,packageManager:pm.value,port:port.value,dryRun:true})}
-async function run(action){activeJob=action;document.getElementById('log').textContent='Starting '+action+'...';tab('jobs',document.querySelectorAll('.tabs button')[4]);const d=await api('/api/job',{method:'POST',body:body(action)});if(d.instructions){document.getElementById('log').textContent=d.instructions;document.getElementById('dbHelp').textContent=d.instructions;return}pollJobs()}
-async function pollJobs(){const data=await api('/api/jobs');const job=data.jobs.find(j=>j.name===activeJob)||data.jobs.at(-1);if(job)document.getElementById('log').textContent='$ '+job.command+'\n\n'+job.log;if(job?.running)setTimeout(pollJobs,1200);refresh()}
-async function scraperStart(){await api('/api/scraper/start',{method:'POST',body:'{}'});scraperLogs()}
-function scraperUrl(path='/'){const h=location.hostname;const proto=location.protocol||'http:';if(h==='localhost'||h==='127.0.0.1')return proto+'//'+h+':${scraperPort}'+path;return 'http://localhost:${scraperPort}'+path}
-function openScraper(path='/'){window.open(scraperUrl(path),'_blank','noopener,noreferrer')}
-async function scraperStop(){await api('/api/scraper/stop',{method:'POST',body:'{}'});scraperLogs()}
-async function scraperLogs(){const d=await api('/api/scraper/logs');document.getElementById('scraperLog').textContent=d.log||'No logs yet.';refresh();if(d.scraper?.running)setTimeout(scraperLogs,1500)}
-async function updateCode(force){document.getElementById('log').textContent='Updating from GitHub...';tab('jobs',document.querySelectorAll('.tabs button')[4]);const d=await api('/api/update',{method:'POST',body:JSON.stringify({force,restart:true})});document.getElementById('log').textContent=JSON.stringify(d,null,2)+'\n\nIf update succeeded, wait a few seconds and refresh.';setTimeout(()=>location.reload(),3500)}
-function renderGuides(){guideCards.innerHTML=Object.entries(COMMANDS).map(([name,cmd],i)=>'<div class="guide-card"><h3>'+name+'</h3><button class="secondary" onclick="copyCommand('+i+',this)">Copy all</button><span class="copy-ok" id="copied'+i+'"></span><pre id="cmd'+i+'"></pre></div>').join('');Object.values(COMMANDS).forEach((cmd,i)=>document.getElementById('cmd'+i).textContent=cmd)}
-async function copyCommand(i,btn){const text=Object.values(COMMANDS)[i];await navigator.clipboard.writeText(text);document.getElementById('copied'+i).textContent='Copied';setTimeout(()=>document.getElementById('copied'+i).textContent='',1800)}
-function showDbHelp(){const text=COMMANDS['Database: Docker local']+'\n\n--- Termux ---\n'+COMMANDS['Database: Termux PostgreSQL']+'\n\n--- Render ---\n'+COMMANDS['Render.com panel'];dbHelp.textContent=text}
-async function refresh(){const d=await api('/api/status'),s=d.scraper,db=d.database||{},det=d.environment||{};detected.innerHTML='<b>Detected:</b> '+(det.label||'-')+' · database: '+(det.canInstallDatabase?'auto/installable':'panel/manual');if(det.id==='termux')env.value='termux-offline';else if(det.id==='render')env.value='render';else if(det.id==='vercel')env.value='vercel';else if(det.id==='codespaces')env.value='vscode';status.innerHTML='<div class="metric"><small>Package</small><b>'+d.package.name+'</b></div><div class="metric"><small>Version</small><b>'+(d.package.version||'-')+'</b></div><div class="metric"><small>Database</small><b>'+(db.configured?'Configured':'Missing')+'</b><small>'+(db.maskedUrl||'Use Database tab')+'</small></div><div class="metric"><small>Scraper</small><b>'+(s.running?'Running:'+s.port:'Stopped')+'</b></div><div class="metric"><small>Git</small><b class="small">'+(d.git?.commit||'-')+'</b></div><div class="metric"><small>Project</small><b class="small">'+d.projectDir+'</b></div>'}
-renderGuides();showDbHelp();refresh();setInterval(refresh,5000);
+const TOKEN = ${JSON.stringify(token)};
+const COMMANDS = ${JSON.stringify(commands)};
+let activeJob = '';
+const $ = id => document.getElementById(id);
+const logError = err => {
+  const msg = 'UI/API error: ' + (err && err.message ? err.message : String(err));
+  const log = $('log');
+  const db = $('dbHelp');
+  if (log) log.textContent = msg;
+  if (db && !db.textContent) db.textContent = msg;
+  console.error(err);
+};
+async function api(path, opt = {}) {
+  const r = await fetch(path, { ...opt, headers: { 'content-type': 'application/json', 'x-local-deployer-token': TOKEN, ...(opt.headers || {}) } });
+  const d = await r.json();
+  if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+  return d;
+}
+function selectTab(id, btn) {
+  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+  const panel = $(id);
+  if (panel) panel.classList.add('active');
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+function tab(id, btn) { selectTab(id, btn); }
+function tabByIndex(id, index) { selectTab(id, document.querySelectorAll('.tabs button')[index]); }
+function requestBody(action) {
+  return JSON.stringify({
+    action,
+    env: $('env')?.value || 'vscode',
+    scrapingLibs: $('libs')?.value || 'node',
+    packageManager: $('pm')?.value || 'npm',
+    port: $('port')?.value || '3000',
+    dryRun: true
+  });
+}
+async function run(action) {
+  try {
+    activeJob = action;
+    $('log').textContent = 'Starting ' + action + '...';
+    tabByIndex('jobs', 4);
+    const d = await api('/api/job', { method: 'POST', body: requestBody(action) });
+    if (d.instructions) {
+      $('log').textContent = d.instructions;
+      $('dbHelp').textContent = d.instructions;
+      return;
+    }
+    pollJobs();
+  } catch (err) { logError(err); }
+}
+async function pollJobs() {
+  try {
+    const data = await api('/api/jobs');
+    const job = data.jobs.find(j => j.name === activeJob) || data.jobs.at(-1);
+    if (job) $('log').textContent = '$ ' + job.command + '\n\n' + job.log;
+    if (job?.running) setTimeout(pollJobs, 1200);
+    refresh();
+  } catch (err) { logError(err); }
+}
+async function scraperStart() { try { await api('/api/scraper/start', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
+function scraperUrl(path = '/') {
+  const h = location.hostname;
+  const proto = location.protocol || 'http:';
+  if (h === 'localhost' || h === '127.0.0.1') return proto + '//' + h + ':${scraperPort}' + path;
+  return 'http://localhost:${scraperPort}' + path;
+}
+function openScraper(path = '/') { window.open(scraperUrl(path), '_blank', 'noopener,noreferrer'); }
+async function scraperStop() { try { await api('/api/scraper/stop', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
+async function scraperLogs() {
+  try {
+    const d = await api('/api/scraper/logs');
+    $('scraperLog').textContent = d.log || 'No logs yet.';
+    refresh();
+    if (d.scraper?.running) setTimeout(scraperLogs, 1500);
+  } catch (err) { logError(err); }
+}
+async function updateCode(force) {
+  try {
+    $('log').textContent = 'Updating from GitHub...';
+    tabByIndex('jobs', 4);
+    const d = await api('/api/update', { method: 'POST', body: JSON.stringify({ force, restart: true }) });
+    $('log').textContent = JSON.stringify(d, null, 2) + '\n\nIf update succeeded, wait a few seconds and refresh.';
+    setTimeout(() => location.reload(), 3500);
+  } catch (err) { logError(err); }
+}
+function renderGuides() {
+  const container = $('guideCards');
+  if (!container) return;
+  const names = Object.keys(COMMANDS);
+  container.innerHTML = names.map((name, i) => '<div class="guide-card"><h3>' + name + '</h3><button class="secondary" onclick="copyCommand(' + i + ',this)">Copy all</button><span class="copy-ok" id="copied' + i + '"></span><pre id="cmd' + i + '"></pre></div>').join('');
+  Object.values(COMMANDS).forEach((cmd, i) => { $('cmd' + i).textContent = cmd; });
+}
+async function copyCommand(i, btn) {
+  try {
+    const text = Object.values(COMMANDS)[i];
+    await navigator.clipboard.writeText(text);
+    $('copied' + i).textContent = 'Copied';
+    setTimeout(() => { const el = $('copied' + i); if (el) el.textContent = ''; }, 1800);
+  } catch (err) { logError(err); }
+}
+function showDbHelp() {
+  $('dbHelp').textContent = COMMANDS['Database: Docker local'] + '\n\n--- Termux ---\n' + COMMANDS['Database: Termux PostgreSQL'] + '\n\n--- Render ---\n' + COMMANDS['Render.com panel'];
+}
+async function refresh() {
+  try {
+    const d = await api('/api/status');
+    const scraper = d.scraper || {};
+    const db = d.database || {};
+    const det = d.environment || {};
+    const detectedEl = $('detected');
+    if (detectedEl) detectedEl.innerHTML = '<b>Detected:</b> ' + (det.label || '-') + ' · database: ' + (det.canInstallDatabase ? 'auto/installable' : 'panel/manual');
+    const envSelect = $('env');
+    if (envSelect && det.id === 'termux') envSelect.value = 'termux-offline';
+    else if (envSelect && det.id === 'render') envSelect.value = 'render';
+    else if (envSelect && det.id === 'vercel') envSelect.value = 'vercel';
+    else if (envSelect && det.id === 'codespaces') envSelect.value = 'vscode';
+    const dbLabel = db.configured ? (/HOST/i.test(db.maskedUrl || '') ? 'Placeholder HOST' : 'Configured') : 'Missing';
+    const statusEl = $('status');
+    if (statusEl) statusEl.innerHTML = '<div class="metric"><small>Package</small><b>' + d.package.name + '</b></div><div class="metric"><small>Version</small><b>' + (d.package.version || '-') + '</b></div><div class="metric"><small>Database</small><b>' + dbLabel + '</b><small>' + (db.maskedUrl || 'Use Database tab') + '</small></div><div class="metric"><small>Scraper</small><b>' + (scraper.running ? 'Running:' + scraper.port : 'Stopped') + '</b></div><div class="metric"><small>Git</small><b class="small">' + (d.git?.commit || '-') + '</b></div><div class="metric"><small>Project</small><b class="small">' + d.projectDir + '</b></div>';
+  } catch (err) { logError(err); }
+}
+window.tab = tab;
+window.run = run;
+window.scraperStart = scraperStart;
+window.openScraper = openScraper;
+window.scraperStop = scraperStop;
+window.scraperLogs = scraperLogs;
+window.updateCode = updateCode;
+window.copyCommand = copyCommand;
+window.showDbHelp = showDbHelp;
+renderGuides();
+showDbHelp();
+refresh();
+setInterval(refresh, 5000);
 </script></body></html>`;
 }
