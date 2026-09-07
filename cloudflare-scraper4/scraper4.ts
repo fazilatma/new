@@ -10,6 +10,26 @@
  *   cd new/cloudflare-scraper4
  *   npm install
  *
+ * Update existing code on any local clone:
+ *   cd "$HOME/new"                         # Termux
+ *   # or: cd /workspaces/new                # Codespaces
+ *   # or: cd /opt/scraper4-new              # VPS
+ *   git config --local --unset-all credential.helper || true
+ *   git config --local --replace-all credential.helper '!gh auth git-credential'
+ *   gh auth setup-git || true
+ *   git fetch origin arena/01a0765b-new
+ *   git reset --hard origin/arena/01a0765b-new
+ *   cd cloudflare-scraper4
+ *   npm install --ignore-scripts --no-audit --prefer-online
+ *   grep version package.json | head -1
+ *   # Expected: 1.49.0
+ *
+ * Cloudflare Worker update from Dashboard:
+ *   1) Push/pull this branch: arena/01a0765b-new.
+ *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
+ *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
+ *   4) Open /health and verify version is 1.49.0.
+ *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4
  *   npm install

@@ -98,11 +98,11 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', c => c.json({ ok: true, version: process.env.WORKER_VERSION || '1.48.0', runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
+app.get('/api/version', c => c.json({ ok: true, version: process.env.WORKER_VERSION || '1.49.0', runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
 app.get('/api/activity', async c => {
   const [profiles, jobs] = await Promise.all([listProfiles(), listJobs(Math.min(30, Number(c.req.query('limit')) || 15))]);
   const active = jobs.filter((j: any) => ['queued', 'running'].includes(j.status));
-  return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: process.env.WORKER_VERSION || '1.48.0', counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
+  return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: process.env.WORKER_VERSION || '1.49.0', counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
 });
 app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: [] }));
 app.get('/api/ai/test-results', async c => c.json({ ok: true, results: [], leaderboard: await getLeaderboard() }));
