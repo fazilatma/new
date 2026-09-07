@@ -11,7 +11,7 @@ import { config, assertConfig } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
-import { createBackup, createJob, databaseDriver, databaseLabel, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
@@ -21,10 +21,26 @@ import { mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, t
 import { syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
-import { workerLoop, requestWorkerStop } from './processor.js';
+import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.57.0'; } catch { return process.env.npm_package_version || '1.57.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.58.0'; } catch { return process.env.npm_package_version || '1.58.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
+function nodeLibraryProbe(){
+  const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+  const deps={...(pkgJson.dependencies||{}),...(pkgJson.devDependencies||{})};
+  const resolvePackage=(name:string)=>Boolean(deps[name]);
+  const command=(name:string)=>{const r=spawnSync(process.platform==='win32'?'where':'which',[name],{encoding:'utf8'});return r.status===0?(r.stdout||'').trim().split(/\r?\n/)[0]:''};
+  const item=(name:string,available:boolean,version='',source='runtime',note='')=>({name,available,installed:available,version,source,note});
+  const npm=(name:string)=>item(name,resolvePackage(name),String(deps[name]||''),'npm dependency');
+  const groups=[
+    {label:'Node runtime',items:[item('Node.js',true,process.version,'runtime'),item('node:sqlite',true,process.versions.node,'built-in'),item('undici/fetch',typeof fetch==='function',process.versions.node,'built-in')]},
+    {label:'Installed npm scraping/runtime libraries',items:['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg'].map(npm)},
+    {label:'Build/deploy dependencies',items:['typescript','esbuild','wrangler'].map(npm)},
+    {label:'System browser/tools',items:['chromium','chromium-browser','google-chrome','git','gh','psql'].map(name=>{const path=command(name);return item(name,Boolean(path),path,'system command')})},
+    {label:'Storage configuration',items:[item(databaseLabel,true,databaseDriver,'database'),item('DATABASE_URL',Boolean(process.env.DATABASE_URL),'configured','environment'),item('RUN_WORKER_IN_WEB',config.runWorkerInWeb,'configured','environment')]}
+  ];
+  return{ok:true,environment:process.env.TERMUX_VERSION?'termux-node':process.env.RENDER?'render-node':'local-node',queriedAt:new Date().toISOString(),dynamic:true,projectDir:String(root.pathname),groups};
+}
 const localScraperAutoUpdate = process.env.LOCAL_SCRAPER_AUTO_UPDATE !== 'false' && process.env.RENDER !== 'true';
 const localScraperAutoUpdateMs = Math.max(60_000, Number(process.env.LOCAL_SCRAPER_AUTO_UPDATE_MS || 600_000));
 let localScraperUpdateRunning = false;
@@ -131,6 +147,8 @@ app.post('/api/visual-ticket', async c => {
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
 app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
+app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
+app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {
   const [profiles, jobs] = await Promise.all([listProfiles(), listJobs(Math.min(30, Number(c.req.query('limit')) || 15))]);
   const active = jobs.filter((j: any) => ['queued', 'running'].includes(j.status));
@@ -227,12 +245,16 @@ app.delete('/api/profiles/:id', async c => c.json({ ok: await deleteProfile(c.re
 app.post('/api/profiles/:id/scrape', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any; const target = validTarget(body.target || 'none');
-  return c.json({ ok: true, job: await createJob(profile.id, 'scrape', target) }, 202);
+  const job=await createJob(profile.id, 'scrape', target, { forceNew: body.forceNew !== false });
+  triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor:'triggered' }, 202);
 });
 app.post('/api/profiles/:id/sync', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any;
-  return c.json({ ok: true, job: await createJob(profile.id, 'sync', validTarget(body.target || 'both')) }, 202);
+  const job=await createJob(profile.id, 'sync', validTarget(body.target || 'both'), { forceNew: body.forceNew === true });
+  triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor:'triggered' }, 202);
 });
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id')));
@@ -240,13 +262,15 @@ app.post('/api/extract/:id',async c=>runProfileApi(c,c.req.param('id')));
 app.get('/api/jobs', async c => c.json({ ok: true, jobs: await listJobs(Math.min(200, Number(c.req.query('limit')) || 50)) }));
 app.get('/api/jobs/:id', async c => { const job = await getJob(c.req.param('id')); return job ? c.json({ ok: true, job }) : c.json({ ok: false, error: 'Job not found' }, 404); });
 app.post('/api/jobs/:id/stop', async c => { const job=await stopJob(c.req.param('id')); if(job)return c.json({ok:true,job,forced:true}); await updateJob(c.req.param('id'), { stopRequested: true }); return c.json({ ok: true, forced:false }); });
-app.post('/api/jobs/:id/retry',async c=>{const job=await retryJob(c.req.param('id'));return job?c.json({ok:true,job}):c.json({ok:false,error:'Job cannot be retried'},409)});
+app.post('/api/jobs/:id/retry',async c=>{const job=await retryJob(c.req.param('id'));if(job)triggerLocalJobDrain();return job?c.json({ok:true,job,processor:'triggered'}):c.json({ok:false,error:'Job cannot be retried'},409)});
 app.delete('/api/jobs/:id',async c=>c.json({ok:await deleteJob(c.req.param('id'))}));
 app.delete('/api/jobs',async c=>c.json({ok:true,deleted:await clearFinishedJobs()}));
 app.get('/api/profiles/:id/products', async c => {
   const limit = Math.min(500, Number(c.req.query('limit')) || 100), offset = Math.max(0, Number(c.req.query('offset')) || 0);
   return c.json({ ok: true, ...await listProducts(c.req.param('id'), limit, offset, c.req.query('q') || '') });
 });
+app.delete('/api/profiles/:id/products/:sourceKey',async c=>c.json({ok:await deleteProduct(c.req.param('id'),decodeURIComponent(c.req.param('sourceKey')))}));
+app.delete('/api/profiles/:id/products',async c=>{if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm=DELETE is required'},400);return c.json({ok:true,deleted:await clearProducts(c.req.param('id'))})});
 app.get('/api/profiles/:id/export.csv',async c=>{const result=await listProducts(c.req.param('id'),100000,0,''),fields=['sourceKey','title','price','url','image','sku','brand','stock','weight','category','shortDesc','longDesc'],csv='\uFEFF'+fields.join(',')+'\n'+result.products.map(p=>fields.map(field=>csvCell((p as any)[field])).join(',')).join('\n');return c.body(csv,200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="${c.req.param('id').replace(/[^a-z0-9_.-]/gi,'_')}.csv"`})});
 app.post('/api/profiles/:id/import',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const body=await c.req.json() as any,rows=Array.isArray(body.rows)?body.rows:typeof body.csv==='string'?parseCsv(body.csv):[];let imported=0,failed=0;const errors:string[]=[];for(const [index,row] of rows.entries())try{const title=String(row.title||row.name||'').trim();if(!title)throw Error('title is empty');const key=String(row.sourceKey||row.key||crypto.randomUUID()),image=String(row.image||'');await upsertProduct(profile.id,{sourceKey:key,title,price:numberFromText(String(row.price||0)),priceText:String(row.price||''),url:String(row.url||row.link||''),image,images:image?[image]:[],sku:String(row.sku||''),brand:String(row.brand||''),stock:row.stock==null?undefined:Number(row.stock),weight:row.weight==null?undefined:Number(row.weight),category:String(row.category||''),shortDesc:String(row.shortDesc||''),longDesc:String(row.longDesc||''),sourcePage:'import',scrapedAt:new Date().toISOString()});imported++}catch(error){failed++;if(errors.length<50)errors.push(`row ${index+1}: ${error instanceof Error?error.message:String(error)}`)}return c.json({ok:failed===0,imported,failed,errors})});
 app.post('/api/test-selector', async c => {
@@ -262,6 +286,16 @@ app.post('/api/import-php', async c => {
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, info => console.log(`Scraper4 Render listening on http://${info.address}:${info.port}`));
 let scheduler: NodeJS.Timeout | undefined;
 let backgroundStarted = false;
+let localDrainRunning = false;
+function triggerLocalJobDrain(): void {
+  if (localDrainRunning) return;
+  localDrainRunning = true;
+  setImmediate(async () => {
+    try { for (let i = 0; i < 25; i++) if (!await processOneJob()) break; }
+    catch (error) { console.error('Manual job drain error', error); }
+    finally { localDrainRunning = false; }
+  });
+}
 function startBackground(): void {
   if (!config.runWorkerInWeb || !databaseReady || backgroundStarted) return;
   backgroundStarted = true;

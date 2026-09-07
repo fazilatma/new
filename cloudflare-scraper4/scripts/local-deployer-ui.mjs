@@ -103,7 +103,8 @@ function normalizeDatabaseUrl(value = '') {
   if (detected.id === 'termux') {
     if (!raw || /@HOST(?::|\/|$)/i.test(raw) || /postgres(?::postgres)?@(?:localhost|127\.0\.0\.1):5432\/scraper4/i.test(raw)) return termuxDatabaseUrl();
   }
-  if (!raw || /@HOST(?::|\/|$)/i.test(raw)) return detected.id === 'termux' ? termuxDatabaseUrl() : dockerDatabaseUrl();
+  if (!raw) return '';
+  if (/@HOST(?::|\/|$)/i.test(raw)) return detected.id === 'termux' ? termuxDatabaseUrl() : dockerDatabaseUrl();
   return raw;
 }
 function parseDotEnvFile(file) {
@@ -298,6 +299,17 @@ async function readJson(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
+function proxyScraper(req, res, url) {
+  if (!scraper?.running) startScraper();
+  const targetPath = (url.pathname === '/scraper' ? '/' : url.pathname.replace(/^\/scraper/, '')) + url.search;
+  const upstream = http.request({ hostname: '127.0.0.1', port: scraperPort, path: targetPath || '/', method: req.method, headers: { ...req.headers, host: `127.0.0.1:${scraperPort}` } }, upstreamRes => {
+    res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+    upstreamRes.pipe(res);
+  });
+  upstream.on('error', error => send(res, 502, { ok: false, error: `Local scraper proxy failed: ${error.message}` }));
+  req.pipe(upstream);
+}
+
 function requireAuth(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const supplied = req.headers['x-local-deployer-token'] || url.searchParams.get('token') || '';
@@ -317,6 +329,24 @@ function universalArgs(body, mode = 'plan') {
   return args;
 }
 
+function installedLibraryProbe(envId = 'vscode') {
+  const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  const moduleAvailable = name => existsSync(join(projectDir, 'node_modules', name, 'package.json')) || Boolean(deps[name]);
+  const command = name => {
+    const result = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8' });
+    return result.status === 0 ? String(result.stdout || '').trim().split(/\r?\n/)[0] : '';
+  };
+  const item = (name, available, version = '', source = 'runtime', note = '') => ({ name, available: Boolean(available), installed: Boolean(available), version, source, note });
+  const npm = name => item(name, moduleAvailable(name), deps[name] || '', 'npm dependency');
+  const env = detectEnvironment();
+  return { ok: true, dynamic: true, environment: envId || env.runtime, detected: env, queriedAt: new Date().toISOString(), groups: [
+    { label: 'Local deployer runtime', items: [item('Node.js', true, process.version, 'runtime'), item('npm', Boolean(command('npm')), command('npm'), 'system command'), item('git', Boolean(command('git')), command('git'), 'system command'), item('gh', Boolean(command('gh')), command('gh'), 'system command')] },
+    { label: 'Project npm libraries installed/declared', items: ['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg','typescript','esbuild','wrangler'].map(npm) },
+    { label: 'Browser/database system tools', items: ['chromium','chromium-browser','google-chrome','psql','sqlite3','python','make','clang'].map(name => { const path = command(name); return item(name, Boolean(path), path, 'system command'); }) },
+    { label: 'Selected environment catalog', items: installedLibraryGroups(envId).flatMap(group => group.items.map(name => item(name, true, '', group.type, group.label))) }
+  ] };
+}
+
 function status() {
   return {
     ok: true,
@@ -325,6 +355,7 @@ function status() {
     node: process.version,
     autoUpdate: { enabled: autoUpdateEnabled, intervalMs: autoUpdateIntervalMs, running: autoUpdateRunning, last: lastAutoUpdate },
     environment: detectEnvironment(),
+    libraries: installedLibraryProbe().groups,
     database: { configured: Boolean(localEnv().DATABASE_URL), effectiveUrl: normalizeDatabaseUrl(localEnv().DATABASE_URL), maskedUrl: String(normalizeDatabaseUrl(localEnv().DATABASE_URL) || '').replace(/:[^:@/]+@/, ':***@'), rawHasPlaceholder: /@HOST(?::|\/|$)/i.test(String(localEnv().DATABASE_URL || '')) },
     git: currentGitInfo(),
     files: {
@@ -340,9 +371,13 @@ function status() {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    const ref = req.headers.referer ? new URL(req.headers.referer, `http://${req.headers.host}`) : null;
+    const fromScraperProxy = ref?.pathname?.startsWith('/scraper');
+    if (url.pathname.startsWith('/scraper') || (fromScraperProxy && (url.pathname === '/dashboard.js' || url.pathname === '/health' || url.pathname.startsWith('/api/') || url.pathname.startsWith('/assets/') || url.pathname === '/visual'))) return proxyScraper(req, res, url);
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, page(token), 'text/html; charset=utf-8');
     if (!requireAuth(req, res)) return;
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, status());
+    if (req.method === 'GET' && url.pathname === '/api/libraries') return send(res, 200, installedLibraryProbe(url.searchParams.get('env') || 'vscode'));
     if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, { ok: true, jobs: [...jobs.values()].map(({ child, ...j }) => j) });
     if (req.method === 'GET' && url.pathname === '/api/scraper/logs') return send(res, 200, { ok: true, log: scraperLog, scraper: status().scraper });
     if (req.method === 'POST' && url.pathname === '/api/update') {
@@ -408,7 +443,7 @@ process.on('SIGINT', () => { stopScraper(); server.close(() => process.exit(0));
 process.on('SIGTERM', () => { stopScraper(); server.close(() => process.exit(0)); });
 
 function page(token) {
-  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a0765b-new\ngit reset --hard origin/arena/01a0765b-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\ngrep '\"version\"' package.json | head -1\n# Expected: 1.57.0\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a0765b-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnpm run deployer:ui", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a0765b-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a0765b-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' "};
+  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a0765b-new\ngit reset --hard origin/arena/01a0765b-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\ngrep '\"version\"' package.json | head -1\n# Expected: 1.58.0\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a0765b-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnpm run deployer:ui", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a0765b-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a0765b-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' "};
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scraper4 Local Deployer</title>
 <style>
 :root{color-scheme:dark;--bg:#050814;--bg2:#0b1220;--card:#111c31cc;--card2:#0f172acc;--line:#263854;--text:#e7eefb;--muted:#93a4bc;--brand:#38bdf8;--brand2:#a78bfa;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--shadow:0 24px 80px #0009}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 12% -10%,#164e63 0,#0f172a 33%,#020617 78%);color:var(--text);font:14px/1.55 Inter,ui-sans-serif,system-ui,Segoe UI,Arial}.shell{max-width:1320px;margin:0 auto;padding:22px}.hero{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;padding:20px;border:1px solid #ffffff18;border-radius:28px;background:linear-gradient(135deg,#0f172add,#111827aa);box-shadow:var(--shadow);position:sticky;top:12px;z-index:5;backdrop-filter:blur(16px)}.brand{display:flex;gap:14px;align-items:center}.logo{width:52px;height:52px;border-radius:18px;background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:0 0 45px #38bdf866}.hero h1{font-size:24px;margin:0}.muted{color:var(--muted)}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:#02061799;color:#dbeafe;padding:7px 11px;margin:3px}.grid{display:grid;grid-template-columns:330px 1fr;gap:18px;margin-top:18px}.card{border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,var(--card),var(--card2));padding:18px;box-shadow:var(--shadow)}.side{position:sticky;top:120px;align-self:start}.steps{display:grid;gap:10px}.step{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid #263854;border-radius:16px;background:#07111f}.step b{color:#bfdbfe}.step .num{width:28px;height:28px;border-radius:10px;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#00111f;display:grid;place-items:center;font-weight:900;flex:none}label{display:block;margin:12px 0 5px;color:#cbd5e1;font-weight:700}select,input{width:100%;border:1px solid var(--line);border-radius:14px;background:#020817;color:var(--text);padding:12px}button{border:0;border-radius:14px;background:linear-gradient(135deg,var(--brand),#60a5fa);color:#00111f;font-weight:900;padding:11px 15px;cursor:pointer;margin:4px 4px 4px 0;box-shadow:0 10px 25px #0004}button:hover{filter:brightness(1.08)}.secondary{background:#24344e;color:#e5edf7}.success{background:linear-gradient(135deg,#22c55e,#86efac);color:#04140a}.danger{background:#ef4444;color:white}.warn{background:#f59e0b;color:#1c0a00}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.tabs button{background:#0f1b31;color:#cbd5e1}.tabs button.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#00111f}.panel{display:none}.panel.active{display:block}.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.metric{background:#06101e;border:1px solid var(--line);border-radius:18px;padding:14px;min-height:76px}.metric small{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:17px;margin-top:5px}.dot{width:10px;height:10px;border-radius:99px;background:var(--muted);display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 15px #22c55e}.dot.warn{background:var(--warn)}pre{white-space:pre-wrap;word-break:break-word;background:#020617;border:1px solid var(--line);border-radius:18px;padding:15px;min-height:220px;max-height:520px;overflow:auto;color:#dbeafe}.guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.guide-card{border:1px solid var(--line);border-radius:20px;padding:14px;background:#07111f}.guide-card h3{margin:0 0 8px}.lib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px;margin-top:10px}.lib-card{border:1px solid var(--line);border-radius:16px;padding:12px;background:#06101e}.lib-card h3{margin:0 0 8px;color:#bfdbfe}.lib-card code{display:inline-block;margin:2px;padding:2px 6px;border-radius:999px;background:#020617;border:1px solid #334155;color:#dbeafe;font-size:11px}.lib-card small{display:block;color:var(--muted);margin-bottom:7px}.guide-card pre{min-height:160px;max-height:260px;font-size:12px}.copy-ok{color:#86efac;font-size:12px;margin-left:8px}.banner{border:1px solid #f59e0b66;background:#42200688;color:#fde68a;border-radius:18px;padding:12px;margin-bottom:14px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.kbd{font-family:ui-monospace,Menlo,Consolas,monospace;background:#020617;border:1px solid var(--line);border-radius:7px;padding:2px 7px}.small{font-size:12px}@media(max-width:900px){.hero{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.side{position:static}.shell{padding:12px}.hero h1{font-size:20px}}
@@ -484,10 +519,8 @@ async function pollJobs() {
 }
 async function scraperStart() { try { await api('/api/scraper/start', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
 function scraperUrl(path = '/') {
-  const h = location.hostname;
-  const proto = location.protocol || 'http:';
-  if (h === 'localhost' || h === '127.0.0.1') return proto + '//' + h + ':${scraperPort}' + path;
-  return 'http://localhost:${scraperPort}' + path;
+  const clean = path.startsWith('/') ? path : '/' + path;
+  return '/scraper' + (clean === '/' ? '/' : clean);
 }
 function openScraper(path = '/') { window.open(scraperUrl(path), '_blank', 'noopener,noreferrer'); }
 async function scraperStop() { try { await api('/api/scraper/stop', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
@@ -509,12 +542,19 @@ async function updateCode(force) {
   } catch (err) { logError(err); }
 }
 
-function renderLibraries() {
+async function renderLibraries() {
   const root = $('libraryGroups');
   if (!root) return;
   const env = $('env')?.value || 'vscode';
-  const groups = LIBRARY_GROUPS_BY_ENV[env] || LIBRARY_GROUPS_BY_ENV.vscode;
-  root.innerHTML = groups.map(group => '<div class="lib-card"><h3>' + group.label + '</h3><small>' + group.type + '</small><div>' + group.items.map(item => '<code title="' + (item.version || '') + '">' + item.name + '</code>').join(' ') + '</div></div>').join('');
+  root.innerHTML = '<div class="lib-card"><h3>Live query</h3><small>checking installed libraries…</small></div>';
+  try {
+    const data = await api('/api/libraries?env=' + encodeURIComponent(env));
+    const groups = data.groups || [];
+    root.innerHTML = groups.map(group => '<div class="lib-card"><h3>' + group.label + '</h3><small>' + (data.dynamic ? 'live query · ' : '') + (data.environment || env) + '</small><div>' + (group.items || []).map(item => '<code title="' + (item.version || item.source || '') + '">' + (item.available ? '✅ ' : '❌ ') + item.name + '</code>').join(' ') + '</div></div>').join('');
+  } catch (error) {
+    const groups = LIBRARY_GROUPS_BY_ENV[env] || LIBRARY_GROUPS_BY_ENV.vscode;
+    root.innerHTML = groups.map(group => '<div class="lib-card"><h3>' + group.label + '</h3><small>' + group.type + ' · fallback</small><div>' + group.items.map(item => '<code title="' + (item.version || '') + '">' + item.name + '</code>').join(' ') + '</div></div>').join('');
+  }
 }
 function renderGuides() {
   const container = $('guideCards');

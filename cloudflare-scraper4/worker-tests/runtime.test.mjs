@@ -30,7 +30,7 @@ test('dashboard assets are served with security headers',async()=>{
   assert.match(script.headers.get('content-type')||'',/javascript/);
   const js=await script.text();
   assert.doesNotMatch(js,/authorization\s*:\s*['"]Bearer|s4rt|connectBtn/);
-  assert.match(js,/کتابخانه‌های واقعاً نصب‌شده براساس محیط/);
+  assert.match(js,/استعلام زندهٔ کتابخانه‌های نصب‌شده/);
   assert.match(js,/Cloudflare D1/);
   const cloudflareBlock=js.slice(js.indexOf("env:'Cloudflare Worker'"),js.indexOf("env:'Local / Render / VPS Node'"));
   assert.doesNotMatch(cloudflareBlock,/playwright|puppeteer|crawlee/i);
@@ -82,7 +82,7 @@ test('Cloudflare resources are automatically provisioned during deploy',async()=
   assert.match(config,/queue\s*=\s*"scraper4-cloudflare-jobs"/);
   assert.match(config,/dead_letter_queue\s*=\s*"scraper4-cloudflare-jobs-dlq"/);
   assert.match(config,/crons\s*=\s*\[\s*"\* \* \* \* \*"\s*\]/);
-  assert.match(config,/WORKER_VERSION\s*=\s*"1.57.0"/);
+  assert.match(config,/WORKER_VERSION\s*=\s*"1.58.0"/);
   assert.equal(packageJson.scripts['worker:deploy'],'node scripts/deploy-cloudflare.mjs');
   assert.match(deployScript,/R2-free mode[\s\S]*deploy[\s\S]*experimental-provision[\s\S]*d1[\s\S]*migrations[\s\S]*apply[\s\S]*DB[\s\S]*remote/);
   assert.doesNotMatch(deployScript,/10042|enable R2/i);

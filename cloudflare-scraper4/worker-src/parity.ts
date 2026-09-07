@@ -4,7 +4,7 @@ import { VAULT_KDF_ITERATIONS } from './vault.js';
 
 export type Capability={id:string;section:string;label:string;status:'operational'|'adapted'|'account-dependent';endpoint?:string;note?:string};
 
-// Inventory mirrors the actionable controls in scraper4.php v9.80's hamburger menu.
+// Inventory mirrors the actionable controls in scraper4.php v10.170's hamburger menu.
 export const PHP_MENU_CAPABILITIES:Capability[]=[
  {id:'settings-export',section:'backup',label:'دانلود همه تنظیمات و پروفایل‌ها',status:'operational',endpoint:'/api/settings-export'},
  {id:'settings-import',section:'backup',label:'بارگذاری و بازیابی تنظیمات',status:'operational',endpoint:'/api/settings-import'},

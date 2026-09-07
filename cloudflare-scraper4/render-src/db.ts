@@ -186,7 +186,13 @@ export async function deleteProfile(id: string): Promise<boolean> {
   return Boolean(result.rowCount);
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target']): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], options: { forceNew?: boolean } = {}): Promise<Job> {
+  const active=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND kind=$2 AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId,kind]);
+  if(active.rows[0]){
+    const job=jobFromRow(active.rows[0]);
+    if(options.forceNew) await updateJob(job.id,{status:'failed',phase:'replaced-by-new-run',error:'Previous active job was replaced so the new extraction can start.',finishedAt:new Date().toISOString(),stopRequested:true});
+    else return job;
+  }
   const id = crypto.randomUUID();
   const { rows } = await pool.query(`INSERT INTO jobs(id,profile_id,kind,target) VALUES($1,$2,$3,$4) RETURNING *`, [id, profileId, kind, target]);
   return jobFromRow(rows[0]);
@@ -274,6 +280,14 @@ export async function allProducts(profileId: string): Promise<Product[]> {
   return rows.map(row => parseJson<Product>(row.data, row.data));
 }
 export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const {rows}=await pool.query('SELECT data FROM products WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);return rows[0]?.data ? parseJson<Product>(rows[0].data, rows[0].data) : null}
+export async function deleteProduct(profileId:string,sourceKey:string):Promise<boolean>{
+  if(useSqlite){await query('DELETE FROM destination_map WHERE profile_id=? AND source_key=?',[profileId,sourceKey]);const result=await query('DELETE FROM products WHERE profile_id=? AND source_key=?',[profileId,sourceKey]);return Boolean(result.rowCount)}
+  await pool.query('DELETE FROM destination_map WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);const result=await pool.query('DELETE FROM products WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);return Boolean(result.rowCount)
+}
+export async function clearProducts(profileId:string):Promise<number>{
+  if(useSqlite){await query('DELETE FROM destination_map WHERE profile_id=?',[profileId]);const result=await query('DELETE FROM products WHERE profile_id=?',[profileId]);return result.rowCount||0}
+  await pool.query('DELETE FROM destination_map WHERE profile_id=$1',[profileId]);const result=await pool.query('DELETE FROM products WHERE profile_id=$1',[profileId]);return result.rowCount||0
+}
 
 export async function markMissingProducts(profileId:string,seenKeys:string[]):Promise<number>{
   if(!seenKeys.length)return 0;

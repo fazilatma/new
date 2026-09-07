@@ -80,12 +80,13 @@ export async function deleteProfile(id: string): Promise<boolean> {
   ]); return true;
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target']): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], options: { forceNew?: boolean } = {}): Promise<Job> {
   const settings = await getState<any>('settings', {}), dedup = settings?.general?.queueDedup !== false;
   const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId,kind]).first();
   if (active && dedup) {
     const job = jobFromRow(active), staleMin = Math.max(1, Number(settings?.general?.queueDedupStale) || 120), age = Date.now() - new Date(job.updatedAt).getTime();
-    if (job.status === 'queued' && age >= staleMin * 60_000) await updateJob(job.id, {status:'failed', phase:'stale-replaced', error:'کار قبلی به‌خاطر ماندن بیش از حد در صف بسته شد تا کار تازه جایگزین شود.', finishedAt: now()});
+    if (options.forceNew) await updateJob(job.id, {status:'failed', phase:'replaced-by-new-run', error:'کار قبلی با درخواست اجرای تازه بسته شد تا استخراج جدید واقعاً شروع شود.', finishedAt: now(), stopRequested:true});
+    else if (job.status === 'queued' && age >= staleMin * 60_000) await updateJob(job.id, {status:'failed', phase:'stale-replaced', error:'کار قبلی به‌خاطر ماندن بیش از حد در صف بسته شد تا کار تازه جایگزین شود.', finishedAt: now()});
     else return job;
   }
   const id=crypto.randomUUID(),timestamp=now();
@@ -170,6 +171,8 @@ export async function listProducts(profileId:string,limit=100,offset=0,q=''):Pro
 }
 export async function allProducts(profileId:string):Promise<Product[]>{return(await rows('SELECT data FROM products WHERE profile_id=? ORDER BY updated_at',[profileId])).map(productFromRow);}
 export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const row=await statement('SELECT data FROM products WHERE profile_id=? AND source_key=?',[profileId,sourceKey]).first();return row?productFromRow(row):null;}
+export async function deleteProduct(profileId:string,sourceKey:string):Promise<boolean>{await run('DELETE FROM destination_map WHERE profile_id=? AND source_key=?',[profileId,sourceKey]);return Boolean(await run('DELETE FROM products WHERE profile_id=? AND source_key=?',[profileId,sourceKey]));}
+export async function clearProducts(profileId:string):Promise<number>{await run('DELETE FROM destination_map WHERE profile_id=?',[profileId]);return run('DELETE FROM products WHERE profile_id=?',[profileId]);}
 export async function findMissingProducts(profileId:string,seenKeys:string[]):Promise<Product[]>{if(!seenKeys.length)return[];const seen=new Set(seenKeys),existing=await rows<{source_key:string;data:string}>('SELECT source_key,data FROM products WHERE profile_id=? AND active=1',[profileId]);return existing.filter(x=>!seen.has(x.source_key)).map(productFromRow)}
 export async function markMissingProducts(profileId:string,seenKeys:string[]):Promise<number>{
   if(!seenKeys.length)return 0;const seen=new Set(seenKeys),existing=await rows<{source_key:string}>('SELECT source_key FROM products WHERE profile_id=? AND active=1',[profileId]),missing=existing.filter(x=>!seen.has(x.source_key));
