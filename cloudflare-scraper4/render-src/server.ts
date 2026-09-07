@@ -1,5 +1,6 @@
 import { serve } from '@hono/node-server';
 import { timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
@@ -21,6 +22,8 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop } from './processor.js';
 
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.53.0'; } catch { return process.env.npm_package_version || '1.53.0'; } })();
+const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 let databaseReady = false;
 let databaseError = '';
 async function initializeDatabase(): Promise<boolean> {
@@ -54,12 +57,14 @@ app.get('/health', c => c.json({
   ok: true,
   app: 'scraper4-render',
   runtime: process.version,
+  version: runtimeVersion(),
+  packageVersion: PACKAGE_VERSION,
   databaseReady,
   databaseError: databaseReady ? null : databaseError,
   workerInWeb: config.runWorkerInWeb,
   time: new Date().toISOString()
 }));
-app.get('/', c => c.html(DASHBOARD));
+app.get('/', c => c.html(DASHBOARD, 200, { 'cache-control': 'no-store' }));
 app.get('/setup', c => c.html(setupPage(databaseError || 'Database is ready.')));
 app.get('/dashboard.js', c => c.body(DASHBOARD_JS, 200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' }));
 app.get('/assets/fonts/:file', async c => {
@@ -98,11 +103,11 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', c => c.json({ ok: true, version: process.env.WORKER_VERSION || '1.52.0', runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
+app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
 app.get('/api/activity', async c => {
   const [profiles, jobs] = await Promise.all([listProfiles(), listJobs(Math.min(30, Number(c.req.query('limit')) || 15))]);
   const active = jobs.filter((j: any) => ['queued', 'running'].includes(j.status));
-  return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: process.env.WORKER_VERSION || '1.52.0', counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
+  return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: runtimeVersion(), counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
 });
 app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: [] }));
 app.get('/api/ai/test-results', async c => c.json({ ok: true, results: [], leaderboard: await getLeaderboard() }));
