@@ -366,7 +366,7 @@ async function pollJobs() {
   try {
     const data = await api('/api/jobs');
     const job = data.jobs.find(j => j.name === activeJob) || data.jobs.at(-1);
-    if (job) $('log').textContent = '$ ' + job.command + '\n\n' + job.log;
+    if (job) $('log').textContent = '$ ' + job.command + String.fromCharCode(10,10) + job.log;
     if (job?.running) setTimeout(pollJobs, 1200);
     refresh();
   } catch (err) { logError(err); }
@@ -393,7 +393,7 @@ async function updateCode(force) {
     $('log').textContent = 'Updating from GitHub...';
     tabByIndex('jobs', 4);
     const d = await api('/api/update', { method: 'POST', body: JSON.stringify({ force, restart: true }) });
-    $('log').textContent = JSON.stringify(d, null, 2) + '\n\nIf update succeeded, wait a few seconds and refresh.';
+    $('log').textContent = JSON.stringify(d, null, 2) + String.fromCharCode(10,10) + 'If update succeeded, wait a few seconds and refresh.';
     setTimeout(() => location.reload(), 3500);
   } catch (err) { logError(err); }
 }
@@ -413,7 +413,7 @@ async function copyCommand(i, btn) {
   } catch (err) { logError(err); }
 }
 function showDbHelp() {
-  $('dbHelp').textContent = COMMANDS['Database: Docker local'] + '\n\n--- Termux ---\n' + COMMANDS['Database: Termux PostgreSQL'] + '\n\n--- Render ---\n' + COMMANDS['Render.com panel'];
+  $('dbHelp').textContent = [COMMANDS['Database: Docker local'], '--- Termux ---', COMMANDS['Database: Termux PostgreSQL'], '--- Render ---', COMMANDS['Render.com panel']].join(String.fromCharCode(10,10));
 }
 async function refresh() {
   try {
