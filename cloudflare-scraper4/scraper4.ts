@@ -43,10 +43,33 @@
  *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
  *   cd "$HOME/new"
  *   git config --local --unset-all credential.helper || true
- *   git config --local --replace-all credential.helper "!gh auth git-credential"
+ *   git config --local --replace-all credential.helper '!gh auth git-credential'
+ *   git config --local --get-all credential.helper
+ *   # Correct output must be exactly: !gh auth git-credential
+ *   # Do NOT set: "gh auth setup-git auth git-credential"
  *   git pull --ff-only origin arena/01a0765b-new
  *   cd "$HOME/new/cloudflare-scraper4"
- *   npm install --ignore-scripts
+ *   npm config set fetch-retries 5
+ *   npm config set fetch-retry-mintimeout 20000
+ *   npm config set fetch-retry-maxtimeout 120000
+ *   npm install --ignore-scripts --no-audit --prefer-online
+ *
+ *   # Termux PostgreSQL database setup.
+ *   # If the dashboard says: role "postgres" does not exist, you are using
+ *   # the Docker/Desktop URL on Termux. Termux usually creates a PostgreSQL
+ *   # role with the current Android user name, not a role named postgres.
+ *   pkg install -y postgresql
+ *   mkdir -p "$PREFIX/var/lib/postgresql"
+ *   [ -f "$PREFIX/var/lib/postgresql/PG_VERSION" ] || initdb "$PREFIX/var/lib/postgresql"
+ *   pg_ctl -D "$PREFIX/var/lib/postgresql" -l "$HOME/scraper4-postgres.log" start || true
+ *   createdb scraper4 || true
+ *   printf "DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n" > .env.local
+ *   cat .env.local
+ *   # Correct Termux form: postgresql://u0_a123@localhost:5432/scraper4
+ *   # Wrong on Termux unless you created it manually: postgres:postgres@localhost
+ *
+ *   npm run deployer:ui
+ *   # or run the scraper directly:
  *   npm run render:build
  *   PORT=3000 npm run render:start
  *   # open http://127.0.0.1:3000 in the phone browser
