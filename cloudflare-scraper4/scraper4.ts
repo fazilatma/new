@@ -22,13 +22,13 @@
  *   cd cloudflare-scraper4
  *   npm install --ignore-scripts --no-audit --prefer-online
  *   grep version package.json | head -1
- *   # Expected: 1.49.0
+ *   # Expected: 1.50.0
  *
  * Cloudflare Worker update from Dashboard:
  *   1) Push/pull this branch: arena/01a0765b-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
- *   4) Open /health and verify version is 1.49.0.
+ *   4) Open /health and verify version is 1.50.0.
  *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4
@@ -122,6 +122,13 @@
  *   # for production, create a systemd service and reverse proxy with Nginx.
  *   # The universal deployer can generate examples:
  *   node scripts/universal-deployer.mjs --env vps --mode prepare --out .deploy/vps
+ *
+ * JSON settings file pickers:
+ *   All settings-related upload controls accept only .json/application-json.
+ *   When several JSON files are selected, Scraper4 sorts them by lastModified
+ *   from newest to oldest and imports the newest JSON file first. Browser/OS
+ *   native file dialogs may still display their own order; the app enforces
+ *   the JSON-only and newest-first rule after selection.
  *
  * Engine compatibility:
  *   Cloudflare Worker: auto, htmlrewriter, jsonld, next_data, metadata,
