@@ -435,7 +435,8 @@ function scheduleBranchScanner() {
 function updateBranchConfig({ intervalSeconds, autoInstallLatest } = {}) {
   const seconds = Number(intervalSeconds);
   if (Number.isFinite(seconds) && seconds >= 0) {
-    branchScanIntervalMs = seconds === 0 ? 0 : Math.max(15_000, Math.round(seconds));
+    // intervalSeconds is seconds; 0 disables the timer, otherwise clamp to a 15s floor.
+    branchScanIntervalMs = seconds === 0 ? 0 : Math.max(15_000, Math.round(seconds * 1000));
   }
   if (typeof autoInstallLatest === 'boolean') autoInstallLatestEnabled = autoInstallLatest;
   try {
