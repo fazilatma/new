@@ -412,7 +412,8 @@ async function syncBasalam(store, integ, opts = {}) {
   for (let page = 0; page < 6; page++) {
     const params = { per_page: 10, sort: 'estimate_send_at:desc' }; // عین پیش‌فرض SDK باسلام (تعداد بیشتر ۴۲۲ می‌دهد)
     if (cursor) params.cursor = cursor;
-    if (integ.vendor_id) params['items.vendor_ids'] = String(integ.vendor_id);
+    // نکته: فیلتر items.vendor_ids عمداً ارسال نمی‌شود — باسلام به توکن غرفه برای آن 403 می‌دهد
+    // و توکن غرفه به‌هرحال فقط مرسوله‌های خودش را می‌بیند.
     let res;
     try {
       res = await basalamGet(integ.token, '/v1/vendor-parcels', params);
