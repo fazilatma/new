@@ -284,7 +284,8 @@ const int0 = (v) => {
 function mapParcelToOrder(p, integ) {
   const items = Array.isArray(p.items) ? p.items : [];
   const qty = items.reduce((a, i) => a + (int0(i.quantity) || 1), 0) || 1;
-  const total = int0(p.total_items_price) || items.reduce((a, i) => a + int0(i.price) * (int0(i.quantity) || 1), 0);
+  const totalRial = int0(p.total_items_price) || items.reduce((a, i) => a + int0(i.price) * (int0(i.quantity) || 1), 0);
+  const total = Math.round(totalRial / 10); // باسلام ریال می‌دهد؛ کتاب به تومان
   const order = p.order || {};
   const cust = order.customer || {};
   const rec = cust.recipient || {};
@@ -303,7 +304,7 @@ function mapParcelToOrder(p, integ) {
     product_name: names || `مرسوله باسلام #${p.id}`,
     quantity: qty,
     unit_sale: Math.round(total / qty), unit_cost: 0, discount: 0,
-    shipping_cost: int0(receipt.final_post_cost),
+    shipping_cost: Math.round(int0(receipt.final_post_cost) / 10), // ریال→تومان
     packaging_cost: 0, commission: 0, ads_cost: 0, other_cost: 0, other_label: '',
     status,
     payment_status: status === 'cancelled' ? 'refunded' : 'paid',
@@ -342,10 +343,10 @@ function mapWooToOrder(o) {
   };
 }
 
-/* درج/به‌روزرسانی هوشمند: هزینه‌ها و تامین‌کننده دستی کاربر حفظ می‌شود */
+/* درج/به‌روزرسانی هوشمند: هزینه‌های دستی کاربر حفظ می‌شود؛ هزینه ارسال از مرجع سینک تازه می‌شود */
 const SYNC_UPDATE_FIELDS = [
   'customer_name', 'customer_phone', 'city', 'product_name', 'quantity',
-  'unit_sale', 'discount', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
+  'unit_sale', 'discount', 'shipping_cost', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
 ];
 async function upsertExternalOrder(store, order) {
   const ex = await store.findBy('orders', 'order_code', order.order_code);
