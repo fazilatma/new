@@ -170,12 +170,20 @@ class UpstreamError extends Error {
 /* خلاصه خطاهای اعتبارسنجی لاراول: {field: [msg]} */
 function detailErrors(errors) {
   if (!errors || typeof errors !== 'object') return '';
+  const flat = (x) => {
+    if (Array.isArray(x)) return x.map(flat).filter(Boolean).join('، ');
+    if (x && typeof x === 'object') {
+      if (typeof x.message === 'string' && x.message) return (x.field ? `${x.field}: ` : '') + x.message;
+      try { return JSON.stringify(x).slice(0, 200); } catch { return ''; }
+    }
+    return String(x ?? '');
+  };
   const parts = [];
-  for (const [f, v] of Object.entries(errors).slice(0, 4)) {
-    const m = Array.isArray(v) ? v[0] : v;
-    parts.push(`${f}: ${String(m).slice(0, 120)}`);
+  for (const [f, v] of Object.entries(errors).slice(0, 5)) {
+    const m = flat(v).slice(0, 200);
+    if (m) parts.push(/^\d+$/.test(f) ? m : `${f}: ${m}`);
   }
-  return parts.join('؛ ').slice(0, 400);
+  return parts.join('؛ ').slice(0, 600);
 }
 
 async function fetchJSON(url, options = {}, label = 'upstream') {
@@ -402,7 +410,7 @@ async function syncBasalam(store, integ, opts = {}) {
   let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0;
   const errors = [];
   for (let page = 0; page < 6; page++) {
-    const params = { per_page: 50, sort: 'estimate_send_at:desc' }; // عین پیش‌فرض SDK باسلام برای vendor-parcels
+    const params = { per_page: 10, sort: 'estimate_send_at:desc' }; // عین پیش‌فرض SDK باسلام (تعداد بیشتر ۴۲۲ می‌دهد)
     if (cursor) params.cursor = cursor;
     if (integ.vendor_id) params['items.vendor_ids'] = String(integ.vendor_id);
     let res;
