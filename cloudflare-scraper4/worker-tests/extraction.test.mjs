@@ -95,6 +95,17 @@ test('JSON-LD completes partially rendered cards and provides detail variants wi
   const skipped=await scraper.parseDetailPage('<div class="gallery"><img src="/only.jpg"></div>','https://shop.example/p/red',{gallery:'.gallery',gallerySkipFirst:true});assert.deepEqual(skipped.images,[]);
 });
 
+test('heuristic auto extraction accepts only real product-card candidates with title image and price',async()=>{
+  const html=`<main>
+      <nav><a href="/products/help">Products help</a></nav>
+      <article class="card"><a href="/product/real-shirt"><img src="/shirt.jpg" alt="Real Shirt"><h2>Real Shirt</h2><span>$25.00 USD</span></a></article>
+      <article class="card"><a href="/product/no-image"><h2>No Image</h2><span>$30.00 USD</span></a></article>
+      <article class="card"><a href="/product/no-price"><img src="/blank.jpg" alt="No Price"><h2>No Price</h2></a></article>
+    </main>`;
+  const products=await scraper.extractHeuristicProducts(html,'https://example.test/search/shirts');
+  assert.equal(products.length,1);assert.equal(products[0].title,'Real Shirt');assert.equal(products[0].image,'https://example.test/shirt.jpg');assert.equal(products[0].price,25);
+});
+
 test('pagination URL construction matches every PHP mode and drops stale path query strings',()=>{
   const profile=(pagination,paginationValue,url='https://shop.test/catalog?sort=asc#items')=>({url,pagination,paginationValue});
   assert.equal(scraper.pageUrl(profile('query_page','wrong'),3),'https://shop.test/catalog?sort=asc&page=3');
