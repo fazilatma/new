@@ -6,9 +6,11 @@ compatibility_date = "2025-06-01"
 # حیاتی: جلوی پاک‌شدن binding داشبورد در هر دیپلوی را می‌گیرد
 keep_vars = true
 
-# دیتابیس D1 فقط یک‌بار در داشبورد ساخته و وصل می‌شود (بدون نیاز به آیدی در این فایل):
-#   صفحه ورکر ← Settings ← Bindings ← Add ← D1 database ← نام DB
-# بعد از آن، هر Push به گیت = یک ورژن جدید، خودکار و بدون هیچ تنظیم اضافه‌ای.
+# دیتابیس D1 — بخشی از کد است و با هر دیپلوی همراه می‌شود؛ دیگر هرگز قطع نمی‌شود.
+[[d1_databases]]
+binding = "DB"
+database_name = "hesabdar-db"
+database_id = "aac447ab-7a70-4562-a17d-70e0f236fd16"
 
 [vars]
 APP_NAME = "hesabdar"

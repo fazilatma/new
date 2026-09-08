@@ -47,7 +47,7 @@
    - Production branch: همان شاخه‌ای که کد نهایی در آن است
    - Build command: `npm run build` (بقیه پیش‌فرض) ← **Deploy**
 2. ساخت دیتابیس: **Storage & databases ← D1 SQL Databases ← Create** با نام `hesabdar-db`
-3. اتصال دیتابیس: داخل صفحه ورکر ← **Settings ← Bindings ← Add ← D1 database** ← نام متغیر `DB` ← انتخاب `hesabdar-db` ← **Save** ← بعد یک Push جدید (یا Retry deployment)
+3. اتصال دیتابیس: لازم نیست! ✅ اتصال دیتابیس داخل کد ثبت شده و با هر دیپلوی خودکار اعمال می‌شود. (اگر قبلاً دستی binding اضافه کرده‌اید، می‌توانید حذفش کنید — اختیاری.)
 4. تمام! 🎉 از این به بعد هر Push = یک ورژن جدید، خودکار.
 
 > در صفحه ورکر، تب **Versions** تاریخچه همه ورژن‌ها را نشان می‌دهد و با **Rollback** می‌توانید با یک کلیک به هر ورژن قبلی برگردید.
@@ -57,12 +57,8 @@
 ```bash
 npm install
 npx wrangler login
-npx wrangler d1 create hesabdar-db
-# خروجی database_id را در انتهای wrangler.toml اضافه کنید:
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "hesabdar-db"
-# database_id = "PASTE_ID_HERE"
+npx wrangler login
+# (دیتابیس از قبل ساخته شده و اتصال آن داخل wrangler.toml ثبت است)
 npm run deploy
 # آدرس https://hesabdar.<your-subdomain>.workers.dev آماده است ✅
 ```
