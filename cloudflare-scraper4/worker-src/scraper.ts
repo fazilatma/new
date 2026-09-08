@@ -422,23 +422,24 @@ const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','cra
 const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter']);
 const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];
-function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine):ExtractionEngine[]{
+function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
+  if(!autoFirst&&requested!=='auto'){add(requested);return out}
   if(master&&!NODE_ONLY_ENGINES.has(master)&&!WORKER_MANUAL_ENGINES.has(master))add(master);
   for(const engine of WORKER_DISCOVERY_ENGINES)add(engine);
   if(requested!=='auto')add(requested);else for(const engine of WORKER_AUTO_ENGINES)add(engine);
   return out;
 }
 
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number}>{
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
-  const started=Date.now(),result=await parseByEngine(page.text,page.url,selectors,engine,master);
+  const started=Date.now(),result=await parseByEngine(page.text,page.url,selectors,engine,master,autoFirst);
   return {products:result.products,nextUrl:next.url,url:page.url,usedEngine:result.usedEngine,elapsedMs:Date.now()-started};
 }
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
 
-async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine):Promise<EngineResult>{
+async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
   if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
     if(name==='htmlrewriter')return parseCards(html,baseUrl,selectors);
@@ -449,7 +450,7 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
     if(name==='heuristic')return extractHeuristicProducts(html,baseUrl);
     return [];
   };
-  for(const name of engineOrder(engine,master)){
+  for(const name of engineOrder(engine,master,autoFirst)){
     const products=dedupeProducts(await tryOne(name));
     if(products.length||engine!=='auto')return{products,usedEngine:name};
   }

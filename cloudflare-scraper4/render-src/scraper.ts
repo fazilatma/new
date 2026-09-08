@@ -58,9 +58,9 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio','htmlrewriter']);
 const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'cheerio','playwright','puppeteer','crawlee_playwright'];
-function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine):ExtractionEngine[]{const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);if(requested!=='auto')add(requested);else for(const engine of RENDER_AUTO_ENGINES)add(engine);return out}
+function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};if(!autoFirst&&requested!=='auto'){add(requested);return out}if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);if(requested!=='auto')add(requested);else for(const engine of RENDER_AUTO_ENGINES)add(engine);return out}
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true): Promise<ScrapeListResult> {
   const started=Date.now();
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url);
@@ -77,7 +77,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     if (name === 'heuristic') return heuristicProducts(text, finalUrl);
     return [] as Product[];
   };
-  for(const name of engineOrder(engine,master)){
+  for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
       if(products.length||engine!=='auto')return{products,usedEngine:name,elapsedMs:Date.now()-started};

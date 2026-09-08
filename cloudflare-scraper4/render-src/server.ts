@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.64.0'; } catch { return process.env.npm_package_version || '1.64.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.65.0'; } catch { return process.env.npm_package_version || '1.65.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -256,6 +256,29 @@ app.post('/api/profiles/:id/sync', async c => {
   if(job.kind==='sync'&&job.status==='queued')triggerLocalJobDrain();
   return c.json({ ok: true, job, processor:job.kind==='sync'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
+
+const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','playwright','puppeteer','crawlee_playwright'];
+async function benchmarkProfileEngines(profile:Profile){
+  const pages=3,results:any[]=[],startedAt=new Date().toISOString();
+  for(const engine of BENCHMARK_ENGINES){
+    const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
+    try{
+      for(let pageNo=1;pageNo<=pages;pageNo++){
+        const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,engine,undefined,false);
+        pagesScanned++;
+        for(const product of scraped.products){const key=product.sourceKey||product.url||product.title;if(key&&!seen.has(key)){seen.add(key);products++}}
+      }
+    }catch(err){error=err instanceof Error?err.message:String(err)}
+    const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
+    results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
+  }
+  const fastest=results.filter(r=>r.ok&&r.available).sort((a,b)=>b.productsPerMinute-a.productsPerMinute||a.elapsedMs-b.elapsedMs)[0]||null;
+  (profile as any).extractionEngineBenchmarks=results;
+  if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
+  await saveProfile({...profile,updatedAt:new Date().toISOString()});
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`Fastest engine saved as profile default: ${fastest.engine}.`]:['No engine extracted products from the first three pages. Check network access, anti-bot responses, and selectors.']};
+}
+app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);return c.json(await benchmarkProfileEngines(profile))});
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/extract/:id',async c=>runProfileApi(c,c.req.param('id')));
@@ -350,6 +373,7 @@ function normalizeProfile(raw: any): Profile {
   return { id: String(raw.id || idFromUrl(url.href)), name: String(raw.name || url.hostname), url: url.href, enabled: raw.enabled !== false,
     pages: Math.min(100,Math.max(0,Number(raw.pages)||0)), pagination: ['query_page','path_page','none'].includes(raw.pagination || raw.pagType) ? raw.pagination || raw.pagType : 'query_page',
     extractionEngine: ['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
+    extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue: String(raw.paginationValue || raw.pagVal || 'page'), selectors, titleSuffix: String(raw.titleSuffix || ''),
     priceMode: ['none','add','percent','multiply'].includes(raw.priceMode) ? raw.priceMode : 'none', priceValue: Number(raw.priceValue ?? raw.priceVal) || 0,
     roundPrice: Math.max(0,Number(raw.roundPrice)||0), minPrice: Math.max(0,Number(raw.minPrice)||0), wooCategoryId: Number(raw.wooCategoryId)||0,

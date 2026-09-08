@@ -30,7 +30,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.64.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.65.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -85,7 +85,7 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.64.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.65.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/runtime/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 app.get('/api/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 
@@ -190,7 +190,33 @@ app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const prof
 
 app.post('/api/queue-watchdog',async c=>{const b=await jsonBody(c);const settings=await getState<any>('settings',{}),stallMin=Number(b.minutes)>0?Number(b.minutes):Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));await recoverBackgroundRuns(promise=>c.executionCtx.waitUntil(promise));const autoContinue=b.autoContinue??settings.watchdog?.autoContinue!==false,recovered=autoContinue?await recoverFailedAndStalledJobs(stallMin):0,reaped=autoContinue?0:await reapStalledJobs(stallMin);if(recovered){const queued=await listQueuedJobs(200);for(const job of queued)await enqueueJob(job,promise=>c.executionCtx.waitUntil(promise))}return c.json({ok:true,reaped,recovered,autoContinue,backgroundRecovered:true,stallMinutes:stallMin})});
 app.post('/api/source-test',async c=>{const b=await jsonBody(c),result=await safeText(String(b.url||''),1_000_000);return c.json({ok:true,bytes:byteLength(result.text),url:result.url,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()})});
+
+const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
+const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+async function benchmarkProfileEngines(profile:Profile){
+  const pages=3,results:any[]=[],startedAt=new Date().toISOString();
+  for(const engine of BENCHMARK_ENGINES){
+    const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
+    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'This engine requires the Node.js/Render/VPS runtime.'});continue}
+    try{
+      for(let pageNo=1;pageNo<=pages;pageNo++){
+        const page=await scrapeListPage(pageUrl(profile,pageNo),profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),engine,undefined,false);
+        pagesScanned++;
+        for(const product of page.products){const key=product.sourceKey||product.url||product.title;if(key&&!seen.has(key)){seen.add(key);products++}}
+        if(profile.pagination==='next_selector'&&!page.nextUrl)break;
+      }
+    }catch(err){error=message(err)}
+    const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
+    results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
+  }
+  const fastest=results.filter(r=>r.ok&&r.available).sort((a,b)=>b.productsPerMinute-a.productsPerMinute||a.elapsedMs-b.elapsedMs)[0]||null;
+  (profile as any).extractionEngineBenchmarks=results;
+  if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
+  await saveProfile({...profile,updatedAt:new Date().toISOString()});
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`Fastest engine saved as profile default: ${fastest.engine}.`]:['No engine extracted products from the first three pages. Check network access, anti-bot responses, and selectors.']};
+}
 app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await jsonBody(c);return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
+app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);return c.json(await benchmarkProfileEngines(profile))});
 app.post('/api/test-selector',async c=>{const b=await jsonBody(c);if(b.type==='variations')return c.json({ok:true,...await testVariations(String(b.url||''),String(b.selector||''))});if(b.type==='gallery')return c.json({ok:true,...await testGallery(String(b.url||''),String(b.selector||''),Number(b.max)||30,Boolean(b.skipFirst))});return c.json({ok:true,...await testSelector(String(b.url||''),String(b.selector||''),String(b.type||'text'))})});
 app.post('/api/suggest-selectors',async c=>{const b=await jsonBody(c),mode=['list','detail'].includes(b.mode)?b.mode:'all';return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode)})});
 app.post('/api/test-connection/:target',async c=>{const target=c.req.param('target'),input=await jsonBody(c);return c.json(await connectionDiagnostic(target,input))});
@@ -497,7 +523,7 @@ export function normalizeProfile(raw:any):Profile {
     pages:Math.min(100,Math.max(0,Number(raw.pages)||0)),
     pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
     extractionEngine:['auto','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
-    extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),
+    extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
     priceMode:['none','add','percent','multiply'].includes(raw.priceMode)?raw.priceMode:'none',priceValue:Number(raw.priceValue??raw.priceVal)||0,
     roundPrice:Math.max(0,Number(raw.roundPrice)||0),minPrice:Math.max(0,Number(raw.minPrice)||0),wooCategoryId:Number(raw.wooCategoryId)||0,

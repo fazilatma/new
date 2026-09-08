@@ -27,6 +27,7 @@ export type Profile = {
   extractionEngineMaster?: ExtractionEngine;
   extractionEngineHost?: string;
   extractionEngineMs?: number;
+  extractionEngineBenchmarks?: Array<{engine: ExtractionEngine; elapsedMs: number; pagesScanned: number; products: number; productsPerMinute: number; ok: boolean; error?: string}>;
   paginationValue: string;
   selectors: Selectors;
   titleSuffix: string;
