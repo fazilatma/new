@@ -159,7 +159,7 @@ tailwind.config = {
       <div class="grid lg:grid-cols-3 gap-4 mb-4">
         <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
           <div class="flex items-center justify-between mb-2">
-            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها</h3>
+            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(کلیک روی راهنما: خاموش/روشن خط)</span></h3>
             <div class="flex gap-1 text-xs" id="trend-grp"></div>
           </div>
           <div class="chart-box tall"><canvas id="ch-cnt"></canvas></div>
@@ -519,7 +519,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.4.0';
+const APP_VER = '1.5.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -721,6 +721,24 @@ function groupSeries(list, group, incReturned = true) {
     r.revenue += c.revenue; r.cost += c.cost; r.count++;
   }
   return [...map.values()].sort((a, b) => a.key < b.key ? -1 : 1).map((r) => ({ ...r, profit: r.revenue - r.cost }));
+}
+/* سری زمانی چندخطی: تجمعی/تکمیل‌شده/لغوشده/مرجوع‌شده — لغو فقط شمارشی، بدون پول */
+function groupStatusSeries(list, group, incR) {
+  const map = new Map();
+  const mk = () => ({ count: 0, revenue: 0, profit: 0 });
+  for (const o of list) {
+    if (!o.order_date) continue;
+    const { key, label } = periodKey(o.order_date, group);
+    if (!map.has(key)) map.set(key, { key, label, tot: mk(), del: mk(), can: mk(), ret: mk() });
+    const r = map.get(key);
+    if (o.status === 'cancelled') { r.can.count++; continue; }
+    if (!isCounted(o, incR)) continue;
+    const c = calc(o, incR);
+    r.tot.count++; r.tot.revenue += c.revenue; r.tot.profit += c.profit;
+    const b = o.status === 'delivered' ? r.del : o.status === 'returned' ? r.ret : null;
+    if (b) { b.count++; b.revenue += c.revenue; b.profit += c.profit; }
+  }
+  return [...map.values()].sort((a, b) => a.key < b.key ? -1 : 1);
 }
 
 /* ═══════════════ اعلان و مودال ═══════════════ */
@@ -1036,22 +1054,41 @@ function renderDashboard() {
   const groups = [['daily', 'روزانه'], ['weekly', 'هفتگی'], ['monthly', 'ماهانه']];
   $('#trend-grp').innerHTML = groups.map(([g, t]) =>
     `<button onclick="state.trendGroup='${g}';renderDashboard()" class="btn !py-1 !px-2 !text-[11px] ${state.trendGroup === g ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
-  const series = groupSeries(list, state.trendGroup, incR);
+  const series = groupStatusSeries(list, state.trendGroup, incR);
   const sLab = series.map((r) => r.label);
-  const lineDS = (label, data, color, fill, pts) => ({ label, data, borderColor: color, backgroundColor: fill,
-    fill: true, tension: .4, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6,
+  const tickM = document.documentElement.classList.contains('dark') ? '#94a3b8' : '#64748b';
+  const lineDS = (label, data, color, fill, pts) => ({ label, data, borderColor: color, backgroundColor: fill || color,
+    fill: !!fill, tension: .4, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6,
     pointBackgroundColor: pts || color, pointBorderColor: '#fff', pointBorderWidth: 1.5 });
-  const noLeg = (tip) => ({ legend: { display: false }, tooltip: { rtl: true, textDirection: 'rtl', padding: 10, callbacks: { label: tip } } });
+  const legTip = (tip) => ({ legend: { display: true, position: 'bottom',
+      labels: { font: { family: 'Vazirmatn' }, color: tickM, usePointStyle: true, boxWidth: 6 } },
+    tooltip: { rtl: true, textDirection: 'rtl', padding: 10, callbacks: { label: tip } } });
+  const G = (k, f) => series.map((r) => r[k][f]);
   mkChart('ch-cnt', { type: 'line',
-    data: { labels: sLab, datasets: [lineDS('تعداد سفارش', series.map((r) => r.count), '#6366f1', 'rgba(99,102,241,.15)')] },
-    options: chartBase({ plugins: noLeg((c) => ` ${fmtN(c.parsed.y)} سفارش`) }) });
+    data: { labels: sLab, datasets: [
+      lineDS('تجمعی', G('tot', 'count'), '#6366f1', 'rgba(99,102,241,.15)'),
+      lineDS('تکمیل‌شده', G('del', 'count'), '#14b8a6'),
+      lineDS('لغوشده', G('can', 'count'), '#f43f5e'),
+      lineDS('مرجوع‌شده', G('ret', 'count'), '#f97316'),
+    ] },
+    options: chartBase({ plugins: legTip((c) => ` ${c.dataset.label}: ${fmtN(c.parsed.y)} سفارش`) }) });
   mkChart('ch-vol', { type: 'line',
-    data: { labels: sLab, datasets: [lineDS('حجم فروش', series.map((r) => r.revenue), '#0ea5e9', 'rgba(14,165,233,.15)')] },
-    options: chartBase({ plugins: noLeg((c) => ` ${fmtMoney(c.parsed.y)}`) }) });
+    data: { labels: sLab, datasets: [
+      lineDS('تجمعی', G('tot', 'revenue'), '#0ea5e9', 'rgba(14,165,233,.15)'),
+      lineDS('تکمیل‌شده', G('del', 'revenue'), '#14b8a6'),
+      lineDS('لغوشده', G('can', 'revenue'), '#f43f5e'),
+      lineDS('مرجوع‌شده', G('ret', 'revenue'), '#f97316'),
+    ] },
+    options: chartBase({ plugins: legTip((c) => ` ${c.dataset.label}: ${fmtMoney(c.parsed.y)}`) }) });
+  const pftPts = series.map((r) => r.tot.profit >= 0 ? '#10b981' : '#f43f5e');
   mkChart('ch-pft', { type: 'line',
-    data: { labels: sLab, datasets: [lineDS('سود', series.map((r) => r.profit), '#10b981', 'rgba(16,185,129,.15)',
-      series.map((r) => r.profit >= 0 ? '#10b981' : '#f43f5e'))] },
-    options: chartBase({ plugins: noLeg((c) => ` ${fmtMoney(c.parsed.y)}`) }) });
+    data: { labels: sLab, datasets: [
+      lineDS('تجمعی', G('tot', 'profit'), '#10b981', 'rgba(16,185,129,.15)', pftPts),
+      lineDS('تکمیل‌شده', G('del', 'profit'), '#14b8a6'),
+      lineDS('لغوشده', G('can', 'profit'), '#f43f5e'),
+      lineDS('مرجوع‌شده', G('ret', 'profit'), '#f97316'),
+    ] },
+    options: chartBase({ plugins: legTip((c) => ` ${c.dataset.label}: ${fmtMoney(c.parsed.y)}`) }) });
 
   /* منابع */
   const bySrc = ['basalam', 'website'].map((src) => ({ src, ...summarize(list.filter((o) => o.source === src), incR) }));
