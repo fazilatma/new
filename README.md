@@ -39,17 +39,18 @@
 
 ## 🚀 اجرا و دیپلوی
 
-### روش صفر: دیپلوی کاملاً خودکار با گیت‌هاب (پیشنهادی 🤖)
+### روش صفر: اتصال گیت‌هاب به کلاودفلر (پیشنهادی 🤖) — بدون سکرت، بدون توکن
 
-بعد از یک‌بار تنظیم، با هر Push دیتابیس D1 (اگر نباشد) **خودکار ساخته** و ورکر **خودکار دیپلوی** می‌شود:
+فقط چند کلیک، فقط یک‌بار. بعد از آن هر Push به‌صورت خودکار دیپلوی می‌شود و هر دیپلوی یک **ورژن** جدید در داشبورد می‌سازد:
 
-1. در داشبورد Cloudflare: **My Profile ← API Tokens ← Create Token ← Create Custom Token**:
-   - Permissions: **Account → D1 → Edit** و **Account → Workers Scripts → Edit**
-   - Account Resources: اکانت خودتان ← Continue ← Create Token ← توکن را کپی کنید
-2. **Account ID** را از صفحه Workers & Pages (ستون سمت راست) کپی کنید.
-3. در همین ریپوی گیت‌هاب: **Settings ← Secrets and variables ← Actions ← New repository secret** و این دو را اضافه کنید:
-   - `CLOUDFLARE_API_TOKEN` و `CLOUDFLARE_ACCOUNT_ID`
-4. تمام! هر Push به `main` یا `arena/**` خودکار دیپلوی می‌شود (وضعیت در تب **Actions**).
+1. در داشبورد Cloudflare: **Workers & Pages ← Create ← Connect to Git** ← انتخاب همین ریپو:
+   - Production branch: همان شاخه‌ای که کد نهایی در آن است
+   - Build command: `npm run build` (بقیه پیش‌فرض) ← **Deploy**
+2. ساخت دیتابیس: **Storage & databases ← D1 SQL Databases ← Create** با نام `hesabdar-db`
+3. اتصال دیتابیس: داخل صفحه ورکر ← **Settings ← Bindings ← Add ← D1 database** ← نام متغیر `DB` ← انتخاب `hesabdar-db` ← **Save** ← بعد یک Push جدید (یا Retry deployment)
+4. تمام! 🎉 از این به بعد هر Push = یک ورژن جدید، خودکار.
+
+> در صفحه ورکر، تب **Versions** تاریخچه همه ورژن‌ها را نشان می‌دهد و با **Rollback** می‌توانید با یک کلیک به هر ورژن قبلی برگردید.
 
 ### روش ۱: دستی با CLI
 
@@ -57,7 +58,11 @@
 npm install
 npx wrangler login
 npx wrangler d1 create hesabdar-db
-# خروجی database_id را در wrangler.toml جای‌گذاری و بخش d1_databases را از کامنت خارج کنید
+# خروجی database_id را در انتهای wrangler.toml اضافه کنید:
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "hesabdar-db"
+# database_id = "PASTE_ID_HERE"
 npm run deploy
 # آدرس https://hesabdar.<your-subdomain>.workers.dev آماده است ✅
 ```

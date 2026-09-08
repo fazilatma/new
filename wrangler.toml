@@ -3,18 +3,9 @@ name = "hesabdar"
 main = "dist/worker.js"
 compatibility_date = "2025-06-01"
 
-# دیتابیس D1 الزامی است (بدون آن هیچ داده‌ای ذخیره نمی‌شود):
-#   npx wrangler d1 create hesabdar-db
-# بعد database_id را جای‌گذاری و این بخش را از کامنت خارج کنید:
-#
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "hesabdar-db"
-# database_id = "PASTE_YOUR_DATABASE_ID_HERE"
+# دیتابیس D1 فقط یک‌بار در داشبورد ساخته و وصل می‌شود (بدون نیاز به آیدی در این فایل):
+#   صفحه ورکر ← Settings ← Bindings ← Add ← D1 database ← نام DB
+# بعد از آن، هر Push به گیت = یک ورژن جدید، خودکار و بدون هیچ تنظیم اضافه‌ای.
 
 [vars]
 APP_NAME = "hesabdar"
-
-# سینک خودکار ساعتی اتصال‌هایی که تیک «خودکار» دارند:
-[triggers]
-crons = ["0 * * * *"]
