@@ -1,0 +1,17 @@
+# ─── حسابدار فروش | Cloudflare Worker ──────────────────────────────
+name = "hesabdar-foroosh"
+main = "dist/worker.js"
+compatibility_date = "2025-06-01"
+
+# حالت پیش‌فرض: بدون دیتابیس (حافظه موقت) — برای تست سریع
+# برای دیتابیس دائمی، ابتدا بسازید:
+#   npx wrangler d1 create hesabdar-db
+# بعد database_id را جای‌گذاری و این بخش را از کامنت خارج کنید:
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "hesabdar-db"
+# database_id = "PASTE_YOUR_DATABASE_ID_HERE"
+
+[vars]
+APP_NAME = "hesabdar-foroosh"

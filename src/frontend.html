@@ -1,0 +1,1366 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>حسابدار فروش | مدیریت سفارش‌ها و سود</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {
+    fontFamily: { sans: ['Vazirmatn','Tahoma','sans-serif'] },
+    colors: { brand: {50:'#eef2ff',100:'#e0e7ff',500:'#6366f1',600:'#4f46e5',700:'#4338ca'} },
+    boxShadow: { soft: '0 8px 30px rgba(0,0,0,.08)', glow: '0 0 24px rgba(99,102,241,.35)' }
+  }}
+};
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  * { font-family: 'Vazirmatn', Tahoma, sans-serif; }
+  html { scroll-behavior: smooth; }
+  body { min-height: 100vh; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #a5b4fc; border-radius: 99px; }
+  .dark ::-webkit-scrollbar-thumb { background: #4c1d95; }
+  .glass { background: rgba(255,255,255,.75); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .dark .glass { background: rgba(17,24,39,.72); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .card { border-radius: 1.25rem; border: 1px solid rgba(148,163,184,.25); transition: transform .2s, box-shadow .2s; }
+  .card-hover:hover { transform: translateY(-3px); box-shadow: 0 14px 40px rgba(0,0,0,.12); }
+  .grad-text { background: linear-gradient(135deg,#818cf8,#e879f9,#34d399); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .grad-bg { background: linear-gradient(135deg,#4f46e5,#7c3aed 55%,#db2777); }
+  .grad-green { background: linear-gradient(135deg,#059669,#10b981); }
+  .grad-amber { background: linear-gradient(135deg,#d97706,#f59e0b); }
+  .grad-rose { background: linear-gradient(135deg,#e11d48,#f43f5e); }
+  .grad-sky { background: linear-gradient(135deg,#0284c7,#38bdf8); }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  .anim { animation: fadeUp .45s ease both; }
+  .anim-1 { animation-delay: .05s } .anim-2 { animation-delay: .1s } .anim-3 { animation-delay: .15s } .anim-4 { animation-delay: .2s }
+  .view { display: none; } .view.active { display: block; animation: fadeUp .35s ease both; }
+  .nav-item { transition: all .2s; border: 1px solid transparent; }
+  .nav-item.active { background: linear-gradient(135deg,#4f46e5,#7c3aed); color: #fff !important; box-shadow: 0 6px 20px rgba(99,102,241,.4); }
+  .nav-item:not(.active):hover { background: rgba(99,102,241,.1); }
+  .inp { width: 100%; border-radius: .8rem; border: 1px solid rgba(148,163,184,.4); padding: .6rem .9rem; background: rgba(255,255,255,.6); outline: none; transition: all .2s; font-size: .9rem; }
+  .dark .inp { background: rgba(31,41,55,.6); border-color: rgba(148,163,184,.25); color: #f3f4f6; }
+  .inp:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.2); }
+  select.inp option { color: #111; }
+  .btn { display: inline-flex; align-items: center; gap: .4rem; border-radius: .8rem; padding: .6rem 1.1rem; font-weight: 700; font-size: .875rem; transition: all .2s; cursor: pointer; border: none; }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: linear-gradient(135deg,#4f46e5,#7c3aed); color: #fff; box-shadow: 0 4px 16px rgba(99,102,241,.4); }
+  .btn-primary:hover { box-shadow: 0 6px 24px rgba(99,102,241,.55); transform: translateY(-1px); }
+  .btn-soft { background: rgba(99,102,241,.12); color: #4f46e5; } .dark .btn-soft { color: #a5b4fc; }
+  .btn-soft:hover { background: rgba(99,102,241,.22); }
+  .btn-danger { background: rgba(244,63,94,.12); color: #e11d48; } .btn-danger:hover { background: rgba(244,63,94,.25); }
+  .chip { display: inline-flex; align-items: center; gap: .25rem; font-size: .72rem; font-weight: 700; padding: .2rem .65rem; border-radius: 99px; white-space: nowrap; }
+  table.tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .85rem; }
+  table.tbl thead th { position: sticky; top: 0; font-weight: 800; font-size: .75rem; color: #6b7280; padding: .7rem .8rem; text-align: right; white-space: nowrap; background: rgba(248,250,252,.95); }
+  .dark table.tbl thead th { color: #9ca3af; background: rgba(17,24,39,.95); }
+  table.tbl tbody td { padding: .7rem .8rem; border-top: 1px solid rgba(148,163,184,.18); white-space: nowrap; }
+  table.tbl tbody tr { transition: background .15s; }
+  table.tbl tbody tr:hover { background: rgba(99,102,241,.06); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(4px); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  .modal-box { max-height: 92vh; overflow-y: auto; width: 100%; animation: fadeUp .3s ease both; }
+  @keyframes toastIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+  .toast { animation: toastIn .3s ease both; }
+  .chart-box { position: relative; height: 260px; } .chart-box.tall { height: 320px; }
+  .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  .kpi-icon { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; flex-shrink: 0; }
+  @media print {
+    body * { visibility: hidden; }
+    #print-area, #print-area * { visibility: visible; }
+    #print-area { position: absolute; inset: 0; padding: 24px; }
+    .no-print { display: none !important; }
+  }
+</style>
+</head>
+<body class="bg-slate-100 text-slate-800 dark:bg-[#0b1020] dark:text-slate-100 transition-colors">
+
+<!-- پس‌زمینه گرادیانی -->
+<div class="fixed inset-0 -z-10 overflow-hidden no-print">
+  <div class="absolute -top-32 -left-32 w-96 h-96 rounded-full opacity-25 blur-3xl" style="background:#7c3aed"></div>
+  <div class="absolute top-1/3 -right-32 w-96 h-96 rounded-full opacity-20 blur-3xl" style="background:#db2777"></div>
+  <div class="absolute -bottom-32 left-1/3 w-96 h-96 rounded-full opacity-20 blur-3xl" style="background:#10b981"></div>
+</div>
+
+<div id="toast-wrap" class="fixed bottom-20 md:bottom-6 left-4 z-[100] flex flex-col gap-2 no-print"></div>
+
+<!-- ─── هدر ─── -->
+<header class="sticky top-0 z-40 glass border-b border-slate-200/50 dark:border-white/10 no-print">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
+    <div class="w-11 h-11 rounded-2xl grad-bg flex items-center justify-center text-2xl shadow-glow shrink-0">📊</div>
+    <div class="flex-1 min-w-0">
+      <h1 class="font-black text-lg leading-6 truncate">حسابدار فروش <span class="grad-text" id="shop-name-title"></span></h1>
+      <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <span id="today-j">—</span>
+        <span class="w-1 h-1 rounded-full bg-slate-400"></span>
+        <span id="mode-badge" class="chip bg-slate-200 dark:bg-white/10">…</span>
+      </div>
+    </div>
+    <button onclick="toggleTheme()" class="btn btn-soft !px-3" title="تم روشن/تیره"><span id="theme-ico">🌙</span></button>
+    <button onclick="go('new')" class="btn btn-primary">＋ ثبت سفارش</button>
+  </div>
+</header>
+
+<div class="max-w-7xl mx-auto px-4 py-5 flex gap-5">
+  <!-- ─── سایدبار ─── -->
+  <aside class="hidden md:block w-60 shrink-0 no-print">
+    <nav class="glass card p-3 sticky top-24 flex flex-col gap-1 text-sm font-bold" id="sidebar"></nav>
+    <div class="glass card p-4 mt-4 text-center">
+      <div class="text-3xl mb-1">💰</div>
+      <div class="text-xs text-slate-500 dark:text-slate-400 mb-1">سود این ماه</div>
+      <div class="font-black text-lg text-emerald-600 dark:text-emerald-400 num" id="side-profit">—</div>
+    </div>
+  </aside>
+
+  <!-- ─── محتوا ─── -->
+  <main class="flex-1 min-w-0 pb-24 md:pb-10">
+
+    <!-- داشبورد -->
+    <section id="view-dashboard" class="view">
+      <div class="glass card p-4 mb-4 flex flex-wrap items-center gap-2 no-print">
+        <span class="font-black text-sm ml-1">📅 بازه زمانی:</span>
+        <div id="rng-btns" class="flex flex-wrap gap-2"></div>
+        <div id="rng-custom" class="hidden items-center gap-2 w-full mt-2 pt-2 border-t border-slate-200 dark:border-white/10">
+          <div class="flex items-center gap-1 text-xs">از <span id="pk-from"></span></div>
+          <div class="flex items-center gap-1 text-xs">تا <span id="pk-to"></span></div>
+          <button class="btn btn-primary !py-1.5" onclick="applyCustomRange()">اعمال</button>
+        </div>
+        <label class="mr-auto flex items-center gap-2 text-xs cursor-pointer select-none">
+          <input type="checkbox" id="inc-ret" checked onchange="renderDashboard()" class="w-4 h-4 accent-indigo-600">
+          احتساب مرجوعی به‌عنوان زیان
+        </label>
+      </div>
+      <div id="kpis" class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-4"></div>
+      <div class="grid lg:grid-cols-3 gap-4 mb-4">
+        <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-black text-sm">📈 روند فروش و سود</h3>
+            <div class="flex gap-1 text-xs" id="trend-grp"></div>
+          </div>
+          <div class="chart-box tall"><canvas id="ch-trend"></canvas></div>
+        </div>
+        <div class="glass card card-hover p-4 anim anim-2">
+          <h3 class="font-black text-sm mb-2">🧭 سهم منابع فروش</h3>
+          <div class="chart-box"><canvas id="ch-source"></canvas></div>
+        </div>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-4 mb-4">
+        <div class="glass card card-hover p-4 anim anim-3">
+          <h3 class="font-black text-sm mb-2">🏪 عملکرد غرفه‌های باسلام</h3>
+          <div class="chart-box"><canvas id="ch-booth"></canvas></div>
+        </div>
+        <div class="glass card card-hover p-4 anim anim-4">
+          <h3 class="font-black text-sm mb-2">🏆 پرفروش‌ترین کالاها</h3>
+          <div id="top-products" class="flex flex-col gap-2 max-h-[260px] overflow-y-auto pl-1"></div>
+        </div>
+      </div>
+      <div class="glass card p-4 anim">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-black text-sm">🧾 آخرین سفارش‌ها</h3>
+          <button class="btn btn-soft !py-1 !text-xs" onclick="go('orders')">همه سفارش‌ها ←</button>
+        </div>
+        <div class="overflow-x-auto"><table class="tbl" id="recent-tbl"></table></div>
+      </div>
+    </section>
+
+    <!-- سفارش‌ها -->
+    <section id="view-orders" class="view">
+      <div class="glass card p-4 mb-4 flex flex-wrap gap-2 items-center no-print">
+        <input id="f-q" class="inp !w-44" placeholder="🔍 جستجو: مشتری، کالا، کد…" oninput="renderOrders()">
+        <select id="f-source" class="inp !w-36" onchange="renderOrders()">
+          <option value="">همه منابع</option><option value="basalam">باسلام</option><option value="website">سایت فروشگاهی</option>
+        </select>
+        <select id="f-booth" class="inp !w-40" onchange="renderOrders()"><option value="">همه غرفه‌ها</option></select>
+        <select id="f-sup" class="inp !w-40" onchange="renderOrders()"><option value="">همه تامین‌کنندگان</option></select>
+        <select id="f-status" class="inp !w-36" onchange="renderOrders()"><option value="">همه وضعیت‌ها</option></select>
+        <button class="btn btn-soft mr-auto" onclick="exportOrdersCSV()">⬇ خروجی اکسل</button>
+      </div>
+      <div id="orders-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+      <div class="glass card p-4">
+        <div class="text-xs text-slate-500 mb-2"><span id="orders-count" class="font-black"></span> سفارش</div>
+        <div class="overflow-x-auto"><table class="tbl" id="orders-tbl"></table></div>
+      </div>
+    </section>
+
+    <!-- ثبت/ویرایش سفارش -->
+    <section id="view-new" class="view">
+      <div class="grid lg:grid-cols-3 gap-4">
+        <form id="order-form" class="glass card p-5 lg:col-span-2 flex flex-col gap-4" onsubmit="return submitOrder(event)">
+          <h3 class="font-black" id="form-title">➕ ثبت سفارش جدید</h3>
+          <input type="hidden" id="o-id">
+          <div class="grid md:grid-cols-3 gap-3">
+            <div><label class="text-xs font-bold">کد سفارش</label><input id="o-code" class="inp num" dir="ltr"></div>
+            <div><label class="text-xs font-bold">منبع فروش *</label>
+              <select id="o-source" class="inp" onchange="onSourceChange()"><option value="basalam">🛍 باسلام</option><option value="website">🌐 سایت فروشگاهی</option></select></div>
+            <div id="wrap-booth"><label class="text-xs font-bold">غرفه باسلام *</label>
+              <div class="flex gap-1"><select id="o-booth" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('booth')" title="غرفه جدید">＋</button></div></div>
+          </div>
+          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
+            <div><label class="text-xs font-bold">نام و نام خانوادگی مشتری *</label><input id="o-customer" class="inp" required placeholder="مثلاً سارا محمدی"></div>
+            <div><label class="text-xs font-bold">شماره تماس</label><input id="o-phone" class="inp num" dir="ltr" placeholder="09…"></div>
+            <div><label class="text-xs font-bold">شهر</label><input id="o-city" class="inp" placeholder="تهران"></div>
+          </div>
+          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
+            <div class="md:col-span-2"><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
+            <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="liveCalc()"></div>
+            <div class="md:col-span-2"><label class="text-xs font-bold">تامین‌کننده (واسطه)</label>
+              <div class="flex gap-1"><select id="o-sup" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('supplier')" title="تامین‌کننده جدید">＋</button></div></div>
+            <div><label class="text-xs font-bold">تاریخ سفارش</label><div id="pk-date"></div></div>
+          </div>
+          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3">
+            <div class="text-xs font-black mb-2 text-slate-500">💵 مبالغ (تومان)</div>
+            <div class="grid md:grid-cols-3 gap-3">
+              <div><label class="text-xs font-bold">قیمت فروش واحد *</label><input id="o-usale" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">هزینه ارسال</label><input id="o-ship" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه)</label><input id="o-comm" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">سایر هزینه‌ها</label><input id="o-other" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">شرح سایر هزینه‌ها</label><input id="o-otherlabel" class="inp" placeholder="مثلاً پیامک…"></div>
+            </div>
+          </div>
+          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
+            <div><label class="text-xs font-bold">وضعیت سفارش</label><select id="o-status" class="inp"></select></div>
+            <div><label class="text-xs font-bold">وضعیت پرداخت</label><select id="o-pay" class="inp"></select></div>
+            <div><label class="text-xs font-bold">توضیحات</label><input id="o-notes" class="inp" placeholder="اختیاری…"></div>
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="btn btn-primary flex-1 justify-center !py-3">💾 ذخیره سفارش</button>
+            <button type="button" class="btn btn-soft" onclick="resetForm()">پاک‌سازی</button>
+          </div>
+        </form>
+        <div class="flex flex-col gap-4">
+          <div class="glass card p-5 sticky top-24">
+            <h3 class="font-black text-sm mb-3">🧮 محاسبه لحظه‌ای سود</h3>
+            <div id="calc-panel" class="flex flex-col gap-2 text-sm"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- گزارش و تحلیل -->
+    <section id="view-reports" class="view">
+      <div class="glass card p-4 mb-4 flex flex-wrap gap-2 items-center no-print">
+        <select id="r-group" class="inp !w-40" onchange="renderReports()">
+          <option value="daily">📅 روزانه</option><option value="weekly" selected>📊 هفتگی</option>
+          <option value="monthly">🗓 ماهانه</option><option value="yearly">📆 سالانه</option>
+        </select>
+        <select id="r-source" class="inp !w-40" onchange="renderReports()">
+          <option value="">همه منابع</option><option value="basalam">باسلام</option><option value="website">سایت فروشگاهی</option>
+        </select>
+        <select id="r-booth" class="inp !w-44" onchange="renderReports()"><option value="">همه غرفه‌ها</option></select>
+        <select id="r-range" class="inp !w-40" onchange="renderReports()">
+          <option value="12">۱۲ دوره اخیر</option><option value="6">۶ دوره اخیر</option>
+          <option value="30">۳۰ دوره اخیر</option><option value="0">همه</option>
+        </select>
+        <button class="btn btn-soft mr-auto" onclick="exportReportsCSV()">⬇ خروجی اکسل</button>
+      </div>
+      <div id="r-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+      <div class="glass card p-4 mb-4">
+        <h3 class="font-black text-sm mb-2">📈 نمودار سود و زیان</h3>
+        <div class="chart-box tall"><canvas id="ch-pnl"></canvas></div>
+      </div>
+      <div class="glass card p-4 mb-4">
+        <h3 class="font-black text-sm mb-2">📋 جدول سود و زیان دوره‌ای</h3>
+        <div class="overflow-x-auto"><table class="tbl" id="pnl-tbl"></table></div>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-4">
+        <div class="glass card p-4">
+          <h3 class="font-black text-sm mb-2">🤝 عملکرد تامین‌کنندگان</h3>
+          <div class="chart-box"><canvas id="ch-sups"></canvas></div>
+          <div class="overflow-x-auto mt-2"><table class="tbl" id="sup-tbl"></table></div>
+        </div>
+        <div class="glass card p-4">
+          <h3 class="font-black text-sm mb-2">📦 تحلیل کالاها</h3>
+          <div class="chart-box"><canvas id="ch-prods"></canvas></div>
+          <div class="overflow-x-auto mt-2"><table class="tbl" id="prod-tbl"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- غرفه‌ها -->
+    <section id="view-booths" class="view">
+      <div class="flex items-center gap-2 mb-4 no-print">
+        <h2 class="font-black">🏪 غرفه‌های باسلام</h2>
+        <button class="btn btn-primary mr-auto !py-2" onclick="boothModal()">＋ غرفه جدید</button>
+      </div>
+      <div id="booths-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+    </section>
+
+    <!-- تامین‌کنندگان -->
+    <section id="view-suppliers" class="view">
+      <div class="flex items-center gap-2 mb-4 no-print">
+        <h2 class="font-black">🤝 تامین‌کنندگان (واسطه‌ها)</h2>
+        <button class="btn btn-primary mr-auto !py-2" onclick="supplierModal()">＋ تامین‌کننده جدید</button>
+      </div>
+      <div id="suppliers-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+    </section>
+
+    <!-- تنظیمات -->
+    <section id="view-settings" class="view">
+      <div class="grid lg:grid-cols-2 gap-4">
+        <div class="glass card p-5">
+          <h3 class="font-black mb-3">⚙️ تنظیمات فروشگاه</h3>
+          <div class="flex flex-col gap-3">
+            <div><label class="text-xs font-bold">نام فروشگاه</label><input id="s-shop" class="inp" placeholder="مثلاً فروشگاه …"></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-bold">کمیسیون پیش‌فرض باسلام (٪)</label><input id="s-cb" type="number" min="0" max="100" value="0" class="inp num"></div>
+              <div><label class="text-xs font-bold">کمیسیون پیش‌فرض سایت (٪)</label><input id="s-cw" type="number" min="0" max="100" value="0" class="inp num"></div>
+            </div>
+            <button class="btn btn-primary justify-center" onclick="saveSettings()">💾 ذخیره تنظیمات</button>
+          </div>
+        </div>
+        <div class="glass card p-5">
+          <h3 class="font-black mb-3">💾 مدیریت داده‌ها</h3>
+          <div class="flex flex-col gap-2 text-sm">
+            <button class="btn btn-soft justify-center" onclick="backupJSON()">⬇ دانلود بکاپ کامل (JSON)</button>
+            <label class="btn btn-soft justify-center cursor-pointer">⬆ بازیابی از بکاپ<input type="file" accept=".json" class="hidden" onchange="restoreJSON(this)"></label>
+            <button class="btn btn-soft justify-center" onclick="exportOrdersCSV()">📊 خروجی اکسل همه سفارش‌ها</button>
+            <button class="btn btn-soft justify-center" onclick="seedDemo()">✨ افزودن داده نمونه برای تست</button>
+            <button class="btn btn-danger justify-center" onclick="wipeAll()">🗑 حذف همه داده‌ها</button>
+          </div>
+          <div class="mt-4 text-xs text-slate-500 dark:text-slate-400 leading-6" id="db-info"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ناوبری موبایل -->
+<nav class="md:hidden fixed bottom-0 inset-x-0 z-40 glass border-t border-slate-200 dark:border-white/10 px-2 py-2 flex justify-around text-[11px] font-bold no-print" id="mobile-nav"></nav>
+
+<!-- مودال عمومی -->
+<div id="modal" class="modal-bg hidden no-print" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box glass card !bg-white dark:!bg-slate-900 p-5 max-w-lg">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-black" id="modal-title"></h3>
+      <button class="btn btn-soft !px-3 !py-1" onclick="closeModal()">✕</button>
+    </div>
+    <div id="modal-body"></div>
+    <div id="modal-foot" class="flex gap-2 mt-4"></div>
+  </div>
+</div>
+
+<!-- فاکتور -->
+<div id="invoice-modal" class="modal-bg hidden" onclick="if(event.target===this)closeInvoice()">
+  <div class="modal-box bg-white text-slate-800 rounded-2xl p-6 max-w-xl" id="print-area"></div>
+</div>
+
+<script>
+'use strict';
+/* ═══════════════ ابزارهای عمومی ═══════════════ */
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const FA_D = '۰۱۲۳۴۵۶۷۸۹';
+const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
+const fmtN = (n) => toFa(Number(n || 0).toLocaleString('en-US'));
+const fmtMoney = (n) => fmtN(Math.round(Number(n || 0))) + ' تومان';
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+/* ═══════════════ تقویم شمسی (Jalaali) ═══════════════ */
+function _div(a, b) { return Math.trunc(a / b); }
+function _mod(a, b) { return a - Math.trunc(a / b) * b; }
+function _jalCal(jy, withoutLeap) {
+  const breaks = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 2060, 2097, 2192, 2262, 2324, 2394, 2456, 3178];
+  const gy = jy + 621; let leapJ = -14, jp = breaks[0], jm, jump, leap;
+  for (let i = 1; i < breaks.length; i++) {
+    jm = breaks[i]; jump = jm - jp;
+    if (jy < jm) break;
+    leapJ = leapJ + _div(jump, 33) * 8 + _div(_mod(jump, 33), 4); jp = jm;
+  }
+  const n = jy - jp;
+  leapJ = leapJ + _div(n, 33) * 8 + _div(_mod(n, 33) + 3, 4);
+  if (_mod(jump, 33) === 4 && jump - n === 4) leapJ += 1;
+  const leapG = _div(gy, 4) - _div((_div(gy, 100) + 1) * 3, 4) - 150;
+  const march = 20 + leapJ - leapG;
+  if (withoutLeap) return { gy, march };
+  if (jump - n < 6) n = n - jump + _div(jump + 4, 33) * 33;
+  leap = _mod(_mod(n + 1, 33) - 1, 4);
+  if (leap === -1) leap = 4;
+  return { leap, gy, march };
+}
+function _g2d(gy, gm, gd) {
+  let d = _div((gy + _div(gm - 8, 6) + 100100) * 1461, 4) + _div(153 * _mod(gm + 9, 12) + 2, 5) + gd - 34840408;
+  d = d - _div(_div(gy + 100100 + _div(gm - 8, 6), 100) * 3, 4) + 752;
+  return d;
+}
+function _d2g(jdn) {
+  let j = 4 * jdn + 139361631;
+  j = j + _div(_div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908;
+  const i = _div(_mod(j, 1461), 4) * 5 + 308;
+  const gd = _div(_mod(i, 153), 5) + 1, gm = _mod(_div(i, 153), 12) + 1;
+  const gy = _div(j, 1461) - 100100 + _div(8 - gm, 6);
+  return { gy, gm, gd };
+}
+function _j2d(jy, jm, jd) { const r = _jalCal(jy, true); return _g2d(r.gy, 3, r.march) + (jm - 1) * 31 - _div(jm, 7) * (jm - 7) + jd - 1; }
+function _d2j(jdn) {
+  const gy = _d2g(jdn).gy; let jy = gy - 621;
+  const r = _jalCal(jy, false), jdn1f = _g2d(gy, 3, r.march);
+  let k = jdn - jdn1f, jm, jd;
+  if (k >= 0) { if (k <= 185) return { jy, jm: 1 + _div(k, 31), jd: _mod(k, 31) + 1 }; k -= 186; }
+  else { jy -= 1; k += 179; if (r.leap === 1) k += 1; }
+  return { jy, jm: 7 + _div(k, 30), jd: _mod(k, 30) + 1 };
+}
+const J_MONTHS = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+const toJ = (gy, gm, gd) => _d2j(_g2d(gy, gm, gd));
+const toG = (jy, jm, jd) => _d2g(_j2d(jy, jm, jd));
+const pad2 = (n) => String(n).padStart(2, '0');
+const isoToday = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const parseISO = (s) => { const [y, m, d] = String(s || '').split('-').map(Number); return new Date(y || 2000, (m || 1) - 1, d || 1); };
+const toISO = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const addDays = (iso, n) => { const d = parseISO(iso); d.setDate(d.getDate() + n); return toISO(d); };
+const isoToJ = (iso) => { const [y, m, d] = String(iso).split('-').map(Number); return toJ(y, m, d); };
+const jToISO = (jy, jm, jd) => { const g = toG(jy, jm, jd); return `${g.gy}-${pad2(g.gm)}-${pad2(g.gd)}`; };
+const fmtJ = (iso, withYear = true) => {
+  if (!iso) return '—';
+  const j = isoToJ(iso);
+  return withYear ? `${toFa(j.jd)} ${J_MONTHS[j.jm - 1]} ${toFa(j.jy)}` : `${toFa(j.jd)} ${J_MONTHS[j.jm - 1]}`;
+};
+const weekStart = (iso) => { const d = parseISO(iso); const off = (d.getDay() + 1) % 7; d.setDate(d.getDate() - off); return toISO(d); }; // شنبه
+const monthStartJ = (iso) => { const j = isoToJ(iso); return jToISO(j.jy, j.jm, 1); };
+const yearStartJ = (iso) => { const j = isoToJ(iso); return jToISO(j.jy, 1, 1); };
+
+/* ═══════════════ ثابت‌ها ═══════════════ */
+const SOURCES = { basalam: '🛍 باسلام', website: '🌐 سایت فروشگاهی' };
+const SRC_SHORT = { basalam: 'باسلام', website: 'سایت' };
+const STATUS = {
+  pending: { t: 'در انتظار تایید', c: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300' },
+  confirmed: { t: 'تایید شده', c: 'bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300' },
+  shipped: { t: 'ارسال شده', c: 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300' },
+  delivered: { t: 'تحویل شده', c: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' },
+  returned: { t: 'مرجوع شده', c: 'bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300' },
+  cancelled: { t: 'لغو شده', c: 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300' },
+};
+const PAY = { pending: 'در انتظار پرداخت', paid: 'پرداخت شده', refunded: 'برگشت وجه' };
+
+/* ═══════════════ لایه ذخیره‌سازی (API + حالت محلی) ═══════════════ */
+const Api = {
+  async req(path, method = 'GET', data) {
+    const r = await fetch('/api' + path, {
+      method, headers: { 'content-type': 'application/json' },
+      body: data ? JSON.stringify(data) : undefined,
+    });
+    if (!r.ok) throw new Error('خطای سرور ' + r.status);
+    return r.json();
+  },
+};
+const Local = {
+  read(k, fb) { try { const v = JSON.parse(localStorage.getItem('hd_' + k)); return v ?? fb; } catch { return fb; } },
+  write(k, v) { localStorage.setItem('hd_' + k, JSON.stringify(v)); },
+};
+const Store = {
+  mode: 'api',
+  async init() {
+    try {
+      const h = await Api.req('/health');
+      this.mode = h.mode === 'd1' ? 'd1' : 'api';
+    } catch { this.mode = 'local'; }
+    const b = $('#mode-badge');
+    if (this.mode === 'd1') { b.textContent = '☁️ متصل به Cloudflare D1'; b.className = 'chip bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'; }
+    else if (this.mode === 'api') { b.textContent = '☁️ متصل به ورکر (حافظه موقت)'; b.className = 'chip bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300'; }
+    else { b.textContent = '💾 حالت محلی (مرورگر)'; b.className = 'chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'; }
+    $('#db-info').innerHTML = this.mode === 'local'
+      ? 'در حالت محلی، داده‌ها فقط در همین مرورگر ذخیره می‌شود. برای دیتابیس دائمی ابری، روی Cloudflare با D1 دیپلوی کنید (راهنمای README).'
+      : 'داده‌ها روی Cloudflare ذخیره می‌شوند و از هر دستگاهی در دسترس‌اند. حتماً گاهی بکاپ JSON بگیرید.';
+  },
+  async listOrders() {
+    if (this.mode === 'local') return Local.read('orders', []);
+    try { return (await Api.req('/orders')).orders || []; } catch { this.mode = 'local'; return Local.read('orders', []); }
+  },
+  async saveOrder(o) {
+    if (this.mode === 'local') {
+      const arr = Local.read('orders', []);
+      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
+      else { o.id = uid(); o.created_at = new Date().toISOString(); arr.push(o); }
+      Local.write('orders', arr); return o;
+    }
+    const r = o.id ? await Api.req('/orders/' + o.id, 'PUT', o) : await Api.req('/orders', 'POST', o);
+    return r.order;
+  },
+  async delOrder(id) {
+    if (this.mode === 'local') { Local.write('orders', Local.read('orders', []).filter((x) => String(x.id) !== String(id))); return; }
+    await Api.req('/orders/' + id, 'DELETE');
+  },
+  async listBooths() {
+    if (this.mode === 'local') return Local.read('booths', []);
+    try { return (await Api.req('/booths')).booths || []; } catch { this.mode = 'local'; return Local.read('booths', []); }
+  },
+  async saveBooth(o) {
+    if (this.mode === 'local') {
+      const arr = Local.read('booths', []);
+      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
+      else { o.id = uid(); arr.push(o); }
+      Local.write('booths', arr); return o;
+    }
+    const r = o.id ? await Api.req('/booths/' + o.id, 'PUT', o) : await Api.req('/booths', 'POST', o);
+    return r.booth;
+  },
+  async delBooth(id) {
+    if (this.mode === 'local') { Local.write('booths', Local.read('booths', []).filter((x) => String(x.id) !== String(id))); return; }
+    await Api.req('/booths/' + id, 'DELETE');
+  },
+  async listSuppliers() {
+    if (this.mode === 'local') return Local.read('suppliers', []);
+    try { return (await Api.req('/suppliers')).suppliers || []; } catch { this.mode = 'local'; return Local.read('suppliers', []); }
+  },
+  async saveSupplier(o) {
+    if (this.mode === 'local') {
+      const arr = Local.read('suppliers', []);
+      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
+      else { o.id = uid(); arr.push(o); }
+      Local.write('suppliers', arr); return o;
+    }
+    const r = o.id ? await Api.req('/suppliers/' + o.id, 'PUT', o) : await Api.req('/suppliers', 'POST', o);
+    return r.supplier;
+  },
+  async delSupplier(id) {
+    if (this.mode === 'local') { Local.write('suppliers', Local.read('suppliers', []).filter((x) => String(x.id) !== String(id))); return; }
+    await Api.req('/suppliers/' + id, 'DELETE');
+  },
+  async getSettings() {
+    if (this.mode === 'local') return Local.read('settings', {});
+    try { return (await Api.req('/settings')).settings || {}; } catch { return Local.read('settings', {}); }
+  },
+  async saveSettings(s) {
+    if (this.mode === 'local') { Local.write('settings', s); return s; }
+    await Api.req('/settings', 'POST', s); return s;
+  },
+};
+
+/* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
+const state = {
+  orders: [], booths: [], suppliers: [], settings: {},
+  range: 'month', customFrom: null, customTo: null, trendGroup: 'daily',
+};
+const N = (v) => Number(v) || 0;
+
+/* محاسبه مالی یک سفارش */
+function calc(o, incReturned = true) {
+  const qty = N(o.quantity) || 1;
+  let revenue = N(o.unit_sale) * qty - N(o.discount);
+  const cost = N(o.unit_cost) * qty + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
+  if (o.status === 'returned' && incReturned) revenue = 0; // مرجوعی = زیان (هزینه‌ها می‌مانند)
+  return { revenue, cost, profit: revenue - cost, margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : (revenue - cost < 0 ? -100 : 0) };
+}
+const isCounted = (o, incReturned) => o.status !== 'cancelled' && (incReturned || o.status !== 'returned');
+
+function getRange() {
+  const t = isoToday();
+  if (state.range === 'today') return { from: t, to: t };
+  if (state.range === 'week') return { from: weekStart(t), to: t };
+  if (state.range === 'month') return { from: monthStartJ(t), to: t };
+  if (state.range === 'year') return { from: yearStartJ(t), to: t };
+  if (state.range === 'custom' && state.customFrom) return { from: state.customFrom, to: state.customTo || state.customFrom };
+  return { from: '2000-01-01', to: '2100-01-01' };
+}
+function inRange(o, from, to) { return (o.order_date || '') >= from && (o.order_date || '') <= to; }
+
+/* جمع‌بندی روی لیست سفارش‌ها */
+function summarize(list, incReturned = true) {
+  let revenue = 0, cost = 0, count = 0;
+  for (const o of list) {
+    if (!isCounted(o, incReturned)) continue;
+    const c = calc(o, incReturned);
+    revenue += c.revenue; cost += c.cost; count++;
+  }
+  const profit = revenue - cost;
+  return { revenue, cost, profit, count, margin: revenue > 0 ? (profit / revenue) * 100 : 0, avg: count ? revenue / count : 0 };
+}
+
+/* گروه‌بندی دوره‌ای */
+function periodKey(iso, group) {
+  const j = isoToJ(iso);
+  if (group === 'daily') return { key: iso, label: fmtJ(iso, false) };
+  if (group === 'weekly') { const s = weekStart(iso); return { key: s, label: 'هفته ' + fmtJ(s, false) }; }
+  if (group === 'monthly') return { key: `${j.jy}-${pad2(j.jm)}`, label: `${J_MONTHS[j.jm - 1]} ${toFa(j.jy)}` };
+  return { key: String(j.jy), label: 'سال ' + toFa(j.jy) };
+}
+function groupSeries(list, group, incReturned = true) {
+  const map = new Map();
+  for (const o of list) {
+    if (!o.order_date || !isCounted(o, incReturned)) continue;
+    const { key, label } = periodKey(o.order_date, group);
+    if (!map.has(key)) map.set(key, { key, label, revenue: 0, cost: 0, count: 0 });
+    const c = calc(o, incReturned), r = map.get(key);
+    r.revenue += c.revenue; r.cost += c.cost; r.count++;
+  }
+  return [...map.values()].sort((a, b) => a.key < b.key ? -1 : 1).map((r) => ({ ...r, profit: r.revenue - r.cost }));
+}
+
+/* ═══════════════ اعلان و مودال ═══════════════ */
+function toast(msg, type = 'ok') {
+  const colors = { ok: 'bg-emerald-600', err: 'bg-rose-600', info: 'bg-indigo-600' };
+  const el = document.createElement('div');
+  el.className = `toast ${colors[type]} text-white text-sm font-bold px-4 py-2.5 rounded-xl shadow-lg max-w-xs`;
+  el.textContent = msg;
+  $('#toast-wrap').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; setTimeout(() => el.remove(), 400); }, 3200);
+}
+function openModal({ title, body, buttons = [] }) {
+  $('#modal-title').textContent = title;
+  $('#modal-body').innerHTML = body;
+  const foot = $('#modal-foot'); foot.innerHTML = '';
+  for (const b of buttons) {
+    const btn = document.createElement('button');
+    btn.className = 'btn ' + (b.cls || 'btn-primary') + ' flex-1 justify-center';
+    btn.textContent = b.label;
+    btn.onclick = b.onClick;
+    foot.appendChild(btn);
+  }
+  $('#modal').classList.remove('hidden');
+}
+function closeModal() { $('#modal').classList.add('hidden'); }
+function confirmDlg(title, msg, onYes) {
+  openModal({ title, body: `<p class="text-sm leading-7">${msg}</p>`, buttons: [
+    { label: 'انصراف', cls: 'btn-soft', onClick: closeModal },
+    { label: 'بله، انجام شود', cls: 'btn-danger !bg-rose-600 !text-white', onClick: () => { closeModal(); onYes(); } },
+  ]});
+}
+
+/* ═══════════════ انتخاب‌گر تاریخ شمسی ═══════════════ */
+function jPicker(el, initialISO) {
+  const root = typeof el === 'string' ? $(el) : el;
+  root.innerHTML = `<div class="flex gap-1" dir="rtl">
+    <select class="inp !px-2 num j-d" style="width:70px"></select>
+    <select class="inp !px-2 j-m" style="width:105px"></select>
+    <select class="inp !px-2 num j-y" style="width:85px"></select></div>`;
+  const dS = root.querySelector('.j-d'), mS = root.querySelector('.j-m'), yS = root.querySelector('.j-y');
+  const cur = isoToJ(isoToday());
+  for (let y = cur.jy - 5; y <= cur.jy + 2; y++) yS.insertAdjacentHTML('beforeend', `<option value="${y}">${toFa(y)}</option>`);
+  J_MONTHS.forEach((m, i) => mS.insertAdjacentHTML('beforeend', `<option value="${i + 1}">${m}</option>`));
+  const fillDays = () => {
+    const ml = dS.value;
+    dS.innerHTML = '';
+    const max = root._mlen || 31;
+    for (let d = 1; d <= max; d++) dS.insertAdjacentHTML('beforeend', `<option value="${d}">${toFa(d)}</option>`);
+    if (ml <= max) dS.value = ml;
+  };
+  const updLen = () => {
+    const jy = +yS.value, jm = +mS.value;
+    root._mlen = jm <= 6 ? 31 : jm <= 11 ? 30 : (_jalCal(jy, false).leap === 0 ? 30 : 29);
+    fillDays();
+  };
+  yS.onchange = updLen; mS.onchange = updLen;
+  const api = {
+    get() { return jToISO(+yS.value, +mS.value, +dS.value); },
+    set(iso) { try { const j = isoToJ(iso); yS.value = j.jy; mS.value = j.jm; updLen(); dS.value = Math.min(j.jd, root._mlen); } catch {} },
+  };
+  updLen(); api.set(initialISO || isoToday());
+  return api;
+}
+let PK = {};
+
+/* ═══════════════ ناوبری و تم ═══════════════ */
+const NAV = [
+  { id: 'dashboard', t: 'داشبورد', i: '🏠' },
+  { id: 'orders', t: 'سفارش‌ها', i: '🧾' },
+  { id: 'new', t: 'ثبت سفارش', i: '➕' },
+  { id: 'reports', t: 'گزارش و تحلیل', i: '📊' },
+  { id: 'booths', t: 'غرفه‌ها', i: '🏪' },
+  { id: 'suppliers', t: 'تامین‌کنندگان', i: '🤝' },
+  { id: 'settings', t: 'تنظیمات', i: '⚙️' },
+];
+let currentView = 'dashboard';
+function buildNav() {
+  $('#sidebar').innerHTML = NAV.map((n) =>
+    `<button data-v="${n.id}" onclick="go('${n.id}')" class="nav-item flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-600 dark:text-slate-300"><span class="text-lg">${n.i}</span>${n.t}</button>`).join('');
+  $('#mobile-nav').innerHTML = NAV.map((n) =>
+    `<button data-v="${n.id}" onclick="go('${n.id}')" class="nav-item flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl text-slate-600 dark:text-slate-300"><span class="text-xl">${n.i}</span>${n.t}</button>`).join('');
+}
+function go(v) {
+  currentView = v;
+  $$('#sidebar .nav-item, #mobile-nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+  $$('.view').forEach((s) => s.classList.remove('active'));
+  $('#view-' + v).classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (v === 'dashboard') renderDashboard();
+  if (v === 'orders') renderOrders();
+  if (v === 'reports') renderReports();
+  if (v === 'booths') renderBooths();
+  if (v === 'suppliers') renderSuppliers();
+}
+function toggleTheme() {
+  const dark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('hd_theme', dark ? 'dark' : 'light');
+  $('#theme-ico').textContent = dark ? '☀️' : '🌙';
+  refreshChartsTheme();
+}
+
+/* ═══════════════ نمودارها ═══════════════ */
+let CH = {};
+const compact = (v) => {
+  const a = Math.abs(v);
+  if (a >= 1e9) return toFa((v / 1e9).toFixed(1)) + ' م';
+  if (a >= 1e6) return toFa((v / 1e6).toFixed(1)) + ' م';
+  if (a >= 1e3) return toFa(Math.round(v / 1e3)) + ' ه';
+  return toFa(Math.round(v));
+};
+function chartBase(extra = {}) {
+  const dark = document.documentElement.classList.contains('dark');
+  const grid = dark ? 'rgba(148,163,184,.12)' : 'rgba(100,116,139,.15)';
+  const tick = dark ? '#94a3b8' : '#64748b';
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { font: { family: 'Vazirmatn' }, color: tick }, rtl: true }, tooltip: { rtl: true, textDirection: 'rtl', padding: 10, callbacks: { label: (c) => ` ${c.dataset.label}: ${fmtN(c.parsed.y ?? c.parsed)}` } } },
+    scales: { x: { grid: { color: grid }, ticks: { color: tick, font: { family: 'Vazirmatn', size: 10 } } }, y: { grid: { color: grid }, ticks: { color: tick, font: { family: 'Vazirmatn', size: 10 }, callback: compact } } },
+    ...extra,
+  };
+}
+function mkChart(id, cfg) {
+  if (CH[id]) CH[id].destroy();
+  const el = document.getElementById(id);
+  if (!el) return;
+  Chart.defaults.font.family = 'Vazirmatn';
+  CH[id] = new Chart(el, cfg);
+}
+function refreshChartsTheme() {
+  if (currentView === 'dashboard') renderDashboard();
+  else if (currentView === 'reports') renderReports();
+}
+
+/* ═══════════════ بارگذاری اولیه ═══════════════ */
+const boothName = (id) => (state.booths.find((b) => String(b.id) === String(id)) || {}).name || '—';
+const supNameOf = (o) => {
+  const s = state.suppliers.find((x) => String(x.id) === String(o.supplier_id));
+  return s ? s.name : (o.supplier_name || '—');
+};
+async function loadAll() {
+  const [orders, booths, suppliers, settings] = await Promise.all([
+    Store.listOrders(), Store.listBooths(), Store.listSuppliers(), Store.getSettings(),
+  ]);
+  state.orders = orders || []; state.booths = booths || [];
+  state.suppliers = suppliers || []; state.settings = settings || {};
+  $('#shop-name-title').textContent = state.settings.shop_name ? '«' + state.settings.shop_name + '»' : '';
+  $('#s-shop').value = state.settings.shop_name || '';
+  $('#s-cb').value = state.settings.comm_basalam ?? 0;
+  $('#s-cw').value = state.settings.comm_website ?? 0;
+  fillSelects();
+  const t = isoToday(), from = monthStartJ(t);
+  const mp = summarize(state.orders.filter((o) => inRange(o, from, t)));
+  const sp = $('#side-profit');
+  sp.textContent = fmtMoney(mp.profit);
+  sp.className = 'font-black text-lg num ' + (mp.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400');
+  go(currentView);
+}
+function fillSelects() {
+  const bOpts = state.booths.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#o-booth').innerHTML = bOpts || '<option value="">— غرفه‌ای ثبت نشده —</option>';
+  $('#f-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + bOpts;
+  $('#r-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + bOpts;
+  const sOpts = `<option value="">— بدون تامین‌کننده —</option>` + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('#o-sup').innerHTML = sOpts;
+  $('#f-sup').innerHTML = '<option value="">همه تامین‌کنندگان</option>' + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('#o-status').innerHTML = Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.t}</option>`).join('');
+  $('#f-status').innerHTML = '<option value="">همه وضعیت‌ها</option>' + Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.t}</option>`).join('');
+  $('#o-pay').innerHTML = Object.entries(PAY).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+}
+
+/* ═══════════════ داشبورد ═══════════════ */
+const RANGES = [
+  { id: 'today', t: 'امروز' }, { id: 'week', t: 'این هفته' }, { id: 'month', t: 'این ماه' },
+  { id: 'year', t: 'امسال' }, { id: 'all', t: 'همه' }, { id: 'custom', t: 'دلخواه' },
+];
+function setRange(r) {
+  state.range = r;
+  $('#rng-custom').classList.toggle('hidden', r !== 'custom');
+  $('#rng-custom').classList.toggle('flex', r === 'custom');
+  state.trendGroup = (r === 'year' || r === 'all') ? 'monthly' : 'daily';
+  renderDashboard();
+}
+function applyCustomRange() {
+  state.customFrom = PK.from.get(); state.customTo = PK.to.get();
+  if (state.customFrom > state.customTo) [state.customFrom, state.customTo] = [state.customTo, state.customFrom];
+  renderDashboard();
+}
+function kpiCard(title, value, sub, icon, grad, delay) {
+  return `<div class="glass card card-hover p-3.5 anim ${delay}">
+    <div class="flex items-center gap-2.5">
+      <div class="kpi-icon ${grad}">${icon}</div>
+      <div class="min-w-0"><div class="text-[11px] text-slate-500 dark:text-slate-400 font-bold">${title}</div>
+      <div class="font-black text-base num truncate">${value}</div></div>
+    </div><div class="text-[11px] mt-1.5 text-slate-500 dark:text-slate-400">${sub}</div></div>`;
+}
+function renderDashboard() {
+  const incR = $('#inc-ret').checked;
+  $('#rng-btns').innerHTML = RANGES.map((r) =>
+    `<button onclick="setRange('${r.id}')" class="btn !py-1.5 !text-xs ${state.range === r.id ? 'btn-primary' : 'btn-soft'}">${r.t}</button>`).join('');
+  const { from, to } = getRange();
+  const list = state.orders.filter((o) => inRange(o, from, to));
+  const s = summarize(list, incR);
+  const pm = s.margin;
+  $('#kpis').innerHTML =
+    kpiCard('💰 فروش کل', fmtMoney(s.revenue), `${fmtN(s.count)} سفارش در بازه`, 'grad-bg', '💵', 'anim-1') +
+    kpiCard('🧾 هزینه کل', fmtMoney(s.cost), 'خرید + ارسال + کمیسیون و…', 'grad-amber', '🧮', 'anim-2') +
+    kpiCard('✅ سود خالص', fmtMoney(s.profit), `حاشیه سود ${toFa(pm.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', s.profit >= 0 ? '📈' : '📉', 'anim-3') +
+    kpiCard('🧺 میانگین سبد', fmtMoney(s.avg), 'میانگین فروش هر سفارش', 'grad-sky', '🛒', 'anim-4') +
+    kpiCard('📦 سفارش‌ها', fmtN(s.count), `از ${fmtJ(from, state.range !== 'today')} تا ${fmtJ(to, state.range !== 'today')}`, 'grad-bg', '📦', 'anim-2') +
+    kpiCard('⚖️ نسبت هزینه', toFa(s.revenue ? ((s.cost / s.revenue) * 100).toFixed(1) : 0) + '٪', 'سهم هزینه از فروش', 'grad-amber', '⚖️', 'anim-3');
+
+  /* روند */
+  const groups = [['daily', 'روزانه'], ['weekly', 'هفتگی'], ['monthly', 'ماهانه']];
+  $('#trend-grp').innerHTML = groups.map(([g, t]) =>
+    `<button onclick="state.trendGroup='${g}';renderDashboard()" class="btn !py-1 !px-2 !text-[11px] ${state.trendGroup === g ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
+  const series = groupSeries(list, state.trendGroup, incR);
+  mkChart('ch-trend', { type: 'bar',
+    data: { labels: series.map((r) => r.label), datasets: [
+      { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.75)', borderRadius: 6 },
+      { label: 'سود', data: series.map((r) => r.profit), backgroundColor: series.map((r) => r.profit >= 0 ? 'rgba(16,185,129,.8)' : 'rgba(244,63,94,.8)'), borderRadius: 6 },
+    ]}, options: chartBase() });
+
+  /* منابع */
+  const bySrc = ['basalam', 'website'].map((src) => ({ src, ...summarize(list.filter((o) => o.source === src), incR) }));
+  mkChart('ch-source', { type: 'doughnut',
+    data: { labels: bySrc.map((x) => SRC_SHORT[x.src]), datasets: [{ data: bySrc.map((x) => x.revenue), backgroundColor: ['#f59e0b', '#0ea5e9'], borderWidth: 0, hoverOffset: 8 }] },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Vazirmatn' } }, rtl: true }, tooltip: { rtl: true, callbacks: { label: (c) => ` ${fmtMoney(c.parsed)}` } } } } });
+
+  /* غرفه‌ها */
+  const boothRows = state.booths.map((b) => ({ name: b.name, ...summarize(list.filter((o) => String(o.booth_id) === String(b.id)), incR) })).filter((x) => x.count);
+  mkChart('ch-booth', { type: 'bar',
+    data: { labels: boothRows.map((x) => x.name), datasets: [{ label: 'سود', data: boothRows.map((x) => x.profit),
+      backgroundColor: boothRows.map((x) => x.profit >= 0 ? 'rgba(16,185,129,.8)' : 'rgba(244,63,94,.8)'), borderRadius: 8 }] },
+    options: chartBase({ indexAxis: 'y', scales: undefined, plugins: { legend: { display: false }, tooltip: { rtl: true, callbacks: { label: (c) => ` سود: ${fmtMoney(c.parsed.x)}` } } } }) });
+
+  /* پرفروش‌ها */
+  const pm2 = new Map();
+  for (const o of list) {
+    if (!isCounted(o, incR) || !o.product_name) continue;
+    const c = calc(o, incR);
+    const r = pm2.get(o.product_name) || { name: o.product_name, revenue: 0, profit: 0, qty: 0 };
+    r.revenue += c.revenue; r.profit += c.profit; r.qty += N(o.quantity) || 1;
+    pm2.set(o.product_name, r);
+  }
+  const top = [...pm2.values()].sort((a, b) => b.profit - a.profit).slice(0, 7);
+  const maxP = Math.max(1, ...top.map((x) => x.profit));
+  $('#top-products').innerHTML = top.length ? top.map((p, i) =>
+    `<div class="flex items-center gap-2 text-xs">
+      <span class="font-black w-5 text-slate-400 num">${toFa(i + 1)}</span>
+      <div class="flex-1 min-w-0"><div class="flex justify-between gap-2"><span class="font-bold truncate">${esc(p.name)}</span>
+      <span class="num font-black ${p.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(p.profit)}</span></div>
+      <div class="h-1.5 rounded-full bg-slate-200 dark:bg-white/10 mt-1"><div class="h-full rounded-full ${p.profit >= 0 ? 'grad-green' : 'grad-rose'}" style="width:${Math.max(4, (p.profit / maxP) * 100)}%"></div></div></div>
+    </div>`).join('')
+    : '<div class="text-center text-xs text-slate-400 py-8">سفارشی در این بازه ثبت نشده است 🍃</div>';
+
+  /* آخرین سفارش‌ها */
+  const recent = [...list].sort((a, b) => String(b.order_date).localeCompare(String(a.order_date))).slice(0, 8);
+  $('#recent-tbl').innerHTML = `<thead><tr><th>کد</th><th>تاریخ</th><th>مشتری</th><th>کالا</th><th>منبع</th><th>فروش</th><th>سود</th><th>وضعیت</th></tr></thead><tbody>` +
+    (recent.map(orderRowMini).join('') || '<tr><td colspan="8" class="text-center text-slate-400 py-6">—</td></tr>') + '</tbody>';
+}
+function orderRowMini(o) {
+  const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
+  return `<tr class="cursor-pointer" onclick="openInvoice('${o.id}')">
+    <td class="num font-bold">${esc(o.order_code || '—')}</td><td class="num">${fmtJ(o.order_date, false)}</td>
+    <td class="font-bold">${esc(o.customer_name || '—')}</td><td>${esc(o.product_name || '—')}</td>
+    <td class="text-xs">${SOURCES[o.source] || ''}</td>
+    <td class="num">${fmtN(c.revenue)}</td>
+    <td class="num font-black ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(c.profit)}</td>
+    <td><span class="chip ${st.c}">${st.t}</span></td></tr>`;
+}
+
+/* ═══════════════ لیست سفارش‌ها ═══════════════ */
+function filteredOrders() {
+  const q = ($('#f-q').value || '').trim();
+  const src = $('#f-source').value, b = $('#f-booth').value, sp = $('#f-sup').value, st = $('#f-status').value;
+  return state.orders.filter((o) => {
+    if (src && o.source !== src) return false;
+    if (b && String(o.booth_id) !== b) return false;
+    if (sp && String(o.supplier_id) !== sp) return false;
+    if (st && o.status !== st) return false;
+    if (q && ![o.order_code, o.customer_name, o.customer_phone, o.product_name, o.city].some((x) => String(x || '').includes(q))) return false;
+    return true;
+  }).sort((a, b2) => String(b2.order_date).localeCompare(String(a.order_date)));
+}
+function renderOrders() {
+  const list = filteredOrders();
+  const s = summarize(list, true);
+  $('#orders-count').textContent = fmtN(list.length);
+  $('#orders-summary').innerHTML =
+    kpiCard('📦 تعداد', fmtN(list.length), 'سفارش یافت‌شده', 'grad-bg', '📦', '') +
+    kpiCard('💰 فروش', fmtMoney(s.revenue), 'جمع فروش', 'grad-sky', '💵', '') +
+    kpiCard('🧾 هزینه', fmtMoney(s.cost), 'جمع هزینه‌ها', 'grad-amber', '🧮', '') +
+    kpiCard('✅ سود', fmtMoney(s.profit), `حاشیه ${toFa(s.margin.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', '📈', '');
+  $('#orders-tbl').innerHTML = `<thead><tr><th>کد</th><th>تاریخ</th><th>مشتری</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>سود</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
+    (list.slice(0, 300).map((o) => {
+      const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
+      return `<tr>
+        <td class="num font-bold">${esc(o.order_code || '—')}</td><td class="num">${fmtJ(o.order_date)}</td>
+        <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
+        <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
+        <td class="text-xs">${SOURCES[o.source] || ''}${o.source === 'basalam' ? `<div class="text-[11px] text-slate-400">${esc(boothName(o.booth_id))}</div>` : ''}</td>
+        <td class="text-xs">${esc(supNameOf(o))}</td>
+        <td class="num">${fmtN(c.revenue)}</td>
+        <td class="num font-black ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(c.profit)}</td>
+        <td><span class="chip ${st.c}">${st.t}</span></td>
+        <td><div class="flex gap-1">
+          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="openInvoice('${o.id}')" title="فاکتور">🧾</button>
+          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="editOrder('${o.id}')" title="ویرایش">✏️</button>
+          <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delOrder('${o.id}')" title="حذف">🗑</button>
+        </div></td></tr>`;
+    }).join('') || '<tr><td colspan="10" class="text-center text-slate-400 py-8">سفارشی یافت نشد 🍃</td></tr>') + '</tbody>';
+}
+async function delOrder(id) {
+  const o = state.orders.find((x) => String(x.id) === String(id));
+  confirmDlg('🗑 حذف سفارش', `سفارش <b>${esc(o?.order_code || '')}</b> حذف شود؟ این عمل قابل بازگشت نیست.`, async () => {
+    await Store.delOrder(id);
+    state.orders = state.orders.filter((x) => String(x.id) !== String(id));
+    toast('سفارش حذف شد'); renderOrders();
+  });
+}
+
+/* ═══════════════ فرم سفارش ═══════════════ */
+function nextOrderCode() {
+  const jy = isoToJ(isoToday()).jy;
+  let max = 0;
+  for (const o of state.orders) {
+    const m = String(o.order_code || '').match(/(\d+)\s*$/);
+    if (m) max = Math.max(max, +m[1]);
+  }
+  return `SF-${toFa(jy)}-${String(max + 1).padStart(4, '0')}`;
+}
+function onSourceChange() {
+  const src = $('#o-source').value;
+  $('#wrap-booth').style.display = src === 'basalam' ? '' : 'none';
+  const pct = N(state.settings[src === 'basalam' ? 'comm_basalam' : 'comm_website']);
+  if (pct > 0 && !$('#o-id').value && N($('#o-comm').value) === 0) {
+    const rev = N($('#o-usale').value) * (N($('#o-qty').value) || 1);
+    if (rev > 0) $('#o-comm').value = Math.round(rev * pct / 100);
+    liveCalc();
+  }
+}
+function formData() {
+  const iso = PK.date.get(), j = isoToJ(iso);
+  const supId = $('#o-sup').value;
+  const sup = state.suppliers.find((s) => String(s.id) === String(supId));
+  return {
+    id: $('#o-id').value || undefined,
+    order_code: $('#o-code').value.trim() || nextOrderCode(),
+    source: $('#o-source').value,
+    booth_id: $('#o-source').value === 'basalam' ? ($('#o-booth').value || null) : null,
+    customer_name: $('#o-customer').value.trim(), customer_phone: $('#o-phone').value.trim(), city: $('#o-city').value.trim(),
+    product_name: $('#o-product').value.trim(), quantity: N($('#o-qty').value) || 1,
+    supplier_id: supId || null, supplier_name: sup ? sup.name : '',
+    unit_sale: N($('#o-usale').value), unit_cost: N($('#o-ucost').value), discount: N($('#o-disc').value),
+    shipping_cost: N($('#o-ship').value), packaging_cost: N($('#o-pack').value), commission: N($('#o-comm').value),
+    ads_cost: N($('#o-ads').value), other_cost: N($('#o-other').value), other_label: $('#o-otherlabel').value.trim(),
+    status: $('#o-status').value, payment_status: $('#o-pay').value,
+    order_date: iso, jdate: `${j.jy}/${j.jm}/${j.jd}`, jy: j.jy, jm: j.jm, jd: j.jd,
+    notes: $('#o-notes').value.trim(),
+  };
+}
+function liveCalc() {
+  try {
+    const o = formData(), c = calc(o, true);
+    const row = (t, v, cls = '') => `<div class="flex justify-between ${cls}"><span class="text-slate-500 dark:text-slate-400">${t}</span><span class="font-bold num">${v}</span></div>`;
+    $('#calc-panel').innerHTML =
+      row('💰 فروش (پس از تخفیف)', fmtMoney(c.revenue)) +
+      row('🧾 هزینه کل', fmtMoney(c.cost)) +
+      `<div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-2 flex justify-between text-base">
+        <span class="font-black">${c.profit >= 0 ? '✅ سود' : '🔻 زیان'}</span>
+        <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(c.profit)}</span></div>` +
+      row('حاشیه سود', toFa(c.margin.toFixed(1)) + '٪') +
+      `<div class="text-[11px] text-slate-400 leading-5 mt-1">فروش واحد × تعداد − تخفیف = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل</div>`;
+  } catch {}
+}
+function resetForm() {
+  $('#order-form').reset();
+  $('#o-id').value = ''; $('#o-qty').value = 1;
+  ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => $('#' + id).value = 0);
+  $('#form-title').textContent = '➕ ثبت سفارش جدید';
+  $('#o-code').value = nextOrderCode();
+  PK.date.set(isoToday()); onSourceChange(); liveCalc();
+}
+async function submitOrder(e) {
+  e.preventDefault();
+  const o = formData();
+  if (!o.customer_name || !o.product_name) { toast('نام مشتری و نام کالا الزامی است', 'err'); return false; }
+  if (o.source === 'basalam' && !o.booth_id) { toast('برای سفارش باسلام، غرفه را انتخاب کنید', 'err'); return false; }
+  const saved = await Store.saveOrder(o);
+  if (o.id) { const i = state.orders.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) state.orders[i] = { ...state.orders[i], ...saved }; toast('✅ سفارش به‌روزرسانی شد'); }
+  else { state.orders.push(saved); toast('✅ سفارش ثبت شد'); }
+  resetForm(); go('orders');
+  return false;
+}
+function editOrder(id) {
+  const o = state.orders.find((x) => String(x.id) === String(id));
+  if (!o) return;
+  resetForm();
+  $('#form-title').textContent = '✏️ ویرایش سفارش ' + (o.order_code || '');
+  $('#o-id').value = o.id; $('#o-code').value = o.order_code || '';
+  $('#o-source').value = o.source || 'basalam'; onSourceChange();
+  $('#o-booth').value = o.booth_id || ''; $('#o-customer').value = o.customer_name || '';
+  $('#o-phone').value = o.customer_phone || ''; $('#o-city').value = o.city || '';
+  $('#o-product').value = o.product_name || ''; $('#o-qty').value = o.quantity || 1;
+  $('#o-sup').value = o.supplier_id || '';
+  $('#o-usale').value = o.unit_sale || 0; $('#o-ucost').value = o.unit_cost || 0;
+  $('#o-disc').value = o.discount || 0; $('#o-ship').value = o.shipping_cost || 0;
+  $('#o-pack').value = o.packaging_cost || 0; $('#o-comm').value = o.commission || 0;
+  $('#o-ads').value = o.ads_cost || 0; $('#o-other').value = o.other_cost || 0;
+  $('#o-otherlabel').value = o.other_label || '';
+  $('#o-status').value = o.status || 'pending'; $('#o-pay').value = o.payment_status || 'pending';
+  $('#o-notes').value = o.notes || '';
+  PK.date.set(o.order_date || isoToday());
+  liveCalc(); go('new');
+}
+function quickAdd(kind) {
+  const isBooth = kind === 'booth';
+  openModal({
+    title: isBooth ? '🏪 غرفه جدید' : '🤝 تامین‌کننده جدید',
+    body: `<div class="flex flex-col gap-2">
+      <input id="qa-name" class="inp" placeholder="نام *">
+      ${isBooth ? '<input id="qa-desc" class="inp" placeholder="توضیح (اختیاری)">' : '<input id="qa-phone" class="inp num" placeholder="شماره تماس (اختیاری)">'}
+    </div>`,
+    buttons: [{ label: 'ذخیره', onClick: async () => {
+      const name = $('#qa-name').value.trim();
+      if (!name) { toast('نام الزامی است', 'err'); return; }
+      if (isBooth) {
+        const b = await Store.saveBooth({ name, description: $('#qa-desc').value.trim() });
+        state.booths.push(b); fillSelects(); $('#o-booth').value = b.id;
+      } else {
+        const s = await Store.saveSupplier({ name, phone: $('#qa-phone').value.trim() });
+        state.suppliers.push(s); fillSelects(); $('#o-sup').value = s.id;
+      }
+      closeModal(); toast('✅ ذخیره شد');
+    }}],
+  });
+  setTimeout(() => $('#qa-name').focus(), 100);
+}
+
+/* ═══════════════ گزارش و تحلیل ═══════════════ */
+function renderReports() {
+  const group = $('#r-group').value, src = $('#r-source').value, booth = $('#r-booth').value;
+  const limit = +$('#r-range').value;
+  let list = state.orders.filter((o) => (!src || o.source === src) && (!booth || String(o.booth_id) === booth));
+  const s = summarize(list, true);
+  $('#r-kpis').innerHTML =
+    kpiCard('💰 فروش کل', fmtMoney(s.revenue), `${fmtN(s.count)} سفارش`, 'grad-bg', '💵', '') +
+    kpiCard('🧾 هزینه کل', fmtMoney(s.cost), 'جمع همه هزینه‌ها', 'grad-amber', '🧮', '') +
+    kpiCard('✅ سود/زیان', fmtMoney(s.profit), `حاشیه ${toFa(s.margin.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', s.profit >= 0 ? '📈' : '📉', '') +
+    kpiCard('🧺 میانگین سبد', fmtMoney(s.avg), 'میانگین هر سفارش', 'grad-sky', '🛒', '');
+  let series = groupSeries(list, group, true);
+  if (limit > 0) series = series.slice(-limit);
+  state._reportSeries = series;
+  mkChart('ch-pnl', { type: 'bar',
+    data: { labels: series.map((r) => r.label), datasets: [
+      { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.7)', borderRadius: 6 },
+      { label: 'هزینه', data: series.map((r) => r.cost), backgroundColor: 'rgba(245,158,11,.7)', borderRadius: 6 },
+      { label: 'سود', data: series.map((r) => r.profit), backgroundColor: series.map((r) => r.profit >= 0 ? 'rgba(16,185,129,.85)' : 'rgba(244,63,94,.85)'), borderRadius: 6 },
+    ]}, options: chartBase() });
+  $('#pnl-tbl').innerHTML = `<thead><tr><th>دوره</th><th>تعداد</th><th>فروش</th><th>هزینه</th><th>سود/زیان</th><th>حاشیه</th></tr></thead><tbody>` +
+    ([...series].reverse().map((r) =>
+      `<tr><td class="font-bold">${r.label}</td><td class="num">${fmtN(r.count)}</td><td class="num">${fmtN(r.revenue)}</td>
+       <td class="num">${fmtN(r.cost)}</td>
+       <td class="num font-black ${r.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(r.profit)}</td>
+       <td class="num">${toFa(r.revenue ? ((r.profit / r.revenue) * 100).toFixed(1) : 0)}٪</td></tr>`).join('')
+    || '<tr><td colspan="6" class="text-center text-slate-400 py-6">داده‌ای نیست 🍃</td></tr>') + '</tbody>';
+
+  /* تامین‌کنندگان */
+  const supMap = new Map();
+  for (const o of list) {
+    if (!isCounted(o, true)) continue;
+    const k = supNameOf(o) || 'نامشخص', c = calc(o, true);
+    const r = supMap.get(k) || { name: k, count: 0, revenue: 0, cost: 0 };
+    r.count++; r.revenue += c.revenue; r.cost += c.cost; supMap.set(k, r);
+  }
+  const sups = [...supMap.values()].map((x) => ({ ...x, profit: x.revenue - x.cost })).sort((a, b) => b.profit - a.profit).slice(0, 10);
+  mkChart('ch-sups', { type: 'bar',
+    data: { labels: sups.map((x) => x.name), datasets: [{ data: sups.map((x) => x.profit),
+      backgroundColor: sups.map((x) => x.profit >= 0 ? 'rgba(14,165,233,.8)' : 'rgba(244,63,94,.8)'), borderRadius: 8 }] },
+    options: chartBase({ indexAxis: 'y', scales: undefined, plugins: { legend: { display: false }, tooltip: { rtl: true, callbacks: { label: (c) => ` ${fmtMoney(c.parsed.x)}` } } } }) });
+  $('#sup-tbl').innerHTML = `<thead><tr><th>تامین‌کننده</th><th>سفارش</th><th>فروش</th><th>سود</th></tr></thead><tbody>` +
+    (sups.map((x) => `<tr><td class="font-bold">${esc(x.name)}</td><td class="num">${fmtN(x.count)}</td><td class="num">${fmtN(x.revenue)}</td>
+      <td class="num font-black ${x.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(x.profit)}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="text-center text-slate-400 py-4">—</td></tr>') + '</tbody>';
+
+  /* کالاها */
+  const prMap = new Map();
+  for (const o of list) {
+    if (!isCounted(o, true) || !o.product_name) continue;
+    const c = calc(o, true);
+    const r = prMap.get(o.product_name) || { name: o.product_name, qty: 0, revenue: 0, profit: 0 };
+    r.qty += N(o.quantity) || 1; r.revenue += c.revenue; r.profit += c.profit; prMap.set(o.product_name, r);
+  }
+  const prods = [...prMap.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+  mkChart('ch-prods', { type: 'bar',
+    data: { labels: prods.map((x) => x.name), datasets: [{ data: prods.map((x) => x.revenue), backgroundColor: 'rgba(167,139,250,.85)', borderRadius: 8 }] },
+    options: chartBase({ indexAxis: 'y', scales: undefined, plugins: { legend: { display: false }, tooltip: { rtl: true, callbacks: { label: (c) => ` ${fmtMoney(c.parsed.x)}` } } } }) });
+  $('#prod-tbl').innerHTML = `<thead><tr><th>کالا</th><th>تعداد</th><th>فروش</th><th>سود</th></tr></thead><tbody>` +
+    (prods.map((x) => `<tr><td class="font-bold">${esc(x.name)}</td><td class="num">${fmtN(x.qty)}</td><td class="num">${fmtN(x.revenue)}</td>
+      <td class="num font-black ${x.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(x.profit)}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="text-center text-slate-400 py-4">—</td></tr>') + '</tbody>';
+}
+
+/* ═══════════════ غرفه‌ها و تامین‌کنندگان ═══════════════ */
+function renderBooths() {
+  $('#booths-grid').innerHTML = state.booths.map((b) => {
+    const s = summarize(state.orders.filter((o) => String(o.booth_id) === String(b.id)), true);
+    return `<div class="glass card card-hover p-4 anim">
+      <div class="flex items-start gap-2">
+        <div class="kpi-icon grad-amber">🏪</div>
+        <div class="flex-1 min-w-0"><div class="font-black truncate">${esc(b.name)}</div>
+        <div class="text-xs text-slate-500 dark:text-slate-400 truncate">${esc(b.description || 'غرفه باسلام')}</div></div>
+        <div class="flex gap-1 no-print">
+          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="boothModal('${b.id}')">✏️</button>
+          <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delBooth('${b.id}')">🗑</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 mt-3 text-center text-xs">
+        <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm">${fmtN(s.count)}</div><div class="text-slate-500">سفارش</div></div>
+        <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm">${compact(s.revenue)}</div><div class="text-slate-500">فروش</div></div>
+        <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm ${s.profit >= 0 ? 'text-emerald-600' : 'text-rose-500'}">${compact(s.profit)}</div><div class="text-slate-500">سود</div></div>
+      </div></div>`;
+  }).join('') || emptyBox('هنوز غرفه‌ای ثبت نشده است 🏪');
+}
+function renderSuppliers() {
+  $('#suppliers-grid').innerHTML = state.suppliers.map((s) => {
+    const rows = state.orders.filter((o) => String(o.supplier_id) === String(s.id));
+    const sm = summarize(rows, true);
+    return `<div class="glass card card-hover p-4 anim">
+      <div class="flex items-start gap-2">
+        <div class="kpi-icon grad-sky">🤝</div>
+        <div class="flex-1 min-w-0"><div class="font-black truncate">${esc(s.name)}</div>
+        <div class="text-xs text-slate-500 dark:text-slate-400 num">${esc(s.phone || '')}</div></div>
+        <div class="flex gap-1 no-print">
+          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="supplierModal('${s.id}')">✏️</button>
+          <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delSupplier('${s.id}')">🗑</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 mt-3 text-center text-xs">
+        <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm">${fmtN(rows.length)}</div><div class="text-slate-500">سفارش</div></div>
+        <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm">${compact(sm.revenue)}</div><div class="text-slate-500">فروش</div></div>
+        <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm ${sm.profit >= 0 ? 'text-emerald-600' : 'text-rose-500'}">${compact(sm.profit)}</div><div class="text-slate-500">سود</div></div>
+      </div></div>`;
+  }).join('') || emptyBox('هنوز تامین‌کننده‌ای ثبت نشده است 🤝');
+}
+const emptyBox = (t) => `<div class="glass card p-10 text-center text-slate-400 col-span-full">${t}</div>`;
+function boothModal(id) {
+  const b = state.booths.find((x) => String(x.id) === String(id)) || {};
+  openModal({ title: id ? '✏️ ویرایش غرفه' : '🏪 غرفه جدید',
+    body: `<div class="flex flex-col gap-2"><input id="m-name" class="inp" placeholder="نام غرفه *" value="${esc(b.name || '')}">
+      <input id="m-desc" class="inp" placeholder="توضیح (اختیاری)" value="${esc(b.description || '')}"></div>`,
+    buttons: [{ label: '💾 ذخیره', onClick: async () => {
+      const name = $('#m-name').value.trim();
+      if (!name) { toast('نام غرفه الزامی است', 'err'); return; }
+      const saved = await Store.saveBooth({ id: b.id, name, description: $('#m-desc').value.trim() });
+      if (b.id) Object.assign(b, saved); else state.booths.push(saved);
+      closeModal(); fillSelects(); renderBooths(); toast('✅ ذخیره شد');
+    }}] });
+}
+function supplierModal(id) {
+  const s = state.suppliers.find((x) => String(x.id) === String(id)) || {};
+  openModal({ title: id ? '✏️ ویرایش تامین‌کننده' : '🤝 تامین‌کننده جدید',
+    body: `<div class="flex flex-col gap-2"><input id="m-name" class="inp" placeholder="نام تامین‌کننده *" value="${esc(s.name || '')}">
+      <input id="m-phone" class="inp num" placeholder="شماره تماس" value="${esc(s.phone || '')}">
+      <input id="m-desc" class="inp" placeholder="توضیح (اختیاری)" value="${esc(s.description || '')}"></div>`,
+    buttons: [{ label: '💾 ذخیره', onClick: async () => {
+      const name = $('#m-name').value.trim();
+      if (!name) { toast('نام الزامی است', 'err'); return; }
+      const saved = await Store.saveSupplier({ id: s.id, name, phone: $('#m-phone').value.trim(), description: $('#m-desc').value.trim() });
+      if (s.id) Object.assign(s, saved); else state.suppliers.push(saved);
+      closeModal(); fillSelects(); renderSuppliers(); toast('✅ ذخیره شد');
+    }}] });
+}
+async function delBooth(id) {
+  confirmDlg('🗑 حذف غرفه', 'این غرفه حذف شود؟ (سفارش‌های آن باقی می‌مانند)', async () => {
+    await Store.delBooth(id);
+    state.booths = state.booths.filter((x) => String(x.id) !== String(id));
+    fillSelects(); renderBooths(); toast('حذف شد');
+  });
+}
+async function delSupplier(id) {
+  confirmDlg('🗑 حذف تامین‌کننده', 'این تامین‌کننده حذف شود؟ (سفارش‌های آن باقی می‌مانند)', async () => {
+    await Store.delSupplier(id);
+    state.suppliers = state.suppliers.filter((x) => String(x.id) !== String(id));
+    fillSelects(); renderSuppliers(); toast('حذف شد');
+  });
+}
+
+/* ═══════════════ فاکتور ═══════════════ */
+function openInvoice(id) {
+  const o = state.orders.find((x) => String(x.id) === String(id));
+  if (!o) return;
+  const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
+  const shop = state.settings.shop_name || 'فروشگاه ما';
+  const row = (t, v) => `<div class="flex justify-between py-1 text-sm"><span class="text-slate-500">${t}</span><span class="font-bold num">${v}</span></div>`;
+  $('#print-area').innerHTML = `
+    <div class="text-center border-b-2 border-dashed border-slate-200 pb-3 mb-3">
+      <div class="text-2xl font-black">🧾 ${esc(shop)}</div>
+      <div class="text-xs text-slate-500 mt-1">فاکتور فروش ${o.source === 'basalam' ? '— باسلام (' + esc(boothName(o.booth_id)) + ')' : '— سایت فروشگاهی'}</div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 text-sm mb-3">
+      <div>کد سفارش: <b class="num">${esc(o.order_code || '')}</b></div>
+      <div>تاریخ: <b class="num">${fmtJ(o.order_date)}</b></div>
+      <div>مشتری: <b>${esc(o.customer_name || '')}</b></div>
+      <div>تلفن: <b class="num">${esc(o.customer_phone || '—')}</b></div>
+      <div>شهر: <b>${esc(o.city || '—')}</b></div>
+      <div>وضعیت: <b>${st.t}</b></div>
+    </div>
+    <table class="w-full text-sm border border-slate-200 rounded-xl overflow-hidden mb-3">
+      <thead><tr class="bg-slate-100"><th class="p-2 text-right">کالا</th><th class="p-2">تعداد</th><th class="p-2">فی</th><th class="p-2">مبلغ</th></tr></thead>
+      <tbody><tr class="border-t border-slate-200">
+        <td class="p-2 font-bold">${esc(o.product_name || '')}</td>
+        <td class="p-2 text-center num">${fmtN(o.quantity || 1)}</td>
+        <td class="p-2 text-center num">${fmtN(o.unit_sale)}</td>
+        <td class="p-2 text-center num">${fmtN(N(o.unit_sale) * (N(o.quantity) || 1))}</td>
+      </tr></tbody>
+    </table>
+    ${row('تخفیف', '− ' + fmtMoney(o.discount))}
+    ${row('هزینه ارسال', fmtMoney(o.shipping_cost))}
+    <div class="flex justify-between py-2 text-base font-black border-t-2 border-slate-800 mt-1"><span>جمع فاکتور</span><span class="num">${fmtMoney(c.revenue)}</span></div>
+    <div class="text-[11px] text-slate-400 mt-2">تامین‌کننده: ${esc(supNameOf(o))} ${o.notes ? ' — ' + esc(o.notes) : ''}</div>
+    <div class="text-center text-xs text-slate-400 mt-3">از خرید شما سپاسگزاریم 🙏</div>
+    <div class="flex gap-2 mt-4 no-print">
+      <button class="btn btn-primary flex-1 justify-center" onclick="window.print()">🖨 چاپ</button>
+      <button class="btn btn-soft flex-1 justify-center" onclick="closeInvoice()">بستن</button>
+    </div>`;
+  $('#invoice-modal').classList.remove('hidden');
+}
+function closeInvoice() { $('#invoice-modal').classList.add('hidden'); }
+
+/* ═══════════════ خروجی / بکاپ ═══════════════ */
+function download(name, content, type = 'text/csv;charset=utf-8') {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + content], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function exportOrdersCSV() {
+  const head = ['کد', 'تاریخ شمسی', 'منبع', 'غرفه', 'مشتری', 'تلفن', 'شهر', 'کالا', 'تعداد', 'تامین‌کننده', 'فروش', 'هزینه', 'سود', 'وضعیت', 'پرداخت', 'توضیحات'];
+  const lines = [head.join(',')];
+  for (const o of state.orders) {
+    const c = calc(o, true);
+    lines.push([o.order_code, fmtJ(o.order_date), SRC_SHORT[o.source] || o.source, o.source === 'basalam' ? boothName(o.booth_id) : '',
+      o.customer_name, o.customer_phone, o.city, o.product_name, o.quantity, supNameOf(o),
+      Math.round(c.revenue), Math.round(c.cost), Math.round(c.profit),
+      (STATUS[o.status] || {}).t, PAY[o.payment_status] || '', (o.notes || '').replace(/,/g, '؛')]
+      .map((x) => `"${String(x ?? '').replace(/"/g, '""')}"`).join(','));
+  }
+  download(`orders-${isoToday()}.csv`, lines.join('\n'));
+  toast('📊 فایل اکسل دانلود شد');
+}
+function exportReportsCSV() {
+  const series = state._reportSeries || [];
+  const lines = ['دوره,تعداد,فروش,هزینه,سود'];
+  for (const r of series) lines.push(`"${r.label}",${r.count},${Math.round(r.revenue)},${Math.round(r.cost)},${Math.round(r.profit)}`);
+  download(`pnl-${isoToday()}.csv`, lines.join('\n'));
+  toast('📊 خروجی گزارش دانلود شد');
+}
+async function backupJSON() {
+  download(`backup-${isoToday()}.json`, JSON.stringify({ app: 'hesabdar-foroosh', exported_at: new Date().toISOString(), orders: state.orders, booths: state.booths, suppliers: state.suppliers, settings: state.settings }, null, 1), 'application/json');
+  toast('💾 بکاپ دانلود شد');
+}
+function restoreJSON(input) {
+  const f = input.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = async () => {
+    try {
+      const d = JSON.parse(rd.result);
+      confirmDlg('⬆ بازیابی بکاپ', `بکاپ مورخ <b class="num">${esc(d.exported_at || '')}</b> جایگزین داده‌های فعلی شود؟`, async () => {
+        if (Store.mode === 'local') {
+          if (d.orders) Local.write('orders', d.orders);
+          if (d.booths) Local.write('booths', d.booths);
+          if (d.suppliers) Local.write('suppliers', d.suppliers);
+          if (d.settings) Local.write('settings', d.settings);
+        } else {
+          await Api.req('/import', 'POST', d);
+        }
+        toast('✅ بازیابی شد'); loadAll();
+      });
+    } catch { toast('فایل معتبر نیست', 'err'); }
+    input.value = '';
+  };
+  rd.readAsText(f);
+}
+function wipeAll() {
+  confirmDlg('🗑 حذف همه داده‌ها', 'همه سفارش‌ها، غرفه‌ها و تامین‌کنندگان حذف شوند؟ این عمل <b>قابل بازگشت نیست</b>!', async () => {
+    if (Store.mode === 'local') { Local.write('orders', []); Local.write('booths', []); Local.write('suppliers', []); }
+    else await Api.req('/import', 'POST', { orders: [], booths: [], suppliers: [] });
+    toast('🗑 همه داده‌ها حذف شد'); loadAll();
+  });
+}
+
+/* ═══════════════ تنظیمات ═══════════════ */
+async function saveSettings() {
+  state.settings.shop_name = $('#s-shop').value.trim();
+  state.settings.comm_basalam = N($('#s-cb').value);
+  state.settings.comm_website = N($('#s-cw').value);
+  await Store.saveSettings(state.settings);
+  $('#shop-name-title').textContent = state.settings.shop_name ? '«' + state.settings.shop_name + '»' : '';
+  toast('✅ تنظیمات ذخیره شد');
+}
+
+/* ═══════════════ داده نمونه ═══════════════ */
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+async function seedDemo() {
+  confirmDlg('✨ داده نمونه', 'حدود ۹۰ سفارش نمونه در ۶ ماه گذشته ساخته شود؟ (داده فعلی حفظ می‌شود)', async () => {
+    const R = rng(1404);
+    const pick = (a) => a[Math.floor(R() * a.length)];
+    if (!state.booths.length) {
+      for (const n of ['غرفه عسل و سوغات', 'غرفه خشکبار ممتاز']) state.booths.push(await Store.saveBooth({ name: n }));
+    }
+    if (!state.suppliers.length) {
+      for (const s of [{ name: 'آقای رضایی', phone: '09120000001' }, { name: 'خانم کریمی', phone: '09120000002' }, { name: 'پخش تهران', phone: '02100000000' }, { name: 'تولیدی اصفهان', phone: '03100000000' }])
+        state.suppliers.push(await Store.saveSupplier(s));
+    }
+    const prods = [
+      ['عسل طبیعی ۱ کیلویی', 890000, 620000], ['زعفران نگین ۱۰ گرمی', 1450000, 1180000],
+      ['پسته اکبری ۱ کیلویی', 1250000, 990000], ['بادام هندی ۱ کیلویی', 1380000, 1120000],
+      ['روغن ارده کنجد', 460000, 330000], ['شیره انگور سنتی', 390000, 270000],
+      ['گردوی با پوست ۱ کیلویی', 520000, 390000], ['چای بهاره لاهیجان', 640000, 470000],
+    ];
+    const customers = ['سارا محمدی', 'علی رضایی', 'مریم کریمی', 'حسین احمدی', 'فاطمه نادری', 'رضا موسوی', 'نگار کاظمی', 'امیر صادقی', 'زهرا حیدری', 'محمد عزیزی', 'الهام فرجی', 'دانیال شریفی'];
+    const cities = ['تهران', 'مشهد', 'اصفهان', 'شیراز', 'تبریز', 'کرج', 'قم', 'اهواز', 'رشت', 'یزد'];
+    const t = isoToday();
+    for (let i = 0; i < 90; i++) {
+      const daysAgo = Math.floor(Math.pow(R(), 1.4) * 180);
+      const iso = addDays(t, -daysAgo), j = isoToJ(iso);
+      const [pn, sale, cost] = pick(prods);
+      const qty = R() < 0.75 ? 1 : R() < 0.9 ? 2 : 3;
+      const src = R() < 0.65 ? 'basalam' : 'website';
+      const sup = pick(state.suppliers);
+      const stR = R();
+      const status = stR < 0.68 ? 'delivered' : stR < 0.8 ? 'shipped' : stR < 0.88 ? 'confirmed' : stR < 0.93 ? 'pending' : stR < 0.97 ? 'returned' : 'cancelled';
+      const o = {
+        order_code: `SF-${toFa(j.jy)}-${String(1000 + i).slice(1)}${i}`,
+        source: src, booth_id: src === 'basalam' ? pick(state.booths).id : null,
+        customer_name: pick(customers), customer_phone: '09' + String(Math.floor(R() * 900000000) + 100000000), city: pick(cities),
+        product_name: pn, quantity: qty, supplier_id: sup.id, supplier_name: sup.name,
+        unit_sale: sale, unit_cost: cost, discount: R() < 0.2 ? Math.round(sale * qty * 0.05) : 0,
+        shipping_cost: 60000 + Math.floor(R() * 40000), packaging_cost: Math.floor(R() * 25000),
+        commission: src === 'basalam' ? Math.round(sale * qty * 0.04) : Math.round(sale * qty * 0.02),
+        ads_cost: Math.floor(R() * 30000), other_cost: 0, other_label: '',
+        status, payment_status: status === 'cancelled' ? 'refunded' : status === 'pending' ? 'pending' : 'paid',
+        order_date: iso, jdate: `${j.jy}/${j.jm}/${j.jd}`, jy: j.jy, jm: j.jm, jd: j.jd, notes: '',
+      };
+      state.orders.push(await Store.saveOrder(o));
+    }
+    fillSelects(); loadAll();
+    toast('✨ داده نمونه ساخته شد');
+  });
+}
+
+/* ═══════════════ شروع ═══════════════ */
+async function init() {
+  if (localStorage.getItem('hd_theme') !== 'light') document.documentElement.classList.add('dark');
+  else document.documentElement.classList.remove('dark');
+  $('#theme-ico').textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+  buildNav();
+  $('#today-j').textContent = 'امروز ' + fmtJ(isoToday());
+  PK.date = jPicker('#pk-date', isoToday());
+  PK.from = jPicker('#pk-from', monthStartJ(isoToday()));
+  PK.to = jPicker('#pk-to', isoToday());
+  await Store.init();
+  await loadAll();
+  resetForm();
+}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
