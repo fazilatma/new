@@ -77,7 +77,12 @@ tailwind.config = {
   .modal-box { max-height: 92vh; overflow-y: auto; width: 100%; animation: fadeUp .3s ease both; }
   @keyframes toastIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
   .toast { animation: toastIn .3s ease both; }
-  .chart-box { position: relative; height: 260px; } .panx:active { cursor: grabbing; } .chart-box.tall { height: 320px; }
+  .chart-box { position: relative; height: 260px; } .panx:active { cursor: grabbing; }
+  .leg-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .6rem; border-radius: 999px;
+    border: 1px solid rgba(148,163,184,.4); font-weight: 700; cursor: pointer; background: transparent; }
+  .leg-chip:hover { background: rgba(148,163,184,.12); }
+  .leg-chip i { width: 10px; height: 10px; border-radius: 99px; display: inline-block; }
+  .leg-chip.leg-off { opacity: .35; text-decoration: line-through; } .chart-box.tall { height: 320px; }
   .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
   .kpi-icon { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; flex-shrink: 0; }
   details.coll { border: 1px dashed rgba(148,163,184,.45); border-radius: .9rem; overflow: hidden; background: rgba(148,163,184,.05); }
@@ -166,6 +171,7 @@ tailwind.config = {
             </div>
           </div>
           <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-cnt-w" class="chart-box tall"><canvas id="ch-cnt"></canvas></div></div>
+          <div id="ch-cnt-leg" class="flex flex-wrap items-center justify-center gap-1.5 mt-2 text-[11px]"></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">🧭 سهم منابع فروش</h3>
@@ -176,10 +182,12 @@ tailwind.config = {
         <div class="glass card card-hover p-4 anim anim-1">
           <h3 class="font-black text-sm mb-2">💰 روند حجم فروش</h3>
           <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-vol-w" class="chart-box tall"><canvas id="ch-vol"></canvas></div></div>
+          <div id="ch-vol-leg" class="flex flex-wrap items-center justify-center gap-1.5 mt-2 text-[11px]"></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">✅ روند سود</h3>
           <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-pft-w" class="chart-box tall"><canvas id="ch-pft"></canvas></div></div>
+          <div id="ch-pft-leg" class="flex flex-wrap items-center justify-center gap-1.5 mt-2 text-[11px]"></div>
         </div>
       </div>
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
@@ -325,6 +333,7 @@ tailwind.config = {
       <div class="glass card p-4 mb-4">
         <h3 class="font-black text-sm mb-2">📈 نمودار سود و زیان</h3>
         <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-pnl-w" class="chart-box tall"><canvas id="ch-pnl"></canvas></div></div>
+          <div id="ch-pnl-leg" class="flex flex-wrap items-center justify-center gap-1.5 mt-2 text-[11px]"></div>
       </div>
       <div class="glass card p-4 mb-4">
         <h3 class="font-black text-sm mb-2">📋 جدول سود و زیان دوره‌ای</h3>
@@ -522,7 +531,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.6.0';
+const APP_VER = '1.6.1';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -942,6 +951,8 @@ function mkChart(id, cfg) {
   if (!el) return;
   Chart.defaults.font.family = 'Vazirmatn';
   CH[id] = new Chart(el, cfg);
+  const leg = document.getElementById(id + '-leg');
+  if (leg) renderLegend(leg, CH[id]);
 }
 function refreshChartsTheme() {
   if (currentView === 'dashboard') renderDashboard();
@@ -1043,6 +1054,18 @@ function breakdownTableHTML(rows, firstCol) {
   return `<thead><tr><th>${firstCol}</th><th>سفارش</th><th>فروش</th><th>هزینه</th><th>سود</th><th>حاشیه</th><th>سهم از سود</th></tr></thead><tbody>`
     + (body || '<tr><td colspan="7" class="text-center text-slate-400 py-4">—</td></tr>') + '</tbody>';
 }
+/* راهنمای HTML بیرون از ناحیه اسکرول — همیشه دیده می‌شود؛ کلیک = خاموش/روشن خط */
+function renderLegend(el, chart) {
+  const col = (ds) => { const c = ds.borderColor || ds.backgroundColor; return Array.isArray(c) ? c[0] : c; };
+  el.innerHTML = chart.data.datasets.map((ds, i) =>
+    `<button type="button" data-i="${i}" class="leg-chip"><i style="background:${col(ds)}"></i>${ds.label}</button>`).join('');
+  el.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    const i = +b.dataset.i, vis = !chart.isDatasetVisible(i);
+    chart.setDatasetVisibility(i, vis);
+    chart.update();
+    b.classList.toggle('leg-off', !vis);
+  });
+}
 /* درگ-تو-پن روی نمودارهای زمانی (ماوس؛ لمسی ذاتاً اسکرول می‌شود) */
 function bindPan() {
   document.querySelectorAll('.panx').forEach((el) => {
@@ -1090,12 +1113,10 @@ function renderDashboard() {
   const sLab = series.map((r) => r.label);
   const wide = Math.min(Math.max(sLab.length, 1) * 56, 6000) + 'px';
   for (const id of ['ch-cnt-w', 'ch-vol-w', 'ch-pft-w']) { const w = document.getElementById(id); w.style.minWidth = wide; w.parentElement.scrollLeft = 1e9; }
-  const tickM = document.documentElement.classList.contains('dark') ? '#94a3b8' : '#64748b';
   const lineDS = (label, data, color, fill, pts) => ({ label, data, borderColor: color, backgroundColor: fill || color,
     fill: !!fill, tension: .4, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6,
     pointBackgroundColor: pts || color, pointBorderColor: '#fff', pointBorderWidth: 1.5 });
-  const legTip = (tip) => ({ legend: { display: true, position: 'bottom',
-      labels: { font: { family: 'Vazirmatn' }, color: tickM, usePointStyle: true, boxWidth: 6 } },
+  const legTip = (tip) => ({ legend: { display: false }, /* راهنما: چیپ HTML بیرون اسکرول */
     tooltip: { rtl: true, textDirection: 'rtl', padding: 10, callbacks: { label: tip } } });
   const G = (k, f) => series.map((r) => r[k][f]);
   mkChart('ch-cnt', { type: 'line',
@@ -1458,7 +1479,9 @@ function renderReports() {
       { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.7)', borderRadius: 6 },
       { label: 'هزینه', data: series.map((r) => r.cost), backgroundColor: 'rgba(245,158,11,.7)', borderRadius: 6 },
       { label: 'سود', data: series.map((r) => r.profit), backgroundColor: series.map((r) => r.profit >= 0 ? 'rgba(16,185,129,.85)' : 'rgba(244,63,94,.85)'), borderRadius: 6 },
-    ]}, options: chartBase() });
+    ]}, options: chartBase({ plugins: { legend: { display: false },
+    tooltip: { rtl: true, textDirection: 'rtl', padding: 10,
+      callbacks: { label: (c) => ` ${c.dataset.label}: ${fmtN(c.parsed.y ?? c.parsed)}` } } } }) });
   $('#pnl-tbl').innerHTML = `<thead><tr><th>دوره</th><th>تعداد</th><th>فروش</th><th>هزینه</th><th>سود/زیان</th><th>حاشیه</th></tr></thead><tbody>` +
     ([...series].reverse().map((r) =>
       `<tr><td class="font-bold">${r.label}</td><td class="num">${fmtN(r.count)}</td><td class="num">${fmtN(r.revenue)}</td>
