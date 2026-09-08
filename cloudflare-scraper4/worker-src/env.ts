@@ -41,6 +41,9 @@ export type Env = {
   WORKER_VERSION?: string;
   AI_TEST_MODEL_BUDGET_MS?: string;
   AI_TEST_TIMEOUT_MS?: string;
+  OPENROUTER_API_KEY?: string;
+  AI_OPENROUTER_API_KEY?: string;
+  OLLAMA_URL?: string;
 };
 
 export const MIN_SECRET_LENGTH = 8;

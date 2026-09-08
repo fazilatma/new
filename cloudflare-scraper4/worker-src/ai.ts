@@ -1,4 +1,4 @@
-import { MISTRAL_MODEL_ENDPOINTS } from './ai-catalog.js';
+import { MISTRAL_MODEL_ENDPOINTS, OPENROUTER_NON_CHAT_MODELS } from './ai-catalog.js';
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { assertPublicUrl, safeFetch } from './network.js';
@@ -49,7 +49,7 @@ export type AiModelEndpoint='chat-completions'|'ocr'|'embeddings';
 type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'>>;
 function isMistralProvider(provider:AiEndpointProvider):boolean{return provider.id==='mistral'||/api\.mistral\.ai/i.test(String(provider.baseUrl||''))}
 export function aiModelEndpoint(provider:AiEndpointProvider,model:string):AiModelEndpoint{return isMistralProvider(provider)?MISTRAL_MODEL_ENDPOINTS[model]||'chat-completions':'chat-completions'}
-export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{return aiModelEndpoint(provider,model)==='chat-completions'}
+export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
 
 export async function aiCall(provider:Provider,model:string,prompt:string,networkOverride?:Network,timeoutMs?:number,batchId?:string){
   const network=networkOverride||(await loadConnections()).ai.network;
@@ -248,9 +248,9 @@ function cloudflareModelIds(raw:string):string[]{
   return [...new Set(out.filter(Boolean))];
 }
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
-function isOpenRouter(provider:Pick<Provider,'id'|'name'|'baseUrl'>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
+function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.68.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.69.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;

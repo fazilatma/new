@@ -9,6 +9,8 @@ export type ConnectionVault = {
 };
 
 type Envelope = { version: 1; salt: string; iv: string; tag: string; ciphertext: string };
+const DEFAULT_OPENROUTER_MODELS=['bytedance-seed/seed-2-1-turbo','qwen/qwen3.8-2.4t-a95b','bytedance-seed/seed-2.0-code','deepseek/deepseek-v4-pro-0813','x-ai/grok-4.6','liquid/lfm-2.5-2.6b:free','nvidia/nemotron-3.5-lightning','nvidia/nemotron-3.5-lightning:free','sakana/sakana-namazu','upstage/solar-pro4','meta/muse-glimmer-30b','meta/muse-spark-1.2'];
+function seedAiProviders(ai:ConnectionVault['ai']){if(!ai.providers.some(p=>p.id==='ollama'))ai.providers.push({id:'ollama',name:'Ollama',baseUrl:process.env.OLLAMA_URL||'http://127.0.0.1:11434',apiKey:'',models:[],enabled:false});let openrouter=ai.providers.find(p=>p.id==='openrouter');if(!openrouter){openrouter={id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',apiKey:process.env.OPENROUTER_API_KEY||process.env.AI_OPENROUTER_API_KEY||'',models:[],enabled:Boolean(process.env.OPENROUTER_API_KEY||process.env.AI_OPENROUTER_API_KEY)};ai.providers.push(openrouter)}openrouter.models=[...new Set([...(openrouter.models||[]),...DEFAULT_OPENROUTER_MODELS])];}
 
 export const emptyConnections = (): ConnectionVault => ({
   woo: { url: '', key: '', secret: '', categoryId:0 },
@@ -45,6 +47,7 @@ export function environmentFallback(): ConnectionVault {
   const result=emptyConnections();
   result.woo={...result.woo,url:config.woo.url,key:config.woo.key,secret:config.woo.secret};
   result.basalam={...result.basalam,token:config.basalam.token,vendorId:config.basalam.vendorId,api:config.basalam.api};
+  seedAiProviders(result.ai);
   return result;
 }
 
@@ -53,8 +56,9 @@ export function mergeConnections(base: ConnectionVault, input: any): ConnectionV
   const num=(value:unknown,fallback=0)=>Number.isFinite(Number(value))?Number(value):fallback;
   const bool=(value:unknown,fallback=false)=>typeof value==='boolean'?value:fallback;
   const shops=Array.isArray(input?.basalam?.shops)?input.basalam.shops.map((shop:any)=>({name:text(shop?.name),token:text(shop?.token),vendorId:text(shop?.vendorId),pricePercent:num(shop?.pricePercent)})):base.basalam.shops;
-  const providers=Array.isArray(input?.ai?.providers)?input.ai.providers.map((p:any,i:number)=>({id:text(p?.id)||`provider-${i+1}`,name:text(p?.name)||text(p?.id)||`Provider ${i+1}`,baseUrl:text(p?.baseUrl||p?.base_url).replace(/\/$/,''),apiKey:text(p?.apiKey||p?.api_key),models:Array.isArray(p?.models)?p.models.map(String):[],enabled:p?.enabled!==false})):base.ai.providers;
-  const network={...base.ai.network,...(input?.ai?.network||{})};
+  const providerInput=Array.isArray(input?.ai?.providers)?input.ai.providers:(input?.ai&&typeof input.ai==='object'?Object.values(input.ai).filter((value:any)=>value&&typeof value==='object'&&(value.id||value.vendor||value.url||value.baseUrl||Array.isArray(value.models))):null);
+  const providers=Array.isArray(providerInput)?providerInput.map((p:any,i:number)=>({id:text(p?.id)||`provider-${i+1}`,name:text(p?.name)||text(p?.id)||`Provider ${i+1}`,baseUrl:text(p?.baseUrl||p?.base_url||p?.url).replace(/\/$/,''),apiKey:text(p?.apiKey||p?.api_key),models:Array.isArray(p?.models)?p.models.map((model:any)=>typeof model==='string'?model:String(model?.id||model?.name||'')).filter(Boolean):[],enabled:p?.enabled!==false})):base.ai.providers;
+  const network={...base.ai.network,...(input?.ai?.network||{})}; if(!Array.isArray(providerInput))seedAiProviders(base.ai);
   return {
     woo:{url:text(input?.woo?.url,base.woo.url).replace(/\/$/,''),key:text(input?.woo?.key,base.woo.key),secret:text(input?.woo?.secret,base.woo.secret),categoryId:num(input?.woo?.categoryId,base.woo.categoryId)},
     basalam:{token:text(input?.basalam?.token,base.basalam.token),vendorId:text(input?.basalam?.vendorId,base.basalam.vendorId),api:text(input?.basalam?.api,base.basalam.api).replace(/\/$/,'')||'https://openapi.basalam.com/v1',preparationDays:num(input?.basalam?.preparationDays,base.basalam.preparationDays),weight:num(input?.basalam?.weight,base.basalam.weight),packageWeight:num(input?.basalam?.packageWeight,base.basalam.packageWeight),stock:num(input?.basalam?.stock,base.basalam.stock),categoryId:num(input?.basalam?.categoryId,base.basalam.categoryId),autoCategory:bool(input?.basalam?.autoCategory,base.basalam.autoCategory),netIndirect:bool(input?.basalam?.netIndirect,base.basalam.netIndirect),shops},
