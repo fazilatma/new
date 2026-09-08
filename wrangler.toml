@@ -3,6 +3,9 @@ name = "hesabdar"
 main = "dist/worker.js"
 compatibility_date = "2025-06-01"
 
+# حیاتی: جلوی پاک‌شدن binding داشبورد در هر دیپلوی را می‌گیرد
+keep_vars = true
+
 # دیتابیس D1 فقط یک‌بار در داشبورد ساخته و وصل می‌شود (بدون نیاز به آیدی در این فایل):
 #   صفحه ورکر ← Settings ← Bindings ← Add ← D1 database ← نام DB
 # بعد از آن، هر Push به گیت = یک ورژن جدید، خودکار و بدون هیچ تنظیم اضافه‌ای.
