@@ -23,6 +23,15 @@ npm run worker:db:local
 npm run worker:dev
 ```
 
+### شمارهٔ نسخه (تک‌مرجع)
+
+تنها مرجع نسخه، فیلد `version` در `package.json` است. پس از تغییر آن، این دستور همهٔ جاهای دیگر را یکجا هم‌سان می‌کند:
+
+```bash
+npm run version:sync    # هدر داشبورد، پاورقی گزارش تغییرات، wrangler.toml، fallbackها و دستورالعمل نصب محیط‌ها
+npm run version:check   # فقط بررسی؛ در npm run worker:test هم اجرا می‌شود و در صورت ناهماهنگی تست شکست می‌خورد
+```
+
 - source اصلی Worker: `worker-src/`
 - entrypoint: `worker-src/main.ts`
 - تنظیمات و bindingهای declarative Cloudflare: `wrangler.toml`
