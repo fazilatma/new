@@ -91,6 +91,14 @@ npm run dev
 | PUT/DELETE | `/api/integrations/:id` | ویرایش / حذف اتصال |
 | POST | `/api/integrations/test` | تست اتصال با توکن/کلید (بدون ذخیره) |
 | POST | `/api/integrations/:id/sync` | سینک سفارش‌ها (`{days}`) |
+| GET | `/api/cloud/status` | وضعیت بکاپ ابری + آدرس‌های Redirect |
+| POST | `/api/cloud/config` | ذخیره Client ID/Secret گوگل یا مایکروسافت |
+| GET | `/api/cloud/:provider/auth` | شروع اتصال OAuth (گوگل/وان‌درایو) |
+| GET | `/api/cloud/:provider/callback` | برگشت از OAuth (خودکار) |
+| POST | `/api/cloud/:provider/backup` | بکاپ فوری |
+| GET | `/api/cloud/:provider/files` | لیست فایل‌های بکاپ |
+| POST | `/api/cloud/:provider/restore` | بازیابی از فایل (`{fileId}`) |
+| DELETE | `/api/cloud/:provider` | قطع اتصال |
 
 ## 🧮 فرمول سود
 

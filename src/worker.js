@@ -1,9 +1,10 @@
 /* ═══════════════════════════════════════════════════════════════════
    حسابدار فروش — بک‌اند Cloudflare Worker
    • سرو فرانت‌اند (تک‌فایل، فارسی/راست‌چین، تقویم شمسی)
-   • API سفارش‌ها / غرفه‌ها / تامین‌کنندگان / تنظیمات / اتصال‌ها
+   • API سفارش‌ها / غرفه‌ها / تامین‌کنندگان / تنظیمات / اتصال‌ها / بکاپ ابری
    • اتصال خودکار: باسلام (SalamAPI) + ووکامرس (WooCommerce REST API)
-   • دیتابیس: D1 (اگر bind شده باشد) وگرنه حافظه موقت
+   • بکاپ خودکار: گوگل درایو + وان‌درایو (مایکروسافت)
+   • دیتابیس: فقط D1 (دائمی) — بدون D1 هیچ API داده‌ای کار نمی‌کند
    ═══════════════════════════════════════════════════════════════════ */
 
 const FRONTEND_HTML = "__FRONTEND_HTML__";
@@ -89,7 +90,7 @@ function json(data, status = 200) {
   });
 }
 
-/* ─── استور D1 ─── */
+/* ─── استور D1 (تنها حافظه: دائمی) ─── */
 function d1Store(db) {
   async function migrate() {
     if (globalThis.__MIGRATED__) return;
@@ -146,47 +147,6 @@ function d1Store(db) {
       for (const r of rows) o[r.key] = r.value;
       return o;
     },
-  };
-}
-
-/* ─── استور حافظه (fallback بدون D1) ─── */
-function memStore() {
-  if (!globalThis.__MEM__) {
-    globalThis.__MEM__ = { booths: [], suppliers: [], orders: [], integrations: [], settings: {}, seq: 1 };
-  }
-  const M = globalThis.__MEM__;
-  if (!M.integrations) M.integrations = [];
-  const nextId = () => M.seq++;
-  return {
-    mode: 'memory',
-    migrate: async () => {},
-    list: async (t) => [...(M[t] || [])].reverse().slice(0, 5000),
-    findBy: async (t, f, v) => (M[t] || []).find((r) => String(r[f]) === String(v)) || null,
-    insert: async (t, obj) => {
-      const row = { id: nextId(), created_at: nowISO(), ...obj };
-      M[t].push(row);
-      return row;
-    },
-    update: async (t, id, obj) => {
-      const row = M[t].find((r) => String(r.id) === String(id));
-      if (!row) return null;
-      Object.assign(row, obj);
-      return row;
-    },
-    remove: async (t, id) => {
-      M[t] = M[t].filter((r) => String(r.id) !== String(id));
-      return { ok: true };
-    },
-    clear: async (t) => {
-      M[t] = [];
-      return { ok: true };
-    },
-    getSetting: async (k) => (M.settings[k] ?? null),
-    setSetting: async (k, v) => {
-      M.settings[k] = v;
-      return { ok: true };
-    },
-    allSettings: async () => ({ ...M.settings }),
   };
 }
 
@@ -571,11 +531,322 @@ async function handleIntegrations(req, store, parts) {
   return json({ error: 'method not allowed' }, 405);
 }
 
-/* سینک خودکار دوره‌ای (Cron) — فقط حالت D1 */
-async function runAutoSync(env) {
+/* ═══════════════════════════════════════════════════════════════════
+   بکاپ ابری: گوگل درایو + وان‌درایو (OAuth2)
+   ═══════════════════════════════════════════════════════════════════ */
+const CLOUD_PROVIDERS = {
+  google: {
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    scopes: 'https://www.googleapis.com/auth/drive.file',
+  },
+  onedrive: {
+    authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    scopes: 'offline_access Files.ReadWrite',
+  },
+};
+const ck = (p, k) => `${p}_${k}`;
+
+async function getCloudCfg(store, p) {
+  const [client_id, client_secret, refresh_token, email, last_backup, last_file] = await Promise.all([
+    store.getSetting(ck(p, 'client_id')), store.getSetting(ck(p, 'client_secret')),
+    store.getSetting(ck(p, 'refresh_token')), store.getSetting(ck(p, 'email')),
+    store.getSetting(ck(p, 'last_backup')), store.getSetting(ck(p, 'last_file')),
+  ]);
+  return {
+    client_id: client_id || '', client_secret: client_secret || '',
+    refresh_token: refresh_token || '', email: email || '',
+    last_backup: last_backup || '', last_file: last_file || '',
+  };
+}
+
+const redirectUri = (origin, p) => `${origin}/api/cloud/${p}/callback`;
+
+async function cloudStatus(store, origin) {
+  const out = { redirect_uris: {} };
+  for (const p of ['google', 'onedrive']) {
+    const c = await getCloudCfg(store, p);
+    out[p] = {
+      configured: !!(c.client_id && c.client_secret),
+      connected: !!c.refresh_token,
+      email: c.email, last_backup: c.last_backup, last_file: c.last_file,
+      client_id_hint: c.client_id ? String(c.client_id).slice(0, 14) + '…' : '',
+    };
+    out.redirect_uris[p] = redirectUri(origin, p);
+  }
+  return out;
+}
+
+function randState() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+async function startCloudAuth(store, p, origin) {
+  const cfg = await getCloudCfg(store, p);
+  if (!cfg.client_id) throw new UpstreamError('OAuth client not configured — save Client ID/Secret first', 400);
+  const meta = CLOUD_PROVIDERS[p];
+  const state = randState();
+  await store.setSetting(ck(p, 'oauth_state'), JSON.stringify({ state, ts: Date.now() }));
+  const u = new URL(meta.authUrl);
+  u.searchParams.set('client_id', cfg.client_id);
+  u.searchParams.set('redirect_uri', redirectUri(origin, p));
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('scope', meta.scopes);
+  u.searchParams.set('state', state);
+  if (p === 'google') {
+    u.searchParams.set('access_type', 'offline');
+    u.searchParams.set('prompt', 'consent');
+  }
+  return u.toString();
+}
+
+async function finishCloudAuth(store, p, code, state, origin) {
+  let saved = null;
+  try { saved = JSON.parse((await store.getSetting(ck(p, 'oauth_state'))) || 'null'); } catch {}
+  if (!saved || saved.state !== state || Date.now() - saved.ts > 15 * 60e3) {
+    return { ok: false, error: 'Invalid or expired state. Please try connecting again.' };
+  }
+  await store.setSetting(ck(p, 'oauth_state'), '');
+  const cfg = await getCloudCfg(store, p);
+  const meta = CLOUD_PROVIDERS[p];
+  const form = new URLSearchParams();
+  form.set('code', code);
+  form.set('client_id', cfg.client_id);
+  form.set('client_secret', cfg.client_secret);
+  form.set('redirect_uri', redirectUri(origin, p));
+  form.set('grant_type', 'authorization_code');
+  try {
+    const { data } = await fetchJSON(meta.tokenUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    }, p);
+    if (!data.refresh_token) {
+      if (p === 'google') return { ok: false, error: 'Google did not return a refresh token. Remove app access at myaccount.google.com/permissions and retry.' };
+      return { ok: false, error: 'No refresh token returned.' };
+    }
+    await store.setSetting(ck(p, 'refresh_token'), data.refresh_token);
+    try {
+      const at = data.access_token;
+      if (p === 'google' && at) {
+        const u = await fetchJSON('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer ' + at } }, p);
+        if (u.data && u.data.email) await store.setSetting(ck(p, 'email'), u.data.email);
+      } else if (at) {
+        const u = await fetchJSON('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', { headers: { Authorization: 'Bearer ' + at } }, p);
+        const em = (u.data && (u.data.mail || u.data.userPrincipalName)) || '';
+        if (em) await store.setSetting(ck(p, 'email'), em);
+      }
+    } catch { /* اختیاری */ }
+    const email = await store.getSetting(ck(p, 'email'));
+    return { ok: true, email: email || '' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function cloudAccessToken(store, p) {
+  const cfg = await getCloudCfg(store, p);
+  if (!cfg.refresh_token) throw new UpstreamError('Not connected', 400);
+  const meta = CLOUD_PROVIDERS[p];
+  const form = new URLSearchParams();
+  form.set('refresh_token', cfg.refresh_token);
+  form.set('client_id', cfg.client_id);
+  form.set('client_secret', cfg.client_secret);
+  form.set('grant_type', 'refresh_token');
+  const { data } = await fetchJSON(meta.tokenUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  }, p);
+  if (data.refresh_token) await store.setSetting(ck(p, 'refresh_token'), data.refresh_token);
+  return data.access_token;
+}
+
+function backupFileName() {
+  const d = new Date();
+  const z = (n) => String(n).padStart(2, '0');
+  return `hesabdar-backup-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.json`;
+}
+
+async function exportData(store) {
+  const [orders, booths, suppliers, integrations, settings] = await Promise.all([
+    store.list('orders'), store.list('booths'), store.list('suppliers'),
+    store.list('integrations'), store.allSettings(),
+  ]);
+  return { app: 'hesabdar-foroosh', exported_at: nowISO(), orders, booths, suppliers, integrations, settings };
+}
+
+async function importData(store, b) {
+  const counts = {};
+  for (const t of ['orders', 'booths', 'suppliers', 'integrations']) {
+    if (Array.isArray(b[t])) {
+      await store.clear(t);
+      for (const row of b[t].slice(0, 5000)) {
+        const c = { ...row };
+        delete c.id;
+        if (t === 'orders') await store.insert(t, pick(c, ORDER_FIELDS));
+        else if (t === 'integrations') await store.insert(t, pick(c, INTEG_ALL));
+        else await store.insert(t, c.name ? { name: String(c.name), description: c.description || '', phone: c.phone || '' } : c);
+      }
+      counts[t] = b[t].length;
+    }
+  }
+  if (b.settings && typeof b.settings === 'object') {
+    for (const [k, v] of Object.entries(b.settings)) await store.setSetting(k, String(v));
+  }
+  return counts;
+}
+
+async function uploadBackup(store, p) {
+  const at = await cloudAccessToken(store, p);
+  const payload = JSON.stringify(await exportData(store));
+  const name = backupFileName();
+  let file;
+  if (p === 'google') {
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify({ name, mimeType: 'application/json' })], { type: 'application/json' }));
+    form.append('media', new Blob([payload], { type: 'application/json' }));
+    const { data } = await fetchJSON('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + at }, body: form,
+    }, p);
+    file = { id: data.id, name: data.name || name };
+  } else {
+    const { data } = await fetchJSON(`https://graph.microsoft.com/v1.0/me/drive/root:/Hesabdar/${encodeURIComponent(name)}:/content`, {
+      method: 'PUT', headers: { Authorization: 'Bearer ' + at, 'content-type': 'application/json' }, body: payload,
+    }, p);
+    file = { id: data.id, name: data.name || name };
+  }
+  await store.setSetting(ck(p, 'last_backup'), nowISO());
+  await store.setSetting(ck(p, 'last_file'), file.name);
+  return { file, at: nowISO() };
+}
+
+async function listCloudBackups(store, p) {
+  const at = await cloudAccessToken(store, p);
+  if (p === 'google') {
+    const u = new URL('https://www.googleapis.com/drive/v3/files');
+    u.searchParams.set('q', "name contains 'hesabdar-backup' and trashed=false");
+    u.searchParams.set('orderBy', 'createdTime desc');
+    u.searchParams.set('pageSize', '20');
+    u.searchParams.set('fields', 'files(id,name,createdTime,size)');
+    const { data } = await fetchJSON(u.toString(), { headers: { Authorization: 'Bearer ' + at } }, p);
+    return (data.files || []).map((f) => ({ id: f.id, name: f.name, created: f.createdTime, size: f.size }));
+  }
+  try {
+    const { data } = await fetchJSON('https://graph.microsoft.com/v1.0/me/drive/root:/Hesabdar:/children?$top=20&$orderby=createdDateTime desc', { headers: { Authorization: 'Bearer ' + at } }, p);
+    return (data.value || []).filter((f) => (f.name || '').includes('hesabdar-backup')).map((f) => ({ id: f.id, name: f.name, created: f.createdDateTime, size: f.size }));
+  } catch (e) {
+    if (e.status === 404) return [];
+    throw e;
+  }
+}
+
+async function downloadBackup(store, p, fileId) {
+  const at = await cloudAccessToken(store, p);
+  const url = p === 'google'
+    ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${encodeURIComponent(fileId)}/content`;
+  let r;
+  try {
+    r = await fetch(url, { headers: { Authorization: 'Bearer ' + at }, signal: AbortSignal.timeout(30000) });
+  } catch {
+    throw new UpstreamError(`${p}: download failed`, 0);
+  }
+  if (!r.ok) throw new UpstreamError(`${p}: download failed (HTTP ${r.status})`, r.status);
+  return r.text();
+}
+
+function oauthResultPage(ok, title, msg) {
+  return `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
+<body style="font-family:Tahoma,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0b1020;color:#fff;margin:0">
+<div style="text-align:center;background:#1e293b;padding:32px;border-radius:16px;max-width:420px">
+<div style="font-size:48px">${ok ? '✅' : '❌'}</div>
+<h2>${title}</h2><p style="color:#cbd5e1;line-height:2">${msg}</p>
+<button onclick="window.close()" style="background:#4f46e5;color:#fff;border:none;border-radius:10px;padding:10px 28px;font-size:15px;cursor:pointer;font-family:inherit">بستن این صفحه</button>
+<p style="font-size:12px;color:#64748b;margin-top:12px">به برنامه برگردید و دکمه ↻ (به‌روزرسانی وضعیت) را بزنید</p>
+</div></body></html>`;
+}
+
+async function handleCloud(req, store, url, parts) {
+  const method = req.method;
+  const sub = parts[1]; // status | config | google | onedrive
+  const body = async () => {
+    try { return await req.json(); } catch { return {}; }
+  };
+  const origin = url.origin;
+
+  if (sub === 'status' && method === 'GET') return json({ ok: true, ...(await cloudStatus(store, origin)) });
+
+  if (sub === 'config' && (method === 'POST' || method === 'PUT')) {
+    const b = await body();
+    const p = b.provider;
+    if (p !== 'google' && p !== 'onedrive') return json({ ok: false, error: 'bad provider' }, 400);
+    if (b.client_id) await store.setSetting(ck(p, 'client_id'), String(b.client_id).trim());
+    if (b.client_secret) await store.setSetting(ck(p, 'client_secret'), String(b.client_secret).trim());
+    return json({ ok: true, ...(await cloudStatus(store, origin)) });
+  }
+
+  if (sub === 'google' || sub === 'onedrive') {
+    const p = sub, action = parts[2];
+    if (action === 'auth' && method === 'GET') {
+      try {
+        return Response.redirect(await startCloudAuth(store, p, origin), 302);
+      } catch (e) {
+        return new Response(oauthResultPage(false, 'خطا', e.message), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      }
+    }
+    if (action === 'callback' && method === 'GET') {
+      const code = url.searchParams.get('code'), state = url.searchParams.get('state'), err = url.searchParams.get('error');
+      let html;
+      if (err) html = oauthResultPage(false, 'اتصال لغو شد', 'در صفحه ارائه‌دهنده، دسترسی تایید نشد.');
+      else if (!code) html = oauthResultPage(false, 'خطا', 'کد تایید دریافت نشد.');
+      else {
+        const r = await finishCloudAuth(store, p, code, state, origin);
+        html = r.ok
+          ? oauthResultPage(true, 'اتصال موفق شد', `حساب ${r.email ? '<b dir="ltr">' + r.email + '</b>' : ''} متصل شد. از این پس بکاپ‌ها به‌صورت خودکار ذخیره می‌شوند.`)
+          : oauthResultPage(false, 'خطا در اتصال', r.error);
+      }
+      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
+    if (action === 'backup' && method === 'POST') {
+      try {
+        return json({ ok: true, ...(await uploadBackup(store, p)) });
+      } catch (e) { return json({ ok: false, error: e.message, status: e.status }); }
+    }
+    if (action === 'files' && method === 'GET') {
+      try {
+        return json({ ok: true, files: await listCloudBackups(store, p) });
+      } catch (e) { return json({ ok: false, error: e.message, status: e.status }); }
+    }
+    if (action === 'restore' && method === 'POST') {
+      try {
+        const b = await body();
+        if (!b.fileId) return json({ ok: false, error: 'fileId required' }, 400);
+        const text = await downloadBackup(store, p, b.fileId);
+        let d;
+        try { d = JSON.parse(text); } catch { return json({ ok: false, error: 'Invalid backup file' }, 400); }
+        if (!d || d.app !== 'hesabdar-foroosh' || !Array.isArray(d.orders)) return json({ ok: false, error: 'Not a Hesabdar backup' }, 400);
+        const counts = await importData(store, d);
+        return json({ ok: true, counts, exported_at: d.exported_at });
+      } catch (e) { return json({ ok: false, error: e.message, status: e.status }); }
+    }
+    if (!action && method === 'DELETE') {
+      for (const k of ['refresh_token', 'email', 'last_backup', 'last_file', 'oauth_state']) await store.setSetting(ck(p, k), '');
+      return json({ ok: true });
+    }
+  }
+  return json({ error: 'not found' }, 404);
+}
+
+/* کارهای دوره‌ای Cron: سینک خودکار + بکاپ ابری */
+async function runScheduled(env) {
   if (!env.DB) return;
   const store = d1Store(env.DB);
   await store.migrate();
+  /* ۱) سینک اتصال‌های خودکار */
   const all = await store.list('integrations');
   for (const integ of all.filter((i) => num(i.auto_sync, 0) === 1)) {
     try {
@@ -586,6 +857,16 @@ async function runAutoSync(env) {
     } catch (e) {
       try { await store.update('integrations', integ.id, { last_status: 'auto error' }); } catch {}
     }
+  }
+  /* ۲) بکاپ ابری روزانه */
+  for (const p of ['google', 'onedrive']) {
+    try {
+      const last = await store.getSetting(ck(p, 'last_backup'));
+      if (last && Date.now() - Date.parse(last) < 20 * 3600e3) continue;
+      const cfg = await getCloudCfg(store, p);
+      if (!cfg.refresh_token) continue;
+      await uploadBackup(store, p);
+    } catch {}
   }
 }
 
@@ -600,42 +881,23 @@ async function handleApi(req, store, url) {
     try { return await req.json(); } catch { return {}; }
   };
 
-  /* health */
-  if (resource === 'health') {
-    return json({ ok: true, mode: store.mode, time: nowISO(), app: 'hesabdar-foroosh' });
-  }
-
   /* اتصال‌ها */
   if (resource === 'integrations') {
     return handleIntegrations(req, store, parts);
   }
 
+  /* بکاپ ابری */
+  if (resource === 'cloud') {
+    return handleCloud(req, store, url, parts);
+  }
+
   /* export / import */
   if (resource === 'export' && method === 'GET') {
-    const [orders, booths, suppliers, integrations, settings] = await Promise.all([
-      store.list('orders'), store.list('booths'), store.list('suppliers'),
-      store.list('integrations'), store.allSettings(),
-    ]);
-    return json({ app: 'hesabdar-foroosh', exported_at: nowISO(), orders, booths, suppliers, integrations, settings });
+    return json(await exportData(store));
   }
   if (resource === 'import' && method === 'POST') {
-    const b = await body();
-    for (const t of ['orders', 'booths', 'suppliers', 'integrations']) {
-      if (Array.isArray(b[t])) {
-        await store.clear(t);
-        for (const row of b[t].slice(0, 5000)) {
-          const c = { ...row };
-          delete c.id;
-          if (t === 'orders') await store.insert(t, pick(c, ORDER_FIELDS));
-          else if (t === 'integrations') await store.insert(t, pick(c, INTEG_ALL));
-          else await store.insert(t, c.name ? { name: String(c.name), description: c.description || '', phone: c.phone || '' } : c);
-        }
-      }
-    }
-    if (b.settings && typeof b.settings === 'object') {
-      for (const [k, v] of Object.entries(b.settings)) await store.setSetting(k, String(v));
-    }
-    return json({ ok: true });
+    const counts = await importData(store, await body());
+    return json({ ok: true, counts });
   }
 
   /* settings */
@@ -705,10 +967,18 @@ export default {
       });
     }
 
-    /* API */
+    /* سلامت (بدون نیاز به دیتابیس، برای تشخیص حالت) */
+    if (url.pathname === '/api/health') {
+      return json({ ok: true, mode: env.DB ? 'd1' : 'nodb', time: nowISO(), app: 'hesabdar-foroosh' });
+    }
+
+    /* API — فقط با D1 */
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+      if (!env.DB) {
+        return json({ error: 'no_db', message: 'D1 database is not connected. Data APIs are disabled.' }, 503);
+      }
       try {
-        const store = env.DB ? d1Store(env.DB) : memStore();
+        const store = d1Store(env.DB);
         await store.migrate();
         return await handleApi(req, store, url);
       } catch (err) {
@@ -725,8 +995,8 @@ export default {
     });
   },
 
-  /* سینک خودکار با Cron (فقط اتصال‌های auto_sync=1) */
+  /* Cron ساعتی: سینک خودکار + بکاپ ابری */
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runAutoSync(env));
+    ctx.waitUntil(runScheduled(env));
   },
 };

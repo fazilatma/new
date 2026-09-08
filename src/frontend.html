@@ -124,6 +124,7 @@ tailwind.config = {
 
   <!-- ─── محتوا ─── -->
   <main class="flex-1 min-w-0 pb-24 md:pb-10">
+    <div id="db-banner"></div>
 
     <!-- داشبورد -->
     <section id="view-dashboard" class="view">
@@ -332,7 +333,7 @@ tailwind.config = {
         <div class="text-xs text-slate-500 dark:text-slate-400 leading-6">
           با اتصال غرفه‌های باسلام و سایت ووکامرسی، سفارش‌ها به‌صورت خودکار وارد حسابداری می‌شوند.
           هزینه‌های تامین‌کننده را بعداً دستی تکمیل کنید؛ سینک مجدد، هزینه‌های ثبت‌شده شما را <b>پاک نمی‌کند</b>.
-          توجه: «تست اتصال» و «سینک» فقط روی نسخه دیپلوی‌شده Cloudflare کار می‌کنند (نه حالت محلی).
+          توجه: برای تست و سینک، دیتابیس دائمی (D1) باید متصل باشد.
         </div>
       </div>
       <div class="grid lg:grid-cols-2 gap-4 items-start">
@@ -395,6 +396,26 @@ tailwind.config = {
     <!-- تنظیمات -->
     <section id="view-settings" class="view">
       <div class="grid lg:grid-cols-2 gap-4">
+        <div class="glass card p-5 lg:col-span-2">
+          <h3 class="font-black mb-1">☁️ بکاپ ابری خودکار (گوگل درایو / وان‌درایو)</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 leading-6">علاوه بر دیتابیس دائمی، هر روز یک نسخه پشتیبان کامل در فضای ابری خودتان ذخیره می‌شود. هر لحظه هم می‌توانید بکاپ فوری بگیرید یا بازیابی کنید.</p>
+          <div id="cloud-panels" class="grid md:grid-cols-2 gap-3 mt-3"></div>
+          <details class="coll mt-3">
+            <summary><span class="chev">▾</span> ❓ راهنمای ساخت Client ID و Secret</summary>
+            <div class="coll-body text-[11px] leading-6 text-slate-600 dark:text-slate-300">
+              <b>گوگل درایو:</b><br>
+              ۱. وارد <a href="https://console.cloud.google.com" target="_blank" class="text-indigo-500 font-bold">console.cloud.google.com ↗</a> شوید ← پروژه جدید بسازید ← از Library عبارت <b dir="ltr">Google Drive API</b> را Enable کنید.<br>
+              ۲. از منوی APIs &amp; Services ← <b>OAuth consent screen</b> ← نوع External ← نام و ایمیل را وارد کنید ← در بخش Test users ایمیل خودتان را اضافه کنید.<br>
+              ۳. از Credentials ← <b>Create Credentials ← OAuth client ID</b> ← نوع Web application ← در قسمت Authorized redirect URIs همان Redirect URI بالای همین کارت را وارد کنید ← Create.<br>
+              ۴. Client ID و Client Secret را اینجا ذخیره کنید و «اتصال حساب» را بزنید.<br><br>
+              <b>وان‌درایو (مایکروسافت):</b><br>
+              ۱. وارد <a href="https://portal.azure.com" target="_blank" class="text-indigo-500 font-bold">portal.azure.com ↗</a> شوید ← <b>Microsoft Entra ID ← App registrations ← New registration</b> ← نام دلخواه ← گزینه حساب‌های شخصی و سازمانی ← Redirect URI از نوع Web با همان آدرس بالای کارت ← Register.<br>
+              ۲. مقدار <b dir="ltr">Application (client) ID</b> را اینجا ذخیره کنید.<br>
+              ۳. از Certificates &amp; secrets ← <b>New client secret</b> ← مقدار Value را کپی و اینجا ذخیره کنید.<br>
+              ۴. «اتصال حساب» را بزنید و با حساب مایکروسافت تایید کنید. (مجوز لازم: <code dir="ltr">Files.ReadWrite</code>)
+            </div>
+          </details>
+        </div>
         <div class="glass card p-5">
           <h3 class="font-black mb-3">⚙️ تنظیمات فروشگاه</h3>
           <div class="flex flex-col gap-3">
@@ -538,6 +559,7 @@ const Api = {
       method, headers: { 'content-type': 'application/json' },
       body: data ? JSON.stringify(data) : undefined,
     });
+    if (r.status === 503) throw new Error('NO_DB');
     if (!r.ok) throw new Error('خطای سرور ' + r.status);
     return r.json();
   },
@@ -547,108 +569,44 @@ const Local = {
   write(k, v) { localStorage.setItem('hd_' + k, JSON.stringify(v)); },
 };
 const Store = {
-  mode: 'api',
+  mode: 'offline', // d1 | nodb | offline — فقط D1 دائمی، بدون حافظه موقت
   async init() {
     try {
       const h = await Api.req('/health');
-      this.mode = h.mode === 'd1' ? 'd1' : 'api';
-    } catch { this.mode = 'local'; }
+      this.mode = h.mode === 'd1' ? 'd1' : 'nodb';
+    } catch { this.mode = 'offline'; }
     const b = $('#mode-badge');
     if (this.mode === 'd1') { b.textContent = '☁️ متصل به Cloudflare D1'; b.className = 'chip bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'; }
-    else if (this.mode === 'api') { b.textContent = '☁️ متصل به ورکر (حافظه موقت)'; b.className = 'chip bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300'; }
-    else { b.textContent = '💾 حالت محلی (مرورگر)'; b.className = 'chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'; }
-    $('#db-info').innerHTML = this.mode === 'local'
-      ? 'در حالت محلی، داده‌ها فقط در همین مرورگر ذخیره می‌شود. برای دیتابیس دائمی ابری، روی Cloudflare با D1 دیپلوی کنید (راهنمای README).'
-      : 'داده‌ها روی Cloudflare ذخیره می‌شوند و از هر دستگاهی در دسترس‌اند. حتماً گاهی بکاپ JSON بگیرید.';
+    else if (this.mode === 'nodb') { b.textContent = '⚠️ دیتابیس وصل نیست'; b.className = 'chip bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300'; }
+    else { b.textContent = '⛔ عدم دسترسی به سرور'; b.className = 'chip bg-slate-300 text-slate-600 dark:bg-white/10 dark:text-slate-400'; }
+    $('#db-info').innerHTML = this.mode === 'd1'
+      ? 'داده‌ها به‌صورت دائمی در دیتابیس Cloudflare D1 ذخیره می‌شوند و از هر دستگاهی در دسترس‌اند. بکاپ ابری خودکار (گوگل/وان‌درایو) را هم فعال کنید.'
+      : '⚠️ در این حالت داده‌ای ذخیره نمی‌شود. برای استفاده، ورکر را با دیتابیس D1 دیپلوی کنید (راهنمای README).';
+    renderDbBanner();
   },
-  async listOrders() {
-    if (this.mode === 'local') return Local.read('orders', []);
-    try { return (await Api.req('/orders')).orders || []; } catch { this.mode = 'local'; return Local.read('orders', []); }
-  },
-  async saveOrder(o) {
-    if (this.mode === 'local') {
-      const arr = Local.read('orders', []);
-      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
-      else { o.id = uid(); o.created_at = new Date().toISOString(); arr.push(o); }
-      Local.write('orders', arr); return o;
-    }
-    const r = o.id ? await Api.req('/orders/' + o.id, 'PUT', o) : await Api.req('/orders', 'POST', o);
-    return r.order;
-  },
-  async delOrder(id) {
-    if (this.mode === 'local') { Local.write('orders', Local.read('orders', []).filter((x) => String(x.id) !== String(id))); return; }
-    await Api.req('/orders/' + id, 'DELETE');
-  },
-  async listBooths() {
-    if (this.mode === 'local') return Local.read('booths', []);
-    try { return (await Api.req('/booths')).booths || []; } catch { this.mode = 'local'; return Local.read('booths', []); }
-  },
-  async saveBooth(o) {
-    if (this.mode === 'local') {
-      const arr = Local.read('booths', []);
-      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
-      else { o.id = uid(); arr.push(o); }
-      Local.write('booths', arr); return o;
-    }
-    const r = o.id ? await Api.req('/booths/' + o.id, 'PUT', o) : await Api.req('/booths', 'POST', o);
-    return r.booth;
-  },
-  async delBooth(id) {
-    if (this.mode === 'local') { Local.write('booths', Local.read('booths', []).filter((x) => String(x.id) !== String(id))); return; }
-    await Api.req('/booths/' + id, 'DELETE');
-  },
-  async listSuppliers() {
-    if (this.mode === 'local') return Local.read('suppliers', []);
-    try { return (await Api.req('/suppliers')).suppliers || []; } catch { this.mode = 'local'; return Local.read('suppliers', []); }
-  },
-  async saveSupplier(o) {
-    if (this.mode === 'local') {
-      const arr = Local.read('suppliers', []);
-      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
-      else { o.id = uid(); arr.push(o); }
-      Local.write('suppliers', arr); return o;
-    }
-    const r = o.id ? await Api.req('/suppliers/' + o.id, 'PUT', o) : await Api.req('/suppliers', 'POST', o);
-    return r.supplier;
-  },
-  async delSupplier(id) {
-    if (this.mode === 'local') { Local.write('suppliers', Local.read('suppliers', []).filter((x) => String(x.id) !== String(id))); return; }
-    await Api.req('/suppliers/' + id, 'DELETE');
-  },
-  async listIntegrations() {
-    if (this.mode === 'local') return Local.read('integrations', []);
-    try { return (await Api.req('/integrations')).integrations || []; } catch { this.mode = 'local'; return Local.read('integrations', []); }
-  },
-  async saveIntegration(o) {
-    if (this.mode === 'local') {
-      const arr = Local.read('integrations', []);
-      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
-      else { o.id = uid(); arr.push({ auto_sync: 0, last_status: '', ...o }); }
-      Local.write('integrations', arr); return arr.find((x) => String(x.id) === String(o.id));
-    }
-    const r = o.id ? await Api.req('/integrations/' + o.id, 'PUT', o) : await Api.req('/integrations', 'POST', o);
-    return r.integration;
-  },
-  async delIntegration(id) {
-    if (this.mode === 'local') { Local.write('integrations', Local.read('integrations', []).filter((x) => String(x.id) !== String(id))); return; }
-    await Api.req('/integrations/' + id, 'DELETE');
-  },
-  async testIntegration(payload) {
-    if (this.mode === 'local') throw new Error('LOCAL_MODE');
-    return Api.req('/integrations/test', 'POST', payload);
-  },
-  async syncIntegration(id, days) {
-    if (this.mode === 'local') throw new Error('LOCAL_MODE');
-    return Api.req('/integrations/' + id + '/sync', 'POST', { days });
-  },
-  async getSettings() {
-    if (this.mode === 'local') return Local.read('settings', {});
-    try { return (await Api.req('/settings')).settings || {}; } catch { return Local.read('settings', {}); }
-  },
-  async saveSettings(s) {
-    if (this.mode === 'local') { Local.write('settings', s); return s; }
-    await Api.req('/settings', 'POST', s); return s;
-  },
+  needDb() { if (this.mode !== 'd1') throw new Error('NO_DB'); },
+  async listOrders() { this.needDb(); return (await Api.req('/orders')).orders || []; },
+  async saveOrder(o) { this.needDb(); return (await (o.id ? Api.req('/orders/' + o.id, 'PUT', o) : Api.req('/orders', 'POST', o))).order; },
+  async delOrder(id) { this.needDb(); await Api.req('/orders/' + id, 'DELETE'); },
+  async listBooths() { this.needDb(); return (await Api.req('/booths')).booths || []; },
+  async saveBooth(o) { this.needDb(); return (await (o.id ? Api.req('/booths/' + o.id, 'PUT', o) : Api.req('/booths', 'POST', o))).booth; },
+  async delBooth(id) { this.needDb(); await Api.req('/booths/' + id, 'DELETE'); },
+  async listSuppliers() { this.needDb(); return (await Api.req('/suppliers')).suppliers || []; },
+  async saveSupplier(o) { this.needDb(); return (await (o.id ? Api.req('/suppliers/' + o.id, 'PUT', o) : Api.req('/suppliers', 'POST', o))).supplier; },
+  async delSupplier(id) { this.needDb(); await Api.req('/suppliers/' + id, 'DELETE'); },
+  async listIntegrations() { this.needDb(); return (await Api.req('/integrations')).integrations || []; },
+  async saveIntegration(o) { this.needDb(); return (await (o.id ? Api.req('/integrations/' + o.id, 'PUT', o) : Api.req('/integrations', 'POST', o))).integration; },
+  async delIntegration(id) { this.needDb(); await Api.req('/integrations/' + id, 'DELETE'); },
+  async testIntegration(payload) { this.needDb(); return Api.req('/integrations/test', 'POST', payload); },
+  async syncIntegration(id, days) { this.needDb(); return Api.req('/integrations/' + id + '/sync', 'POST', { days }); },
+  async getSettings() { this.needDb(); return (await Api.req('/settings')).settings || {}; },
+  async saveSettings(s) { this.needDb(); await Api.req('/settings', 'POST', s); return s; },
+  async cloudStatus() { this.needDb(); return Api.req('/cloud/status'); },
+  async cloudConfig(p, cfg) { this.needDb(); return Api.req('/cloud/config', 'POST', { provider: p, ...cfg }); },
+  async cloudBackup(p) { this.needDb(); return Api.req('/cloud/' + p + '/backup', 'POST'); },
+  async cloudFiles(p) { this.needDb(); return Api.req('/cloud/' + p + '/files'); },
+  async cloudRestore(p, fileId) { this.needDb(); return Api.req('/cloud/' + p + '/restore', 'POST', { fileId }); },
+  async cloudDisconnect(p) { this.needDb(); return Api.req('/cloud/' + p, 'DELETE'); },
 };
 
 /* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
@@ -741,6 +699,75 @@ function confirmDlg(title, msg, onYes) {
   ]});
 }
 
+/* ─── بنر وضعیت دیتابیس + مهاجرت از حافظه محلی قدیمی ─── */
+window.addEventListener('unhandledrejection', (e) => {
+  if (e && e.reason && e.reason.message === 'NO_DB') {
+    e.preventDefault();
+    toast('⛔ دیتابیس دائمی (D1) متصل نیست — داده‌ای ذخیره نمی‌شود', 'err');
+  }
+});
+function renderDbBanner() {
+  const w = document.getElementById('db-banner');
+  if (!w) return;
+  if (Store.mode === 'd1') {
+    let hasLocal = false;
+    try {
+      hasLocal = ['orders', 'booths', 'suppliers'].some((k) => {
+        const v = JSON.parse(localStorage.getItem('hd_' + k) || 'null');
+        return Array.isArray(v) && v.length > 0;
+      });
+    } catch {}
+    w.className = hasLocal ? 'mb-4' : '';
+    w.innerHTML = hasLocal
+      ? `<div class="rounded-2xl p-4 text-sm leading-7 bg-amber-100 text-amber-900 dark:bg-amber-500/15 dark:text-amber-200 border border-amber-300 dark:border-amber-500/30 anim">📥 داده‌های قدیمی در حافظه این مرورگر پیدا شد. برای انتقال آن‌ها به فضای دائمی ابری: <button class="btn btn-primary !py-1.5 !text-xs mr-2" onclick="migrateLocalToCloud()">انتقال به فضای دائمی</button></div>`
+      : '';
+    return;
+  }
+  const offline = Store.mode === 'offline';
+  w.className = 'mb-4';
+  w.innerHTML = `<div class="rounded-2xl p-4 text-sm leading-8 bg-rose-100 text-rose-900 dark:bg-rose-500/15 dark:text-rose-200 border border-rose-300 dark:border-rose-500/30 anim">
+    <div class="font-black mb-1">${offline ? '⛔ ارتباط با سرور برقرار نیست' : '⚠️ دیتابیس دائمی (D1) به ورکر متصل نیست'}</div>
+    <div class="text-xs leading-6 opacity-90">${offline
+      ? 'برنامه باید روی Cloudflare Workers اجرا شود. اگر فایل را مستقیم باز کرده‌اید، ابتدا طبق README دیپلوی کنید.'
+      : 'در این حالت هیچ داده‌ای ذخیره نمی‌شود. اتصال D1: ساخت دیتابیس با <code dir="ltr">wrangler d1 create</code> و ثبت <code dir="ltr">database_id</code> در <code dir="ltr">wrangler.toml</code> + دیپلوی مجدد — یا در داشبورد: ورکر ← Settings ← Bindings ← افزودن D1 با نام <code dir="ltr">DB</code>.'}</div>
+  </div>`;
+}
+async function migrateLocalToCloud() {
+  try {
+    toast('⏳ در حال انتقال داده‌ها…', 'info');
+    const boothMap = {}, supMap = {};
+    for (const b of Local.read('booths', [])) {
+      const r = await Api.req('/booths', 'POST', { name: b.name, description: b.description || '' });
+      boothMap[String(b.id)] = r.booth.id;
+    }
+    for (const s of Local.read('suppliers', [])) {
+      const r = await Api.req('/suppliers', 'POST', { name: s.name, phone: s.phone || '', description: s.description || '' });
+      supMap[String(s.id)] = { id: r.supplier.id, name: r.supplier.name };
+    }
+    for (const o of Local.read('orders', [])) {
+      const c = { ...o };
+      delete c.id; delete c.created_at;
+      c.booth_id = boothMap[String(o.booth_id)] ?? null;
+      const sm = supMap[String(o.supplier_id)];
+      c.supplier_id = sm ? sm.id : null;
+      if (sm) c.supplier_name = sm.name;
+      await Api.req('/orders', 'POST', c);
+    }
+    for (const g of Local.read('integrations', [])) {
+      if (!g.type) continue;
+      const c = { ...g };
+      delete c.id; delete c.created_at;
+      c.booth_id = boothMap[String(g.booth_id)] ?? null;
+      await Api.req('/integrations', 'POST', c);
+    }
+    const st = Local.read('settings', {});
+    if (st && Object.keys(st).length) await Api.req('/settings', 'POST', st);
+    ['orders', 'booths', 'suppliers', 'settings', 'integrations'].forEach((k) => localStorage.removeItem('hd_' + k));
+    toast('✅ همه داده‌ها به فضای دائمی منتقل شد');
+    loadAll();
+  } catch (e) { toast('خطا در انتقال: ' + e.message, 'err'); }
+}
+
 /* ═══════════════ انتخاب‌گر تاریخ شمسی ═══════════════ */
 function jPicker(el, initialISO) {
   const root = typeof el === 'string' ? $(el) : el;
@@ -804,6 +831,7 @@ function go(v) {
   if (v === 'booths') renderBooths();
   if (v === 'suppliers') renderSuppliers();
   if (v === 'integrations') renderIntegrations();
+  if (v === 'settings') renderCloud();
 }
 function toggleTheme() {
   const dark = document.documentElement.classList.toggle('dark');
@@ -851,6 +879,14 @@ const supNameOf = (o) => {
   return s ? s.name : (o.supplier_name || '—');
 };
 async function loadAll() {
+  try {
+    await loadAllInner();
+  } catch (e) {
+    if (e && e.message === 'NO_DB') { state.orders = []; renderDbBanner(); go(currentView); return; }
+    toast('خطا در بارگذاری: ' + (e.message || e), 'err');
+  }
+}
+async function loadAllInner() {
   const [orders, booths, suppliers, integrations, settings] = await Promise.all([
     Store.listOrders(), Store.listBooths(), Store.listSuppliers(), Store.listIntegrations(), Store.getSettings(),
   ]);
@@ -1479,6 +1515,11 @@ function togglePw(id) { const el = document.getElementById(id); el.type = el.typ
 function testBox(ok, html) {
   return `<div class="text-xs leading-6 rounded-xl p-2.5 ${ok ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-300'}">${html}</div>`;
 }
+function netErr(e) {
+  const m = e && e.message;
+  if (m === 'NO_DB' || m === 'LOCAL_MODE') return '⛔ دیتابیس دائمی (D1) متصل نیست — ابتدا آن را وصل کنید.';
+  return '⛔ ' + esc(m || 'خطای ناشناخته');
+}
 function mapConnError(res, type) {
   const st = res.status;
   if (st === 401) return type === 'basalam' ? '⛔ توکن نامعتبر است یا منقضی شده. یک توکن جدید بسازید.' : '⛔ کلید یا رمز اشتباه است.';
@@ -1531,7 +1572,7 @@ async function basTest() {
       state._basTest = r.info;
     } else $('#bas-result').innerHTML = testBox(false, mapConnError(r, 'basalam'));
   } catch (e) {
-    $('#bas-result').innerHTML = testBox(false, e.message === 'LOCAL_MODE' ? '⛔ تست اتصال فقط روی نسخه Cloudflare کار می‌کند. لطفاً برنامه را دیپلوی کنید.' : '⛔ ' + esc(e.message));
+    $('#bas-result').innerHTML = testBox(false, netErr(e));
   }
   btn.disabled = false; btn.textContent = '🔌 تست اتصال';
 }
@@ -1575,7 +1616,7 @@ async function wooTest() {
       $('#woo-result').innerHTML = testBox(true, `✅ اتصال موفق!${r.info.store_title ? `<br>فروشگاه: <b>${esc(r.info.store_title)}</b>` : ''}<br>تعداد سفارش‌ها: <b class="num">${fmtN(r.info.orders_total)}</b>${r.info.currency ? ` • واحد پول: <b dir="ltr">${esc(r.info.currency)}</b>` : ''}`);
     } else $('#woo-result').innerHTML = testBox(false, mapConnError(r, 'woo'));
   } catch (e) {
-    $('#woo-result').innerHTML = testBox(false, e.message === 'LOCAL_MODE' ? '⛔ تست اتصال فقط روی نسخه Cloudflare کار می‌کند. لطفاً برنامه را دیپلوی کنید.' : '⛔ ' + esc(e.message));
+    $('#woo-result').innerHTML = testBox(false, netErr(e));
   }
   btn.disabled = false; btn.textContent = '🔌 تست اتصال';
 }
@@ -1622,7 +1663,7 @@ async function syncInteg(id) {
       btn.disabled = false; btn.textContent = '🔄 سینک سفارش‌ها';
     }
   } catch (e) {
-    box.innerHTML = testBox(false, e.message === 'LOCAL_MODE' ? '⛔ سینک فقط روی نسخه Cloudflare کار می‌کند. لطفاً برنامه را دیپلوی کنید.' : '⛔ ' + esc(e.message));
+    box.innerHTML = testBox(false, netErr(e));
     btn.disabled = false; btn.textContent = '🔄 سینک سفارش‌ها';
   }
 }
@@ -1645,7 +1686,7 @@ async function syncAll() {
   state.orders = await Store.listOrders();
   renderIntegrations();
   btn.disabled = false; btn.textContent = '🔄 سینک همه اتصال‌ها';
-  if (fails && !totalNew && !totalUpd) toast('⛔ سینک ناموفق بود (در حالت محلی کار نمی‌کند)', 'err');
+  if (fails && !totalNew && !totalUpd) toast('⛔ سینک ناموفق بود — اتصال دیتابیس را بررسی کنید', 'err');
   else toast(`✅ سینک همه: ${fmtN(totalNew)} جدید، ${fmtN(totalUpd)} به‌روزشده${fails ? `، ${fmtN(fails)} ناموفق` : ''}`);
 }
 async function toggleAuto(id, on) {
@@ -1653,7 +1694,7 @@ async function toggleAuto(id, on) {
     const saved = await Store.saveIntegration({ id, auto_sync: on ? 1 : 0 });
     Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
     toast(on ? '⏰ سینک خودکار ساعتی روشن شد' : 'سینک خودکار خاموش شد');
-  } catch (e) { toast('خطا: ' + e.message, 'err'); renderIntegrations(); }
+  } catch (e) { toast(netErr(e), 'err'); renderIntegrations(); }
 }
 function editInteg(id) {
   const c = state.integrations.find((x) => String(x.id) === String(id));
@@ -1682,6 +1723,107 @@ function delInteg(id) {
     await Store.delIntegration(id);
     state.integrations = state.integrations.filter((x) => String(x.id) !== String(id));
     renderIntegrations(); toast('اتصال حذف شد');
+  });
+}
+
+/* ═══════════════ بکاپ ابری (گوگل درایو / وان‌درایو) ═══════════════ */
+const CLOUD_META = {
+  google: { t: 'گوگل درایو', i: '📁' },
+  onedrive: { t: 'وان‌درایو (مایکروسافت)', i: '🗂' },
+};
+async function renderCloud() {
+  const w = $('#cloud-panels');
+  if (!w) return;
+  if (Store.mode !== 'd1') {
+    w.innerHTML = '<div class="md:col-span-2 text-xs text-slate-400 text-center py-3">⛔ بکاپ ابری نیازمند اتصال دیتابیس دائمی (D1) است.</div>';
+    return;
+  }
+  let st;
+  try { st = await Store.cloudStatus(); }
+  catch (e) { w.innerHTML = '<div class="md:col-span-2 text-xs text-rose-500 text-center py-3">خطا در دریافت وضعیت</div>'; return; }
+  w.innerHTML = ['google', 'onedrive'].map((p) => {
+    const s = st[p] || {}, m = CLOUD_META[p];
+    const last = s.last_backup ? fmtJ(s.last_backup.slice(0, 10)) + ' ' + toFa(s.last_backup.slice(11, 16)) : '—';
+    return `<div class="rounded-xl border border-slate-200 dark:border-white/10 p-3">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-xl">${m.i}</span>
+        <div class="font-black text-sm">${m.t}</div>
+        <span class="chip mr-auto ${s.connected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : 'bg-slate-200 text-slate-500 dark:bg-white/10 dark:text-slate-400'}">${s.connected ? '✅ متصل' : '⚪ قطع'}</span>
+      </div>
+      ${s.connected ? `<div class="text-[11px] text-slate-500 dark:text-slate-400 mb-2" dir="auto">حساب: <b dir="ltr">${esc(s.email || '')}</b> • آخرین بکاپ: <b class="num">${last}</b></div>` : ''}
+      <div class="text-[11px] text-slate-500 dark:text-slate-400 mb-1">Redirect URI (در کنسول گوگل/آژور ثبت کنید):</div>
+      <div class="num text-[11px] bg-slate-100 dark:bg-black/30 rounded-lg p-1.5 mb-2 break-all select-all" dir="ltr">${esc((st.redirect_uris || {})[p] || '')}</div>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <input id="cc-id-${p}" class="inp num !text-xs" dir="ltr" placeholder="Client ID${s.client_id_hint ? ` (${s.client_id_hint})` : ''}">
+        <input id="cc-sec-${p}" type="password" class="inp num !text-xs" dir="ltr" placeholder="${s.configured ? 'Secret ذخیره شده (خالی=حفظ)' : 'Client Secret'}">
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        <button class="btn btn-soft !py-1.5 !text-xs" onclick="saveCloudCfg('${p}')">💾 ذخیره مشخصات</button>
+        ${s.connected
+          ? `<button class="btn btn-primary !py-1.5 !text-xs" onclick="cloudBackupNow('${p}')">☁️ بکاپ فوری</button>
+             <button class="btn btn-soft !py-1.5 !text-xs" onclick="cloudRestoreModal('${p}')">📥 بازیابی</button>
+             <button class="btn btn-danger !py-1.5 !text-xs" onclick="cloudDisconnect('${p}')">❌ قطع اتصال</button>`
+          : `<button class="btn btn-primary !py-1.5 !text-xs" onclick="connectCloud('${p}')">🔗 اتصال حساب</button>`}
+        <button class="btn btn-soft !py-1.5 !text-xs !px-2" onclick="renderCloud()" title="به‌روزرسانی وضعیت">↻</button>
+      </div>
+      <div id="cloud-res-${p}" class="mt-2 empty:hidden"></div>
+    </div>`;
+  }).join('');
+}
+async function saveCloudCfg(p) {
+  const cid = $('#cc-id-' + p).value.trim(), sec = $('#cc-sec-' + p).value.trim();
+  if (!cid && !sec) { toast('Client ID و Secret را وارد کنید', 'err'); return; }
+  try {
+    await Store.cloudConfig(p, { client_id: cid, client_secret: sec });
+    toast('✅ ذخیره شد'); renderCloud();
+  } catch (e) { toast(netErr(e), 'err'); }
+}
+function connectCloud(p) {
+  window.open('/api/cloud/' + p + '/auth', '_blank');
+  toast('بعد از تایید دسترسی، برگردید و ↻ را بزنید', 'info');
+}
+async function cloudBackupNow(p) {
+  const box = $('#cloud-res-' + p);
+  box.innerHTML = testBox(true, '⏳ در حال آپلود بکاپ…');
+  try {
+    const r = await Store.cloudBackup(p);
+    if (r.ok) { box.innerHTML = testBox(true, `✅ بکاپ آپلود شد: <b dir="ltr">${esc(r.file.name)}</b>`); renderCloud(); }
+    else box.innerHTML = testBox(false, '⛔ ' + esc(r.error || 'خطا'));
+  } catch (e) { box.innerHTML = testBox(false, netErr(e)); }
+}
+async function cloudRestoreModal(p) {
+  let files = [];
+  try {
+    const r = await Store.cloudFiles(p);
+    if (!r.ok) { toast('⛔ ' + (r.error || 'خطا'), 'err'); return; }
+    files = r.files || [];
+  } catch (e) { toast(netErr(e), 'err'); return; }
+  if (!files.length) { toast('فایل بکاپی پیدا نشد', 'err'); return; }
+  openModal({
+    title: '📥 بازیابی از ' + CLOUD_META[p].t,
+    body: `<div class="flex flex-col gap-1.5 max-h-64 overflow-y-auto">` + files.map((f, i) =>
+      `<label class="flex items-center gap-2 text-xs p-2 rounded-xl bg-slate-100 dark:bg-white/5 cursor-pointer">
+        <input type="radio" name="crf" value="${esc(f.id)}" ${i === 0 ? 'checked' : ''} class="accent-indigo-600">
+        <span class="flex-1 min-w-0"><b dir="ltr" class="break-all">${esc(f.name)}</b><br><span class="text-slate-400 num">${f.created ? fmtJ(f.created.slice(0, 10)) : ''} ${f.size ? '• ' + fmtN(Math.round(f.size / 1024)) + ' KB' : ''}</span></span>
+      </label>`).join('') + `</div><p class="text-[11px] text-rose-500 mt-2">⚠️ بازیابی، جایگزین همه داده‌های فعلی می‌شود!</p>`,
+    buttons: [{ label: '📥 بازیابی همین فایل', onClick: () => {
+      const sel = document.querySelector('input[name="crf"]:checked');
+      if (!sel) return;
+      closeModal();
+      confirmDlg('📥 تایید بازیابی', 'همه داده‌های فعلی با این بکاپ جایگزین شود؟', async () => {
+        try {
+          const r = await Store.cloudRestore(p, sel.value);
+          if (r.ok) { toast('✅ بازیابی شد'); loadAll(); }
+          else toast('⛔ ' + (r.error || 'خطا'), 'err');
+        } catch (e) { toast(netErr(e), 'err'); }
+      });
+    }}],
+  });
+}
+async function cloudDisconnect(p) {
+  confirmDlg('❌ قطع اتصال', `اتصال ${CLOUD_META[p].t} قطع شود؟ (فایل‌های بکاپ در فضای شما باقی می‌مانند)`, async () => {
+    await Store.cloudDisconnect(p);
+    renderCloud(); toast('اتصال قطع شد');
   });
 }
 

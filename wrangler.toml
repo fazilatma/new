@@ -3,7 +3,7 @@ name = "hesabdar"
 main = "dist/worker.js"
 compatibility_date = "2025-06-01"
 
-# برای اتصال دیتابیس دائمی، ابتدا بسازید:
+# دیتابیس D1 الزامی است (بدون آن هیچ داده‌ای ذخیره نمی‌شود):
 #   npx wrangler d1 create hesabdar-db
 # بعد database_id را جای‌گذاری و این بخش را از کامنت خارج کنید:
 #
