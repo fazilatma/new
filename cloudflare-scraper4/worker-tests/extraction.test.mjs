@@ -106,6 +106,14 @@ test('heuristic auto extraction accepts only real product-card candidates with t
   assert.equal(products.length,1);assert.equal(products[0].title,'Real Shirt');assert.equal(products[0].image,'https://example.test/shirt.jpg');assert.equal(products[0].price,25);
 });
 
+test('metadata extraction rejects category page metadata that would turn the whole page into one product',async()=>{
+  const listHtml=`<html><head><title>Shirts | Store</title><meta property="og:type" content="website"><meta property="og:title" content="Shirts | Store"><meta property="og:image" content="/hero.jpg"></head><body><h1>All Shirts</h1></body></html>`;
+  const detailHtml=`<html><head><title>Real Shirt</title><meta property="og:type" content="product"><meta property="og:title" content="Real Shirt"><meta property="og:image" content="/shirt.jpg"><meta property="product:price:amount" content="25.00"></head></html>`;
+  assert.deepEqual(await scraper.extractMetadataProduct(listHtml,'https://shop.example/search/shirts'),[]);
+  const products=await scraper.extractMetadataProduct(detailHtml,'https://shop.example/product/real-shirt');
+  assert.equal(products.length,1);assert.equal(products[0].title,'Real Shirt');assert.equal(products[0].price,25);assert.equal(products[0].image,'https://shop.example/shirt.jpg');
+});
+
 test('pagination URL construction matches every PHP mode and drops stale path query strings',()=>{
   const profile=(pagination,paginationValue,url='https://shop.test/catalog?sort=asc#items')=>({url,pagination,paginationValue});
   assert.equal(scraper.pageUrl(profile('query_page','wrong'),3),'https://shop.test/catalog?sort=asc&page=3');
