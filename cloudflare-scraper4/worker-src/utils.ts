@@ -15,3 +15,30 @@ export function message(error:unknown):string{return error instanceof Error?erro
 export function isWriteQuotaError(error:unknown):boolean{return /exceeded .{0,20}write|write operations quota|rows written|d1.{0,20}quota|quota.{0,20}(exceeded|reached)|write.{0,20}limit/i.test(message(error));}
 export async function sha256(value:string):Promise<string>{const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',textEncoder.encode(value)));return [...bytes].map(x=>x.toString(16).padStart(2,'0')).join('');}
 export function safeEqual(a:string,b:string):boolean {const length=Math.max(a.length,b.length),aa=a.padEnd(length,'\0'),bb=b.padEnd(length,'\0');let diff=a.length^b.length;for(let i=0;i<length;i++)diff|=aa.charCodeAt(i)^bb.charCodeAt(i);return diff===0;}
+
+/**
+ * PHP scraper4 v10.170 parity (suffixTextNormalize).
+ * Folds the Arabic letter forms that Persian shops mix into their titles so the
+ * same product does not look like two different products to category learning,
+ * duplicate detection and suffix matching. Previously only ي/ى/ك were folded,
+ * which left "مانتو نسويّة"-style titles unmatched.
+ */
+const PERSIAN_FOLD_MAP: Record<string,string> = {
+  'ي':'ی','ى':'ی','ك':'ک','ة':'ه','ۀ':'ه','أ':'ا','إ':'ا','ؤ':'و','：':':'
+};
+const PERSIAN_FOLD_RE = new RegExp(`[${Object.keys(PERSIAN_FOLD_MAP).join('')}]`,'g');
+/** Arabic harakat/tatweel carry no meaning for matching and are dropped. */
+const ARABIC_DIACRITICS_RE = /[\u064B-\u065F\u0670\u0640]/g;
+/** Zero-width joiners, bidi marks, NBSP and BOM all collapse to a plain space. */
+const INVISIBLE_SPACE_RE = /[\u200b-\u200f\u00a0\ufeff\u2060]/g;
+export function normalizePersianText(value: unknown): string {
+  return String(value ?? '')
+    .replace(PERSIAN_FOLD_RE, ch => PERSIAN_FOLD_MAP[ch] ?? ch)
+    .replace(ARABIC_DIACRITICS_RE, '')
+    .replace(INVISIBLE_SPACE_RE, ' ')
+    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}

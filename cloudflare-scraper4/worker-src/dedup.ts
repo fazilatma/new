@@ -1,3 +1,4 @@
+import { normalizePersianText } from './utils.js';
 /**
  * Pure helpers for server-side duplicate detection on destination shops (WooCommerce / Basalam).
  * The heavy work (paged listing + chunked removal) lives in background.ts; everything here is
@@ -58,9 +59,7 @@ export function stripDedupSuffix(name: string, patterns: RegExp[]): string {
 
 /** Canonical duplicate key: suffix-free, Persian-normalized, whitespace-collapsed, per shop. */
 export function dedupKey(name: string, shopId: string, patterns: RegExp[]): string {
-  const base = stripDedupSuffix(name, patterns).toLowerCase()
-    .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
-    .replace(/[\u200c\u200f\u200e]/g, ' ').replace(/\s+/g, ' ').trim();
+  const base = normalizePersianText(stripDedupSuffix(name, patterns));
   return base ? `${shopId || 'default'}::${base}` : '';
 }
 

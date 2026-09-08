@@ -2,10 +2,10 @@ import { loadConnections } from './connections.js';
 import { getState, learnCategory, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
 import { buildDedupGroups, normalizeDedupKeep, parseSuffixFormats } from './dedup.js';
 import { safeFetch, safeWooFetch } from './network.js';
-import { basicAuth } from './utils.js';
+import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
 
-const norm=(v:string)=>String(v||'').toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/\s+/g,' ').replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
+const norm=(v:string)=>normalizePersianText(v).replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
 type Target='woo'|'basalam';
 type Shop={name:string;token:string;vendorId:string;pricePercent:number;primary:boolean};
 export type Remote={id:number;name:string;title:string;sku:string;images:string[];image:string;status:string;statusLabel:string;price:number;priceRaw:number;stock:number|null;category:string;categoryId:number|null;shopId:string;shopName:string;rejectionReason:string;shortDescription:string;description:string;raw:any};

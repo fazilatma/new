@@ -1,3 +1,4 @@
+import { normalizePersianText } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -340,7 +341,7 @@ export async function listCategoryLearning(limit=1000):Promise<any[]>{const {row
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES($1,$2,$3,$4,$5)',[row.chatId,row.customer,row.input,row.output,row.source])}
 export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[Number(row.chat_id||0)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
 export async function listAutoreplyLog(limit=100):Promise<any[]>{const {rows}=await pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT $1',[limit]);return rows}
-function normalizeLearning(value:string){return value.toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()}
+function normalizeLearning(value:string){return normalizePersianText(value).replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()}
 
 export async function getState<T>(key: string, fallback: T): Promise<T> {
   const { rows } = await pool.query('SELECT value FROM app_state WHERE key=$1', [key]);

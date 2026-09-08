@@ -35,6 +35,51 @@ export function aiSkipTimeoutMs(settings:any):number{
   return Math.max(50,Math.min(60_000,Math.trunc(raw)));
 }
 const runAge=(run:BackgroundRun)=>Date.now()-(Date.parse(run.updatedAt||run.createdAt)||Date.now());
+/**
+ * PHP scraper4 v10.125+ parity (taskProgressSig + autoResumeBook).
+ * A stalled run used to be re-queued by the watchdog forever, even when every
+ * attempt made zero progress, producing an endless recover->stall->recover loop.
+ * We fingerprint only progress counters (never timestamps, otherwise each attempt
+ * looks "new" and the cap could never trigger) and stop auto-resuming a run whose
+ * fingerprint has not moved after AUTO_RESUME_MAX_TRIES attempts.
+ */
+const AUTO_RESUME_MAX_TRIES=5;
+/** Attempts older than this window are forgotten so a run can recover later. */
+const AUTO_RESUME_WINDOW_MS=3_600_000;
+export function taskProgressSig(run:BackgroundRun):string{
+  const any=run as any,parts:string[]=[`phase=${run.phase||''}`];
+  for(const key of ['cursor','total','processed','changed','failed','scanned','groupsFound','duplicates','removed','page','totalPages','groupCursor','removeCursor']){
+    const value=any[key];
+    if(value===undefined||value===null)continue;
+    parts.push(`${key}=${Array.isArray(value)?value.length:typeof value==='boolean'?(value?1:0):typeof value==='number'?Math.trunc(value):String(value)}`);
+  }
+  for(const key of ['items','products','groups'])if(Array.isArray(any[key]))parts.push(`${key}=${any[key].length}`);
+  if(any.result&&Array.isArray(any.result.results))parts.push(`result=${any.result.results.length}`);
+  return parts.join('|');
+}
+type ResumeBookEntry={sig:string;at:number;tries:number};
+const RESUME_BOOK_KEY='background_resume_book';
+/**
+ * Records this auto-resume attempt and returns how many consecutive attempts
+ * made no progress. A changed fingerprint resets the counter to zero.
+ */
+async function noteAutoResumeAttempt(run:BackgroundRun):Promise<number>{
+  const book=(await getState<Record<string,ResumeBookEntry>>(RESUME_BOOK_KEY,{}))||{};
+  const key=`${run.kind}:${run.id}`,sig=taskProgressSig(run),nowMs=Date.now();
+  for(const [entryKey,entry] of Object.entries(book))if(!entry||nowMs-Number(entry.at||0)>AUTO_RESUME_WINDOW_MS)delete book[entryKey];
+  const previous=book[key];
+  const tries=previous&&previous.sig===sig&&nowMs-Number(previous.at||0)<AUTO_RESUME_WINDOW_MS?Number(previous.tries||0)+1:0;
+  book[key]={sig,at:nowMs,tries};
+  try{await setState(RESUME_BOOK_KEY,book)}catch{/* cap is best effort; never block recovery on a write */}
+  return tries;
+}
+/** Clears the no-progress counter when a run is reset or resumed by a human. */
+async function clearAutoResumeAttempts(kind:BackgroundRun['kind'],id:string):Promise<void>{
+  try{
+    const book=(await getState<Record<string,ResumeBookEntry>>(RESUME_BOOK_KEY,{}))||{};
+    if(book[`${kind}:${id}`]){delete book[`${kind}:${id}`];await setState(RESUME_BOOK_KEY,book)}
+  }catch{/* best effort */}
+}
 async function raceBudget<T>(work:Promise<T>,ms:number):Promise<T|undefined>{
   let timer:ReturnType<typeof setTimeout>|undefined;
   const timeout=new Promise<undefined>(resolve=>{timer=setTimeout(()=>resolve(undefined),ms)});
@@ -108,7 +153,7 @@ export async function listQueuedBackgroundRuns(limit=5):Promise<BackgroundMessag
 /** Force-clear a stuck run (its pointer, run row, lease and shared test-results state) so a fresh run can start. */
 export async function resetBackgroundRun(kind:BackgroundRun['kind']):Promise<void>{
   const id=await getState<string>(pointerKey(kind),'');
-  if(id){await deleteState(runKey(kind,id));await deleteState(leaseKey(kind,id));}
+  if(id){await deleteState(runKey(kind,id));await deleteState(leaseKey(kind,id));await clearAutoResumeAttempts(kind,id);}
   await setState(pointerKey(kind),'');
   if(kind==='ai-test')await deleteState('ai_test_results');
 }
@@ -171,6 +216,7 @@ export async function controlBackgroundRun(kind:BackgroundRun['kind'],action:'st
     run.stopRequested=true;run.status='paused';run.phase='paused';await writeRun(run);return publicRun(run);
   }
   if(!['paused','failed'].includes(run.status))return publicRun(run);
+  await clearAutoResumeAttempts(run.kind,run.id); // a human resume clears the no-progress cap
   run.stopRequested=false;run.status='queued';run.phase=run.kind==='category-all'&&run.products.length===0?'listing':run.kind==='dedup'?(!run.listingDone?'listing':!run.grouped?'grouping':'removing'):'waiting';run.error=null;run.finishedAt=null;run.attempts=0;await writeRun(run);await enqueue({task:run.kind,runId:run.id},waitUntil);return publicRun(run);
 }
 
@@ -382,6 +428,13 @@ export async function recoverBackgroundRuns(waitUntil?:(promise:Promise<unknown>
     }
     if(!run||run.stopRequested||run.status==='paused'||['done','failed'].includes(run.status))continue;
     if(runAge(run)<=STALL_MS)continue;
+    // v10.125 parity: stop re-queueing a run that keeps stalling without progress.
+    const tries=await noteAutoResumeAttempt(run);
+    if(tries>=AUTO_RESUME_MAX_TRIES){
+      run.status='paused';run.phase='no-progress';
+      run.error=`Auto-resume stopped after ${tries} attempts without progress. Press resume to try again.`;
+      await writeRun(run);continue;
+    }
     if(run.kind==='ai-test'){
       run.skipNext=true;run.status='queued';run.phase='watchdog-skip';run.error=null;await writeRun(run);await enqueue({task:kind,runId:run.id},waitUntil);continue;
     }

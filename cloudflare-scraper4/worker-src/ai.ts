@@ -1,3 +1,4 @@
+import { normalizePersianText } from './utils.js';
 import { MISTRAL_MODEL_ENDPOINTS, OPENROUTER_NON_CHAT_MODELS } from './ai-catalog.js';
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
@@ -250,7 +251,7 @@ function cloudflareModelIds(raw:string):string[]{
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.72.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.73.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -336,7 +337,7 @@ function categoryRows(title:string,categories:AiCategoryOption[]){
   const words=normalizeCategoryText(title).split(' ').filter(word=>word.length>1),rows=categories.filter(row=>Number.isInteger(Number(row.id))&&Number(row.id)>0&&(row.leaf!==false||!categories.some(other=>Number(other.parentId)===Number(row.id))));
   return rows.map((row,index)=>{const name=String(row.path||row.name),normalized=normalizeCategoryText(name),score=words.reduce((sum,word)=>sum+(normalized.includes(word)?word.length+2:0),0);return{row,index,name,score}}).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,500);
 }
-function normalizeCategoryText(value:string){return String(value||'').toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim()}
+function normalizeCategoryText(value:string){return normalizePersianText(value).replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim()}
 function categoryPrompt(title:string,categories:AiCategoryOption[]){const ranked=categoryRows(title,categories),allowed:AiCategoryOption[]=[],lines:string[]=[];let length=0;for(const item of ranked){const line=`${item.row.id} | ${item.name}`;if(length+line.length+1>18_000)break;lines.push(line);allowed.push(item.row);length+=line.length+1}if(!lines.length)throw new Error('فهرست معتبر دسته‌بندی باسلام در دسترس نیست.');return{allowed,prompt:`برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}`}}
 function parseCategoryId(text:string,categories:AiCategoryOption[]){const source=String(text||''),valid=new Set(categories.map(row=>Number(row.id)));for(const candidate of [source,...[...source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map(match=>match[1])])try{const parsed=JSON.parse(candidate.trim());const id=Number(parsed?.category_id??parsed?.categoryId??parsed?.id);if(valid.has(id))return id}catch{/* response can contain prose */}for(const match of source.matchAll(/["']?category_(?:id)?["']?\s*[:=]\s*["']?(\d+)/gi)){const id=Number(match[1]);if(valid.has(id))return id}const numbers=[...source.matchAll(/\d+/g)].map(match=>Number(match[0])).filter(id=>valid.has(id));return numbers.length?numbers.at(-1)!:0}
 async function categoryWithTask(task:AiTestTask,title:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number){
