@@ -6,7 +6,7 @@ import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;detailSelectorsFilled?:boolean};
+type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean};
 type SyncCheckpoint={offset:number};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
@@ -22,13 +22,15 @@ function preserveExisting(fresh:Product,previous:Product|null):Product{
     variationPrices:Object.keys(fresh.variationPrices||{}).length?fresh.variationPrices:previous.variationPrices
   };
 }
-async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job):Promise<number>{
+const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
+function isManualListEngine(engine?:string):boolean{return !!engine&&MANUAL_LIST_ENGINES.has(engine)}
+async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job,onlyMissing=true):Promise<number>{
   try{
-    const suggested=await suggestSelectors(url,mode),selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([,value])=>String(value||'').trim());
+    const suggested=await suggestSelectors(url,mode),selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));
     if(!entries.length)return 0;
     profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];
     await saveProfile({...profile,updatedAt:new Date().toISOString()});
-    if(job)append(job,`${mode==='list'?'سلکتورهای فهرست':'سلکتورهای جزئیات'} شناسایی و در تب سلکتورها ذخیره شد: ${entries.map(([key])=>key).join(', ')}`,'info');
+    if(job)append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`,'info');
     return entries.length;
   }catch(error){if(job)append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning');return 0}
 }
@@ -84,6 +86,8 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       await saveProfile({...profile,updatedAt:new Date().toISOString()});
       append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
     }
+    checkpoint.autoSelectorsAllowed=!!(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine));
+    if(checkpoint.autoSelectorsAllowed&&!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,page.url,'list',job,true);checkpoint.listSelectorsFilled=true}
     checkpoint.url=page.url;checkpoint.nextUrl=page.nextUrl;checkpoint.index=0;
     const pageProducts=page.products.map(raw=>transformProduct(raw,profile)).filter(product=>!profile.minPrice||product.price>=profile.minPrice);
     checkpoint.products=pageProducts.filter(product=>!checkpoint.seen.includes(product.sourceKey));
@@ -97,7 +101,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     await setState(key,checkpoint);await save(job);
   }
   job.phase='details-save-sync';
-  if(!checkpoint.detailSelectorsFilled){const sample=checkpoint.products.find(p=>p.url);if(sample?.url)await applySelectorSuggestions(profile,sample.url,'detail',job);checkpoint.detailSelectorsFilled=true;await setState(key,checkpoint)}
+  if(!checkpoint.detailSelectorsFilled){const sample=checkpoint.products.find(p=>p.url);if(sample?.url&&checkpoint.autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true);checkpoint.detailSelectorsFilled=true;await setState(key,checkpoint)}
   const start=checkpoint.index,end=Math.min(checkpoint.products.length,start+chunkSize()),batch=checkpoint.products.slice(start,end),previousByKey=new Map<string,Product|null>(),rawPriceByKey=new Map<string,number>();
   await mapLimit(batch,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));

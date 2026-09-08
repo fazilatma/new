@@ -419,12 +419,14 @@ class NextLinkHandler {
 }
 type EngineResult={products:Product[];usedEngine:ExtractionEngine};
 const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
-const WORKER_AUTO_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','htmlrewriter'];
+const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
+const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter']);
+const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
-  if(requested!=='auto'){add(requested);return out}
-  if(master&&!NODE_ONLY_ENGINES.has(master))add(master);
-  for(const engine of WORKER_AUTO_ENGINES)add(engine);
+  if(master&&!NODE_ONLY_ENGINES.has(master)&&!WORKER_MANUAL_ENGINES.has(master))add(master);
+  for(const engine of WORKER_DISCOVERY_ENGINES)add(engine);
+  if(requested!=='auto')add(requested);else for(const engine of WORKER_AUTO_ENGINES)add(engine);
   return out;
 }
 

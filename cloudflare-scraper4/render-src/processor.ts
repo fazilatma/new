@@ -11,7 +11,9 @@ function append(job: Job, message: string, level = 'info'): void {
   if (job.log.length > 200) job.log = job.log.slice(-200);
 }
 async function save(job: Job): Promise<void> { const current=await getJob(job.id); if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return; if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')} await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); }
-async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job): Promise<void> { try { const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([,value])=>String(value||'').trim()); if(!entries.length)return; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveProfile({...profile,updatedAt:new Date().toISOString()}); append(job,`${mode==='list'?'سلکتورهای فهرست':'سلکتورهای جزئیات'} شناسایی و در تب سلکتورها ذخیره شد: ${entries.map(([key])=>key).join(', ')}`); } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); } }
+const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
+function isManualListEngine(engine?: string): boolean { return !!engine && MANUAL_LIST_ENGINES.has(engine); }
+async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job, onlyMissing = true): Promise<void> { try { const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim())); if(!entries.length)return; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveProfile({...profile,updatedAt:new Date().toISOString()}); append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`); } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); } }
 
 export async function processOneJob(): Promise<boolean> {
   const job = await claimJob(); if (!job) return false;
@@ -19,7 +21,7 @@ export async function processOneJob(): Promise<boolean> {
     const profile = await getProfile(job.profileId); if (!profile) throw new Error('Profile not found');
     append(job, `شروع ${job.kind === 'scrape' ? 'استخراج' : 'همگام‌سازی'} «${profile.name}»`);
     if (job.kind === 'scrape') {
-      job.phase = 'list'; await applySelectorSuggestions(profile,profile.url,'list',job); await save(job); const found = new Map<string, Product>();
+      job.phase = 'list'; await save(job); const found = new Map<string, Product>(); let autoSelectorsAllowed=false;
       for (let page = 1; page <= profile.pages; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
@@ -32,12 +34,13 @@ export async function processOneJob(): Promise<boolean> {
           await saveProfile({...profile, updatedAt: new Date().toISOString()});
           append(job, `موتور مستر این پروفایل: ${scraped.usedEngine}${scraped.elapsedMs ? ` · ${scraped.elapsedMs}ms` : ''}`);
         }
+        if (scraped.usedEngine && list.length && !isManualListEngine(scraped.usedEngine)) { autoSelectorsAllowed=true; await applySelectorSuggestions(profile,url,'list',job,true); }
         if (!list.length) { append(job, 'محصولی پیدا نشد', 'warning'); break; }
         for (const raw of list) { const p = transformProduct(raw, profile); if (!profile.minPrice || p.price >= profile.minPrice) found.set(p.sourceKey, p); }
         job.total = found.size; job.processed += list.length; await save(job);
       }
       if (job.status !== 'stopped') {
-        job.phase = 'details'; const products = [...found.values()]; const sample=products.find(p=>p.url); if(sample?.url)await applySelectorSuggestions(profile,sample.url,'detail',job); await save(job);
+        job.phase = 'details'; const products = [...found.values()]; const sample=products.find(p=>p.url); if(sample?.url&&autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true); await save(job);
         await mapLimit(products, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
           if (await stopRequested(job.id)) return;
           try { await scrapeDetails(product, profile.selectors); }
