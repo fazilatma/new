@@ -8,8 +8,8 @@ import {build} from 'esbuild';
 import {load} from 'cheerio';
 
 const temporary=await mkdtemp(join(tmpdir(),'scraper4-extraction-'));
-await build({entryPoints:{scraper:new URL('../worker-src/scraper.ts',import.meta.url).pathname,network:new URL('../worker-src/network.ts',import.meta.url).pathname,app:new URL('../worker-src/app.ts',import.meta.url).pathname,catalog:new URL('../worker-src/ai-catalog.ts',import.meta.url).pathname},bundle:true,format:'esm',platform:'browser',target:'es2022',outdir:temporary,entryNames:'[name]',outExtension:{'.js':'.mjs'}});
-const scraper=await import(pathToFileURL(join(temporary,'scraper.mjs'))),network=await import(pathToFileURL(join(temporary,'network.mjs'))),app=await import(pathToFileURL(join(temporary,'app.mjs'))),catalog=await import(pathToFileURL(join(temporary,'catalog.mjs')));
+await build({entryPoints:{scraper:new URL('../worker-src/scraper.ts',import.meta.url).pathname,network:new URL('../worker-src/network.ts',import.meta.url).pathname,env:new URL('../worker-src/env.ts',import.meta.url).pathname,app:new URL('../worker-src/app.ts',import.meta.url).pathname,catalog:new URL('../worker-src/ai-catalog.ts',import.meta.url).pathname},bundle:true,splitting:true,format:'esm',platform:'browser',target:'es2022',outdir:temporary,entryNames:'[name]',outExtension:{'.js':'.mjs'}});
+const scraper=await import(pathToFileURL(join(temporary,'scraper.mjs'))),network=await import(pathToFileURL(join(temporary,'network.mjs'))),env=await import(pathToFileURL(join(temporary,'env.mjs'))),app=await import(pathToFileURL(join(temporary,'app.mjs'))),catalog=await import(pathToFileURL(join(temporary,'catalog.mjs')));
 const HTML_VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
 
 class CheerioHTMLRewriter {
@@ -104,6 +104,19 @@ test('heuristic auto extraction accepts only real product-card candidates with t
     </main>`;
   const products=await scraper.extractHeuristicProducts(html,'https://example.test/search/shirts');
   assert.equal(products.length,1);assert.equal(products[0].title,'Real Shirt');assert.equal(products[0].image,'https://example.test/shirt.jpg');assert.equal(products[0].price,25);
+});
+
+test('main extraction reaches the selected speed-test engine after earlier discovery engines are empty',async()=>{
+  const html=`<main><article class="card"><a href="/product/bench-winner"><img src="/winner.jpg" alt="Benchmark Winner"><h2>Benchmark Winner</h2><span>$42.00 USD</span></a></article></main>`;
+  const previousFetch=globalThis.fetch;
+  env.configureEnv({DB:{prepare(){return {bind(){return this},first:async()=>null,all:async()=>({success:true,results:[]}),run:async()=>({success:true,meta:{}})}},batch:async()=>[],exec:async()=>({count:0,duration:0})}});
+  globalThis.fetch=async()=>new Response(html,{headers:{'content-type':'text/html'}});
+  try{
+    const result=await scraper.scrapeListPage('https://example.test/search',{},'',false,'heuristic');
+    assert.equal(result.usedEngine,'heuristic');
+    assert.equal(result.products.length,1);
+    assert.equal(result.products[0].title,'Benchmark Winner');
+  }finally{globalThis.fetch=previousFetch}
 });
 
 test('metadata extraction rejects category page metadata that would turn the whole page into one product',async()=>{

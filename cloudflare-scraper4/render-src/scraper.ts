@@ -80,9 +80,10 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
-      if(products.length||engine!=='auto')return{products,usedEngine:name,elapsedMs:Date.now()-started};
+      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started};
+      if(engine!=='auto'&&name===engine)return{products,usedEngine:name,elapsedMs:Date.now()-started};
     }catch(error){
-      if(engine!=='auto')throw error;
+      if(engine!=='auto'&&name===engine)throw error;
     }
   }
   return{products:[],usedEngine:engine,elapsedMs:Date.now()-started};

@@ -452,7 +452,8 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
   };
   for(const name of engineOrder(engine,master,autoFirst)){
     const products=dedupeProducts(await tryOne(name));
-    if(products.length||engine!=='auto')return{products,usedEngine:name};
+    if(products.length)return{products,usedEngine:name};
+    if(engine!=='auto'&&name===engine)return{products,usedEngine:name};
   }
   return{products:[],usedEngine:engine};
 }
