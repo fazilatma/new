@@ -29,13 +29,13 @@
  *   cd cloudflare-scraper4
  *   npm install --ignore-scripts --no-audit --prefer-online
  *   grep version package.json | head -1
- *   # Expected: 1.65.0
+ *   # Expected: 1.66.0
  *
  * Cloudflare Worker update from Dashboard:
  *   1) Push/pull this branch: arena/01a0765b-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
- *   4) Open /health and verify version is 1.65.0.
+ *   4) Open /health and verify version is 1.66.0.
  *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4
