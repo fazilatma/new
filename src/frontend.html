@@ -159,14 +159,24 @@ tailwind.config = {
       <div class="grid lg:grid-cols-3 gap-4 mb-4">
         <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
           <div class="flex items-center justify-between mb-2">
-            <h3 class="font-black text-sm">📈 روند فروش و سود</h3>
+            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها</h3>
             <div class="flex gap-1 text-xs" id="trend-grp"></div>
           </div>
-          <div class="chart-box tall"><canvas id="ch-trend"></canvas></div>
+          <div class="chart-box tall"><canvas id="ch-cnt"></canvas></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">🧭 سهم منابع فروش</h3>
           <div class="chart-box"><canvas id="ch-source"></canvas></div>
+        </div>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-4 mb-4">
+        <div class="glass card card-hover p-4 anim anim-1">
+          <h3 class="font-black text-sm mb-2">💰 روند حجم فروش</h3>
+          <div class="chart-box tall"><canvas id="ch-vol"></canvas></div>
+        </div>
+        <div class="glass card card-hover p-4 anim anim-2">
+          <h3 class="font-black text-sm mb-2">✅ روند سود</h3>
+          <div class="chart-box tall"><canvas id="ch-pft"></canvas></div>
         </div>
       </div>
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
@@ -381,7 +391,7 @@ tailwind.config = {
         <div class="glass card p-5 anim anim-1">
           <div class="flex items-center gap-2 mb-1">
             <h3 class="font-black">🛍 غرفه‌های باسلام</h3>
-            <div class="mr-auto flex items-center gap-1 text-xs">سینک <input id="bas-days" type="number" value="30" min="1" max="365" class="inp !w-16 !py-1 num"> روز اخیر</div>
+            <div class="mr-auto flex items-center gap-1 text-xs">سینک <select id="bas-days" class="inp !w-28 !py-1 text-xs"><option value="7">۷ روز اخیر</option><option value="30" selected>۳۰ روز اخیر</option><option value="90">۹۰ روز اخیر</option><option value="365">۱ سال اخیر</option><option value="all">🌍 همه سفارش‌ها</option></select></div>
           </div>
           <div class="text-[11px] text-slate-500 dark:text-slate-400 mb-3 leading-5">توکن را از <a class="text-indigo-500 font-bold" href="https://developers.basalam.com/panel/tokens" target="_blank">پنل توسعه‌دهندگان باسلام ↗</a> بسازید — دسترسی <code dir="ltr" class="num">vendor.parcel.read</code> لازم است.</div>
           <div id="bas-conns" class="flex flex-col gap-2 mb-3"></div>
@@ -407,7 +417,7 @@ tailwind.config = {
         <div class="glass card p-5 anim anim-2">
           <div class="flex items-center gap-2 mb-1">
             <h3 class="font-black">🌐 سایت ووکامرس</h3>
-            <div class="mr-auto flex items-center gap-1 text-xs">سینک <input id="woo-days" type="number" value="30" min="1" max="365" class="inp !w-16 !py-1 num"> روز اخیر</div>
+            <div class="mr-auto flex items-center gap-1 text-xs">سینک <select id="woo-days" class="inp !w-28 !py-1 text-xs"><option value="7">۷ روز اخیر</option><option value="30" selected>۳۰ روز اخیر</option><option value="90">۹۰ روز اخیر</option><option value="365">۱ سال اخیر</option><option value="all">🌍 همه سفارش‌ها</option></select></div>
           </div>
           <div class="text-[11px] text-slate-500 dark:text-slate-400 mb-3 leading-5">از پیشخوان وردپرس: <b>ووکامرس ← تنظیمات ← پیشرفته ← REST API</b> یک کلید با دسترسی <b>خواندن (Read)</b> بسازید.</div>
           <div id="woo-conns" class="flex flex-col gap-2 mb-3"></div>
@@ -509,7 +519,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.3.0';
+const APP_VER = '1.4.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1027,11 +1037,21 @@ function renderDashboard() {
   $('#trend-grp').innerHTML = groups.map(([g, t]) =>
     `<button onclick="state.trendGroup='${g}';renderDashboard()" class="btn !py-1 !px-2 !text-[11px] ${state.trendGroup === g ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
   const series = groupSeries(list, state.trendGroup, incR);
-  mkChart('ch-trend', { type: 'bar',
-    data: { labels: series.map((r) => r.label), datasets: [
-      { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.75)', borderRadius: 6 },
-      { label: 'سود', data: series.map((r) => r.profit), backgroundColor: series.map((r) => r.profit >= 0 ? 'rgba(16,185,129,.8)' : 'rgba(244,63,94,.8)'), borderRadius: 6 },
-    ]}, options: chartBase() });
+  const sLab = series.map((r) => r.label);
+  const lineDS = (label, data, color, fill, pts) => ({ label, data, borderColor: color, backgroundColor: fill,
+    fill: true, tension: .4, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6,
+    pointBackgroundColor: pts || color, pointBorderColor: '#fff', pointBorderWidth: 1.5 });
+  const noLeg = (tip) => ({ legend: { display: false }, tooltip: { rtl: true, textDirection: 'rtl', padding: 10, callbacks: { label: tip } } });
+  mkChart('ch-cnt', { type: 'line',
+    data: { labels: sLab, datasets: [lineDS('تعداد سفارش', series.map((r) => r.count), '#6366f1', 'rgba(99,102,241,.15)')] },
+    options: chartBase({ plugins: noLeg((c) => ` ${fmtN(c.parsed.y)} سفارش`) }) });
+  mkChart('ch-vol', { type: 'line',
+    data: { labels: sLab, datasets: [lineDS('حجم فروش', series.map((r) => r.revenue), '#0ea5e9', 'rgba(14,165,233,.15)')] },
+    options: chartBase({ plugins: noLeg((c) => ` ${fmtMoney(c.parsed.y)}`) }) });
+  mkChart('ch-pft', { type: 'line',
+    data: { labels: sLab, datasets: [lineDS('سود', series.map((r) => r.profit), '#10b981', 'rgba(16,185,129,.15)',
+      series.map((r) => r.profit >= 0 ? '#10b981' : '#f43f5e'))] },
+    options: chartBase({ plugins: noLeg((c) => ` ${fmtMoney(c.parsed.y)}`) }) });
 
   /* منابع */
   const bySrc = ['basalam', 'website'].map((src) => ({ src, ...summarize(list.filter((o) => o.source === src), incR) }));
@@ -1823,7 +1843,7 @@ async function syncInteg(id) {
   const c = state.integrations.find((x) => String(x.id) === String(id));
   if (!c) return;
   const btn = document.getElementById('sync-' + id), box = document.getElementById('sync-res-' + id);
-  const days = c.type === 'basalam' ? (+$('#bas-days').value || 30) : (+$('#woo-days').value || 30);
+  const days = c.type === 'basalam' ? ($('#bas-days').value === 'all' ? 'all' : (+$('#bas-days').value || 30)) : ($('#woo-days').value === 'all' ? 'all' : (+$('#woo-days').value || 30));
   btn.disabled = true; btn.textContent = '⏳ در حال سینک…';
   try {
     const r = await Store.syncIntegration(id, days);
@@ -1851,7 +1871,7 @@ async function syncAll() {
   for (const c of state.integrations) {
     btn.textContent = `⏳ سینک ${c.name || ''}…`;
     try {
-      const days = c.type === 'basalam' ? (+$('#bas-days').value || 30) : (+$('#woo-days').value || 30);
+      const days = c.type === 'basalam' ? ($('#bas-days').value === 'all' ? 'all' : (+$('#bas-days').value || 30)) : ($('#woo-days').value === 'all' ? 'all' : (+$('#woo-days').value || 30));
       const r = await Store.syncIntegration(c.id, days);
       if (r.ok) {
         totalNew += r.imported || 0; totalUpd += r.updated || 0;

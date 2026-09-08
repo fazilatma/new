@@ -406,12 +406,13 @@ async function testIntegration(body) {
 
 /* ─── سینک سفارش‌ها ─── */
 async function syncBasalam(store, integ, opts = {}) {
-  const days = Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
-  const cutoff = Date.now() - days * 864e5;
-  let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0;
+  const wantAll = opts.days === 'all' || Number(opts.days) === 0;
+  const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
+  const cutoff = wantAll ? 0 : Date.now() - days * 864e5;
+  let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0, perPage = 50;
   const errors = [];
-  for (let page = 0; page < 6; page++) {
-    const params = { per_page: 10, sort: 'estimate_send_at:desc' }; // عین پیش‌فرض SDK باسلام (تعداد بیشتر ۴۲۲ می‌دهد)
+  for (let page = 0; page < 20; page++) {
+    const params = { per_page: perPage, sort: 'estimate_send_at:desc' };
     if (cursor) params.cursor = cursor;
     // نکته: فیلتر items.vendor_ids عمداً ارسال نمی‌شود — باسلام به توکن غرفه برای آن 403 می‌دهد
     // و توکن غرفه به‌هرحال فقط مرسوله‌های خودش را می‌بیند.
@@ -419,8 +420,12 @@ async function syncBasalam(store, integ, opts = {}) {
     try {
       res = await basalamGet(integ.token, '/v1/vendor-parcels', params);
     } catch (e) {
-      errors.push(e.message);
-      break;
+      if (page === 0 && !cursor && perPage !== 10 && e && e.status === 422) {
+        perPage = 10; // ۵۰ پذیرفته نشد → تلاش مجدد با پیش‌فرض SDK
+        try {
+          res = await basalamGet(integ.token, '/v1/vendor-parcels', { ...params, per_page: 10 });
+        } catch (e2) { errors.push(e2.message); break; }
+      } else { errors.push(e.message); break; }
     }
     const items = Array.isArray(res) ? res : (res.data || res.parcels || res.items || res.results || []);
     if (!items.length) break;
@@ -444,11 +449,12 @@ async function syncBasalam(store, integ, opts = {}) {
 }
 
 async function syncWoo(store, integ, opts = {}) {
-  const days = Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
-  const after = new Date(Date.now() - days * 864e5).toISOString();
+  const wantAll = opts.days === 'all' || Number(opts.days) === 0;
+  const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
+  const after = wantAll ? undefined : new Date(Date.now() - days * 864e5).toISOString();
   let imported = 0, updated = 0, skipped = 0, page = 1;
   const errors = [];
-  for (page = 1; page <= 6; page++) {
+  for (page = 1; page <= 20; page++) {
     let items;
     try {
       const res = await wooGet(integ.store_url, integ.consumer_key, integ.consumer_secret, '/orders',
