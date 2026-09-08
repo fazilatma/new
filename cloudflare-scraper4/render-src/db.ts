@@ -186,11 +186,12 @@ export async function deleteProfile(id: string): Promise<boolean> {
   return Boolean(result.rowCount);
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], options: { forceNew?: boolean } = {}): Promise<Job> {
-  const active=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND kind=$2 AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId,kind]);
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean } = {}): Promise<Job> {
+  const settings=await getState<any>('settings',{}),staleMin=Math.max(1,Number(settings?.general?.queueDedupStale)||120);
+  const active=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]);
   if(active.rows[0]){
-    const job=jobFromRow(active.rows[0]);
-    if(options.forceNew) await updateJob(job.id,{status:'failed',phase:'replaced-by-new-run',error:'Previous active job was replaced so the new extraction can start.',finishedAt:new Date().toISOString(),stopRequested:true});
+    const job=jobFromRow(active.rows[0]),age=Date.now()-new Date(job.updatedAt).getTime();
+    if(age>=staleMin*60_000) await updateJob(job.id,{status:'failed',phase:'stale-replaced',error:'Previous active job for this profile was stale and was replaced.',finishedAt:new Date().toISOString(),stopRequested:true});
     else return job;
   }
   const id = crypto.randomUUID();

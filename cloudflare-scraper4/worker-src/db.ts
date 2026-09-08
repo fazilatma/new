@@ -80,19 +80,18 @@ export async function deleteProfile(id: string): Promise<boolean> {
   ]); return true;
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], options: { forceNew?: boolean } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean } = {}): Promise<Job> {
   const settings = await getState<any>('settings', {}), dedup = settings?.general?.queueDedup !== false;
-  const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId,kind]).first();
+  const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
   if (active && dedup) {
     const job = jobFromRow(active), staleMin = Math.max(1, Number(settings?.general?.queueDedupStale) || 120), age = Date.now() - new Date(job.updatedAt).getTime();
-    if (options.forceNew) await updateJob(job.id, {status:'failed', phase:'replaced-by-new-run', error:'کار قبلی با درخواست اجرای تازه بسته شد تا استخراج جدید واقعاً شروع شود.', finishedAt: now(), stopRequested:true});
-    else if (job.status === 'queued' && age >= staleMin * 60_000) await updateJob(job.id, {status:'failed', phase:'stale-replaced', error:'کار قبلی به‌خاطر ماندن بیش از حد در صف بسته شد تا کار تازه جایگزین شود.', finishedAt: now()});
+    if (age >= staleMin * 60_000) await updateJob(job.id, {status:'failed', phase:'stale-replaced', error:'کار قبلی همین پروفایل به‌خاطر گیرکردن طولانی بسته شد تا کار تازه جایگزین شود.', finishedAt: now(), stopRequested:true});
     else return job;
   }
   const id=crypto.randomUUID(),timestamp=now();
   try { await run('INSERT INTO jobs(id,profile_id,kind,target,created_at,updated_at) VALUES(?,?,?,?,?,?)',[id,profileId,kind,target,timestamp,timestamp]); }
   catch (error) {
-    const concurrent=await statement("SELECT * FROM jobs WHERE profile_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId,kind]).first();
+    const concurrent=await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
     if (concurrent) return jobFromRow(concurrent); throw error;
   }
   return (await getJob(id))!;

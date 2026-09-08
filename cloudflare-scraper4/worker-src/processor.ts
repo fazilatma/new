@@ -1,12 +1,12 @@
 import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
-import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, transformProduct } from './scraper.js';
+import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean};
+type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;detailSelectorsFilled?:boolean};
 type SyncCheckpoint={offset:number};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
@@ -21,6 +21,16 @@ function preserveExisting(fresh:Product,previous:Product|null):Product{
     variations:fresh.variations?.length?fresh.variations:previous.variations,variationGroups:fresh.variationGroups?.length?fresh.variationGroups:previous.variationGroups,
     variationPrices:Object.keys(fresh.variationPrices||{}).length?fresh.variationPrices:previous.variationPrices
   };
+}
+async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job):Promise<number>{
+  try{
+    const suggested=await suggestSelectors(url,mode),selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([,value])=>String(value||'').trim());
+    if(!entries.length)return 0;
+    profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];
+    await saveProfile({...profile,updatedAt:new Date().toISOString()});
+    if(job)append(job,`${mode==='list'?'سلکتورهای فهرست':'سلکتورهای جزئیات'} شناسایی و در تب سلکتورها ذخیره شد: ${entries.map(([key])=>key).join(', ')}`,'info');
+    return entries.length;
+  }catch(error){if(job)append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning');return 0}
 }
 type JobLog=Job['log'][number];
 function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,...extra}}
@@ -66,6 +76,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   if(await stopRequested(job.id)){job.status='stopped';return false}
   if(!checkpoint.products){
     job.phase='list';
+    if(!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,checkpoint.url,'list',job);checkpoint.listSelectorsFilled=true}
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
     const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
     if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
@@ -86,6 +97,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     await setState(key,checkpoint);await save(job);
   }
   job.phase='details-save-sync';
+  if(!checkpoint.detailSelectorsFilled){const sample=checkpoint.products.find(p=>p.url);if(sample?.url)await applySelectorSuggestions(profile,sample.url,'detail',job);checkpoint.detailSelectorsFilled=true;await setState(key,checkpoint)}
   const start=checkpoint.index,end=Math.min(checkpoint.products.length,start+chunkSize()),batch=checkpoint.products.slice(start,end),previousByKey=new Map<string,Product|null>(),rawPriceByKey=new Map<string,number>();
   await mapLimit(batch,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));

@@ -17,13 +17,13 @@ import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, retire } from './maintenance.js';
-import { mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, testSelector, transformProduct } from './scraper.js';
+import { mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.59.0'; } catch { return process.env.npm_package_version || '1.59.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.60.0'; } catch { return process.env.npm_package_version || '1.60.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -245,16 +245,16 @@ app.delete('/api/profiles/:id', async c => c.json({ ok: await deleteProfile(c.re
 app.post('/api/profiles/:id/scrape', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any; const target = validTarget(body.target || 'none');
-  const job=await createJob(profile.id, 'scrape', target, { forceNew: body.forceNew !== false });
-  triggerLocalJobDrain();
-  return c.json({ ok: true, job, processor:'triggered' }, 202);
+  const job=await createJob(profile.id, 'scrape', target);
+  if(job.kind==='scrape'&&job.status==='queued')triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor:job.kind==='scrape'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 app.post('/api/profiles/:id/sync', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any;
-  const job=await createJob(profile.id, 'sync', validTarget(body.target || 'both'), { forceNew: body.forceNew === true });
-  triggerLocalJobDrain();
-  return c.json({ ok: true, job, processor:'triggered' }, 202);
+  const job=await createJob(profile.id, 'sync', validTarget(body.target || 'both'));
+  if(job.kind==='sync'&&job.status==='queued')triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor:job.kind==='sync'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id')));
@@ -325,20 +325,22 @@ function legacyProducts(raw: unknown): Product[] {
   return entries.filter(([,p])=>p&&p.title).map(([key,p])=>{const images=Array.isArray(p.images)?p.images.filter((x:unknown)=>typeof x==='string'&&!String(x).startsWith('data:')):[];const image=String(p.image||images[0]||'');if(image&&!images.includes(image)&&!image.startsWith('data:'))images.unshift(image);return{sourceKey:key,title:String(p.title),price:numberFromText(String(p.finalPrice??p.price??0)),priceText:String(p.priceText??p.price??''),url:String(p.url||p.link||''),image:image.startsWith('data:')?'':image,images,shortDesc:String(p.shortDesc||''),longDesc:String(p.longDesc||''),sku:String(p.sku||''),brand:String(p.brand||''),stock:p.stock==null?undefined:Number(p.stock),weight:p.weight==null?undefined:Number(p.weight),category:String(p.category||''),sourcePage:String(p.sourcePage||''),scrapedAt:new Date().toISOString()}});
 }
 
+async function applyInlineSelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',errors:string[]){try{const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([,value])=>String(value||'').trim());if(entries.length){profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];await saveProfile({...profile,updatedAt:new Date().toISOString()});return suggested}}catch(error){errors.push(`selectors ${mode}: ${error instanceof Error?error.message:String(error)}`)}return null}
 async function runProfileApi(c:any,id:string){
   const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);
   const body=await c.req.json().catch(()=>({})) as any,target=validTarget(body.target||(body.sync?'both':'none')),persist=body.persist!==false,withDetails=body.details!==false,extract=body.extract!==false&&!Boolean((profile as any).noExtract);
   const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(2000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||1000));
-  const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0;
+  const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0,listSelectorUpdate:any=null,detailSelectorUpdate:any=null;
   if(extract){
+    listSelectorUpdate=await applyInlineSelectorSuggestions(profile,profile.url,'list',errors);
     for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,profile.extractionEngine,profile.extractionEngineMaster);pagesScanned++;usedEngine=scraped.usedEngine||usedEngine;engineMs+=scraped.elapsedMs||0;if(scraped.usedEngine&&scraped.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==scraped.usedEngine)){profile.extractionEngineMaster=scraped.usedEngine;profile.extractionEngineHost=new URL(pageUrl(profile,pageNo)).hostname;profile.extractionEngineMs=scraped.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}const before=products.length;for(const raw of scraped.products){const product=transformProduct(raw,profile);if((profile.minPrice&&product.price<profile.minPrice)||seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}if(products.length===before){if(pageNo===1)throw new Error('در صفحهٔ اول هیچ محصول تازه‌ای استخراج نشد؛ این اجرا موفقِ صفرمحصول محسوب نمی‌شود. سلکتورها، موتور استخراج و محدودیت دسترسی/ضدربات سایت را بررسی کنید.');break}}catch(error){errors.push(`page ${pageNo}: ${error instanceof Error?error.message:String(error)}`);if(pageNo===1)break}
     if(!products.length&&errors.length)throw new Error(errors[0]);
-    if(withDetails&&products.length)await mapLimit(products,Math.min(4,Math.max(1,Number(process.env.DETAIL_CONCURRENCY||2))),async product=>{try{Object.assign(product,await scrapeDetails(product,profile.selectors))}catch(error){errors.push(`${product.title}: details: ${error instanceof Error?error.message:String(error)}`)}});
+    if(withDetails&&products.length){const sample=products.find(p=>p.url);if(sample?.url)detailSelectorUpdate=await applyInlineSelectorSuggestions(profile,sample.url,'detail',errors);await mapLimit(products,Math.min(4,Math.max(1,Number(process.env.DETAIL_CONCURRENCY||2))),async product=>{try{Object.assign(product,await scrapeDetails(product,profile.selectors))}catch(error){errors.push(`${product.title}: details: ${error instanceof Error?error.message:String(error)}`)}});}
     if(persist)for(const product of products)try{(await upsertProduct(profile.id,product))==='added'?added++:updated++}catch(error){errors.push(`${product.title}: save: ${error instanceof Error?error.message:String(error)}`)}
     if(persist)await markProfileRun(profile.id);
   }else products.push(...(await listProducts(profile.id,limit,0,String(body.q||''))).products);
   if(target!=='none')for(const product of products)try{if(target==='woo'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'woo',action:await syncWoo(product,profile)});if(target==='basalam'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'basalam',results:await syncBasalam(product,profile)})}catch(error){errors.push(`${product.title}: sync: ${error instanceof Error?error.message:String(error)}`)}
-  return c.json({ok:errors.length===0,mode:'inline-api',profileId:profile.id,target,engine:{requested:profile.extractionEngine,master:profile.extractionEngineMaster,used:usedEngine||profile.extractionEngineMaster||profile.extractionEngine,elapsedMs:engineMs,pagesScanned},summary:{total:products.length,added,updated,synced:syncResults.length,failed:errors.length,persisted:persist,details:withDetails},products,syncResults,errors},errors.length?207:200);
+  return c.json({ok:errors.length===0,mode:'inline-api',profileId:profile.id,target,engine:{requested:profile.extractionEngine,master:profile.extractionEngineMaster,used:usedEngine||profile.extractionEngineMaster||profile.extractionEngine,elapsedMs:engineMs,pagesScanned},summary:{total:products.length,added,updated,synced:syncResults.length,failed:errors.length,persisted:persist,details:withDetails},products,syncResults,errors,selectors:{list:listSelectorUpdate?.selectors||{},detail:detailSelectorUpdate?.selectors||{}}},errors.length?207:200);
 }
 function normalizeProfile(raw: any): Profile {
   const url = new URL(String(raw.url || '').replace(/&amp;/g, '&')); if (!['http:','https:'].includes(url.protocol)) throw new Error('Invalid profile URL');
