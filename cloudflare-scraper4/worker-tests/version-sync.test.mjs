@@ -128,6 +128,16 @@ test('intrusive confirmation popups are gone from safe/local actions', async () 
     'اجرای فعلی ایجنتیک پاک شود؟'
   ]) assert.ok(!dashboard.includes(`confirm('${gone}'`), `local action should not prompt: ${gone}`);
 
+  // Starting a job is safe and reversible: it reports through the non-blocking
+  // toast, not a modal the user has to dismiss before seeing the job list.
+  assert.ok(!dashboard.includes("openResultModal(source==='backend'"),
+    'starting an extraction must not open a blocking result modal');
+  assert.match(dashboard, /notice\(source==='backend'/,
+    'starting an extraction reports through the non-blocking notice toast');
+  // Failures are still worth interrupting for.
+  assert.ok(dashboard.includes('شروع استخراج ناموفق بود'),
+    'a failed extraction start must still surface a modal');
+
   // Genuinely destructive/irreversible remote operations must still confirm.
   for (const kept of [
     'پروفایل و محصولات آن حذف شود؟',
