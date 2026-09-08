@@ -167,6 +167,17 @@ class UpstreamError extends Error {
   }
 }
 
+/* خلاصه خطاهای اعتبارسنجی لاراول: {field: [msg]} */
+function detailErrors(errors) {
+  if (!errors || typeof errors !== 'object') return '';
+  const parts = [];
+  for (const [f, v] of Object.entries(errors).slice(0, 4)) {
+    const m = Array.isArray(v) ? v[0] : v;
+    parts.push(`${f}: ${String(m).slice(0, 120)}`);
+  }
+  return parts.join('؛ ').slice(0, 400);
+}
+
 async function fetchJSON(url, options = {}, label = 'upstream') {
   let r;
   try {
@@ -178,7 +189,9 @@ async function fetchJSON(url, options = {}, label = 'upstream') {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
   if (!r.ok) {
-    const msg = (data && (data.message || data.error || (data.code && `${data.code}`))) || text.slice(0, 300) || `HTTP ${r.status}`;
+    let msg = (data && (data.message || data.error || (data.code && `${data.code}`))) || text.slice(0, 300) || `HTTP ${r.status}`;
+    const det = detailErrors(data && data.errors);
+    if (det) msg += ` — ${det}`;
     throw new UpstreamError(`${label}: ${msg}`, r.status);
   }
   return { data, headers: r.headers };
@@ -389,7 +402,7 @@ async function syncBasalam(store, integ, opts = {}) {
   let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0;
   const errors = [];
   for (let page = 0; page < 6; page++) {
-    const params = { per_page: 50, sort: 'created_at:desc' };
+    const params = { per_page: 50, sort: 'estimate_send_at:desc' }; // عین پیش‌فرض SDK باسلام برای vendor-parcels
     if (cursor) params.cursor = cursor;
     if (integ.vendor_id) params['items.vendor_ids'] = String(integ.vendor_id);
     let res;
