@@ -165,7 +165,8 @@ tailwind.config = {
         <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
           <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
             <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(درگ/اسکرول افقی • کلیک راهنما: خاموش/روشن خط)</span></h3>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 flex-wrap">
+              <select id="trend-ch" class="inp !py-1 !px-2 !text-[11px] !w-auto" onchange="state.trendCh=this.value;renderDashboard()"></select>
               <div class="flex gap-1 text-xs" id="trend-rng"></div>
               <div class="flex gap-1 text-xs" id="trend-grp"></div>
             </div>
@@ -180,12 +181,12 @@ tailwind.config = {
       </div>
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
         <div class="glass card card-hover p-4 anim anim-1">
-          <h3 class="font-black text-sm mb-2">💰 روند حجم فروش</h3>
+          <h3 class="font-black text-sm mb-2">💰 روند حجم فروش <span class="trend-ch-lab text-[11px] font-normal text-slate-400"></span></h3>
           <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-vol-w" class="chart-box tall"><canvas id="ch-vol"></canvas></div></div>
           <div id="ch-vol-leg" class="flex flex-wrap items-center justify-center gap-1.5 mt-2 text-[11px]"></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
-          <h3 class="font-black text-sm mb-2">✅ روند سود</h3>
+          <h3 class="font-black text-sm mb-2">✅ روند سود <span class="trend-ch-lab text-[11px] font-normal text-slate-400"></span></h3>
           <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-pft-w" class="chart-box tall"><canvas id="ch-pft"></canvas></div></div>
           <div id="ch-pft-leg" class="flex flex-wrap items-center justify-center gap-1.5 mt-2 text-[11px]"></div>
         </div>
@@ -531,7 +532,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.6.1';
+const APP_VER = '1.7.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -679,7 +680,7 @@ const Store = {
 /* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
 const state = {
   orders: [], booths: [], suppliers: [], integrations: [], settings: {},
-  range: 'month', customFrom: null, customTo: null, trendGroup: 'weekly', trendRange: '365',
+  range: 'month', customFrom: null, customTo: null, trendGroup: 'weekly', trendRange: '365', trendCh: 'all',
 };
 const N = (v) => Number(v) || 0;
 
@@ -1107,8 +1108,19 @@ function renderDashboard() {
   const TRNG = [['90', '۳ ماهه'], ['180', '۶ ماهه'], ['365', '۱ ساله'], ['all', '🌍 همه']];
   $('#trend-rng').innerHTML = TRNG.map(([v, t]) =>
     `<button onclick="setTrendRange('${v}')" class="btn !py-1 !px-2 !text-[11px] ${state.trendRange === v ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
+  const chOpts = [['all', '🌍 تجمعی'], ['web', '🛒 سایت فروشگاهی'],
+    ...state.booths.map((b) => ['booth:' + b.id, '🏪 ' + b.name])];
+  if (state.orders.some((o) => String(o.booth_id || '') === '' && o.source !== 'website')) chOpts.push(['other', '✍️ دستی / سایر']);
+  if (!chOpts.some(([v]) => v === state.trendCh)) state.trendCh = 'all';
+  $('#trend-ch').innerHTML = chOpts.map(([v, t]) => `<option value="${v}"${state.trendCh === v ? ' selected' : ''}>${esc(t)}</option>`).join('');
+  const chName = (chOpts.find(([v]) => v === state.trendCh) || chOpts[0])[1];
+  document.querySelectorAll('.trend-ch-lab').forEach((el) => el.textContent = '• ' + chName);
   const tcut = state.trendRange === 'all' ? '' : isoDaysAgo(+state.trendRange);
-  const tlist = state.orders.filter((o) => !tcut || (o.order_date || '') >= tcut);
+  const matchCh = (o) => state.trendCh === 'all' ? true
+    : state.trendCh === 'web' ? (o.source === 'website' && String(o.booth_id || '') === '')
+    : state.trendCh === 'other' ? (String(o.booth_id || '') === '' && o.source !== 'website')
+    : String(o.booth_id) === state.trendCh.slice(6);
+  const tlist = state.orders.filter((o) => (!tcut || (o.order_date || '') >= tcut) && matchCh(o));
   const series = groupStatusSeries(tlist, state.trendGroup, incR);
   const sLab = series.map((r) => r.label);
   const wide = Math.min(Math.max(sLab.length, 1) * 56, 6000) + 'px';

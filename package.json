@@ -1,6 +1,6 @@
 {
   "name": "hesabdar-foroosh",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "private": true,
   "description": "برنامه حسابداری حرفه‌ای فروش واسطه‌ای (باسلام + سایت فروشگاهی) روی Cloudflare Workers",
   "scripts": {
