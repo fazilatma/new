@@ -60,7 +60,19 @@ tailwind.config = {
   .dark table.tbl thead th { color: #9ca3af; background: rgba(17,24,39,.95); }
   table.tbl tbody td { padding: .7rem .8rem; border-top: 1px solid rgba(148,163,184,.18); white-space: nowrap; }
   table.tbl tbody tr { transition: background .15s; }
-  table.tbl tbody tr:hover { background: rgba(99,102,241,.06); }
+  table.tbl tbody tr:hover { background: rgba(99,102,241,.06); filter: brightness(.97); }
+  /* رنگ‌بندی ردیف سفارش بر اساس وضعیت و ثبت هزینه */
+  table.tbl tbody tr.row-cancelled td, .lg-cancelled { background: rgba(244,63,94,.12); }
+  table.tbl tbody tr.row-returned td, .lg-returned { background: rgba(249,115,22,.13); }
+  table.tbl tbody tr.row-nocost td, .lg-nocost { background: rgba(245,158,11,.14); }
+  table.tbl tbody tr.row-ok td, .lg-ok { background: rgba(16,185,129,.10); }
+  table.tbl tbody tr.row-pending td, .lg-pending { background: rgba(139,92,246,.08); }
+  .dark table.tbl tbody tr.row-cancelled td, .dark .lg-cancelled { background: rgba(244,63,94,.20); }
+  .dark table.tbl tbody tr.row-returned td, .dark .lg-returned { background: rgba(249,115,22,.21); }
+  .dark table.tbl tbody tr.row-nocost td, .dark .lg-nocost { background: rgba(245,158,11,.22); }
+  .dark table.tbl tbody tr.row-ok td, .dark .lg-ok { background: rgba(16,185,129,.16); }
+  .dark table.tbl tbody tr.row-pending td, .dark .lg-pending { background: rgba(139,92,246,.14); }
+  .lg { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-weight: 700; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(4px); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem; }
   .modal-box { max-height: 92vh; overflow-y: auto; width: 100%; animation: fadeUp .3s ease both; }
   @keyframes toastIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
@@ -196,6 +208,13 @@ tailwind.config = {
       <div id="orders-bulkbar"></div>
       <div class="glass card p-4">
         <div class="text-xs text-slate-500 mb-2"><span id="orders-count" class="font-black"></span> سفارش</div>
+        <div id="orders-legend" class="flex flex-wrap gap-1.5 text-[11px] mb-3 text-slate-600 dark:text-slate-300 no-print">
+          <span class="lg lg-ok">✅ هزینه ثبت‌شده</span>
+          <span class="lg lg-nocost">⚠️ نیازمند ثبت هزینه</span>
+          <span class="lg lg-pending">⏳ در انتظار تایید</span>
+          <span class="lg lg-returned">↩️ مرجوع شده</span>
+          <span class="lg lg-cancelled">❌ لغو شده</span>
+        </div>
         <div class="overflow-x-auto"><table class="tbl" id="orders-tbl"></table></div>
       </div>
     </section>
@@ -490,7 +509,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.2.1';
+const APP_VER = '1.3.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1087,6 +1106,14 @@ function filteredOrders() {
     return true;
   }).sort((a, b2) => String(b2.order_date).localeCompare(String(a.order_date)));
 }
+/* رنگ ردیف سفارش: لغو/مرجوعی/نیازمند هزینه/کامل/در انتظار */
+function orderRowClass(o) {
+  const st = o.status || 'pending';
+  if (st === 'cancelled') return 'row-cancelled';
+  if (st === 'returned') return 'row-returned';
+  if (st === 'pending') return 'row-pending';
+  return (parseFloat(o.unit_cost) || 0) > 0 ? 'row-ok' : 'row-nocost';
+}
 function renderOrders() {
   const list = filteredOrders();
   const s = summarize(list, true);
@@ -1099,8 +1126,8 @@ function renderOrders() {
   $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>تاریخ</th><th>مشتری</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>سود</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
     (list.slice(0, 300).map((o) => {
       const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
-      return `<tr>
-        <td><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>
+      return `<tr class="${orderRowClass(o)} cursor-pointer" onclick="editOrder('${o.id}')">
+        <td onclick="event.stopPropagation()"><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>
         <td class="num font-bold">${esc(o.order_code || '—')}</td><td class="num">${fmtJ(o.order_date)}</td>
         <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
         <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
@@ -1109,7 +1136,7 @@ function renderOrders() {
         <td class="num">${fmtN(c.revenue)}</td>
         <td class="num font-black ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(c.profit)}</td>
         <td><span class="chip ${st.c}">${st.t}</span></td>
-        <td><div class="flex gap-1">
+        <td><div class="flex gap-1" onclick="event.stopPropagation()">
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="openInvoice('${o.id}')" title="فاکتور">🧾</button>
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="editOrder('${o.id}')" title="ویرایش">✏️</button>
           <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delOrder('${o.id}')" title="حذف">🗑</button>
