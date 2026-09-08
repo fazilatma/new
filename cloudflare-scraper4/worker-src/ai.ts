@@ -181,7 +181,7 @@ export async function aiAgentCall(provider:Provider,model:string,messages:Array<
   return{...turn,raw:parseResponse(JSON.stringify(body),provider.apiKey),latencyMs,providerId:provider.id,model:canonical};
 }
 async function mistralDedicatedCall(provider:Provider,model:string,prompt:string,network:Network,started:number,endpointType:Exclude<AiModelEndpoint,'chat-completions'>,timeoutMs?:number){
-  const endpoint=mistralEndpoint(provider.baseUrl,endpointType),reportedEndpoint=safeEndpoint(endpoint),payload=endpointType==='embeddings'?{model,input:[prompt||'سلام']}:{model,document:{type:'image_url',image_url:MISTRAL_OCR_TEST_IMAGE},include_image_base64:false};
+  const endpoint=mistralEndpoint(provider.baseUrl,endpointType),reportedEndpoint=safeEndpoint(endpoint),payload=endpointType==='embeddings'?{model,input:[prompt||'Reply with exactly: SCRAPER4_OK']}:{model,document:{type:'image_url',image_url:MISTRAL_OCR_TEST_IMAGE},include_image_base64:false};
   const result=await requestAi(endpoint,payload,provider,network,timeoutMs);
   if(result.networkError){const reason=safeError(result.networkError,endpoint,provider.apiKey);throw new AiResponseError(reason,{ok:false,phase:'network',provider:provider.id,providerName:provider.name,model,prompt,endpoint:reportedEndpoint,endpointType,chatCompatible:false,latencyMs:Date.now()-started,raw:{error:reason}})}
   const response=result.response!,body=result.body,latencyMs=Date.now()-started;
@@ -250,7 +250,7 @@ function cloudflareModelIds(raw:string):string[]{
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function isOpenRouter(provider:Pick<Provider,'id'|'name'|'baseUrl'>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.63.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.64.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -445,7 +445,7 @@ async function executeAiTestRound(batch:AiTestTask[],prompt:string,categoryTitle
  * limits. Results are persisted before responding and a repeated runId/cursor
  * replays the stored rows.
  */
-export async function testModelBatch(prompt='سلام',options:AiTestOptions={}){
+export async function testModelBatch(prompt='Reply with exactly: SCRAPER4_OK',options:AiTestOptions={}){
   const ai=(await loadConnections()).ai,providers=providersFromAi(ai),onlyCandidates=Boolean(options.onlyCandidates),tasks=aiTestTasks(ai,providers,onlyCandidates),cursor=Math.max(0,Math.trunc(Number(options.cursor)||0)),categoryTitle=String(options.categoryTitle||'').trim(),categories=Array.isArray(options.categories)?options.categories:[],requestedRunId=String(options.runId||'').trim();
   const previous=requestedRunId||cursor>0?await getState<StoredAiTest|null>('ai_test_results',null):null,runId=requestedRunId||crypto.randomUUID(),sameRun=Boolean(previous?.runId&&previous.runId===runId&&previous.prompt===prompt&&previous.categoryTitle===categoryTitle&&previous.onlyCandidates===onlyCandidates),startedAt=sameRun&&previous?.startedAt?previous.startedAt:new Date().toISOString();
   if(cursor>0&&!sameRun)throw new Error('نوبت آزمایش مدل‌ها منقضی یا تغییر داده شده است؛ آزمایش را از ابتدا اجرا کنید.');

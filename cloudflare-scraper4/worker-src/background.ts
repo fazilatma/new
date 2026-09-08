@@ -28,7 +28,7 @@ const active=(run:BackgroundRun|null)=>Boolean(run&&['queued','running','paused'
 /** If a run shows no progress for this long, skip the current model and continue. */
 const STALL_MS=45_000;
 /** Lease must expire sooner than STALL so a dead isolate cannot block the watchdog. */
-const DEFAULT_SKIP_TIMEOUT_MS=1_000;
+const DEFAULT_SKIP_TIMEOUT_MS=30_000;
 export function aiSkipTimeoutMs(settings:any):number{
   const fromSettings=Number(settings?.ai?.skipTimeoutMs),fromEnv=Number(getEnv().AI_TEST_TIMEOUT_MS);
   const raw=Number.isFinite(fromSettings)&&fromSettings>0?fromSettings:Number.isFinite(fromEnv)&&fromEnv>0?fromEnv:DEFAULT_SKIP_TIMEOUT_MS;
@@ -75,7 +75,7 @@ export async function retryAiTestPart(key:string,part:'message'|'category'){
   if(!retryKey)throw new Error('شناسه مدل برای تلاش مجدد لازم است.');
   if(!stored?.runId||!Array.isArray(stored.results)||!stored.results.length)throw new Error('نتیجهٔ ذخیره‌شده‌ای برای تلاش مجدد نیست؛ ابتدا تست مدل‌ها را اجرا کنید.');
   let categories:any[]=[];if(part==='category'&&stored.categoryTitle)try{categories=(await destinationCategories()).items}catch{/* category retry still records the missing-list error */}
-  const result=await testModelBatch(String(stored.prompt||'سلام'),{runId:String(stored.runId),retryKey,retryPart:part,onlyCandidates:Boolean(stored.onlyCandidates),categoryTitle:String(stored.categoryTitle||''),categories,timeoutMs:aiSkipTimeoutMs(await getState('settings',{}))});
+  const result=await testModelBatch(String(stored.prompt||'Reply with exactly: SCRAPER4_OK'),{runId:String(stored.runId),retryKey,retryPart:part,onlyCandidates:Boolean(stored.onlyCandidates),categoryTitle:String(stored.categoryTitle||''),categories,timeoutMs:aiSkipTimeoutMs(await getState('settings',{}))});
   const run=await currentBackgroundRun('ai-test');
   if(run&&run.kind==='ai-test'&&(run.id===stored.runId||run.result?.runId===stored.runId)){run.result={...(run.result||{}),...result,results:result.results};await writeRun(run)}
   return result;
@@ -123,7 +123,7 @@ export async function startAiTestRun(input:any,waitUntil?:(promise:Promise<unkno
     if(runAge(previous)<STALL_MS)return{run:publicRun(previous),existing:true};
     await resetBackgroundRun('ai-test');
   }
-  const timestamp=now(),id=crypto.randomUUID(),run:AiTestRun={id,kind:'ai-test',status:'queued',phase:'waiting',stopRequested:false,createdAt:timestamp,updatedAt:timestamp,startedAt:null,finishedAt:null,attempts:0,error:null,prompt:String(input?.prompt||'سلام'),categoryTitle:String(input?.categoryTitle||'').trim(),onlyCandidates:Boolean(input?.onlyCandidates),delayMs:Math.max(0,Math.min(60_000,Number(input?.delayMs)||0)),cursor:0,result:{runId:id,total:0,nextCursor:0,results:[]}};
+  const timestamp=now(),id=crypto.randomUUID(),run:AiTestRun={id,kind:'ai-test',status:'queued',phase:'waiting',stopRequested:false,createdAt:timestamp,updatedAt:timestamp,startedAt:null,finishedAt:null,attempts:0,error:null,prompt:String(input?.prompt||'Reply with exactly: SCRAPER4_OK'),categoryTitle:String(input?.categoryTitle||'').trim(),onlyCandidates:Boolean(input?.onlyCandidates),delayMs:Math.max(0,Math.min(60_000,Number(input?.delayMs)||0)),cursor:0,result:{runId:id,total:0,nextCursor:0,results:[]}};
   await writeRun(run);await setState(pointerKey('ai-test'),id);await enqueue({task:'ai-test',runId:id},waitUntil);return{run:publicRun(run),existing:false};
 }
 
