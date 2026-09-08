@@ -33,13 +33,13 @@
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
  *   gh auth setup-git
- *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0803e-new --depth 1
  *   cd "$HOME/new"
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper "!gh auth git-credential"
- *   git pull --ff-only origin arena/01a0765b-new
+ *   git pull --ff-only origin arena/01a0803e-new
  *   cd "$HOME/new/cloudflare-scraper4"
- *   npm install --ignore-scripts
+ *   npm install
  *   npm run browsers:install || true
  *   CHROME_BIN="$(command -v chromium-browser || command -v chromium || true)"
  *   if [ -n "$CHROME_BIN" ]; then printf "BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n" >> .env.local; fi

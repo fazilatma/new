@@ -12,9 +12,9 @@
  *
  * Automatic updates after this version:
  *   Keep using npm run deployer:ui as the entry point on Termux/local/VPS.
- *   The local deployer now checks GitHub at startup and then every 10 minutes.
- *   If origin/arena/01a0765b-new has a newer commit, it runs fetch/reset and
- *   npm install automatically, then restarts the deployer. Disable only with:
+ *   The local deployer now scans every repo branch every minute (default),
+ *   shows them in a Branches table (version per branch + Install button), and
+ *   automatically installs the branch with the newest version. Disable only with:
  *     LOCAL_DEPLOYER_AUTO_UPDATE=false npm run deployer:ui
  *
  * Update existing code on any local clone:
@@ -24,18 +24,18 @@
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper '!gh auth git-credential'
  *   gh auth setup-git || true
- *   git fetch origin arena/01a0765b-new
- *   git reset --hard origin/arena/01a0765b-new
+ *   git fetch origin arena/01a0803e-new
+ *   git reset --hard origin/arena/01a0803e-new
  *   cd cloudflare-scraper4
- *   npm install --ignore-scripts --no-audit --prefer-online
+ *   npm install --no-audit --prefer-online
  *   grep version package.json | head -1
- *   # Expected: 1.69.0
+ *   # Expected: 1.70.0
  *
  * Cloudflare Worker update from Dashboard:
- *   1) Push/pull this branch: arena/01a0765b-new.
+ *   1) Push/pull this branch: arena/01a0803e-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
- *   4) Open /health and verify version is 1.69.0.
+ *   4) Open /health and verify version is 1.70.0.
  *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4
@@ -67,19 +67,19 @@
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
  *   gh auth setup-git
- *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0803e-new --depth 1
  *   cd "$HOME/new"
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper '!gh auth git-credential'
  *   git config --local --get-all credential.helper
  *   # Correct output must be exactly: !gh auth git-credential
  *   # Do NOT set: "gh auth setup-git auth git-credential"
- *   git pull --ff-only origin arena/01a0765b-new
+ *   git pull --ff-only origin arena/01a0803e-new
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm config set fetch-retries 5
  *   npm config set fetch-retry-mintimeout 20000
  *   npm config set fetch-retry-maxtimeout 90000
- *   npm install --ignore-scripts --no-audit --prefer-online
+ *   npm install --no-audit --prefer-online
  *
  *   # Termux PostgreSQL (optional) database setup.
  *   # If the dashboard says: role "postgres" does not exist, you are using

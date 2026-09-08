@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.69.0'; } catch { return process.env.npm_package_version || '1.69.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.70.0'; } catch { return process.env.npm_package_version || '1.70.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -49,7 +49,7 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
   if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
   localScraperUpdateRunning = true;
   try {
-    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0765b-new').trim() || 'arena/01a0765b-new';
+    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0803e-new').trim() || 'arena/01a0803e-new';
     const before = (runLocal('git', ['rev-parse', 'HEAD']).stdout || '').trim();
     const fetched = runLocal('git', ['fetch', 'origin', branch]);
     if (fetched.status !== 0) return console.warn(`[auto-update:${reason}] git fetch failed: ${fetched.stderr || fetched.stdout}`);
@@ -59,7 +59,7 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
     runLocal('git', ['config', '--local', '--replace-all', 'credential.helper', '!gh auth git-credential']);
     const reset = runLocal('git', ['reset', '--hard', `origin/${branch}`]);
     if (reset.status !== 0) return console.warn(`[auto-update:${reason}] git reset failed: ${reset.stderr || reset.stdout}`);
-    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--ignore-scripts', '--no-audit', '--prefer-online']);
+    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--no-audit', '--prefer-online']);
     runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'render:build']);
     setTimeout(() => process.exit(75), 500);
   } finally { localScraperUpdateRunning = false; }

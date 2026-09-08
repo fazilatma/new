@@ -23,7 +23,23 @@ async function getSqliteDb(): Promise<any> {
   if (sqliteDb) return sqliteDb;
   const file = sqlitePath();
   mkdirSync(dirname(file), { recursive: true });
-  const mod: any = await import('node:sqlite');
+  let mod: any;
+  try {
+    mod = await import('node:sqlite');
+  } catch (error) {
+    // node:sqlite ships with Node.js >= 22.5. Older Node (e.g. v20) cannot run
+    // the local SQLite mode; explain the fix instead of failing cryptically.
+    const [nodeMajor, nodeMinor] = String(process.versions.node || '').split('.').map(Number);
+    if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 5)) {
+      throw new Error(
+        `SQLite mode needs Node.js 22.5+ (you are running Node ${process.versions.node}). ` +
+        'On Windows install the current Node.js LTS (winget install OpenJS.NodeJS.LTS) and restart, ' +
+        'or set DATABASE_URL to a PostgreSQL connection string in .env.local. ' +
+        `(node:sqlite import failed: ${error instanceof Error ? error.message : String(error)})`
+      );
+    }
+    throw new Error(`node:sqlite could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
+  }
   sqliteDb = new mod.DatabaseSync(file);
   sqliteDb.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   return sqliteDb;
