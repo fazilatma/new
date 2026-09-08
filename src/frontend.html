@@ -187,6 +187,7 @@ tailwind.config = {
         <button class="btn btn-soft mr-auto" onclick="exportOrdersCSV()">⬇ خروجی اکسل</button>
       </div>
       <div id="orders-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+      <div id="orders-bulkbar"></div>
       <div class="glass card p-4">
         <div class="text-xs text-slate-500 mb-2"><span id="orders-count" class="font-black"></span> سفارش</div>
         <div class="overflow-x-auto"><table class="tbl" id="orders-tbl"></table></div>
@@ -309,8 +310,10 @@ tailwind.config = {
     <section id="view-booths" class="view">
       <div class="flex items-center gap-2 mb-4 no-print">
         <h2 class="font-black">🏪 غرفه‌های باسلام</h2>
-        <button class="btn btn-primary mr-auto !py-2" onclick="boothModal()">＋ غرفه جدید</button>
+        <label class="flex items-center gap-1 text-xs mr-auto cursor-pointer whitespace-nowrap"><input id="selall-booths" type="checkbox" onchange="toggleSelAll('booths', this.checked)" class="w-4 h-4 accent-indigo-600"> انتخاب همه</label>
+        <button class="btn btn-primary !py-2" onclick="boothModal()">＋ غرفه جدید</button>
       </div>
+      <div id="booths-bulkbar"></div>
       <div id="booths-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
     </section>
 
@@ -318,8 +321,10 @@ tailwind.config = {
     <section id="view-suppliers" class="view">
       <div class="flex items-center gap-2 mb-4 no-print">
         <h2 class="font-black">🤝 تامین‌کنندگان (واسطه‌ها)</h2>
-        <button class="btn btn-primary mr-auto !py-2" onclick="supplierModal()">＋ تامین‌کننده جدید</button>
+        <label class="flex items-center gap-1 text-xs mr-auto cursor-pointer whitespace-nowrap"><input id="selall-suppliers" type="checkbox" onchange="toggleSelAll('suppliers', this.checked)" class="w-4 h-4 accent-indigo-600"> انتخاب همه</label>
+        <button class="btn btn-primary !py-2" onclick="supplierModal()">＋ تامین‌کننده جدید</button>
       </div>
+      <div id="suppliers-bulkbar"></div>
       <div id="suppliers-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
     </section>
 
@@ -601,6 +606,7 @@ const Store = {
   async syncIntegration(id, days) { this.needDb(); return Api.req('/integrations/' + id + '/sync', 'POST', { days }); },
   async getSettings() { this.needDb(); return (await Api.req('/settings')).settings || {}; },
   async saveSettings(s) { this.needDb(); await Api.req('/settings', 'POST', s); return s; },
+  async bulkDelete(kind, ids) { this.needDb(); return Api.req('/' + kind + '/bulk-delete', 'POST', { ids }); },
   async cloudStatus() { this.needDb(); return Api.req('/cloud/status'); },
   async cloudConfig(p, cfg) { this.needDb(); return Api.req('/cloud/config', 'POST', { provider: p, ...cfg }); },
   async cloudBackup(p) { this.needDb(); return Api.req('/cloud/' + p + '/backup', 'POST'); },
@@ -1043,10 +1049,11 @@ function renderOrders() {
     kpiCard('💰 فروش', fmtMoney(s.revenue), 'جمع فروش', 'grad-sky', '💵', '') +
     kpiCard('🧾 هزینه', fmtMoney(s.cost), 'جمع هزینه‌ها', 'grad-amber', '🧮', '') +
     kpiCard('✅ سود', fmtMoney(s.profit), `حاشیه ${toFa(s.margin.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', '📈', '');
-  $('#orders-tbl').innerHTML = `<thead><tr><th>کد</th><th>تاریخ</th><th>مشتری</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>سود</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
+  $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>تاریخ</th><th>مشتری</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>سود</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
     (list.slice(0, 300).map((o) => {
       const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
       return `<tr>
+        <td><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>
         <td class="num font-bold">${esc(o.order_code || '—')}</td><td class="num">${fmtJ(o.order_date)}</td>
         <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
         <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
@@ -1060,7 +1067,8 @@ function renderOrders() {
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="editOrder('${o.id}')" title="ویرایش">✏️</button>
           <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delOrder('${o.id}')" title="حذف">🗑</button>
         </div></td></tr>`;
-    }).join('') || '<tr><td colspan="10" class="text-center text-slate-400 py-8">سفارشی یافت نشد 🍃</td></tr>') + '</tbody>';
+    }).join('') || '<tr><td colspan="11" class="text-center text-slate-400 py-8">سفارشی یافت نشد 🍃</td></tr>') + '</tbody>';
+  renderOrdersBulkBar();
 }
 async function delOrder(id) {
   const o = state.orders.find((x) => String(x.id) === String(id));
@@ -1068,6 +1076,74 @@ async function delOrder(id) {
     await Store.delOrder(id);
     state.orders = state.orders.filter((x) => String(x.id) !== String(id));
     toast('سفارش حذف شد'); renderOrders();
+  });
+}
+
+/* ═══════════════ حذف گروهی ═══════════════ */
+state.sel = { orders: new Set(), booths: new Set(), suppliers: new Set() };
+const SEL_NAMES = { orders: 'سفارش', booths: 'غرفه', suppliers: 'تامین‌کننده' };
+function toggleSel(kind, id, on) {
+  const s = state.sel[kind];
+  if (on) s.add(String(id)); else s.delete(String(id));
+  if (kind === 'orders') renderOrdersBulkBar();
+  else renderCardsBulkBar(kind);
+}
+function toggleSelAll(kind, on) {
+  const s = state.sel[kind];
+  s.clear();
+  if (on) {
+    const list = kind === 'orders' ? filteredOrders() : state[kind];
+    for (const x of list) s.add(String(x.id));
+  }
+  if (kind === 'orders') renderOrders();
+  else if (kind === 'booths') renderBooths();
+  else renderSuppliers();
+}
+function bulkBarHTML(kind) {
+  const n = state.sel[kind].size;
+  if (!n) return '';
+  return `<div class="glass card p-3 !border-indigo-300 dark:!border-indigo-500/50 flex items-center gap-2 text-sm anim">
+    <span class="font-black num">${fmtN(n)}</span><span class="text-xs">مورد انتخاب شده</span>
+    <button class="btn !bg-rose-600 !text-white !py-1.5 !text-xs mr-auto" onclick="bulkDel('${kind}')">🗑 حذف ${SEL_NAMES[kind]}‌های انتخاب‌شده</button>
+    <button class="btn btn-soft !py-1.5 !text-xs" onclick="toggleSelAll('${kind}', false)">✕ لغو</button>
+  </div>`;
+}
+function renderOrdersBulkBar() {
+  const w = document.getElementById('orders-bulkbar');
+  if (!w) return;
+  w.innerHTML = bulkBarHTML('orders');
+  w.className = state.sel.orders.size ? 'mb-4' : '';
+  const all = document.querySelector('#orders-tbl thead input[type=checkbox]');
+  if (all) {
+    const f = filteredOrders();
+    all.checked = state.sel.orders.size > 0 && f.length > 0 && f.every((o) => state.sel.orders.has(String(o.id)));
+  }
+}
+function renderCardsBulkBar(kind) {
+  const w = document.getElementById(kind + '-bulkbar');
+  if (!w) return;
+  w.innerHTML = bulkBarHTML(kind);
+  w.className = state.sel[kind].size ? 'mb-4' : '';
+  const all = document.getElementById('selall-' + kind);
+  if (all) {
+    const total = state[kind].length;
+    all.checked = state.sel[kind].size > 0 && total > 0 && state.sel[kind].size === total;
+  }
+}
+async function bulkDel(kind) {
+  const ids = [...state.sel[kind]];
+  if (!ids.length) return;
+  confirmDlg('🗑 حذف گروهی', `<b class="num">${fmtN(ids.length)}</b> ${SEL_NAMES[kind]} حذف شود؟ این عمل قابل بازگشت نیست.${kind !== 'orders' ? '<br>(سفارش‌های مرتبط باقی می‌مانند)' : ''}`, async () => {
+    try {
+      for (let i = 0; i < ids.length; i += 400) {
+        await Store.bulkDelete(kind, ids.slice(i, i + 400));
+      }
+      state.sel[kind].clear();
+      if (kind === 'orders') { state.orders = await Store.listOrders(); renderOrders(); }
+      else if (kind === 'booths') { state.booths = await Store.listBooths(); fillSelects(); renderBooths(); }
+      else { state.suppliers = await Store.listSuppliers(); fillSelects(); renderSuppliers(); }
+      toast(`🗑 ${fmtN(ids.length)} مورد حذف شد`);
+    } catch (e) { toast(netErr(e), 'err'); }
   });
 }
 
@@ -1270,6 +1346,7 @@ function renderBooths() {
         <div class="flex-1 min-w-0"><div class="font-black truncate">${esc(b.name)}</div>
         <div class="text-xs text-slate-500 dark:text-slate-400 truncate">${esc(b.description || 'غرفه باسلام')}</div></div>
         <div class="flex gap-1 no-print">
+          <input type="checkbox" ${state.sel.booths.has(String(b.id)) ? 'checked' : ''} onchange="toggleSel('booths','${b.id}',this.checked)" class="w-4 h-4 accent-indigo-600 mt-1.5" title="انتخاب برای حذف گروهی">
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="boothModal('${b.id}')">✏️</button>
           <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delBooth('${b.id}')">🗑</button>
         </div>
@@ -1280,6 +1357,7 @@ function renderBooths() {
         <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm ${s.profit >= 0 ? 'text-emerald-600' : 'text-rose-500'}">${compact(s.profit)}</div><div class="text-slate-500">سود</div></div>
       </div></div>`;
   }).join('') || emptyBox('هنوز غرفه‌ای ثبت نشده است 🏪');
+  renderCardsBulkBar('booths');
 }
 function renderSuppliers() {
   $('#suppliers-grid').innerHTML = state.suppliers.map((s) => {
@@ -1291,6 +1369,7 @@ function renderSuppliers() {
         <div class="flex-1 min-w-0"><div class="font-black truncate">${esc(s.name)}</div>
         <div class="text-xs text-slate-500 dark:text-slate-400 num">${esc(s.phone || '')}</div></div>
         <div class="flex gap-1 no-print">
+          <input type="checkbox" ${state.sel.suppliers.has(String(s.id)) ? 'checked' : ''} onchange="toggleSel('suppliers','${s.id}',this.checked)" class="w-4 h-4 accent-indigo-600 mt-1.5" title="انتخاب برای حذف گروهی">
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="supplierModal('${s.id}')">✏️</button>
           <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delSupplier('${s.id}')">🗑</button>
         </div>
@@ -1301,6 +1380,7 @@ function renderSuppliers() {
         <div class="rounded-xl bg-slate-100 dark:bg-white/5 p-2"><div class="font-black num text-sm ${sm.profit >= 0 ? 'text-emerald-600' : 'text-rose-500'}">${compact(sm.profit)}</div><div class="text-slate-500">سود</div></div>
       </div></div>`;
   }).join('') || emptyBox('هنوز تامین‌کننده‌ای ثبت نشده است 🤝');
+  renderCardsBulkBar('suppliers');
 }
 const emptyBox = (t) => `<div class="glass card p-10 text-center text-slate-400 col-span-full">${t}</div>`;
 function boothModal(id) {

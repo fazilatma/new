@@ -129,6 +129,10 @@ function d1Store(db) {
       await run(`DELETE FROM ${t} WHERE id = ?`, [id]);
       return { ok: true };
     },
+    removeMany: async (t, ids) => {
+      const r = await run(`DELETE FROM ${t} WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+      return (r.meta && (r.meta.changes ?? r.meta.rows_written)) || ids.length;
+    },
     clear: async (t) => {
       await run(`DELETE FROM ${t}`);
       return { ok: true };
@@ -889,6 +893,15 @@ async function handleApi(req, store, url) {
   /* بکاپ ابری */
   if (resource === 'cloud') {
     return handleCloud(req, store, url, parts);
+  }
+
+  /* حذف گروهی */
+  if ((resource === 'orders' || resource === 'booths' || resource === 'suppliers') && id === 'bulk-delete' && method === 'POST') {
+    const b = await body();
+    const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String).filter(Boolean))].slice(0, 500) : [];
+    if (!ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    const deleted = await store.removeMany(resource, ids);
+    return json({ ok: true, deleted });
   }
 
   /* export / import */
