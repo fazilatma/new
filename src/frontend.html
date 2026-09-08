@@ -77,6 +77,8 @@ tailwind.config = {
   .modal-box { max-height: 92vh; overflow-y: auto; width: 100%; animation: fadeUp .3s ease both; }
   @keyframes toastIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
   .toast { animation: toastIn .3s ease both; }
+  html, body { overflow-x: clip; } /* بدون اسکرول افقی صفحه — اسکرول داخلی آزاد */
+  .grid > * { min-width: 0; } /* آیتم گرید کوچک‌شدنی (رفع اسکرول اجباری پیشخوان) */
   .chart-box { position: relative; height: 260px; } .panx:active { cursor: grabbing; }
   .leg-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .6rem; border-radius: 999px;
     border: 1px solid rgba(148,163,184,.4); font-weight: 700; cursor: pointer; background: transparent; }
@@ -117,7 +119,7 @@ tailwind.config = {
     <div class="w-11 h-11 rounded-2xl grad-bg flex items-center justify-center text-2xl shadow-glow shrink-0">📊</div>
     <div class="flex-1 min-w-0">
       <h1 class="font-black text-lg leading-6 truncate">حسابدار فروش <span class="grad-text" id="shop-name-title"></span></h1>
-      <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+      <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 truncate">
         <span id="today-j">—</span>
         <span class="w-1 h-1 rounded-full bg-slate-400"></span>
         <span id="mode-badge" class="chip bg-slate-200 dark:bg-white/10">…</span>
@@ -150,7 +152,7 @@ tailwind.config = {
       <div class="glass card p-4 mb-4 flex flex-wrap items-center gap-2 no-print">
         <span class="font-black text-sm ml-1">📅 بازه زمانی:</span>
         <div id="rng-btns" class="flex flex-wrap gap-2"></div>
-        <div id="rng-custom" class="hidden items-center gap-2 w-full mt-2 pt-2 border-t border-slate-200 dark:border-white/10">
+        <div id="rng-custom" class="hidden flex-wrap items-center gap-2 w-full mt-2 pt-2 border-t border-slate-200 dark:border-white/10">
           <div class="flex items-center gap-1 text-xs">از <span id="pk-from"></span></div>
           <div class="flex items-center gap-1 text-xs">تا <span id="pk-to"></span></div>
           <button class="btn btn-primary !py-1.5" onclick="applyCustomRange()">اعمال</button>
@@ -167,8 +169,8 @@ tailwind.config = {
             <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(درگ/اسکرول افقی • کلیک راهنما: خاموش/روشن خط)</span></h3>
             <div class="flex items-center gap-3 flex-wrap">
               <select id="trend-ch" class="inp !py-1 !px-2 !text-[11px] !w-auto" onchange="state.trendCh=this.value;renderDashboard()"></select>
-              <div class="flex gap-1 text-xs" id="trend-rng"></div>
-              <div class="flex gap-1 text-xs" id="trend-grp"></div>
+              <div class="flex flex-wrap gap-1 text-xs" id="trend-rng"></div>
+              <div class="flex flex-wrap gap-1 text-xs" id="trend-grp"></div>
             </div>
           </div>
           <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-cnt-w" class="chart-box tall"><canvas id="ch-cnt"></canvas></div></div>
@@ -484,7 +486,7 @@ tailwind.config = {
           <h3 class="font-black mb-3">⚙️ تنظیمات فروشگاه</h3>
           <div class="flex flex-col gap-3">
             <div><label class="text-xs font-bold">نام فروشگاه</label><input id="s-shop" class="inp" placeholder="مثلاً فروشگاه …"></div>
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label class="text-xs font-bold">کمیسیون پیش‌فرض باسلام (٪)</label><input id="s-cb" type="number" min="0" max="100" value="0" class="inp num"></div>
               <div><label class="text-xs font-bold">کمیسیون پیش‌فرض سایت (٪)</label><input id="s-cw" type="number" min="0" max="100" value="0" class="inp num"></div>
             </div>
@@ -509,7 +511,7 @@ tailwind.config = {
 </div>
 
 <!-- ناوبری موبایل -->
-<nav class="md:hidden fixed bottom-0 inset-x-0 z-40 glass border-t border-slate-200 dark:border-white/10 px-2 py-2 flex justify-around text-[11px] font-bold no-print" id="mobile-nav"></nav>
+<nav class="md:hidden fixed bottom-0 inset-x-0 z-40 glass border-t border-slate-200 dark:border-white/10 px-2 py-2 flex justify-around overflow-x-auto text-[11px] font-bold no-print" id="mobile-nav"></nav>
 
 <!-- مودال عمومی -->
 <div id="modal" class="modal-bg hidden no-print" onclick="if(event.target===this)closeModal()">
@@ -532,7 +534,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.7.0';
+const APP_VER = '1.7.1';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -903,7 +905,7 @@ function buildNav() {
   $('#sidebar').innerHTML = NAV.map((n) =>
     `<button data-v="${n.id}" onclick="go('${n.id}')" class="nav-item flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-600 dark:text-slate-300"><span class="text-lg">${n.i}</span>${n.t}</button>`).join('');
   $('#mobile-nav').innerHTML = NAV.map((n) =>
-    `<button data-v="${n.id}" onclick="go('${n.id}')" class="nav-item flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl text-slate-600 dark:text-slate-300"><span class="text-xl">${n.i}</span>${n.t}</button>`).join('');
+    `<button data-v="${n.id}" onclick="go('${n.id}')" class="nav-item flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl text-slate-600 dark:text-slate-300 shrink-0 whitespace-nowrap"><span class="text-xl">${n.i}</span>${n.t}</button>`).join('');
 }
 function go(v) {
   currentView = v;
@@ -2057,7 +2059,7 @@ async function renderCloud() {
       ${s.connected ? `<div class="text-[11px] text-slate-500 dark:text-slate-400 mb-2" dir="auto">حساب: <b dir="ltr">${esc(s.email || '')}</b> • آخرین بکاپ: <b class="num">${last}</b></div>` : ''}
       <div class="text-[11px] text-slate-500 dark:text-slate-400 mb-1">Redirect URI (در کنسول گوگل/آژور ثبت کنید):</div>
       <div class="num text-[11px] bg-slate-100 dark:bg-black/30 rounded-lg p-1.5 mb-2 break-all select-all" dir="ltr">${esc((st.redirect_uris || {})[p] || '')}</div>
-      <div class="grid grid-cols-2 gap-2 mb-2">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
         <input id="cc-id-${p}" class="inp num !text-xs" dir="ltr" placeholder="Client ID${s.client_id_hint ? ` (${s.client_id_hint})` : ''}">
         <input id="cc-sec-${p}" type="password" class="inp num !text-xs" dir="ltr" placeholder="${s.configured ? 'Secret ذخیره شده (خالی=حفظ)' : 'Client Secret'}">
       </div>
