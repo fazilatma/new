@@ -301,6 +301,73 @@ tailwind.config = {
       <div id="suppliers-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
     </section>
 
+    <!-- اتصال‌ها -->
+    <section id="view-integrations" class="view">
+      <div class="glass card p-4 mb-4 text-sm leading-8 anim no-print">
+        <div class="font-black mb-1">🔗 اتصال خودکار فروشگاه‌ها</div>
+        <div class="text-xs text-slate-500 dark:text-slate-400 leading-6">
+          با اتصال غرفه‌های باسلام و سایت ووکامرسی، سفارش‌ها به‌صورت خودکار وارد حسابداری می‌شوند.
+          هزینه‌های تامین‌کننده را بعداً دستی تکمیل کنید؛ سینک مجدد، هزینه‌های ثبت‌شده شما را <b>پاک نمی‌کند</b>.
+          توجه: «تست اتصال» و «سینک» فقط روی نسخه دیپلوی‌شده Cloudflare کار می‌کنند (نه حالت محلی).
+        </div>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-4 items-start">
+        <div class="glass card p-5 anim anim-1">
+          <div class="flex items-center gap-2 mb-1">
+            <h3 class="font-black">🛍 غرفه‌های باسلام</h3>
+            <div class="mr-auto flex items-center gap-1 text-xs">سینک <input id="bas-days" type="number" value="30" min="1" max="365" class="inp !w-16 !py-1 num"> روز اخیر</div>
+          </div>
+          <div class="text-[11px] text-slate-500 dark:text-slate-400 mb-3 leading-5">توکن را از <a class="text-indigo-500 font-bold" href="https://developers.basalam.com/panel/tokens" target="_blank">پنل توسعه‌دهندگان باسلام ↗</a> بسازید — دسترسی <code dir="ltr" class="num">vendor.parcel.read</code> لازم است.</div>
+          <div id="bas-conns" class="flex flex-col gap-2 mb-3"></div>
+          <div class="rounded-xl border border-dashed border-slate-300 dark:border-white/15 p-3">
+            <div class="font-black text-xs mb-2" id="bas-form-title">＋ افزودن غرفه جدید</div>
+            <input type="hidden" id="bas-id">
+            <div class="flex flex-col gap-2">
+              <input id="bas-name" class="inp" placeholder="نام نمایشی (اختیاری — پیش‌فرض: اسم غرفه)">
+              <select id="bas-booth" class="inp" title="غرفه محلی مرتبط"></select>
+              <div class="relative">
+                <input id="bas-token" type="password" class="inp num" dir="ltr" placeholder="Personal Access Token">
+                <button type="button" onclick="togglePw('bas-token')" class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-lg" title="نمایش">👁</button>
+              </div>
+              <div id="bas-result"></div>
+              <div class="flex gap-2">
+                <button class="btn btn-soft flex-1 justify-center" id="bas-test-btn" onclick="basTest()">🔌 تست اتصال</button>
+                <button class="btn btn-primary flex-1 justify-center" onclick="basSave()">💾 ذخیره</button>
+                <button class="btn btn-soft hidden !px-3" id="bas-cancel" onclick="basReset()">✕</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="glass card p-5 anim anim-2">
+          <div class="flex items-center gap-2 mb-1">
+            <h3 class="font-black">🌐 سایت ووکامرس</h3>
+            <div class="mr-auto flex items-center gap-1 text-xs">سینک <input id="woo-days" type="number" value="30" min="1" max="365" class="inp !w-16 !py-1 num"> روز اخیر</div>
+          </div>
+          <div class="text-[11px] text-slate-500 dark:text-slate-400 mb-3 leading-5">از پیشخوان وردپرس: <b>ووکامرس ← تنظیمات ← پیشرفته ← REST API</b> یک کلید با دسترسی <b>خواندن (Read)</b> بسازید.</div>
+          <div id="woo-conns" class="flex flex-col gap-2 mb-3"></div>
+          <div class="rounded-xl border border-dashed border-slate-300 dark:border-white/15 p-3">
+            <div class="font-black text-xs mb-2" id="woo-form-title">＋ افزودن سایت جدید</div>
+            <input type="hidden" id="woo-id">
+            <div class="flex flex-col gap-2">
+              <input id="woo-name" class="inp" placeholder="نام فروشگاه (مثلاً سایت اصلی)">
+              <input id="woo-url" class="inp num" dir="ltr" placeholder="https://myshop.com">
+              <input id="woo-key" class="inp num" dir="ltr" placeholder="Consumer Key (ck_…)">
+              <div class="relative">
+                <input id="woo-secret" type="password" class="inp num" dir="ltr" placeholder="Consumer Secret (cs_…)">
+                <button type="button" onclick="togglePw('woo-secret')" class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-lg" title="نمایش">👁</button>
+              </div>
+              <div id="woo-result"></div>
+              <div class="flex gap-2">
+                <button class="btn btn-soft flex-1 justify-center" id="woo-test-btn" onclick="wooTest()">🔌 تست اتصال</button>
+                <button class="btn btn-primary flex-1 justify-center" onclick="wooSave()">💾 ذخیره</button>
+                <button class="btn btn-soft hidden !px-3" id="woo-cancel" onclick="wooReset()">✕</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- تنظیمات -->
     <section id="view-settings" class="view">
       <div class="grid lg:grid-cols-2 gap-4">
@@ -524,6 +591,32 @@ const Store = {
     if (this.mode === 'local') { Local.write('suppliers', Local.read('suppliers', []).filter((x) => String(x.id) !== String(id))); return; }
     await Api.req('/suppliers/' + id, 'DELETE');
   },
+  async listIntegrations() {
+    if (this.mode === 'local') return Local.read('integrations', []);
+    try { return (await Api.req('/integrations')).integrations || []; } catch { this.mode = 'local'; return Local.read('integrations', []); }
+  },
+  async saveIntegration(o) {
+    if (this.mode === 'local') {
+      const arr = Local.read('integrations', []);
+      if (o.id) { const i = arr.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) arr[i] = { ...arr[i], ...o }; }
+      else { o.id = uid(); arr.push({ auto_sync: 0, last_status: '', ...o }); }
+      Local.write('integrations', arr); return arr.find((x) => String(x.id) === String(o.id));
+    }
+    const r = o.id ? await Api.req('/integrations/' + o.id, 'PUT', o) : await Api.req('/integrations', 'POST', o);
+    return r.integration;
+  },
+  async delIntegration(id) {
+    if (this.mode === 'local') { Local.write('integrations', Local.read('integrations', []).filter((x) => String(x.id) !== String(id))); return; }
+    await Api.req('/integrations/' + id, 'DELETE');
+  },
+  async testIntegration(payload) {
+    if (this.mode === 'local') throw new Error('LOCAL_MODE');
+    return Api.req('/integrations/test', 'POST', payload);
+  },
+  async syncIntegration(id, days) {
+    if (this.mode === 'local') throw new Error('LOCAL_MODE');
+    return Api.req('/integrations/' + id + '/sync', 'POST', { days });
+  },
   async getSettings() {
     if (this.mode === 'local') return Local.read('settings', {});
     try { return (await Api.req('/settings')).settings || {}; } catch { return Local.read('settings', {}); }
@@ -536,7 +629,7 @@ const Store = {
 
 /* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
 const state = {
-  orders: [], booths: [], suppliers: [], settings: {},
+  orders: [], booths: [], suppliers: [], integrations: [], settings: {},
   range: 'month', customFrom: null, customTo: null, trendGroup: 'daily',
 };
 const N = (v) => Number(v) || 0;
@@ -665,6 +758,7 @@ const NAV = [
   { id: 'reports', t: 'گزارش و تحلیل', i: '📊' },
   { id: 'booths', t: 'غرفه‌ها', i: '🏪' },
   { id: 'suppliers', t: 'تامین‌کنندگان', i: '🤝' },
+  { id: 'integrations', t: 'اتصال‌ها', i: '🔗' },
   { id: 'settings', t: 'تنظیمات', i: '⚙️' },
 ];
 let currentView = 'dashboard';
@@ -685,6 +779,7 @@ function go(v) {
   if (v === 'reports') renderReports();
   if (v === 'booths') renderBooths();
   if (v === 'suppliers') renderSuppliers();
+  if (v === 'integrations') renderIntegrations();
 }
 function toggleTheme() {
   const dark = document.documentElement.classList.toggle('dark');
@@ -732,11 +827,11 @@ const supNameOf = (o) => {
   return s ? s.name : (o.supplier_name || '—');
 };
 async function loadAll() {
-  const [orders, booths, suppliers, settings] = await Promise.all([
-    Store.listOrders(), Store.listBooths(), Store.listSuppliers(), Store.getSettings(),
+  const [orders, booths, suppliers, integrations, settings] = await Promise.all([
+    Store.listOrders(), Store.listBooths(), Store.listSuppliers(), Store.listIntegrations(), Store.getSettings(),
   ]);
   state.orders = orders || []; state.booths = booths || [];
-  state.suppliers = suppliers || []; state.settings = settings || {};
+  state.suppliers = suppliers || []; state.integrations = integrations || []; state.settings = settings || {};
   $('#shop-name-title').textContent = state.settings.shop_name ? '«' + state.settings.shop_name + '»' : '';
   $('#s-shop').value = state.settings.shop_name || '';
   $('#s-cb').value = state.settings.comm_basalam ?? 0;
@@ -752,6 +847,8 @@ async function loadAll() {
 function fillSelects() {
   const bOpts = state.booths.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
   $('#o-booth').innerHTML = bOpts || '<option value="">— غرفه‌ای ثبت نشده —</option>';
+  const bb = $('#bas-booth');
+  if (bb) { const cur = bb.value; bb.innerHTML = '<option value="__new__">＋ ساخت خودکار غرفه جدید</option>' + bOpts; if (cur) bb.value = cur; }
   $('#f-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + bOpts;
   $('#r-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + bOpts;
   const sOpts = `<option value="">— بدون تامین‌کننده —</option>` + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
@@ -1343,6 +1440,195 @@ async function seedDemo() {
     }
     fillSelects(); loadAll();
     toast('✨ داده نمونه ساخته شد');
+  });
+}
+
+/* ═══════════════ اتصال‌ها (باسلام + ووکامرس) ═══════════════ */
+function togglePw(id) { const el = document.getElementById(id); el.type = el.type === 'password' ? 'text' : 'password'; }
+function testBox(ok, html) {
+  return `<div class="text-xs leading-6 rounded-xl p-2.5 ${ok ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-300'}">${html}</div>`;
+}
+function mapConnError(res, type) {
+  const st = res.status;
+  if (st === 401) return type === 'basalam' ? '⛔ توکن نامعتبر است یا منقضی شده. یک توکن جدید بسازید.' : '⛔ کلید یا رمز اشتباه است.';
+  if (st === 403) return '⛔ دسترسی کافی نیست. ' + (type === 'basalam' ? 'توکن باید دسترسی vendor.parcel.read داشته باشد.' : 'کلید باید دسترسی خواندن (Read) سفارش‌ها را داشته باشد.');
+  if (st === 404) return type === 'woo' ? '⛔ آدرس سایت اشتباه است یا REST API ووکامرس در دسترس نیست.' : '⛔ سرویس باسلام در دسترس نیست. کمی بعد تلاش کنید.';
+  if (!st) return '⛔ ارتباط برقرار نشد. آدرس، اینترنت و HTTPS بودن سایت را بررسی کنید.';
+  return '⛔ خطا: ' + esc(res.error || ('کد ' + st));
+}
+function renderIntegrations() {
+  const bas = state.integrations.filter((x) => x.type === 'basalam');
+  const woo = state.integrations.filter((x) => x.type === 'woo');
+  $('#bas-conns').innerHTML = bas.map(connCard).join('') || '<div class="text-[11px] text-slate-400 text-center py-2">هنوز غرفه‌ای متصل نشده است</div>';
+  $('#woo-conns').innerHTML = woo.map(connCard).join('') || '<div class="text-[11px] text-slate-400 text-center py-2">هنوز سایتی متصل نشده است</div>';
+}
+function connCard(c) {
+  const isBas = c.type === 'basalam';
+  const lastSync = c.last_sync_at ? fmtJ(c.last_sync_at.slice(0, 10)) : '—';
+  const okSync = (c.last_status || '').startsWith('ok') || (c.last_status || '').startsWith('auto:');
+  return `<div class="rounded-xl bg-slate-100 dark:bg-white/5 p-3 text-xs">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">${isBas ? '🛍' : '🌐'}</span>
+      <div class="flex-1 min-w-0">
+        <div class="font-black truncate">${esc(c.name || (isBas ? c.vendor_title : c.store_url) || '—')}</div>
+        <div class="text-slate-500 dark:text-slate-400 truncate" dir="auto">${isBas
+          ? `غرفه: ${esc(c.vendor_title || boothName(c.booth_id))} ${c.token_hint ? `• توکن ${esc(c.token_hint)}` : ''}`
+          : `${esc(c.store_url || '')} ${c.consumer_key_hint ? `• ${esc(c.consumer_key_hint)}` : ''}`}</div>
+      </div>
+      <span class="chip ${okSync ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : 'bg-slate-200 text-slate-600 dark:bg-white/10 dark:text-slate-300'}" title="${esc(c.last_status || '')}">سینک: <span class="num">${lastSync}</span></span>
+    </div>
+    <div class="flex items-center gap-2 mt-2">
+      <button class="btn btn-primary !py-1.5 !text-xs flex-1 justify-center" id="sync-${c.id}" onclick="syncInteg('${c.id}')">🔄 سینک سفارش‌ها</button>
+      <label class="flex items-center gap-1 text-[11px] cursor-pointer whitespace-nowrap" title="سینک خودکار با Cron ورکر (تنظیم در wrangler.toml)">خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}', this.checked)" class="w-4 h-4 accent-indigo-600"></label>
+      <button class="btn btn-soft !px-2 !py-1.5 !text-xs" onclick="editInteg('${c.id}')" title="ویرایش">✏️</button>
+      <button class="btn btn-danger !px-2 !py-1.5 !text-xs" onclick="delInteg('${c.id}')" title="حذف">🗑</button>
+    </div>
+    <div id="sync-res-${c.id}" class="mt-2 empty:hidden"></div>
+  </div>`;
+}
+/* ── باسلام ── */
+async function basTest() {
+  const token = $('#bas-token').value.trim();
+  if (!token) { $('#bas-result').innerHTML = testBox(false, 'اول توکن را وارد کنید.'); return; }
+  const btn = $('#bas-test-btn');
+  btn.disabled = true; btn.textContent = '⏳ در حال تست…';
+  try {
+    const r = await Store.testIntegration({ type: 'basalam', token });
+    if (r.ok) {
+      $('#bas-result').innerHTML = testBox(true, `✅ اتصال موفق!<br>کاربر: <b>${esc(r.info.user_name || '—')}</b><br>غرفه: <b>${esc(r.info.vendor_title || '—')}</b>`);
+      if (!$('#bas-name').value.trim() && r.info.vendor_title) $('#bas-name').value = r.info.vendor_title;
+      state._basTest = r.info;
+    } else $('#bas-result').innerHTML = testBox(false, mapConnError(r, 'basalam'));
+  } catch (e) {
+    $('#bas-result').innerHTML = testBox(false, e.message === 'LOCAL_MODE' ? '⛔ تست اتصال فقط روی نسخه Cloudflare کار می‌کند. لطفاً برنامه را دیپلوی کنید.' : '⛔ ' + esc(e.message));
+  }
+  btn.disabled = false; btn.textContent = '🔌 تست اتصال';
+}
+async function basSave() {
+  const id = $('#bas-id').value || undefined;
+  const token = $('#bas-token').value.trim();
+  if (!id && !token) { toast('توکن را وارد کنید', 'err'); return; }
+  let boothId = $('#bas-booth').value;
+  const info = state._basTest;
+  if (boothId === '__new__') {
+    const b = await Store.saveBooth({ name: $('#bas-name').value.trim() || (info && info.vendor_title) || 'غرفه باسلام' });
+    state.booths.push(b); fillSelects(); boothId = b.id;
+    toast('🏪 غرفه محلی هم ساخته شد');
+  }
+  const payload = { id, type: 'basalam', name: $('#bas-name').value.trim() || (info && info.vendor_title) || '', booth_id: boothId };
+  if (token) payload.token = token;
+  if (info && info.vendor_id) { payload.vendor_id = info.vendor_id; payload.vendor_title = info.vendor_title || ''; }
+  try {
+    const saved = await Store.saveIntegration(payload);
+    if (id) Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
+    else state.integrations.push(saved);
+    state._basTest = null; basReset(); renderIntegrations();
+    toast('✅ اتصال باسلام ذخیره شد');
+  } catch (e) { toast('خطا در ذخیره: ' + e.message, 'err'); }
+}
+function basReset() {
+  $('#bas-id').value = ''; $('#bas-name').value = ''; $('#bas-token').value = '';
+  $('#bas-booth').value = '__new__'; $('#bas-result').innerHTML = '';
+  $('#bas-form-title').textContent = '＋ افزودن غرفه جدید';
+  $('#bas-cancel').classList.add('hidden'); state._basTest = null;
+}
+/* ── ووکامرس ── */
+async function wooTest() {
+  const payload = { type: 'woo', store_url: $('#woo-url').value.trim(), consumer_key: $('#woo-key').value.trim(), consumer_secret: $('#woo-secret').value.trim() };
+  if (!payload.store_url || !payload.consumer_key || !payload.consumer_secret) { $('#woo-result').innerHTML = testBox(false, 'آدرس سایت، کلید و رمز را کامل وارد کنید.'); return; }
+  const btn = $('#woo-test-btn');
+  btn.disabled = true; btn.textContent = '⏳ در حال تست…';
+  try {
+    const r = await Store.testIntegration(payload);
+    if (r.ok) {
+      $('#woo-result').innerHTML = testBox(true, `✅ اتصال موفق!${r.info.store_title ? `<br>فروشگاه: <b>${esc(r.info.store_title)}</b>` : ''}<br>تعداد سفارش‌ها: <b class="num">${fmtN(r.info.orders_total)}</b>${r.info.currency ? ` • واحد پول: <b dir="ltr">${esc(r.info.currency)}</b>` : ''}`);
+    } else $('#woo-result').innerHTML = testBox(false, mapConnError(r, 'woo'));
+  } catch (e) {
+    $('#woo-result').innerHTML = testBox(false, e.message === 'LOCAL_MODE' ? '⛔ تست اتصال فقط روی نسخه Cloudflare کار می‌کند. لطفاً برنامه را دیپلوی کنید.' : '⛔ ' + esc(e.message));
+  }
+  btn.disabled = false; btn.textContent = '🔌 تست اتصال';
+}
+async function wooSave() {
+  const id = $('#woo-id').value || undefined;
+  const payload = { id, type: 'woo', name: $('#woo-name').value.trim(), store_url: $('#woo-url').value.trim() };
+  const key = $('#woo-key').value.trim(), sec = $('#woo-secret').value.trim();
+  if (!payload.store_url) { toast('آدرس سایت را وارد کنید', 'err'); return; }
+  if (!id && (!key || !sec)) { toast('کلید و رمز را وارد کنید', 'err'); return; }
+  if (key) payload.consumer_key = key;
+  if (sec) payload.consumer_secret = sec;
+  try {
+    const saved = await Store.saveIntegration(payload);
+    if (id) Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
+    else state.integrations.push(saved);
+    wooReset(); renderIntegrations();
+    toast('✅ اتصال سایت ذخیره شد');
+  } catch (e) { toast('خطا در ذخیره: ' + e.message, 'err'); }
+}
+function wooReset() {
+  $('#woo-id').value = ''; $('#woo-name').value = ''; $('#woo-url').value = '';
+  $('#woo-key').value = ''; $('#woo-secret').value = ''; $('#woo-result').innerHTML = '';
+  $('#woo-form-title').textContent = '＋ افزودن سایت جدید';
+  $('#woo-cancel').classList.add('hidden');
+}
+/* ── عملیات مشترک ── */
+async function syncInteg(id) {
+  const c = state.integrations.find((x) => String(x.id) === String(id));
+  if (!c) return;
+  const btn = document.getElementById('sync-' + id), box = document.getElementById('sync-res-' + id);
+  const days = c.type === 'basalam' ? (+$('#bas-days').value || 30) : (+$('#woo-days').value || 30);
+  btn.disabled = true; btn.textContent = '⏳ در حال سینک…';
+  try {
+    const r = await Store.syncIntegration(id, days);
+    if (r.ok) {
+      Object.assign(c, { last_sync_at: new Date().toISOString(), last_status: `ok: +${r.imported} ~${r.updated}` });
+      state.orders = await Store.listOrders();
+      renderIntegrations();
+      const nb = document.getElementById('sync-res-' + id);
+      if (nb) nb.innerHTML = testBox(true, `✅ سینک شد: <b class="num">${fmtN(r.imported)}</b> سفارش جدید، <b class="num">${fmtN(r.updated)}</b> به‌روزشده${r.skipped ? `، <b class="num">${fmtN(r.skipped)}</b> ردشده` : ''}${r.errors && r.errors.length ? `<br>⚠️ ${esc(r.errors[0])}` : ''}`);
+      toast(`✅ ${fmtN(r.imported + r.updated)} سفارش سینک شد`);
+    } else {
+      box.innerHTML = testBox(false, mapConnError(r, c.type));
+      btn.disabled = false; btn.textContent = '🔄 سینک سفارش‌ها';
+    }
+  } catch (e) {
+    box.innerHTML = testBox(false, e.message === 'LOCAL_MODE' ? '⛔ سینک فقط روی نسخه Cloudflare کار می‌کند. لطفاً برنامه را دیپلوی کنید.' : '⛔ ' + esc(e.message));
+    btn.disabled = false; btn.textContent = '🔄 سینک سفارش‌ها';
+  }
+}
+async function toggleAuto(id, on) {
+  try {
+    const saved = await Store.saveIntegration({ id, auto_sync: on ? 1 : 0 });
+    Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
+    toast(on ? '⏰ سینک خودکار روشن شد (نیازمند فعال‌سازی Cron در ورکر)' : 'سینک خودکار خاموش شد');
+  } catch (e) { toast('خطا: ' + e.message, 'err'); renderIntegrations(); }
+}
+function editInteg(id) {
+  const c = state.integrations.find((x) => String(x.id) === String(id));
+  if (!c) return;
+  if (c.type === 'basalam') {
+    basReset();
+    $('#bas-id').value = c.id; $('#bas-name').value = c.name || '';
+    $('#bas-booth').value = c.booth_id || '__new__';
+    $('#bas-token').value = ''; $('#bas-token').placeholder = 'خالی بگذارید تا توکن قبلی حفظ شود';
+    $('#bas-form-title').textContent = '✏️ ویرایش اتصال باسلام';
+    $('#bas-cancel').classList.remove('hidden');
+    $('#bas-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else {
+    wooReset();
+    $('#woo-id').value = c.id; $('#woo-name').value = c.name || ''; $('#woo-url').value = c.store_url || '';
+    $('#woo-key').value = ''; $('#woo-key').placeholder = `کلید فعلی: ${c.consumer_key_hint || ''} (خالی = حفظ قبلی)`;
+    $('#woo-secret').value = ''; $('#woo-secret').placeholder = 'خالی بگذارید تا رمز قبلی حفظ شود';
+    $('#woo-form-title').textContent = '✏️ ویرایش اتصال سایت';
+    $('#woo-cancel').classList.remove('hidden');
+    $('#woo-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+function delInteg(id) {
+  const c = state.integrations.find((x) => String(x.id) === String(id));
+  confirmDlg('🗑 حذف اتصال', `اتصال <b>${esc(c?.name || '')}</b> حذف شود؟ (سفارش‌های سینک‌شده باقی می‌مانند)`, async () => {
+    await Store.delIntegration(id);
+    state.integrations = state.integrations.filter((x) => String(x.id) !== String(id));
+    renderIntegrations(); toast('اتصال حذف شد');
   });
 }
 

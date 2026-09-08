@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS orders (
 
 CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(order_date);
 CREATE INDEX IF NOT EXISTS idx_orders_source ON orders(source);
+CREATE INDEX IF NOT EXISTS idx_orders_code ON orders(order_code);
+
+CREATE TABLE IF NOT EXISTS integrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  name TEXT DEFAULT '',
+  token TEXT DEFAULT '',
+  vendor_id INTEGER,
+  vendor_title TEXT DEFAULT '',
+  booth_id INTEGER,
+  store_url TEXT DEFAULT '',
+  consumer_key TEXT DEFAULT '',
+  consumer_secret TEXT DEFAULT '',
+  auto_sync INTEGER DEFAULT 0,
+  last_sync_at TEXT,
+  last_status TEXT DEFAULT '',
+  created_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 
 CREATE TABLE IF NOT EXISTS settings (
