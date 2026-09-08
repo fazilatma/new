@@ -77,7 +77,7 @@ tailwind.config = {
   .modal-box { max-height: 92vh; overflow-y: auto; width: 100%; animation: fadeUp .3s ease both; }
   @keyframes toastIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
   .toast { animation: toastIn .3s ease both; }
-  .chart-box { position: relative; height: 260px; } .chart-box.tall { height: 320px; }
+  .chart-box { position: relative; height: 260px; } .panx:active { cursor: grabbing; } .chart-box.tall { height: 320px; }
   .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
   .kpi-icon { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; flex-shrink: 0; }
   details.coll { border: 1px dashed rgba(148,163,184,.45); border-radius: .9rem; overflow: hidden; background: rgba(148,163,184,.05); }
@@ -158,11 +158,14 @@ tailwind.config = {
       <div id="kpis" class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-4"></div>
       <div class="grid lg:grid-cols-3 gap-4 mb-4">
         <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(کلیک روی راهنما: خاموش/روشن خط • اسکرول افقی برای گذشته)</span></h3>
-            <div class="flex gap-1 text-xs" id="trend-grp"></div>
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(درگ/اسکرول افقی • کلیک راهنما: خاموش/روشن خط)</span></h3>
+            <div class="flex items-center gap-3">
+              <div class="flex gap-1 text-xs" id="trend-rng"></div>
+              <div class="flex gap-1 text-xs" id="trend-grp"></div>
+            </div>
           </div>
-          <div class="overflow-x-auto"><div id="ch-cnt-w" class="chart-box tall"><canvas id="ch-cnt"></canvas></div></div>
+          <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-cnt-w" class="chart-box tall"><canvas id="ch-cnt"></canvas></div></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">🧭 سهم منابع فروش</h3>
@@ -172,11 +175,11 @@ tailwind.config = {
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
         <div class="glass card card-hover p-4 anim anim-1">
           <h3 class="font-black text-sm mb-2">💰 روند حجم فروش</h3>
-          <div class="overflow-x-auto"><div id="ch-vol-w" class="chart-box tall"><canvas id="ch-vol"></canvas></div></div>
+          <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-vol-w" class="chart-box tall"><canvas id="ch-vol"></canvas></div></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">✅ روند سود</h3>
-          <div class="overflow-x-auto"><div id="ch-pft-w" class="chart-box tall"><canvas id="ch-pft"></canvas></div></div>
+          <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-pft-w" class="chart-box tall"><canvas id="ch-pft"></canvas></div></div>
         </div>
       </div>
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
@@ -321,7 +324,7 @@ tailwind.config = {
       <div id="r-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
       <div class="glass card p-4 mb-4">
         <h3 class="font-black text-sm mb-2">📈 نمودار سود و زیان</h3>
-        <div class="overflow-x-auto"><div id="ch-pnl-w" class="chart-box tall"><canvas id="ch-pnl"></canvas></div></div>
+        <div class="overflow-x-auto panx cursor-grab select-none" dir="ltr"><div id="ch-pnl-w" class="chart-box tall"><canvas id="ch-pnl"></canvas></div></div>
       </div>
       <div class="glass card p-4 mb-4">
         <h3 class="font-black text-sm mb-2">📋 جدول سود و زیان دوره‌ای</h3>
@@ -519,7 +522,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.5.1';
+const APP_VER = '1.6.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -580,6 +583,7 @@ const pad2 = (n) => String(n).padStart(2, '0');
 const isoToday = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
 const parseISO = (s) => { const [y, m, d] = String(s || '').split('-').map(Number); return new Date(y || 2000, (m || 1) - 1, d || 1); };
 const toISO = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const isoDaysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return toISO(d); };
 const addDays = (iso, n) => { const d = parseISO(iso); d.setDate(d.getDate() + n); return toISO(d); };
 const isoToJ = (iso) => { const [y, m, d] = String(iso).split('-').map(Number); return toJ(y, m, d); };
 const jToISO = (jy, jm, jd) => { const g = toG(jy, jm, jd); return `${g.gy}-${pad2(g.gm)}-${pad2(g.gd)}`; };
@@ -666,7 +670,7 @@ const Store = {
 /* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
 const state = {
   orders: [], booths: [], suppliers: [], integrations: [], settings: {},
-  range: 'month', customFrom: null, customTo: null, trendGroup: 'daily',
+  range: 'month', customFrom: null, customTo: null, trendGroup: 'weekly', trendRange: '365',
 };
 const N = (v) => Number(v) || 0;
 
@@ -1000,7 +1004,12 @@ function setRange(r) {
   state.range = r;
   $('#rng-custom').classList.toggle('hidden', r !== 'custom');
   $('#rng-custom').classList.toggle('flex', r === 'custom');
-  state.trendGroup = (r === 'year' || r === 'all') ? 'monthly' : 'daily';
+  renderDashboard();
+}
+/* بازه مستقل نمودارهای روند + گروه‌بندی خودکار متناسب */
+function setTrendRange(v) {
+  state.trendRange = v;
+  state.trendGroup = v === 'all' ? 'monthly' : v === '90' ? 'daily' : 'weekly';
   renderDashboard();
 }
 function applyCustomRange() {
@@ -1034,6 +1043,24 @@ function breakdownTableHTML(rows, firstCol) {
   return `<thead><tr><th>${firstCol}</th><th>سفارش</th><th>فروش</th><th>هزینه</th><th>سود</th><th>حاشیه</th><th>سهم از سود</th></tr></thead><tbody>`
     + (body || '<tr><td colspan="7" class="text-center text-slate-400 py-4">—</td></tr>') + '</tbody>';
 }
+/* درگ-تو-پن روی نمودارهای زمانی (ماوس؛ لمسی ذاتاً اسکرول می‌شود) */
+function bindPan() {
+  document.querySelectorAll('.panx').forEach((el) => {
+    let down = false, moved = false, sx = 0, sl = 0;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      down = true; moved = false; sx = e.clientX; sl = el.scrollLeft;
+      el.setPointerCapture(e.pointerId);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!down) return;
+      if (Math.abs(e.clientX - sx) > 4) moved = true;
+      el.scrollLeft = sl - (e.clientX - sx);
+    });
+    ['pointerup', 'pointercancel'].forEach((ev) => el.addEventListener(ev, () => { down = false; }));
+    el.addEventListener('click', (e) => { if (moved) { moved = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  });
+}
 function renderDashboard() {
   const incR = $('#inc-ret').checked;
   $('#rng-btns').innerHTML = RANGES.map((r) =>
@@ -1054,10 +1081,15 @@ function renderDashboard() {
   const groups = [['daily', 'روزانه'], ['weekly', 'هفتگی'], ['monthly', 'ماهانه']];
   $('#trend-grp').innerHTML = groups.map(([g, t]) =>
     `<button onclick="state.trendGroup='${g}';renderDashboard()" class="btn !py-1 !px-2 !text-[11px] ${state.trendGroup === g ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
-  const series = groupStatusSeries(list, state.trendGroup, incR);
+  const TRNG = [['90', '۳ ماهه'], ['180', '۶ ماهه'], ['365', '۱ ساله'], ['all', '🌍 همه']];
+  $('#trend-rng').innerHTML = TRNG.map(([v, t]) =>
+    `<button onclick="setTrendRange('${v}')" class="btn !py-1 !px-2 !text-[11px] ${state.trendRange === v ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
+  const tcut = state.trendRange === 'all' ? '' : isoDaysAgo(+state.trendRange);
+  const tlist = state.orders.filter((o) => !tcut || (o.order_date || '') >= tcut);
+  const series = groupStatusSeries(tlist, state.trendGroup, incR);
   const sLab = series.map((r) => r.label);
   const wide = Math.min(Math.max(sLab.length, 1) * 56, 6000) + 'px';
-  for (const id of ['ch-cnt-w', 'ch-vol-w', 'ch-pft-w']) document.getElementById(id).style.minWidth = wide;
+  for (const id of ['ch-cnt-w', 'ch-vol-w', 'ch-pft-w']) { const w = document.getElementById(id); w.style.minWidth = wide; w.parentElement.scrollLeft = 1e9; }
   const tickM = document.documentElement.classList.contains('dark') ? '#94a3b8' : '#64748b';
   const lineDS = (label, data, color, fill, pts) => ({ label, data, borderColor: color, backgroundColor: fill || color,
     fill: !!fill, tension: .4, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6,
@@ -1420,6 +1452,7 @@ function renderReports() {
   if (limit > 0) series = series.slice(-limit);
   state._reportSeries = series;
   document.getElementById('ch-pnl-w').style.minWidth = Math.min(Math.max(series.length, 1) * 84, 6000) + 'px';
+  document.getElementById('ch-pnl-w').parentElement.scrollLeft = 1e9;
   mkChart('ch-pnl', { type: 'bar',
     data: { labels: series.map((r) => r.label), datasets: [
       { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.7)', borderRadius: 6 },
@@ -2068,6 +2101,7 @@ async function init() {
   if (localStorage.getItem('hd_theme') !== 'light') document.documentElement.classList.add('dark');
   else document.documentElement.classList.remove('dark');
   $('#theme-ico').textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+  bindPan();
   buildNav();
   $('#today-j').textContent = 'امروز ' + fmtJ(isoToday());
   $('#ver-badge').textContent = 'نسخه ' + toFa(APP_VER);
