@@ -60,6 +60,46 @@ distinct.
 
 Covered by `worker-tests/php-10170-parity.test.mjs` (7 tests).
 
+### v10.170 - reconciliation table (`reconRunOne` / `reconExpected`)
+
+`recon()` only answered "is this local row mapped to a remote id?" and returned a flat
+summary. The PHP edition answers the question shop owners actually ask: for every
+product, does the destination agree with the source, and if not, why?
+
+Added `reconTable()` in `worker-src/maintenance.ts` (re-exported by
+`render-src/maintenance.ts`, so both runtimes share one implementation). Every remote
+product and every unmatched active local product is bucketed exactly once:
+
+| bucket | meaning |
+| --- | --- |
+| `matched` | in both, price agrees |
+| `priceDiff` | in both, destination price differs (carries `from`/`to`/`delta`) |
+| `extra` | in the destination but in no profile/source |
+| `missing` | in the source but not in the destination (retired products excluded) |
+| `noPrice` | matched, but the source has no price so it cannot be compared |
+
+Matching follows PHP's order: normalized title first (`reconNormTitle` = the shared
+Persian normalizer plus product-code suffix stripping), then `sku`, then the stored
+remote id, so products whose titles were edited at the destination still match instead
+of being double-counted as `extra` + `missing`.
+
+Surfaced as:
+
+- `POST /api/maintenance/recon-table/<target>` in both `worker-src/app.ts` and
+  `render-src/server.ts`.
+- Two "جدول مغایرت" buttons on the existing reconciliation card, rendering a sorted,
+  colour-coded table (discrepancies first) instead of the previous raw JSON dump.
+
+### AI model test - precise configuration errors
+
+Not a PHP gap, but reported alongside it: testing all models returned the same opaque
+"تنظیمات ارائه‌دهنده/مدل کامل نیست" on every row. Default providers (OpenRouter,
+Mistral, Ollama) ship with a model list but no API key, so `aiCall`'s combined
+`!baseUrl || !apiKey || !model` guard fired for all of them with no indication which
+field was missing. `aiConfigProblem()` now names the missing field, unconfigured
+providers are reported as skipped (`phase: 'configuration'`) rather than as failures,
+and local runtimes (Ollama / localhost) are exempt from the API-key requirement.
+
 ### Reviewed and intentionally not ported
 
 - `sfxRemoteStatus` / `suffixStatusBucket` - the underlying Basalam status codes

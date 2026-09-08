@@ -13,6 +13,89 @@ type CatalogQuery={page?:number;perPage?:number;q?:string;status?:string;shopId?
 type ProductRef={id:number;shopId:string};
 export type DestinationCategory={id:number;name:string;path:string;parentId:number|null;depth:number;leaf:boolean};
 
+/**
+ * PHP scraper4 v10.170 parity: reconciliation ("مغایرت‌گیری") table.
+ *
+ * `recon()` only answered "is this local row mapped to a remote id?". The PHP
+ * edition answers the question shop owners actually ask: for every product,
+ * does the destination agree with the source, and if not, why? Every remote and
+ * every local product is bucketed exactly once:
+ *
+ *   matched    - found in both, price agrees
+ *   priceDiff  - found in both, destination price differs (from -> to)
+ *   extra      - exists in the destination but in no profile/source
+ *   missing    - exists in the source but not in the destination
+ *   noPrice    - matched, but the source has no price so it cannot be compared
+ *
+ * Title matching uses reconNormTitle (shared Persian normalizer + product-code
+ * suffix stripping); when titles were edited at the destination we still match
+ * through the stored remote id, exactly like PHP's `$idMap` fallback.
+ */
+export type ReconRow={
+  bucket:'matched'|'priceDiff'|'extra'|'missing'|'noPrice';
+  title:string;remoteTitle:string;remoteId:number|null;
+  profileId:string;sourceKey:string;
+  sourcePrice:number|null;remotePrice:number|null;delta:number|null;
+  matchedBy:'id'|'sku'|'title'|'none';
+  shopId:string;shopName:string;status:string;why:string;
+};
+/** Title key for reconciliation: Persian-normalized and stripped of a trailing product code. */
+export function reconNormTitle(value:string):string{
+  return normalizePersianText(value)
+    .replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*[\d]+[\])]\s*$/i,'')
+    .replace(/[^\p{L}\p{N}\s]/gu,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+const reconPrice=(value:unknown):number|null=>{const n=Math.round(Number(value)||0);return n>0?n:null};
+
+export type ReconTable=Awaited<ReturnType<typeof reconTable>>;
+export async function reconTable(target:Target,profileId=''){
+  const local=await maintenanceRows(profileId),remote=await remoteProducts(target);
+  const rows:ReconRow[]=[];
+  // Index the source side by normalized title, by sku and by stored remote id.
+  const byTitle=new Map<string,any[]>(),bySku=new Map<string,any>(),byRemoteId=new Map<number,any>();
+  for(const row of local){
+    const key=reconNormTitle(row.title);
+    if(key){const list=byTitle.get(key)||[];list.push(row);byTitle.set(key,list)}
+    const sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);
+    if(sku&&!bySku.has(sku))bySku.set(sku,row);
+    const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0);
+    if(mapped>0&&!byRemoteId.has(mapped))byRemoteId.set(mapped,row);
+  }
+  const consumed=new Set<any>();
+  for(const item of remote){
+    const key=reconNormTitle(item.name||item.title||'');
+    // PHP order: title first, then the stored id (destination titles get edited).
+    let source=(byTitle.get(key)||[]).find(row=>!consumed.has(row))||null,matchedBy:ReconRow['matchedBy']=source?'title':'none';
+    if(!source&&item.sku&&bySku.has(item.sku)){const candidate=bySku.get(item.sku);if(!consumed.has(candidate)){source=candidate;matchedBy='sku'}}
+    if(!source&&byRemoteId.has(item.id)){const candidate=byRemoteId.get(item.id);if(!consumed.has(candidate)){source=candidate;matchedBy='id'}}
+    const remotePrice=reconPrice(item.price);
+    if(!source){
+      rows.push({bucket:'extra',title:item.name||item.title||'',remoteTitle:item.name||item.title||'',remoteId:item.id||null,profileId:'',sourceKey:'',sourcePrice:null,remotePrice,delta:null,matchedBy:'none',shopId:String(item.shopId||''),shopName:String(item.shopName||''),status:String(item.status||''),why:'در هیچ پروفایل/مبدأ نیست'});
+      continue;
+    }
+    consumed.add(source);
+    const sourcePrice=reconPrice(source.price);
+    const base={title:source.title||'',remoteTitle:item.name||item.title||'',remoteId:item.id||null,profileId:String(source.profile_id||''),sourceKey:String(source.source_key||''),sourcePrice,remotePrice,matchedBy,shopId:String(item.shopId||''),shopName:String(item.shopName||''),status:String(item.status||'')};
+    if(sourcePrice===null)rows.push({...base,bucket:'noPrice',delta:null,why:'قیمت مبدأ ثبت نشده — مقایسه نشد'});
+    else if(remotePrice!==sourcePrice)rows.push({...base,bucket:'priceDiff',delta:(remotePrice||0)-sourcePrice,why:'قیمت مقصد با مبدأ یکی نیست'});
+    else rows.push({...base,bucket:'matched',delta:0,why:''});
+  }
+  for(const row of local){
+    if(consumed.has(row))continue;
+    if(!row.active)continue; // retired products are not "missing"
+    rows.push({bucket:'missing',title:row.title||'',remoteTitle:'',remoteId:null,profileId:String(row.profile_id||''),sourceKey:String(row.source_key||''),sourcePrice:reconPrice(row.price),remotePrice:null,delta:null,matchedBy:'none',shopId:'',shopName:'',status:'',why:'در مبدأ هست ولی در مقصد نیست'});
+  }
+  const count=(bucket:ReconRow['bucket'])=>rows.filter(row=>row.bucket===bucket).length;
+  const summary={matched:count('matched'),priceDiff:count('priceDiff'),extra:count('extra'),missing:count('missing'),noPrice:count('noPrice')};
+  const matchedByTitle=rows.filter(row=>row.matchedBy==='title').length,matchedBySku=rows.filter(row=>row.matchedBy==='sku').length,matchedById=rows.filter(row=>row.matchedBy==='id').length;
+  const inSync=summary.priceDiff===0&&summary.extra===0&&summary.missing===0;
+  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
+  await setState(`recon_table_${target}`,report);
+  return report;
+}
+
 export async function recon(target:Target,profileId=''){
   const local=await maintenanceRows(profileId),remote=await remoteProducts(target),byId=new Map(remote.map(x=>[x.id,x])),bySku=new Map(remote.filter(x=>x.sku).map(x=>[x.sku,x])),byName=new Map(remote.map(x=>[norm(x.name),x])),used=new Set<number>(),items:any[]=[];
   for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''})}

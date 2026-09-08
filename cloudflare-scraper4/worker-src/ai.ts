@@ -52,9 +52,29 @@ function isMistralProvider(provider:AiEndpointProvider):boolean{return provider.
 export function aiModelEndpoint(provider:AiEndpointProvider,model:string):AiModelEndpoint{return isMistralProvider(provider)?MISTRAL_MODEL_ENDPOINTS[model]||'chat-completions':'chat-completions'}
 export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
 
+/**
+ * A provider is only testable when it has a base URL, at least one API key and a
+ * model. The old code threw one generic "provider/model config is incomplete"
+ * error from deep inside aiCall, so a user testing every model saw the same
+ * opaque message on every row with no hint which field was missing. Local
+ * runtimes (Ollama) need no key, so they are exempt from the key requirement.
+ */
+function isKeylessAiProvider(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'>>):boolean{
+  const base=String(provider.baseUrl||'');
+  return provider.id==='ollama'||/(^|\/\/)(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)([:/]|$)/i.test(base)||/(^|\.)ollama\b/i.test(base);
+}
+/** Returns a precise Persian reason why this provider/model cannot be called, or '' when it is usable. */
+export function aiConfigProblem(provider:Provider,model:string):string{
+  const name=String(provider.name||provider.id||'ارائه‌دهنده');
+  if(!String(provider.baseUrl||'').trim())return `آدرس سرویس (Base URL) برای «${name}» تنظیم نشده است.`;
+  if(!String(model||'').trim())return `برای «${name}» هیچ مدلی انتخاب نشده است.`;
+  if(!String(provider.apiKey||'').trim()&&!isKeylessAiProvider(provider))return `کلید API برای «${name}» وارد نشده است؛ در بخش ارائه‌دهنده‌ها کلید را ثبت کنید.`;
+  return '';
+}
+
 export async function aiCall(provider:Provider,model:string,prompt:string,networkOverride?:Network,timeoutMs?:number,batchId?:string){
   const network=networkOverride||(await loadConnections()).ai.network;
-  if(!provider.baseUrl||!provider.apiKey||!model)throw new Error('تنظیمات ارائه‌دهنده/مدل کامل نیست');
+  {const problem=aiConfigProblem(provider,model);if(problem)throw new Error(problem);}
   const started=Date.now();
   if(isCloudflareNative(provider.baseUrl))return cloudflareCall(provider,model,prompt,network,started,timeoutMs);
   const endpointType=aiModelEndpoint(provider,model);
@@ -81,7 +101,7 @@ export async function aiCall(provider:Provider,model:string,prompt:string,networ
 /** Chat with full conversation history (aiCall only sends a single prompt). */
 export async function aiChat(provider:Provider,model:string,messages:Array<{role:string;content:string}>,networkOverride?:Network,timeoutMs?:number,maxTokens=1200,keyIndex=0){const providerUsed=providerWithKey(provider,keyIndex);provider=providerUsed;
   const network=networkOverride||(await loadConnections()).ai.network;
-  if(!provider.baseUrl||!provider.apiKey||!model)throw new Error('تنظیمات ارائه‌دهنده/مدل کامل نیست');
+  {const problem=aiConfigProblem(provider,model);if(problem)throw new Error(problem);}
   const started=Date.now(),chatMessages=messages.slice(-40).map(m=>({role:String(m.role||'user'),content:String(m.content||'')}));
   if(!chatMessages.length||chatMessages[chatMessages.length-1].role!=='user')throw new Error('آخرین پیام باید از سمت کاربر باشد.');
   const lastPrompt=chatMessages[chatMessages.length-1].content;
@@ -147,7 +167,7 @@ export function parseAgentTurn(body:any):{text:string;toolCalls:AiToolCall[]}{
  */
 export async function aiAgentCall(provider:Provider,model:string,messages:Array<{role:string;content:string|null;tool_call_id?:string;tool_calls?:Array<{id:string;type:string;function:{name:string;arguments:string}}>}>,tools:AiTool[],networkOverride?:Network,timeoutMs?:number,maxTokens=2000):Promise<AiAgentTurn>{
   const network=networkOverride||(await loadConnections()).ai.network,started=Date.now();
-  if(!provider.baseUrl||!provider.apiKey||!model)throw new Error('تنظیمات ارائه‌دهنده/مدل کامل نیست');
+  {const problem=aiConfigProblem(provider,model);if(problem)throw new Error(problem);}
   const canonical=canonicalAiModel(model);
   if(isCloudflareNative(provider.baseUrl)){
     const accountId=cloudflareAccountId(provider.baseUrl);
@@ -251,7 +271,7 @@ function cloudflareModelIds(raw:string):string[]{
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.73.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.74.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -409,8 +429,14 @@ function skippedAiTestResult(task:AiTestTask,prompt:string,categoryTitle:string,
   const error=String(reason||'پس از چند تلاش، پاسخ این نوبت از Worker دریافت نشد.');
   return{ok:false,skipped:true,retryable:true,phase:'transport-skip',key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model,prompt,latencyMs:0,error,raw:{error},categoryTitle,categoryResult:categoryTitle?{ok:false,skipped:true,phase:'transport-skip',key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model,prompt:categoryTitle,latencyMs:0,error,raw:{error}}:null,catResponse:categoryTitle?error:''};
 }
+function unconfiguredAiTestResult(task:AiTestTask,prompt:string,categoryTitle:string,problem:string){
+  // Reported as a skip (not a failure) so an unconfigured provider cannot make the whole run look broken.
+  return{ok:false,skipped:true,retryable:false,phase:'configuration',key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model,prompt,latencyMs:0,error:problem,raw:{error:problem},categoryTitle,categoryResult:categoryTitle?{ok:false,skipped:true,phase:'configuration',key:task.key,provider:task.p.id,providerName:task.p.name,model:task.model,prompt:categoryTitle,latencyMs:0,error:problem,raw:{error:problem}}:null,catResponse:categoryTitle?problem:''};
+}
 async function executeAiTestTask(task:AiTestTask,prompt:string,categoryTitle:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number,skipCurrent=false,skipReason='',batchId=''){
   if(skipCurrent)return skippedAiTestResult(task,prompt,categoryTitle,skipReason);
+  const configProblem=aiConfigProblem(task.p,task.model);
+  if(configProblem)return unconfiguredAiTestResult(task,prompt,categoryTitle,configProblem);
   let message:any;try{message={...await aiCall(task.p,task.model,prompt,network,timeoutMs,batchId),key:task.key}}catch(error){message=aiTestFailure(error,task,prompt)}
   let categoryResult:any=null;
   if(categoryTitle&&!message.ok)categoryResult={ok:false,skipped:true,phase:'message-failed',key:task.key,provider:task.p.id,providerName:task.p.name,model:task.model,prompt:categoryTitle,latencyMs:0,error:'چون پاسخ پیام ناموفق بود، تست دسته‌بندی این مدل رد شد تا صف گیر نکند.',raw:{reason:'message-failed'}};
@@ -421,6 +447,8 @@ async function executeAiTestTask(task:AiTestTask,prompt:string,categoryTitle:str
 }
 function categoryResponseText(categoryResult:any,categories:AiCategoryOption[]){return categoryResult?.ok?`${categoryResult.categoryName} (#${categoryResult.categoryId})`:categoryResult?.error||(!categories.length?'فهرست دسته‌بندی در دسترس نیست':'')}
 async function executeAiTestPart(task:AiTestTask,prompt:string,categoryTitle:string,categories:AiCategoryOption[],network:Network,timeoutMs:number|undefined,part:'message'|'category',previousRow:any){
+  const configProblem=aiConfigProblem(task.p,task.model);
+  if(configProblem)return unconfiguredAiTestResult(task,prompt,categoryTitle,configProblem);
   if(part==='message'){
     let message:any;try{message={...await aiCall(task.p,task.model,prompt,network,timeoutMs,String(previousRow?.batchId||'')),key:task.key}}catch(error){message=aiTestFailure(error,task,prompt)}
     const row:any={...previousRow,...message,key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,categoryTitle,categoryResult:previousRow?.categoryResult??null,catResponse:previousRow?.catResponse||'',messageRetryCount:Number(previousRow?.messageRetryCount||0)+1,retryCount:Number(previousRow?.retryCount||0)+1};

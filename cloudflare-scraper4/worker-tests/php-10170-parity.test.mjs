@@ -98,3 +98,101 @@ test('v10.125 parity: progress fingerprint ignores timestamps', async () => {
   assert.match(body, /cursor/);
   assert.match(body, /processed/);
 });
+
+/** Loads reconTable with the data-access layer stubbed, so the real logic runs. */
+async function loadReconTable(local, remote) {
+  const src = await read('../worker-src/maintenance.ts');
+  const start = src.indexOf('/**\n * PHP scraper4 v10.170 parity: reconciliation');
+  const end = src.indexOf("export async function recon(target:Target,profileId=''){");
+  assert.ok(start > -1 && end > start, 'reconTable block must exist in worker-src/maintenance.ts');
+  const utils = await read('../worker-src/utils.ts');
+  const helpers = utils
+    .slice(utils.indexOf('const PERSIAN_FOLD_MAP'))
+    .replace(/: Record<string,string>/g, '').replace(/: unknown/g, '').replace(/: string/g, '');
+  const block = src.slice(start, end)
+    .replace(/export type ReconRow=\{[\s\S]*?\};\n/, '')
+    .replace(/export type ReconTable=[^\n]*\n/, '')
+    .replace(/:ReconRow\['bucket'\]/g, '').replace(/:ReconRow\['matchedBy'\]/g, '')
+    .replace(/:ReconRow\[\]/g, '').replace(/<string,any\[\]>/g, '').replace(/<string,any>/g, '')
+    .replace(/<number,any>/g, '').replace(/<any>/g, '')
+    .replace(/\(value:unknown\)/g, '(value)').replace(/:number\|null=>/g, '=>')
+    .replace(/export function reconNormTitle\(value:string\):string/, 'export function reconNormTitle(value)')
+    .replace(/export async function reconTable\(target:Target,profileId=''\)/, 'export async function reconTable(target,profileId="")');
+  const code = `
+    const LOCAL=${JSON.stringify(local)},REMOTE=${JSON.stringify(remote)};
+    const maintenanceRows=async()=>LOCAL;const remoteProducts=async()=>REMOTE;const setState=async()=>{};
+    ${helpers}
+    ${block}`;
+  return import(`data:text/javascript,${encodeURIComponent(code)}`);
+}
+
+test('v10.170 parity: reconciliation table buckets every product exactly once', async () => {
+  const local = [
+    { profile_id: 'p1', source_key: 'a', title: 'گوشی سامسونگ', price: 1000, active: true, data: {}, remote_woo_id: 11 },
+    { profile_id: 'p1', source_key: 'b', title: 'کفش ورزشی', price: 2000, active: true, data: {}, remote_woo_id: 12 },
+    { profile_id: 'p1', source_key: 'c', title: 'مانتو نسويّة', price: 3000, active: true, data: {}, remote_woo_id: 0 },
+    { profile_id: 'p1', source_key: 'd', title: 'محصول بدون قیمت', price: 0, active: true, data: {}, remote_woo_id: 14 },
+    { profile_id: 'p1', source_key: 'e', title: 'فقط در مبدأ', price: 500, active: true, data: {}, remote_woo_id: 0 },
+    { profile_id: 'p1', source_key: 'f', title: 'بازنشسته', price: 900, active: false, data: {}, remote_woo_id: 0 },
+  ];
+  const remote = [
+    { id: 11, name: 'گوشی سامسونگ', price: 1000, status: 'publish', shopId: 's', shopName: 'S', sku: '' },
+    { id: 12, name: 'کفش ورزشی', price: 2500, status: 'publish', shopId: 's', shopName: 'S', sku: '' },
+    { id: 13, name: 'مانتو نسویه', price: 3000, status: 'publish', shopId: 's', shopName: 'S', sku: '' },
+    { id: 14, name: 'محصول بدون قیمت', price: 777, status: 'publish', shopId: 's', shopName: 'S', sku: '' },
+    { id: 99, name: 'محصول ناشناخته', price: 100, status: 'publish', shopId: 's', shopName: 'S', sku: '' },
+  ];
+  const { reconTable } = await loadReconTable(local, remote);
+  const report = await reconTable('woo');
+
+  assert.equal(report.matched, 2, 'identical products (one only matches after Arabic folding)');
+  assert.equal(report.priceDiff, 1);
+  assert.equal(report.extra, 1);
+  assert.equal(report.missing, 1, 'retired products must not count as missing');
+  assert.equal(report.noPrice, 1);
+  assert.equal(report.inSync, false);
+  // Every remote row plus every unmatched active local row, counted once.
+  assert.equal(report.rows.length, remote.length + report.missing);
+
+  const diff = report.rows.find(row => row.bucket === 'priceDiff');
+  assert.equal(diff.remotePrice, 2500);
+  assert.equal(diff.sourcePrice, 2000);
+  assert.equal(diff.delta, 500);
+  // The Arabic-spelling variant must land in matched, not in extra+missing.
+  assert.ok(report.rows.some(row => row.bucket === 'matched' && row.title === 'مانتو نسويّة'));
+});
+
+test('v10.170 parity: a fully synced shop reports inSync with no discrepancies', async () => {
+  const local = [{ profile_id: 'p1', source_key: 'a', title: 'کالا', price: 100, active: true, data: {}, remote_woo_id: 1 }];
+  const remote = [{ id: 1, name: 'کالا', price: 100, status: 'publish', shopId: 's', shopName: 'S', sku: '' }];
+  const { reconTable } = await loadReconTable(local, remote);
+  const report = await reconTable('woo');
+  assert.equal(report.inSync, true);
+  assert.equal(report.matched, 1);
+  assert.equal(report.priceDiff + report.extra + report.missing, 0);
+});
+
+test('v10.170 parity: recon title key strips product-code suffixes', async () => {
+  const { reconNormTitle } = await loadReconTable([], []);
+  assert.equal(reconNormTitle('گوشی سامسونگ (کد: ۱۲۳)'), 'گوشی سامسونگ');
+  assert.equal(reconNormTitle('کفش  ورزشی - مدل A'), 'کفش ورزشی مدل a');
+});
+
+test('AI model test reports which setting is missing instead of a generic error', async () => {
+  const ai = await read('../worker-src/ai.ts');
+  // The old opaque message must be gone from every call site.
+  assert.doesNotMatch(ai, /تنظیمات ارائه‌دهنده\/مدل کامل نیست/);
+  assert.match(ai, /export function aiConfigProblem/);
+  // Base URL, model and API key each get their own message.
+  assert.match(ai, /Base URL/);
+  assert.match(ai, /کلید API برای/);
+  assert.match(ai, /هیچ مدلی انتخاب نشده/);
+  // Unconfigured providers are skipped up-front rather than failing mid-request.
+  assert.match(ai, /unconfiguredAiTestResult/);
+  assert.match(ai, /phase:'configuration'/);
+  // Local runtimes legitimately have no key.
+  assert.match(ai, /isKeylessAiProvider/);
+  const render = await read('../render-src/ai.ts');
+  assert.doesNotMatch(render, /تنظیمات ارائه‌دهنده\/مدل کامل نیست/);
+  assert.match(render, /aiConfigProblem/);
+});
