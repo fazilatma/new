@@ -68,6 +68,13 @@ tailwind.config = {
   .chart-box { position: relative; height: 260px; } .chart-box.tall { height: 320px; }
   .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
   .kpi-icon { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; flex-shrink: 0; }
+  details.coll { border: 1px dashed rgba(148,163,184,.45); border-radius: .9rem; overflow: hidden; background: rgba(148,163,184,.05); }
+  details.coll summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: .5rem; padding: .7rem .9rem; font-weight: 800; font-size: .8rem; user-select: none; }
+  details.coll summary::-webkit-details-marker { display: none; }
+  details.coll summary .chev { transition: transform .2s; font-size: .75rem; color: #6366f1; display: inline-block; }
+  details.coll[open] summary .chev { transform: rotate(180deg); }
+  details.coll summary:hover { background: rgba(99,102,241,.06); }
+  details.coll .coll-body { padding: .2rem .9rem .9rem; }
   @media print {
     body * { visibility: hidden; }
     #print-area, #print-area * { visibility: visible; }
@@ -198,37 +205,51 @@ tailwind.config = {
             <div id="wrap-booth"><label class="text-xs font-bold">غرفه باسلام *</label>
               <div class="flex gap-1"><select id="o-booth" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('booth')" title="غرفه جدید">＋</button></div></div>
           </div>
-          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
-            <div><label class="text-xs font-bold">نام و نام خانوادگی مشتری *</label><input id="o-customer" class="inp" required placeholder="مثلاً سارا محمدی"></div>
-            <div><label class="text-xs font-bold">شماره تماس</label><input id="o-phone" class="inp num" dir="ltr" placeholder="09…"></div>
-            <div><label class="text-xs font-bold">شهر</label><input id="o-city" class="inp" placeholder="تهران"></div>
-          </div>
-          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
-            <div class="md:col-span-2"><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
-            <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="liveCalc()"></div>
-            <div class="md:col-span-2"><label class="text-xs font-bold">تامین‌کننده (واسطه)</label>
-              <div class="flex gap-1"><select id="o-sup" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('supplier')" title="تامین‌کننده جدید">＋</button></div></div>
-            <div><label class="text-xs font-bold">تاریخ سفارش</label><div id="pk-date"></div></div>
-          </div>
           <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3">
-            <div class="text-xs font-black mb-2 text-slate-500">💵 مبالغ (تومان)</div>
+            <div class="text-xs font-black mb-2 text-slate-500">👤 مشتری و کالا</div>
+            <div class="grid md:grid-cols-3 gap-3">
+              <div><label class="text-xs font-bold">نام و نام خانوادگی مشتری *</label><input id="o-customer" class="inp" required placeholder="مثلاً سارا محمدی"></div>
+              <div><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
+              <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="liveCalc()"></div>
+            </div>
+          </div>
+          <details class="coll" id="det-cust">
+            <summary><span class="chev">▾</span> 👤 مشخصات تکمیلی مشتری <span class="text-[11px] font-normal text-slate-400">— تلفن، شهر</span></summary>
+            <div class="coll-body grid md:grid-cols-2 gap-3">
+              <div><label class="text-xs font-bold">شماره تماس</label><input id="o-phone" class="inp num" dir="ltr" placeholder="09…"></div>
+              <div><label class="text-xs font-bold">شهر</label><input id="o-city" class="inp" placeholder="تهران"></div>
+            </div>
+          </details>
+          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3">
+            <div class="text-xs font-black mb-2 text-slate-500">💵 مبالغ اصلی (تومان)</div>
             <div class="grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">قیمت فروش واحد *</label><input id="o-usale" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">تامین‌کننده (واسطه)</label>
+                <div class="flex gap-1"><select id="o-sup" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('supplier')" title="تامین‌کننده جدید">＋</button></div></div>
+            </div>
+          </div>
+          <details class="coll" id="det-cost">
+            <summary><span class="chev">▾</span> 💸 تخفیف و هزینه‌های جانبی <span id="extra-total" class="chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 num mr-auto">۰ تومان</span></summary>
+            <div class="coll-body grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">هزینه ارسال</label><input id="o-ship" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه)</label><input id="o-comm" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">سایر هزینه‌ها</label><input id="o-other" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">شرح سایر هزینه‌ها</label><input id="o-otherlabel" class="inp" placeholder="مثلاً پیامک…"></div>
+              <div class="md:col-span-3"><label class="text-xs font-bold">شرح سایر هزینه‌ها</label><input id="o-otherlabel" class="inp" placeholder="مثلاً پیامک…"></div>
             </div>
-          </div>
+          </details>
           <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
+            <div><label class="text-xs font-bold">تاریخ سفارش</label><div id="pk-date"></div></div>
             <div><label class="text-xs font-bold">وضعیت سفارش</label><select id="o-status" class="inp"></select></div>
             <div><label class="text-xs font-bold">وضعیت پرداخت</label><select id="o-pay" class="inp"></select></div>
-            <div><label class="text-xs font-bold">توضیحات</label><input id="o-notes" class="inp" placeholder="اختیاری…"></div>
           </div>
+          <details class="coll" id="det-notes">
+            <summary><span class="chev">▾</span> 📝 توضیحات</summary>
+            <div class="coll-body"><textarea id="o-notes" class="inp" rows="2" placeholder="اختیاری…"></textarea></div>
+          </details>
           <div class="flex gap-2">
             <button type="submit" class="btn btn-primary flex-1 justify-center !py-3">💾 ذخیره سفارش</button>
             <button type="button" class="btn btn-soft" onclick="resetForm()">پاک‌سازی</button>
@@ -304,7 +325,10 @@ tailwind.config = {
     <!-- اتصال‌ها -->
     <section id="view-integrations" class="view">
       <div class="glass card p-4 mb-4 text-sm leading-8 anim no-print">
-        <div class="font-black mb-1">🔗 اتصال خودکار فروشگاه‌ها</div>
+        <div class="flex items-center gap-2 mb-1">
+          <div class="font-black">🔗 اتصال خودکار فروشگاه‌ها</div>
+          <button class="btn btn-primary !py-1.5 !text-xs mr-auto" id="sync-all-btn" onclick="syncAll()">🔄 سینک همه اتصال‌ها</button>
+        </div>
         <div class="text-xs text-slate-500 dark:text-slate-400 leading-6">
           با اتصال غرفه‌های باسلام و سایت ووکامرسی، سفارش‌ها به‌صورت خودکار وارد حسابداری می‌شوند.
           هزینه‌های تامین‌کننده را بعداً دستی تکمیل کنید؛ سینک مجدد، هزینه‌های ثبت‌شده شما را <b>پاک نمی‌کند</b>.
@@ -1063,6 +1087,9 @@ function liveCalc() {
         <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(c.profit)}</span></div>` +
       row('حاشیه سود', toFa(c.margin.toFixed(1)) + '٪') +
       `<div class="text-[11px] text-slate-400 leading-5 mt-1">فروش واحد × تعداد − تخفیف = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل</div>`;
+    const extra = N(o.discount) + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
+    const eb = document.getElementById('extra-total');
+    if (eb) eb.textContent = fmtMoney(extra);
   } catch {}
 }
 function resetForm() {
@@ -1071,6 +1098,7 @@ function resetForm() {
   ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => $('#' + id).value = 0);
   $('#form-title').textContent = '➕ ثبت سفارش جدید';
   $('#o-code').value = nextOrderCode();
+  ['det-cust', 'det-cost', 'det-notes'].forEach((id) => { document.getElementById(id).open = false; });
   PK.date.set(isoToday()); onSourceChange(); liveCalc();
 }
 async function submitOrder(e) {
@@ -1103,6 +1131,9 @@ function editOrder(id) {
   $('#o-status').value = o.status || 'pending'; $('#o-pay').value = o.payment_status || 'pending';
   $('#o-notes').value = o.notes || '';
   PK.date.set(o.order_date || isoToday());
+  document.getElementById('det-cust').open = !!(o.customer_phone || o.city);
+  document.getElementById('det-cost').open = !!((+o.discount || 0) + (+o.shipping_cost || 0) + (+o.packaging_cost || 0) + (+o.commission || 0) + (+o.ads_cost || 0) + (+o.other_cost || 0));
+  document.getElementById('det-notes').open = !!o.notes;
   liveCalc(); go('new');
 }
 function quickAdd(kind) {
@@ -1479,7 +1510,7 @@ function connCard(c) {
     </div>
     <div class="flex items-center gap-2 mt-2">
       <button class="btn btn-primary !py-1.5 !text-xs flex-1 justify-center" id="sync-${c.id}" onclick="syncInteg('${c.id}')">🔄 سینک سفارش‌ها</button>
-      <label class="flex items-center gap-1 text-[11px] cursor-pointer whitespace-nowrap" title="سینک خودکار با Cron ورکر (تنظیم در wrangler.toml)">خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}', this.checked)" class="w-4 h-4 accent-indigo-600"></label>
+      <label class="flex items-center gap-1 text-[11px] cursor-pointer whitespace-nowrap" title="سینک خودکار ساعتی توسط Cloudflare">خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}', this.checked)" class="w-4 h-4 accent-indigo-600"></label>
       <button class="btn btn-soft !px-2 !py-1.5 !text-xs" onclick="editInteg('${c.id}')" title="ویرایش">✏️</button>
       <button class="btn btn-danger !px-2 !py-1.5 !text-xs" onclick="delInteg('${c.id}')" title="حذف">🗑</button>
     </div>
@@ -1595,11 +1626,33 @@ async function syncInteg(id) {
     btn.disabled = false; btn.textContent = '🔄 سینک سفارش‌ها';
   }
 }
+async function syncAll() {
+  if (!state.integrations.length) { toast('اتصالی ثبت نشده است', 'err'); return; }
+  const btn = $('#sync-all-btn');
+  btn.disabled = true;
+  let totalNew = 0, totalUpd = 0, fails = 0;
+  for (const c of state.integrations) {
+    btn.textContent = `⏳ سینک ${c.name || ''}…`;
+    try {
+      const days = c.type === 'basalam' ? (+$('#bas-days').value || 30) : (+$('#woo-days').value || 30);
+      const r = await Store.syncIntegration(c.id, days);
+      if (r.ok) {
+        totalNew += r.imported || 0; totalUpd += r.updated || 0;
+        Object.assign(c, { last_sync_at: new Date().toISOString(), last_status: `ok: +${r.imported} ~${r.updated}` });
+      } else fails++;
+    } catch { fails++; }
+  }
+  state.orders = await Store.listOrders();
+  renderIntegrations();
+  btn.disabled = false; btn.textContent = '🔄 سینک همه اتصال‌ها';
+  if (fails && !totalNew && !totalUpd) toast('⛔ سینک ناموفق بود (در حالت محلی کار نمی‌کند)', 'err');
+  else toast(`✅ سینک همه: ${fmtN(totalNew)} جدید، ${fmtN(totalUpd)} به‌روزشده${fails ? `، ${fmtN(fails)} ناموفق` : ''}`);
+}
 async function toggleAuto(id, on) {
   try {
     const saved = await Store.saveIntegration({ id, auto_sync: on ? 1 : 0 });
     Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
-    toast(on ? '⏰ سینک خودکار روشن شد (نیازمند فعال‌سازی Cron در ورکر)' : 'سینک خودکار خاموش شد');
+    toast(on ? '⏰ سینک خودکار ساعتی روشن شد' : 'سینک خودکار خاموش شد');
   } catch (e) { toast('خطا: ' + e.message, 'err'); renderIntegrations(); }
 }
 function editInteg(id) {
