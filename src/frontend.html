@@ -159,10 +159,10 @@ tailwind.config = {
       <div class="grid lg:grid-cols-3 gap-4 mb-4">
         <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
           <div class="flex items-center justify-between mb-2">
-            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(کلیک روی راهنما: خاموش/روشن خط)</span></h3>
+            <h3 class="font-black text-sm">📈 روند تعداد سفارش‌ها <span class="text-[11px] font-normal text-slate-400">(کلیک روی راهنما: خاموش/روشن خط • اسکرول افقی برای گذشته)</span></h3>
             <div class="flex gap-1 text-xs" id="trend-grp"></div>
           </div>
-          <div class="chart-box tall"><canvas id="ch-cnt"></canvas></div>
+          <div class="overflow-x-auto"><div id="ch-cnt-w" class="chart-box tall"><canvas id="ch-cnt"></canvas></div></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">🧭 سهم منابع فروش</h3>
@@ -172,11 +172,11 @@ tailwind.config = {
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
         <div class="glass card card-hover p-4 anim anim-1">
           <h3 class="font-black text-sm mb-2">💰 روند حجم فروش</h3>
-          <div class="chart-box tall"><canvas id="ch-vol"></canvas></div>
+          <div class="overflow-x-auto"><div id="ch-vol-w" class="chart-box tall"><canvas id="ch-vol"></canvas></div></div>
         </div>
         <div class="glass card card-hover p-4 anim anim-2">
           <h3 class="font-black text-sm mb-2">✅ روند سود</h3>
-          <div class="chart-box tall"><canvas id="ch-pft"></canvas></div>
+          <div class="overflow-x-auto"><div id="ch-pft-w" class="chart-box tall"><canvas id="ch-pft"></canvas></div></div>
         </div>
       </div>
       <div class="grid lg:grid-cols-2 gap-4 mb-4">
@@ -321,7 +321,7 @@ tailwind.config = {
       <div id="r-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
       <div class="glass card p-4 mb-4">
         <h3 class="font-black text-sm mb-2">📈 نمودار سود و زیان</h3>
-        <div class="chart-box tall"><canvas id="ch-pnl"></canvas></div>
+        <div class="overflow-x-auto"><div id="ch-pnl-w" class="chart-box tall"><canvas id="ch-pnl"></canvas></div></div>
       </div>
       <div class="glass card p-4 mb-4">
         <h3 class="font-black text-sm mb-2">📋 جدول سود و زیان دوره‌ای</h3>
@@ -519,7 +519,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.5.0';
+const APP_VER = '1.5.1';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1056,6 +1056,8 @@ function renderDashboard() {
     `<button onclick="state.trendGroup='${g}';renderDashboard()" class="btn !py-1 !px-2 !text-[11px] ${state.trendGroup === g ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
   const series = groupStatusSeries(list, state.trendGroup, incR);
   const sLab = series.map((r) => r.label);
+  const wide = Math.min(Math.max(sLab.length, 1) * 56, 6000) + 'px';
+  for (const id of ['ch-cnt-w', 'ch-vol-w', 'ch-pft-w']) document.getElementById(id).style.minWidth = wide;
   const tickM = document.documentElement.classList.contains('dark') ? '#94a3b8' : '#64748b';
   const lineDS = (label, data, color, fill, pts) => ({ label, data, borderColor: color, backgroundColor: fill || color,
     fill: !!fill, tension: .4, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6,
@@ -1417,6 +1419,7 @@ function renderReports() {
   let series = groupSeries(list, group, true);
   if (limit > 0) series = series.slice(-limit);
   state._reportSeries = series;
+  document.getElementById('ch-pnl-w').style.minWidth = Math.min(Math.max(series.length, 1) * 84, 6000) + 'px';
   mkChart('ch-pnl', { type: 'bar',
     data: { labels: series.map((r) => r.label), datasets: [
       { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.7)', borderRadius: 6 },
