@@ -37,8 +37,10 @@ const rules = [
   { file: 'worker-src/dashboard.ts', label: 'changelog footer (current)', find: new RegExp(String.raw`(نسخهٔ فعلی: )${F}`, 'g'), to: `$1${FA}` },
   { file: 'worker-src/dashboard.ts', label: 'faVersion fallback', find: new RegExp(String.raw`(function faVersion\(value\)\{return String\(value\|\|')${N}(')`, 'g'), to: `$1${V}$2` },
   { file: 'worker-src/dashboard.ts', label: 'header version fallback', find: new RegExp(String.raw`(faVersion\(health\.version\|\|')${N}(')`, 'g'), to: `$1${V}$2` },
-  { file: 'worker-src/dashboard.ts', label: 'install guide expected version', find: new RegExp(String.raw`(# Expected: )${N}`, 'g'), to: `$1${V}` },
-  { file: 'scripts/local-deployer-ui.mjs', label: 'deployer guide expected version', find: new RegExp(String.raw`(# Expected: )${N}`, 'g'), to: `$1${V}` },
+  { file: 'worker-src/dashboard.ts', label: 'install guide expected version', find: new RegExp(String.raw`((?:#|REM) Expected: )${N}`, 'g'), to: `$1${V}` },
+  { file: 'worker-src/dashboard.ts', label: 'install guide expected health version', find: new RegExp(String.raw`(Expected version: )${N}`, 'g'), to: `$1${V}` },
+  { file: 'scripts/local-deployer-ui.mjs', label: 'deployer guide expected version', find: new RegExp(String.raw`((?:#|REM) Expected: )${N}`, 'g'), to: `$1${V}` },
+  { file: 'scripts/local-deployer-ui.mjs', label: 'deployer guide expected health version', find: new RegExp(String.raw`([Ee]xpected version: )${N}`, 'g'), to: `$1${V}` },
   { file: 'scraper4.ts', label: 'header docs expected version', find: new RegExp(String.raw`(# Expected: )${N}`, 'g'), to: `$1${V}` },
   { file: 'scraper4.ts', label: 'header docs health version', find: new RegExp(String.raw`(verify version is )${N}`, 'g'), to: `$1${V}` },
   { file: 'worker-tests/runtime.test.mjs', label: 'runtime test wrangler assertion', find: new RegExp(String.raw`(WORKER_VERSION\\s\*=\\s\*")${N}(")`, 'g'), to: `$1${V}$2` }

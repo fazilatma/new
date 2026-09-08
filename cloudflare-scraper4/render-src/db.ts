@@ -16,7 +16,10 @@ let sqliteDb: any = null;
 export const databaseDriver = useSqlite ? 'sqlite' : 'postgres';
 export const databaseLabel = useSqlite ? 'local SQLite' : 'PostgreSQL';
 function sqlitePath(): string {
-  const raw = process.env.SCRAPER4_SQLITE_PATH || config.databaseUrl.replace(/^sqlite:/, '').replace(/^file:/, '') || 'data/scraper4.sqlite';
+  // Accept sqlite:path, file:path, sqlite:///abs/path and bare paths. Windows
+  // drive letters (sqlite:C:\dir\db.sqlite) must survive the prefix stripping.
+  const configured = String(process.env.SCRAPER4_SQLITE_PATH || config.databaseUrl || '').trim();
+  const raw = configured.replace(/^sqlite:(\/\/)?/i, '').replace(/^file:(\/\/)?/i, '').trim();
   return resolve(raw || 'data/scraper4.sqlite');
 }
 async function getSqliteDb(): Promise<any> {

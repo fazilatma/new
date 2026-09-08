@@ -85,17 +85,39 @@ function repairEsbuild() {
   }
 }
 
+// Importing esbuild succeeds even when the native binary is missing: the JS
+// wrapper only resolves its platform package on the FIRST build/transform call.
+// That is exactly the Windows symptom ("Cannot find module 'esbuild'" /
+// "The esbuild binary was not found"), so a bare import() is not a real check.
+// We therefore run a tiny transform to force the binary to load.
+async function verifyEsbuildBinary(module) {
+  if (!module || typeof module.transform !== 'function') throw new Error('esbuild module does not expose transform()');
+  await module.transform('0;', { loader: 'js' });
+  return module;
+}
+
+function isMissingBinaryError(error) {
+  const message = String((error && error.message) || error || '');
+  return /cannot find module|binary|not installed|another platform|host environment|EACCES|ENOENT|spawn|dlopen|is not a valid Win32 application/i.test(message);
+}
+
 export async function loadEsbuild() {
+  let module = null;
   try {
-    return await import('esbuild');
+    module = await import('esbuild');
+    return await verifyEsbuildBinary(module);
   } catch (firstError) {
-    console.error(`[esbuild-loader] Could not load esbuild: ${firstError && firstError.message ? firstError.message : firstError}`);
+    const reason = (firstError && firstError.message) || String(firstError);
+    if (module && !isMissingBinaryError(firstError)) throw firstError; // a genuine transform bug, not a broken install
+    console.error(`[esbuild-loader] esbuild is not usable: ${reason}`);
     repairEsbuild();
     try {
-      return await import('esbuild');
+      // Bust the ESM cache so the freshly installed copy is loaded.
+      const fresh = await import(`esbuild?repaired=${Date.now()}`).catch(() => import('esbuild'));
+      return await verifyEsbuildBinary(fresh);
     } catch (secondError) {
       throw new Error(
-        '[esbuild] esbuild still cannot be loaded after repair: ' + (secondError && secondError.message ? secondError.message : secondError) +
+        '[esbuild] esbuild still cannot be loaded after repair: ' + ((secondError && secondError.message) || secondError) +
         '\nOn Windows make sure Node.js LTS is installed and that this folder was not copied from another OS, then run:\n' +
         `  ${npmCommand} install esbuild@${desiredEsbuildVersion()} --no-audit --prefer-online`
       );

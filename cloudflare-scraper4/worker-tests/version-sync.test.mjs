@@ -84,3 +84,54 @@ test('deployer guides stay aligned with the dashboard guides', async () => {
     assert.ok(!commands[key].includes('--ignore-scripts'), `${key} must not skip install scripts (breaks esbuild)`);
   }
 });
+
+test('Windows download produces a double-clickable .cmd launcher that unpacks the .ps1', async () => {
+  globalThis.btoa = value => Buffer.from(value, 'binary').toString('base64');
+  const dashboard = await readProjectFile('worker-src/dashboard.ts');
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+
+  const cut = (source, head) => {
+    const start = source.indexOf(head);
+    assert.ok(start > 0, `missing ${head}`);
+    return source.slice(start, source.indexOf('function saveBlobAs(', start));
+  };
+  const workerFn = new Function(cut(dashboard, 'function windowsLauncherCmd(ps1Text,scriptName){') + '; return windowsLauncherCmd;')();
+  const deployerFn = new Function(cut(deployer, 'function windowsLauncherCmd(ps1Text, scriptName) {') + '; return windowsLauncherCmd;')();
+
+  const commands = JSON.parse(deployer.match(/const commands = (\{[\s\S]*?\});\n/)[1]);
+  const ps1 = commands['Windows PowerShell'];
+  const launcher = workerFn(ps1, 'scraper4-install-windows.ps1');
+
+  assert.equal(launcher, deployerFn(ps1, 'scraper4-install-windows.ps1'), 'both UIs must emit the same launcher');
+  assert.ok(launcher.startsWith('@echo off'), 'must be a batch file');
+  assert.ok(launcher.includes('\r\n'), 'Windows needs CRLF line endings');
+  assert.match(launcher, /-ExecutionPolicy Bypass/, 'must bypass the policy that blocks downloaded .ps1 files');
+  assert.match(launcher, /\npause\r?\n?/, 'window must stay open so errors are readable');
+  assert.ok(!launcher.split('\r\n').some(line => line.includes('\\\\')), 'no double-escaped paths');
+  for (const line of launcher.split('\r\n')) assert.ok(line.length < 8000, 'batch lines must stay under the cmd limit');
+
+  const payload = launcher.split('\r\n').filter(line => line.startsWith('set "B64=!B64!')).map(line => line.slice(14, -1)).join('');
+  assert.ok(payload.length > 0, 'installer payload must be embedded');
+  assert.equal(Buffer.from(payload, 'base64').toString('utf8'), ps1, 'embedded payload must decode back to the exact installer');
+});
+
+test('intrusive confirmation popups are gone from safe/local actions', async () => {
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  assert.ok(!deployer.includes('confirm('), 'the deployer UI must not use blocking confirm() popups');
+  assert.match(deployer, /dataset\.armed/, 'destructive branch install keeps a non-modal two-step guard');
+
+  const dashboard = await readProjectFile('worker-src/dashboard.ts');
+  for (const gone of [
+    'همهٔ سلکتورهای جزئیات و تنظیم گالری پاک شود؟',
+    'همه کارهای تمام‌شده پاک شوند؟',
+    'تاریخچهٔ درون‌ریزی پاک شود؟',
+    'اجرای فعلی ایجنتیک پاک شود؟'
+  ]) assert.ok(!dashboard.includes(`confirm('${gone}'`), `local action should not prompt: ${gone}`);
+
+  // Genuinely destructive/irreversible remote operations must still confirm.
+  for (const kept of [
+    'پروفایل و محصولات آن حذف شود؟',
+    'محصول مقصد حذف شود؟',
+    'پاسخ‌ها واقعاً برای مشتریان ارسال شوند؟'
+  ]) assert.ok(dashboard.includes(`confirm('${kept}'`), `destructive action must keep its guard: ${kept}`);
+});
