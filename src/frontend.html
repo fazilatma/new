@@ -257,49 +257,45 @@ tailwind.config = {
             <div id="wrap-booth"><label class="text-xs font-bold">غرفه باسلام *</label>
               <div class="flex gap-1"><select id="o-booth" class="inp" onchange="onBoothChange()"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('booth')" title="غرفه جدید">＋</button></div></div>
           </div>
-          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3">
-            <div class="text-xs font-black mb-2 text-slate-500">👤 مشتری و کالا</div>
+          <div class="rounded-xl border-2 border-blue-300 bg-blue-50/70 dark:bg-blue-500/5 dark:border-blue-500/40 p-4">
+            <div class="text-sm font-black mb-3 text-blue-800 dark:text-blue-200">🧍 بخش مشتری — دریافتی‌ها</div>
             <div class="grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">نام و نام خانوادگی مشتری *</label><input id="o-customer" class="inp" required placeholder="مثلاً سارا محمدی"></div>
-              <div><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
-              <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="onQtyChange()"></div>
-            </div>
-          </div>
-          <details class="coll" id="det-cust">
-            <summary><span class="chev">▾</span> 👤 مشخصات تکمیلی مشتری <span class="text-[11px] font-normal text-slate-400">— تلفن، شهر</span></summary>
-            <div class="coll-body grid md:grid-cols-2 gap-3">
               <div><label class="text-xs font-bold">شماره تماس</label><input id="o-phone" class="inp num" dir="ltr" placeholder="09…"></div>
               <div><label class="text-xs font-bold">شهر</label><input id="o-city" class="inp" placeholder="تهران"></div>
-            </div>
-          </details>
-          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3">
-            <div class="text-xs font-black mb-2 text-slate-500">💵 مبالغ اصلی (تومان)</div>
-            <div class="grid md:grid-cols-3 gap-3">
+              <div><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
+              <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="onQtyChange()"></div>
+              <div><label class="text-xs font-bold">نوع خرید مشتری</label><select id="o-cptype" class="inp"></select></div>
               <div><label class="text-xs font-bold">قیمت فروش واحد *</label><input id="o-usale" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">ارسال دریافتی از مشتری 🤖</label><input id="o-shiprev" type="number" min="0" value="0" class="inp num" oninput="AUTO.shipT=true;liveCalc()" title="پیشنهاد خودکار از تعرفه غرفه؛ قابل ویرایش دستی"></div>
+              <div><label class="text-xs font-bold">وضعیت پرداخت</label><select id="o-pay" class="inp"></select></div>
+            </div>
+          </div>
+          <div class="rounded-xl border-2 border-orange-300 bg-orange-50/70 dark:bg-orange-500/5 dark:border-orange-500/40 p-4">
+            <div class="text-sm font-black mb-3 text-orange-800 dark:text-orange-200">🏭 بخش تامین‌کننده — پرداختی‌ها و هزینه‌ها</div>
+            <div class="grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">تامین‌کننده (واسطه)</label>
                 <div class="flex gap-1"><select id="o-sup" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('supplier')" title="تامین‌کننده جدید">＋</button></div></div>
               <div><label class="text-xs font-bold">نوع خرید از تامین‌کننده</label><select id="o-ptype" class="inp"></select></div>
-              <div><label class="text-xs font-bold">ارسال دریافتی از مشتری 🤖</label><input id="o-shiprev" type="number" min="0" value="0" class="inp num" oninput="AUTO.shipT=true;liveCalc()" title="پیشنهاد خودکار از تعرفه غرفه؛ قابل ویرایش دستی"></div>
+              <div><label class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه) 🤖</label><input id="o-comm" type="number" min="0" value="0" class="inp num" oninput="AUTO.commT=true;liveCalc()" title="پیشنهاد خودکار از ٪ غرفه؛ قابل ویرایش دستی"></div>
-              <div class="md:col-span-3 text-[11px] text-slate-400">🤖 کمیسیون و ارسال دریافتی خودکار پیشنهاد می‌شوند و با تغییر قیمت/تعداد/غرفه به‌روز می‌مانند؛ هر تغییری بدهید دستی حساب و حفظ می‌شود.</div>
-            </div>
-          </div>
-          <details class="coll" id="det-cost">
-            <summary><span class="chev">▾</span> 💸 تخفیف و هزینه‌های جانبی <span id="extra-total" class="chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 num mr-auto">۰ تومان</span></summary>
-            <div class="coll-body grid md:grid-cols-3 gap-3">
-              <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">هزینه ارسال (پرداختی شما)</label><input id="o-ship" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-                            <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-                            <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">سایر هزینه‌ها</label><input id="o-other" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div class="md:col-span-3"><label class="text-xs font-bold">شرح سایر هزینه‌ها</label><input id="o-otherlabel" class="inp" placeholder="مثلاً پیامک…"></div>
+              <div class="md:col-span-3 text-[11px] text-slate-400">🤖 کمیسیون و ارسال دریافتی (بخش مشتری) خودکار پیشنهاد می‌شوند و با تغییر قیمت/تعداد/غرفه به‌روز می‌مانند؛ هر تغییری بدهید دستی حساب و حفظ می‌شود.</div>
             </div>
-          </details>
-          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-3 gap-3">
+            <details class="coll mt-3" id="det-cost">
+              <summary><span class="chev">▾</span> 💸 هزینه‌های جانبی <span id="extra-total" class="chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 num mr-auto">۰ تومان</span></summary>
+              <div class="coll-body grid md:grid-cols-3 gap-3">
+                <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+                <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+                <div><label class="text-xs font-bold">سایر هزینه‌ها</label><input id="o-other" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+                <div class="md:col-span-3"><label class="text-xs font-bold">شرح سایر هزینه‌ها</label><input id="o-otherlabel" class="inp" placeholder="مثلاً پیامک…"></div>
+              </div>
+            </details>
+          </div>
+          <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-2 gap-3">
             <div><label class="text-xs font-bold">تاریخ سفارش</label><div id="pk-date"></div></div>
             <div><label class="text-xs font-bold">وضعیت سفارش</label><select id="o-status" class="inp"></select></div>
-            <div><label class="text-xs font-bold">وضعیت پرداخت</label><select id="o-pay" class="inp"></select></div>
           </div>
           <details class="coll" id="det-notes">
             <summary><span class="chev">▾</span> 📝 توضیحات</summary>
@@ -539,7 +535,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.13.0';
+const APP_VER = '1.14.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1014,6 +1010,7 @@ function fillSelects() {
   $('#f-status').innerHTML = '<option value="">همه وضعیت‌ها</option>' + Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.i} ${v.t}</option>`).join('');
   $('#o-pay').innerHTML = Object.entries(PAY).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('#o-ptype').innerHTML = Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+  $('#o-cptype').innerHTML = Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('#f-ptype').innerHTML = '<option value="">همه خریدها</option>' + Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
 }
 
@@ -1420,7 +1417,7 @@ function formData() {
     unit_sale: N($('#o-usale').value), unit_cost: N($('#o-ucost').value), discount: N($('#o-disc').value),
     shipping_cost: N($('#o-ship').value), shipping_rev: N($('#o-shiprev').value), packaging_cost: N($('#o-pack').value), commission: N($('#o-comm').value),
     ads_cost: N($('#o-ads').value), other_cost: N($('#o-other').value), other_label: $('#o-otherlabel').value.trim(),
-    status: $('#o-status').value, payment_status: $('#o-pay').value, purchase_type: $('#o-ptype').value,
+    status: $('#o-status').value, payment_status: $('#o-pay').value, purchase_type: $('#o-ptype').value, customer_ptype: $('#o-cptype').value,
     order_date: iso, jdate: `${j.jy}/${j.jm}/${j.jd}`, jy: j.jy, jm: j.jm, jd: j.jd,
     notes: $('#o-notes').value.trim(),
   };
@@ -1438,7 +1435,7 @@ function liveCalc() {
         <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(c.profit)}</span></div>` +
       row('حاشیه سود', toFa(c.margin.toFixed(1)) + '٪') +
       `<div class="text-[11px] text-slate-400 leading-5 mt-1">فروش واحد × تعداد − تخفیف + ارسال دریافتی = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل</div>`;
-    const extra = N(o.discount) + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
+    const extra = N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
     const eb = document.getElementById('extra-total');
     if (eb) eb.textContent = fmtMoney(extra);
   } catch {}
@@ -1450,7 +1447,7 @@ function resetForm() {
   ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-shiprev', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => $('#' + id).value = 0);
   $('#form-title').textContent = '➕ ثبت سفارش جدید';
   $('#o-code').value = nextOrderCode();
-  ['det-cust', 'det-cost', 'det-notes'].forEach((id) => { document.getElementById(id).open = false; });
+  ['det-cost', 'det-notes'].forEach((id) => { document.getElementById(id).open = false; });
   PK.date.set(isoToday()); onSourceChange(); liveCalc();
 }
 async function submitOrder(e) {
@@ -1480,11 +1477,10 @@ function editOrder(id) {
   $('#o-pack').value = o.packaging_cost || 0; $('#o-comm').value = o.commission || 0;
   $('#o-ads').value = o.ads_cost || 0; $('#o-other').value = o.other_cost || 0;
   $('#o-otherlabel').value = o.other_label || '';
-  $('#o-status').value = o.status || 'pending'; $('#o-pay').value = o.payment_status || 'pending'; $('#o-ptype').value = o.purchase_type || 'cash';
+  $('#o-status').value = o.status || 'pending'; $('#o-pay').value = o.payment_status || 'pending'; $('#o-ptype').value = o.purchase_type || 'cash'; $('#o-cptype').value = o.customer_ptype || 'cash';
   $('#o-notes').value = o.notes || '';
   PK.date.set(o.order_date || isoToday());
-  document.getElementById('det-cust').open = !!(o.customer_phone || o.city);
-  document.getElementById('det-cost').open = !!((+o.discount || 0) + (+o.shipping_cost || 0) + (+o.packaging_cost || 0) + (+o.commission || 0) + (+o.ads_cost || 0) + (+o.other_cost || 0));
+  document.getElementById('det-cost').open = !!((+o.shipping_cost || 0) + (+o.packaging_cost || 0) + (+o.ads_cost || 0) + (+o.other_cost || 0));
   document.getElementById('det-notes').open = !!o.notes;
   liveCalc(); go('new');
 }
