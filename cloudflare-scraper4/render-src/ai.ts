@@ -6,7 +6,25 @@ import { getState, setState } from './db.js';
 type Provider={id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean};
 type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string};
 
-export async function aiProviders():Promise<Provider[]>{const ai=(await loadConnections()).ai;return ai.providers.length?ai.providers:[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,models:ai.model?[ai.model]:[],enabled:true}]}
+/**
+ * The hamburger menu still exposes a single shared Base URL/API key, and many
+ * saved vaults only have that one filled in. A provider row without its own key
+ * may therefore still be usable: borrow the shared key when it points at the
+ * same service, otherwise every model reports a missing key even though the
+ * user did enter one.
+ */
+function sharedKeyFitsProvider(ai:any,provider:any):boolean{
+  const host=(value:string)=>{try{return new URL(String(value)).host.toLowerCase()}catch{return ''}};
+  const shared=host(ai?.baseUrl||'');const own=host(provider?.baseUrl||'');
+  if(!String(ai?.apiKey||'').trim())return false;
+  return !own||!shared||own===shared;
+}
+export async function aiProviders():Promise<Provider[]>{const ai=(await loadConnections()).ai;if(!ai.providers.length)return [{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,models:ai.model?[ai.model]:[],enabled:true}];
+  return ai.providers.map((provider:any)=>{const borrow=sharedKeyFitsProvider(ai,provider);
+    return {...provider,
+      baseUrl:String(provider.baseUrl||'').trim()||(borrow?String(ai.baseUrl||''):''),
+      apiKey:String(provider.apiKey||'').trim()||(borrow?String(ai.apiKey||''):'')};
+  })}
 /**
  * Mirrors worker-src/ai.ts: report exactly which field is missing instead of one
  * opaque "provider/model config is incomplete" message. Local runtimes (Ollama)

@@ -10,7 +10,20 @@ type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolve
 type AiAttempt={endpoint:string;body:string|string[];model:string;httpStatus?:number;phase:'network'|'http'|'success';error?:string};
 type RequestResult={response?:Response;body?:any;rawText?:string;networkError?:string};
 
-function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';const apiKey=typeof first==='string'?first:first?.token||'';return{...provider,apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
+/**
+ * The hamburger menu still exposes a single shared Base URL/API key, and many
+ * saved vaults only have that one filled in. A provider row that carries no key
+ * of its own may therefore still be usable: borrow the shared key when it points
+ * at the same service, otherwise every model reports a missing key even though
+ * the user did enter one.
+ */
+function sharedKeyFitsProvider(ai:any,provider:any):boolean{
+  const host=(value:string)=>{try{return new URL(String(value)).host.toLowerCase()}catch{return ''}};
+  const shared=host(ai?.baseUrl||'');const own=host(provider?.baseUrl||'');
+  if(!String(ai?.apiKey||'').trim())return false;
+  return !own||!shared||own===shared;
+}
+function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';let apiKey=typeof first==='string'?first:first?.token||'';if(!String(apiKey).trim()&&String(ai.apiKey||'').trim()&&sharedKeyFitsProvider(ai,provider))apiKey=String(ai.apiKey);return{...provider,baseUrl:String(provider.baseUrl||'').trim()||(sharedKeyFitsProvider(ai,provider)?String(ai.baseUrl||''):''),apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
 
 /** Active API keys of a provider (fallback to the single apiKey). */
 export function providerKeys(provider:Provider):string[]{
@@ -271,7 +284,7 @@ function cloudflareModelIds(raw:string):string[]{
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.76.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.77.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;

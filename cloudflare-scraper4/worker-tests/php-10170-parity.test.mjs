@@ -196,3 +196,42 @@ test('AI model test reports which setting is missing instead of a generic error'
   assert.doesNotMatch(render, /تنظیمات ارائه‌دهنده\/مدل کامل نیست/);
   assert.match(render, /aiConfigProblem/);
 });
+
+test('a provider without its own key falls back to the shared AI key', async () => {
+  // Regression: the hamburger menu saves one shared Base URL + API key, but
+  // aiProviders() returned the provider rows untouched, so a key entered there
+  // was ignored and EVERY model failed with "the API key is not set" even though
+  // the user had entered one.
+  for (const path of ['../worker-src/ai.ts', '../render-src/ai.ts']) {
+    const source = await read(path);
+    assert.match(source, /function sharedKeyFitsProvider/, `${path} must offer the shared key to keyless providers`);
+    // Only when the shared credential belongs to the same service.
+    assert.match(source, /new URL\(String\(value\)\)\.host\.toLowerCase\(\)/, `${path} must compare hosts before borrowing a key`);
+    assert.match(source, /if\(!String\(ai\?\.apiKey\|\|''\)\.trim\(\)\)return false;/, `${path} must not borrow an empty shared key`);
+    // The helper is useless unless it is actually applied to the provider list.
+    assert.match(source, /sharedKeyFitsProvider\(ai,provider\)/, `${path} must apply the fallback when building providers`);
+  }
+  // worker: the key fallback happens while mapping ai.providers.
+  const worker = await read('../worker-src/ai.ts');
+  const mapper = worker.slice(worker.indexOf('function providersFromAi'), worker.indexOf('export function providerKeys'));
+  assert.match(mapper, /apiKey=String\(ai\.apiKey\)/, 'the worker must adopt the shared key for a keyless provider');
+  assert.match(mapper, /baseUrl:String\(provider\.baseUrl\|\|''\)\.trim\(\)\|\|\(sharedKeyFitsProvider/, 'the worker must adopt the shared base URL too');
+  // render: same fallback, applied where aiProviders() maps the rows.
+  const render = await read('../render-src/ai.ts');
+  const renderMap = render.slice(render.indexOf('export async function aiProviders'), render.indexOf('export function aiConfigProblem'));
+  assert.match(renderMap, /apiKey:String\(provider\.apiKey\|\|''\)\.trim\(\)\|\|\(borrow/, 'the render server must adopt the shared key');
+
+  // Execute the real rule rather than trusting the shape of the source.
+  const source = await read('../worker-src/ai.ts');
+  const body = source
+    .slice(source.indexOf('function sharedKeyFitsProvider'), source.indexOf('function providersFromAi'))
+    .replace(/\(ai:any,provider:any\)/, '(ai,provider)')
+    .replace(/\(value:string\)/, '(value)')
+    .replace(/:boolean/g, '');
+  const fits = new Function(`${body}; return sharedKeyFitsProvider;`)();
+  const shared = { baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-shared' };
+  assert.equal(fits(shared, { baseUrl: 'https://openrouter.ai/api/v1' }), true, 'same host must borrow the shared key');
+  assert.equal(fits(shared, { baseUrl: '' }), true, 'a provider with no base URL falls back to the shared service');
+  assert.equal(fits(shared, { baseUrl: 'https://api.openai.com/v1' }), false, 'a key must never leak to a different provider');
+  assert.equal(fits({ baseUrl: 'https://openrouter.ai/api/v1', apiKey: '   ' }, { baseUrl: 'https://openrouter.ai/api/v1' }), false, 'a blank shared key is not a key');
+});
