@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.75.0'; } catch { return process.env.npm_package_version || '1.75.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.76.0'; } catch { return process.env.npm_package_version || '1.76.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -44,11 +44,39 @@ function nodeLibraryProbe(){
 const localScraperAutoUpdate = process.env.LOCAL_SCRAPER_AUTO_UPDATE !== 'false' && process.env.RENDER !== 'true';
 const localScraperAutoUpdateMs = Math.max(60_000, Number(process.env.LOCAL_SCRAPER_AUTO_UPDATE_MS || 600_000));
 let localScraperUpdateRunning = false;
+let localScraperDirtySkipLogged = -1;
+let localScraperUnpushedSkipLogged = -1;
 function runLocal(command: string, args: string[] = []) { return spawnSync(command, args, { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env }); }
 function maybeAutoUpdateLocalScraper(reason = 'timer') {
   if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
   localScraperUpdateRunning = true;
   try {
+    // Never `git reset --hard` over uncommitted work: the auto-updater would
+    // silently delete edits that only exist in the working tree.
+    const dirty = runLocal('git', ['status', '--porcelain']);
+    if (dirty.status === 0 && String(dirty.stdout || '').trim()) {
+      const files = String(dirty.stdout).trim().split('\n').length;
+      if (localScraperDirtySkipLogged !== files) {
+        localScraperDirtySkipLogged = files;
+        console.warn(`[auto-update:${reason}] paused: ${files} uncommitted change(s) would be lost by git reset --hard. Commit or stash to resume.`);
+      }
+      return;
+    }
+    localScraperDirtySkipLogged = -1;
+    // A clean tree still hides local commits that were never pushed; resetting
+    // to origin would erase them too.
+    const headBranch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim();
+    runLocal('git', ['fetch', 'origin', headBranch]);
+    const ahead = headBranch ? runLocal('git', ['rev-list', '--count', `origin/${headBranch}..HEAD`]) : { status: 1, stdout: '' };
+    const unpushed = ahead.status === 0 ? Number(String(ahead.stdout || '').trim()) || 0 : 0;
+    if (unpushed > 0) {
+      if (localScraperUnpushedSkipLogged !== unpushed) {
+        localScraperUnpushedSkipLogged = unpushed;
+        console.warn(`[auto-update:${reason}] paused: ${unpushed} unpushed commit(s) would be lost by git reset --hard. Push them to resume.`);
+      }
+      return;
+    }
+    localScraperUnpushedSkipLogged = -1;
     const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0803e-new').trim() || 'arena/01a0803e-new';
     const before = (runLocal('git', ['rev-parse', 'HEAD']).stdout || '').trim();
     const fetched = runLocal('git', ['fetch', 'origin', branch]);

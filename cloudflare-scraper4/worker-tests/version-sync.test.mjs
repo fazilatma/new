@@ -145,3 +145,64 @@ test('intrusive confirmation popups are gone from safe/local actions', async () 
     'پاسخ‌ها واقعاً برای مشتریان ارسال شوند؟'
   ]) assert.ok(dashboard.includes(`confirm('${kept}'`), `destructive action must keep its guard: ${kept}`);
 });
+
+test('the deployer page ships a client script that actually parses', async () => {
+  // Regression: the client script lives in a template literal, so a Windows path
+  // ending in a backslash ("%TEMP%\") escaped the closing quote and threw a
+  // SyntaxError. The whole script then failed to load and every button was dead.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  assert.match(deployer, /return String\.raw`<!doctype html>/,
+    'the page template must be raw so backslashes in generated Windows commands stay literal');
+
+  const start = deployer.indexOf('return String.raw`<!doctype html>');
+  const script = deployer.slice(deployer.indexOf('<script>', start) + 8, deployer.indexOf('</script>', start));
+  assert.ok(script.length > 5000, 'client script should be substantial');
+
+  // Resolve the ${...} interpolations the same way the server does, then parse.
+  const resolved = script
+    .replace(/\$\{JSON\.stringify\([^)]*\)\}/g, '"x"')
+    .replace(/\$\{[^}]*\}/g, '0');
+  new Function(resolved); // throws if the served script is not valid JavaScript
+});
+
+test('closing the deployer leaves the scraper serving its own URL', async () => {
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  // The scraper is spawned detached and unref'd, so it survives the deployer.
+  assert.match(deployer, /spawn\(scraperCommand,[^)]*detached: true/, 'the scraper must run in its own process group');
+  assert.match(deployer, /child\.unref\(\)/, 'the deployer must not hold the scraper open');
+  // Shutdown must not kill it unless explicitly asked to.
+  assert.match(deployer, /LOCAL_SCRAPER_STOP_WITH_UI/, 'stopping the scraper with the UI must be opt-in');
+  assert.match(deployer, /function shutdownUi\(\)/);
+  assert.doesNotMatch(deployer, /process\.on\('SIGTERM', \(\) => \{ stopScraper\(\)/, 'SIGTERM must not unconditionally stop the scraper');
+  // Stop must signal the whole group, or only the npm shell would die.
+  assert.match(deployer, /process\.kill\(-scraper\.child\.pid/, 'Stop must signal the scraper process group');
+  // Autostart + adoption, so the URL is up without opening the deployer page.
+  assert.match(deployer, /function autoStartScraper\(\)/);
+  assert.match(deployer, /already serving/, 'a restarted deployer must adopt a running scraper instead of double-starting it');
+  assert.match(deployer, /Scraper \(independent of the deployer, no token needed\)/, 'the terminal must print the scraper URL next to the deployer URL');
+});
+
+test('auto-update never discards uncommitted work', async () => {
+  // Regression: both auto-updaters ran `git reset --hard origin/<branch>` on a
+  // timer, silently deleting local edits (and committed work) with no recovery.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  const server = await readProjectFile('render-src/server.ts');
+  for (const [name, source] of [['deployer', deployer], ['render server', server]]) {
+    assert.match(source, /status', '--porcelain'\]/, `${name} must check for a dirty worktree before resetting`);
+    assert.match(source, /reset', '--hard'/, `${name} still performs the reset when the tree is clean`);
+  }
+  // The deployer guards inside autoUpdateFromGit, which is what the timer calls;
+  // the manual updateFromGit path stays force-capable on purpose.
+  const auto = deployer.slice(deployer.indexOf('function autoUpdateFromGit('), deployer.indexOf('function scheduleBranchScanner('));
+  assert.match(auto, /'--porcelain'/, 'the timed deployer update must check the worktree first');
+  assert.match(auto, /return lastAutoUpdate;/, 'a dirty worktree must abort the timed update');
+  // A clean tree is not enough: unpushed commits are destroyed by reset --hard too.
+  assert.match(auto, /origin\/\$\{target\}\.\.HEAD/, 'the timed deployer update must refuse to discard unpushed commits');
+  assert.match(auto, /unpushed-commits/, 'skipping for unpushed commits must be reported to the UI');
+  // The render server guards inline, before its own reset.
+  const guardAt = server.indexOf("'--porcelain'");
+  const aheadAt = server.indexOf('..HEAD`');
+  const resetAt = server.indexOf("'reset', '--hard'");
+  assert.ok(guardAt > 0 && guardAt < resetAt, 'the scraper must check before it resets');
+  assert.ok(aheadAt > 0 && aheadAt < resetAt, 'the scraper must refuse to discard unpushed commits');
+});

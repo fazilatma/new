@@ -13,11 +13,20 @@ Usage:
   DEPLOYER_UI_PORT=8790 npm run deployer:ui
   DEPLOYER_UI_TOKEN=my-local-token npm run deployer:ui
 
+Scraper (starts automatically, on its own address):
+  SCRAPER_PORT=3000                        the scraper serves http://localhost:3000/
+                                           with no token; it is a separate process and
+                                           keeps running after the deployer is closed
+  LOCAL_SCRAPER_AUTOSTART=false            do not start the scraper automatically
+  LOCAL_SCRAPER_STOP_WITH_UI=true          also stop the scraper when the deployer exits
+
 Branch auto-update (defaults):
   LOCAL_DEPLOYER_SCAN_INTERVAL_MS=60000   scan all repo branches every 1 minute
   LOCAL_DEPLOYER_AUTO_INSTALL_LATEST=true  automatically install the branch with
                                            the newest Scraper4 package version
   LOCAL_DEPLOYER_AUTO_UPDATE=false         disable the automatic branch scanner
+  Auto-update is skipped while the git worktree has uncommitted changes, so it can
+  never discard local work; commit or stash, then press Update now.
 
 Open the printed URL in your browser. In GitHub Codespaces, forward the printed port and keep the token query string.
 `);
@@ -105,6 +114,8 @@ let branchScanIntervalMs = readIntervalMs(startupEnv.LOCAL_DEPLOYER_SCAN_INTERVA
 let autoInstallLatestEnabled = startupEnv.LOCAL_DEPLOYER_AUTO_INSTALL_LATEST !== 'false';
 let autoUpdateRunning = false;
 let lastAutoUpdate = null;
+let lastDirtySkipLogged = -1;
+let lastUnpushedSkipLogged = -1;
 let branchScannerTimer = null;
 const branchMetaCache = new Map(); // branch name -> { sha, version, hasCode }
 const branchState = { scanning: false, lastScanAt: null, lastScanMs: null, lastScanError: null, lastAction: null, branches: [], latest: null, current: null };
@@ -279,6 +290,46 @@ function updateFromGit({ branch, force = false, install = false } = {}) {
 
 function autoUpdateFromGit({ branch, reason = 'timer', force = true, install = true } = {}) {
   if (!autoUpdateEnabled || autoUpdateRunning) return null;
+  // A background timer must never run `git reset --hard` over local work: that
+  // silently deletes uncommitted edits with no way back. Skip the automatic
+  // update while the tree is dirty and say so; the manual button still works.
+  const dirty = runSync('git', ['status', '--porcelain']);
+  if (dirty.ok && dirty.stdout.trim()) {
+    const files = dirty.stdout.trim().split('\n').length;
+    lastAutoUpdate = {
+      ok: false, reason, at: new Date().toISOString(), skipped: 'dirty-worktree',
+      error: `Auto-update skipped: ${files} uncommitted change(s) in the working tree. Commit or stash them, then press Update now.`,
+    };
+    if (lastDirtySkipLogged !== files) {
+      lastDirtySkipLogged = files;
+      console.log(`[deployer] auto-update paused: ${files} uncommitted change(s) would be lost by git reset --hard. Commit or stash to resume.`);
+    }
+    return lastAutoUpdate;
+  }
+  lastDirtySkipLogged = -1;
+  // A clean tree is not enough: `git reset --hard origin/<branch>` also destroys
+  // commits that exist only locally. Refuse to discard unpushed history.
+  // Compare against the exact reset target (origin/<branch>), not @{upstream}:
+  // this branch often has no upstream configured, and a failed lookup must not
+  // be read as "nothing to lose".
+  const head = runSync('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const localBranch = head.ok ? head.stdout.trim() : '';
+  const target = branch || localBranch;
+  runSync('git', ['fetch', 'origin', target]);
+  const ahead = target ? runSync('git', ['rev-list', '--count', `origin/${target}..HEAD`]) : { ok: false, stdout: '' };
+  const unpushed = ahead.ok ? Number(ahead.stdout.trim()) || 0 : 0;
+  if (unpushed > 0) {
+    lastAutoUpdate = {
+      ok: false, reason, at: new Date().toISOString(), skipped: 'unpushed-commits',
+      error: `Auto-update skipped: ${unpushed} local commit(s) are not pushed yet and would be lost. Push them, then press Update now.`,
+    };
+    if (lastUnpushedSkipLogged !== unpushed) {
+      lastUnpushedSkipLogged = unpushed;
+      console.log(`[deployer] auto-update paused: ${unpushed} unpushed commit(s) would be lost by git reset --hard. Push them to resume.`);
+    }
+    return lastAutoUpdate;
+  }
+  lastUnpushedSkipLogged = -1;
   autoUpdateRunning = true;
   try {
     const result = updateFromGit({ branch, force, install });
@@ -507,7 +558,12 @@ function startScraper() {
     LOCAL_SCRAPER_AUTO_UPDATE: baseEnv.LOCAL_SCRAPER_AUTO_UPDATE || 'true',
     DATABASE_URL: normalizeDatabaseUrl(baseEnv.DATABASE_URL)
   };
-  const child = spawn(scraperCommand, { cwd: projectDir, shell: true, env });
+  // detached: the scraper gets its own process group so it keeps serving its own
+  // URL after the deployer exits. Opening the scraper must never depend on the
+  // deployer still running.
+  const child = spawn(scraperCommand, { cwd: projectDir, shell: true, env, detached: true });
+  // Do not hold the deployer's event loop open waiting on the scraper.
+  child.unref();
   scraper = { running: true, pid: child.pid, startedAt: new Date().toISOString(), exitCode: null, child, command: scraperCommand, port: scraperPort };
   const add = d => { scraperLog += d.toString(); if (scraperLog.length > maxLog) scraperLog = scraperLog.slice(-maxLog); };
   add(`[local scraper] ${scraperCommand}\n[local scraper] PORT=${scraperPort} DATABASE_URL=${env.DATABASE_URL.replace(/:[^:@/]+@/, ':***@')}\n\n`);
@@ -518,7 +574,16 @@ function startScraper() {
 }
 
 function stopScraper() {
-  if (scraper?.child && !scraper.child.killed) scraper.child.kill('SIGTERM');
+  if (scraper?.child && !scraper.child.killed) {
+    // The scraper runs detached in its own process group (so it survives the
+    // deployer), which means `npm` and the node server it spawns are children.
+    // Signal the whole group with -pid, or Stop would only kill the shell and
+    // leave the real server holding the port.
+    try {
+      if (process.platform === 'win32') runSync('taskkill', ['/pid', String(scraper.child.pid), '/t', '/f']);
+      else process.kill(-scraper.child.pid, 'SIGTERM');
+    } catch { scraper.child.kill('SIGTERM'); }
+  }
   return scraper || { running: false };
 }
 
@@ -701,21 +766,85 @@ function listenWithRetry(attempt = 0) {
 Local Deployer UI is running:`);
     console.log(`  http://localhost:${port}/?token=${token}`);
     console.log(`
-Codespaces: open forwarded port ${port}; keep the token in the URL.`);
+Scraper (independent of the deployer, no token needed):`);
+    console.log(`  http://localhost:${scraperPort}/`);
+    console.log(`
+Codespaces: open forwarded ports ${port} and ${scraperPort}; keep the token in the deployer URL.`);
     console.log(`Project: ${projectDir}
 `);
+    autoStartScraper();
   });
+}
+
+// The scraper must come up on its own address as soon as the deployer is
+// installed or updated, so opening it never depends on the deployer page
+// (which used to be the only way to trigger startScraper()).
+function autoStartScraper() {
+  if (String(process.env.LOCAL_SCRAPER_AUTOSTART || '').toLowerCase() === 'false') {
+    console.log('[deployer] scraper autostart disabled (LOCAL_SCRAPER_AUTOSTART=false).');
+    return;
+  }
+  // The scraper outlives the deployer, so a restarted deployer may find one
+  // already serving the port. Adopt it instead of starting a second copy that
+  // would fail with EADDRINUSE.
+  const probe = http.request({ hostname: '127.0.0.1', port: scraperPort, path: '/', method: 'HEAD', timeout: 1500 }, response => {
+    response.resume();
+    console.log(`[deployer] a scraper is already serving http://localhost:${scraperPort}/ (HTTP ${response.statusCode}); leaving it running.`);
+  });
+  const startFresh = () => {
+    probe.destroy();
+    try {
+      startScraper();
+      console.log(`[deployer] building and starting the scraper on port ${scraperPort}...`);
+      waitForScraper();
+    } catch (error) {
+      console.error(`[deployer] could not autostart the scraper: ${error?.message || error}`);
+    }
+  };
+  probe.on('timeout', startFresh);
+  probe.on('error', startFresh);
+  probe.end();
+}
+
+// Report readiness once, so the terminal tells the user when the URL is live
+// instead of leaving them to guess while `render:build` runs.
+function waitForScraper(attempt = 0) {
+  if (!scraper?.running) {
+    if (scraper && scraper.exitCode !== null) console.error(`[deployer] scraper exited with code ${scraper.exitCode}; open the deployer's Scraper tab for the log.`);
+    return;
+  }
+  const request = http.request({ hostname: '127.0.0.1', port: scraperPort, path: '/', method: 'HEAD', timeout: 2000 }, response => {
+    response.resume();
+    console.log(`\n  Scraper is ready:  http://localhost:${scraperPort}/  (HTTP ${response.statusCode})\n`);
+  });
+  const retry = () => {
+    request.destroy();
+    if (attempt < 150) setTimeout(() => waitForScraper(attempt + 1), 2000);
+    else console.error(`[deployer] scraper did not answer on port ${scraperPort} after 5 minutes; check the Scraper tab log.`);
+  };
+  request.on('timeout', retry);
+  request.on('error', retry);
+  request.end();
 }
 
 listenWithRetry();
 scheduleBranchScanner();
 
-process.on('SIGINT', () => { stopScraper(); server.close(() => process.exit(0)); });
-process.on('SIGTERM', () => { stopScraper(); server.close(() => process.exit(0)); });
+// Closing the deployer must NOT take the scraper down with it: the scraper owns
+// its own URL and has to stay reachable on its own. Set LOCAL_SCRAPER_STOP_WITH_UI=true
+// to restore the old behaviour; the Stop button still stops it on demand.
+const stopScraperWithUi = String(process.env.LOCAL_SCRAPER_STOP_WITH_UI || '').toLowerCase() === 'true';
+function shutdownUi() {
+  if (stopScraperWithUi) stopScraper();
+  else if (scraper?.running) console.log(`\n[deployer] closing the deployer; the scraper keeps running on http://localhost:${scraperPort}/ (pid ${scraper.pid}).`);
+  server.close(() => process.exit(0));
+}
+process.on('SIGINT', shutdownUi);
+process.on('SIGTERM', shutdownUi);
 
 function page(token) {
-  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a0803e-new\ngit reset --hard origin/arena/01a0803e-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.75.0\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a0803e-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.75.0\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a0803e-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a0803e-new\n  git reset --hard origin/arena/01a0803e-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.75.0\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a0803e-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a0803e-new\n  git reset --hard origin/arena/01a0803e-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.75.0\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a0803e-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a0803e-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\nnpm install --no-audit --prefer-online\nnpm run browsers:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.75.0\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.75.0", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.75.0\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.75.0"};
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scraper4 Local Deployer</title>
+  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a0803e-new\ngit reset --hard origin/arena/01a0803e-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.76.0\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a0803e-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.76.0\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a0803e-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a0803e-new\n  git reset --hard origin/arena/01a0803e-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.76.0\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a0803e-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a0803e-new\n  git reset --hard origin/arena/01a0803e-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.76.0\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a0803e-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a0803e-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\nnpm install --no-audit --prefer-online\nnpm run browsers:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.76.0\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.76.0", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.76.0\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.76.0"};
+  return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scraper4 Local Deployer</title>
 <style>
 :root{color-scheme:dark;--bg:#050814;--bg2:#0b1220;--card:#111c31cc;--card2:#0f172acc;--line:#263854;--text:#e7eefb;--muted:#93a4bc;--brand:#38bdf8;--brand2:#a78bfa;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--shadow:0 24px 80px #0009}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 12% -10%,#164e63 0,#0f172a 33%,#020617 78%);color:var(--text);font:14px/1.55 Inter,ui-sans-serif,system-ui,Segoe UI,Arial}.shell{max-width:1320px;margin:0 auto;padding:22px}.hero{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;padding:20px;border:1px solid #ffffff18;border-radius:28px;background:linear-gradient(135deg,#0f172add,#111827aa);box-shadow:var(--shadow);position:sticky;top:12px;z-index:5;backdrop-filter:blur(16px)}.brand{display:flex;gap:14px;align-items:center}.logo{width:52px;height:52px;border-radius:18px;background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:0 0 45px #38bdf866}.hero h1{font-size:24px;margin:0}.muted{color:var(--muted)}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:#02061799;color:#dbeafe;padding:7px 11px;margin:3px}.grid{display:grid;grid-template-columns:330px 1fr;gap:18px;margin-top:18px}.card{border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,var(--card),var(--card2));padding:18px;box-shadow:var(--shadow)}.side{position:sticky;top:120px;align-self:start}.steps{display:grid;gap:10px}.step{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid #263854;border-radius:16px;background:#07111f}.step b{color:#bfdbfe}.step .num{width:28px;height:28px;border-radius:10px;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#00111f;display:grid;place-items:center;font-weight:900;flex:none}label{display:block;margin:12px 0 5px;color:#cbd5e1;font-weight:700}select,input{width:100%;border:1px solid var(--line);border-radius:14px;background:#020817;color:var(--text);padding:12px}button{border:0;border-radius:14px;background:linear-gradient(135deg,var(--brand),#60a5fa);color:#00111f;font-weight:900;padding:11px 15px;cursor:pointer;margin:4px 4px 4px 0;box-shadow:0 10px 25px #0004}button:hover{filter:brightness(1.08)}.secondary{background:#24344e;color:#e5edf7}.success{background:linear-gradient(135deg,#22c55e,#86efac);color:#04140a}.danger{background:#ef4444;color:white}.warn{background:#f59e0b;color:#1c0a00}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.tabs button{background:#0f1b31;color:#cbd5e1}.tabs button.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#00111f}.panel{display:none}.panel.active{display:block}.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.metric{background:#06101e;border:1px solid var(--line);border-radius:18px;padding:14px;min-height:76px}.metric small{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:17px;margin-top:5px}.dot{width:10px;height:10px;border-radius:99px;background:var(--muted);display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 15px #22c55e}.dot.warn{background:var(--warn)}pre{white-space:pre-wrap;word-break:break-word;background:#020617;border:1px solid var(--line);border-radius:18px;padding:15px;min-height:220px;max-height:520px;overflow:auto;color:#dbeafe}.guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.guide-card{border:1px solid var(--line);border-radius:20px;padding:14px;background:#07111f}.guide-card h3{margin:0 0 8px}.lib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px;margin-top:10px}.lib-card{border:1px solid var(--line);border-radius:16px;padding:12px;background:#06101e}.lib-card h3{margin:0 0 8px;color:#bfdbfe}.lib-card code{display:inline-block;margin:2px;padding:2px 6px;border-radius:999px;background:#020617;border:1px solid #334155;color:#dbeafe;font-size:11px}.lib-card small{display:block;color:var(--muted);margin-bottom:7px}.guide-card pre{min-height:160px;max-height:260px;font-size:12px}.copy-ok{color:#86efac;font-size:12px;margin-left:8px}.banner{border:1px solid #f59e0b66;background:#42200688;color:#fde68a;border-radius:18px;padding:12px;margin-bottom:14px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.kbd{font-family:ui-monospace,Menlo,Consolas,monospace;background:#020617;border:1px solid var(--line);border-radius:7px;padding:2px 7px}.small{font-size:12px}@media(max-width:900px){.hero{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.side{position:static}.shell{padding:12px}.hero h1{font-size:20px}}
 .tbl{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}.tbl th,.tbl td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;background:#06101e}.tbl th{background:#0b1c31;color:#bfdbfe;font-size:12px}.tbl tr.current td{background:#052e1666}.tbl .num{font-family:ui-monospace,Menlo,Consolas,monospace;color:#93c5fd}.tbl small{color:var(--muted)}
@@ -724,7 +853,7 @@ function page(token) {
 <section><div class="tabs"><button class="active" onclick="tab('dash',this)">Overview</button><button onclick="tab('database',this)">Database</button><button onclick="tab('scraper',this)">Local scraper</button><button onclick="tab('guide',this)">Copy commands</button><button onclick="tab('branches',this)">Branches</button><button onclick="tab('jobs',this)">Logs</button></div>
 <div id="dash" class="panel active"><div class="card"><h2>Project status</h2><p class="muted">If you see <span class="kbd">getaddrinfo ENOTFOUND HOST</span>, your DATABASE_URL still contains the placeholder HOST. On Windows (and on machines without Docker) the database button now configures the <b>SQLite database built into Node.js</b> automatically - no PostgreSQL install/service is needed.</p><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">Install / retry npm</button><button class="success" onclick="run('databaseInstall')">Install / connect database</button><button onclick="run('localBuild')">Build local scraper</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
 <div id="database" class="panel"><div class="card"><h2>Database setup</h2><p class="muted">The deployer auto-detects Termux, Codespaces, desktop, Render, Vercel and Windows. On Windows / machines without Docker it configures the <b>built-in SQLite database</b> (nothing to install). On Docker/Codespaces it starts PostgreSQL automatically; on Render/Cloudflare/Vercel it shows panel instructions.</p><div class="row"><button class="success" onclick="run('databaseInstall')">Install database now</button><button class="secondary" onclick="showDbHelp()">Show panel instructions</button></div><pre id="dbHelp"></pre></div></div>
-<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">This starts the real Node/Render scraper on port ${scraperPort}. Use the database button first if DATABASE_URL is missing or contains HOST.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><pre id="scraperLog"></pre></div></div>
+<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">The scraper starts automatically with the deployer and keeps its own address: <a href="http://localhost:${scraperPort}/" target="_blank" rel="noreferrer">http://localhost:${scraperPort}/</a> (no token needed). It is a separate process, so it stays up after you close the deployer, and the terminal prints its URL under the deployer URL. Use the database button first if DATABASE_URL is missing or contains HOST. Set <span class="kbd">LOCAL_SCRAPER_AUTOSTART=false</span> to stop it starting on its own, or <span class="kbd">LOCAL_SCRAPER_STOP_WITH_UI=true</span> to shut it down together with the deployer.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><pre id="scraperLog"></pre></div></div>
 <div id="guide" class="panel"><div class="card"><h2>Installed libraries by type</h2><p class="muted">This inventory is generated from package.json plus required runtime/platform packages, so you can see what is already installed before copying commands.</p><div id="libraryGroups" class="lib-grid"></div></div><div class="card"><h2>One-click copy commands</h2><p class="muted">Each environment has its own copy button. Paste only plain text into Termux; never paste Markdown links.</p><div id="guideCards" class="guide-grid"></div></div></div>
 <div id="branches" class="panel"><div class="card"><h2>Repo branches - newest version tracking</h2><p class="muted">Every <b id="branchIntervalLabel">1 minute</b> the deployer fetches all branches of <span class="kbd">fazilatma/new</span>, reads the Scraper4 version from each branch (<span class="kbd">cloudflare-scraper4/package.json</span>) and - when enabled - automatically installs the branch carrying the <b>newest version</b>. Use the row button to install a specific branch.</p><div class="row" style="margin:10px 0"><label style="margin:0 10px 0 0;width:auto;font-weight:600"><input type="checkbox" id="autoInstallLatest" style="width:auto" checked> Auto-install newest version</label><select id="branchInterval" style="width:auto"><option value="1">every 1 minute</option><option value="5">every 5 minutes</option><option value="10">every 10 minutes</option><option value="30">every 30 minutes</option><option value="0">never (manual only)</option></select><button class="secondary" onclick="scanNow()">Scan now</button><button class="secondary" onclick="renderBranches(true)">Refresh table</button></div><div id="branchSummary" class="banner"></div><div style="overflow:auto"><table class="tbl"><thead><tr><th>Branch</th><th>Version on branch</th><th>Installed version</th><th>Last commit</th><th>Status</th><th>Action</th></tr></thead><tbody id="branchRows"><tr><td colspan="6" class="muted">Loading branches…</td></tr></tbody></table></div></div></div>
 <div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div></section></section></main>
@@ -906,7 +1035,7 @@ function renderBranchesData(d, force) {
     if (hasCode) {
       actionCell = isCurrent
         ? '<span class="muted small">installed</span> <button class="secondary" onclick="updateCode(true)">Update branch</button>'
-        : '<button class="success" onclick="installBranch(\\'' + b.name + '\\', this)">Install</button>';
+        : '<button class="success" onclick="installBranch(' + String.fromCharCode(39) + b.name + String.fromCharCode(39) + ', this)">Install</button>';
     }
     return '<tr' + (isCurrent ? ' class="current"' : '') + '><td><code>' + escHtml(b.name) + '</code></td>' +
       '<td class="num"><b>' + versionCell + '</b></td>' +

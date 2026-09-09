@@ -9,3 +9,4 @@ render-dist/
 worker-dist/
 dist/
 .deploy/
+data/
