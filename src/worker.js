@@ -463,6 +463,13 @@ async function testIntegration(body) {
 }
 
 /* ─── سینک سفارش‌ها ─── */
+/* تازگی مرسوله: جدیدترینِ پرداخت/ایجاد (سفارشِ تازه‌پرداخت‌شده با ایجاد قدیمی جا نماند؛ بی‌تاریخ = تازه) */
+const parcelTs = (p) => {
+  const a = Date.parse((p.order && (p.order.paid_at || p.order.created_at)) || '');
+  const b = Date.parse(p.created_at || '');
+  const m = Math.max(Number.isFinite(a) ? a : -1, Number.isFinite(b) ? b : -1);
+  return m < 0 ? NaN : m;
+};
 async function syncBasalam(store, integ, opts = {}) {
   const wantAll = opts.days === 'all' || Number(opts.days) === 0;
   const pct0 = num(await store.getSetting('comm_basalam').catch(() => null), 0); // ٪ پیش‌فرض کارمزد باسلام
@@ -471,7 +478,7 @@ async function syncBasalam(store, integ, opts = {}) {
   const ship = { single: num(booth && booth.ship_single, 0), multi: num(booth && booth.ship_multi, 0) }; // تعرفه ثابت ارسال غرفه
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const cutoff = wantAll ? 0 : Date.now() - days * 864e5;
-  let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0, perPage = 50;
+  let cursor = null, imported = 0, updated = 0, skipped = 0, scanned = 0, pages = 0, perPage = 30, oldStrikes = 0;
   const seen = new Set(); // کدهای دیده‌شده در پنجره (برای گذر تازه‌سازی وضعیت)
   const errors = [];
   for (let page = 0; page < 20; page++) {
@@ -484,18 +491,21 @@ async function syncBasalam(store, integ, opts = {}) {
       res = await basalamGet(integ.token, '/v1/vendor-parcels', params);
     } catch (e) {
       if (page === 0 && !cursor && perPage !== 10 && e && e.status === 422) {
-        perPage = 10; // ۵۰ پذیرفته نشد → تلاش مجدد با پیش‌فرض SDK
+        perPage = 10; // ۳۰ پذیرفته نشد → تلاش مجدد با پیش‌فرض SDK
         try {
           res = await basalamGet(integ.token, '/v1/vendor-parcels', { ...params, per_page: 10 });
         } catch (e2) { errors.push(e2.message); break; }
       } else { errors.push(e.message); break; }
     }
-    const items = Array.isArray(res) ? res : (res.data || res.parcels || res.items || res.results || []);
+    let items = Array.isArray(res) ? res : (res.data || res.parcels || res.items || res.results || []);
+    if (!Array.isArray(items) && items && typeof items === 'object') items = items.data || items.parcels || items.items || items.results || []; // پاکت تودرتو
     if (!items.length) break;
-    let hitOld = false;
+    scanned += items.length;
+    let fresh = 0;
     for (const p of items) {
-      const ts = Date.parse((p.order && p.order.created_at) || p.created_at || '');
-      if (Number.isFinite(ts) && ts < cutoff) { hitOld = true; continue; }
+      const ts = parcelTs(p);
+      if (Number.isFinite(ts) && ts < cutoff) continue;
+      fresh++;
       try {
         const mapped = mapParcelToOrder(p, integ, pct, ship);
         seen.add(mapped.order_code);
@@ -507,8 +517,9 @@ async function syncBasalam(store, integ, opts = {}) {
       }
     }
     pages++;
-    cursor = res.next_cursor || res.nextCursor || null;
-    if (!cursor || hitOld) break;
+    cursor = (res && (res.next_cursor || res.nextCursor)) || (res && res.meta && res.meta.next_cursor) || null;
+    if (fresh === 0) oldStrikes++; else oldStrikes = 0; // فقط ۲ صفحه پیاپیِ کاملاً قدیمی توقف می‌دهد
+    if (!cursor || oldStrikes >= 2) break;
   }
   // گذر دوم: تازه‌سازی وضعیت سفارش‌های بازِ بیرون از پنجره (لغو/ردِ دیرهنگام)
   let refreshed = 0;
@@ -520,7 +531,7 @@ async function syncBasalam(store, integ, opts = {}) {
     });
     refreshed = r.checked; updated += r.updated;
   } catch (e) { if (errors.length < 5) errors.push(e.message); }
-  return { imported, updated, skipped, pages, refreshed, errors };
+  return { imported, updated, skipped, scanned, pages, refreshed, errors };
 }
 
 async function syncWoo(store, integ, opts = {}) {
@@ -528,7 +539,7 @@ async function syncWoo(store, integ, opts = {}) {
   const pct = num(await store.getSetting('comm_website').catch(() => null), 0); // ٪ پیش‌فرض کارمزد سایت
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const after = wantAll ? undefined : new Date(Date.now() - days * 864e5).toISOString();
-  let imported = 0, updated = 0, skipped = 0, page = 1;
+  let imported = 0, updated = 0, skipped = 0, scanned = 0, page = 1;
   const seen = new Set();
   const errors = [];
   for (page = 1; page <= 20; page++) {
@@ -542,6 +553,7 @@ async function syncWoo(store, integ, opts = {}) {
       break;
     }
     if (!items.length) break;
+    scanned += items.length;
     for (const o of items) {
       try {
         const mapped = mapWooToOrder(o, pct);
@@ -565,7 +577,7 @@ async function syncWoo(store, integ, opts = {}) {
     });
     refreshed = r.checked; updated += r.updated;
   } catch (e) { if (errors.length < 5) errors.push(e.message); }
-  return { imported, updated, skipped, pages: page - 1, refreshed, errors };
+  return { imported, updated, skipped, scanned, pages: page - 1, refreshed, errors };
 }
 
 /* حذف رمزها از خروجی لیست */
