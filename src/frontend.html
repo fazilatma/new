@@ -699,7 +699,7 @@ const state = {
 };
 const N = (v) => Number(v) || 0;
 
-/* مبنای حسابداری: واحدی (پیش‌فرض) یا مبالغ کلی — تنظیمات */
+/* مبنای ورود مبلغ در فرم: واحدی (پیش‌فرض) یا کلی — ذخیره‌سازی همیشه واحدی است */
 function costMode() { return (state.settings && state.settings.cost_mode) === 'total' ? 'total' : 'unit'; }
 function applyCostMode() {
   const t = costMode() === 'total';
@@ -711,9 +711,8 @@ function applyCostMode() {
 /* محاسبه مالی یک سفارش */
 function calc(o, incReturned = true) {
   const qty = N(o.quantity) || 1;
-  const mult = costMode() === 'total' ? 1 : qty;
-  let revenue = N(o.unit_sale) * mult - N(o.discount) + N(o.shipping_rev); // + ارسال دریافتی از مشتری
-  const cost = N(o.unit_cost) * mult + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
+  let revenue = N(o.unit_sale) * qty - N(o.discount) + N(o.shipping_rev); // + ارسال دریافتی از مشتری
+  const cost = N(o.unit_cost) * qty + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
   if (o.status === 'returned' && incReturned) revenue = 0; // مرجوعی = زیان (هزینه‌ها می‌مانند)
   return { revenue, cost, profit: revenue - cost, margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : (revenue - cost < 0 ? -100 : 0) };
 }
@@ -1457,6 +1456,7 @@ function onSourceChange() {
 }
 function formData() {
   const iso = PK.date.get(), j = isoToJ(iso);
+  const _tdiv = costMode() === 'total' ? (N($('#o-qty').value) || 1) : 1; // حالت کلی: فیلد مبلغ کل است → ذخیره واحدی
   const supId = $('#o-sup').value;
   const sup = state.suppliers.find((s) => String(s.id) === String(supId));
   return {
@@ -1467,7 +1467,7 @@ function formData() {
     customer_name: $('#o-customer').value.trim(), customer_phone: $('#o-phone').value.trim(), city: $('#o-city').value.trim(),
     product_name: $('#o-product').value.trim(), quantity: N($('#o-qty').value) || 1,
     supplier_id: supId || null, supplier_name: sup ? sup.name : '',
-    unit_sale: M('o-usale'), unit_cost: M('o-ucost'), discount: M('o-disc'),
+    unit_sale: M('o-usale') / _tdiv, unit_cost: M('o-ucost') / _tdiv, discount: M('o-disc'),
     shipping_cost: M('o-ship'), shipping_rev: M('o-shiprev'), packaging_cost: M('o-pack'), commission: M('o-comm'),
     ads_cost: M('o-ads'), other_cost: M('o-other'), other_label: $('#o-otherlabel').value.trim(),
     status: $('#o-status').value, payment_status: $('#o-pay').value, purchase_type: $('#o-ptype').value, customer_ptype: $('#o-cptype').value,
@@ -1525,7 +1525,8 @@ function editOrder(id) {
   $('#o-phone').value = o.customer_phone || ''; $('#o-city').value = o.city || '';
   $('#o-product').value = o.product_name || ''; $('#o-qty').value = o.quantity || 1;
   $('#o-sup').value = o.supplier_id || '';
-  setMoney('o-usale', o.unit_sale); setMoney('o-ucost', o.unit_cost);
+  const _tmult = costMode() === 'total' ? (o.quantity || 1) : 1; // حالت کلی: نمایش مبلغ کل
+  setMoney('o-usale', N(o.unit_sale) * _tmult); setMoney('o-ucost', N(o.unit_cost) * _tmult);
   setMoney('o-disc', o.discount); setMoney('o-ship', o.shipping_cost); setMoney('o-shiprev', o.shipping_rev);
   setMoney('o-pack', o.packaging_cost); setMoney('o-comm', o.commission);
   setMoney('o-ads', o.ads_cost); setMoney('o-other', o.other_cost);
@@ -1753,7 +1754,6 @@ function openInvoice(id) {
   if (!o) return;
   const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
   const shop = state.settings.shop_name || 'فروشگاه ما';
-  const iq = N(o.quantity) || 1, itm = costMode() === 'total', ifi = itm ? Math.round(N(o.unit_sale) / iq) : N(o.unit_sale), iline = itm ? N(o.unit_sale) : N(o.unit_sale) * iq;
   const row = (t, v) => `<div class="flex justify-between py-1 text-sm"><span class="text-slate-500">${t}</span><span class="font-bold num">${v}</span></div>`;
   $('#print-area').innerHTML = `
     <div class="text-center border-b-2 border-dashed border-slate-200 pb-3 mb-3">
@@ -1773,8 +1773,8 @@ function openInvoice(id) {
       <tbody><tr class="border-t border-slate-200">
         <td class="p-2 font-bold">${esc(o.product_name || '')}</td>
         <td class="p-2 text-center num">${fmtN(o.quantity || 1)}</td>
-        <td class="p-2 text-center num">${fmtN(ifi)}</td>
-        <td class="p-2 text-center num">${fmtN(iline)}</td>
+        <td class="p-2 text-center num">${fmtN(o.unit_sale)}</td>
+        <td class="p-2 text-center num">${fmtN(N(o.unit_sale) * (N(o.quantity) || 1))}</td>
       </tr></tbody>
     </table>
     ${row('تخفیف', '− ' + fmtMoney(o.discount))}
