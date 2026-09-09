@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS integrations (
   consumer_key TEXT DEFAULT '',
   consumer_secret TEXT DEFAULT '',
   auto_sync INTEGER DEFAULT 0,
+  sync_every_min INTEGER DEFAULT 60,
   last_sync_at TEXT,
   last_status TEXT DEFAULT '',
   created_at TEXT

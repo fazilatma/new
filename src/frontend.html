@@ -534,7 +534,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.7.1';
+const APP_VER = '1.8.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1855,9 +1855,10 @@ function connCard(c) {
       </div>
       <span class="chip ${okSync ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : 'bg-slate-200 text-slate-600 dark:bg-white/10 dark:text-slate-300'}" title="${esc(c.last_status || '')}">سینک: <span class="num">${lastSync}</span></span>
     </div>
-    <div class="flex items-center gap-2 mt-2">
+    <div class="flex flex-wrap items-center gap-2 mt-2">
       <button class="btn btn-primary !py-1.5 !text-xs flex-1 justify-center" id="sync-${c.id}" onclick="syncInteg('${c.id}')">🔄 سینک سفارش‌ها</button>
-      <label class="flex items-center gap-1 text-[11px] cursor-pointer whitespace-nowrap" title="سینک خودکار ساعتی توسط Cloudflare">خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}', this.checked)" class="w-4 h-4 accent-indigo-600"></label>
+      <label class="flex items-center gap-1 text-[11px] cursor-pointer whitespace-nowrap" title="سینک خودکار توسط Cloudflare — بازه از همین ردیف">خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}', this.checked)" class="w-4 h-4 accent-indigo-600"></label>
+      <select class="inp !py-1 !px-1 !text-[11px] !w-auto num" title="بازه سینک خودکار" onchange="setAutoEvery('${c.id}', this.value)">${EVERY_OPTS.map(([v, t]) => `<option value="${v}"${(+c.sync_every_min || 60) === v ? ' selected' : ''}>${t}</option>`).join('')}</select>
       <button class="btn btn-soft !px-2 !py-1.5 !text-xs" onclick="editInteg('${c.id}')" title="ویرایش">✏️</button>
       <button class="btn btn-danger !px-2 !py-1.5 !text-xs" onclick="delInteg('${c.id}')" title="حذف">🗑</button>
     </div>
@@ -1999,7 +2000,15 @@ async function toggleAuto(id, on) {
   try {
     const saved = await Store.saveIntegration({ id, auto_sync: on ? 1 : 0 });
     Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
-    toast(on ? '⏰ سینک خودکار ساعتی روشن شد' : 'سینک خودکار خاموش شد');
+    toast(on ? '⏰ سینک خودکار روشن شد' : 'سینک خودکار خاموش شد');
+  } catch (e) { toast(netErr(e), 'err'); renderIntegrations(); }
+}
+const EVERY_OPTS = [[15, 'هر ۱۵ دقیقه'], [30, 'هر ۳۰ دقیقه'], [60, 'هر ۱ ساعت'], [180, 'هر ۳ ساعت'], [360, 'هر ۶ ساعت'], [720, 'هر ۱۲ ساعت'], [1440, 'هر ۲۴ ساعت']];
+async function setAutoEvery(id, val) {
+  try {
+    const saved = await Store.saveIntegration({ id, sync_every_min: +val });
+    Object.assign(state.integrations.find((x) => String(x.id) === String(id)), saved);
+    toast('⏰ بازه سینک خودکار: ' + (EVERY_OPTS.find(([v]) => v === +val) || ['', ''])[1]);
   } catch (e) { toast(netErr(e), 'err'); renderIntegrations(); }
 }
 function editInteg(id) {

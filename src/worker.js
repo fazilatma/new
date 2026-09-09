@@ -40,12 +40,16 @@ const SCHEMA = [
     type TEXT NOT NULL, name TEXT DEFAULT '',
     token TEXT DEFAULT '', vendor_id INTEGER, vendor_title TEXT DEFAULT '', booth_id INTEGER,
     store_url TEXT DEFAULT '', consumer_key TEXT DEFAULT '', consumer_secret TEXT DEFAULT '',
-    auto_sync INTEGER DEFAULT 0, last_sync_at TEXT, last_status TEXT DEFAULT '',
+    auto_sync INTEGER DEFAULT 0, sync_every_min INTEGER DEFAULT 60, last_sync_at TEXT, last_status TEXT DEFAULT '',
     created_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`,
 ];
 
+/* مهاجرت ستون‌های جدید روی دیتابیس‌های قدیمی (خطای ستون تکراری نادیده گرفته می‌شود) */
+const MIGRATIONS = [
+  ['integrations', 'sync_every_min', 'INTEGER DEFAULT 60'],
+];
 const ORDER_FIELDS = [
   'order_code', 'source', 'booth_id', 'customer_name', 'customer_phone', 'city',
   'product_name', 'quantity', 'supplier_id', 'supplier_name',
@@ -55,13 +59,13 @@ const ORDER_FIELDS = [
 ];
 const INTEG_FIELDS = [
   'type', 'name', 'token', 'vendor_id', 'vendor_title', 'booth_id',
-  'store_url', 'consumer_key', 'consumer_secret', 'auto_sync',
+  'store_url', 'consumer_key', 'consumer_secret', 'auto_sync', 'sync_every_min',
 ];
 const INTEG_ALL = [...INTEG_FIELDS, 'last_sync_at', 'last_status'];
 const NUM_FIELDS = new Set([
   'quantity', 'unit_sale', 'unit_cost', 'discount', 'shipping_cost',
   'packaging_cost', 'commission', 'ads_cost', 'other_cost', 'jy', 'jm', 'jd', 'booth_id', 'supplier_id',
-  'vendor_id', 'auto_sync',
+  'vendor_id', 'auto_sync', 'sync_every_min',
 ]);
 
 /* ─── ابزارها ─── */
@@ -95,6 +99,9 @@ function d1Store(db) {
   async function migrate() {
     if (globalThis.__MIGRATED__) return;
     for (const sql of SCHEMA) await db.prepare(sql).run();
+    for (const [t, col, ddl] of MIGRATIONS) {
+      try { await db.prepare(`ALTER TABLE ${t} ADD COLUMN ${col} ${ddl}`).run(); } catch {}
+    }
     globalThis.__MIGRATED__ = true;
   }
   const all = async (sql, params = []) =>
@@ -875,13 +882,19 @@ async function handleCloud(req, store, url, parts) {
 }
 
 /* کارهای دوره‌ای Cron: سینک خودکار + بکاپ ابری */
+/* موعد سینک خودکار رسیده؟ (پیش‌فرض: هر ۶۰ دقیقه) */
+const isSyncDue = (integ, now = Date.now()) => {
+  if (num(integ.auto_sync, 0) !== 1) return false;
+  const last = integ.last_sync_at ? Date.parse(integ.last_sync_at) : 0;
+  return now - last >= num(integ.sync_every_min, 60) * 60e3;
+};
 async function runScheduled(env) {
   if (!env.DB) return;
   const store = d1Store(env.DB);
   await store.migrate();
   /* ۱) سینک اتصال‌های خودکار */
   const all = await store.list('integrations');
-  for (const integ of all.filter((i) => num(i.auto_sync, 0) === 1)) {
+  for (const integ of all.filter((i) => isSyncDue(i))) {
     try {
       const res = integ.type === 'basalam'
         ? await syncBasalam(store, integ, { days: 2 })
@@ -1037,7 +1050,7 @@ export default {
     });
   },
 
-  /* Cron ساعتی: سینک خودکار + بکاپ ابری */
+  /* Cron پایه (هر ۱۵ دقیقه): سینک خودکار سررسیده + بکاپ ابری */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runScheduled(env));
   },
