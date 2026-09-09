@@ -66,12 +66,12 @@ tailwind.config = {
   table.tbl tbody tr.row-returned td, .lg-returned { background: rgba(249,115,22,.13); }
   table.tbl tbody tr.row-nocost td, .lg-nocost { background: rgba(245,158,11,.14); }
   table.tbl tbody tr.row-ok td, .lg-ok { background: rgba(16,185,129,.10); }
-  table.tbl tbody tr.row-pending td, .lg-pending { background: rgba(139,92,246,.08); }
+  table.tbl tbody tr.row-pending td, .lg-pending { background: rgba(100,116,139,.10); }
   .dark table.tbl tbody tr.row-cancelled td, .dark .lg-cancelled { background: rgba(244,63,94,.20); }
   .dark table.tbl tbody tr.row-returned td, .dark .lg-returned { background: rgba(249,115,22,.21); }
   .dark table.tbl tbody tr.row-nocost td, .dark .lg-nocost { background: rgba(245,158,11,.22); }
   .dark table.tbl tbody tr.row-ok td, .dark .lg-ok { background: rgba(16,185,129,.16); }
-  .dark table.tbl tbody tr.row-pending td, .dark .lg-pending { background: rgba(139,92,246,.14); }
+  .dark table.tbl tbody tr.row-pending td, .dark .lg-pending { background: rgba(148,163,184,.18); }
   .lg { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-weight: 700; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(4px); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem; }
   .modal-box { max-height: 92vh; overflow-y: auto; width: 100%; animation: fadeUp .3s ease both; }
@@ -539,7 +539,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.12.0';
+const APP_VER = '1.13.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -617,12 +617,12 @@ const yearStartJ = (iso) => { const j = isoToJ(iso); return jToISO(j.jy, 1, 1); 
 const SOURCES = { basalam: '🛍 باسلام', website: '🌐 سایت فروشگاهی' };
 const SRC_SHORT = { basalam: 'باسلام', website: 'سایت' };
 const STATUS = {
-  pending: { t: 'در انتظار تایید', c: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300' },
-  confirmed: { t: 'تایید شده', c: 'bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300' },
-  shipped: { t: 'ارسال شده', c: 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300' },
-  delivered: { t: 'تحویل شده', c: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' },
-  returned: { t: 'مرجوع شده', c: 'bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300' },
-  cancelled: { t: 'لغو شده', c: 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300' },
+  pending: { t: 'در انتظار تایید', i: '⏳', c: 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-500/50 dark:bg-amber-400/15 dark:text-amber-200 dark:ring-amber-300/30' },
+  confirmed: { t: 'تایید شده', i: '✅', c: 'bg-blue-100 text-blue-900 ring-1 ring-inset ring-blue-500/50 dark:bg-blue-400/15 dark:text-blue-200 dark:ring-blue-300/30' },
+  shipped: { t: 'ارسال شده', i: '🚚', c: 'bg-violet-100 text-violet-900 ring-1 ring-inset ring-violet-500/50 dark:bg-violet-400/15 dark:text-violet-200 dark:ring-violet-300/30' },
+  delivered: { t: 'تحویل شده', i: '📦', c: 'bg-emerald-100 text-emerald-900 ring-1 ring-inset ring-emerald-500/50 dark:bg-emerald-400/15 dark:text-emerald-200 dark:ring-emerald-300/30' },
+  returned: { t: 'مرجوع شده', i: '↩', c: 'bg-orange-500 text-white shadow-sm shadow-orange-500/40 dark:bg-orange-500 dark:text-white' },
+  cancelled: { t: 'لغو شده', i: '✕', c: 'bg-rose-600 text-white shadow-sm shadow-rose-600/40 dark:bg-rose-600 dark:text-white' },
 };
 const PAY = { pending: 'در انتظار پرداخت', paid: 'پرداخت شده', refunded: 'برگشت وجه' };
 const PTYPE = { cash: '💵 نقدی', installment: '📝 قسطی' };
@@ -1010,8 +1010,8 @@ function fillSelects() {
   const sOpts = `<option value="">— بدون تامین‌کننده —</option>` + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   $('#o-sup').innerHTML = sOpts;
   $('#f-sup').innerHTML = '<option value="">همه تامین‌کنندگان</option>' + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
-  $('#o-status').innerHTML = Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.t}</option>`).join('');
-  $('#f-status').innerHTML = '<option value="">همه وضعیت‌ها</option>' + Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.t}</option>`).join('');
+  $('#o-status').innerHTML = Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.i} ${v.t}</option>`).join('');
+  $('#f-status').innerHTML = '<option value="">همه وضعیت‌ها</option>' + Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.i} ${v.t}</option>`).join('');
   $('#o-pay').innerHTML = Object.entries(PAY).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('#o-ptype').innerHTML = Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('#f-ptype').innerHTML = '<option value="">همه خریدها</option>' + Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
@@ -1224,7 +1224,7 @@ function orderRowMini(o) {
     <td class="text-xs">${SOURCES[o.source] || ''}</td>
     <td class="num">${fmtN(c.revenue)}</td>
     <td class="num font-black ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(c.profit)}</td>
-    <td><span class="chip ${st.c}">${st.t}</span></td></tr>`;
+    <td><span class="chip ${st.c}">${st.i} ${st.t}</span></td></tr>`;
 }
 
 /* ═══════════════ لیست سفارش‌ها ═══════════════ */
@@ -1270,7 +1270,7 @@ function renderOrders() {
         <td class="text-xs">${SOURCES[o.source] || ''}${o.source === 'basalam' ? `<div class="text-[11px] text-slate-400">${esc(boothName(o.booth_id))}</div>` : ''}</td>
         <td class="text-xs">${esc(supNameOf(o))}<div class="text-[11px] text-slate-400">${PTYPE[o.purchase_type] || PTYPE.cash}</div></td>
         <td class="num">${fmtN(c.revenue)}</td>
-        <td><span class="chip ${st.c}">${st.t}</span></td>
+        <td><span class="chip ${st.c}">${st.i} ${st.t}</span></td>
         <td><div class="flex gap-1" onclick="event.stopPropagation()">
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="openInvoice('${o.id}')" title="فاکتور">🧾</button>
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="editOrder('${o.id}')" title="ویرایش">✏️</button>
@@ -1716,7 +1716,7 @@ function openInvoice(id) {
       <div>مشتری: <b>${esc(o.customer_name || '')}</b></div>
       <div>تلفن: <b class="num">${esc(o.customer_phone || '—')}</b></div>
       <div>شهر: <b>${esc(o.city || '—')}</b></div>
-      <div>وضعیت: <b>${st.t}</b></div>
+      <div>وضعیت: <span class="chip ${st.c}">${st.i} ${st.t}</span></div>
     </div>
     <table class="w-full text-sm border border-slate-200 rounded-xl overflow-hidden mb-3">
       <thead><tr class="bg-slate-100"><th class="p-2 text-right">کالا</th><th class="p-2">تعداد</th><th class="p-2">فی</th><th class="p-2">مبلغ</th></tr></thead>
