@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS booths (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT DEFAULT '',
+  ship_single REAL DEFAULT 0,
+  ship_multi REAL DEFAULT 0,
+  comm_pct REAL DEFAULT 0,
   created_at TEXT
 );
 
@@ -33,6 +36,7 @@ CREATE TABLE IF NOT EXISTS orders (
   unit_cost REAL DEFAULT 0,
   discount REAL DEFAULT 0,
   shipping_cost REAL DEFAULT 0,
+  shipping_rev REAL DEFAULT 0,
   packaging_cost REAL DEFAULT 0,
   commission REAL DEFAULT 0,
   ads_cost REAL DEFAULT 0,

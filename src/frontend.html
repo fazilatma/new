@@ -254,14 +254,14 @@ tailwind.config = {
             <div><label class="text-xs font-bold">منبع فروش *</label>
               <select id="o-source" class="inp" onchange="onSourceChange()"><option value="basalam">🛍 باسلام</option><option value="website">🌐 سایت فروشگاهی</option></select></div>
             <div id="wrap-booth"><label class="text-xs font-bold">غرفه باسلام *</label>
-              <div class="flex gap-1"><select id="o-booth" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('booth')" title="غرفه جدید">＋</button></div></div>
+              <div class="flex gap-1"><select id="o-booth" class="inp" onchange="onBoothChange()"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('booth')" title="غرفه جدید">＋</button></div></div>
           </div>
           <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3">
             <div class="text-xs font-black mb-2 text-slate-500">👤 مشتری و کالا</div>
             <div class="grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">نام و نام خانوادگی مشتری *</label><input id="o-customer" class="inp" required placeholder="مثلاً سارا محمدی"></div>
               <div><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
-              <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="onQtyChange()"></div>
             </div>
           </div>
           <details class="coll" id="det-cust">
@@ -284,7 +284,8 @@ tailwind.config = {
             <summary><span class="chev">▾</span> 💸 تخفیف و هزینه‌های جانبی <span id="extra-total" class="chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 num mr-auto">۰ تومان</span></summary>
             <div class="coll-body grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">هزینه ارسال</label><input id="o-ship" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">هزینه ارسال (پرداختی شما)</label><input id="o-ship" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label class="text-xs font-bold">ارسال دریافتی از مشتری</label><input id="o-shiprev" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه)</label><input id="o-comm" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
               <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
@@ -488,6 +489,7 @@ tailwind.config = {
             <div><label class="text-xs font-bold">نام فروشگاه</label><input id="s-shop" class="inp" placeholder="مثلاً فروشگاه …"></div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label class="text-xs font-bold">کمیسیون پیش‌فرض باسلام (٪)</label><input id="s-cb" type="number" min="0" max="100" value="0" class="inp num"></div>
+              <div class="text-[11px] text-slate-400">جدول رسمی کارمزد دسته‌ها: <a class="underline" href="https://vendor.basalam.com/landings/commission" target="_blank" rel="noopener">صفحه کارمزد باسلام</a> (ورود غرفه‌دار لازم است) • نرخ دقیق هر محصول: پنل غرفه ← محصولات</div>
               <div><label class="text-xs font-bold">کمیسیون پیش‌فرض سایت (٪)</label><input id="s-cw" type="number" min="0" max="100" value="0" class="inp num"></div>
             </div>
             <button class="btn btn-primary justify-center" onclick="saveSettings()">💾 ذخیره تنظیمات</button>
@@ -534,7 +536,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.8.1';
+const APP_VER = '1.9.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -689,7 +691,7 @@ const N = (v) => Number(v) || 0;
 /* محاسبه مالی یک سفارش */
 function calc(o, incReturned = true) {
   const qty = N(o.quantity) || 1;
-  let revenue = N(o.unit_sale) * qty - N(o.discount);
+  let revenue = N(o.unit_sale) * qty - N(o.discount) + N(o.shipping_rev); // + ارسال دریافتی از مشتری
   const cost = N(o.unit_cost) * qty + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
   if (o.status === 'returned' && incReturned) revenue = 0; // مرجوعی = زیان (هزینه‌ها می‌مانند)
   return { revenue, cost, profit: revenue - cost, margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : (revenue - cost < 0 ? -100 : 0) };
@@ -1357,6 +1359,39 @@ function nextOrderCode() {
   }
   return `SF-${toFa(jy)}-${String(max + 1).padStart(4, '0')}`;
 }
+/* پیشنهاد ٪ کارمزد از جدول رسمی باسلام (نرخ دقیق هر محصول: پنل غرفه ← محصولات) */
+const BOOTH_COMM_CATS = [
+  ['— انتخاب دسته برای پیشنهاد ٪ —', ''],
+  ['مواد غذایی: آجیل، خشکبار، عسل (۹٪)', 9],
+  ['مواد غذایی: خواروبار، لبنیات، پروتئینی، میوه تازه (۳٪)', 3],
+  ['مواد غذایی: روغن خوراکی (۵٪)', 5],
+  ['مواد غذایی: سایر (۶٪)', 6],
+  ['مد و پوشاک (۱۴٪)', 14],
+  ['صنایع دستی (۱۰٪)', 10],
+  ['خدمات کسب‌وکار (۷٪)', 7],
+  ['آرایشی و بهداشتی (۵ تا ۱۳٪ — دقیق از پنل)', ''],
+  ['خانه و آشپزخانه (۲ تا ۱۴٪ — دقیق از پنل)', ''],
+  ['کالای دیجیتال (۲ تا ۱۱٪ — دقیق از پنل)', ''],
+  ['ورزش و سفر / سلامت و زیبایی (۶٫۵ تا ۱۵٪ — دقیق از پنل)', ''],
+  ['فرهنگی، آموزشی و سرگرمی (۷ تا ۱۲٪ — دقیق از پنل)', ''],
+  ['طلا و نقره (۲ تا ۱۰٪ — دقیق از پنل)', ''],
+  ['ابزارآلات و خودرو (۵ تا ۸٪ — دقیق از پنل)', ''],
+];
+/* پیش‌فرض ارسال/کارمزد از تنظیمات غرفه + سوییچ خودکار تک/چندقلمی */
+function onBoothChange() {
+  if ($('#o-id').value || $('#o-source').value !== 'basalam') return;
+  const b = state.booths.find((x) => String(x.id) === String($('#o-booth').value)) || {};
+  const multi = (N($('#o-qty').value) || 1) > 1;
+  const want = multi ? N(b.ship_multi) : N(b.ship_single);
+  const cur = N($('#o-shiprev').value);
+  const other = multi ? N(b.ship_single) : N(b.ship_multi);
+  if (want > 0 && (cur === 0 || cur === other)) { $('#o-shiprev').value = want; liveCalc(); }
+  if (N(b.comm_pct) > 0 && N($('#o-comm').value) === 0) {
+    const rev = N($('#o-usale').value) * (N($('#o-qty').value) || 1);
+    if (rev > 0) { $('#o-comm').value = Math.round(rev * N(b.comm_pct) / 100); liveCalc(); }
+  }
+}
+function onQtyChange() { onBoothChange(); liveCalc(); }
 function onSourceChange() {
   const src = $('#o-source').value;
   $('#wrap-booth').style.display = src === 'basalam' ? '' : 'none';
@@ -1380,7 +1415,7 @@ function formData() {
     product_name: $('#o-product').value.trim(), quantity: N($('#o-qty').value) || 1,
     supplier_id: supId || null, supplier_name: sup ? sup.name : '',
     unit_sale: N($('#o-usale').value), unit_cost: N($('#o-ucost').value), discount: N($('#o-disc').value),
-    shipping_cost: N($('#o-ship').value), packaging_cost: N($('#o-pack').value), commission: N($('#o-comm').value),
+    shipping_cost: N($('#o-ship').value), shipping_rev: N($('#o-shiprev').value), packaging_cost: N($('#o-pack').value), commission: N($('#o-comm').value),
     ads_cost: N($('#o-ads').value), other_cost: N($('#o-other').value), other_label: $('#o-otherlabel').value.trim(),
     status: $('#o-status').value, payment_status: $('#o-pay').value,
     order_date: iso, jdate: `${j.jy}/${j.jm}/${j.jd}`, jy: j.jy, jm: j.jm, jd: j.jd,
@@ -1398,7 +1433,7 @@ function liveCalc() {
         <span class="font-black">${c.profit >= 0 ? '✅ سود' : '🔻 زیان'}</span>
         <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(c.profit)}</span></div>` +
       row('حاشیه سود', toFa(c.margin.toFixed(1)) + '٪') +
-      `<div class="text-[11px] text-slate-400 leading-5 mt-1">فروش واحد × تعداد − تخفیف = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل</div>`;
+      `<div class="text-[11px] text-slate-400 leading-5 mt-1">فروش واحد × تعداد − تخفیف + ارسال دریافتی = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل</div>`;
     const extra = N(o.discount) + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
     const eb = document.getElementById('extra-total');
     if (eb) eb.textContent = fmtMoney(extra);
@@ -1407,7 +1442,7 @@ function liveCalc() {
 function resetForm() {
   $('#order-form').reset();
   $('#o-id').value = ''; $('#o-qty').value = 1;
-  ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => $('#' + id).value = 0);
+  ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-shiprev', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => $('#' + id).value = 0);
   $('#form-title').textContent = '➕ ثبت سفارش جدید';
   $('#o-code').value = nextOrderCode();
   ['det-cust', 'det-cost', 'det-notes'].forEach((id) => { document.getElementById(id).open = false; });
@@ -1436,7 +1471,7 @@ function editOrder(id) {
   $('#o-product').value = o.product_name || ''; $('#o-qty').value = o.quantity || 1;
   $('#o-sup').value = o.supplier_id || '';
   $('#o-usale').value = o.unit_sale || 0; $('#o-ucost').value = o.unit_cost || 0;
-  $('#o-disc').value = o.discount || 0; $('#o-ship').value = o.shipping_cost || 0;
+  $('#o-disc').value = o.discount || 0; $('#o-ship').value = o.shipping_cost || 0; $('#o-shiprev').value = o.shipping_rev || 0;
   $('#o-pack').value = o.packaging_cost || 0; $('#o-comm').value = o.commission || 0;
   $('#o-ads').value = o.ads_cost || 0; $('#o-other').value = o.other_cost || 0;
   $('#o-otherlabel').value = o.other_label || '';
@@ -1570,7 +1605,8 @@ function renderBooths() {
       <div class="flex items-start gap-2">
         <div class="kpi-icon grad-amber">🏪</div>
         <div class="flex-1 min-w-0"><div class="font-black truncate">${esc(b.name)}</div>
-        <div class="text-xs text-slate-500 dark:text-slate-400 truncate">${esc(b.description || 'غرفه باسلام')}</div></div>
+        <div class="text-xs text-slate-500 dark:text-slate-400 truncate">${esc(b.description || 'غرفه باسلام')}</div>
+        ${(N(b.comm_pct) > 0 || N(b.ship_single) > 0) ? `<div class="text-[11px] text-slate-400 num">٪${toFa(N(b.comm_pct))} کارمزد • ✈️ ${compact(N(b.ship_single))} / ${compact(N(b.ship_multi))}</div>` : ''}</div>
         <div class="flex gap-1 no-print">
           <input type="checkbox" ${state.sel.booths.has(String(b.id)) ? 'checked' : ''} onchange="toggleSel('booths','${b.id}',this.checked)" class="w-4 h-4 accent-indigo-600 mt-1.5" title="انتخاب برای حذف گروهی">
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="boothModal('${b.id}')">✏️</button>
@@ -1613,11 +1649,17 @@ function boothModal(id) {
   const b = state.booths.find((x) => String(x.id) === String(id)) || {};
   openModal({ title: id ? '✏️ ویرایش غرفه' : '🏪 غرفه جدید',
     body: `<div class="flex flex-col gap-2"><input id="m-name" class="inp" placeholder="نام غرفه *" value="${esc(b.name || '')}">
-      <input id="m-desc" class="inp" placeholder="توضیح (اختیاری)" value="${esc(b.description || '')}"></div>`,
+      <input id="m-desc" class="inp" placeholder="توضیح (اختیاری)" value="${esc(b.description || '')}">
+      <div class="grid grid-cols-3 gap-2">
+        <div><label class="text-xs font-bold">٪ کارمزد غرفه</label><input id="m-commpct" type="number" min="0" max="100" class="inp num" value="${N(b.comm_pct || 0)}" title="صفر = ٪ سراسری تنظیمات"></div>
+        <div><label class="text-xs font-bold">ارسال تک‌قلمی (تومان)</label><input id="m-ship1" type="number" min="0" class="inp num" value="${N(b.ship_single || 0)}"></div>
+        <div><label class="text-xs font-bold">ارسال چندقلمی (تومان)</label><input id="m-ship2" type="number" min="0" class="inp num" value="${N(b.ship_multi || 0)}"></div>
+      </div>
+      <select id="m-commcat" class="inp !text-xs" onchange="if(this.value)$('#m-commpct').value=this.value" title="پیشنهاد ٪ از جدول رسمی باسلام">${BOOTH_COMM_CATS.map(([t, v]) => `<option value="${v}">${t}</option>`).join('')}</select></div>`,
     buttons: [{ label: '💾 ذخیره', onClick: async () => {
       const name = $('#m-name').value.trim();
       if (!name) { toast('نام غرفه الزامی است', 'err'); return; }
-      const saved = await Store.saveBooth({ id: b.id, name, description: $('#m-desc').value.trim() });
+      const saved = await Store.saveBooth({ id: b.id, name, description: $('#m-desc').value.trim(), ship_single: N($('#m-ship1').value), ship_multi: N($('#m-ship2').value), comm_pct: N($('#m-commpct').value) });
       if (b.id) Object.assign(b, saved); else state.booths.push(saved);
       closeModal(); fillSelects(); renderBooths(); toast('✅ ذخیره شد');
     }}] });
@@ -1701,13 +1743,13 @@ function download(name, content, type = 'text/csv;charset=utf-8') {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 function exportOrdersCSV() {
-  const head = ['کد', 'تاریخ شمسی', 'منبع', 'غرفه', 'مشتری', 'تلفن', 'شهر', 'کالا', 'تعداد', 'تامین‌کننده', 'فروش', 'هزینه', 'سود', 'وضعیت', 'پرداخت', 'توضیحات'];
+  const head = ['کد', 'تاریخ شمسی', 'منبع', 'غرفه', 'مشتری', 'تلفن', 'شهر', 'کالا', 'تعداد', 'تامین‌کننده', 'فروش', 'هزینه', 'سود', 'ارسال دریافتی', 'وضعیت', 'پرداخت', 'توضیحات'];
   const lines = [head.join(',')];
   for (const o of state.orders) {
     const c = calc(o, true);
     lines.push([o.order_code, fmtJ(o.order_date), SRC_SHORT[o.source] || o.source, o.source === 'basalam' ? boothName(o.booth_id) : '',
       o.customer_name, o.customer_phone, o.city, o.product_name, o.quantity, supNameOf(o),
-      Math.round(c.revenue), Math.round(c.cost), Math.round(c.profit),
+      Math.round(c.revenue), Math.round(c.cost), Math.round(c.profit), Math.round(N(o.shipping_rev)),
       (STATUS[o.status] || {}).t, PAY[o.payment_status] || '', (o.notes || '').replace(/,/g, '؛')]
       .map((x) => `"${String(x ?? '').replace(/"/g, '""')}"`).join(','));
   }

@@ -13,7 +13,8 @@ const FRONTEND_HTML = "__FRONTEND_HTML__";
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS booths (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL, description TEXT DEFAULT '', created_at TEXT
+    name TEXT NOT NULL, description TEXT DEFAULT '',
+    ship_single REAL DEFAULT 0, ship_multi REAL DEFAULT 0, comm_pct REAL DEFAULT 0, created_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +27,7 @@ const SCHEMA = [
     product_name TEXT DEFAULT '', quantity INTEGER DEFAULT 1,
     supplier_id INTEGER, supplier_name TEXT DEFAULT '',
     unit_sale REAL DEFAULT 0, unit_cost REAL DEFAULT 0, discount REAL DEFAULT 0,
-    shipping_cost REAL DEFAULT 0, packaging_cost REAL DEFAULT 0, commission REAL DEFAULT 0,
+    shipping_cost REAL DEFAULT 0, shipping_rev REAL DEFAULT 0, packaging_cost REAL DEFAULT 0, commission REAL DEFAULT 0,
     ads_cost REAL DEFAULT 0, other_cost REAL DEFAULT 0, other_label TEXT DEFAULT '',
     status TEXT DEFAULT 'pending', payment_status TEXT DEFAULT 'pending',
     order_date TEXT, jdate TEXT, jy INTEGER, jm INTEGER, jd INTEGER,
@@ -49,11 +50,15 @@ const SCHEMA = [
 /* مهاجرت ستون‌های جدید روی دیتابیس‌های قدیمی (خطای ستون تکراری نادیده گرفته می‌شود) */
 const MIGRATIONS = [
   ['integrations', 'sync_every_min', 'INTEGER DEFAULT 60'],
+  ['booths', 'ship_single', 'REAL DEFAULT 0'],
+  ['booths', 'ship_multi', 'REAL DEFAULT 0'],
+  ['booths', 'comm_pct', 'REAL DEFAULT 0'],
+  ['orders', 'shipping_rev', 'REAL DEFAULT 0'],
 ];
 const ORDER_FIELDS = [
   'order_code', 'source', 'booth_id', 'customer_name', 'customer_phone', 'city',
   'product_name', 'quantity', 'supplier_id', 'supplier_name',
-  'unit_sale', 'unit_cost', 'discount', 'shipping_cost', 'packaging_cost',
+  'unit_sale', 'unit_cost', 'discount', 'shipping_cost', 'shipping_rev', 'packaging_cost',
   'commission', 'ads_cost', 'other_cost', 'other_label',
   'status', 'payment_status', 'order_date', 'jdate', 'jy', 'jm', 'jd', 'notes',
 ];
@@ -65,7 +70,7 @@ const INTEG_ALL = [...INTEG_FIELDS, 'last_sync_at', 'last_status'];
 const NUM_FIELDS = new Set([
   'quantity', 'unit_sale', 'unit_cost', 'discount', 'shipping_cost',
   'packaging_cost', 'commission', 'ads_cost', 'other_cost', 'jy', 'jm', 'jd', 'booth_id', 'supplier_id',
-  'vendor_id', 'auto_sync', 'sync_every_min',
+  'vendor_id', 'auto_sync', 'sync_every_min', 'shipping_rev', 'ship_single', 'ship_multi', 'comm_pct',
 ]);
 
 /* ─── ابزارها ─── */
@@ -288,7 +293,7 @@ const int0 = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-function mapParcelToOrder(p, integ, pct = 0) {
+function mapParcelToOrder(p, integ, pct = 0, ship = null) {
   const items = Array.isArray(p.items) ? p.items : [];
   const qty = items.reduce((a, i) => a + (int0(i.quantity) || 1), 0) || 1;
   const totalRial = int0(p.total_items_price) || items.reduce((a, i) => a + int0(i.price) * (int0(i.quantity) || 1), 0);
@@ -301,6 +306,8 @@ function mapParcelToOrder(p, integ, pct = 0) {
   const status = BASALAM_STATUS[p.status && p.status.id] || 'pending';
   const commission = (status === 'cancelled' || !(pct > 0) || !(total > 0)) ? undefined : Math.round(total * pct / 100); // API کارمزد نمی‌دهد؛ از ٪ پیش‌فرض
   const receipt = p.post_receipt || {};
+  const receiptRial = int0(receipt.final_post_cost);
+  const shipEst = qty > 1 ? num(ship && ship.multi, 0) : num(ship && ship.single, 0); // تعرفه ثابت غرفه (تومان)
   const names = items.map((i) => `${i.title || 'کالا'} ×${int0(i.quantity) || 1}`).join('، ');
   return {
     order_code: `BL-${p.id}`,
@@ -312,7 +319,9 @@ function mapParcelToOrder(p, integ, pct = 0) {
     product_name: names || `مرسوله باسلام #${p.id}`,
     quantity: qty,
     unit_sale: Math.round(total / qty), unit_cost: 0, discount: 0,
-    shipping_cost: Math.round(int0(receipt.final_post_cost) / 10), // ریال→تومان؛ صفر=بدون رسید (دست‌نخورده می‌ماند)
+    shipping_cost: status === 'cancelled' ? 0 : (receiptRial > 0 ? Math.round(receiptRial / 10) : (shipEst > 0 ? shipEst : 0)),
+    shipping_rev: (status === 'cancelled' || !(shipEst > 0)) ? undefined : shipEst, // دریافتی از مشتری طبق تعرفه غرفه
+    _shipSrc: status === 'cancelled' ? undefined : (receiptRial > 0 ? 'receipt' : (shipEst > 0 ? 'default' : undefined)),
     packaging_cost: 0, commission, ads_cost: 0, other_cost: 0, other_label: '',
     status,
     payment_status: status === 'cancelled' ? 'refunded' : 'paid',
@@ -342,7 +351,8 @@ function mapWooToOrder(o, pct = 0) {
     unit_sale: Math.round(lineTotal / qty),
     unit_cost: 0,
     discount: int0(o.discount_total),
-    shipping_cost: int0(o.shipping_total),
+    shipping_cost: 0, // هزینه واقعی پست سایت نامشخص است؛ دستی وارد شود (مقدار قبلی حفظ می‌شود)
+    shipping_rev: int0(o.shipping_total) || undefined, // دریافتی از مشتری
     packaging_cost: 0, commission, ads_cost: 0, other_cost: 0, other_label: '',
     status,
     payment_status: (o.status === 'refunded' || o.status === 'cancelled') ? 'refunded' : (o.date_paid ? 'paid' : 'pending'),
@@ -355,7 +365,7 @@ function mapWooToOrder(o, pct = 0) {
 /* درج/به‌روزرسانی هوشمند: هزینه‌های دستی کاربر حفظ می‌شود؛ هزینه ارسال از مرجع سینک تازه می‌شود */
 const SYNC_UPDATE_FIELDS = [
   'customer_name', 'customer_phone', 'city', 'product_name', 'quantity',
-  'unit_sale', 'discount', 'shipping_cost', 'commission', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
+  'unit_sale', 'discount', 'shipping_cost', 'shipping_rev', 'commission', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
 ];
 async function upsertExternalOrder(store, order) {
   const ex = await store.findBy('orders', 'order_code', order.order_code);
@@ -365,8 +375,8 @@ async function upsertExternalOrder(store, order) {
   }
   const patch = {};
   for (const f of SYNC_UPDATE_FIELDS) {
-    if (f === 'commission' && num(ex.commission, 0) !== 0) continue; // مقدار قبلی/دستی حفظ شود؛ فقط خانه خالی پر شود
-    if (f === 'shipping_cost' && !num(order[f], 0)) continue; // بدون رسید پستی → حفظ مقدار دستی
+    if ((f === 'commission' || f === 'shipping_rev') && num(ex[f], 0) !== 0) continue; // مقدار قبلی/دستی حفظ شود؛ فقط خانه خالی پر شود
+    if (f === 'shipping_cost' && (!num(order[f], 0) || (order._shipSrc === 'default' && num(ex.shipping_cost, 0) !== 0))) continue; // بدون داده یا تخمین غرفه روی مقدار موجود → حفظ
     patch[f] = order[f];
   }
   if (!ex.notes) patch.notes = order.notes;
@@ -420,7 +430,10 @@ async function testIntegration(body) {
 /* ─── سینک سفارش‌ها ─── */
 async function syncBasalam(store, integ, opts = {}) {
   const wantAll = opts.days === 'all' || Number(opts.days) === 0;
-  const pct = num(await store.getSetting('comm_basalam').catch(() => null), 0); // ٪ پیش‌فرض کارمزد باسلام
+  const pct0 = num(await store.getSetting('comm_basalam').catch(() => null), 0); // ٪ پیش‌فرض کارمزد باسلام
+  const booth = integ.booth_id ? await store.findBy('booths', 'id', integ.booth_id).catch(() => null) : null;
+  const pct = num(booth && booth.comm_pct, 0) > 0 ? num(booth.comm_pct) : pct0; // ٪ غرفه بر ٪ سراسری اولویت دارد
+  const ship = { single: num(booth && booth.ship_single, 0), multi: num(booth && booth.ship_multi, 0) }; // تعرفه ثابت ارسال غرفه
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const cutoff = wantAll ? 0 : Date.now() - days * 864e5;
   let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0, perPage = 50;
@@ -448,7 +461,7 @@ async function syncBasalam(store, integ, opts = {}) {
       const ts = Date.parse((p.order && p.order.created_at) || p.created_at || '');
       if (Number.isFinite(ts) && ts < cutoff) { hitOld = true; continue; }
       try {
-        if (await upsertExternalOrder(store, mapParcelToOrder(p, integ, pct))) imported++;
+        if (await upsertExternalOrder(store, mapParcelToOrder(p, integ, pct, ship))) imported++;
         else updated++;
       } catch (e) {
         skipped++;
@@ -978,7 +991,7 @@ async function handleApi(req, store, url) {
 
   /* منابع CRUD */
   const config = {
-    booths: { fields: ['name', 'description'] },
+    booths: { fields: ['name', 'description', 'ship_single', 'ship_multi', 'comm_pct'] },
     suppliers: { fields: ['name', 'phone', 'description'] },
     orders: { fields: ORDER_FIELDS },
   };
