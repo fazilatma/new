@@ -225,7 +225,7 @@ tailwind.config = {
         </select>
         <select id="f-booth" class="inp !w-40" onchange="renderOrders()"><option value="">همه غرفه‌ها</option></select>
         <select id="f-sup" class="inp !w-40" onchange="renderOrders()"><option value="">همه تامین‌کنندگان</option></select>
-        <select id="f-status" class="inp !w-36" onchange="renderOrders()"><option value="">همه وضعیت‌ها</option></select>
+        <select id="f-status" class="inp !w-36" onchange="onStatusFilter()"><option value="">همه وضعیت‌ها</option></select>
         <select id="f-ptype" class="inp !w-36" onchange="renderOrders()"><option value="">همه خریدها</option></select>
         <button class="btn btn-soft mr-auto" onclick="exportOrdersCSV()">⬇ خروجی اکسل</button>
       </div>
@@ -537,7 +537,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.15.0';
+const APP_VER = '1.16.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -694,6 +694,7 @@ const Store = {
 /* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
 const state = {
   orders: [], booths: [], suppliers: [], integrations: [], settings: {},
+  statusSel: new Set(), // فیلتر چندتایی وضعیت (چیپ‌ها + سلکت همگام‌اند)
   range: 'month', customFrom: null, customTo: null, trendGroup: 'weekly', trendRange: '365', trendCh: 'all',
 };
 const N = (v) => Number(v) || 0;
@@ -1029,7 +1030,7 @@ function fillSelects() {
   $('#o-sup').innerHTML = sOpts;
   $('#f-sup').innerHTML = '<option value="">همه تامین‌کنندگان</option>' + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   $('#o-status').innerHTML = Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.i} ${v.t}</option>`).join('');
-  $('#f-status').innerHTML = '<option value="">همه وضعیت‌ها</option>' + Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.i} ${v.t}</option>`).join('');
+  syncStatusFilterUI();
   $('#o-pay').innerHTML = Object.entries(PAY).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('#o-ptype').innerHTML = Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('#o-cptype').innerHTML = Object.entries(PTYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
@@ -1249,12 +1250,12 @@ function orderRowMini(o) {
 /* ═══════════════ لیست سفارش‌ها ═══════════════ */
 function filteredOrders(opts = {}) {
   const q = ($('#f-q').value || '').trim();
-  const src = $('#f-source').value, b = $('#f-booth').value, sp = $('#f-sup').value, st = $('#f-status').value, pt = $('#f-ptype').value;
+  const src = $('#f-source').value, b = $('#f-booth').value, sp = $('#f-sup').value, pt = $('#f-ptype').value;
   return state.orders.filter((o) => {
     if (src && o.source !== src) return false;
     if (b && String(o.booth_id) !== b) return false;
     if (sp && String(o.supplier_id) !== sp) return false;
-    if (st && !opts.ignoreStatus && o.status !== st) return false;
+    if (!opts.ignoreStatus && state.statusSel.size && !state.statusSel.has(o.status || 'pending')) return false;
     if (pt && (o.purchase_type || 'cash') !== pt) return false;
     if (q && ![o.order_code, o.customer_name, o.customer_phone, o.product_name, o.city].some((x) => String(x || '').includes(q))) return false;
     return true;
@@ -1268,19 +1269,33 @@ function orderRowClass(o) {
   if (st === 'pending') return 'row-pending';
   return (parseFloat(o.unit_cost) || 0) > 0 ? 'row-ok' : 'row-nocost';
 }
-/* لیجند وضعیت‌ها: شمارش + فیلتر با کلیک */
+/* لیجند وضعیت‌ها: شمارش + فیلتر چندتایی با کلیک */
 function renderStatusChips() {
   const base = filteredOrders({ ignoreStatus: true });
   const counts = {};
   for (const o of base) counts[o.status || 'pending'] = (counts[o.status || 'pending'] || 0) + 1;
-  const cur = $('#f-status').value;
-  const act = 'outline outline-2 outline-offset-2 outline-indigo-600';
+  const sel = state.statusSel, act = 'outline outline-2 outline-offset-2 outline-indigo-600';
   $('#status-chips').innerHTML =
-    `<button onclick="toggleStatusChip('')" class="chip bg-slate-200 text-slate-700 dark:bg-white/10 dark:text-slate-200 ${cur === '' ? act : 'opacity-80 hover:opacity-100'} cursor-pointer transition">🌍 همه <b class="num">${fmtN(base.length)}</b></button>` +
-    Object.entries(STATUS).map(([k, v]) => `<button onclick="toggleStatusChip('${k}')" class="chip ${v.c} ${cur === k ? act : 'opacity-80 hover:opacity-100'} cursor-pointer transition" title="فیلتر: ${v.t}">${v.i} ${v.t} <b class="num">${fmtN(counts[k] || 0)}</b></button>`).join('');
+    `<button onclick="toggleStatusChip('')" class="chip bg-slate-200 text-slate-700 dark:bg-white/10 dark:text-slate-200 ${sel.size === 0 ? act : 'opacity-80 hover:opacity-100'} cursor-pointer transition">🌍 همه <b class="num">${fmtN(base.length)}</b></button>` +
+    Object.entries(STATUS).map(([k, v]) => `<button onclick="toggleStatusChip('${k}')" class="chip ${v.c} ${sel.has(k) ? act : 'opacity-80 hover:opacity-100'} cursor-pointer transition" title="فیلتر: ${v.t}">${v.i} ${v.t} <b class="num">${fmtN(counts[k] || 0)}</b></button>`).join('');
 }
 function toggleStatusChip(key) {
-  $('#f-status').value = $('#f-status').value === key ? '' : key;
+  if (!key) state.statusSel.clear();
+  else if (state.statusSel.has(key)) state.statusSel.delete(key);
+  else state.statusSel.add(key);
+  syncStatusFilterUI();
+  renderOrders();
+}
+/* همگام‌سازی سلکت وضعیت با انتخاب چندتایی چیپ‌ها */
+function syncStatusFilterUI() {
+  const sel = state.statusSel, el = $('#f-status');
+  el.innerHTML = '<option value="">همه وضعیت‌ها</option>' + Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.i} ${v.t}</option>`).join('') +
+    (sel.size > 1 ? `<option value="__multi" disabled>🔘 ${toFa(sel.size)} وضعیت انتخاب شده</option>` : '');
+  el.value = sel.size === 1 ? [...sel][0] : (sel.size > 1 ? '__multi' : '');
+}
+function onStatusFilter() {
+  const v = $('#f-status').value;
+  state.statusSel = v && v !== '__multi' ? new Set([v]) : (v === '__multi' ? state.statusSel : new Set());
   renderOrders();
 }
 function renderOrders() {
