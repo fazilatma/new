@@ -288,7 +288,7 @@ const int0 = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-function mapParcelToOrder(p, integ) {
+function mapParcelToOrder(p, integ, pct = 0) {
   const items = Array.isArray(p.items) ? p.items : [];
   const qty = items.reduce((a, i) => a + (int0(i.quantity) || 1), 0) || 1;
   const totalRial = int0(p.total_items_price) || items.reduce((a, i) => a + int0(i.price) * (int0(i.quantity) || 1), 0);
@@ -299,6 +299,7 @@ function mapParcelToOrder(p, integ) {
   const user = cust.user || {};
   const city = cust.city || {};
   const status = BASALAM_STATUS[p.status && p.status.id] || 'pending';
+  const commission = (status === 'cancelled' || !(pct > 0) || !(total > 0)) ? undefined : Math.round(total * pct / 100); // API کارمزد نمی‌دهد؛ از ٪ پیش‌فرض
   const receipt = p.post_receipt || {};
   const names = items.map((i) => `${i.title || 'کالا'} ×${int0(i.quantity) || 1}`).join('، ');
   return {
@@ -311,8 +312,8 @@ function mapParcelToOrder(p, integ) {
     product_name: names || `مرسوله باسلام #${p.id}`,
     quantity: qty,
     unit_sale: Math.round(total / qty), unit_cost: 0, discount: 0,
-    shipping_cost: Math.round(int0(receipt.final_post_cost) / 10), // ریال→تومان
-    packaging_cost: 0, commission: 0, ads_cost: 0, other_cost: 0, other_label: '',
+    shipping_cost: Math.round(int0(receipt.final_post_cost) / 10), // ریال→تومان؛ صفر=بدون رسید (دست‌نخورده می‌ماند)
+    packaging_cost: 0, commission, ads_cost: 0, other_cost: 0, other_label: '',
     status,
     payment_status: status === 'cancelled' ? 'refunded' : 'paid',
     order_date: cleanDate(order.paid_at || p.created_at),
@@ -321,12 +322,13 @@ function mapParcelToOrder(p, integ) {
   };
 }
 
-function mapWooToOrder(o) {
+function mapWooToOrder(o, pct = 0) {
   const items = Array.isArray(o.line_items) ? o.line_items : [];
   const qty = items.reduce((a, i) => a + (int0(i.quantity) || 1), 0) || 1;
   const lineTotal = items.reduce((a, i) => a + (Number(i.total) || 0), 0);
   const billing = o.billing || {};
   const status = WOO_STATUS[o.status] || 'pending';
+  const commission = (status === 'cancelled' || !(pct > 0) || !(lineTotal > 0)) ? undefined : Math.round(lineTotal * pct / 100);
   const names = items.map((i) => `${i.name || 'کالا'} ×${int0(i.quantity) || 1}`).join('، ');
   return {
     order_code: `WC-${o.id}`,
@@ -341,7 +343,7 @@ function mapWooToOrder(o) {
     unit_cost: 0,
     discount: int0(o.discount_total),
     shipping_cost: int0(o.shipping_total),
-    packaging_cost: 0, commission: 0, ads_cost: 0, other_cost: 0, other_label: '',
+    packaging_cost: 0, commission, ads_cost: 0, other_cost: 0, other_label: '',
     status,
     payment_status: (o.status === 'refunded' || o.status === 'cancelled') ? 'refunded' : (o.date_paid ? 'paid' : 'pending'),
     order_date: cleanDate(o.date_created),
@@ -353,7 +355,7 @@ function mapWooToOrder(o) {
 /* درج/به‌روزرسانی هوشمند: هزینه‌های دستی کاربر حفظ می‌شود؛ هزینه ارسال از مرجع سینک تازه می‌شود */
 const SYNC_UPDATE_FIELDS = [
   'customer_name', 'customer_phone', 'city', 'product_name', 'quantity',
-  'unit_sale', 'discount', 'shipping_cost', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
+  'unit_sale', 'discount', 'shipping_cost', 'commission', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
 ];
 async function upsertExternalOrder(store, order) {
   const ex = await store.findBy('orders', 'order_code', order.order_code);
@@ -362,7 +364,11 @@ async function upsertExternalOrder(store, order) {
     return true; // جدید
   }
   const patch = {};
-  for (const f of SYNC_UPDATE_FIELDS) patch[f] = order[f];
+  for (const f of SYNC_UPDATE_FIELDS) {
+    if (f === 'commission' && num(ex.commission, 0) !== 0) continue; // مقدار قبلی/دستی حفظ شود؛ فقط خانه خالی پر شود
+    if (f === 'shipping_cost' && !num(order[f], 0)) continue; // بدون رسید پستی → حفظ مقدار دستی
+    patch[f] = order[f];
+  }
   if (!ex.notes) patch.notes = order.notes;
   await store.update('orders', ex.id, pick(patch, ORDER_FIELDS));
   return false; // به‌روزشده
@@ -414,6 +420,7 @@ async function testIntegration(body) {
 /* ─── سینک سفارش‌ها ─── */
 async function syncBasalam(store, integ, opts = {}) {
   const wantAll = opts.days === 'all' || Number(opts.days) === 0;
+  const pct = num(await store.getSetting('comm_basalam').catch(() => null), 0); // ٪ پیش‌فرض کارمزد باسلام
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const cutoff = wantAll ? 0 : Date.now() - days * 864e5;
   let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0, perPage = 50;
@@ -441,7 +448,7 @@ async function syncBasalam(store, integ, opts = {}) {
       const ts = Date.parse((p.order && p.order.created_at) || p.created_at || '');
       if (Number.isFinite(ts) && ts < cutoff) { hitOld = true; continue; }
       try {
-        if (await upsertExternalOrder(store, mapParcelToOrder(p, integ))) imported++;
+        if (await upsertExternalOrder(store, mapParcelToOrder(p, integ, pct))) imported++;
         else updated++;
       } catch (e) {
         skipped++;
@@ -457,6 +464,7 @@ async function syncBasalam(store, integ, opts = {}) {
 
 async function syncWoo(store, integ, opts = {}) {
   const wantAll = opts.days === 'all' || Number(opts.days) === 0;
+  const pct = num(await store.getSetting('comm_website').catch(() => null), 0); // ٪ پیش‌فرض کارمزد سایت
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const after = wantAll ? undefined : new Date(Date.now() - days * 864e5).toISOString();
   let imported = 0, updated = 0, skipped = 0, page = 1;
@@ -474,7 +482,7 @@ async function syncWoo(store, integ, opts = {}) {
     if (!items.length) break;
     for (const o of items) {
       try {
-        if (await upsertExternalOrder(store, mapWooToOrder(o))) imported++;
+        if (await upsertExternalOrder(store, mapWooToOrder(o, pct))) imported++;
         else updated++;
       } catch (e) {
         skipped++;
