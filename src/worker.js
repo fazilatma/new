@@ -322,9 +322,9 @@ function mapParcelToOrder(p, integ, pct = 0, ship = null) {
     product_name: names || `مرسوله باسلام #${p.id}`,
     quantity: qty,
     unit_sale: Math.round(total / qty), unit_cost: 0, discount: 0,
-    shipping_cost: status === 'cancelled' ? 0 : (receiptRial > 0 ? Math.round(receiptRial / 10) : (shipEst > 0 ? shipEst : 0)),
+    shipping_cost: status === 'cancelled' ? 0 : (receiptRial > 0 ? Math.round(receiptRial / 10) : 0), // پیش‌فرض صفر؛ فقط رسید واقعی یا عدد دستی
     shipping_rev: (status === 'cancelled' || !(shipEst > 0)) ? undefined : shipEst, // دریافتی از مشتری طبق تعرفه غرفه
-    _shipSrc: status === 'cancelled' ? undefined : (receiptRial > 0 ? 'receipt' : (shipEst > 0 ? 'default' : undefined)),
+    _shipSrc: status === 'cancelled' ? undefined : (receiptRial > 0 ? 'receipt' : undefined),
     packaging_cost: 0, commission, ads_cost: 0, other_cost: 0, other_label: '',
     status,
     payment_status: status === 'cancelled' ? 'refunded' : 'paid',

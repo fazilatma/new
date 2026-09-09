@@ -240,6 +240,7 @@ tailwind.config = {
           <span class="lg lg-returned">↩️ مرجوع شده</span>
           <span class="lg lg-cancelled">❌ لغو شده</span>
         </div>
+        <div id="status-chips" class="flex flex-wrap gap-1.5 mb-3 no-print"></div>
         <div class="overflow-x-auto"><table class="tbl" id="orders-tbl"></table></div>
       </div>
     </section>
@@ -266,9 +267,9 @@ tailwind.config = {
               <div><label class="text-xs font-bold">نام کالا *</label><input id="o-product" class="inp" required placeholder="مثلاً عسل طبیعی ۱ کیلویی"></div>
               <div><label class="text-xs font-bold">تعداد *</label><input id="o-qty" type="number" min="1" value="1" class="inp num" oninput="onQtyChange()"></div>
               <div><label class="text-xs font-bold">نوع خرید مشتری</label><select id="o-cptype" class="inp"></select></div>
-              <div><label class="text-xs font-bold">قیمت فروش واحد *</label><input id="o-usale" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">ارسال دریافتی از مشتری 🤖</label><input id="o-shiprev" type="number" min="0" value="0" class="inp num" oninput="AUTO.shipT=true;liveCalc()" title="پیشنهاد خودکار از تعرفه غرفه؛ قابل ویرایش دستی"></div>
+              <div><label id="lbl-usale" class="text-xs font-bold">قیمت فروش واحد *</label><input id="o-usale" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
+              <div><label class="text-xs font-bold">تخفیف به مشتری</label><input id="o-disc" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
+              <div><label class="text-xs font-bold">ارسال دریافتی از مشتری 🤖</label><input id="o-shiprev" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);AUTO.shipT=true;liveCalc()" title="پیشنهاد خودکار از تعرفه غرفه؛ قابل ویرایش دستی"></div>
               <div><label class="text-xs font-bold">وضعیت پرداخت</label><select id="o-pay" class="inp"></select></div>
             </div>
           </div>
@@ -278,17 +279,17 @@ tailwind.config = {
               <div><label class="text-xs font-bold">تامین‌کننده (واسطه)</label>
                 <div class="flex gap-1"><select id="o-sup" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('supplier')" title="تامین‌کننده جدید">＋</button></div></div>
               <div><label class="text-xs font-bold">نوع خرید از تامین‌کننده</label><select id="o-ptype" class="inp"></select></div>
-              <div><label class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-              <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه) 🤖</label><input id="o-comm" type="number" min="0" value="0" class="inp num" oninput="AUTO.commT=true;liveCalc()" title="پیشنهاد خودکار از ٪ غرفه؛ قابل ویرایش دستی"></div>
-              <div><label class="text-xs font-bold">هزینه ارسال (پرداختی شما)</label><input id="o-ship" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+              <div><label id="lbl-ucost" class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
+              <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه) 🤖</label><input id="o-comm" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);AUTO.commT=true;liveCalc()" title="پیشنهاد خودکار از ٪ غرفه؛ قابل ویرایش دستی"></div>
+              <div><label class="text-xs font-bold">هزینه ارسال (پرداختی شما)</label><input id="o-ship" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
               <div class="md:col-span-3 text-[11px] text-slate-400">🤖 کمیسیون و ارسال دریافتی (بخش مشتری) خودکار پیشنهاد می‌شوند و با تغییر قیمت/تعداد/غرفه به‌روز می‌مانند؛ هر تغییری بدهید دستی حساب و حفظ می‌شود.</div>
             </div>
             <details class="coll mt-3" id="det-cost">
               <summary><span class="chev">▾</span> 💸 هزینه‌های جانبی <span id="extra-total" class="chip bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 num mr-auto">۰ تومان</span></summary>
               <div class="coll-body grid md:grid-cols-3 gap-3">
-                <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-                <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
-                <div><label class="text-xs font-bold">سایر هزینه‌ها</label><input id="o-other" type="number" min="0" value="0" class="inp num" oninput="liveCalc()"></div>
+                <div><label class="text-xs font-bold">بسته‌بندی</label><input id="o-pack" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
+                <div><label class="text-xs font-bold">تبلیغات</label><input id="o-ads" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
+                <div><label class="text-xs font-bold">سایر هزینه‌ها</label><input id="o-other" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
                 <div class="md:col-span-3"><label class="text-xs font-bold">شرح سایر هزینه‌ها</label><input id="o-otherlabel" class="inp" placeholder="مثلاً پیامک…"></div>
               </div>
             </details>
@@ -490,6 +491,7 @@ tailwind.config = {
               <div><label class="text-xs font-bold">کمیسیون پیش‌فرض باسلام (٪)</label><input id="s-cb" type="number" min="0" max="100" value="0" class="inp num"></div>
               <div class="text-[11px] text-slate-400">جدول رسمی کارمزد دسته‌ها: <a class="underline" href="https://vendor.basalam.com/landings/commission" target="_blank" rel="noopener">صفحه کارمزد باسلام</a> (ورود غرفه‌دار لازم است) • نرخ دقیق هر محصول: پنل غرفه ← محصولات</div>
               <div><label class="text-xs font-bold">کمیسیون پیش‌فرض سایت (٪)</label><input id="s-cw" type="number" min="0" max="100" value="0" class="inp num"></div>
+              <div><label class="text-xs font-bold">مبنای حسابداری</label><select id="s-costmode" class="inp"><option value="unit">💵 هزینه واحد × تعداد</option><option value="total">🧾 مبالغ کلی (بدون ضرب در تعداد)</option></select></div>
             </div>
             <button class="btn btn-primary justify-center" onclick="saveSettings()">💾 ذخیره تنظیمات</button>
           </div>
@@ -535,12 +537,20 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.14.0';
+const APP_VER = '1.15.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
 const fmtN = (n) => toFa(Number(n || 0).toLocaleString('en-US'));
 const fmtMoney = (n) => fmtN(Math.round(Number(n || 0))) + ' تومان';
+/* ورودی‌های مالی با جداکننده هزارگان (خواندن/نوشتن نمایشی) */
+const parseMoney = (v) => {
+  const s = String(v ?? '').replace(/[۰-۹]/g, (d) => FA_D.indexOf(d)).replace(/[^0-9]/g, '');
+  return s ? parseInt(s, 10) : 0;
+};
+const M = (id) => parseMoney(document.getElementById(id).value);
+const setMoney = (id, v) => { document.getElementById(id).value = fmtN(Math.round(Number(v) || 0)); };
+const fmtInp = (el) => { el.value = fmtN(parseMoney(el.value)); };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -688,11 +698,21 @@ const state = {
 };
 const N = (v) => Number(v) || 0;
 
+/* مبنای حسابداری: واحدی (پیش‌فرض) یا مبالغ کلی — تنظیمات */
+function costMode() { return (state.settings && state.settings.cost_mode) === 'total' ? 'total' : 'unit'; }
+function applyCostMode() {
+  const t = costMode() === 'total';
+  const lu = document.getElementById('lbl-usale'), lc = document.getElementById('lbl-ucost');
+  if (lu) lu.textContent = t ? 'مبلغ کل فروش *' : 'قیمت فروش واحد *';
+  if (lc) lc.textContent = t ? 'هزینه کل خرید (تمام‌شده تامین‌کننده) *' : 'هزینه خرید واحد (تمام‌شده تامین‌کننده) *';
+  try { liveCalc(); } catch {}
+}
 /* محاسبه مالی یک سفارش */
 function calc(o, incReturned = true) {
   const qty = N(o.quantity) || 1;
-  let revenue = N(o.unit_sale) * qty - N(o.discount) + N(o.shipping_rev); // + ارسال دریافتی از مشتری
-  const cost = N(o.unit_cost) * qty + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
+  const mult = costMode() === 'total' ? 1 : qty;
+  let revenue = N(o.unit_sale) * mult - N(o.discount) + N(o.shipping_rev); // + ارسال دریافتی از مشتری
+  const cost = N(o.unit_cost) * mult + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
   if (o.status === 'returned' && incReturned) revenue = 0; // مرجوعی = زیان (هزینه‌ها می‌مانند)
   return { revenue, cost, profit: revenue - cost, margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : (revenue - cost < 0 ? -100 : 0) };
 }
@@ -988,6 +1008,8 @@ async function loadAllInner() {
   $('#s-shop').value = state.settings.shop_name || '';
   $('#s-cb').value = state.settings.comm_basalam ?? 0;
   $('#s-cw').value = state.settings.comm_website ?? 0;
+  $('#s-costmode').value = state.settings.cost_mode || 'unit';
+  applyCostMode();
   fillSelects();
   const t = isoToday(), from = monthStartJ(t);
   const mp = summarize(state.orders.filter((o) => inRange(o, from, t)));
@@ -1225,14 +1247,14 @@ function orderRowMini(o) {
 }
 
 /* ═══════════════ لیست سفارش‌ها ═══════════════ */
-function filteredOrders() {
+function filteredOrders(opts = {}) {
   const q = ($('#f-q').value || '').trim();
   const src = $('#f-source').value, b = $('#f-booth').value, sp = $('#f-sup').value, st = $('#f-status').value, pt = $('#f-ptype').value;
   return state.orders.filter((o) => {
     if (src && o.source !== src) return false;
     if (b && String(o.booth_id) !== b) return false;
     if (sp && String(o.supplier_id) !== sp) return false;
-    if (st && o.status !== st) return false;
+    if (st && !opts.ignoreStatus && o.status !== st) return false;
     if (pt && (o.purchase_type || 'cash') !== pt) return false;
     if (q && ![o.order_code, o.customer_name, o.customer_phone, o.product_name, o.city].some((x) => String(x || '').includes(q))) return false;
     return true;
@@ -1246,10 +1268,26 @@ function orderRowClass(o) {
   if (st === 'pending') return 'row-pending';
   return (parseFloat(o.unit_cost) || 0) > 0 ? 'row-ok' : 'row-nocost';
 }
+/* لیجند وضعیت‌ها: شمارش + فیلتر با کلیک */
+function renderStatusChips() {
+  const base = filteredOrders({ ignoreStatus: true });
+  const counts = {};
+  for (const o of base) counts[o.status || 'pending'] = (counts[o.status || 'pending'] || 0) + 1;
+  const cur = $('#f-status').value;
+  const act = 'outline outline-2 outline-offset-2 outline-indigo-600';
+  $('#status-chips').innerHTML =
+    `<button onclick="toggleStatusChip('')" class="chip bg-slate-200 text-slate-700 dark:bg-white/10 dark:text-slate-200 ${cur === '' ? act : 'opacity-80 hover:opacity-100'} cursor-pointer transition">🌍 همه <b class="num">${fmtN(base.length)}</b></button>` +
+    Object.entries(STATUS).map(([k, v]) => `<button onclick="toggleStatusChip('${k}')" class="chip ${v.c} ${cur === k ? act : 'opacity-80 hover:opacity-100'} cursor-pointer transition" title="فیلتر: ${v.t}">${v.i} ${v.t} <b class="num">${fmtN(counts[k] || 0)}</b></button>`).join('');
+}
+function toggleStatusChip(key) {
+  $('#f-status').value = $('#f-status').value === key ? '' : key;
+  renderOrders();
+}
 function renderOrders() {
   const list = filteredOrders();
   const s = summarize(list, true);
   $('#orders-count').textContent = fmtN(list.length);
+  renderStatusChips();
   $('#orders-summary').innerHTML =
     kpiCard('📦 تعداد', fmtN(list.length), 'سفارش یافت‌شده', 'grad-bg', '📦', '') +
     kpiCard('💰 فروش', fmtMoney(s.revenue), 'جمع فروش', 'grad-sky', '💵', '') +
@@ -1387,13 +1425,13 @@ function refreshAuto() {
   const src = $('#o-source').value;
   const b = src === 'basalam' ? (state.booths.find((x) => String(x.id) === String($('#o-booth').value)) || {}) : {};
   const qty = N($('#o-qty').value) || 1;
-  const rev = N($('#o-usale').value) * qty;
+  const rev = M('o-usale') * (costMode() === 'total' ? 1 : qty);
   const pct = N(b.comm_pct) > 0 ? N(b.comm_pct) : N(state.settings[src === 'basalam' ? 'comm_basalam' : 'comm_website']);
   const wantC = (pct > 0 && rev > 0) ? Math.round(rev * pct / 100) : 0;
   const wantS = src === 'basalam' ? (qty > 1 ? N(b.ship_multi) : N(b.ship_single)) : 0;
-  const curC = N($('#o-comm').value), curS = N($('#o-shiprev').value);
-  if (wantC > 0 && !AUTO.commT && (curC === 0 || curC === AUTO.comm)) { $('#o-comm').value = wantC; AUTO.comm = wantC; }
-  if (wantS > 0 && !AUTO.shipT && (curS === 0 || curS === AUTO.ship)) { $('#o-shiprev').value = wantS; AUTO.ship = wantS; }
+  const curC = M('o-comm'), curS = M('o-shiprev');
+  if (wantC > 0 && !AUTO.commT && (curC === 0 || curC === AUTO.comm)) { setMoney('o-comm', wantC); AUTO.comm = wantC; }
+  if (wantS > 0 && !AUTO.shipT && (curS === 0 || curS === AUTO.ship)) { setMoney('o-shiprev', wantS); AUTO.ship = wantS; }
 }
 function onBoothChange() { liveCalc(); }
 function onQtyChange() { liveCalc(); }
@@ -1414,9 +1452,9 @@ function formData() {
     customer_name: $('#o-customer').value.trim(), customer_phone: $('#o-phone').value.trim(), city: $('#o-city').value.trim(),
     product_name: $('#o-product').value.trim(), quantity: N($('#o-qty').value) || 1,
     supplier_id: supId || null, supplier_name: sup ? sup.name : '',
-    unit_sale: N($('#o-usale').value), unit_cost: N($('#o-ucost').value), discount: N($('#o-disc').value),
-    shipping_cost: N($('#o-ship').value), shipping_rev: N($('#o-shiprev').value), packaging_cost: N($('#o-pack').value), commission: N($('#o-comm').value),
-    ads_cost: N($('#o-ads').value), other_cost: N($('#o-other').value), other_label: $('#o-otherlabel').value.trim(),
+    unit_sale: M('o-usale'), unit_cost: M('o-ucost'), discount: M('o-disc'),
+    shipping_cost: M('o-ship'), shipping_rev: M('o-shiprev'), packaging_cost: M('o-pack'), commission: M('o-comm'),
+    ads_cost: M('o-ads'), other_cost: M('o-other'), other_label: $('#o-otherlabel').value.trim(),
     status: $('#o-status').value, payment_status: $('#o-pay').value, purchase_type: $('#o-ptype').value, customer_ptype: $('#o-cptype').value,
     order_date: iso, jdate: `${j.jy}/${j.jm}/${j.jd}`, jy: j.jy, jm: j.jm, jd: j.jd,
     notes: $('#o-notes').value.trim(),
@@ -1434,7 +1472,7 @@ function liveCalc() {
         <span class="font-black">${c.profit >= 0 ? '✅ سود' : '🔻 زیان'}</span>
         <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(c.profit)}</span></div>` +
       row('حاشیه سود', toFa(c.margin.toFixed(1)) + '٪') +
-      `<div class="text-[11px] text-slate-400 leading-5 mt-1">فروش واحد × تعداد − تخفیف + ارسال دریافتی = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل</div>`;
+      `<div class="text-[11px] text-slate-400 leading-5 mt-1">${costMode() === 'total' ? 'مبلغ فروش − تخفیف + ارسال دریافتی = فروش کل<br>خرید کل + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل' : 'فروش واحد × تعداد − تخفیف + ارسال دریافتی = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل'}</div>`;
     const extra = N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
     const eb = document.getElementById('extra-total');
     if (eb) eb.textContent = fmtMoney(extra);
@@ -1444,7 +1482,7 @@ function resetForm() {
   AUTO.comm = AUTO.ship = null; AUTO.commT = AUTO.shipT = false;
   $('#order-form').reset();
   $('#o-id').value = ''; $('#o-qty').value = 1;
-  ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-shiprev', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => $('#' + id).value = 0);
+  ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-shiprev', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => setMoney(id, 0));
   $('#form-title').textContent = '➕ ثبت سفارش جدید';
   $('#o-code').value = nextOrderCode();
   ['det-cost', 'det-notes'].forEach((id) => { document.getElementById(id).open = false; });
@@ -1472,10 +1510,10 @@ function editOrder(id) {
   $('#o-phone').value = o.customer_phone || ''; $('#o-city').value = o.city || '';
   $('#o-product').value = o.product_name || ''; $('#o-qty').value = o.quantity || 1;
   $('#o-sup').value = o.supplier_id || '';
-  $('#o-usale').value = o.unit_sale || 0; $('#o-ucost').value = o.unit_cost || 0;
-  $('#o-disc').value = o.discount || 0; $('#o-ship').value = o.shipping_cost || 0; $('#o-shiprev').value = o.shipping_rev || 0;
-  $('#o-pack').value = o.packaging_cost || 0; $('#o-comm').value = o.commission || 0;
-  $('#o-ads').value = o.ads_cost || 0; $('#o-other').value = o.other_cost || 0;
+  setMoney('o-usale', o.unit_sale); setMoney('o-ucost', o.unit_cost);
+  setMoney('o-disc', o.discount); setMoney('o-ship', o.shipping_cost); setMoney('o-shiprev', o.shipping_rev);
+  setMoney('o-pack', o.packaging_cost); setMoney('o-comm', o.commission);
+  setMoney('o-ads', o.ads_cost); setMoney('o-other', o.other_cost);
   $('#o-otherlabel').value = o.other_label || '';
   $('#o-status').value = o.status || 'pending'; $('#o-pay').value = o.payment_status || 'pending'; $('#o-ptype').value = o.purchase_type || 'cash'; $('#o-cptype').value = o.customer_ptype || 'cash';
   $('#o-notes').value = o.notes || '';
@@ -1653,14 +1691,14 @@ function boothModal(id) {
       <input id="m-desc" class="inp" placeholder="توضیح (اختیاری)" value="${esc(b.description || '')}">
       <div class="grid grid-cols-3 gap-2">
         <div><label class="text-xs font-bold">٪ کارمزد غرفه</label><input id="m-commpct" type="number" min="0" max="100" class="inp num" value="${N(b.comm_pct || 0)}" title="صفر = ٪ سراسری تنظیمات"></div>
-        <div><label class="text-xs font-bold">ارسال تک‌قلمی (تومان)</label><input id="m-ship1" type="number" min="0" class="inp num" value="${N(b.ship_single || 0)}"></div>
-        <div><label class="text-xs font-bold">ارسال چندقلمی (تومان)</label><input id="m-ship2" type="number" min="0" class="inp num" value="${N(b.ship_multi || 0)}"></div>
+        <div><label class="text-xs font-bold">ارسال تک‌قلمی (تومان)</label><input id="m-ship1" type="text" inputmode="numeric" class="inp num" oninput="fmtInp(this)" value="${fmtN(N(b.ship_single || 0))}"></div>
+        <div><label class="text-xs font-bold">ارسال چندقلمی (تومان)</label><input id="m-ship2" type="text" inputmode="numeric" class="inp num" oninput="fmtInp(this)" value="${fmtN(N(b.ship_multi || 0))}"></div>
       </div>
       <select id="m-commcat" class="inp !text-xs" onchange="if(this.value)$('#m-commpct').value=this.value" title="پیشنهاد ٪ از جدول رسمی باسلام">${BOOTH_COMM_CATS.map(([t, v]) => `<option value="${v}">${t}</option>`).join('')}</select></div>`,
     buttons: [{ label: '💾 ذخیره', onClick: async () => {
       const name = $('#m-name').value.trim();
       if (!name) { toast('نام غرفه الزامی است', 'err'); return; }
-      const saved = await Store.saveBooth({ id: b.id, name, description: $('#m-desc').value.trim(), ship_single: N($('#m-ship1').value), ship_multi: N($('#m-ship2').value), comm_pct: N($('#m-commpct').value) });
+      const saved = await Store.saveBooth({ id: b.id, name, description: $('#m-desc').value.trim(), ship_single: M('m-ship1'), ship_multi: M('m-ship2'), comm_pct: N($('#m-commpct').value) });
       if (b.id) Object.assign(b, saved); else state.booths.push(saved);
       closeModal(); fillSelects(); renderBooths(); toast('✅ ذخیره شد');
     }}] });
@@ -1700,6 +1738,7 @@ function openInvoice(id) {
   if (!o) return;
   const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
   const shop = state.settings.shop_name || 'فروشگاه ما';
+  const iq = N(o.quantity) || 1, itm = costMode() === 'total', ifi = itm ? Math.round(N(o.unit_sale) / iq) : N(o.unit_sale), iline = itm ? N(o.unit_sale) : N(o.unit_sale) * iq;
   const row = (t, v) => `<div class="flex justify-between py-1 text-sm"><span class="text-slate-500">${t}</span><span class="font-bold num">${v}</span></div>`;
   $('#print-area').innerHTML = `
     <div class="text-center border-b-2 border-dashed border-slate-200 pb-3 mb-3">
@@ -1719,8 +1758,8 @@ function openInvoice(id) {
       <tbody><tr class="border-t border-slate-200">
         <td class="p-2 font-bold">${esc(o.product_name || '')}</td>
         <td class="p-2 text-center num">${fmtN(o.quantity || 1)}</td>
-        <td class="p-2 text-center num">${fmtN(o.unit_sale)}</td>
-        <td class="p-2 text-center num">${fmtN(N(o.unit_sale) * (N(o.quantity) || 1))}</td>
+        <td class="p-2 text-center num">${fmtN(ifi)}</td>
+        <td class="p-2 text-center num">${fmtN(iline)}</td>
       </tr></tbody>
     </table>
     ${row('تخفیف', '− ' + fmtMoney(o.discount))}
@@ -1804,8 +1843,11 @@ async function saveSettings() {
   state.settings.shop_name = $('#s-shop').value.trim();
   state.settings.comm_basalam = N($('#s-cb').value);
   state.settings.comm_website = N($('#s-cw').value);
+  state.settings.cost_mode = $('#s-costmode').value;
   await Store.saveSettings(state.settings);
   $('#shop-name-title').textContent = state.settings.shop_name ? '«' + state.settings.shop_name + '»' : '';
+  applyCostMode();
+  go(currentView);
   toast('✅ تنظیمات ذخیره شد');
 }
 
