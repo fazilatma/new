@@ -245,6 +245,7 @@ const BASALAM_STATUS = {
   3067: 'cancelled',  // CANCEL
   3572: 'returned',   // PRODUCT_IS_NOT_DELIVERED
   3233: 'returned',   // DEFINITIVE_DISSATISFACTION
+  6440: 'cancelled',  // VENDOR_CANCEL_REQUEST — درخواست لغو غرفه‌دار (تایید نشدن توسط غرفه)
 };
 
 /* ─── ووکامرس ─── */
@@ -385,6 +386,38 @@ async function upsertExternalOrder(store, order) {
   return false; // به‌روزشده
 }
 
+/* ─── تازه‌سازی وضعیت سفارش‌های باز در هر سینک ─── */
+// پنجرهٔ سینک (دستی ۳۰ روز، خودکار ۲ روز) لغو/ردِ دیرهنگامِ سفارش‌های قدیمی را نمی‌بیند؛
+// پس هر سفارش بازی که در پنجره دیده نشده، تکی از API خوانده و وضعیتش تازه می‌شود.
+const OPEN_STATUS = ['pending', 'confirmed', 'shipped']; // + تحویل‌شده‌های ۶۰ روز اخیر (مرجوعی بعد از تحویل)
+async function refreshOpenOrders(store, cfg) {
+  const all = await store.list('orders');
+  const from60 = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+  const rx = new RegExp('^' + cfg.prefix + '(\\d+)$');
+  const cands = all.filter((o) => {
+    if (o.source !== cfg.source || (cfg.seen && cfg.seen.has(o.order_code))) return false;
+    if (cfg.boothId ? String(o.booth_id) !== String(cfg.boothId) : o.booth_id) return false; // توکن هر غرفه فقط مرسوله خودش
+    if (!OPEN_STATUS.includes(o.status) && !(o.status === 'delivered' && (o.order_date || '') >= from60)) return false;
+    return rx.test(o.order_code || '');
+  }).sort((a, b) => (OPEN_STATUS.includes(a.status) ? 0 : 1) - (OPEN_STATUS.includes(b.status) ? 0 : 1)
+    || String(a.order_date || '').localeCompare(String(b.order_date || ''))).slice(0, cfg.cap || 40);
+  let checked = 0, updated = 0, authFail = false;
+  for (const o of cands) {
+    if (authFail) break;
+    const id = (o.order_code || '').match(rx)[1];
+    try {
+      const isNew = await upsertExternalOrder(store, cfg.mapOne(await cfg.fetchOne(id)));
+      checked++;
+      if (!isNew) updated++;
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) { authFail = true; cfg.errors.push('تازه‌سازی وضعیت متوقف شد: ' + e.message); }
+      else if (e && e.status === 404) { checked++; } // در منبع حذف شده؛ رکورد محلی دست‌نخورده می‌ماند
+      else if (cfg.errors.length < 5) cfg.errors.push(`refresh ${o.order_code}: ${e.message}`);
+    }
+  }
+  return { checked, updated };
+}
+
 /* ─── تست اتصال (بدون ذخیره‌سازی) ─── */
 async function testIntegration(body) {
   const type = body.type;
@@ -438,6 +471,7 @@ async function syncBasalam(store, integ, opts = {}) {
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const cutoff = wantAll ? 0 : Date.now() - days * 864e5;
   let cursor = null, imported = 0, updated = 0, skipped = 0, pages = 0, perPage = 50;
+  const seen = new Set(); // کدهای دیده‌شده در پنجره (برای گذر تازه‌سازی وضعیت)
   const errors = [];
   for (let page = 0; page < 20; page++) {
     const params = { per_page: perPage, sort: 'estimate_send_at:desc' };
@@ -462,7 +496,9 @@ async function syncBasalam(store, integ, opts = {}) {
       const ts = Date.parse((p.order && p.order.created_at) || p.created_at || '');
       if (Number.isFinite(ts) && ts < cutoff) { hitOld = true; continue; }
       try {
-        if (await upsertExternalOrder(store, mapParcelToOrder(p, integ, pct, ship))) imported++;
+        const mapped = mapParcelToOrder(p, integ, pct, ship);
+        seen.add(mapped.order_code);
+        if (await upsertExternalOrder(store, mapped)) imported++;
         else updated++;
       } catch (e) {
         skipped++;
@@ -473,7 +509,17 @@ async function syncBasalam(store, integ, opts = {}) {
     cursor = res.next_cursor || res.nextCursor || null;
     if (!cursor || hitOld) break;
   }
-  return { imported, updated, skipped, pages, errors };
+  // گذر دوم: تازه‌سازی وضعیت سفارش‌های بازِ بیرون از پنجره (لغو/ردِ دیرهنگام)
+  let refreshed = 0;
+  try {
+    const r = await refreshOpenOrders(store, {
+      source: 'basalam', boothId: integ.booth_id || null, seen, errors, cap: 40, prefix: 'BL-',
+      fetchOne: (id) => basalamGet(integ.token, '/v1/vendor-parcels/' + id),
+      mapOne: (p) => mapParcelToOrder(p, integ, pct, ship),
+    });
+    refreshed = r.checked; updated += r.updated;
+  } catch (e) { if (errors.length < 5) errors.push(e.message); }
+  return { imported, updated, skipped, pages, refreshed, errors };
 }
 
 async function syncWoo(store, integ, opts = {}) {
@@ -482,6 +528,7 @@ async function syncWoo(store, integ, opts = {}) {
   const days = wantAll ? 0 : Math.min(Math.max(num(opts.days, 30) || 30, 1), 365);
   const after = wantAll ? undefined : new Date(Date.now() - days * 864e5).toISOString();
   let imported = 0, updated = 0, skipped = 0, page = 1;
+  const seen = new Set();
   const errors = [];
   for (page = 1; page <= 20; page++) {
     let items;
@@ -496,7 +543,9 @@ async function syncWoo(store, integ, opts = {}) {
     if (!items.length) break;
     for (const o of items) {
       try {
-        if (await upsertExternalOrder(store, mapWooToOrder(o, pct))) imported++;
+        const mapped = mapWooToOrder(o, pct);
+        seen.add(mapped.order_code);
+        if (await upsertExternalOrder(store, mapped)) imported++;
         else updated++;
       } catch (e) {
         skipped++;
@@ -505,7 +554,17 @@ async function syncWoo(store, integ, opts = {}) {
     }
     if (items.length < 100) break;
   }
-  return { imported, updated, skipped, pages: page - 1, errors };
+  // گذر دوم: تازه‌سازی وضعیت سفارش‌های بازِ بیرون از پنجره
+  let refreshed = 0;
+  try {
+    const r = await refreshOpenOrders(store, {
+      source: 'website', boothId: null, seen, errors, cap: 40, prefix: 'WC-',
+      fetchOne: (id) => wooGet(integ.store_url, integ.consumer_key, integ.consumer_secret, '/orders/' + id).then((x) => x.data),
+      mapOne: (o) => mapWooToOrder(o, pct),
+    });
+    refreshed = r.checked; updated += r.updated;
+  } catch (e) { if (errors.length < 5) errors.push(e.message); }
+  return { imported, updated, skipped, pages: page - 1, refreshed, errors };
 }
 
 /* حذف رمزها از خروجی لیست */

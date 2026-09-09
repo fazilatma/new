@@ -539,7 +539,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.11.0';
+const APP_VER = '1.12.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1258,18 +1258,18 @@ function renderOrders() {
     kpiCard('💰 فروش', fmtMoney(s.revenue), 'جمع فروش', 'grad-sky', '💵', '') +
     kpiCard('🧾 هزینه', fmtMoney(s.cost), 'جمع هزینه‌ها', 'grad-amber', '🧮', '') +
     kpiCard('✅ سود', fmtMoney(s.profit), `حاشیه ${toFa(s.margin.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', '📈', '');
-  $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>تاریخ</th><th>مشتری</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>سود</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
+  $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>تاریخ</th><th>مشتری</th><th>سود/زیان</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
     (list.slice(0, 300).map((o) => {
-      const c = calc(o, true), st = STATUS[o.status] || STATUS.pending;
+      const c = calc(o, true), st = STATUS[o.status] || STATUS.pending, pc = c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500';
       return `<tr class="${orderRowClass(o)} cursor-pointer" onclick="editOrder('${o.id}')">
         <td onclick="event.stopPropagation()"><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>
         <td class="num font-bold">${esc(o.order_code || '—')}</td><td class="num">${fmtJ(o.order_date)}</td>
         <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
+        ${o.status === 'cancelled' ? '<td class="text-center text-slate-300">—</td>' : `<td class="num"><div class="font-black ${pc}">${fmtN(c.profit)}</div><div class="text-[11px] ${pc} opacity-70">${toFa(c.margin.toFixed(1))}٪</div></td>`}
         <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
         <td class="text-xs">${SOURCES[o.source] || ''}${o.source === 'basalam' ? `<div class="text-[11px] text-slate-400">${esc(boothName(o.booth_id))}</div>` : ''}</td>
         <td class="text-xs">${esc(supNameOf(o))}<div class="text-[11px] text-slate-400">${PTYPE[o.purchase_type] || PTYPE.cash}</div></td>
         <td class="num">${fmtN(c.revenue)}</td>
-        <td class="num font-black ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtN(c.profit)}</td>
         <td><span class="chip ${st.c}">${st.t}</span></td>
         <td><div class="flex gap-1" onclick="event.stopPropagation()">
           <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="openInvoice('${o.id}')" title="فاکتور">🧾</button>
@@ -2010,7 +2010,7 @@ async function syncInteg(id) {
       state.orders = await Store.listOrders();
       renderIntegrations();
       const nb = document.getElementById('sync-res-' + id);
-      if (nb) nb.innerHTML = testBox(true, `✅ سینک شد: <b class="num">${fmtN(r.imported)}</b> سفارش جدید، <b class="num">${fmtN(r.updated)}</b> به‌روزشده${r.skipped ? `، <b class="num">${fmtN(r.skipped)}</b> ردشده` : ''}${r.errors && r.errors.length ? `<br>⚠️ ${esc(r.errors[0])}` : ''}`);
+      if (nb) nb.innerHTML = testBox(true, `✅ سینک شد: <b class="num">${fmtN(r.imported)}</b> سفارش جدید، <b class="num">${fmtN(r.updated)}</b> به‌روزشده${r.skipped ? `، <b class="num">${fmtN(r.skipped)}</b> ردشده` : ''}${r.refreshed ? `، <b class="num">${fmtN(r.refreshed)}</b> وضعیت بازبینی` : ''}${r.errors && r.errors.length ? `<br>⚠️ ${esc(r.errors[0])}` : ''}`);
       toast(`✅ ${fmtN(r.imported + r.updated)} سفارش سینک شد`);
     } else {
       box.innerHTML = testBox(false, mapConnError(r, c.type));
@@ -2025,14 +2025,14 @@ async function syncAll() {
   if (!state.integrations.length) { toast('اتصالی ثبت نشده است', 'err'); return; }
   const btn = $('#sync-all-btn');
   btn.disabled = true;
-  let totalNew = 0, totalUpd = 0, fails = 0;
+  let totalNew = 0, totalUpd = 0, totalRef = 0, fails = 0;
   for (const c of state.integrations) {
     btn.textContent = `⏳ سینک ${c.name || ''}…`;
     try {
       const days = c.type === 'basalam' ? ($('#bas-days').value === 'all' ? 'all' : (+$('#bas-days').value || 30)) : ($('#woo-days').value === 'all' ? 'all' : (+$('#woo-days').value || 30));
       const r = await Store.syncIntegration(c.id, days);
       if (r.ok) {
-        totalNew += r.imported || 0; totalUpd += r.updated || 0;
+        totalNew += r.imported || 0; totalUpd += r.updated || 0; totalRef += r.refreshed || 0;
         Object.assign(c, { last_sync_at: new Date().toISOString(), last_status: `ok: +${r.imported} ~${r.updated}` });
       } else fails++;
     } catch { fails++; }
@@ -2041,7 +2041,7 @@ async function syncAll() {
   renderIntegrations();
   btn.disabled = false; btn.textContent = '🔄 سینک همه اتصال‌ها';
   if (fails && !totalNew && !totalUpd) toast('⛔ سینک ناموفق بود — اتصال دیتابیس را بررسی کنید', 'err');
-  else toast(`✅ سینک همه: ${fmtN(totalNew)} جدید، ${fmtN(totalUpd)} به‌روزشده${fails ? `، ${fmtN(fails)} ناموفق` : ''}`);
+  else toast(`✅ سینک همه: ${fmtN(totalNew)} جدید، ${fmtN(totalUpd)} به‌روزشده${totalRef ? `، ${fmtN(totalRef)} وضعیت` : ''}${fails ? `، ${fmtN(fails)} ناموفق` : ''}`);
 }
 async function toggleAuto(id, on) {
   try {
