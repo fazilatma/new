@@ -206,3 +206,50 @@ test('auto-update never discards uncommitted work', async () => {
   assert.ok(guardAt > 0 && guardAt < resetAt, 'the scraper must check before it resets');
   assert.ok(aheadAt > 0 && aheadAt < resetAt, 'the scraper must refuse to discard unpushed commits');
 });
+
+test('opening the scraper waits for it to build instead of returning ECONNREFUSED', async () => {
+  // Regression (Termux): the "Open scraper" button proxies to 127.0.0.1:3000.
+  // proxyScraper() called startScraper() and then connected immediately, but the
+  // scraper runs `render:build && render:start`, which on Termux/ARM takes tens
+  // of seconds. The connection was refused and the user got a raw
+  // "Local scraper proxy failed: connect ECONNREFUSED 127.0.0.1:3000".
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  assert.match(deployer, /async function proxyScraper\(/, 'the proxy must be able to await readiness');
+  assert.match(deployer, /return await proxyScraper\(req, res, url\)/, 'the route must await the proxy so rejections are handled');
+  assert.match(deployer, /async function waitForScraperPort\(/, 'the proxy must poll until the port is listening');
+  assert.match(deployer, /LOCAL_SCRAPER_PROXY_WAIT_MS/, 'the wait budget must be configurable for very slow devices');
+  // The readiness probe -- not the cached `scraper.running` flag -- must gate the
+  // forward. `running` is true the instant spawn() returns, long before the port
+  // is listening, so gating on it reintroduces the ECONNREFUSED.
+  const proxy = deployer.slice(deployer.indexOf('async function proxyScraper('), deployer.indexOf('function requireAuth('));
+  assert.match(proxy, /if \(!\(await scraperIsListening\(\)\)\) \{\s*\n\s*startScraper\(\);/,
+    'the proxy must probe the port, not trust scraper.running, before forwarding');
+  assert.match(proxy, /await waitForScraperPort\(Date\.now\(\) \+ budget\)/, 'the proxy must actually await the port');
+  assert.doesNotMatch(proxy, /const budget = 0;/, 'the wait budget must not be disabled');
+  // A request body must survive the wait, otherwise POSTs through the proxy break.
+  assert.match(deployer, /for await \(const chunk of req\) chunks\.push\(chunk\)/, 'the body must be buffered before waiting');
+  assert.match(deployer, /upstream\.end\(body\)/, 'the buffered body must be forwarded');
+  assert.doesNotMatch(deployer, /req\.pipe\(upstream\)/, 'piping a already-consumed request would send an empty body');
+});
+
+test('a scraper that exited is restarted, and the failure is explained', async () => {
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  // child.killed stays false after a natural exit, so the old guard reported
+  // "already running" forever and no click could ever restart a crashed scraper.
+  assert.doesNotMatch(deployer, /if \(scraper\?\.child && !scraper\.child\.killed\) return scraper;/,
+    'the stale child.killed guard must be gone');
+  assert.match(deployer, /if \(scraper\?\.running && scraper\.child && scraper\.exitCode === null\) return scraper;/,
+    'startScraper must treat an exited scraper as restartable');
+
+  // Prove the guard semantics rather than trusting the regex above.
+  const exited = { running: false, child: {}, exitCode: 1 };
+  const alive = { running: true, child: {}, exitCode: null };
+  const guard = s => Boolean(s?.running && s.child && s.exitCode === null);
+  assert.equal(guard(exited), false, 'an exited scraper must not short-circuit startScraper');
+  assert.equal(guard(alive), true, 'a healthy scraper must not be started twice');
+
+  // The user must see why, not a bare connection error.
+  assert.match(deployer, /exited with code \$\{scraper\.exitCode\} before it could serve/, 'the error must name the exit code');
+  assert.match(deployer, /log: tail/, 'the response must carry the tail of the scraper log');
+  assert.match(deployer, /still starting and did not answer/, 'a slow start must be reported as slow, not broken');
+});
