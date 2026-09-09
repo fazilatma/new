@@ -278,3 +278,58 @@ test('the import report names providers that arrived without a key', async () =>
   // Local runtimes need no key, so they must not be reported as broken.
   assert.match(dashboard, /keyless=providers\.filter\(p=>!String\(p\.apiKey\|\|''\)\.trim\(\)&&!\/\(\^\|\\\/\\\/\)\(localhost/, 'localhost providers are exempt');
 });
+
+test('importing the real provider file keeps per-model flags, vendor and every enabled key', async () => {
+  // Regression: the exported catalogue stores models as objects carrying their
+  // own flags (reasoning / nonChat), a vendor, and apiKeys entries with a label
+  // and an enabled switch. The importer flattened models to bare ids and threw
+  // the rest away, so a reasoning model was called with the short non-reasoning
+  // budget, an image-only model was tested as a chat model, and a key the user
+  // had switched off came back enabled.
+  const dashboard = await read('../worker-src/dashboard.ts');
+  const start = Math.min(dashboard.indexOf('function aiImportModelIds'), dashboard.indexOf('function aiImportKeyFrom'));
+  const body = dashboard.slice(start, dashboard.indexOf('async function importAiFile')).replace(/:\s*string/g, '');
+  const { aiImportModelIds, aiImportReasoningModels, aiImportNonChatModels, aiImportKeyList } =
+    new Function(`${body}; return { aiImportModelIds, aiImportReasoningModels, aiImportNonChatModels, aiImportKeyList };`)();
+
+  // Models arrive as objects, not strings.
+  assert.deepEqual(aiImportModelIds([{ id: 'mistral-large-latest', name: 'Mistral Large' }, { id: 'mistral-small-latest' }]),
+    ['mistral-large-latest', 'mistral-small-latest']);
+  assert.deepEqual(aiImportModelIds(['plain-string']), ['plain-string'], 'older string lists still work');
+
+  // reasoning:true must survive; the name-pattern guess never matches this id.
+  const mistral = { models: [{ id: 'mistral-large-latest', reasoning: false }, { id: 'mistral-small-latest', reasoning: true }] };
+  assert.deepEqual(aiImportReasoningModels(mistral), ['mistral-small-latest']);
+
+  // nonChat:true must survive so the model is skipped, not reported as a failure.
+  const openrouter = { models: [{ id: 'a' }, { id: 'nvidia/nemotron-3.5-lightning', nonChat: true, nonChatReason: 'تولید تصویر' }] };
+  assert.deepEqual(aiImportNonChatModels(openrouter), ['nvidia/nemotron-3.5-lightning']);
+
+  // Cloudflare ships two labelled keys; both must be imported.
+  assert.deepEqual(
+    aiImportKeyList({ apiKeys: [{ key: 'cfut_1', label: '', enabled: true }, { key: 'cfat_2', label: 'کلید 2', enabled: true }] }, ''),
+    ['cfut_1', 'cfat_2']);
+  // A key the user switched off must not be imported as active.
+  assert.deepEqual(
+    aiImportKeyList({ apiKeys: [{ key: 'live', enabled: true }, { key: 'retired', enabled: false }] }, ''),
+    ['live']);
+
+  // The importer keeps the vendor and stores the two new lists.
+  assert.match(dashboard, /models:aiImportModelIds\(p\.models\)/);
+  assert.match(dashboard, /reasoningModels:aiImportReasoningModels\(p\)/, 'the importer must read the per-model reasoning flags');
+  assert.match(dashboard, /nonChatModels:aiImportNonChatModels\(p\)/);
+  assert.match(dashboard, /\.\.\.\(p\.vendor\?\{vendor:String\(p\.vendor\)\}:\{\}\)/);
+});
+
+test('a model flagged non-chat in the imported file is not treated as a chat model', async () => {
+  const ai = await read('../worker-src/ai.ts');
+  assert.match(ai, /if\(provider\.nonChatModels\?\.includes\(model\)\)return false/, 'isChatCompatibleAiModel must honour the imported flag');
+  // Both vaults have to persist the fields, otherwise they are lost on save.
+  const workerVault = await read('../worker-src/vault.ts');
+  const renderVault = await read('../render-src/vault.ts');
+  for (const [name, src] of [['worker', workerVault], ['render', renderVault]]) {
+    assert.match(src, /nonChatModels/, `${name} vault must persist nonChatModels`);
+    assert.match(src, /vendor/, `${name} vault must persist vendor`);
+  }
+  assert.match(renderVault, /reasoningModels:Array\.isArray\(p\?\.reasoningModels\)/, 'the render vault dropped reasoningModels entirely');
+});

@@ -5,7 +5,7 @@ import { getState, setState } from './db.js';
 import { assertPublicUrl, safeFetch } from './network.js';
 
 export type CfAccountKey={accountId:string;token:string};
-export type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels:string[];enabled:boolean};
+export type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels:string[];nonChatModels?:string[];vendor?:string;enabled:boolean};
 type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string};
 type AiAttempt={endpoint:string;body:string|string[];model:string;httpStatus?:number;phase:'network'|'http'|'success';error?:string};
 type RequestResult={response?:Response;body?:any;rawText?:string;networkError?:string};
@@ -23,7 +23,7 @@ function sharedKeyFitsProvider(ai:any,provider:any):boolean{
   if(!String(ai?.apiKey||'').trim())return false;
   return !own||!shared||own===shared;
 }
-function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';let apiKey=typeof first==='string'?first:first?.token||'';if(!String(apiKey).trim()&&String(ai.apiKey||'').trim()&&sharedKeyFitsProvider(ai,provider))apiKey=String(ai.apiKey);return{...provider,baseUrl:String(provider.baseUrl||'').trim()||(sharedKeyFitsProvider(ai,provider)?String(ai.baseUrl||''):''),apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
+function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';let apiKey=typeof first==='string'?first:first?.token||'';if(!String(apiKey).trim()&&String(ai.apiKey||'').trim()&&sharedKeyFitsProvider(ai,provider))apiKey=String(ai.apiKey);return{...provider,baseUrl:String(provider.baseUrl||'').trim()||(sharedKeyFitsProvider(ai,provider)?String(ai.baseUrl||''):''),apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[],nonChatModels:Array.isArray(provider.nonChatModels)?provider.nonChatModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
 
 /** Active API keys of a provider (fallback to the single apiKey). */
 export function providerKeys(provider:Provider):string[]{
@@ -60,10 +60,10 @@ export async function preferredAiChatModel():Promise<{provider:Provider;model:st
 }
 
 export type AiModelEndpoint='chat-completions'|'ocr'|'embeddings';
-type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'>>;
+type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'|'nonChatModels'>>;
 function isMistralProvider(provider:AiEndpointProvider):boolean{return provider.id==='mistral'||/api\.mistral\.ai/i.test(String(provider.baseUrl||''))}
 export function aiModelEndpoint(provider:AiEndpointProvider,model:string):AiModelEndpoint{return isMistralProvider(provider)?MISTRAL_MODEL_ENDPOINTS[model]||'chat-completions':'chat-completions'}
-export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
+export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(provider.nonChatModels?.includes(model))return false;if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
 
 /**
  * A provider is only testable when it has a base URL, at least one API key and a
@@ -284,7 +284,7 @@ function cloudflareModelIds(raw:string):string[]{
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.78.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.79.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
