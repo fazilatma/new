@@ -29,7 +29,7 @@ const SCHEMA = [
     unit_sale REAL DEFAULT 0, unit_cost REAL DEFAULT 0, discount REAL DEFAULT 0,
     shipping_cost REAL DEFAULT 0, shipping_rev REAL DEFAULT 0, packaging_cost REAL DEFAULT 0, commission REAL DEFAULT 0,
     ads_cost REAL DEFAULT 0, other_cost REAL DEFAULT 0, other_label TEXT DEFAULT '',
-    status TEXT DEFAULT 'pending', payment_status TEXT DEFAULT 'pending',
+    status TEXT DEFAULT 'pending', payment_status TEXT DEFAULT 'pending', purchase_type TEXT DEFAULT 'cash',
     order_date TEXT, jdate TEXT, jy INTEGER, jm INTEGER, jd INTEGER,
     notes TEXT DEFAULT '', created_at TEXT
   )`,
@@ -54,13 +54,14 @@ const MIGRATIONS = [
   ['booths', 'ship_multi', 'REAL DEFAULT 0'],
   ['booths', 'comm_pct', 'REAL DEFAULT 0'],
   ['orders', 'shipping_rev', 'REAL DEFAULT 0'],
+  ['orders', 'purchase_type', "TEXT DEFAULT 'cash'"],
 ];
 const ORDER_FIELDS = [
   'order_code', 'source', 'booth_id', 'customer_name', 'customer_phone', 'city',
   'product_name', 'quantity', 'supplier_id', 'supplier_name',
   'unit_sale', 'unit_cost', 'discount', 'shipping_cost', 'shipping_rev', 'packaging_cost',
   'commission', 'ads_cost', 'other_cost', 'other_label',
-  'status', 'payment_status', 'order_date', 'jdate', 'jy', 'jm', 'jd', 'notes',
+  'status', 'payment_status', 'purchase_type', 'order_date', 'jdate', 'jy', 'jm', 'jd', 'notes',
 ];
 const INTEG_FIELDS = [
   'type', 'name', 'token', 'vendor_id', 'vendor_title', 'booth_id',

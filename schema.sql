@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS orders (
   other_label TEXT DEFAULT '',
   status TEXT DEFAULT 'pending',
   payment_status TEXT DEFAULT 'pending',
+  purchase_type TEXT DEFAULT 'cash',
   order_date TEXT,
   jdate TEXT,
   jy INTEGER,
