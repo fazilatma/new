@@ -77,7 +77,26 @@ function safeOn(rewriter:HTMLRewriter,selector:string,handler:any):boolean{
   try{rewriter.on(selector,handler);return true}catch{return false}
 }
 function cleanText(value:string):string{
-  return normalizeDigits(String(value||'')).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g,' ').replace(/\s+/g,' ').trim();
+  // HTMLRewriter hands text chunks and attributes over with entities still encoded,
+  // so "iPhone 17 Pro &amp; iPhone 17 Pro Max" would otherwise be stored verbatim
+  // and then never match the same product on the destination store.
+  return normalizeDigits(decodeEntities(String(value||''))).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g,' ').replace(/\s+/g,' ').trim();
+}
+function decodeEntities(value:string):string{
+  if(!value.includes('&'))return value;
+  return value
+    .replace(/&(?:nbsp|#160|#xa0);/gi,' ')
+    .replace(/&(?:quot|#34|#x22);/gi,'"')
+    .replace(/&(?:apos|#39|#x27);/gi,"'")
+    .replace(/&(?:lt|#60|#x3c);/gi,'<')
+    .replace(/&(?:gt|#62|#x3e);/gi,'>')
+    .replace(/&#(\d{1,7});/g,(_,code)=>safeCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]{1,6});/gi,(_,code)=>safeCodePoint(parseInt(code,16)))
+    .replace(/&(?:amp|#38|#x26);/gi,'&');
+}
+function safeCodePoint(code:number):string{
+  if(!Number.isFinite(code)||code<=0||code>0x10ffff)return '';
+  try{return String.fromCodePoint(code)}catch{return ''}
 }
 function normalizeDigits(value:string):string{
   return String(value||'').replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
@@ -176,6 +195,10 @@ export function numberFromText(value:string):number{
   const numbers=matches.map(raw=>{
     let token=raw.trim().replace(/\s/g,'');
     if(/^\d+[.,]\d{1,2}$/.test(token)&&!/[٬،]/.test(raw))return Number(token.replace(',','.'));
+    // Thousands separators plus decimal cents, e.g. "1,099.00" or "1.099,00":
+    // stripping every non-digit would turn $1,099.00 into 109900.
+    if(/^\d{1,3}(?:,\d{3})+\.\d{1,2}$/.test(token))return Number(token.replace(/,/g,''));
+    if(/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(token))return Number(token.replace(/\./g,'').replace(',','.'));
     token=token.replace(/[^\d]/g,'');return Number(token||0);
   }).filter(n=>Number.isFinite(n)&&n>=0);
   return numbers.length?Math.max(...numbers):0;

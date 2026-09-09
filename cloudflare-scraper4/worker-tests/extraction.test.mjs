@@ -8,7 +8,7 @@ import {build} from 'esbuild';
 import {load} from 'cheerio';
 
 const temporary=await mkdtemp(join(tmpdir(),'scraper4-extraction-'));
-await build({entryPoints:{scraper:new URL('../worker-src/scraper.ts',import.meta.url).pathname,network:new URL('../worker-src/network.ts',import.meta.url).pathname,env:new URL('../worker-src/env.ts',import.meta.url).pathname,app:new URL('../worker-src/app.ts',import.meta.url).pathname,catalog:new URL('../worker-src/ai-catalog.ts',import.meta.url).pathname},bundle:true,splitting:true,format:'esm',platform:'browser',target:'es2022',outdir:temporary,entryNames:'[name]',outExtension:{'.js':'.mjs'}});
+await build({entryPoints:{scraper:new URL('../worker-src/scraper.ts',import.meta.url).pathname,network:new URL('../worker-src/network.ts',import.meta.url).pathname,env:new URL('../worker-src/env.ts',import.meta.url).pathname,app:new URL('../worker-src/app.ts',import.meta.url).pathname,catalog:new URL('../worker-src/ai-catalog.ts',import.meta.url).pathname,schema:new URL('../worker-src/schema.ts',import.meta.url).pathname},bundle:true,splitting:true,format:'esm',platform:'browser',target:'es2022',outdir:temporary,entryNames:'[name]',outExtension:{'.js':'.mjs'}});
 const scraper=await import(pathToFileURL(join(temporary,'scraper.mjs'))),network=await import(pathToFileURL(join(temporary,'network.mjs'))),env=await import(pathToFileURL(join(temporary,'env.mjs'))),app=await import(pathToFileURL(join(temporary,'app.mjs'))),catalog=await import(pathToFileURL(join(temporary,'catalog.mjs')));
 const HTML_VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
 
@@ -415,4 +415,69 @@ test('remaining dashboard content follows a topic-first novice workflow without 
 
 test('processor refuses unsafe retirement after empty, duplicate or failed extraction and preserves detail tags',async()=>{
   const source=await readFile(new URL('../worker-src/processor.ts',import.meta.url),'utf8');assert.match(source,/checkpoint\.retireSafe=false;[\s\S]*صفحه.*خالی/);assert.match(source,/فقط محصولات تکراری/);assert.match(source,/if\(checkpoint\.retireSafe&&checkpoint\.seen\.length\)/);assert.match(source,/هیچ محصولی بازنشسته نشد/);assert.match(source,/tags:fresh\.tags\|\|previous\.tags/);
+});
+
+test('runtime SCHEMA keeps seeded profile JSON intact and the Apple profile targets real cards',async()=>{
+  // Regression: SCHEMA used to be a plain template literal, so every \" inside the
+  // seeded profile payloads collapsed to a bare " and the JSON became unparseable.
+  // db.ts's json() helper swallows that failure, so every seeded profile silently
+  // loaded with no selectors and extracted nothing.
+  const source=await readFile(new URL('../worker-src/schema.ts',import.meta.url),'utf8');
+  assert.match(source,/export const SCHEMA = String\.raw`/,'SCHEMA must be a raw template literal');
+
+  const {SCHEMA}=await import(pathToFileURL(join(temporary,'schema.mjs')));
+  const payloads=[...SCHEMA.matchAll(/'(\{"id":"[^']*?\})'/g)].map(match=>match[1].replace(/''/g,"'"));
+  assert.ok(payloads.length>=6,`expected the seeded profiles, found ${payloads.length}`);
+  const profiles=payloads.map(payload=>JSON.parse(payload));
+  for(const profile of profiles)assert.ok(profile.selectors&&profile.selectors.container,`${profile.id} lost its selectors`);
+
+  const apple=profiles.filter(profile=>profile.id==='us-apple-buy-iphone').pop();
+  assert.ok(apple,'the US Apple Store profile must stay seeded');
+  // "section li" also matched apple.com's global navigation and the Shopping
+  // guides / Ways to save lists, which produced priceless junk rows.
+  assert.doesNotMatch(apple.selectors.container,/section li/);
+  assert.match(apple.selectors.link,/\/shop\/buy-iphone\//,'the link selector needs a product path segment');
+  assert.equal(apple.extractionEngine,'htmlrewriter','hand-tuned CSS selectors must not be bypassed by engine autodetection');
+});
+
+test('Apple-style cards extract cleanly while navigation lists are ignored',async()=>{
+  const {SCHEMA}=await import(pathToFileURL(join(temporary,'schema.mjs')));
+  const payloads=[...SCHEMA.matchAll(/'(\{"id":"us-apple-buy-iphone"[^']*?\})'/g)].map(match=>match[1].replace(/''/g,"'"));
+  const {selectors}=JSON.parse(payloads[payloads.length-1]);
+  const card=(title,slug,price)=>`<li class="rf-hcard rc-card"><h3 class="rf-hcard-title">${title}</h3>`+
+    `<img src="https://store.storeimages.cdn-apple.com/${slug}.jpg" alt="${title}">`+
+    `<div class="rc-prices"><span class="rc-prices-fullprice">Buy from $${price} or $45.79/mo. per month for 24 mo.</span></div>`+
+    `<a href="/shop/buy-iphone/${slug}">Buy - ${title}</a></li>`;
+  const html='<!DOCTYPE html><html><head><title>Buy iPhone - Apple</title></head><body>'+
+    '<nav id="globalnav"><section class="globalnav-submenu"><ul>'+
+    '<li><a href="https://www.apple.com/shop/buy-mac">Mac</a></li>'+
+    '<li><a href="https://www.apple.com/shop/buy-iphone">iPhone</a></li></ul></section></nav>'+
+    '<section class="all-models"><ul>'+
+    card('iPhone 17 Pro &amp; iPhone 17 Pro Max','iphone-17-pro','1099')+
+    card('iPhone Air','iphone-air','999')+'</ul></section>'+
+    '<section class="rf-shopping-guides"><ul>'+
+    '<li><a href="https://www.apple.com/shop/buy-iphone/carrier-offers">Carrier Deals</a></li>'+
+    '<li><a href="https://www.apple.com/shop/refurbished">Certified Refurbished</a></li></ul></section>'+
+    '</body></html>';
+  const products=await scraper.parseCards(html,'https://www.apple.com/shop/buy-iphone',selectors);
+  assert.deepEqual(products.map(product=>product.title),['iPhone 17 Pro & iPhone 17 Pro Max','iPhone Air'],
+    'navigation and shopping-guide links must not become products, and entities must be decoded');
+  assert.deepEqual(products.map(product=>product.price),[1099,999]);
+  assert.ok(products.every(product=>product.url.startsWith('https://www.apple.com/shop/buy-iphone/')));
+});
+
+test('prices keep thousands separators and cents apart',async()=>{
+  const cases=[['Buy from $1099 or $45.79/mo.',1099],['$1,099.00',1099],['$1,299.99',1299.99],
+    ['1.099,00',1099],['1,200,000 تومان',1200000],['۱٬۲۰۰٬۰۰۰ تومان',1200000],['$599',599],['',0]];
+  for(const [text,expected] of cases)assert.equal(scraper.numberFromText(text),expected,`numberFromText(${JSON.stringify(text)})`);
+});
+
+test('HTML entities in card text are decoded',async()=>{
+  // The test harness swaps in a cheerio-backed HTMLRewriter that already decodes
+  // entities, but the real Workers runtime hands text chunks over encoded, so
+  // "iPhone 17 Pro &amp; iPhone 17 Pro Max" would be stored verbatim and would
+  // never match the same product on the destination store.
+  const source=await readFile(new URL('../worker-src/scraper.ts',import.meta.url),'utf8');
+  assert.match(source,/normalizeDigits\(decodeEntities\(String\(value\|\|''\)\)\)/,'cleanText must decode entities');
+  assert.match(source,/&\(\?:amp\|#38\|#x26\);/,'&amp; must be decoded last so &amp;lt; does not become <');
 });

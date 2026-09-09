@@ -9,7 +9,14 @@ const absolute = (value: string, base: string) => { try { const url = new URL(va
 export function numberFromText(value: string): number {
   const en = value.replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
   const groups = en.match(/\d[\d,٬.\s]*/g) || [];
-  return groups.length ? Math.max(...groups.map(item => Number(item.replace(/\D/g, '')) || 0)) : 0;
+  // Mirrors worker-src/scraper.ts: "1,099.00" is 1099, not 109900.
+  return groups.length ? Math.max(...groups.map(item => {
+    const token = item.trim().replace(/[\s٬]/g, match => (match === '٬' ? ',' : ''));
+    if (/^\d+[.,]\d{1,2}$/.test(token)) return Number(token.replace(',', '.')) || 0;
+    if (/^\d{1,3}(?:,\d{3})+\.\d{1,2}$/.test(token)) return Number(token.replace(/,/g, '')) || 0;
+    if (/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(token)) return Number(token.replace(/\./g, '').replace(',', '.')) || 0;
+    return Number(token.replace(/\D/g, '')) || 0;
+  })) : 0;
 }
 
 function sourceKey(url: string, title: string): string { return createHash('sha256').update(url || title).digest('hex').slice(0, 32); }
