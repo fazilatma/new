@@ -235,3 +235,46 @@ test('a provider without its own key falls back to the shared AI key', async () 
   assert.equal(fits(shared, { baseUrl: 'https://api.openai.com/v1' }), false, 'a key must never leak to a different provider');
   assert.equal(fits({ baseUrl: 'https://openrouter.ai/api/v1', apiKey: '   ' }, { baseUrl: 'https://openrouter.ai/api/v1' }), false, 'a blank shared key is not a key');
 });
+
+test('importing an AI provider file keeps the API keys whatever they are called', async () => {
+  // Regression: importAiFile only looked at apiKey / api_key / keyValue, so a
+  // catalogue that stores the credential as key, token, apiToken, a nested
+  // credentials object, or a separate id -> key map imported every provider
+  // with an empty key. Testing the models then failed for all of them with
+  // "the API key for X is not set".
+  const dashboard = await read('../worker-src/dashboard.ts');
+  assert.match(dashboard, /function aiImportKeyFrom/, 'the importer needs a tolerant key reader');
+  assert.match(dashboard, /function aiImportKeyList/);
+  assert.match(dashboard, /keyBook/, 'a separate keys map must be consulted');
+  assert.doesNotMatch(dashboard, /\(p\.apiKey\|\|p\.api_key\|\|p\.keyValue\)\?\[/, 'the old three-name extraction must be gone');
+
+  // Execute the real helpers rather than trusting the source shape.
+  const body = dashboard
+    .slice(dashboard.indexOf('function aiImportKeyFrom'), dashboard.indexOf('async function importAiFile'))
+    .replace(/:\s*string/g, '');
+  const { aiImportKeyFrom, aiImportKeyList } = new Function(`${body}; return { aiImportKeyFrom, aiImportKeyList };`)();
+
+  assert.equal(aiImportKeyFrom({ apiKey: 'a' }), 'a');
+  assert.equal(aiImportKeyFrom({ key: 'b' }), 'b');
+  assert.equal(aiImportKeyFrom({ token: 'c' }), 'c');
+  assert.equal(aiImportKeyFrom({ apiToken: 'd' }), 'd');
+  assert.equal(aiImportKeyFrom({ credentials: { secret: 'e' } }), 'e', 'nested credentials must be read');
+  assert.equal(aiImportKeyFrom({ authorization: 'Bearer f' }), 'f', 'a Bearer prefix must be stripped');
+  assert.equal(aiImportKeyFrom({ apiKey: '   ' }), '', 'blank keys are not keys');
+  assert.equal(aiImportKeyFrom({}), '');
+
+  // A key held only in a side map still reaches the provider.
+  assert.deepEqual(aiImportKeyList({ id: 'groq' }, 'gsk-from-map'), ['gsk-from-map']);
+  // Existing multi-key vaults keep working.
+  assert.deepEqual(aiImportKeyList({ apiKeys: ['k1', 'k2'] }, ''), ['k1', 'k2']);
+});
+
+test('the import report names providers that arrived without a key', async () => {
+  const dashboard = await read('../worker-src/dashboard.ts');
+  assert.match(dashboard, /const keyless=providers\.filter/, 'the importer must collect keyless providers');
+  assert.match(dashboard, /missingKey:keyless\.length/, 'the report must carry the count');
+  assert.match(dashboard, /missingKeyProviders:keyless/, 'the report must name them');
+  assert.match(dashboard, /بدون کلید API وارد شد/, 'the summary must warn in Persian');
+  // Local runtimes need no key, so they must not be reported as broken.
+  assert.match(dashboard, /keyless=providers\.filter\(p=>!String\(p\.apiKey\|\|''\)\.trim\(\)&&!\/\(\^\|\\\/\\\/\)\(localhost/, 'localhost providers are exempt');
+});
