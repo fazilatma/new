@@ -6,7 +6,7 @@ import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, 
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS } from './dashboard.js';
-import { allProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { flushD1Usage, getD1Usage, allProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { configureEnv, type Env } from './env.js';
 import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, photoFix, rebuildMap, recon, reconTable, retire } from './maintenance.js';
 import { safeFetch, safeText, safeWooFetch } from './network.js';
@@ -30,7 +30,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.88.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.89.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -51,7 +51,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.88.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.89.0')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -74,7 +74,7 @@ app.get('/api/activity',async c=>{
   const quotaState=getWriteQuotaState();
   const quotaRun=(runs as any[]).some((x:any)=>x.phase==='quota'||/quota|write operations/i.test(String(x.error||'')))||(active as any[]).some((j:any)=>/quota|write operations/i.test(String(j.error||'')));
   return c.json({ok:true,ts:new Date().toISOString(),queue:Boolean(c.env.JOBS),version,
-    quota:{writeExceeded:quotaState.writeExceeded||quotaRun,at:quotaState.at},
+    quota:{writeExceeded:quotaState.writeExceeded||quotaRun,at:quotaState.at,d1:await getD1Usage()},
     counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},
     activeJobs:active.slice(0,15).map(j=>{const p=profileById.get(j.profileId),started=Date.parse(j.startedAt||j.createdAt),ended=j.status==='running'?Date.now():Date.parse(j.finishedAt||j.updatedAt),minutes=Math.max(1/60,(ended-started)/60000),speed=Number((Number(j.processed||0)/minutes).toFixed(2)),engine=(p?.extractionEngineMaster||p?.extractionEngine||'auto');return{id:j.id,shortId:j.id.slice(0,8),profileId:j.profileId.slice(0,12),kind:j.kind,target:j.target,status:j.status,phase:j.phase,priority:Number(priorities[j.id])||0,progress:j.total?Math.round(j.processed/j.total*100):0,detail:`${j.processed}/${j.total}`,speedPerMinute:speed,engine,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}}),
     runs,
@@ -85,7 +85,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.88.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.89.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+// Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
+// the exact rows it read/wrote, so we meter our own consumption against the
+// documented free-plan limits (5M reads / 100k writes per UTC day).
+app.get('/api/quota',async c=>{const usage=await getD1Usage();flushD1Usage(c.executionCtx?.waitUntil.bind(c.executionCtx));return c.json({ok:true,d1:usage,note:'Measured from the D1 queries this Worker itself ran. Dashboard, wrangler and other Workers on the same database are not counted.'})});
 app.get('/api/runtime/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 app.get('/api/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 

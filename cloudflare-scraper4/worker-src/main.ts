@@ -1,6 +1,6 @@
 import { app, scheduledTasks } from './app.js';
 import { configureEnv, type Env } from './env.js';
-import { ensureSchema, listQueuedJobs } from './db.js';
+import { ensureSchema, flushD1Usage, listQueuedJobs } from './db.js';
 import { processJob } from './processor.js';
 import { listQueuedBackgroundRuns, processBackgroundMessage } from './background.js';
 import { isWriteQuotaError } from './utils.js';
@@ -73,8 +73,11 @@ export default {
         }
       }
     }
+    // Persist the measured D1 usage before this isolate goes away.
+    flushD1Usage(promise=>ctx.waitUntil(promise));
   },
   async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext):Promise<void>{
     await scheduledTasks(env,promise=>ctx.waitUntil(promise));
+    flushD1Usage(promise=>ctx.waitUntil(promise));
   }
 };

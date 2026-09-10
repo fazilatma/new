@@ -608,3 +608,87 @@ test('the Node vault generates its own key instead of demanding ADMIN_TOKEN', as
   assert.match(server, /if \(!config\.adminToken\) return next\(\);/, 'auth behaviour must be unchanged');
   assert.ok(!/localVaultKey/.test(server), 'the vault key must never be used as an API credential');
 });
+
+test('D1 usage is measured from real query meta, not guessed', async () => {
+  // Cloudflare exposes no "remaining quota" API to a Worker, but every D1 query
+  // returns meta.rows_read / meta.rows_written -- the exact units the free plan
+  // limits. We were discarding that and only reacting after being cut off.
+  const db = await readProjectFile('worker-src/db.ts');
+
+  // Limits must match the documented free-plan figures.
+  assert.match(db, /D1_FREE_DAILY_ROWS_READ = 5_000_000/);
+  assert.match(db, /D1_FREE_DAILY_ROWS_WRITTEN = 100_000/);
+  // Both query paths must be metered, or the count silently under-reports.
+  assert.match(db, /const result = await statement\(sql, values\)\.all<T>\(\);\s*\n\s*meter\(result\.meta\)/, 'reads must be metered');
+  assert.match(db, /const result = await statement\(sql, values\)\.run\(\);\s*\n\s*meter\(result\.meta\)/, 'writes must be metered');
+  // The meter must not become part of the problem it measures.
+  assert.match(db, /USAGE_FLUSH_MS = 60_000/, 'the counter must be batched, not written per query');
+  // meta must be declared or TypeScript would drop the field.
+  const env = await readProjectFile('worker-src/env.ts');
+  assert.match(env, /rows_read\?: number; rows_written\?: number/, 'D1 meta must expose the billing fields');
+
+  // Execute the REAL metering logic from the shipped source.
+  const start = db.indexOf('export const D1_FREE_DAILY_ROWS_READ');
+  const body = db.slice(start, db.indexOf('async function rows<T = any>'))
+    .replace(/export /g, '')
+    .replace(/^type D1Usage = .*$/m, '')
+    .replace(/let usageFlushing: Promise<void> \| null = null;/, 'let usageFlushing = null;')
+    .replace(/: D1Usage/g, '').replace(/<D1Usage>/g, '')
+    .replace(/\(at: Date = new Date\(\)\)/, '(at = new Date())')
+    .replace(/function meter\(meta: \{[^}]*\} \| undefined\): void/, 'function meter(meta)')
+    .replace(/async function flushUsage\(\): Promise<void>/, 'async function flushUsage()')
+    .replace(/function maybeFlushUsage\(waitUntil\?: \([^)]*\) => void\): void/, 'function maybeFlushUsage(waitUntil)')
+    .replace(/async function getD1Usage\(\): Promise<\{[\s\S]*?\}> \{/, 'async function getD1Usage(){')
+    .replace(/function flushD1Usage\(waitUntil\?: \([^)]*\) => void\): void/, 'function flushD1Usage(waitUntil)')
+    .replace(/const pct = \(used: number, limit: number\)/, 'const pct = (used, limit)');
+
+  const build = stored => new Function(`
+    let __store=${JSON.stringify(stored)},__sets=0,__fail=false;
+    const getState=async(k,f)=>__store??f;
+    const setState=async(k,v)=>{if(__fail)throw new Error('quota'); __sets++; __store=v;};
+  ` + body + `
+    return {meter,getD1Usage,flushD1Usage,_sets:()=>__sets,_setFlushed:t=>{usageFlushedAt=t},_fail:v=>{__fail=v}};
+  `)();
+
+  // Counting is exact, and remaining is derived from the real limits.
+  const a = build(null);
+  a.meter({ rows_read: 1000, rows_written: 40 });
+  a.meter({ rows_read: 200 });
+  const ua = await a.getD1Usage();
+  assert.equal(ua.rowsRead, 1200);
+  assert.equal(ua.rowsWritten, 40);
+  assert.equal(ua.remaining.rowsWritten, 100_000 - 40);
+  assert.equal(ua.remaining.rowsRead, 5_000_000 - 1200);
+  assert.equal(ua.measured, 'this-worker-only', 'the scope must be stated honestly');
+  assert.ok(ua.resetsAt.endsWith('T00:00:00.000Z'), 'free limits reset at 00:00 UTC');
+
+  // Metering must cost nothing until a flush is due.
+  assert.equal(a._sets(), 0, 'no write should happen per query');
+
+  // Yesterday's total must not be inherited after the UTC reset.
+  const today = new Date().toISOString().slice(0, 10);
+  const b = build({ day: '2000-01-01', rowsRead: 4_999_999, rowsWritten: 99_999, queries: 5 });
+  b.meter({ rows_read: 10, rows_written: 2 });
+  const ub = await b.getD1Usage();
+  assert.equal(ub.rowsRead, 10, 'a new UTC day starts from zero');
+  assert.equal(ub.rowsWritten, 2);
+  assert.equal(ub.day, today, 'usage is reported for the current UTC day');
+  assert.match(db, /if \(stored && stored\.day === utcDay\(\)\) usageBase = stored;/, 'a stale day must never be loaded as the base');
+
+  // A same-day persisted total must survive isolate recycling.
+  const c = build({ day: today, rowsRead: 1000, rowsWritten: 500, queries: 9 });
+  c.meter({ rows_read: 7, rows_written: 3 });
+  const uc = await c.getD1Usage();
+  assert.equal(uc.rowsRead, 1007, 'persisted + pending');
+  assert.equal(uc.rowsWritten, 503);
+
+  // If the flush write fails (the usual cause is an exhausted quota) the delta
+  // must be preserved exactly once -- not lost, and not counted twice.
+  const d = build(null);
+  d.meter({ rows_read: 250, rows_written: 25 });
+  d._fail(true); d._setFlushed(0); d.flushD1Usage();
+  await new Promise(r => setTimeout(r, 20));
+  const ud = await d.getD1Usage();
+  assert.equal(ud.rowsRead, 250, 'a failed flush must not lose or double-count the delta');
+  assert.equal(ud.rowsWritten, 25);
+});
