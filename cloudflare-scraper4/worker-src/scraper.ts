@@ -463,7 +463,7 @@ export async function scrapeListPage(url:string,selectors:Selectors,nextSelector
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
 
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
-  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
+  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
     if(name==='htmlrewriter')return parseCards(html,baseUrl,selectors);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);

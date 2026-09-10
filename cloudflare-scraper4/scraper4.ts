@@ -29,13 +29,13 @@
  *   cd cloudflare-scraper4
  *   npm install --no-audit --prefer-online
  *   grep version package.json | head -1
- *   # Expected: 1.85.0
+ *   # Expected: 1.86.0
  *
  * Cloudflare Worker update from Dashboard:
  *   1) Push/pull this branch: arena/01a0803e-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
- *   4) Open /health and verify version is 1.85.0.
+ *   4) Open /health and verify version is 1.86.0.
  *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4
@@ -658,7 +658,7 @@ async function extractProductsHtmlRewriter(pageUrl: string, selectors: SelectorM
 }
 
 async function extractProducts(pageUrl: string, selectors: SelectorMap, env: Env, engine: ExtractionEngine = "auto"): Promise<Product[]> {
-  if (["playwright", "puppeteer", "crawlee_playwright"].includes(engine)) throw new Error(`${engine} is a Node.js-only extraction engine. Use the Render/VPS/VS Code runtime, not Cloudflare Workers.`);
+  if (["playwright", "puppeteer", "crawlee_playwright"].includes(engine)) throw new Error(`${engine} is a Node.js-only extraction engine. Use a Node runtime (Termux, Windows, VPS, Render or VS Code), not Cloudflare Workers.`);
   if (engine === "htmlrewriter") return extractProductsHtmlRewriter(pageUrl, selectors, env);
   const response = await safeFetch(pageUrl, env); if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const html = await responseTextLimited(response);

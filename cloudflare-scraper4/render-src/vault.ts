@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
-import { config } from './config.js';
+import { config, runtimeEnvironment } from './config.js';
 
 export type ConnectionVault = {
   woo: { url: string; key: string; secret: string; categoryId: number };
@@ -20,7 +20,7 @@ export const emptyConnections = (): ConnectionVault => ({
 });
 
 function password(): string {
-  if (!config.adminToken) throw new Error('برای ذخیره امن اطلاعات اتصال، ابتدا ADMIN_TOKEN را در Render تعریف کنید.');
+  if (!config.adminToken) throw new Error(`برای ذخیره امن اطلاعات اتصال، ابتدا ADMIN_TOKEN را در ${runtimeEnvironment.tokenHint} تعریف کنید.`);
   return config.adminToken;
 }
 

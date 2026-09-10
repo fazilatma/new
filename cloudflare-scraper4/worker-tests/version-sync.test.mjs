@@ -494,3 +494,54 @@ test('the Node vault keeps Cloudflare account ids and multi-key metadata', async
   const worker = await readProjectFile('worker-src/vault.ts');
   assert.match(worker, /accountId/, 'precondition: the Worker vault already persists them');
 });
+
+test('the Node runtime names the real environment instead of always saying Render', async () => {
+  // The same Node build runs on Termux, Windows, a VPS and Codespaces, but its
+  // errors, hints, /api/version and backup file names all said "Render", which
+  // confused users who had never used Render.com.
+  const cfg = await readProjectFile('render-src/config.ts');
+  const body = cfg.slice(cfg.indexOf('function detectRuntimeEnvironment()'), cfg.indexOf('export const runtimeEnvironment'));
+
+  // Execute the REAL detector from the shipped source.
+  const run = (platform, env) => new Function('process', `${body}; return detectRuntimeEnvironment();`)({ platform, env });
+  assert.equal(run('android', {}).id, 'termux', 'Termux reports platform android');
+  assert.equal(run('linux', { PREFIX: '/data/data/com.termux/files/usr' }).id, 'termux', 'Termux is also detectable via PREFIX');
+  assert.equal(run('win32', {}).id, 'windows');
+  assert.equal(run('linux', { CODESPACES: 'true' }).id, 'codespaces');
+  assert.equal(run('linux', {}).id, 'local', 'a plain VPS must not be called Render');
+  // Render itself must still be detected, so its panel instructions stay correct.
+  assert.equal(run('linux', { RENDER: '1' }).id, 'render');
+  assert.match(run('linux', { RENDER_SERVICE_ID: 'x' }).dbHint, /Render Dashboard/);
+  // Every environment must offer a usable database hint.
+  for (const [p, e] of [['android', {}], ['win32', {}], ['linux', {}]]) {
+    assert.ok(run(p, e).dbHint.length > 10, 'each environment needs its own database hint');
+    assert.ok(!/Render/.test(run(p, e).dbHint), 'a non-Render environment must not be told to use Render');
+  }
+});
+
+test('user-facing messages do not hardcode Render on other runtimes', async () => {
+  const server = await readProjectFile('render-src/server.ts');
+  const vault = await readProjectFile('render-src/vault.ts');
+  const setupPage = await readProjectFile('render-src/dashboard.ts');
+
+  // These four strings were shown verbatim to Termux and Windows users.
+  assert.ok(!/Create Render PostgreSQL/.test(server), 'the database hint must follow the environment');
+  assert.ok(!/ADMIN_TOKEN را در Render/.test(vault), 'the admin-token hint must follow the environment');
+  assert.ok(!/رابط اصلی Termux\/Render/.test(setupPage), 'the setup page must not brand itself Render');
+  assert.ok(!/local-node-render/.test(server), '/api/version must report the real environment');
+  assert.match(server, /runtimeEnvironment/, 'the server must use the detected environment');
+  // The very first line a Termux user sees in the terminal said "Scraper4 Render".
+  assert.ok(!/Scraper4 Render listening/.test(server), 'the startup banner must not say Render');
+  assert.match(server, /Scraper4 \(\$\{runtimeEnvironment\.label\}\) listening/, 'the banner must name the real environment');
+
+  // The parity report also labelled generic rows as Render-specific.
+  const parity = await readProjectFile('render-src/parity.ts');
+  assert.ok(!/بازیابی بکاپ Render/.test(parity), 'the backup row must not be Render-branded');
+
+  // Backups must stop being named "render", yet old files must still restore.
+  const db = await readProjectFile('render-src/db.ts');
+  assert.match(db, /app:'scraper4-backup'/, 'new backups get a neutral id');
+  assert.match(db, /'scraper4-backup', 'scraper4-render'/, 'old backups must still be accepted');
+  const workerDb = await readProjectFile('worker-src/db.ts');
+  assert.match(workerDb, /scraper4-backup/, 'the Worker must accept a backup made by the Node runtime');
+});

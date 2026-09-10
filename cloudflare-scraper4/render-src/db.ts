@@ -357,11 +357,12 @@ export async function createBackup(): Promise<Record<string, unknown>> {
   const [profiles,products,jobs,states,maps,learning,autoreply] = await Promise.all([
     pool.query('SELECT * FROM profiles ORDER BY created_at'),pool.query('SELECT * FROM products ORDER BY profile_id,created_at'),pool.query('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 1000'),pool.query('SELECT * FROM app_state ORDER BY key'),pool.query('SELECT * FROM destination_map ORDER BY profile_id,target,account_key'),pool.query('SELECT * FROM category_learning ORDER BY hits DESC'),pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT 5000')
   ]);
-  return {app:'scraper4-render',version:1,createdAt:new Date().toISOString(),profiles:profiles.rows,products:products.rows,jobs:jobs.rows,states:states.rows,destinationMap:maps.rows,categoryLearning:learning.rows,autoreplyLog:autoreply.rows};
+  return {app:'scraper4-backup',version:1,createdAt:new Date().toISOString(),profiles:profiles.rows,products:products.rows,jobs:jobs.rows,states:states.rows,destinationMap:maps.rows,categoryLearning:learning.rows,autoreplyLog:autoreply.rows};
 }
 
 export async function restoreBackup(bundle: any): Promise<{ profiles: number; products: number; states: number }> {
-  if (!bundle || bundle.app !== 'scraper4-render' || bundle.version !== 1) throw new Error('Invalid Scraper 4 Render backup');
+  const ACCEPTED_BACKUP_IDS = ['scraper4-backup', 'scraper4-render'];
+  if (!bundle || !ACCEPTED_BACKUP_IDS.includes(bundle.app) || bundle.version !== 1) throw new Error('فایل بکاپ معتبر Scraper 4 نیست.');
   const client = await pool.connect(); let pCount=0, productCount=0, stateCount=0;
   try {
     await client.query('BEGIN');

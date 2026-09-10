@@ -7,7 +7,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { aiCall, aiProviders, getLeaderboard, recordVote, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
-import { config, assertConfig } from './config.js';
+import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.85.0'; } catch { return process.env.npm_package_version || '1.85.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.86.0'; } catch { return process.env.npm_package_version || '1.86.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -123,7 +123,8 @@ app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization
 app.onError((error, c) => { console.error(error); return c.json({ ok: false, error: error.message }, 500); });
 app.get('/health', c => c.json({
   ok: true,
-  app: 'scraper4-render',
+  app: 'scraper4',
+  environment: runtimeEnvironment.label,
   runtime: process.version,
   version: runtimeVersion(),
   packageVersion: PACKAGE_VERSION,
@@ -160,7 +161,7 @@ app.get('/visual', async c => {
 });
 
 app.use('/api/*', async (c, next) => {
-  if (!databaseReady) return c.json({ ok: false, error: 'Database is not configured', detail: databaseError, setup: 'Create Render PostgreSQL and set DATABASE_URL to its Internal Database URL.' }, 503);
+  if (!databaseReady) return c.json({ ok: false, error: 'Database is not configured', detail: databaseError, setup: runtimeEnvironment.dbHint, environment: runtimeEnvironment.label }, 503);
   if (!config.adminToken) return next();
   const auth = c.req.header('authorization') || '';
   if (!safeEqual(auth.replace(/^Bearer\s+/i, ''), config.adminToken)) return c.json({ ok: false, error: 'Unauthorized' }, 401);
@@ -174,7 +175,7 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
+app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {
@@ -223,7 +224,7 @@ app.get('/api/basalam/chats',async c=>c.json({ok:true,items:await basalamChats(N
 app.get('/api/basalam/orders',async c=>c.json({ok:true,items:await basalamOrders(Number(c.req.query('limit'))||20)}));
 app.get('/api/settings', async c => c.json({ ok:true, settings: await getState('settings', {}) }));
 app.post('/api/settings', async c => { const settings=await c.req.json(); await setState('settings',settings); return c.json({ok:true}); });
-app.get('/api/backup', async c => c.json(await createBackup(), 200, { 'content-disposition': `attachment; filename="scraper4-render-${Date.now()}.json"` }));
+app.get('/api/backup', async c => c.json(await createBackup(), 200, { 'content-disposition': `attachment; filename="scraper4-backup-${Date.now()}.json"` }));
 app.post('/api/restore', async c => c.json({ok:true,result:await restoreBackup(await c.req.json())}));
 app.get('/api/settings-export', async c => {
   const bundle=await createPhpSettingsBundle(new URL(c.req.url).host),stamp=new Date().toISOString().replace(/[-:T]/g,'').slice(0,15);
@@ -352,7 +353,7 @@ app.post('/api/import-php', async c => {
   return c.json({ ok: true, imported: imported.length, profiles: imported });
 });
 
-const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, info => console.log(`Scraper4 Render listening on http://${info.address}:${info.port}`));
+const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, info => console.log(`Scraper4 (${runtimeEnvironment.label}) listening on http://${info.address}:${info.port}`));
 let scheduler: NodeJS.Timeout | undefined;
 let backgroundStarted = false;
 let localDrainRunning = false;
