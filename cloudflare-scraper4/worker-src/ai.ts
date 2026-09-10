@@ -524,6 +524,68 @@ function redactRaw(value:any):any{if(Array.isArray(value))return value.map(redac
 function safeEndpoint(raw:string){try{const url=new URL(raw);url.username='';url.password='';for(const key of [...url.searchParams.keys()])if(/(?:key|token|secret|password|auth)/i.test(key))url.searchParams.set(key,'[پنهان]');return url.toString()}catch{return raw.replace(/([?&](?:key|token|secret|password|auth)[^=]*=)[^&]+/gi,'$1[پنهان]')}}
 function safeError(raw:string,endpoint:string,apiKey:string):string{let value=String(raw||'').replaceAll(endpoint,safeEndpoint(endpoint));if(apiKey)value=value.replaceAll(apiKey,'[پنهان]');return value}
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}
+// ─── AI description generator ────────────────────────────────────────────────
+// Mirrors render-src/ai.ts so the Cloudflare Worker and the Node runtime fill
+// missing product content identically. Only EMPTY fields are written: text that
+// was really scraped from the source site is never overwritten.
+export function productNeedsEnrichment(product:any):{longDesc:boolean;shortDesc:boolean;images:boolean;variations:boolean;any:boolean}{
+  const text=(value:unknown)=>String(value??'').trim();
+  const longDesc=text(product?.longDesc).length<40;
+  const shortDesc=text(product?.shortDesc).length<10;
+  const images=!Array.isArray(product?.images)||product.images.filter((x:unknown)=>text(x)).length<2;
+  const variations=!Array.isArray(product?.variations)||product.variations.length===0;
+  return{longDesc,shortDesc,images,variations,any:longDesc||shortDesc||variations};
+}
+function firstJsonObject(text:string):any{
+  const raw=String(text||'').replace(/```json/gi,'```').replace(/```/g,'');
+  const start=raw.indexOf('{');
+  if(start<0)return null;
+  for(let end=raw.lastIndexOf('}');end>start;end=raw.lastIndexOf('}',end-1)){
+    try{return JSON.parse(raw.slice(start,end+1))}catch{/* keep shrinking */}
+  }
+  return null;
+}
+export type DescriptionResult={ok:boolean;changed:boolean;fields:string[];model?:string;provider?:string;error?:string};
+export async function generateProductDescription(product:any,options:{force?:boolean}={}):Promise<DescriptionResult>{
+  const need=productNeedsEnrichment(product);
+  if(!options.force&&!need.any)return{ok:true,changed:false,fields:[]};
+  const picked=await preferredAiChatModel();
+  if(!picked)return{ok:false,changed:false,fields:[],error:'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.'};
+  const context=[
+    `نام محصول: ${String(product?.title||'').trim()}`,
+    product?.brand?`برند: ${product.brand}`:'',
+    product?.category?`دسته‌بندی: ${product.category}`:'',
+    product?.priceText?`قیمت: ${product.priceText}`:'',
+    product?.sku?`کد کالا: ${product.sku}`:'',
+    String(product?.shortDesc||'').trim()?`توضیح کوتاه موجود: ${product.shortDesc}`:''
+  ].filter(Boolean).join('\n');
+  const prompt=`تو یک کارشناس تولید محتوای فروشگاهی فارسی هستی. بر اساس اطلاعات زیر، محتوای فروشگاهی بنویس.
+${context}
+
+فقط و فقط یک شیء JSON معتبر برگردان، بدون هیچ متن اضافه و بدون بلوک کد، دقیقاً با این کلیدها:
+{"shortDesc":"یک جملهٔ کوتاه جذاب","longDesc":"<p>توضیح کامل در دو تا سه پاراگراف HTML ساده</p>","variations":["تنوع ۱","تنوع ۲"]}
+
+قوانین: همه‌چیز فارسی و روان باشد. اگر تنوع مشخصی از نام محصول قابل استنباط نیست، آرایهٔ variations را خالی بگذار. هیچ ادعای نادرست یا مشخصات فنی ساختگی ننویس.`;
+  try{
+    const answer=await aiChat(picked.provider,picked.model,[{role:'user',content:prompt}],undefined,undefined,900);
+    const parsed=firstJsonObject(answer.text);
+    if(!parsed)return{ok:false,changed:false,fields:[],provider:picked.provider.id,model:picked.model,error:'پاسخ مدل قابل تبدیل به JSON نبود.'};
+    const fields:string[]=[],clean=(value:unknown)=>String(value??'').trim();
+    if((options.force||need.shortDesc)&&clean(parsed.shortDesc)){product.shortDesc=clean(parsed.shortDesc);fields.push('shortDesc')}
+    if((options.force||need.longDesc)&&clean(parsed.longDesc)){product.longDesc=clean(parsed.longDesc);fields.push('longDesc')}
+    if((options.force||need.variations)&&Array.isArray(parsed.variations)){
+      const list=parsed.variations.map(clean).filter(Boolean).slice(0,20);
+      if(list.length){product.variations=list;fields.push('variations')}
+    }
+    // The gallery is never invented: images must come from the source site.
+    if(need.images&&Array.isArray(product?.images)&&product.image&&!product.images.includes(product.image))product.images=[product.image,...product.images];
+    product.aiEnrichedAt=new Date().toISOString();
+    return{ok:true,changed:fields.length>0,fields,provider:picked.provider.id,model:picked.model};
+  }catch(error){
+    return{ok:false,changed:false,fields:[],provider:picked.provider.id,model:picked.model,error:error instanceof Error?error.message:String(error)};
+  }
+}
+
 export async function getLeaderboard(){return leaderboard(await getState<any>('ai_votes',{scores:{},history:[]}))}
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
 async function networkFetch(url:string,init:RequestInit,net:Network,timeoutMs?:number):Promise<Response>{assertPublicUrl(url);if(net.mode==='direct'||!net.mode)return safeFetch(url,init,3_000_000,timeoutMs);if(net.workerUrl){const target=net.workerUrl.includes('{url}')?net.workerUrl.replace('{url}',encodeURIComponent(url)):net.workerUrl+(net.workerUrl.includes('?')?'&':'?')+'url='+encodeURIComponent(url);return safeFetch(target,{...init,headers:{...init.headers,'x-scraper-target':url}},3_000_000,timeoutMs)}throw new Error(`حالت شبکه «${net.mode}» در Workers به Worker/Gateway واسط نیاز دارد؛ workerUrl را تنظیم کنید.`)}

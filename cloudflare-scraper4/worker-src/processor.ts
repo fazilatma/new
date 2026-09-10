@@ -1,5 +1,6 @@
 import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
+import { generateProductDescription, productNeedsEnrichment } from './ai.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { message } from './utils.js';
@@ -107,6 +108,25 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));
     try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title}: جزئیات: ${errorText}؛ اطلاعات معتبر قبلی حفظ شد.`,'error','failed',reportItem(product,{error:errorText}))}
   });
+  // AI enrichment: fill descriptions/variations the source page did not provide,
+  // using the pinned master model. Always-on by default, runs after real detail
+  // extraction and before save/sync, and can never fail the scrape.
+  const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
+  if(aiSettings?.enabled!==false){
+    const pending=batch.filter(product=>productNeedsEnrichment(product).any);
+    if(pending.length){
+      const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
+      let filled=0,failed=0,reported='';
+      await mapLimit(pending,Math.max(1,Number(getEnv().AI_DESCRIPTION_CONCURRENCY)||2),async product=>{
+        if(await stopRequested(job.id))return;
+        try{const result=await generateProductDescription(product);if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
+        catch(error){failed++;if(!reported)reported=message(error)}
+      });
+      if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
+      if(failed)append(job,`تکمیل توضیحات برای ${failed} محصول انجام نشد${reported?': '+reported:''}`,'warning');
+      job.phase=previousPhase;await save(job);
+    }
+  }
   for(const product of batch){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
     const previous=previousByKey.get(product.sourceKey)||null,rawPrice=rawPriceByKey.get(product.sourceKey)??product.price;

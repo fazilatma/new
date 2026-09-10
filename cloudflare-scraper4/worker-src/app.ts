@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import readXlsxFile from 'read-excel-file/web-worker';
-import { aiCall, aiChat, aiProviders, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
+import { aiCall, aiChat, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
 import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, agentModelSetupHint, controlAgentRun, createOrUpdateAgentPrompt, currentAgentRun, getAgentRunPublic, listAgentRunsPublic, publicAgentRun, removeAgentPrompt, resetAgentRun, startAgentRun } from './agent.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
@@ -106,6 +106,34 @@ app.get('/api/ai/test-results',async c=>c.json({ok:true,...await getLastAiTestRe
 app.post('/api/ai/call',async c=>{const b=await jsonBody(c),provider=(await aiProviders()).find(p=>p.id===b.provider);if(!provider)return c.json({ok:false,error:'Provider not found'},404);const{model,keyIndex}=parseModelKeySuffix(String(b.model||''));return c.json(await aiCall(providerWithKey(provider,keyIndex),model,String(b.prompt||'Reply with exactly: SCRAPER4_OK')))});
 app.post('/api/ai/vote',async c=>{const b=await jsonBody(c);return c.json({ok:true,leaderboard:await recordVote(String(b.task||'manual'),String(b.winner||''),Array.isArray(b.candidates)?b.candidates.map(String):[])})});
 app.get('/api/ai/leaderboard',async c=>c.json({ok:true,leaderboard:await getLeaderboard()}));
+// ─── AI description generator (same contract as the Node runtime) ────────────
+// Always-on by default; fills content the source page did not provide, using
+// the pinned master model. Without these routes the new AI sub-tab would 404.
+app.get('/api/ai/description-settings',async c=>{
+  const settings=await getState<any>('ai_description_settings',{enabled:true}),picked=await preferredAiChatModel();
+  return c.json({ok:true,settings:{enabled:settings?.enabled!==false},master:picked?{provider:picked.provider.id,model:picked.model}:null});
+});
+app.post('/api/ai/description-settings',async c=>{
+  const b=await jsonBody(c),enabled=b.enabled!==false&&b.enabled!=='false';
+  await setState('ai_description_settings',{enabled});
+  return c.json({ok:true,settings:{enabled}});
+});
+app.post('/api/profiles/:id/ai-descriptions',async c=>{
+  const profile=await getProfile(c.req.param('id'));
+  if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);
+  const b=await jsonBody(c),force=b.force===true||b.force==='true',limit=Math.max(1,Math.min(200,Number(b.limit)||25));
+  const picked=await preferredAiChatModel();
+  if(!picked)return c.json({ok:false,error:'هیچ مدل هوش مصنوعی فعالی پیدا نشد. ابتدا یک ارائه‌دهنده و مدل مستر تنظیم کنید.'},400);
+  const stored=(await listProducts(profile.id,1000,0,'')).products||[];
+  const targets=stored.filter((row:any)=>force||productNeedsEnrichment(row).any).slice(0,limit);
+  let filled=0;const failures:any[]=[];
+  for(const product of targets as any[]){
+    const result=await generateProductDescription(product,{force});
+    if(result.changed){await upsertProduct(profile.id,product);filled++}
+    else if(!result.ok)failures.push({title:product.title,error:result.error});
+  }
+  return c.json({ok:true,profileId:profile.id,model:picked.model,provider:picked.provider.id,candidates:targets.length,filled,failed:failures.length,failures:failures.slice(0,5)});
+});
 // ─── AI chat with capability-filtered model picker ───────────────────────────
 app.get('/api/ai/chat-models',async c=>{
   const providers=(await aiProviders()).filter(p=>p.enabled!==false);
@@ -524,7 +552,7 @@ export function normalizeProfile(raw:any):Profile {
   const pagination=String(raw.pagination||raw.pagType||'query_page') as Profile['pagination'];
   const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine;
   const rawMaster=String(raw.extractionEngineMaster||raw.fetch_engine_master||raw.engineMaster||'') as ExtractionEngine;
-  const master=(['htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined);
+  const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined);
   const target=String(sync.target||'');
   const indirect=on(raw.networkIndirect??raw.net_indirect);
   const fallbackIds=raw.basalamFallbackCategoryIds??raw.bslFallbackCatIds;
@@ -532,7 +560,7 @@ export function normalizeProfile(raw:any):Profile {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(0,Number(raw.pages)||0)),
     pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
-    extractionEngine:['auto','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
+    extractionEngine:['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
     priceMode:['none','add','percent','multiply'].includes(raw.priceMode)?raw.priceMode:'none',priceValue:Number(raw.priceValue??raw.priceVal)||0,

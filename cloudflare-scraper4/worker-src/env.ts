@@ -33,6 +33,7 @@ export type Env = {
   ALLOW_INSECURE?: string;
   REQUEST_TIMEOUT_MS?: string;
   DETAIL_CONCURRENCY?: string;
+  AI_DESCRIPTION_CONCURRENCY?: string;
   JOB_CHUNK_SIZE?: string;
   MAX_RESPONSE_BYTES?: string;
   WOO_URL?: string;

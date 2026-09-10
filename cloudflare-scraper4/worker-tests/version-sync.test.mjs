@@ -1185,9 +1185,39 @@ test('every engine the benchmark can select is offered in the dropdowns', async 
   for (const engine of benchmarked) {
     assert.ok(ids.includes(engine), `benchmarked engine "${engine}" must be selectable in the dropdown`);
   }
-  // And every offered engine must be one the server will actually accept.
-  const accepted = server.slice(server.indexOf("['auto','cheerio'"), server.indexOf(']', server.indexOf("['auto','cheerio'")) + 1);
-  for (const id of ids) assert.ok(accepted.includes(`'${id}'`), `dropdown engine "${id}" must be accepted by normalizeProfile`);
+  // And every offered engine must be accepted by normalizeProfile in BOTH
+  // runtimes -- an engine missing from the allow-list is silently rewritten to
+  // 'auto' on save, which is how the benchmark result kept disappearing.
+  for (const [runtime, file] of [['Node', 'render-src/server.ts'], ['Cloudflare Worker', 'worker-src/app.ts']]) {
+    const src = await readProjectFile(file);
+    const at = src.indexOf("extractionEngine:");
+    const accepted = src.slice(src.indexOf("['auto'", at), src.indexOf(']', src.indexOf("['auto'", at)) + 1);
+    for (const id of ids) assert.ok(accepted.includes(`'${id}'`), `${runtime}: dropdown engine "${id}" must survive normalizeProfile`);
+  }
+
+  // Every offered engine must actually RUN somewhere. The Worker has no cheerio
+  // package, so before this fix picking cheerio there returned zero products
+  // with no error at all -- the worst kind of failure to debug.
+  const wScraper = await readProjectFile('worker-src/scraper.ts');
+  // The two runtimes' ExtractionEngine unions must stay identical, otherwise the
+  // Worker rejects an engine the Node benchmark just saved to the profile.
+  const engineUnion = src => [...src.slice(src.indexOf('export type ExtractionEngine'), src.indexOf(';', src.indexOf('export type ExtractionEngine'))).matchAll(/'([a-z_]+)'/g)].map(m => m[1]);
+  assert.deepEqual(
+    engineUnion(await readProjectFile('worker-src/types.ts')),
+    engineUnion(await readProjectFile('render-src/types.ts')),
+    'the Worker and Node ExtractionEngine unions must match',
+  );
+  const wDispatch = wScraper.slice(wScraper.indexOf('const tryOne=async'), wScraper.indexOf('for(const name of engineOrder', wScraper.indexOf('const tryOne=async')));
+  const nodeOnly = ['playwright', 'puppeteer', 'crawlee_playwright'];
+  for (const id of ids.filter(e => e !== 'auto' && !nodeOnly.includes(e))) {
+    assert.ok(wDispatch.includes(`name==='${id}'`), `Worker engine "${id}" must be dispatched, not silently return []`);
+  }
+  // ...and the Node runtime must dispatch every offered engine as well.
+  const rScraper = await readProjectFile('render-src/scraper.ts');
+  const rDispatch = rScraper.slice(rScraper.indexOf('const pick = async'), rScraper.indexOf('for(const name of engineOrder', rScraper.indexOf('const pick = async')));
+  for (const id of ids.filter(e => e !== 'auto')) {
+    assert.ok(rDispatch.includes(`name === '${id}'`), `Node engine "${id}" must be dispatched`);
+  }
 });
 
 test('manual sync runs list, details and delivery in one click', async () => {
@@ -1249,4 +1279,37 @@ test('the AI description generator fills only missing fields, using the master m
   assert.match(block, /catch \(error\)/, 'an AI failure must be caught, never failing the run');
   assert.ok(proc.indexOf("job.phase = 'ai-descriptions'") > proc.indexOf("job.phase = 'details'"),
     'enrichment must run after real detail extraction, so it only fills what is genuinely missing');
+});
+
+test('the AI description endpoints exist in BOTH runtimes, so the tab is never dead', async () => {
+  // The dashboard bundle is shared by the Cloudflare Worker and the Node server.
+  // A route added to only one runtime gives the other a 404 on a visible button
+  // -- the "dead buttons" defect reported repeatedly. Keep them in lockstep.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  const called = [...dash.matchAll(/api\('(\/api\/ai\/description-settings)'/g)].map(m => m[1]);
+  assert.ok(called.length >= 1, 'sanity: the dashboard really calls the description-settings API');
+  assert.ok(dash.includes("/ai-descriptions'"), 'sanity: the dashboard calls the per-profile backfill API');
+
+  for (const [runtime, file] of [['Cloudflare Worker', 'worker-src/app.ts'], ['Node', 'render-src/server.ts']]) {
+    const src = await readProjectFile(file);
+    assert.ok(src.includes("app.get('/api/ai/description-settings'"), `${runtime} must serve GET /api/ai/description-settings`);
+    assert.ok(src.includes("app.post('/api/ai/description-settings'"), `${runtime} must serve POST /api/ai/description-settings`);
+    assert.ok(src.includes("app.post('/api/profiles/:id/ai-descriptions'"), `${runtime} must serve POST /api/profiles/:id/ai-descriptions`);
+  }
+
+  // Both runtimes must own a real generator, and both must enrich by default.
+  for (const [runtime, aiFile, procFile] of [
+    ['Cloudflare Worker', 'worker-src/ai.ts', 'worker-src/processor.ts'],
+    ['Node', 'render-src/ai.ts', 'render-src/processor.ts'],
+  ]) {
+    const ai = await readProjectFile(aiFile);
+    assert.ok(ai.includes('export async function generateProductDescription'), `${runtime} needs generateProductDescription`);
+    assert.ok(ai.includes('export function productNeedsEnrichment'), `${runtime} needs productNeedsEnrichment`);
+    // Ignore the import block: only the real call sites tell us the ordering.
+    const proc = (await readProjectFile(procFile)).split('\n').filter(l => !/^\s*import[\s{]/.test(l)).join('\n');
+    assert.ok(proc.includes("'ai_description_settings'"), `${runtime} processor must read the on/off switch`);
+    assert.ok(/enabled\s*\)?\s*!==\s*false/.test(proc), `${runtime} processor must default the generator ON`);
+    assert.ok(proc.indexOf('generateProductDescription') > proc.indexOf('scrapeDetails('), `${runtime} must enrich AFTER detail extraction`);
+    assert.ok(proc.indexOf('generateProductDescription') < proc.indexOf('upsertProduct('), `${runtime} must enrich BEFORE the product is saved`);
+  }
 });

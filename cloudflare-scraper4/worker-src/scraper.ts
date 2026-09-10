@@ -448,7 +448,7 @@ class NextLinkHandler {
 type EngineResult={products:Product[];usedEngine:ExtractionEngine};
 const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
-const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter']);
+const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter','cheerio']);
 const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
@@ -470,7 +470,7 @@ export async function scrapeList(url:string,selectors:Selectors,indirect=false,e
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
   if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
-    if(name==='htmlrewriter')return parseCards(html,baseUrl,selectors);
+    if(name==='htmlrewriter'||name==='cheerio')return parseCards(html,baseUrl,selectors);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);
     if(name==='next_data')return extractNextDataProducts(html,baseUrl);
     if(name==='metadata')return extractMetadataProduct(html,baseUrl);
