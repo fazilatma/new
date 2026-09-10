@@ -1009,3 +1009,45 @@ test('the bundled AI proxy Worker answers the shapes the client sends', async ()
   for (const token of ["searchParams.get('url')", "x-scraper-target", "x-target-url", 'ALLOWED_HOSTS'])
     assert.ok(source.includes(token), `the proxy Worker must handle ${token}`);
 });
+
+// --- Basalam answered `401 {"message":"invalid authorization header"}` because a
+// token pasted as "Bearer eyJ..." was stored verbatim, so the request carried
+// `Authorization: Bearer Bearer eyJ...` (two schemes). Invisible characters from
+// a Persian keyboard are also not valid header bytes.
+test('pasted Basalam tokens are cleaned before they reach the header', async () => {
+  for (const file of ['../worker-src/vault.ts', '../render-src/vault.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export function sanitizeToken('), `${file}: needs sanitizeToken`);
+    // Both the default account and every extra stall must be sanitised.
+    assert.ok(/token:\s*sanitizeToken\(text\(shop\?\.token\)\)/.test(source), `${file}: stall tokens`);
+    assert.ok(/basalam:\{token:sanitizeToken\(/.test(source), `${file}: default token`);
+  }
+
+  // Behaviour, mirroring the shipped implementation.
+  const clean = (value) => {
+    let token = typeof value === 'string' ? value : '';
+    if (!token) return '';
+    token = token.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+                 .replace(/[\u00a0\u2000-\u200a\u3000]/g, ' ')
+                 .replace(/[\u2018\u2019\u201c\u201d]/g, '').trim();
+    token = token.replace(/^authorization\s*:\s*/i, '').trim();
+    token = token.replace(/^(?:bearer|token)\s+/i, '').trim();
+    if (token.length > 1 && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))))
+      token = token.slice(1, -1).trim();
+    return token.replace(/[^\x21-\x7e]/g, '');
+  };
+  for (const input of ['Bearer ABC123', 'bearer  ABC123', 'Authorization: Bearer ABC123',
+    '"ABC123"', '  ABC123  ', 'ABC\u200c123'.replace('\u200c', '\u200c')])
+    assert.equal(clean(input), 'ABC123', `failed to clean ${JSON.stringify(input)}`);
+  // A clean token must survive untouched.
+  assert.equal(clean('eyJhbGciOi.abc-_123'), 'eyJhbGciOi.abc-_123');
+  // The result must always be usable as a header value.
+  assert.doesNotThrow(() => new Headers().set('authorization', 'Bearer ' + clean('TOK\u200cEN\u00a01')));
+
+  // A 401 must explain what to do instead of only echoing Basalam's text.
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('function basalamAuthHint('), `${file}: needs the 401 hint`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0)'), `${file}: hint must be used`);
+  }
+});

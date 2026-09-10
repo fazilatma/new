@@ -305,3 +305,22 @@ Important browser limitation: static HTML cannot directly install a project or w
   used to end with a green "all destinations match the source" banner. A red
   "no destination responded" banner with the error list is shown instead, and a green banner is
   never shown while any destination failed.
+
+## 1.104.0 — Basalam `401 invalid authorization header` fixed
+
+- **Fixed the `HTTP 401: invalid authorization header` that blocked Basalam sending.**
+  Copying the token the way the documentation prints it — `Bearer eyJ...` — stored the whole string,
+  so the request went out as `Authorization: Bearer Bearer eyJ...` with the scheme twice, which
+  Basalam rejects. Tokens are now cleaned both when saved and when loaded:
+  - a pasted `Bearer` / `Token` / `Authorization:` prefix is removed,
+  - surrounding quotes and leading/trailing spaces are dropped,
+  - invisible characters (ZWNJ, RTL/LTR marks, non-breaking spaces, smart quotes) are stripped —
+    these are not legal HTTP header bytes and made the request throw or be refused outright.
+- **Tokens already stored incorrectly heal themselves on load**, so there is nothing to re-enter.
+- The same cleaning applies to **extra Basalam stalls** and to the **`BASALAM_TOKEN`** environment
+  variable.
+- A `401` now explains what to do ("copy the token without the word Bearer…") instead of only
+  echoing Basalam's message, and the token field says the same thing.
+
+If sending still returns 401 after this, the token itself is invalid or expired — create a new
+personal access token in the Basalam developer panel with the required scopes.

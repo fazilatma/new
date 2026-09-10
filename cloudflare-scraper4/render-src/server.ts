@@ -25,7 +25,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.103.0'; } catch { return process.env.npm_package_version || '1.103.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.104.0'; } catch { return process.env.npm_package_version || '1.104.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -305,7 +305,11 @@ app.post('/api/suggest-selectors',async c=>{const b=await c.req.json().catch(()=
 app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await c.req.json().catch(()=>({}))as any;return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES}));
 app.get('/api/connections', async c => c.json({ok:true,connections:await loadConnections(true)}));
-app.post('/api/connections', async c => c.json({ok:true,connections:await saveConnections(await c.req.json())}));
+app.post('/api/connections', async c => {
+  const body=await c.req.json().catch(()=>null);
+  if(!body||typeof body!=='object')return c.json({ok:false,error:'بدنهٔ درخواست باید JSON معتبر باشد.'},400);
+  return c.json({ok:true,connections:await saveConnections(body)});
+});
 app.get('/api/ai/providers',async c=>c.json({ok:true,providers:await aiProviders(),leaderboard:await getLeaderboard()}));
 app.post('/api/ai/test-all',async c=>{const body=await c.req.json().catch(()=>({})) as any;return c.json({ok:true,results:await testAllModels(String(body.prompt||'Reply with exactly: SCRAPER4_OK'),Boolean(body.onlyCandidates))})});
 app.post('/api/ai/call',async c=>{const body=await c.req.json() as any,providers=await aiProviders(),provider=providers.find(p=>p.id===body.provider);if(!provider)return c.json({ok:false,error:'Provider not found'},404);return c.json(await aiCall(provider,String(body.model||''),String(body.prompt||'Reply with exactly: SCRAPER4_OK')))});

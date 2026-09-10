@@ -15,6 +15,21 @@ function detectRuntimeEnvironment() {
 
 export const runtimeEnvironment = detectRuntimeEnvironment();
 
+/**
+ * Local copy of the token cleaner (vault.ts imports this file, so importing it
+ * back would create a cycle). Strips a pasted "Bearer " prefix and invisible
+ * characters that make Basalam answer `401 invalid authorization header`.
+ */
+function envToken(value: string | undefined): string {
+  return String(value || '')
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+    .trim()
+    .replace(/^authorization\s*:\s*/i, '')
+    .replace(/^(?:bearer|token)\s+/i, '')
+    .trim()
+    .replace(/[^\x21-\x7e]/g, '');
+}
+
 export const config = {
   port: Math.max(1, Number(process.env.PORT || 3000)),
   host: '0.0.0.0',
@@ -30,7 +45,7 @@ export const config = {
     secret: process.env.WOO_SECRET || ''
   },
   basalam: {
-    token: process.env.BASALAM_TOKEN || '',
+    token: envToken(process.env.BASALAM_TOKEN),
     vendorId: process.env.BASALAM_VENDOR_ID || '',
     api: (process.env.BASALAM_API || 'https://openapi.basalam.com/v1').replace(/\/$/, '')
   }

@@ -78,6 +78,16 @@ type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transpo
 const BASALAM_STATUS_PUBLISHED=2976;
 type BasalamPayload={name:string;primary_price:number;stock:any;description:string;status:number;photo?:number;photos?:number[];category_id?:number;weight:any;package_weight:any;preparation_days:any;sku?:string};
 
+/**
+ * A raw `401 invalid authorization header` tells the user nothing about what to
+ * fix, and the usual cause is a pasted token that still carries its "Bearer "
+ * prefix or an expired personal access token.
+ */
+function basalamAuthHint(status:number):string{
+  if(status===401)return 'توکن نامعتبر یا منقضی است. توکن را بدون واژهٔ Bearer و بدون فاصله/نویسهٔ اضافه از پنل توسعه'+'\u200c'+'دهندگان باسلام کپی کنید و دوباره ذخیره کنید. — ';
+  if(status===403)return 'توکن دسترسی (Scope) لازم برای این عملیات را ندارد. — ';
+  return '';
+}
 function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[]):BasalamPayload{
   const payload:BasalamPayload={
     name:product.title,
@@ -167,7 +177,7 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
     body=await response.json().catch(()=>({}));
     if(response.ok)break;
   }
-  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${body.message||JSON.stringify(body).slice(0,300)}`);
+  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0)}${body.message||JSON.stringify(body).slice(0,300)}`);
   return{id:Number(body.id||body.product?.id||existing),body,categoryId:usedCategory};
 }
 

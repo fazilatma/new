@@ -81,17 +81,37 @@ export function environmentFallback(): ConnectionVault {
   return result;
 }
 
+/**
+ * Cleans a pasted API token for use in an Authorization header.
+ * Copying the whole header value ("Bearer eyJ...") produced
+ * `401 invalid authorization header` because we then sent two schemes; invisible
+ * characters from a Persian keyboard are not valid header bytes.
+ */
+export function sanitizeToken(value: unknown): string {
+  let token = typeof value === 'string' ? value : '';
+  if (!token) return '';
+  token = token.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+               .replace(/[\u00a0\u2000-\u200a\u3000]/g, ' ')
+               .replace(/[\u2018\u2019\u201c\u201d]/g, '')
+               .trim();
+  token = token.replace(/^authorization\s*:\s*/i, '').trim();
+  token = token.replace(/^(?:bearer|token)\s+/i, '').trim();
+  if (token.length > 1 && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))))
+    token = token.slice(1, -1).trim();
+  return token.replace(/[^\x21-\x7e]/g, '');
+}
+
 export function mergeConnections(base: ConnectionVault, input: any): ConnectionVault {
   const text=(value:unknown,fallback='')=>typeof value==='string'?value.trim():fallback;
   const num=(value:unknown,fallback=0)=>Number.isFinite(Number(value))?Number(value):fallback;
   const bool=(value:unknown,fallback=false)=>typeof value==='boolean'?value:fallback;
-  const shops=Array.isArray(input?.basalam?.shops)?input.basalam.shops.map((shop:any)=>({name:text(shop?.name),token:text(shop?.token),vendorId:text(shop?.vendorId),pricePercent:num(shop?.pricePercent)})):base.basalam.shops;
+  const shops=Array.isArray(input?.basalam?.shops)?input.basalam.shops.map((shop:any)=>({name:text(shop?.name),token:sanitizeToken(text(shop?.token)),vendorId:text(shop?.vendorId),pricePercent:num(shop?.pricePercent)})):base.basalam.shops;
   const providerInput=Array.isArray(input?.ai?.providers)?input.ai.providers:(input?.ai&&typeof input.ai==='object'?Object.values(input.ai).filter((value:any)=>value&&typeof value==='object'&&(value.id||value.vendor||value.url||value.baseUrl||Array.isArray(value.models))):null);
   const providers=Array.isArray(providerInput)?providerInput.map((p:any,i:number)=>({id:text(p?.id)||`provider-${i+1}`,name:text(p?.name)||text(p?.id)||`Provider ${i+1}`,baseUrl:text(p?.baseUrl||p?.base_url||p?.url).replace(/\/$/,''),apiKey:text(p?.apiKey||p?.api_key),...(p?.accountId||p?.cfToken?{accountId:text(p?.accountId),cfToken:text(p?.cfToken)}:{}),models:Array.isArray(p?.models)?p.models.map((model:any)=>typeof model==='string'?model:String(model?.id||model?.name||'')).filter(Boolean):[],apiKeys:Array.isArray(p?.apiKeys)?p.apiKeys.map((k:any)=>typeof k==='string'?k:(k&&(k.accountId||k.label||k.enabled!==undefined)&&String(k.token||k.key||'').trim()?{...(k.accountId?{accountId:text(k.accountId)}:{}),token:text(k.token||k.key),...(k.label?{label:text(k.label)}:{}),...(k.enabled===false?{enabled:false}:{})}:text(k?.key||k?.token))).filter((k:any)=>typeof k==='string'?k:Boolean(k&&k.token)):[],reasoningModels:Array.isArray(p?.reasoningModels)?p.reasoningModels.map(String):[],nonChatModels:Array.isArray(p?.nonChatModels)?p.nonChatModels.map(String):[],...(p?.vendor?{vendor:text(p.vendor)}:{}),enabled:p?.enabled!==false})):base.ai.providers;
   const network={...base.ai.network,...(input?.ai?.network||{})}; if(!Array.isArray(providerInput))seedAiProviders(base.ai);
   return {
     woo:{url:text(input?.woo?.url,base.woo.url).replace(/\/$/,''),key:text(input?.woo?.key,base.woo.key),secret:text(input?.woo?.secret,base.woo.secret),categoryId:num(input?.woo?.categoryId,base.woo.categoryId),pricePercent:num(input?.woo?.pricePercent,base.woo.pricePercent)},
-    basalam:{token:text(input?.basalam?.token,base.basalam.token),vendorId:text(input?.basalam?.vendorId,base.basalam.vendorId),api:text(input?.basalam?.api,base.basalam.api).replace(/\/$/,'')||'https://openapi.basalam.com/v1',pricePercent:num(input?.basalam?.pricePercent,base.basalam.pricePercent),preparationDays:num(input?.basalam?.preparationDays,base.basalam.preparationDays),weight:num(input?.basalam?.weight,base.basalam.weight),packageWeight:num(input?.basalam?.packageWeight,base.basalam.packageWeight),stock:num(input?.basalam?.stock,base.basalam.stock),categoryId:num(input?.basalam?.categoryId,base.basalam.categoryId),autoCategory:bool(input?.basalam?.autoCategory,base.basalam.autoCategory),netIndirect:bool(input?.basalam?.netIndirect,base.basalam.netIndirect),shops},
+    basalam:{token:sanitizeToken(text(input?.basalam?.token,base.basalam.token)),vendorId:text(input?.basalam?.vendorId,base.basalam.vendorId),api:text(input?.basalam?.api,base.basalam.api).replace(/\/$/,'')||'https://openapi.basalam.com/v1',pricePercent:num(input?.basalam?.pricePercent,base.basalam.pricePercent),preparationDays:num(input?.basalam?.preparationDays,base.basalam.preparationDays),weight:num(input?.basalam?.weight,base.basalam.weight),packageWeight:num(input?.basalam?.packageWeight,base.basalam.packageWeight),stock:num(input?.basalam?.stock,base.basalam.stock),categoryId:num(input?.basalam?.categoryId,base.basalam.categoryId),autoCategory:bool(input?.basalam?.autoCategory,base.basalam.autoCategory),netIndirect:bool(input?.basalam?.netIndirect,base.basalam.netIndirect),shops},
     ai:{baseUrl:text(input?.ai?.baseUrl,base.ai.baseUrl).replace(/\/$/,''),apiKey:text(input?.ai?.apiKey,base.ai.apiKey),model:text(input?.ai?.model,base.ai.model),providers,candidates:Array.isArray(input?.ai?.candidates)?input.ai.candidates.map(String):base.ai.candidates,master:text(input?.ai?.master,base.ai.master),network:{mode:text(network.mode,'direct'),proxyUrl:text(network.proxyUrl),workerUrl:text(network.workerUrl),dohUrl:text(network.dohUrl,'https://cloudflare-dns.com/dns-query'),resolveIp:text(network.resolveIp)}},
     notifications:{url:text(input?.notifications?.url,base.notifications.url),token:text(input?.notifications?.token,base.notifications.token),chatId:text(input?.notifications?.chatId,base.notifications.chatId),baleToken:text(input?.notifications?.baleToken,base.notifications.baleToken),baleChatId:text(input?.notifications?.baleChatId,base.notifications.baleChatId),rubikaToken:text(input?.notifications?.rubikaToken,base.notifications.rubikaToken),rubikaChatId:text(input?.notifications?.rubikaChatId,base.notifications.rubikaChatId)}
   };
