@@ -16,7 +16,8 @@ import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } 
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
-import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply } from './maintenance.js';
+import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
+import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
 import { syncBasalam, syncWoo } from './sync.js';
@@ -24,7 +25,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.100.0'; } catch { return process.env.npm_package_version || '1.100.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.101.0'; } catch { return process.env.npm_package_version || '1.101.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -349,6 +350,9 @@ app.post('/api/maintenance/recon/:target',async c=>{const target=c.req.param('ta
 app.get('/api/maintenance/recon-accounts',async c=>c.json({ok:true,accounts:await reconAccounts()}));
 app.post('/api/maintenance/recon-unified',async c=>{const b=await c.req.json().catch(()=>({}))as any;return c.json(await unifiedRecon(String(b.profileId||'')))});
 app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await c.req.json().catch(()=>({}))as any;return c.json(await unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
+// Request 36b: preview (no confirm) or delete duplicates in every destination,
+// keeping the most expensive copy by default.
+app.post('/api/maintenance/duplicates',async c=>{const b=await c.req.json().catch(()=>({}))as any;return c.json(await destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
 app.post('/api/maintenance/recon-table/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));return c.json(await reconTable(target as 'woo'|'basalam',String(body.profileId||'')))});
 app.post('/api/maintenance/rebuild/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({})) as any;return c.json(await rebuildMap(target as any,String(body.profileId||'')))});
 app.post('/api/maintenance/retire/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any,apply=body.confirm==='APPLY';return c.json(await retire(target as any,String(body.profileId||''),String(body.action||'report'),apply))});
@@ -357,6 +361,29 @@ app.post('/api/maintenance/photo-fix',async c=>{const body=await c.req.json() as
 app.get('/api/destination/:target/products',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const all=await listDestinationProducts(target as any),q=String(c.req.query('q')||'').toLowerCase(),filtered=q?all.filter(x=>x.name.toLowerCase().includes(q)||String(x.id)===q):all,limit=Math.min(200,Number(c.req.query('limit'))||50),offset=Math.max(0,Number(c.req.query('offset'))||0);return c.json({ok:true,total:filtered.length,items:filtered.slice(offset,offset+limit)})});
 app.get('/api/destination/:target/overview',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);return c.json({ok:true,...await destinationOverview(target as any)})});
 app.get('/api/destination/:target/duplicates',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);return c.json({ok:true,groups:await findDestinationDuplicates(target as any)})});
+// Request 36 / runtime parity: server-side duplicate-removal runs. These four
+// routes existed only in the Cloudflare Worker, so the dashboard's duplicate
+// buttons were dead on Termux / VPS / Render installs.
+const dedupTarget=(value:string)=>{if(!['woo','basalam'].includes(value))throw Error('Invalid target');return value as 'woo'|'basalam'};
+app.post('/api/destination/:target/dedup-runs',async c=>{
+  try{const target=dedupTarget(c.req.param('target')),b=await c.req.json().catch(()=>({}))as any;
+    const started=await startDedupRun(target,b);
+    return c.json({ok:true,...started},started.existing?200:202);
+  }catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.get('/api/destination/:target/dedup-runs/current',async c=>{
+  try{dedupTarget(c.req.param('target'));await recoverDedupRun();return c.json({ok:true,run:await getPublicDedupRun()})}
+  catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.post('/api/destination/:target/dedup-runs/control',async c=>{
+  try{dedupTarget(c.req.param('target'));const b=await c.req.json().catch(()=>({}))as any;
+    return c.json({ok:true,run:await controlDedupRun(String(b.action)==='resume'?'resume':'stop')});
+  }catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.post('/api/destination/:target/dedup-runs/reset',async c=>{
+  try{dedupTarget(c.req.param('target'));await resetDedupRun();return c.json({ok:true,run:await getPublicDedupRun()})}
+  catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
 app.post('/api/destination/:target/:id/status',async c=>{const target=c.req.param('target'),body=await c.req.json() as any;if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(body.confirm!=='APPLY')return c.json({ok:false,error:'confirm APPLY is required'},400);return c.json(await destinationChangeStatus(target as any,Number(c.req.param('id')),String(body.status||'')))});
 app.delete('/api/destination/:target/:id',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm DELETE is required'},400);return c.json(await destinationDelete(target as any,Number(c.req.param('id')),c.req.query('force')==='true'))});
 app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const profile=await getProfile(c.req.param('profileId')),product=await getProduct(c.req.param('profileId'),c.req.param('sourceKey')),target=c.req.param('target');if(!profile||!product)return c.json({ok:false,error:'Product/profile not found'},404);if(target==='woo')return c.json({ok:true,result:await syncWoo(product,profile)});if(target==='basalam')return c.json({ok:true,result:await syncBasalam(product,profile)});return c.json({ok:false,error:'Invalid target'},400)});

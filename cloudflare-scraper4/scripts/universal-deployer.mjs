@@ -29,6 +29,7 @@
  *   cd "$HOME"
  *   pkg update -y && pkg upgrade -y
  *   pkg install -y git gh openssh nodejs-lts python make clang tar gzip chromium
+ *   pip install basalam-sdk
  *   rm -rf "$HOME/new"
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
@@ -432,7 +433,7 @@ async function termuxOffline(args, meta) {
 set -euo pipefail
 APP_NAME="${meta.name}"
 ARCHIVE="${meta.name}-termux-offline.tar.gz"
-pkg install -y nodejs-lts tar chromium || true
+pkg install -y nodejs-lts tar chromium || true\npip install basalam-sdk || true
 mkdir -p "$HOME/apps"
 tar -xzf "$ARCHIVE" -C "$HOME/apps"
 cd "$HOME/apps/$APP_NAME"

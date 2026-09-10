@@ -845,3 +845,59 @@ test('node source fetching honours the configured proxy and worker route', async
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+// --- Request 36a: one failing Basalam stall must not cancel the others.
+// The whole multi-stall loop used to sit inside a single try/catch, so a single
+// bad stall aborted the send and hid the stalls that had already succeeded.
+test('a failing Basalam stall does not abort the remaining stalls', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const start = source.indexOf('for(const account of accounts)');
+    assert.ok(start > 0, `${file}: multi-stall loop must exist`);
+    const body = source.slice(start, source.indexOf('return results', start));
+    assert.ok(/results\.push\(\{[^}]*error:/.test(body.replace(/\n/g, '')),
+      `${file}: a stall failure must be recorded as a result instead of thrown`);
+    assert.ok(body.includes('continue;'),
+      `${file}: after a stall fails the loop must continue with the next stall`);
+  }
+});
+
+// --- Request 36a: clicking a counter must show the product name, its price and
+// the error text. The Node runtime recorded no per-product detail at all, so
+// that popup was always empty outside Cloudflare.
+test('both runtimes record product details on job log entries', async () => {
+  for (const file of ['../worker-src/processor.ts', '../render-src/processor.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('function reportItem('), `${file}: must build a report item`);
+    assert.ok(/price:\s*Number\(product\.price\)/.test(source), `${file}: the item must carry the price`);
+    assert.ok(source.includes("'failed'"), `${file}: failures must be tagged for the error counter`);
+    assert.ok(/error:\s*errorText/.test(source), `${file}: the error text must reach the item`);
+  }
+});
+
+// --- Runtime parity: the server-side duplicate remover was Cloudflare-only, so
+// every duplicate button was dead on Termux / VPS / Render.
+test('the Node runtime exposes the dedup-run and duplicate routes', async () => {
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  for (const route of [
+    "'/api/destination/:target/dedup-runs'",
+    "'/api/destination/:target/dedup-runs/current'",
+    "'/api/destination/:target/dedup-runs/control'",
+    "'/api/destination/:target/dedup-runs/reset'",
+    "'/api/maintenance/duplicates'",
+  ]) assert.ok(server.includes(route), `Node server must serve ${route}`);
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  assert.ok(app.includes("'/api/maintenance/duplicates'"), 'Worker must serve the duplicates route too');
+});
+
+// --- Request 36a: Basalam publishes an SDK for Python only, so "SDK first" is
+// implemented through a python3 bridge that must degrade to REST cleanly.
+test('the Basalam Python SDK bridge exists and is wired in', async () => {
+  const bridge = await readFile(new URL('../scripts/basalam-sdk-bridge.py', import.meta.url), 'utf8');
+  for (const token of ['basalam_sdk', 'ProductRequestSchema', 'create_product_sync', 'update_product_sync', 'sdk-missing'])
+    assert.ok(bridge.includes(token), `bridge must reference ${token}`);
+  const sync = await readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8');
+  assert.ok(sync.includes('runBasalamSdkBridge'), 'the Node sync must call the python bridge');
+  assert.ok(sync.indexOf('runBasalamSdkBridge') < sync.indexOf('sendBasalamWithNpmSdk'),
+    'the SDK bridge must be tried before falling back');
+});

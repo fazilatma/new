@@ -48,7 +48,7 @@ async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'
   }catch(error){if(job)append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning');return 0}
 }
 type JobLog=Job['log'][number];
-function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,...extra}}
+function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,price:Number(product.price)||undefined,...extra}}
 function append(job:Job,text:string,level='info',event?:JobLog['event'],item?:JobLog['item']){job.log.push({at:new Date().toISOString(),level,message:text,event,item});if(job.log.length>1500)job.log=job.log.slice(-1500)}
 async function save(job:Job){const current=await getJob(job.id);if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return;if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')}await updateJob(job.id,{status:job.status,phase:job.phase,total:job.total,processed:job.processed,added:job.added,updated:job.updated,failed:job.failed,error:job.error,log:job.log,finishedAt:job.finishedAt})}
 
@@ -250,7 +250,23 @@ async function codeSuffixPatterns():Promise<RegExp[]>{
 }
 async function syncProduct(job:Job,profile:Profile,product:Product):Promise<void>{
   if(job.target==='woo'||job.target==='both')try{const action=await syncWoo(product,profile);append(job,`${product.title} [WooCommerce]: ${action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'woo',shop:'فروشگاه ووکامرس'}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [WooCommerce]: ${errorText}`,'error','failed',reportItem(product,{target:'woo',error:errorText}))}
-  if(job.target==='basalam'||job.target==='both')try{const results=await syncBasalam(product,profile);for(const result of results)append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [Basalam]: ${errorText}`,'error','failed',reportItem(product,{target:'basalam',error:errorText}))}
+  // Basalam publishes to EVERY stall. Each stall is reported on its own line and
+  // a failure in one must not abandon the others: the whole loop used to sit in
+  // a single try/catch, so one bad stall silently cancelled the rest and hid the
+  // successes that had already happened.
+  if(job.target==='basalam'||job.target==='both'){
+    let results:Awaited<ReturnType<typeof syncBasalam>>=[];
+    try{results=await syncBasalam(product,profile)}
+    catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [Basalam]: ${errorText}`,'error','failed',reportItem(product,{target:'basalam',error:errorText}))}
+    for(const result of results){
+      if(result.error){
+        job.failed++;
+        append(job,`${product.title} [Basalam · ${result.shop}]: ${result.error}`,'error','failed',reportItem(product,{target:'basalam',shop:result.shop,error:result.error,transport:result.transport}));
+        continue;
+      }
+      append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.${result.transport?` (${result.transport==='sdk'?'SDK':'API'})`:''}`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop,transport:result.transport}));
+    }
+  }
 }
 
 export async function retryAndEnqueue(id:string,waitUntil?:(promise:Promise<unknown>)=>void):Promise<Job|null>{

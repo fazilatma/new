@@ -280,3 +280,68 @@ export function planActions(rows: UnifiedReconRow[]): ReconAction[] {
   }
   return actions;
 }
+
+/**
+ * Duplicate cleanup planning for the DESTINATIONS (WooCommerce + every Basalam
+ * stall). Products that scrape into the same base title — i.e. identical once
+ * the «(کد ایکس)» suffix is stripped — are duplicates of each other at the shop.
+ * By default the MOST EXPENSIVE listing is kept and the cheaper copies are
+ * deleted, which is the safe direction for a seller.
+ *
+ * Only destination listings are considered; the locally scraped catalogue is
+ * never touched by this plan.
+ */
+export type DuplicateAction = {
+  kind: 'deleteDuplicate';
+  target: 'woo' | 'basalam';
+  accountKey: string;
+  accountName: string;
+  remoteId: number;
+  title: string;
+  price: number;
+  keepId: number;
+  keepPrice: number;
+  keepTitle: string;
+  groupSize: number;
+};
+
+export function planDuplicateDeletions(
+  remotes: ReconRemote[],
+  account: ReconAccount,
+  suffixFormats: unknown = '',
+  keep: 'expensive' | 'cheapest' = 'expensive',
+): DuplicateAction[] {
+  const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
+  const groups = new Map<string, ReconRemote[]>();
+  for (const remote of remotes) {
+    const name = String(remote?.name || '');
+    // Only «(کد ایکس)» listings participate, exactly like reconciliation: a shop
+    // product without the code suffix is not one of our published variants.
+    if (!name || !hasCodeSuffix(name, patterns)) continue;
+    if (!Number(remote?.id)) continue;
+    const key = reconNormTitle(stripCodeSuffix(name, patterns));
+    if (!key) continue;
+    const list = groups.get(key);
+    if (list) list.push(remote); else groups.set(key, [remote]);
+  }
+  const actions: DuplicateAction[] = [];
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const sorted = [...list].sort((a, b) => {
+      const pa = Number(a.price) || 0, pb = Number(b.price) || 0;
+      if (pa !== pb) return keep === 'expensive' ? pb - pa : pa - pb;
+      // Deterministic tie-break so a preview and its apply agree.
+      return (Number(a.id) || 0) - (Number(b.id) || 0);
+    });
+    const survivor = sorted[0];
+    for (const victim of sorted.slice(1)) {
+      actions.push({
+        kind: 'deleteDuplicate', target: account.target, accountKey: account.accountKey,
+        accountName: account.name, remoteId: Number(victim.id), title: String(victim.name || ''),
+        price: Number(victim.price) || 0, keepId: Number(survivor.id), keepPrice: Number(survivor.price) || 0,
+        keepTitle: String(survivor.name || ''), groupSize: list.length,
+      });
+    }
+  }
+  return actions;
+}

@@ -66,7 +66,7 @@ function basalamPrice(product:Product,percent=0):number{
 }
 
 type BasalamAccount={name:string;token:string;vendorId:string;pricePercent?:number};
-type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transport:'sdk'|'api';fallback?:string};
+type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
 type BasalamPayload={name:string;price:number;stock:any;description:string;photo?:string;category_id?:number;weight:any;package_weight:any;preparation_days:any};
 
 function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined):BasalamPayload{
@@ -130,17 +130,26 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
     const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;
     const action=existing?'updated':'created';
+    const price=basalamPrice(product,Number(account.pricePercent)||0);
     let remoteId=0,transport:BasalamSyncResult['transport']='sdk',fallback='';
     try{
-      const sdk=await sendBasalamWithSdk(product,profile,c,account,existing,categoryAttempts[0]);
-      remoteId=Number(sdk.id||existing);transport='sdk';
+      // SDK first, REST API as the fallback.
+      try{
+        const sdk=await sendBasalamWithSdk(product,profile,c,account,existing,categoryAttempts[0]);
+        remoteId=Number(sdk.id||existing);transport='sdk';
+      }catch(error){
+        fallback=error instanceof Error?error.message:String(error);
+        const api=await sendBasalamWithApi(product,profile,c,account,existing,categoryAttempts);
+        remoteId=Number(api.id||existing);transport='api';
+      }
     }catch(error){
-      fallback=error instanceof Error?error.message:String(error);
-      const api=await sendBasalamWithApi(product,profile,c,account,existing,categoryAttempts);
-      remoteId=Number(api.id||existing);transport='api';
+      // This stall failed on BOTH transports. Record it and keep going so the
+      // remaining stalls still receive the product.
+      results.push({shop:account.name,action,id:0,transport:'api',price,error:error instanceof Error?error.message:String(error),fallback:fallback||undefined});
+      continue;
     }
     if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(account===accounts[0])await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
-    results.push({shop:account.name,action,id:remoteId,transport,fallback:transport==='api'?fallback:undefined});
+    results.push({shop:account.name,action,id:remoteId,transport,price,fallback:transport==='api'?fallback:undefined});
   }
   return results;
 }

@@ -8,9 +8,15 @@ import type { Job, Product } from './types.js';
 let stopping = false;
 export function requestWorkerStop(): void { stopping = true; }
 
-function append(job: Job, message: string, level = 'info'): void {
-  job.log.push({ at: new Date().toISOString(), level, message });
-  if (job.log.length > 200) job.log = job.log.slice(-200);
+function append(job: Job, message: string, level = 'info', event?: Job['log'][number]['event'], item?: Job['log'][number]['item']): void {
+  job.log.push({ at: new Date().toISOString(), level, message, event, item });
+  // The dashboard counters are clickable and read this log to list the product
+  // name, its price and the error text, so the Node runtime keeps as much
+  // history as the Worker instead of the old 200-line window.
+  if (job.log.length > 1500) job.log = job.log.slice(-1500);
+}
+function reportItem(product: Product, extra: Partial<NonNullable<Job['log'][number]['item']>> = {}): NonNullable<Job['log'][number]['item']> {
+  return { sourceKey: product.sourceKey, title: product.title, url: product.url, price: Number(product.price) || undefined, ...extra };
 }
 async function save(job: Job): Promise<void> { const current=await getJob(job.id); if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return; if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')} await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); }
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
@@ -192,10 +198,33 @@ async function runSync(job: Job, profile: Awaited<ReturnType<typeof getProfile>>
       job.processed++; if (job.processed % 5 === 0) await save(job);
       continue;
     }
-    try {
-      if (job.target === 'woo' || job.target === 'both') await syncWoo(product, profile);
-      if (job.target === 'basalam' || job.target === 'both') await syncBasalam(product, profile);
-    } catch (error) { job.failed++; append(job, `${product.title}: ${message(error)}`, 'error'); }
+    if (job.target === 'woo' || job.target === 'both') {
+      try {
+        const action = await syncWoo(product, profile);
+        append(job, `${product.title} [WooCommerce]: ${action === 'created' ? 'ایجاد' : 'به‌روزرسانی'} شد.`, 'info', action === 'created' ? 'sync-created' : 'sync-updated', reportItem(product, { target: 'woo', shop: 'فروشگاه ووکامرس' }));
+      } catch (error) {
+        const errorText = message(error); job.failed++;
+        append(job, `${product.title} [WooCommerce]: ${errorText}`, 'error', 'failed', reportItem(product, { target: 'woo', error: errorText }));
+      }
+    }
+    if (job.target === 'basalam' || job.target === 'both') {
+      // Every stall gets its own log line so a failure in one stall neither
+      // hides the others' success nor stops the send.
+      let results: Awaited<ReturnType<typeof syncBasalam>> = [];
+      try { results = await syncBasalam(product, profile); }
+      catch (error) {
+        const errorText = message(error); job.failed++;
+        append(job, `${product.title} [Basalam]: ${errorText}`, 'error', 'failed', reportItem(product, { target: 'basalam', error: errorText }));
+      }
+      for (const result of results) {
+        if (result.error) {
+          job.failed++;
+          append(job, `${product.title} [Basalam · ${result.shop}]: ${result.error}`, 'error', 'failed', reportItem(product, { target: 'basalam', shop: result.shop, error: result.error, transport: result.transport }));
+          continue;
+        }
+        append(job, `${product.title} [Basalam · ${result.shop}]: ${result.action === 'created' ? 'ایجاد' : 'به‌روزرسانی'} شد.${result.transport ? ` (${result.transport === 'sdk' ? 'SDK' : 'API'})` : ''}`, 'info', result.action === 'created' ? 'sync-created' : 'sync-updated', reportItem(product, { target: 'basalam', shop: result.shop, transport: result.transport }));
+      }
+    }
     job.processed++; if (job.processed % 5 === 0) await save(job);
   }
 }

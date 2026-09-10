@@ -92,7 +92,7 @@ export function stripDedupSuffix(name: string, patterns: RegExp[]): string {
 
 /** Canonical duplicate key: suffix-free, Persian-normalized, whitespace-collapsed, per shop. */
 export function dedupKey(name: string, shopId: string, patterns: RegExp[]): string {
-  const base = normalizePersianText(stripDedupSuffix(name, patterns));
+  const base = normalizePersianText(stripCodeSuffix(name, patterns));
   return base ? `${shopId || 'default'}::${base}` : '';
 }
 

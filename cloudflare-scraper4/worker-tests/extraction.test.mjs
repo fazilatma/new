@@ -708,6 +708,62 @@ test('the default basalam shop has its own price percentage', async () => {
   assert.match(nodeMaint, /pricePercent:\s*Number\(c\.basalam\.pricePercent\)\s*\|\|\s*0/);
 });
 
+// --- Request 36b: duplicates at the DESTINATIONS must be planned for deletion,
+// keeping the more expensive listing by default.
+test('planDuplicateDeletions keeps the most expensive listing per group', async () => {
+  const out = join(temporary, 'recon-core-dupe.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+  const account = { target: 'basalam', accountKey: '55', name: 'غرفه یک', pricePercent: 0 };
+  const remotes = [
+    { id: 1, name: 'کیف چرم (کد 11)', price: 100000 },
+    { id: 2, name: 'کیف چرم (کد 12)', price: 250000 },
+    { id: 3, name: 'کیف چرم (کد 13)', price: 180000 },
+    { id: 4, name: 'کفش راحتی (کد 21)', price: 90000 },
+    { id: 5, name: 'محصول بدون کد', price: 500000 },
+    { id: 6, name: 'محصول بدون کد', price: 400000 },
+  ];
+  const actions = core.planDuplicateDeletions(remotes, account);
+  // The 250000 listing survives; the two cheaper copies are removed.
+  assert.equal(actions.length, 2);
+  assert.deepEqual(actions.map(a => a.remoteId).sort((x, y) => x - y), [1, 3]);
+  for (const action of actions) {
+    assert.equal(action.kind, 'deleteDuplicate');
+    assert.equal(action.keepId, 2);
+    assert.equal(action.keepPrice, 250000);
+    assert.equal(action.groupSize, 3);
+    assert.equal(action.accountKey, '55');
+    assert.equal(action.accountName, 'غرفه یک');
+    assert.ok(action.price < action.keepPrice, 'only cheaper copies are deleted');
+  }
+  // A single listing is never a duplicate, and titles without «(کد ایکس)» are
+  // ignored entirely even when they repeat.
+  assert.equal(actions.some(a => [4, 5, 6].includes(a.remoteId)), false);
+  // The cheapest-keeping variant inverts the survivor.
+  const cheap = core.planDuplicateDeletions(remotes, account, '', 'cheapest');
+  assert.deepEqual(cheap.map(a => a.keepId), [1, 1]);
+});
+
+test('planDuplicateDeletions is deterministic when prices tie', async () => {
+  const out = join(temporary, 'recon-core-dupe2.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+  const account = { target: 'woo', accountKey: 'default', name: 'ووکامرس', pricePercent: 0 };
+  const remotes = [
+    { id: 30, name: 'ساعت مچی (کد 3)', price: 200000 },
+    { id: 12, name: 'ساعت مچی (کد 4)', price: 200000 },
+  ];
+  const first = core.planDuplicateDeletions(remotes, account);
+  const second = core.planDuplicateDeletions([...remotes].reverse(), account);
+  // Equal prices -> lowest remote id survives, regardless of input order, so a
+  // preview and the following apply never disagree.
+  assert.deepEqual(first.map(a => a.remoteId), [30]);
+  assert.deepEqual(second.map(a => a.remoteId), [30]);
+  assert.equal(first[0].keepId, 12);
+});
+
 test('expectedPriceFor applies the configured percentage', async () => {
   const out = join(temporary, 'recon-core-test.mjs');
   await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],

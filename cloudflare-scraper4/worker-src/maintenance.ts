@@ -1,6 +1,6 @@
 import { loadConnections } from './connections.js';
 import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
-import { byAccount, byProfile, planActions, reconcileAccount, summarize } from './recon-core.js';
+import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, summarize } from './recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
 import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { safeFetch, safeWooFetch } from './network.js';
@@ -174,6 +174,44 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
     noPrice:after.noPrice,inSync:after.inSync,local:after.local,localAll:after.localAll,skippedNoCode:after.skippedNoCode,accounts:after.accounts,
     accountsBreakdown:after.accountsBreakdown,profiles:after.profiles,failures:after.failures,
     rows:after.rows};
+}
+/**
+ * Request 36b — duplicate cleanup across EVERY destination.
+ *
+ * Scans WooCommerce and each Basalam stall, groups listings whose titles are
+ * identical once the «(کد ایکس)» suffix is removed, and plans the deletion of
+ * all but the most expensive copy (the default, configurable to cheapest).
+ *
+ * `apply=false` returns a preview so the operator can review before anything is
+ * removed; `apply=true` performs the deletions. Nothing in the local scraped
+ * catalogue is ever touched — only destination listings.
+ */
+export async function destinationDuplicates(apply=false,limit=200,keep:'expensive'|'cheapest'='expensive',accountKey=''){
+  const accounts=(await reconAccounts()).filter(a=>!accountKey||String(a.accountKey)===String(accountKey));
+  const settings=await getState<any>('settings',{}),suffixFormats=settings?.dedup?.suffixFormats||'';
+  const actions:any[]=[],failures:any[]=[];
+  for(const account of accounts){
+    try{
+      const remotes=await remoteForAccount(account);
+      actions.push(...planDuplicateDeletions(remotes,account,suffixFormats,keep));
+    }catch(error){failures.push({account:account.name,error:error instanceof Error?error.message:String(error)})}
+  }
+  const byDestination=accounts.map(account=>({
+    account:account.name,accountKey:account.accountKey,target:account.target,
+    duplicates:actions.filter(a=>String(a.accountKey)===String(account.accountKey)&&a.target===account.target).length,
+  }));
+  const capped=actions.slice(0,Math.max(1,Math.min(1000,Number(limit)||200)));
+  if(!apply)return{ok:failures.length===0,dryRun:true,keep,planned:actions.length,willDelete:capped.length,
+    accounts:accounts.length,byDestination,failures,actions:capped.slice(0,200)};
+  let deleted=0,archived=0;const failed:any[]=[];
+  for(const action of capped){
+    try{
+      const result=await destinationDelete(action.target,action.remoteId,true,action.target==='basalam'?action.accountKey:'');
+      if((result as any)?.archived)archived++;else deleted++;
+    }catch(error){failed.push({title:action.title,account:action.accountName,id:action.remoteId,error:error instanceof Error?error.message:String(error)})}
+  }
+  return{ok:failed.length===0&&failures.length===0,dryRun:false,keep,planned:actions.length,processed:capped.length,
+    deleted,archived,accounts:accounts.length,byDestination,failures,failed:failed.slice(0,20),actions:capped.slice(0,200)};
 }
 async function basalamUpdateShop(accountKey:string,id:number,payload:any){
   const c=(await loadConnections()).basalam;

@@ -1,5 +1,5 @@
 import { normalizePersianText } from '../worker-src/utils.js';
-import { byAccount, byProfile, planActions, reconcileAccount, summarize } from '../worker-src/recon-core.js';
+import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, summarize } from '../worker-src/recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from '../worker-src/recon-core.js';
 import { loadConnections } from './connections.js';
 import { getProduct, getProfile, getState, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
@@ -125,6 +125,40 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
     rows: after.rows };
 }
 
+/**
+ * Request 36b — duplicate cleanup across EVERY destination (Node runtime twin of
+ * the Worker implementation). Groups destination listings by their «(کد ایکس)»-
+ * stripped title and plans deletion of all but the most expensive copy.
+ * Local scraped products are never touched.
+ */
+export async function destinationDuplicates(apply = false, limit = 200, keep: 'expensive' | 'cheapest' = 'expensive', accountKey = '') {
+  const accounts = (await reconAccounts()).filter(a => !accountKey || String(a.accountKey) === String(accountKey));
+  const settings = await getState<any>('settings', {});
+  const suffixFormats = (settings as any)?.dedup?.suffixFormats || '';
+  const actions: any[] = [], failures: any[] = [];
+  for (const account of accounts) {
+    try {
+      const remotes = await remoteForAccount(account);
+      actions.push(...planDuplicateDeletions(remotes, account, suffixFormats, keep));
+    } catch (error) { failures.push({ account: account.name, error: error instanceof Error ? error.message : String(error) }); }
+  }
+  const byDestination = accounts.map(account => ({
+    account: account.name, accountKey: account.accountKey, target: account.target,
+    duplicates: actions.filter(a => String(a.accountKey) === String(account.accountKey) && a.target === account.target).length,
+  }));
+  const capped = actions.slice(0, Math.max(1, Math.min(1000, Number(limit) || 200)));
+  if (!apply) return { ok: failures.length === 0, dryRun: true, keep, planned: actions.length, willDelete: capped.length,
+    accounts: accounts.length, byDestination, failures, actions: capped.slice(0, 200) };
+  let deleted = 0, archived = 0; const failed: any[] = [];
+  for (const action of capped) {
+    try {
+      const result = await destinationDelete(action.target, action.remoteId, true, action.target === 'basalam' ? action.accountKey : '');
+      if ((result as any)?.archived) archived++; else deleted++;
+    } catch (error) { failed.push({ title: action.title, account: action.accountName, id: action.remoteId, error: error instanceof Error ? error.message : String(error) }); }
+  }
+  return { ok: failed.length === 0 && failures.length === 0, dryRun: false, keep, planned: actions.length, processed: capped.length,
+    deleted, archived, accounts: accounts.length, byDestination, failures, failed: failed.slice(0, 20), actions: capped.slice(0, 200) };
+}
 async function basalamUpdateShop(accountKey: string, id: number, payload: any) {
   const c = (await loadConnections()).basalam;
   const shop = String(accountKey) === String(c.vendorId) ? { token: c.token, vendorId: String(c.vendorId) } : (c.shops || []).find(s => String(s.vendorId) === String(accountKey));
@@ -155,7 +189,19 @@ export async function listDestinationProducts(target:'woo'|'basalam'):Promise<Re
 export async function destinationOverview(target:'woo'|'basalam'){const items=await listDestinationProducts(target),statuses:Record<string,number>={};for(const item of items)statuses[item.status]=(statuses[item.status]||0)+1;return{target,total:items.length,statuses,withoutImage:items.filter(x=>!x.images.length).length,withoutSku:items.filter(x=>!x.sku).length}}
 export async function findDestinationDuplicates(target:'woo'|'basalam'){const items=await listDestinationProducts(target),groups=new Map<string,Remote[]>();for(const item of items){const key=norm(item.name);if(!key)continue;const rows=groups.get(key)||[];rows.push(item);groups.set(key,rows)}return[...groups.entries()].filter(([,rows])=>rows.length>1).map(([title,rows])=>({title,count:rows.length,items:rows.map(x=>({id:x.id,name:x.name,status:x.status,sku:x.sku}))}))}
 export async function destinationChangeStatus(target:'woo'|'basalam',id:number,status:string){if(target==='woo')await wooUpdate(id,{status});else await basalamUpdate(id,{status});return{ok:true,id,status}}
-export async function destinationDelete(target:'woo'|'basalam',id:number,force=false){const c=await loadConnections();if(target==='woo'){const x=c.woo,auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,r=await safeFetch(`${x.url}/wp-json/wc/v3/products/${id}?force=${force?'true':'false'}`,{method:'DELETE',headers:{authorization:auth}},2_000_000);if(!r.ok)throw Error(`Woo delete HTTP ${r.status}`)}else{const x=c.basalam,r=await safeFetch(`${x.api}/vendors/${encodeURIComponent(x.vendorId)}/products/${id}`,{method:'DELETE',headers:{authorization:`Bearer ${x.token}`}},2_000_000);if(!r.ok)throw Error(`Basalam delete HTTP ${r.status}`)}return{ok:true,id,deleted:true}}
+export async function destinationDelete(target:'woo'|'basalam',id:number,force=false,shopId=''){
+  const c=await loadConnections();
+  if(target==='woo'){
+    const x=c.woo,auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`;
+    const r=await safeFetch(`${x.url}/wp-json/wc/v3/products/${id}?force=${force?'true':'false'}`,{method:'DELETE',headers:{authorization:auth}},2_000_000);
+    if(!r.ok)throw Error(`Woo delete HTTP ${r.status}`);
+    return{ok:true,id,deleted:true,force};
+  }
+  // Basalam has no permanent DELETE endpoint; archive status 4184 is the
+  // reversible equivalent, and it must target the stall that owns the product.
+  await basalamUpdateShop(shopId||String(c.basalam.vendorId),id,{status:4184});
+  return{ok:true,id,deleted:false,archived:true,status:4184,shopId:shopId||'default',message:'باسلام حذف دائمی ندارد؛ محصول با وضعیت ۴۱۸۴ بایگانی شد.'};
+}
 async function remoteProducts(target:'woo'|'basalam'):Promise<Remote[]>{return listDestinationProducts(target)}
 async function wooProducts(){const c=(await loadConnections()).woo;if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');const auth=`Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`,out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.url}/wp-json/wc/v3/products?per_page=100&page=${page}&status=any`,{headers:{authorization:auth,accept:'application/json'}},10_000_000),data=await r.json() as any[];if(!r.ok)throw Error(`Woo HTTP ${r.status}`);for(const x of data)out.push({id:Number(x.id),name:String(x.name||''),sku:String(x.sku||''),images:x.images||[],status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}
 async function basalamProducts(){const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products?per_page=100&page=${page}`,{headers:{authorization:`Bearer ${c.token}`,accept:'application/json'}},10_000_000),body=await r.json() as any;if(!r.ok)throw Error(`Basalam HTTP ${r.status}`);const data=body.data||body.products||body.results||body.items||[];for(const x of data)out.push({id:Number(x.id),name:String(x.name||x.title||''),sku:String(x.sku||''),images:x.photos||x.images||(x.photo?[x.photo]:[]),status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}

@@ -77,3 +77,33 @@ test('unknown keep values normalize to newest',()=>{
   assert.equal(normalizeDedupKeep('anything'),'newest');
   assert.equal(normalizeDedupKeep('cheapest'),'cheapest');
 });
+
+// --- Request 36b: the duplicate remover must recognise the GENERIC «(کد ایکس)»
+// suffix, not only the configured formats. It used to strip configured formats
+// only, so a shop full of «کیف چرم (کد 11)» / «(کد 12)» titles produced zero
+// groups and the cleanup silently did nothing.
+test('dedupKey strips the generic (کد ایکس) suffix as well as configured ones',()=>{
+  const patterns=suffixPatterns(['(کد:x)','#x']);
+  const a=dedupKey('کیف چرم (کد 11)','default',patterns);
+  const b=dedupKey('کیف چرم (کد 12)','default',patterns);
+  const c=dedupKey('کیف چرم (code B2)','default',patterns);
+  assert.equal(a,b,'numeric generic code suffixes must collapse to one key');
+  assert.equal(a,c,'latin generic code suffixes must collapse to the same key');
+  // A title without any code suffix stays distinct.
+  assert.notEqual(a,dedupKey('کفش راحتی (کد 21)','default',patterns));
+  // Shop scoping still applies.
+  assert.notEqual(a,dedupKey('کیف چرم (کد 11)','200',patterns));
+});
+
+test('buildDedupGroups keeps the most expensive generic-suffix duplicate',()=>{
+  const rows=[
+    {id:101,shopId:'default',name:'کیف چرم (کد 11)',price:100000,date:'',status:'publish',sku:'a'},
+    {id:102,shopId:'default',name:'کیف چرم (کد 12)',price:250000,date:'',status:'publish',sku:'b'},
+    {id:103,shopId:'default',name:'کیف چرم (کد 13)',price:180000,date:'',status:'publish',sku:'c'},
+    {id:104,shopId:'default',name:'کفش راحتی (کد 21)',price:90000,date:'',status:'publish',sku:'d'},
+  ];
+  const groups=buildDedupGroups(rows,'expensive',['(کد:x)','#x']);
+  assert.equal(groups.length,1,'the three کیف چرم listings form exactly one group');
+  assert.equal(groups[0].keep.id,102);
+  assert.deepEqual(groups[0].remove.map(x=>x.id).sort((x,y)=>x-y),[101,103]);
+});

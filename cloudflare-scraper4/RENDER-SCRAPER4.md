@@ -181,3 +181,33 @@ npm start
 - **مغایرت‌گیری و هماهنگ‌سازی فقط برای محصولات دارای پسوند «(کد ایکس)»:** ایکس هر حرف یا عددی می‌تواند باشد — «(کد ۱۲)»، «(کد A5)»، «(کد:ب۳)» و «#77» همگی معتبرند. عنوان‌های بدون این پسوند عنوانِ پایه/پیش‌نویس در نظر گرفته می‌شوند و نه مقایسه و نه به ووکامرس/باسلام ارسال می‌شوند. تعداد نادیده‌گرفته‌شده‌ها زیر جدول («… بدون پسوند کد») نمایش داده می‌شود. فرمت‌ها از همان تنظیم «فرمت پسوند کد» در منوی حذف تکراری‌ها خوانده می‌شود.
 - **ستون «تکراری»:** تعداد محصولاتی که با نادیده‌گرفتن پسوند کد عنوان یکسان دارند؛ گروه‌های بزرگ‌تر از یک با رنگ زرد مشخص می‌شوند.
 - **جدول تست مدل‌های هوش مصنوعی با ریفرش صفحه باز نمی‌شود** و فقط پس از پایان اجرایی که همان تب دیده، ظاهر می‌گردد.
+
+## 1.101.0 — Basalam multi-stall sending, clickable counters, destination duplicate cleanup
+
+- **Every Basalam stall really receives the product.** The multi-stall loop existed, but the whole
+  loop sat inside one `try/catch`: if stall 2 of 3 failed, the send was abandoned and the success
+  already achieved on stall 1 was never reported. Each stall is now isolated and reported on its own
+  line, so one bad token or one rejected category no longer cancels the rest.
+- **The official Basalam SDK is now actually used.** Basalam publishes an SDK for **Python only**
+  (`pip install basalam-sdk`); no npm package exists, so the old "SDK first" branch always failed and
+  silently fell back to REST. Sending now runs the real SDK through `scripts/basalam-sdk-bridge.py`
+  (spawned as `python3`) and falls back to the REST API automatically when Python or the SDK is
+  missing. Override the interpreter with `BASALAM_PYTHON`, and the timeout with
+  `BASALAM_SDK_TIMEOUT_MS` (default 45000).
+- **Counters are clickable and now carry real detail.** Clicking a job counter lists the product
+  name, its price and the destination/stall; clicking the error counter shows the full error text.
+  The Node runtime previously recorded no per-product detail at all, so this popup was always empty
+  outside Cloudflare — both runtimes now log identically (and keep 1500 entries instead of 200).
+- **Duplicate cleanup across every destination.** Reconciliation gained
+  «پیش‌نمایش تکراری‌های مقصد» and «حذف تکراری‌ها در همهٔ مقصدها». Listings whose titles are identical
+  once the «(کد ایکس)» suffix is stripped form a duplicate group; by default the **most expensive**
+  copy is kept and the rest are removed (WooCommerce deletes, Basalam archives with status 4184,
+  because its API has no permanent delete). Preview first, then confirm. Locally scraped products are
+  never touched. `POST /api/maintenance/duplicates` `{confirm:'APPLY'|'', keep:'expensive'|'cheapest', accountKey?, limit}`.
+- **Fixed: the duplicate grouper ignored generic code suffixes.** `dedupKey` stripped only the
+  *configured* formats, so a shop full of «کیف چرم (کد 11)» / «(کد 12)» titles produced zero groups
+  and every duplicate cleanup silently did nothing. It now uses the same stripper reconciliation uses.
+- **Fixed: the whole server-side duplicate remover was missing from the Node runtime.** All four
+  `dedup-runs` routes existed only on Cloudflare, so those buttons were dead on Termux, VPS, Render
+  and Codespaces. `render-src/dedup-run.ts` implements them in-process with the same public shape.
+- Termux setup now installs the SDK: `pip install basalam-sdk`.
