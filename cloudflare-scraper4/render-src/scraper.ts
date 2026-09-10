@@ -63,8 +63,8 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
 
 export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number};
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
-const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio','htmlrewriter']);
-const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'cheerio','playwright','puppeteer','crawlee_playwright'];
+const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
+const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','cheerio','playwright','puppeteer','crawlee_playwright'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};if(!autoFirst&&requested!=='auto'){add(requested);return out}if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);if(requested!=='auto')add(requested);else for(const engine of RENDER_AUTO_ENGINES)add(engine);return out}
 
 export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true): Promise<ScrapeListResult> {

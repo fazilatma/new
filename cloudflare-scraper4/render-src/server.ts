@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiProviders, getLeaderboard, recordVote, testAllModels } from './ai.js';
+import { aiCall, aiProviders, controlAiTestRun, getCurrentAiRun, getLeaderboard, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.89.0'; } catch { return process.env.npm_package_version || '1.89.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.90.0'; } catch { return process.env.npm_package_version || '1.90.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -185,10 +185,10 @@ app.get('/api/activity', async c => {
 });
 app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: [] }));
 app.get('/api/ai/test-results', async c => c.json({ ok: true, results: [], leaderboard: await getLeaderboard() }));
-app.get('/api/ai/test-runs/current', c => c.json({ ok: true, run: null }));
-app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; return c.json({ ok: true, results: await testAllModels(String(body.prompt || 'Reply with exactly: SCRAPER4_OK'), Boolean(body.onlyCandidates)) }); });
-app.post('/api/ai/test-runs/control', c => c.json({ ok: true, status: 'noop' }));
-app.post('/api/ai/test-runs/reset', c => c.json({ ok: true }));
+app.get('/api/ai/test-runs/current', async c => c.json({ ok: true, run: await getCurrentAiRun() }));
+app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; const { run, existing } = await startAiTestRun(body); return c.json({ ok: true, run, existing, results: run.result.results }); });
+app.post('/api/ai/test-runs/control', async c => { const body = await c.req.json().catch(() => ({})) as any; const run = await controlAiTestRun(String(body.action || '')); return c.json({ ok: true, status: run?.status || 'idle', run }); });
+app.post('/api/ai/test-runs/reset', async c => { await resetAiTestRun(); return c.json({ ok: true }); });
 app.post('/api/ai/test-runs/retry', c => c.json({ ok: false, error: 'Retry individual AI test parts is only available on Cloudflare Worker runtime.' }, 501));
 app.post('/api/ai/chat', async c => { const body = await c.req.json().catch(() => ({})) as any, providers = await aiProviders(); const key = String(body.providerId || body.provider || '').split('::')[0]; const provider = providers.find((p: any) => p.id === key) || providers[0]; if (!provider) return c.json({ ok: false, error: 'No AI provider configured' }, 400); const messages = Array.isArray(body.messages) ? body.messages : []; const prompt = messages.map((m: any) => `${m.role || 'user'}: ${m.content || ''}`).join('\n') || String(body.prompt || 'Reply with exactly: SCRAPER4_OK'); return c.json(await aiCall(provider, String(body.model || provider.models?.[0] || ''), prompt)); });
 app.get('/api/agent/templates', c => c.json({ ok: true, templates: [] }));

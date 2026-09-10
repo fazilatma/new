@@ -692,3 +692,100 @@ test('D1 usage is measured from real query meta, not guessed', async () => {
   assert.equal(ud.rowsRead, 250, 'a failed flush must not lose or double-count the delta');
   assert.equal(ud.rowsWritten, 25);
 });
+
+test('Node auto mode tries htmlrewriter before browser-only engines', async () => {
+  // A profile that extracted fine on the Cloudflare Worker returned zero
+  // products on Termux. The Worker's auto chain ends with htmlrewriter, but the
+  // Node chain omitted it and fell through to playwright/puppeteer, which have
+  // no build on Android -- so auto found nothing. Execute the REAL engineOrder
+  // from the shipped source so gutting it cannot leave this test green.
+  const src = await readProjectFile('render-src/scraper.ts');
+  const head = src.indexOf('const RENDER_DISCOVERY_ENGINES');
+  const seg = src.slice(head, src.indexOf('\n', src.indexOf('function engineOrder')));
+  const body = seg
+    .replace(/:ExtractionEngine\[\]/g, '')
+    .replace(/<ExtractionEngine>/g, '')
+    .replace(/engine\?:ExtractionEngine/g, 'engine')
+    .replace(/requested:ExtractionEngine/g, 'requested')
+    .replace(/master\?:ExtractionEngine/g, 'master');
+  const engineOrder = new Function(`${body}; return engineOrder;`)();
+
+  const auto = engineOrder('auto');
+  assert.ok(auto.includes('htmlrewriter'), 'auto mode must be able to reach the htmlrewriter engine');
+  for (const browser of ['playwright', 'puppeteer', 'crawlee_playwright']) {
+    assert.ok(
+      auto.indexOf('htmlrewriter') < auto.indexOf(browser),
+      `htmlrewriter must be tried before ${browser}, which cannot run on Android`
+    );
+  }
+
+  // The Worker's own order is the reference: every engine it tries in auto mode
+  // must be tried by Node too, in the same relative order.
+  const workerSrc = await readProjectFile('worker-src/scraper.ts');
+  const workerAuto = workerSrc.slice(workerSrc.indexOf('const WORKER_AUTO_ENGINES'), workerSrc.indexOf('\n', workerSrc.indexOf('const WORKER_AUTO_ENGINES')));
+  assert.match(workerAuto, /'htmlrewriter'/, 'guard: the Worker auto chain still ends with htmlrewriter');
+  const workerOrder = ['jsonld', 'next_data', 'script_json', 'heuristic', 'metadata', 'htmlrewriter'];
+  assert.deepEqual(auto.slice(0, workerOrder.length), workerOrder, 'Node auto must mirror the Worker chain before adding local-only engines');
+
+  // A profile whose saved master engine is htmlrewriter must try it FIRST,
+  // instead of having it discarded as a manual-only engine.
+  assert.equal(engineOrder('auto', 'htmlrewriter')[0], 'htmlrewriter', 'a saved htmlrewriter master must lead the queue');
+});
+
+test('the Node runtime reports a real AI test run instead of a queued stub', async () => {
+  // On Termux the AI test never started: the dashboard polls
+  // /api/ai/test-runs/current and renders nothing when run is null, so the UI
+  // sat on "queued on server" forever even though models were being called.
+  const server = await readProjectFile('render-src/server.ts');
+  assert.doesNotMatch(
+    server,
+    /test-runs\/current',\s*c\s*=>\s*c\.json\(\{\s*ok:\s*true,\s*run:\s*null\s*\}\)/,
+    'the current-run endpoint must not be a hardcoded null stub'
+  );
+  assert.match(server, /test-runs\/current'[\s\S]{0,120}getCurrentAiRun\(\)/, 'current must return the real run');
+  assert.match(server, /startAiTestRun\(body\)/, 'starting a test must create a run');
+  const startRoute = server.slice(server.indexOf("app.post('/api/ai/test-runs',"), server.indexOf("app.post('/api/ai/test-runs/control'"));
+  assert.match(startRoute, /c\.json\(\{[^)]*?\brun\s*[,:}]/, 'the start response body itself must carry the run the dashboard renders');
+  assert.match(server, /controlAiTestRun\(/, 'stop/resume must reach the run');
+
+  const ai = await readProjectFile('render-src/ai.ts');
+  assert.match(ai, /status:'queued'/, 'a run starts queued, like the Worker');
+  assert.match(ai, /aiRun\.status='running'/, 'the run must move to running so progress is visible');
+  assert.match(ai, /aiRun\.status='done'/, 'the run must reach a terminal done state');
+  assert.match(ai, /aiRun\.result\.nextCursor=aiRun\.result\.results\.length/, 'progress must be derived from collected results so resume does not under-report');
+  assert.match(ai, /if\(aiRun\.stopRequested\)/, 'the loop must honour a stop request');
+
+  // The run object must expose the exact fields the shared dashboard reads.
+  for (const field of ['runId', 'total', 'nextCursor', 'results']) {
+    assert.ok(ai.includes(field), `the run result must expose ${field} for the dashboard`);
+  }
+});
+
+test('auto-update rebuilds and restarts the scraper, not just the deployer', async () => {
+  // On Termux the deployer would pull a new version, restart itself, and leave
+  // the scraper dead: restartUiSoon() calls stopScraper() but nothing brought it
+  // back, so the user had to press "Build & start" by hand. The user should only
+  // have to refresh the scraper page.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+
+  const autoStart = deployer.indexOf('function autoUpdateFromGit(');
+  const auto = deployer.slice(autoStart, deployer.indexOf('\n}', autoStart) + 2);
+  assert.ok(auto.includes('updateFromGit('), 'guard: the auto-update body was located');
+  assert.match(auto, /restartUiSoon\(\{\s*restartScraper:/, 'a successful auto-update must ask for the scraper to come back');
+
+  // Execute the REAL scraperWasRunning() so gutting it cannot leave this green.
+  const probe = deployer.slice(deployer.indexOf('function scraperWasRunning()'), deployer.indexOf('\n', deployer.indexOf('function scraperWasRunning()')));
+  const wasRunning = state => new Function('scraper', `${probe}; return scraperWasRunning();`)(state);
+  assert.equal(wasRunning({ child: {}, exitCode: null }), true, 'a live scraper must be restarted');
+  assert.equal(wasRunning({ child: {}, exitCode: 0 }), false, 'an exited scraper must not be resurrected');
+  assert.equal(wasRunning(null), false, 'no scraper means nothing to restart');
+
+  // The successor process must actually be told to start it.
+  const restart = deployer.slice(deployer.indexOf('function restartUiSoon('), deployer.indexOf('function runJob('));
+  assert.match(restart, /restartScraper\s*=\s*false/, 'restarting the scraper must be opt-in, so a manual UI restart is unchanged');
+  assert.match(restart, /restartScraper\s*\?\s*\{\s*LOCAL_SCRAPER_AUTOSTART:\s*'true'\s*\}/, 'the successor deployer must be told to autostart the scraper');
+
+  // The scraper's start command must compile the new code, otherwise a restart
+  // would happily serve the previous build.
+  assert.match(deployer, /scraperCommand\s*=[^\n]*render:build/, 'the scraper start command must run render:build so the new version is built');
+});

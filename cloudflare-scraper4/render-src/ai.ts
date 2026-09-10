@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { assertPublicUrl, privateIp, safeFetch } from './network.js';
 import { loadConnections } from './connections.js';
@@ -49,6 +50,104 @@ export function aiConfigProblem(provider:Provider,model:string):string{
 
 export async function aiCall(provider:Provider,model:string,prompt:string){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:200,temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
 export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),results});return results}
+/**
+ * Server-side AI test run for the Node runtime.
+ *
+ * The dashboard is shared with the Worker, which runs model tests as a
+ * background "run" and polls /api/ai/test-runs/current for progress. The Node
+ * build had no such consumer: it ran every model inside one HTTP request and
+ * the poll endpoint always answered run:null, so the UI sat on "queued" (در صف
+ * سرور) forever and never showed a single model -- even though the models were
+ * in fact being called. This gives Node the same run object, driven by a plain
+ * in-process async loop instead of a Cloudflare queue.
+ */
+export type AiTestRunState = {
+  id:string; kind:'ai-test'; status:'queued'|'running'|'done'|'failed'|'paused'; phase:string;
+  stopRequested:boolean; createdAt:string; updatedAt:string; startedAt:string|null; finishedAt:string|null;
+  attempts:number; error:string|null; prompt:string; categoryTitle:string; onlyCandidates:boolean; delayMs:number;
+  cursor:number; currentStartedAt:string|null;
+  result:{ runId:string; total:number; nextCursor:number; results:any[] };
+};
+
+const AI_RUN_KEY='ai_test_run';
+let aiRun:AiTestRunState|null=null;
+let aiRunTask:Promise<void>|null=null;
+
+const nowIso=()=>new Date().toISOString();
+const sleepMs=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+
+async function persistAiRun(){ if(aiRun) { aiRun.updatedAt=nowIso(); try{ await setState(AI_RUN_KEY,aiRun);}catch{/* keep serving from memory */} } }
+
+export async function getCurrentAiRun():Promise<AiTestRunState|null>{
+  if(aiRun) return aiRun;
+  try{ const stored=await getState<AiTestRunState|null>(AI_RUN_KEY,null); if(stored&&stored.id){ aiRun=stored; return aiRun; } }catch{/* nothing stored yet */}
+  return null;
+}
+
+/** Start a run, or return the live one so a double click cannot fork two runs. */
+export async function startAiTestRun(input:{prompt?:string;categoryTitle?:string;onlyCandidates?:boolean;delayMs?:number}):Promise<{run:AiTestRunState;existing:boolean}>{
+  const current=await getCurrentAiRun();
+  if(current&&(current.status==='queued'||current.status==='running')) return {run:current,existing:true};
+  const id=randomUUID(),timestamp=nowIso();
+  const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates);
+  const onlyCandidates=Boolean(input?.onlyCandidates);
+  const tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));
+  aiRun={ id,kind:'ai-test',status:'queued',phase:'waiting',stopRequested:false,createdAt:timestamp,updatedAt:timestamp,
+    startedAt:null,finishedAt:null,attempts:0,error:null,
+    prompt:String(input?.prompt||'Reply with exactly: SCRAPER4_OK'),categoryTitle:String(input?.categoryTitle||'').trim(),
+    onlyCandidates,delayMs:Math.max(0,Math.min(60_000,Number(input?.delayMs)||0)),cursor:0,currentStartedAt:null,
+    result:{runId:id,total:tasks.length,nextCursor:0,results:[]} };
+  await persistAiRun();
+  // Deliberately not awaited: the HTTP response returns immediately so the UI
+  // can start polling, exactly like the Worker's queue-backed behaviour.
+  aiRunTask=runAiTests(tasks).catch(async error=>{
+    if(aiRun){ aiRun.status='failed'; aiRun.error=error instanceof Error?error.message:String(error); aiRun.finishedAt=nowIso(); await persistAiRun(); }
+  });
+  return {run:aiRun,existing:false};
+}
+
+async function runAiTests(tasks:Array<{p:Provider;model:string;key:string}>):Promise<void>{
+  if(!aiRun) return;
+  aiRun.status='running'; aiRun.phase='testing'; aiRun.startedAt=nowIso(); await persistAiRun();
+  for(let index=0;index<tasks.length;index++){
+    if(!aiRun) return;
+    if(aiRun.stopRequested){ aiRun.status='paused'; aiRun.phase='stopped'; await persistAiRun(); return; }
+    const task=tasks[index];
+    aiRun.cursor=aiRun.result.results.length; aiRun.currentStartedAt=nowIso();
+    aiRun.phase=`testing ${task.p.id}::${task.model}`;
+    await persistAiRun();
+    try{ aiRun.result.results.push({...await aiCall(task.p,task.model,aiRun.prompt),key:task.key}); }
+    catch(error){ aiRun.result.results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)}); }
+    aiRun.result.nextCursor=aiRun.result.results.length;
+    await persistAiRun();
+    if(aiRun.delayMs&&index<tasks.length-1) await sleepMs(aiRun.delayMs);
+  }
+  if(!aiRun) return;
+  aiRun.status='done'; aiRun.phase='finished'; aiRun.currentStartedAt=null; aiRun.finishedAt=nowIso();
+  await persistAiRun();
+  try{ await setState('ai_test_results',{at:nowIso(),results:aiRun.result.results}); }catch{/* results still live on the run */}
+}
+
+export async function controlAiTestRun(action:string):Promise<AiTestRunState|null>{
+  const run=await getCurrentAiRun(); if(!run) return null;
+  if(action==='stop'){ run.stopRequested=true; }
+  else if(action==='resume'&&run.status==='paused'){
+    run.stopRequested=false;
+    const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates);
+    const all=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!run.onlyCandidates||wanted.has(x.key));
+    const done=new Set(run.result.results.map((r:any)=>r.key));
+    aiRun=run; aiRunTask=runAiTests(all.filter(t=>!done.has(t.key))).catch(()=>{});
+  }
+  await persistAiRun();
+  return run;
+}
+
+export async function resetAiTestRun():Promise<void>{
+  if(aiRun) aiRun.stopRequested=true;
+  aiRun=null; aiRunTask=null;
+  try{ await setState(AI_RUN_KEY,null); }catch{/* nothing to clear */}
+}
+
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}
 export async function getLeaderboard(){return leaderboard(await getState<any>('ai_votes',{scores:{},history:[]}))}
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
