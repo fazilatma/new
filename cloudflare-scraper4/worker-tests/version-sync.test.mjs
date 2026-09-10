@@ -582,3 +582,29 @@ test('the deployer redirects /scraper to /scraper/ so relative URLs resolve', as
   assert.match(deployer, /url\.pathname === '\/scraper'\)\s*\{\s*res\.writeHead\(302/, 'must redirect to the trailing slash');
   assert.match(deployer, /location: '\/scraper\/' \+ url\.search/, 'the query string must survive the redirect');
 });
+
+test('the Node vault generates its own key instead of demanding ADMIN_TOKEN', async () => {
+  // On Termux ADMIN_TOKEN is normally unset, which the API layer treats as
+  // "no auth required" -- so reads worked but every save threw, and importing
+  // providers failed with a message telling the user to go define a variable.
+  const vault = await readProjectFile('render-src/vault.ts');
+
+  // The blocking throw must be gone.
+  assert.ok(!/ابتدا ADMIN_TOKEN را در/.test(vault), 'saving must not require ADMIN_TOKEN');
+  assert.match(vault, /return config\.adminToken \|\| localVaultKey\(\);/, 'ADMIN_TOKEN still wins when set');
+
+  // The key must be persisted, or every restart would orphan saved credentials.
+  assert.match(vault, /readFileSync\(VAULT_KEY_FILE/, 'an existing key must be reused');
+  assert.match(vault, /writeFileSync\(VAULT_KEY_FILE[^)]*mode: 0o600/, 'the key file must be owner-only');
+  assert.match(vault, /data\/vault\.key/, 'the key belongs in the git-ignored data directory');
+
+  // data/ must stay ignored: this file decrypts every stored credential.
+  const ignore = await readProjectFile('.gitignore');
+  assert.match(ignore, /^data\/$/m, 'data/ must be git-ignored so the vault key is never committed');
+
+  // Auto-generating an ADMIN_TOKEN would silently switch API auth on and lock
+  // the user out; the generated secret must only ever be the vault password.
+  const server = await readProjectFile('render-src/server.ts');
+  assert.match(server, /if \(!config\.adminToken\) return next\(\);/, 'auth behaviour must be unchanged');
+  assert.ok(!/localVaultKey/.test(server), 'the vault key must never be used as an API credential');
+});

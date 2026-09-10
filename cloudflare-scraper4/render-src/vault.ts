@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
-import { config, runtimeEnvironment } from './config.js';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { config } from './config.js';
 
 export type ConnectionVault = {
   woo: { url: string; key: string; secret: string; categoryId: number };
@@ -19,9 +21,37 @@ export const emptyConnections = (): ConnectionVault => ({
   notifications: { url: '', token: '', chatId: '', baleToken:'', baleChatId:'', rubikaToken:'', rubikaChatId:'' }
 });
 
+/**
+ * The vault needs an encryption password, and ADMIN_TOKEN was doing double duty
+ * as both that password and the API auth token. On a local runtime (Termux,
+ * Windows, a VPS) ADMIN_TOKEN is usually unset -- which the API layer treats as
+ * "no auth required" -- so reads worked but every save threw, and importing
+ * providers failed with a message telling the user to go define a variable.
+ *
+ * Auto-generating an ADMIN_TOKEN would be wrong: that would silently turn on
+ * API authentication and lock the user out of their own dashboard. So we
+ * generate a *vault key only*, persist it under the git-ignored data/
+ * directory with owner-only permissions, and leave API auth exactly as it was.
+ * If ADMIN_TOKEN is set it still wins, so existing installs decrypt unchanged.
+ */
+const VAULT_KEY_FILE = resolve(process.env.VAULT_KEY_FILE || 'data/vault.key');
+
+function localVaultKey(): string {
+  try {
+    const existing = readFileSync(VAULT_KEY_FILE, 'utf8').trim();
+    if (existing) return existing;
+  } catch { /* not created yet */ }
+  const generated = randomBytes(32).toString('hex');
+  mkdirSync(dirname(VAULT_KEY_FILE), { recursive: true });
+  // Owner-only: this key decrypts every stored API credential.
+  writeFileSync(VAULT_KEY_FILE, generated + '\n', { mode: 0o600 });
+  try { chmodSync(VAULT_KEY_FILE, 0o600); } catch { /* filesystem may not support it */ }
+  console.warn(`Generated a local vault key at ${VAULT_KEY_FILE} (no ADMIN_TOKEN set). Keep this file; deleting it makes saved credentials unreadable.`);
+  return generated;
+}
+
 function password(): string {
-  if (!config.adminToken) throw new Error(`برای ذخیره امن اطلاعات اتصال، ابتدا ADMIN_TOKEN را در ${runtimeEnvironment.tokenHint} تعریف کنید.`);
-  return config.adminToken;
+  return config.adminToken || localVaultKey();
 }
 
 export function encryptVault(value: ConnectionVault): Envelope {
@@ -40,7 +70,7 @@ export function decryptVault(raw: unknown): ConnectionVault {
     const decipher=createDecipheriv('aes-256-gcm',key,iv);decipher.setAuthTag(Buffer.from(envelope.tag,'base64'));
     const value=JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext,'base64')),decipher.final()]).toString('utf8'));
     return mergeConnections(emptyConnections(),value);
-  } catch { throw new Error('بازکردن اطلاعات اتصال ممکن نشد؛ آیا ADMIN_TOKEN تغییر کرده است؟'); }
+  } catch { throw new Error(`بازکردن اطلاعات اتصال ممکن نشد. اگر ADMIN_TOKEN را تغییر داده‌اید یا فایل ${VAULT_KEY_FILE} پاک شده است، اطلاعات ذخیره‌شده با کلید قبلی رمزگشایی نمی‌شوند و باید دوباره وارد شوند.`); }
 }
 
 export function environmentFallback(): ConnectionVault {
