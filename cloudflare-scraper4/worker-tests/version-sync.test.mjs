@@ -275,7 +275,8 @@ test('sync-version keeps the lockfile in step and touches nothing else in it', a
 test('auto-update ignores lockfile-only churn but still protects real local work', async () => {
   const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
   assert.match(deployer, /const GENERATED = /, 'the updater must detect generated-file churn');
-  assert.match(deployer, /runSync\('git', \['checkout', '--', \.\.\.generated\]\)/, 'it must restore generated files at their real repo-relative paths, not bare filenames');
+  assert.match(deployer, /\['checkout', '--', \.\.\.generated\.map\(path => `:\/\$\{path\}`\)\]/,
+    'it must restore generated files with repo-root-relative pathspecs, since git runs in the project subdirectory');
 
   // Exercise the real predicate against real `git status --porcelain` output.
   const GENERATED = /(?:^|\/)(?:package-lock\.json|scraper4\.worker\.js|scraper4\.ts)$/;
