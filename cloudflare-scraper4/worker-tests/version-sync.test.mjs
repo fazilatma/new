@@ -545,3 +545,40 @@ test('user-facing messages do not hardcode Render on other runtimes', async () =
   const workerDb = await readProjectFile('worker-src/db.ts');
   assert.match(workerDb, /scraper4-backup/, 'the Worker must accept a backup made by the Node runtime');
 });
+
+test('dashboard URLs are relative so the deployer proxy at /scraper/ works', async () => {
+  // Buttons were dead at http://localhost:8790/scraper/ but fine at :3000.
+  // The page loaded, then every fetch('/api/...') resolved against the ORIGIN
+  // root instead of /scraper/, hitting the deployer's own auth -> 401. The
+  // deployer's Referer allowlist could not save it: the scraper sends
+  // referrer-policy: no-referrer, so browsers send no Referer at all.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+
+  // Execute the REAL helper from the shipped source.
+  const seg = dash.slice(dash.indexOf('const APP_BASE='), dash.indexOf('\n', dash.indexOf('const U=p=>')));
+  const at = pathname => new Function('location', `${seg}; return U;`)({ pathname });
+  assert.equal(at('/scraper/')('/api/profiles'), '/scraper/api/profiles', 'mounted under the proxy');
+  assert.equal(at('/')('/api/profiles'), '/api/profiles', 'port 3000 must be unchanged');
+  assert.equal(at('/scraper/')('/health'), '/scraper/health');
+  assert.equal(at('/scraper/')('/visual?context=list'), '/scraper/visual?context=list');
+  // Absolute and relative inputs must survive untouched.
+  assert.equal(at('/scraper/')('https://x.test/a'), 'https://x.test/a', 'external URLs stay absolute');
+
+  // api() funnels 100+ call sites, so it is the one that must be wrapped.
+  assert.match(dash, /async function api\(path,options=\{\}\)\{const response=await fetch\(U\(path\)/, 'api() must route through U()');
+  // The bootstrap script tag must be relative too, or nothing loads at all.
+  assert.ok(!/<script src="\/dashboard\.js"/.test(dash), 'the script tag must not be root-absolute');
+  assert.match(dash, /<script src="dashboard\.js" defer><\/script>/);
+  // Calls that bypass api() were the second half of the bug.
+  assert.ok(!/fetch\('\/health'\)/.test(dash), 'direct /health fetches must be wrapped');
+  assert.ok(!/fetch\('\/api\//.test(dash), 'no unwrapped absolute API fetch may remain');
+  assert.match(dash, /\$\('visualFrame'\)\.src=U\('\/visual\?context='\)/, 'the visual iframe must be wrapped');
+});
+
+test('the deployer redirects /scraper to /scraper/ so relative URLs resolve', async () => {
+  // At /scraper (no trailing slash) the browser's base is "/", so every
+  // relative URL would miss the proxy and 401 again.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  assert.match(deployer, /url\.pathname === '\/scraper'\)\s*\{\s*res\.writeHead\(302/, 'must redirect to the trailing slash');
+  assert.match(deployer, /location: '\/scraper\/' \+ url\.search/, 'the query string must survive the redirect');
+});
