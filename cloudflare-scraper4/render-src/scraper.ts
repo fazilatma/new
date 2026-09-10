@@ -233,3 +233,82 @@ export async function testSelector(url: string, selector: string, type = 'text')
   $(selector).slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
   return { count: $(selector).length, values };
 }
+
+/**
+ * Real extraction diagnostic for the Node runtime.
+ *
+ * The dashboard's "عیب‌یابی استخراج" button posts to
+ * /api/profiles/:id/extraction-diagnostic, which only ever existed on the
+ * Worker, so on Termux/Node every diagnostic click returned 404 even though the
+ * visual selector preview worked fine. This runs the SAME pipeline the real
+ * scrape uses (safeText -> scrapeListWithMeta -> scrapeDetails) so the report
+ * reflects what the scraper actually does, not a re-implementation.
+ */
+export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
+  const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
+  const stages: any[] = [], recommendations: string[] = [];
+  const add = (name: string, ok: boolean, summary: string, details: any = {}) => stages.push({ name, ok, summary, ...details });
+  if (!url) {
+    add('configuration', false, 'آدرس مبدأ خالی است.');
+    return { ok: false, profileId: profile.id, url, stages, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
+  }
+  let page: { text: string; url: string };
+  try {
+    page = await safeText(url, 4_000_000);
+    const bytes = Buffer.byteLength(page.text, 'utf8');
+    const title = normalize(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ') || '');
+    add('network', true, `صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`, { requestedUrl: url, finalUrl: page.url, bytes, title, runtime: 'node' });
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    add('network', false, text, { requestedUrl: url, runtime: 'node' });
+    recommendations.push(/ضدربات|چالش|challenge|403/i.test(text)
+      ? 'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی این دستگاه را در مبدأ مجاز کنید یا از روش اتصال غیرمستقیم استفاده کنید.'
+      : 'آدرس، دسترسی اینترنت دستگاه و تنظیمات روش اتصال مبدأ را بررسی کنید.');
+    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, recommendations };
+  }
+  let products: Product[] = [], usedEngine: ExtractionEngine | '' = '';
+  try {
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster);
+    products = result.products; usedEngine = result.usedEngine;
+    const complete = {
+      title: products.filter(x => x.title).length, price: products.filter(x => x.price > 0).length,
+      link: products.filter(x => x.url).length, image: products.filter(x => x.image).length, sku: products.filter(x => x.sku).length
+    };
+    add('list-extraction', products.length > 0,
+      products.length ? `${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.` : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
+      { count: products.length, usedEngine, complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+  } catch (error) {
+    add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
+  }
+  const evidence: Record<string, unknown> = {};
+  for (const field of ['container', 'title', 'price', 'link', 'image'] as const) {
+    const selector = String((profile.selectors as any)?.[field] || '').trim();
+    if (!selector) { evidence[field] = { ok: false, count: 0, error: 'سلکتور خالی است' }; continue; }
+    try {
+      const type = field === 'link' ? 'link' : field === 'image' ? 'image' : 'text';
+      const values = await extractSelectorValues(page.text, page.url, selector, type);
+      evidence[field] = { ok: values.length > 0, count: values.length, sample: values.slice(0, 3) };
+    } catch (error) { evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) }; }
+  }
+  const evidenceOk = ['container', 'title'].every(key => (evidence[key] as any)?.ok);
+  add('selector-evidence', evidenceOk, evidenceOk ? 'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.' : 'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.', { evidence });
+  let detail: any = null;
+  const candidate = products.find(product => product.url);
+  const detailKeys = ['shortDesc', 'longDesc', 'sku', 'category', 'tags', 'weight', 'stock', 'brand', 'detailImage', 'gallery', 'variations'];
+  const wantsDetail = detailKeys.some(key => String((profile.selectors as any)?.[key] || '').trim().length > 0);
+  if (candidate && wantsDetail) {
+    try {
+      const extracted = await scrapeDetails(candidate, profile.selectors);
+      detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || '').length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images?.length || 0, variations: extracted.variations?.slice(0, 20) };
+      add('detail-extraction', true, 'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.', { sample: detail });
+    } catch (error) { add('detail-extraction', false, error instanceof Error ? error.message : String(error), { url: candidate.url }); }
+  } else add('detail-extraction', true, candidate ? 'برای این پروفایل سلکتور جزئیات تنظیم نشده است.' : 'محصول دارای لینک برای تست جزئیات پیدا نشد.', { skipped: true });
+  if (!products.length) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
+  else {
+    if (!products.some(x => x.price > 0)) recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');
+    if (!products.some(x => x.url)) recommendations.push('لینک محصول پیدا نشده است؛ سلکتور لینک باید به عنصر a یا ویژگی href/data-url برسد.');
+    if (!products.some(x => x.image)) recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.');
+  }
+  const failed = stages.filter(stage => !stage.ok);
+  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail };
+}

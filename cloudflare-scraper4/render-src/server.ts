@@ -11,19 +11,20 @@ import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
-import { clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconTable, retire } from './maintenance.js';
-import { mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
+import { diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
+import { runDiagnostics } from './diagnostics.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.90.0'; } catch { return process.env.npm_package_version || '1.90.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.91.0'; } catch { return process.env.npm_package_version || '1.91.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -192,7 +193,9 @@ app.post('/api/ai/test-runs/reset', async c => { await resetAiTestRun(); return 
 app.post('/api/ai/test-runs/retry', c => c.json({ ok: false, error: 'Retry individual AI test parts is only available on Cloudflare Worker runtime.' }, 501));
 app.post('/api/ai/chat', async c => { const body = await c.req.json().catch(() => ({})) as any, providers = await aiProviders(); const key = String(body.providerId || body.provider || '').split('::')[0]; const provider = providers.find((p: any) => p.id === key) || providers[0]; if (!provider) return c.json({ ok: false, error: 'No AI provider configured' }, 400); const messages = Array.isArray(body.messages) ? body.messages : []; const prompt = messages.map((m: any) => `${m.role || 'user'}: ${m.content || ''}`).join('\n') || String(body.prompt || 'Reply with exactly: SCRAPER4_OK'); return c.json(await aiCall(provider, String(body.model || provider.models?.[0] || ''), prompt)); });
 app.get('/api/agent/templates', c => c.json({ ok: true, templates: [] }));
-app.get('/api/agent/tools', c => c.json({ ok: true, tools: [] }));
+app.get('/api/agent/tools', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
+app.get('/api/agent/tasks', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
+app.get('/api/ai/workers-catalog', async c => { const catalog = await import('../worker-src/workers-ai-catalog.js'); return c.json({ ok: true, groups: catalog.workersAiTaskGroups(), total: catalog.WORKERS_AI_MODELS.length }); });
 app.get('/api/agent/models', c => c.json({ ok: true, models: [] }));
 app.get('/api/agent/prompts', c => c.json({ ok: true, prompts: [] }));
 app.post('/api/agent/prompts', c => c.json({ ok: false, error: 'Agent prompts are only available on Cloudflare Worker runtime.' }, 501));
@@ -204,6 +207,16 @@ app.post('/api/agent/runs/control', c => c.json({ ok: true, status: 'noop' }));
 app.post('/api/agent/runs/reset', c => c.json({ ok: true }));
 
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
+app.get('/api/debug',async c=>c.json(await runDiagnostics()));
+app.get('/api/import/history',async c=>c.json({ok:true,items:await getImportHistory()}));
+app.post('/api/import/history/clear',async c=>{await clearImportHistory();return c.json({ok:true})});
+app.post('/api/jobs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,ids=Array.isArray(b.ids)?b.ids.map(String):[];if(!ids.length)return c.json({ok:false,error:'هیچ کاری برای اولویت‌بندی ارسال نشد.'},400);const valid:string[]=[];for(const id of ids){const job=await getJob(id);if(job&&job.status==='queued')valid.push(id)}
+  // An empty result (every dragged job already started) must never wipe the saved order.
+  if(!valid.length)return c.json({ok:true,count:0,priorities:await getJobPriorities()});return c.json({ok:true,count:valid.length,priorities:await setJobPriorities(valid)})});
+app.post('/api/runs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,kinds=Array.isArray(b.kinds)?b.kinds.map(String):[];if(!kinds.length)return c.json({ok:false,error:'هیچ اجرایی برای اولویت‌بندی ارسال نشد.'},400);const known=new Set(['ai-test','category-all','dedup','agent']),valid=kinds.filter((kind:string)=>known.has(kind));if(!valid.length)return c.json({ok:true,count:0,priorities:await getRunPriorities()});return c.json({ok:true,count:valid.length,priorities:await setRunPriorities(valid)})});
+app.post('/api/category-learning/import',async c=>c.json({ok:true,imported:await importCategoryLearning(await c.req.json())}));
+app.post('/api/suggest-selectors',async c=>{const b=await c.req.json().catch(()=>({}))as any,mode=['list','detail'].includes(b.mode)?b.mode:'all';return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode)})});
+app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await c.req.json().catch(()=>({}))as any;return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES}));
 app.get('/api/connections', async c => c.json({ok:true,connections:await loadConnections(true)}));
 app.post('/api/connections', async c => c.json({ok:true,connections:await saveConnections(await c.req.json())}));

@@ -789,3 +789,77 @@ test('auto-update rebuilds and restarts the scraper, not just the deployer', asy
   // would happily serve the previous build.
   assert.match(deployer, /scraperCommand\s*=[^\n]*render:build/, 'the scraper start command must run render:build so the new version is built');
 });
+
+test('every diagnostic endpoint the dashboard calls exists on the Node runtime', async () => {
+  // On Termux every diagnostic button returned 404 while the visual selector
+  // preview worked, because those routes were only ever registered on the
+  // Worker. The dashboard is SHARED by both runtimes, so any path it calls must
+  // exist in both or the button is dead on Node.
+  const server = await readProjectFile('render-src/server.ts');
+  const worker = await readProjectFile('worker-src/app.ts');
+  const routesOf = source => new Set(
+    [...source.matchAll(/app\.(get|post|put|delete|patch|all)\('(\/[^']*)'/g)].map(m => m[2])
+  );
+  const nodeRoutes = routesOf(server), workerRoutes = routesOf(worker);
+  assert.ok(workerRoutes.size > 100, 'guard: worker routes were parsed');
+  assert.ok(nodeRoutes.size > 90, 'guard: node routes were parsed');
+
+  // The endpoints behind the diagnostic buttons the user reported as 404.
+  const required = [
+    '/api/profiles/:id/extraction-diagnostic', '/api/debug', '/api/suggest-selectors',
+    '/api/selftest', '/api/parity', '/api/source-test', '/api/import/history',
+    '/api/import/history/clear', '/api/jobs/priority', '/api/runs/priority',
+    '/api/agent/tasks', '/api/ai/workers-catalog', '/api/category-learning/import'
+  ];
+  const missing = required.filter(route => !nodeRoutes.has(route));
+  assert.deepEqual(missing, [], `these dashboard endpoints 404 on Node/Termux: ${missing.join(', ')}`);
+
+  // Each one must also be implemented, not stubbed out with a 501 "Worker only".
+  for (const route of ['/api/debug', '/api/suggest-selectors', '/api/profiles/:id/extraction-diagnostic']) {
+    const at = server.indexOf(`'${route}'`);
+    const body = server.slice(at, server.indexOf('\napp.', at + 1));
+    assert.doesNotMatch(body, /only available on Cloudflare Worker runtime/, `${route} must do real work on Node`);
+  }
+});
+
+test('the Node extraction diagnostic runs the real scrape pipeline', async () => {
+  // The report has to reflect what the scraper actually does, otherwise it can
+  // pass while real extraction fails (the user's case: Cloudflare extracts,
+  // Termux finds nothing).
+  const scraper = await readProjectFile('render-src/scraper.ts');
+  const at = scraper.indexOf('export async function diagnoseExtraction');
+  assert.ok(at > 0, 'the Node runtime must implement diagnoseExtraction');
+  const body = scraper.slice(at);
+
+  assert.match(body, /await safeText\(/, 'it must really fetch the page');
+  assert.match(body, /await scrapeListWithMeta\(/, 'it must use the same list pipeline as a real run, so the engine choice matches');
+  assert.match(body, /extractSelectorValues\(/, 'it must probe each selector against the real HTML');
+  assert.match(body, /await scrapeDetails\(/, 'it must exercise the detail pipeline when detail selectors exist');
+  assert.match(body, /usedEngine/, 'the report must name the engine that won, which is what differs between runtimes');
+
+  for (const stage of ['network', 'list-extraction', 'selector-evidence', 'detail-extraction']) {
+    assert.ok(body.includes(`'${stage}'`), `the report must include the ${stage} stage the dashboard renders`);
+  }
+  // A dead network must still produce a readable report rather than throwing.
+  assert.match(body, /catch\s*\(error\)\s*\{[\s\S]{0,400}add\('network', false/, 'a failed fetch must be reported as a failed stage, not an exception');
+});
+
+test('Node diagnostics report the real local runtime, not Cloudflare bindings', async () => {
+  // The Worker's /api/debug checks D1 and queue bindings, which are meaningless
+  // on a phone. Reporting those on Termux would be noise at best.
+  const diag = await readProjectFile('render-src/diagnostics.ts');
+  assert.match(diag, /databaseDriver/, 'it must report the database actually in use (sqlite or postgres)');
+  assert.match(diag, /sqlite_master/, 'it must be able to inspect the SQLite schema used on Termux/Windows');
+  assert.match(diag, /pg_tables/, 'it must also inspect a PostgreSQL schema');
+  assert.match(diag, /browser-engines/, 'it must flag that browsers cannot run on Android');
+  const checkNames = [...diag.matchAll(/add\('([a-z0-9-]+)'/g)].map(m => m[1]);
+  assert.ok(checkNames.length >= 8, 'guard: diagnostic check names were parsed');
+  for (const cloudflareOnly of ['d1-binding', 'queue-binding', 'dlq-binding', 'vault-kdf', 'r2-disabled']) {
+    assert.ok(!checkNames.includes(cloudflareOnly), `Cloudflare-only check ${cloudflareOnly} must not run on the Node runtime`);
+  }
+  for (const expected of ['database', 'schema', 'browser-engines']) {
+    assert.ok(checkNames.includes(expected), `the Node runtime must report the ${expected} check`);
+  }
+  // runtimeEnvironment is a descriptor object; interpolating it printed "[object Object]".
+  assert.doesNotMatch(diag, /environment=\$\{runtimeEnvironment\}/, 'the environment must be printed by id/label, not as a raw object');
+});

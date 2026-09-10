@@ -411,3 +411,30 @@ function jobFromRow(row: any): Job {
     stopRequested: Boolean(row.stop_requested), error: row.error, log: parseJson(row.log, row.log || []), createdAt: dateValue(row.created_at),
     startedAt: row.started_at?.toISOString?.() || row.started_at || null, finishedAt: row.finished_at?.toISOString?.() || row.finished_at || null, updatedAt: dateValue(row.updated_at) };
 }
+
+// Queue/run ordering, ported from the Worker so the dashboard's drag-to-reorder
+// and priority controls stop returning 404 on the Node runtime.
+const JOB_PRIORITY_KEY = 'job_priorities_v1';
+const RUN_PRIORITY_KEY = 'run_priorities_v1';
+
+export async function getJobPriorities(): Promise<Record<string, number>> { return getState<Record<string, number>>(JOB_PRIORITY_KEY, {}); }
+export async function setJobPriorities(ids: string[]): Promise<Record<string, number>> {
+  const valid = [...new Set(ids.map(String).filter(Boolean))], map: Record<string, number> = {};
+  valid.forEach((id, index) => { map[id] = valid.length - index; });
+  await setState(JOB_PRIORITY_KEY, map);
+  return map;
+}
+export async function getRunPriorities(): Promise<Record<string, number>> { return getState<Record<string, number>>(RUN_PRIORITY_KEY, {}); }
+export async function setRunPriorities(kinds: string[]): Promise<Record<string, number>> {
+  const valid = [...new Set(kinds.map(String).filter(Boolean))], map: Record<string, number> = {};
+  valid.forEach((kind, index) => { map[kind] = valid.length - index; });
+  await setState(RUN_PRIORITY_KEY, map);
+  return map;
+}
+
+/** Import history, capped like the Worker so the log cannot grow without bound. */
+export async function getImportHistory(): Promise<any[]> {
+  const items = await getState<any[]>('import_history', []);
+  return Array.isArray(items) ? items.slice(-60) : [];
+}
+export async function clearImportHistory(): Promise<void> { await setState('import_history', []); }
