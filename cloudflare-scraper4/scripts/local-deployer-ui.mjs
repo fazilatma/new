@@ -116,6 +116,8 @@ const scraperCommand = process.env.LOCAL_SCRAPER_COMMAND || `${npmCommand} run r
 const startupEnv = { ...parseDotEnvFile(join(projectDir, '.env.local')), ...process.env };
 const MIN_BRANCH_SCAN_INTERVAL_MS = 15_000;
 const DEFAULT_BRANCH_SCAN_INTERVAL_MS = 60_000; // default: scan all repo branches every 1 minute
+// A page refresh triggers a scan too, but never more often than this.
+const REFRESH_SCAN_MIN_MS = 10_000;
 function readIntervalMs(value, fallback = DEFAULT_BRANCH_SCAN_INTERVAL_MS) {
   const raw = String(value ?? '').trim();
   if (!raw) return fallback;
@@ -818,7 +820,19 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, page(token), 'text/html; charset=utf-8');
     if (!requireAuth(req, res)) return;
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, status());
-    if (req.method === 'GET' && url.pathname === '/api/branches') return send(res, 200, branchCatalogPayload());
+    if (req.method === 'GET' && url.pathname === '/api/branches') {
+      // Refreshing the deployer page must be enough to pick up a new version:
+      // the background timer can be disabled, throttled, or simply not have
+      // fired yet, and users reported sitting on an old version indefinitely.
+      // Rescan (at most once per REFRESH_SCAN_MIN_MS) and install the newest
+      // branch before answering, so the table the user sees is already current.
+      const lastScan = Date.parse(branchState.lastScanAt || '') || 0;
+      if (autoUpdateEnabled && !branchState.scanning && Date.now() - lastScan > REFRESH_SCAN_MIN_MS) {
+        scanAllBranches('page-refresh');
+        maybeAutoInstallNewest();
+      }
+      return send(res, 200, branchCatalogPayload());
+    }
     if (req.method === 'POST' && url.pathname === '/api/branches/scan') {
       const payload = scanAllBranches('manual');
       // Same follow-up the timer does: seeing a newer version is only useful

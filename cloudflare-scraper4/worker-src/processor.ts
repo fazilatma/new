@@ -3,6 +3,7 @@ import { getEnv } from './env.js';
 import { generateProductDescription, productNeedsEnrichment } from './ai.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
+import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
@@ -225,8 +226,13 @@ async function runSyncChunk(job:Job,profile:Profile):Promise<boolean>{
   if(await stopRequested(job.id)){job.status='stopped';return false}
   job.phase='sync';
   const result=await listProducts(profile.id,chunkSize(),checkpoint.offset,'');job.total=result.total;
+  const patterns=await codeSuffixPatterns();
   for(const product of result.products){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
+    if(!hasCodeSuffix(String(product.title||''),patterns)){
+      append(job,`${product.title}: بدون پسوند «(کد ایکس)» — هماهنگ‌سازی نشد.`,'info');
+      checkpoint.offset++;job.processed++;continue;
+    }
     await syncProduct(job,profile,product);
     checkpoint.offset++;job.processed++;
   }
@@ -234,6 +240,14 @@ async function runSyncChunk(job:Job,profile:Profile):Promise<boolean>{
   return checkpoint.offset<result.total;
 }
 
+/**
+ * Only products whose title carries a «(کد ایکس)» suffix are published. Titles
+ * without one are base/draft entries that must never reach a destination shop.
+ */
+async function codeSuffixPatterns():Promise<RegExp[]>{
+  const settings=await getState<any>('settings',{});
+  return suffixPatterns(parseSuffixFormats(settings?.dedup?.suffixFormats||''));
+}
 async function syncProduct(job:Job,profile:Profile,product:Product):Promise<void>{
   if(job.target==='woo'||job.target==='both')try{const action=await syncWoo(product,profile);append(job,`${product.title} [WooCommerce]: ${action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'woo',shop:'فروشگاه ووکامرس'}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [WooCommerce]: ${errorText}`,'error','failed',reportItem(product,{target:'woo',error:errorText}))}
   if(job.target==='basalam'||job.target==='both')try{const results=await syncBasalam(product,profile);for(const result of results)append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [Basalam]: ${errorText}`,'error','failed',reportItem(product,{target:'basalam',error:errorText}))}

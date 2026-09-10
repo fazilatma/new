@@ -2,7 +2,7 @@ import { loadConnections } from './connections.js';
 import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
 import { byAccount, byProfile, planActions, reconcileAccount, summarize } from './recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
-import { buildDedupGroups, normalizeDedupKeep, parseSuffixFormats } from './dedup.js';
+import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
@@ -128,12 +128,19 @@ async function remoteForAccount(account:ReconAccount):Promise<ReconRemote[]>{
 export async function unifiedRecon(profileId=''){
   const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
   for(const profile of await listProfiles())profileNames[profile.id]=profile.name||profile.id;
+  // Reconciliation is limited to products whose title carries a «(کد ایکس)»
+  // suffix, using the same formats the duplicate-remover already uses.
+  const settings=await getState<any>('settings',{});
+  const suffixFormats=settings?.dedup?.suffixFormats||'';
+  const patterns=suffixPatterns(parseSuffixFormats(suffixFormats));
+  const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
+  const skippedNoCode=local.length-eligible.length;
   const accounts=await reconAccounts(),rows:UnifiedReconRow[]=[],failures:Array<{account:string;error:string}>=[];
   for(const account of accounts){
-    try{rows.push(...reconcileAccount(local,await remoteForAccount(account),account,profileNames))}
+    try{rows.push(...reconcileAccount(local,await remoteForAccount(account),account,profileNames,suffixFormats))}
     catch(error){failures.push({account:account.name,error:error instanceof Error?error.message:String(error)})}
   }
-  const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:local.length,accounts:accounts.length,
+  const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
     ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows).length,failures,rows};
   await setState('recon_unified',report);
   return report;
@@ -143,7 +150,7 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
   const actions=planActions(report.rows as UnifiedReconRow[]).slice(0,Math.max(1,Math.min(1000,limit)));
   if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),
     matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
-    noPrice:report.noPrice,inSync:report.inSync,local:report.local,accounts:report.accounts,
+    noPrice:report.noPrice,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
     accountsBreakdown:report.accountsBreakdown,profiles:report.profiles,failures:report.failures,
     rows:report.rows};
   let changed=0;const failed:any[]=[];
@@ -164,7 +171,7 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
   const after=changed?await unifiedRecon(profileId):report;
   return{ok:failed.length===0,dryRun:false,planned:actions.length,changed,failed:failed.slice(0,20),
     matched:after.matched,priceDiff:after.priceDiff,missing:after.missing,extra:after.extra,
-    noPrice:after.noPrice,inSync:after.inSync,local:after.local,accounts:after.accounts,
+    noPrice:after.noPrice,inSync:after.inSync,local:after.local,localAll:after.localAll,skippedNoCode:after.skippedNoCode,accounts:after.accounts,
     accountsBreakdown:after.accountsBreakdown,profiles:after.profiles,failures:after.failures,
     rows:after.rows};
 }

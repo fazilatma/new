@@ -1,4 +1,5 @@
 import { normalizePersianText } from './utils.js';
+import { hasCodeSuffix, parseSuffixFormats, stripCodeSuffix, suffixPatterns } from './dedup.js';
 
 /**
  * Unified reconciliation ("مغایرت‌گیری یکپارچه") across every destination.
@@ -88,6 +89,8 @@ export type UnifiedReconRow = {
   matchedBy: MatchedBy;
   status: string;
   why: string;
+  /** How many source products share this title once the code suffix is removed. */
+  duplicateCount: number;
 };
 
 /** Title key for reconciliation: Persian-normalized and stripped of a trailing product code. */
@@ -125,8 +128,24 @@ export function mappedRemoteId(row: ReconLocal, account: ReconAccount): number {
  * Compare every source product against ONE destination account.
  * Pure function: no database, no network, fully testable.
  */
-export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], account: ReconAccount, profileNames: Record<string, string> = {}): UnifiedReconRow[] {
+export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], account: ReconAccount, profileNames: Record<string, string> = {}, suffixFormats: unknown = ''): UnifiedReconRow[] {
   const rows: UnifiedReconRow[] = [];
+  // Only products whose title carries a «(کد ایکس)» suffix take part: everything
+  // else is a draft/base title that must never be reconciled or published.
+  const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
+  const allLocal = local;
+  local = allLocal.filter(row => hasCodeSuffix(String(row.title || ''), patterns));
+  // Duplicate groups are counted over the code-free title, so «نام (کد ۱)» and
+  // «نام (کد ۲)» report 2.
+  const dupCount = new Map<string, number>();
+  for (const row of local) {
+    const key = normalizePersianText(stripCodeSuffix(String(row.title || ''), patterns));
+    if (key) dupCount.set(key, (dupCount.get(key) || 0) + 1);
+  }
+  const duplicatesFor = (title: string): number => {
+    const key = normalizePersianText(stripCodeSuffix(String(title || ''), patterns));
+    return key ? (dupCount.get(key) || 0) : 0;
+  };
   const byTitle = new Map<string, ReconLocal[]>();
   const bySku = new Map<string, ReconLocal>();
   const byRemoteId = new Map<number, ReconLocal>();
@@ -148,6 +167,9 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
   });
 
   for (const item of remote) {
+    // Destination products outside the «(کد ایکس)» convention are ignored
+    // entirely rather than being reported as "only at the destination".
+    if (!hasCodeSuffix(String(item.name || ''), patterns)) continue;
     const key = reconNormTitle(item.name || '');
     // Match by title first, then sku, then the stored remote id (destination
     // titles get edited by hand, so the id is the most durable fallback).
@@ -161,7 +183,7 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
       rows.push({
         ...base(null), bucket: 'extra', title: item.name || '', remoteTitle: item.name || '', remoteId: item.id || null,
         sourcePrice: null, expectedPrice: null, remotePrice, delta: null, matchedBy: 'none',
-        status: String(item.status || ''), why: 'در مقصد هست ولی در هیچ پروفایلی نیست',
+        status: String(item.status || ''), why: 'در مقصد هست ولی در هیچ پروفایلی نیست', duplicateCount: duplicatesFor(item.name || ''),
       });
       continue;
     }
@@ -172,6 +194,7 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
     const common = {
       ...base(source), title: source.title || '', remoteTitle: item.name || '', remoteId: item.id || null,
       sourcePrice, expectedPrice, remotePrice, matchedBy, status: String(item.status || ''),
+      duplicateCount: duplicatesFor(source.title || ''),
     };
     if (expectedPrice === null) rows.push({ ...common, bucket: 'noPrice', delta: null, why: 'قیمت مبدأ ثبت نشده — مقایسه نشد' });
     else if (remotePrice !== expectedPrice) rows.push({ ...common, bucket: 'priceDiff', delta: (remotePrice || 0) - expectedPrice, why: account.pricePercent ? `قیمت مقصد با قیمت تعدیل‌شده (${account.pricePercent}٪) یکی نیست` : 'قیمت مقصد با مبدأ یکی نیست' });
@@ -185,7 +208,7 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
     rows.push({
       ...base(row), bucket: 'missing', title: row.title || '', remoteTitle: '', remoteId: null,
       sourcePrice, expectedPrice: expectedPriceFor(sourcePrice, account), remotePrice: null, delta: null,
-      matchedBy: 'none', status: '', why: 'در مبدأ هست ولی در مقصد نیست',
+      matchedBy: 'none', status: '', why: 'در مبدأ هست ولی در مقصد نیست', duplicateCount: duplicatesFor(row.title || ''),
     });
   }
   return rows;

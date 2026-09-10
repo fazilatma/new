@@ -1,6 +1,7 @@
 import { allProducts, claimJob, getJob, getProfile, getState, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
+import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { generateProductDescription, productNeedsEnrichment } from './ai.js';
 import type { Job, Product } from './types.js';
 
@@ -180,8 +181,17 @@ export async function processOneJob(): Promise<boolean> {
 
 async function runSync(job: Job, profile: Awaited<ReturnType<typeof getProfile>> & {}, products: Product[]): Promise<void> {
   job.phase = 'sync'; job.total = products.length; job.processed = 0; await save(job);
+  // Only products whose title carries a «(کد ایکس)» suffix are published; the
+  // rest are base/draft titles that must never reach a destination shop.
+  const settings = await getState<any>('settings', {});
+  const patterns = suffixPatterns(parseSuffixFormats((settings as any)?.dedup?.suffixFormats || ''));
   for (const product of products) {
     if (await stopRequested(job.id)) { job.status = 'stopped'; return; }
+    if (!hasCodeSuffix(String(product.title || ''), patterns)) {
+      append(job, `${product.title}: بدون پسوند «(کد ایکس)» — هماهنگ‌سازی نشد.`, 'info');
+      job.processed++; if (job.processed % 5 === 0) await save(job);
+      continue;
+    }
     try {
       if (job.target === 'woo' || job.target === 'both') await syncWoo(product, profile);
       if (job.target === 'basalam' || job.target === 'both') await syncBasalam(product, profile);
