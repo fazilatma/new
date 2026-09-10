@@ -228,7 +228,12 @@ async function parseJsonLdProducts(html:string,baseUrl:string):Promise<Product[]
 
 export async function parseCards(html:string,baseUrl:string,selectors:SelectorMap):Promise<Product[]>{
   const cards:Card[]=[];const cardHandler=new CardHandler(cards,baseUrl);const rewriter=new HTMLRewriter();
-  const containers=selectorParts(selectors.container||DEFAULT_CONTAINER);
+  // The visual picker pins the clicked card with :nth-of-type(N), which makes the
+  // container match exactly ONE card instead of repeating over the whole grid.
+  // A container is meant to repeat, so drop the positional pins (the Node runtime
+  // does the same in containerNodes(), keeping both runtimes in parity).
+  const containers=selectorParts(selectors.container||DEFAULT_CONTAINER)
+    .map(selector=>selector.includes(':nth-of-type(')?(selector.replace(/:nth-of-type\(\d+\)/g,'').trim()||selector):selector);
   let validContainer=false;for(const selector of containers)validContainer=safeOn(rewriter,selector,cardHandler)||validContainer;
   if(!validContainer)throw new Error('سلکتور ظرف محصول نامعتبر است.');
   for(const field of ['title','price','link','image','sku'] as FieldName[]){

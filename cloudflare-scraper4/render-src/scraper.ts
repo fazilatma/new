@@ -20,21 +20,72 @@ export function numberFromText(value: string): number {
 }
 
 function sourceKey(url: string, title: string): string { return createHash('sha256').update(url || title).digest('hex').slice(0, 32); }
-function firstText($root: cheerio.Cheerio<any>, selector: string): string {
-  if (!String(selector || '').trim()) return '';
-  const inner = $root.find(selector).first();
-  if (inner.length) return normalize(inner.text());
+/**
+ * Find `selector` in the scope of one product card.
+ *
+ * Three lookups, in order of precision:
+ *  1. descendants of the card,
+ *  2. the card element itself,
+ *  3. document-wide, keeping only hits inside this card.
+ *
+ * Step 3 exists because the visual selector picker emits ABSOLUTE paths rooted
+ * at the document (e.g. "section.grid > div.card:nth-of-type(1) > a > div.title").
+ * `find()` matches such a path only against the card's descendants, so it never
+ * matches and every card is skipped: extraction returns 0 while the whole-page
+ * evidence check stays green. Re-anchoring the same path inside the card keeps
+ * those saved profiles working without asking the user to rewrite selectors.
+ */
+function scopedMatches($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector: string): cheerio.Cheerio<any> | null {
+  const inner = $root.find(selector);
+  if (inner.length) return inner;
   const own = $root.filter(selector);
-  return own.length ? normalize(own.first().text()) : '';
-}
-function firstAttr($root: cheerio.Cheerio<any>, selector: string, attrs: string[]): string {
-  if (!String(selector || '').trim()) return '';
-  // Same self-or-descendant rule as firstText: the product link/image is very
-  // often the container element itself, not a child of it.
-  for (const node of [$root.find(selector).first(), $root.filter(selector).first()]) {
-    if (!node.length) continue;
-    for (const attr of attrs) { const value = node.attr(attr); if (value && value !== '#') return value; }
+  if (own.length) return own;
+  const element = $root.get(0);
+  if (!element) return null;
+  const inThisCard = (candidate: cheerio.Cheerio<any>) => {
+    const scoped = candidate.filter((_i, node) => node === element || $.contains(element as any, node as any));
+    return scoped.length ? scoped : null;
+  };
+  // Absolute path as saved: only ever inside the card it was picked from.
+  let global: cheerio.Cheerio<any> | null = null;
+  try { global = $(selector); } catch { global = null; }
+  if (global && global.length) {
+    const hit = inThisCard(global);
+    if (hit) return hit;
   }
+  // The picker pins each step with :nth-of-type(N), so the saved path resolves
+  // only to the FIRST card. Drop the positional pins and the same path matches
+  // the equivalent element in every card; scoping then picks this card's copy.
+  if (selector.includes(':nth-of-type(')) {
+    const loose = selector.replace(/:nth-of-type\(\d+\)/g, '').trim();
+    if (loose && loose !== selector) {
+      let widened: cheerio.Cheerio<any> | null = null;
+      try { widened = $(loose); } catch { widened = null; }
+      if (widened && widened.length) {
+        const hit = inThisCard(widened);
+        if (hit) return hit;
+      }
+      // Last resort: the tail of the path, relative to this card.
+      const tail = loose.split('>').pop()!.trim();
+      if (tail && tail !== loose) {
+        let relative: cheerio.Cheerio<any> | null = null;
+        try { relative = $root.find(tail); } catch { relative = null; }
+        if (relative && relative.length) return relative;
+      }
+    }
+  }
+  return null;
+}
+function firstText($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector: string): string {
+  if (!String(selector || '').trim()) return '';
+  const found = scopedMatches($, $root, selector);
+  return found ? normalize(found.first().text()) : '';
+}
+function firstAttr($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector: string, attrs: string[]): string {
+  if (!String(selector || '').trim()) return '';
+  const found = scopedMatches($, $root, selector);
+  if (!found) return '';
+  for (const attr of attrs) { const value = found.first().attr(attr); if (value && value !== '#') return value; }
   return '';
 }
 
@@ -53,14 +104,37 @@ export function pageUrl(profile: Profile, page: number): string {
   return url.href;
 }
 
+/**
+ * Resolve the container selector to every product card on the page.
+ *
+ * The visual picker pins the clicked element with :nth-of-type(N), which makes
+ * the selector match exactly ONE card. Extraction then returns a single product
+ * (or zero) no matter how many are listed. Dropping the positional pins yields
+ * the repeating sibling pattern the user actually meant; we only accept the
+ * widened form when it still matches the originally selected element(s).
+ */
+function containerNodes($: cheerio.CheerioAPI, selector: string): cheerio.Cheerio<any> {
+  const exact = $(selector);
+  if (!selector.includes(':nth-of-type(')) return exact;
+  const loose = selector.replace(/:nth-of-type\(\d+\)/g, '').trim();
+  if (!loose || loose === selector) return exact;
+  let widened: cheerio.Cheerio<any>;
+  try { widened = $(loose); } catch { return exact; }
+  if (widened.length <= exact.length) return exact;
+  // Every originally matched card must still be part of the wider set.
+  const kept = exact.toArray();
+  const wide = widened.toArray();
+  if (kept.length && !kept.every(node => wide.includes(node))) return exact;
+  return widened;
+}
 function scrapeListCheerioFromHtml(text: string, finalUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(text); const products: Product[] = [];
-  $(selectors.container).each((_index, element) => {
-    const root = $(element); const title = firstText(root, selectors.title); if (!title) return;
-    const priceText = firstText(root, selectors.price);
-    const link = absolute(firstAttr(root, selectors.link, ['href','data-href','data-url','data-product-url']), finalUrl);
-    let imageValue = firstAttr(root, selectors.image, ['data-src','data-lazy-src','data-original','src']);
-    if (!imageValue) imageValue = (firstAttr(root, selectors.image, ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
+  containerNodes($, selectors.container).each((_index, element) => {
+    const root = $(element); const title = firstText($, root, selectors.title); if (!title) return;
+    const priceText = firstText($, root, selectors.price);
+    const link = absolute(firstAttr($, root, selectors.link, ['href','data-href','data-url','data-product-url']), finalUrl);
+    let imageValue = firstAttr($, root, selectors.image, ['data-src','data-lazy-src','data-original','src']);
+    if (!imageValue) imageValue = (firstAttr($, root, selectors.image, ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
     const image = absolute(imageValue, finalUrl);
     products.push({ sourceKey: sourceKey(link, title), title, price: numberFromText(priceText), priceText, url: link, image,
       images: image ? [image] : [], sourcePage: finalUrl, scrapedAt: new Date().toISOString() });
@@ -155,12 +229,12 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
 }
 function parseProductsFromHtml(html: string, baseUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(html); const products: Product[] = [];
-  $(selectors.container).each((_index, element) => {
-    const root = $(element); const title = firstText(root, selectors.title); if (!title) return;
-    const priceText = firstText(root, selectors.price);
-    const link = absolute(firstAttr(root, selectors.link, ['href','data-href','data-url','data-product-url']), baseUrl);
-    let imageValue = firstAttr(root, selectors.image, ['data-src','data-lazy-src','data-original','src']);
-    if (!imageValue) imageValue = (firstAttr(root, selectors.image, ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
+  containerNodes($, selectors.container).each((_index, element) => {
+    const root = $(element); const title = firstText($, root, selectors.title); if (!title) return;
+    const priceText = firstText($, root, selectors.price);
+    const link = absolute(firstAttr($, root, selectors.link, ['href','data-href','data-url','data-product-url']), baseUrl);
+    let imageValue = firstAttr($, root, selectors.image, ['data-src','data-lazy-src','data-original','src']);
+    if (!imageValue) imageValue = (firstAttr($, root, selectors.image, ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
     const image = absolute(imageValue, baseUrl);
     products.push({ sourceKey: sourceKey(link, title), title, price: numberFromText(priceText), priceText, url: link, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() });
   });
@@ -302,7 +376,20 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     } catch (error) { evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) }; }
   }
   const evidenceOk = ['container', 'title'].every(key => (evidence[key] as any)?.ok);
-  const containerCount = Number((evidence.container as any)?.count || 0);
+  // The raw selector may be pinned with :nth-of-type(N) and match a single card
+  // while extraction widens it to every card. Report the number extraction
+  // really uses, otherwise the advice contradicts the result.
+  let containerCount = Number((evidence.container as any)?.count || 0);
+  let widenedContainers = 0;
+  try {
+    const $page = cheerio.load(page.text);
+    widenedContainers = containerNodes($page, String((profile.selectors as any)?.container || '').trim()).length;
+    if (widenedContainers > containerCount) {
+      (evidence.container as any).effectiveCount = widenedContainers;
+      (evidence.container as any).note = 'سلکتور ظرف با :nth-of-type محدود شده بود؛ استخراج آن را به ' + widenedContainers + ' کارت گسترش داد.';
+      containerCount = widenedContainers;
+    }
+  } catch {}
   // Document-wide evidence can be green while container-scoped extraction finds
   // nothing. That contradiction is itself the diagnosis, so surface it.
   const contradiction = evidenceOk && products.length === 0;

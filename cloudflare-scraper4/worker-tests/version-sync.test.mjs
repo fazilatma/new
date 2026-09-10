@@ -865,38 +865,73 @@ test('Node diagnostics report the real local runtime, not Cloudflare bindings', 
 });
 
 test('list extraction finds fields on the container itself, not only its children', async () => {
-  // Root cause of "Cloudflare extracts, Termux extracts nothing": firstText used
+  // Root cause of "Cloudflare extracts, Termux extracts nothing": the lookup used
   // $root.find(), which searches DESCENDANTS ONLY. On shops where the product
   // card IS the matching element (container 'a[href*="/product/"]' and title
   // 'a[href*="/product/"]'), the title came back empty and `if (!title) return`
-  // skipped every product. The Worker's HTMLRewriter has no such restriction,
-  // which is exactly why the two runtimes disagreed.
+  // skipped every product. The self-or-descendant rule now lives in
+  // scopedMatches(), shared by firstText and firstAttr.
   const src = await readProjectFile('render-src/scraper.ts');
-  const at = src.indexOf('function firstText(');
+  const at = src.indexOf('function scopedMatches(');
   const body = src.slice(at, src.indexOf('\nfunction ', at + 10));
-  assert.match(body, /\$root\.filter\(selector\)/, 'firstText must be able to match the container element itself');
-  assert.match(body, /\$root\.find\(selector\)/, 'firstText must still match descendants');
+  assert.match(body, /\$root\.filter\(selector\)/, 'the lookup must be able to match the container element itself');
+  assert.match(body, /\$root\.find\(selector\)/, 'the lookup must still match descendants');
   // Descendants must win, otherwise a broad selector swallows the whole card text.
   assert.ok(body.indexOf('.find(selector)') < body.indexOf('.filter(selector)'),
     'a descendant match must be preferred over the container itself');
+  assert.match(src.slice(src.indexOf('function firstText(')), /scopedMatches\(/, 'firstText must use the shared scoped lookup');
+  assert.match(src.slice(src.indexOf('function firstAttr(')), /scopedMatches\(/, 'firstAttr must use the shared scoped lookup');
 
-  const attrAt = src.indexOf('function firstAttr(');
-  const attrBody = src.slice(attrAt, src.indexOf('\nexport ', attrAt));
-  assert.match(attrBody, /\$root\.filter\(selector\)/, 'firstAttr must also consider the container itself (the card is often the <a>)');
-
-  // Execute the real helpers against markup shaped like the reported site.
+  // Execute the REAL shipped helpers from the built bundle.
   const cheerio = await import('cheerio');
-  const normalize = v => v.replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
-  const jsBody = body
-    .replace(/\$root: cheerio\.Cheerio<any>/g, '$root')
-    .replace(/selector: string/g, 'selector')
-    .replace(/\): string \{/, ') {');
-  const firstText = new Function('normalize', `${jsBody}; return firstText;`)(normalize);
+  const bundle = await readProjectFile('render-dist/server.js');
+  const grab = name => { const i = bundle.indexOf('function ' + name + '('); return bundle.slice(i, bundle.indexOf('\nfunction ', i + 1)); };
+  const normalize = v => String(v || '').replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
+  const { firstText } = new Function('cheerio', 'normalize',
+    `${grab('scopedMatches')}${grab('firstText')}; return { firstText };`)(cheerio, normalize);
   const $ = cheerio.load('<a href="/product/1" class="product"><div class="t">عنوان</div><div class="p">۱۲۳</div></a>');
-  const card = $('a.product');
-  assert.equal(firstText(card, 'a[href*="/product/"], [class*="t"]'), 'عنوان', 'the inner title must win over the whole card text');
+  assert.equal(firstText($, $('a.product'), 'a[href*="/product/"], [class*="t"]'), 'عنوان', 'the inner title must win over the whole card text');
   const $2 = cheerio.load('<a href="/product/2" class="product">فقط عنوان</a>');
-  assert.equal(firstText($2('a.product'), 'a[href*="/product/"]'), 'فقط عنوان', 'a card that IS the title must still extract');
+  assert.equal(firstText($2, $2('a.product'), 'a[href*="/product/"]'), 'فقط عنوان', 'a card that IS the title must still extract');
+});
+
+test('absolute picker paths still resolve inside each product card', async () => {
+  // The visual picker saves DOCUMENT-ABSOLUTE paths pinned with :nth-of-type(N)
+  // ("section.grid > div.card:nth-of-type(1) > a > div.title"). find() only
+  // searches a card's descendants, so such a path never matched and every card
+  // was skipped: 0 products while the whole-page evidence check stayed green --
+  // exactly the contradiction in the user's barfbox.ir report.
+  const cheerio = await import('cheerio');
+  const bundle = await readProjectFile('render-dist/server.js');
+  const grab = name => { const i = bundle.indexOf('function ' + name + '('); return bundle.slice(i, bundle.indexOf('\nfunction ', i + 1)); };
+  const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const F = new Function('cheerio', 'normalize',
+    `${grab('containerNodes')}${grab('scopedMatches')}${grab('firstText')}${grab('firstAttr')}; return { containerNodes, firstText, firstAttr };`)(cheerio, normalize);
+
+  const card = n => `<div class="flex flex-shrink"><a class="flex w-full" href="/p/${n}">` +
+    `<div class="relative x"><picture class="block h-full"><img class="h-full" src="/i/${n}.jpg"></picture></div>` +
+    `<div class="flex w-full"><div class="my-1 line-clamp-2">Product ${n}</div>` +
+    `<div class="flex w-full"><div class="flex flex-row">${n}00,000</div></div></div></a></div>`;
+  const $ = cheerio.load(`<section class="grid xl:grid-cols-4">${card(1)}${card(2)}${card(3)}</section>`);
+  const container = 'section.grid.xl\\:grid-cols-4 > div.flex.flex-shrink:nth-of-type(1)';
+  const title = container + ' > a.flex.w-full > div.flex.w-full:nth-of-type(2) > div.my-1.line-clamp-2:nth-of-type(1)';
+
+  assert.equal($(container).length, 1, 'the saved selector really does pin a single card');
+  assert.equal(F.containerNodes($, container).length, 3, 'extraction must widen the pinned container to every card');
+
+  const titles = [];
+  F.containerNodes($, container).each((_i, el) => {
+    const text = F.firstText($, $(el), title);
+    if (text) titles.push(text);
+  });
+  assert.deepEqual(titles, ['Product 1', 'Product 2', 'Product 3'],
+    'each card must resolve its OWN title through the absolute picker path');
+
+  // Scoping must not leak: a path naming one specific card must not bleed into others.
+  const $b = cheerio.load('<div class="c" id="one"><span class="t">ONE</span></div><div class="c" id="two"><span class="t">TWO</span></div>');
+  const scoped = [];
+  $b('div.c').each((_i, el) => scoped.push(F.firstText($b, $b(el), '#one > span.t')));
+  assert.deepEqual(scoped, ['ONE', ''], 'a card-specific path must not resolve inside a different card');
 });
 
 test('an empty href or src never resolves to the listing page URL', async () => {
@@ -976,4 +1011,156 @@ test('a failing diagnostic stage is shown as a red card', async () => {
   assert.match(dash, /function openStageModal/, 'stage reports must have a shared renderer');
   const modal = dash.slice(dash.indexOf('function openStageModal'), dash.indexOf('function openResultModal'));
   assert.match(modal, /ok\?'ok':'bad'/, 'each stage card must carry the ok/bad class that colours it');
+});
+
+test('Termux defaults to the built-in SQLite database, not a local PostgreSQL', async () => {
+  // The reported symptom: on every refresh of the Termux scraper page,
+  // "connect ECONNREFUSED 127.0.0.1:5432" flashed and the status light stayed
+  // red. normalizeDatabaseUrl() rewrote Termux to postgresql://USER@localhost:5432
+  // whenever DATABASE_URL was empty, but a stock phone runs no postgres server.
+  const src = await readProjectFile('scripts/local-deployer-ui.mjs');
+  const at = src.indexOf('function normalizeDatabaseUrl');
+  const body = src.slice(at, src.indexOf('\nfunction ', at + 10));
+  assert.doesNotMatch(body, /if \(!raw \|\| hasPlaceholder \|\|[^\n]*\) return termuxDatabaseUrl\(\)/,
+    'an empty DATABASE_URL on Termux must not be rewritten to a local PostgreSQL URL');
+
+  const run = new Function('termuxDatabaseUrl', 'dockerDatabaseUrl',
+    body.replace('function normalizeDatabaseUrl(value = \'\') {', 'function normalizeDatabaseUrl(value, detected) {')
+        .replace('const detected = detectEnvironment();', '') + '; return normalizeDatabaseUrl;')(
+    () => 'postgresql://u0_a123@localhost:5432/scraper4',
+    () => 'postgresql://postgres:postgres@localhost:5432/scraper4');
+
+  const termux = { id: 'termux', method: 'termux-postgresql' };
+  assert.equal(run('', termux), 'sqlite:data/scraper4.sqlite', 'an empty URL on Termux must select built-in SQLite');
+  assert.equal(run('sqlite:data/scraper4.sqlite', termux), 'sqlite:data/scraper4.sqlite', 'an explicit SQLite choice must be honoured');
+  assert.equal(run('postgresql://x@HOST:5432/scraper4', termux), 'sqlite:data/scraper4.sqlite', 'the unresolved @HOST placeholder must not become a dead postgres URL');
+  // A deliberate PostgreSQL configuration must still be respected.
+  assert.equal(run('postgresql://u0_a123@localhost:5432/scraper4', termux), 'postgresql://u0_a123@localhost:5432/scraper4',
+    'an explicitly configured PostgreSQL URL must survive');
+  assert.equal(run('postgresql://a:b@db.example.com:5432/s', termux), 'postgresql://a:b@db.example.com:5432/s',
+    'a remote PostgreSQL URL must survive');
+  // Other runtimes must be unaffected.
+  assert.equal(run('', { id: 'windows', method: 'sqlite' }), 'sqlite:data/scraper4.sqlite');
+  assert.equal(run('', { id: 'local', method: 'docker' }), '');
+});
+
+test('an unreachable LOCAL PostgreSQL self-heals to SQLite, a remote one does not', async () => {
+  // Phones that already saved the bad DATABASE_URL must recover on their own,
+  // but a remote database that is merely down must keep failing loudly:
+  // silently serving an empty local file would hide the real data.
+  const db = await readProjectFile('render-src/db.ts');
+  assert.match(db, /export function fallbackToSqlite/, 'a runtime fallback must exist');
+  assert.match(db, /export function isLoopbackPostgres/, 'the fallback must be restricted to loopback databases');
+  const fb = db.slice(db.indexOf('export function fallbackToSqlite'));
+  assert.match(fb, /if \(useSqlite \|\| !isLoopbackPostgres\(\)\) return false/,
+    'a remote PostgreSQL must never be silently swapped for an empty local file');
+  assert.doesNotMatch(db, /^const useSqlite/m, 'useSqlite must be reassignable for the fallback to work');
+
+  // sqlitePath() must not try to use a postgresql:// URL as a file name.
+  const path = db.slice(db.indexOf('function sqlitePath'), db.indexOf('async function getSqliteDb'));
+  assert.match(path, /postgres\|postgresql\|mysql\|mariadb/, 'a leftover postgres URL must not be treated as a SQLite file path');
+
+  const server = await readProjectFile('render-src/server.ts');
+  assert.match(server, /ECONNREFUSED\|ENOENT\|EAI_AGAIN/, 'startup must recognise a refused connection');
+  assert.match(server, /fallbackToSqlite\(detail\)/, 'startup must attempt the fallback before giving up');
+});
+
+test('a database failure is reported with a real message, not an empty string', async () => {
+  // node-postgres throws an AggregateError whose own .message is EMPTY (the real
+  // reasons live in .errors[]), so the log printed "DATABASE NOT READY:" with
+  // nothing after it and the UI showed a red light with no explanation.
+  const server = await readProjectFile('render-src/server.ts');
+  const at = server.indexOf('function describeDatabaseError');
+  assert.ok(at > -1, 'the error unwrapper must exist');
+  const body = server.slice(at, server.indexOf('\nasync function initializeDatabase', at));
+  assert.match(body, /Array\.isArray\(value\.errors\)/, 'AggregateError.errors must be unwrapped');
+
+  // Execute the COMPILED helper so no TypeScript syntax can leak in.
+  const bundle = await readProjectFile('render-dist/server.js');
+  const bAt = bundle.indexOf('function describeDatabaseError(');
+  const compiled = bundle.slice(bAt, bundle.indexOf('\nasync function initializeDatabase', bAt));
+  const describeDatabaseError = new Function('databaseDriver', compiled + '; return describeDatabaseError;')('postgres');
+  const aggregate = new AggregateError(
+    [Object.assign(new Error('connect ECONNREFUSED ::1:5432'), { code: 'ECONNREFUSED' }),
+     Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' })], '');
+  const text = describeDatabaseError(aggregate);
+  assert.match(text, /127\.0\.0\.1:5432/, 'the real address must appear in the message');
+  assert.match(text, /sqlite:data\/scraper4\.sqlite/, 'the message must tell the user how to fix it');
+  assert.notEqual(text.trim(), '', 'the message must never be empty');
+});
+
+test('a database outage keeps its explanation on screen instead of flashing', async () => {
+  // notice() hid itself after 6 seconds, so the ECONNREFUSED error appeared and
+  // vanished while the top light stayed red with no reason shown.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  assert.match(dash, /function notice\(message,kind='ok',persist=false\)/, 'notice must support a persistent variant');
+  assert.match(dash, /if\(!persist\)notice\.timer=setTimeout/, 'a persistent notice must not auto-hide');
+  const at = dash.indexOf("catch(error){state.connected=false;");
+  const block = dash.slice(at, dash.indexOf('function renderStatus', at));
+  assert.match(block, /databaseReady===false/, 'a failed load must check whether the database is the cause');
+  assert.match(block, /h\.databaseError/, 'the real database error must be surfaced');
+  assert.match(block, /notice\(detail,'error',true\)/, 'the database error must persist on screen');
+});
+
+test('the Worker widens a pinned container selector exactly like the Node runtime', async () => {
+  // Profiles are shared between runtimes. The visual picker pins the clicked
+  // card with :nth-of-type(N), so a container matched ONE card instead of the
+  // whole grid. Node fixes this in containerNodes(); the Worker must agree, or
+  // the same profile yields a different product count on Cloudflare.
+  const src = await readProjectFile('worker-src/scraper.ts');
+  const at = src.indexOf('const containers=selectorParts(');
+  const line = src.slice(at, src.indexOf('\n  let validContainer', at));
+  assert.match(line, /nth-of-type/, 'the Worker must strip the positional pins from the container selector');
+  assert.match(line, /replace\(\/:nth-of-type\\\(\\d\+\\\)\/g,''\)/, 'every :nth-of-type(N) step must be removed');
+  assert.match(line, /\|\|selector/, 'a selector that is nothing but pins must fall back to the original');
+
+  // The same widening rule must be applied by both runtimes.
+  const node = await readProjectFile('render-src/scraper.ts');
+  const nodeBody = node.slice(node.indexOf('function containerNodes'), node.indexOf('\nfunction scrapeListCheerioFromHtml'));
+  assert.match(nodeBody, /:nth-of-type\(/, 'the Node runtime must key on the same pattern');
+
+  const widen = new Function('selector',
+    "return selector.includes(':nth-of-type(')?(selector.replace(/:nth-of-type\\(\\d+\\)/g,'').trim()||selector):selector;");
+  assert.equal(widen('section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card');
+  assert.equal(widen('li.product'), 'li.product', 'an unpinned selector must be left alone');
+  assert.equal(widen(':nth-of-type(2)'), ':nth-of-type(2)', 'a pin-only selector must not become empty');
+});
+
+test('the visual picker saves a repeating container and card-relative field selectors', async () => {
+  // The picker used to save a DOCUMENT-ABSOLUTE path for every field
+  // ("section.grid > div.card:nth-of-type(1) > a > div.title") and a container
+  // pinned to one card. Extraction searches only inside a card, so no field
+  // ever matched: 0 products with all-green whole-page evidence.
+  const src = await readProjectFile('render-src/visual.ts');
+  const at = src.indexOf('const PICKER_JS');
+  const picker = src.slice(at, src.indexOf('`;', at));
+  assert.match(picker, /function generalize\(/, 'the container must be generalised to every sibling card');
+  assert.match(picker, /function relative\(/, 'field selectors must be rewritten relative to the container');
+  assert.match(picker, /el\.closest\(containerSel\)/, 'relativisation must anchor on the chosen container');
+  // Both the live preview and the saved value must use the corrected selector.
+  const choose = picker.slice(picker.indexOf('function choose('), picker.indexOf('document.addEventListener'));
+  assert.match(choose, /generalize\(current,s\)/, 'the preview must show the generalised container');
+  assert.match(choose, /relative\(current,s\)/, 'the preview must show the relative field selector');
+  const save = picker.slice(picker.indexOf("__s4save').onclick"));
+  assert.match(save, /s=generalize\(current,s\);containerSel=s/, 'saving a container must generalise it and remember it');
+  assert.match(save, /else s=relative\(current,s\)/, 'saving a field must relativise it against the container');
+  assert.doesNotMatch(save.slice(0, save.indexOf('postMessage')), /const s=selector\(current\),/,
+    'the saved value must not be the raw absolute path');
+
+  // Exercise the real generalisation rule.
+  const generalize = new Function('document', 'el', 's', `
+    ${picker.slice(picker.indexOf('function generalize('), picker.indexOf('function relative('))}
+    return generalize(el, s);`);
+  const cards = [{}, {}, {}];
+  const doc = { querySelectorAll: sel => (sel.includes(':nth-of-type(') ? [cards[0]] : cards) };
+  assert.equal(generalize(doc, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card',
+    'a pinned container must widen to all sibling cards');
+  const single = { querySelectorAll: () => [cards[0]] };
+  assert.equal(generalize(single, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card:nth-of-type(1)',
+    'when widening does not find more cards the original selector must be kept');
+  // Widening must never silently point somewhere else: if the element the user
+  // actually clicked is not part of the wider match, keep the exact selector.
+  const elsewhere = { querySelectorAll: sel => (sel.includes(':nth-of-type(') ? [cards[0]] : [cards[1], cards[2]]) };
+  assert.equal(generalize(elsewhere, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card:nth-of-type(1)',
+    'a widening that drops the picked element must be rejected');
 });

@@ -11,7 +11,7 @@ import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
-import { clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
@@ -24,7 +24,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.92.0'; } catch { return process.env.npm_package_version || '1.92.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.93.0'; } catch { return process.env.npm_package_version || '1.93.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -95,6 +95,25 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
 }
 let databaseReady = false;
 let databaseError = '';
+function describeDatabaseError(error: unknown): string {
+  const parts: string[] = [];
+  const collect = (value: any) => {
+    if (!value) return;
+    if (typeof value.message === 'string' && value.message.trim()) parts.push(value.message.trim());
+    // AggregateError (node-postgres retries IPv6 then IPv4) has an empty own
+    // message; every real reason is inside .errors.
+    if (Array.isArray(value.errors)) for (const inner of value.errors) collect(inner);
+    else if (value.cause) collect(value.cause);
+  };
+  collect(error);
+  const anyError = error as any;
+  if (!parts.length && anyError?.code) parts.push(String(anyError.code));
+  let detail = [...new Set(parts)].join('; ') || 'Unknown database error';
+  if (/ECONNREFUSED/i.test(detail) && databaseDriver === 'postgres') {
+    detail += ' — PostgreSQL is not running at this address. On Termux/Android, PostgreSQL is optional: remove DATABASE_URL from .env.local (or set DATABASE_URL=sqlite:data/scraper4.sqlite) to use the built-in SQLite database, which needs no server.';
+  }
+  return detail;
+}
 async function initializeDatabase(): Promise<boolean> {
   try {
     assertConfig();
@@ -104,8 +123,29 @@ async function initializeDatabase(): Promise<boolean> {
     console.log(`${databaseLabel} connected and schema is ready`);
     return true;
   } catch (error) {
+    const detail = describeDatabaseError(error);
+    // A refused connection to a PostgreSQL on THIS device means no server is
+    // installed (the default situation on Termux/Android). Rather than looping
+    // on ECONNREFUSED forever with a red status light, fall back to the
+    // built-in SQLite database and carry on.
+    if (/ECONNREFUSED|ENOENT|EAI_AGAIN/i.test(detail) && fallbackToSqlite(detail)) {
+      console.warn(`Local PostgreSQL is unreachable; switching to the built-in SQLite database. Reason: ${detail}`);
+      try {
+        await migrate();
+        await pool.query('SELECT 1');
+        databaseReady = true;
+        databaseError = '';
+        console.log(`${databaseLabel} connected and schema is ready (automatic fallback)`);
+        return true;
+      } catch (fallbackError) {
+        databaseReady = false;
+        databaseError = describeDatabaseError(fallbackError);
+        console.error(`DATABASE NOT READY: ${databaseError}`);
+        return false;
+      }
+    }
     databaseReady = false;
-    databaseError = error instanceof Error ? error.message : String(error);
+    databaseError = detail;
     console.error(`DATABASE NOT READY: ${databaseError}`);
     return false;
   }

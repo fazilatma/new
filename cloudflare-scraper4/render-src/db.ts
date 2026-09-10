@@ -6,20 +6,51 @@ import { config } from './config.js';
 import type { Job, Product, Profile } from './types.js';
 
 const { Pool } = pg;
-const useSqlite = !config.databaseUrl || config.databaseUrl.startsWith('sqlite:') || config.databaseUrl.startsWith('file:');
-const pgPool = useSqlite ? null : new Pool({
+// Mutable: a loopback PostgreSQL that refuses connections (no server installed,
+// the usual case on Termux/Android) self-heals to the built-in SQLite file
+// instead of leaving the app permanently unusable. See fallbackToSqlite below.
+let useSqlite = !config.databaseUrl || config.databaseUrl.startsWith('sqlite:') || config.databaseUrl.startsWith('file:');
+let pgPool = useSqlite ? null : new Pool({
   connectionString: config.databaseUrl,
   ssl: config.databaseUrl.includes('localhost') ? false : { rejectUnauthorized: false },
   max: Math.max(2, Number(process.env.DB_POOL_SIZE || 10)),
   idleTimeoutMillis: 30_000
 });
 let sqliteDb: any = null;
-export const databaseDriver = useSqlite ? 'sqlite' : 'postgres';
-export const databaseLabel = useSqlite ? 'local SQLite' : 'PostgreSQL';
+export let databaseDriver = useSqlite ? 'sqlite' : 'postgres';
+export let databaseLabel = useSqlite ? 'local SQLite' : 'PostgreSQL';
+export let sqliteFallbackReason = '';
+
+/** True when the configured PostgreSQL server lives on this device. */
+export function isLoopbackPostgres(): boolean {
+  if (useSqlite) return false;
+  try {
+    const host = new URL(config.databaseUrl.replace(/^postgres(ql)?:/i, 'http:')).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  } catch { return false; }
+}
+
+/**
+ * Switch to the built-in SQLite database at runtime. Only ever called for a
+ * loopback PostgreSQL: a REMOTE database that is merely down must keep failing
+ * loudly, because silently serving an empty local file would hide real data.
+ */
+export function fallbackToSqlite(reason: string): boolean {
+  if (useSqlite || !isLoopbackPostgres()) return false;
+  const dying = pgPool;
+  useSqlite = true;
+  pgPool = null;
+  databaseDriver = 'sqlite';
+  databaseLabel = 'local SQLite';
+  sqliteFallbackReason = reason;
+  void dying?.end().catch(() => {});
+  return true;
+}
 function sqlitePath(): string {
   // Accept sqlite:path, file:path, sqlite:///abs/path and bare paths. Windows
   // drive letters (sqlite:C:\dir\db.sqlite) must survive the prefix stripping.
-  const configured = String(process.env.SCRAPER4_SQLITE_PATH || config.databaseUrl || '').trim();
+  const fromConfig = /^(postgres|postgresql|mysql|mariadb):/i.test(config.databaseUrl) ? '' : config.databaseUrl;
+  const configured = String(process.env.SCRAPER4_SQLITE_PATH || fromConfig || '').trim();
   const raw = configured.replace(/^sqlite:(\/\/)?/i, '').replace(/^file:(\/\/)?/i, '').trim();
   return resolve(raw || 'data/scraper4.sqlite');
 }
