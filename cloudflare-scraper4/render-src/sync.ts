@@ -13,7 +13,9 @@ export async function syncWoo(product: Product, profile: Profile): Promise<'crea
     const search = await safeFetch(`${base}?sku=${encodeURIComponent(sku)}`, { headers: { authorization: auth, accept: 'application/json' } }, 2_000_000);
     if (search.ok) { const rows = await search.json() as any[]; id = rows[0]?.id ? Number(rows[0].id) : null; }
   }
-  const payload: any = { name: product.title, sku, type: 'simple', regular_price: String(product.price), description: product.longDesc || '',
+  // The configured WooCommerce adjustment percentage (0 = unchanged).
+  const wooPercent = Number(c.pricePercent) || 0;
+  const payload: any = { name: product.title, sku, type: 'simple', regular_price: String(Math.round(product.price * (1 + wooPercent / 100))), description: product.longDesc || '',
     short_description: product.shortDesc || '', images: product.images.map(src => ({ src })) };
   if (product.stock !== undefined) Object.assign(payload, { manage_stock: true, stock_quantity: product.stock });
   if (product.weight) payload.weight = String(product.weight);
@@ -41,7 +43,7 @@ export async function syncBasalam(product: Product, profile: Profile): Promise<B
   const learned=c.autoCategory?await findLearnedCategory(product.title):null,categoryId=profile.basalamCategoryId||learned?.categoryId||c.categoryId||undefined;
   const categories=([categoryId,...((profile as any).basalamFallbackCategoryIds||[]),...((c as any).fallbackCategoryIds||[])].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index));
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
-  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:0},...c.shops.filter(s=>s.token&&s.vendorId)];const results:BasalamSyncResult[]=[];
+  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0},...c.shops.filter(s=>s.token&&s.vendorId)];const results:BasalamSyncResult[]=[];
   for(const account of accounts){const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;const action=existing?'updated':'created';let remoteId=0,transport:BasalamSyncResult['transport']='sdk',fallback='';try{const sdk=await sendBasalamWithSdk(product,c,account,existing,categoryAttempts[0]);remoteId=Number(sdk.id||existing);transport='sdk'}catch(error){fallback=error instanceof Error?error.message:String(error);const api=await sendBasalamWithApi(product,c,account,existing,categoryAttempts);remoteId=Number(api.id||existing);transport='api'}if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(account===accounts[0])await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}results.push({shop:account.name,action,id:remoteId,transport,fallback:transport==='api'?fallback:undefined});}
   return results;
 }

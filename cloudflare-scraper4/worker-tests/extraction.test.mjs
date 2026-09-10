@@ -606,3 +606,114 @@ test('dashboard: the selector test buttons run auto-suggest as a last resort', a
   assert.match(detail, /results\.every\(x=>!x\.ok\)\)\{[^}]*await suggestDetailFields\(\)/,
     'a detail test where nothing matched must invoke the detail auto-suggest handler');
 });
+
+// ---------------------------------------------------------------------------
+// Dashboard usability fixes (request 33).
+// ---------------------------------------------------------------------------
+test('dashboard: the sync preview reports progress and registers a task', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf("if(action==='recon-unified-preview'||action==='recon-unified-apply')");
+  assert.ok(start > 0, 'the unified preview handler must exist');
+  const branch = dashboard.slice(start, start + 2200);
+  assert.match(branch, /localTaskStart\(taskKey,taskName/, 'it must register a task before the request');
+  assert.match(branch, /localTaskEnd\(taskKey,d\.ok!==false/, 'it must close the task on success');
+  assert.match(branch, /catch\(error\)\{localTaskEnd\(taskKey,false/, 'it must close the task on failure');
+  assert.match(branch, /در حال خواندن مقصدها/, 'it must show immediate in-place feedback');
+});
+
+test('dashboard: local tasks are merged into the activity list', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.match(dashboard, /const runs2=\[\.\.\.Array\.from\(localTasks\.values\(\)\),\.\.\.runs\]/,
+    'renderActivity must include client-side tasks');
+  assert.match(dashboard, /const runsHtml=runs2\.length\?\(/, 'the empty check must consider local tasks too');
+  assert.match(dashboard, /const del=r\.local\?''/, 'a local task has no server run to delete');
+});
+
+test('dashboard: an empty sync preview explains which precondition is missing', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('if(!d.rows.length)');
+  const branch = dashboard.slice(start, start + 900);
+  assert.match(branch, /if\(!d\.accounts\)/, 'no destination configured must be its own message');
+  assert.match(branch, /if\(!d\.local\)/, 'no extracted products must be its own message');
+  assert.match(branch, /همه‌چیز هماهنگ است/, 'genuinely in-sync must not look like a failure');
+});
+
+test('dashboard: only recent changelog entries render expanded', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('<div class="change-list">');
+  const end = dashboard.indexOf('<div id="changesResult"', start);
+  const section = dashboard.slice(start, end);
+  const older = section.indexOf('<details class="change-older">');
+  assert.ok(older > 0, 'older entries must live in a collapsed <details>');
+  const expanded = section.slice(0, older).split('<div class="change-item">').length - 1;
+  const collapsed = section.slice(older).split('<div class="change-item">').length - 1;
+  assert.ok(expanded > 0 && expanded <= 15, `expected a short expanded list, got ${expanded}`);
+  assert.ok(collapsed > 50, `the bulk of the history must be collapsed, got ${collapsed}`);
+  const total = section.split('<div class="change-item">').length - 1;
+  assert.equal(expanded + collapsed, total, 'no changelog entry may be lost by the split');
+  assert.ok(total > 100, `the full history must still be present, got ${total}`);
+});
+
+test('dashboard: the newest changelog entry stays visible without expanding', async () => {
+  const [dashboard, pkg] = await Promise.all([
+    readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ]);
+  const version = JSON.parse(pkg).version;
+  const digits = version.replace(/[0-9]/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+  const start = dashboard.indexOf('<div class="change-list">');
+  const visible = dashboard.slice(start, dashboard.indexOf('<details class="change-older">', start));
+  assert.ok(visible.includes(`نسخهٔ ${digits}`), 'the current version must be in the expanded part');
+});
+
+test('woocommerce has a real price adjustment percentage end to end', async () => {
+  const [dashboard, workerVault, nodeVault, workerMaint, nodeMaint, workerSync, nodeSync] = await Promise.all([
+    readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/vault.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/vault.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/maintenance.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8')
+  ]);
+  // 1. It can be entered and is persisted.
+  assert.match(dashboard, /BCON\('woo\.pricePercent'\)/, 'the woo settings need a price percent input');
+  for (const [name, vault] of [['worker', workerVault], ['node', nodeVault]]) {
+    assert.match(vault, /pricePercent:\s*num\(input\?\.woo\?\.pricePercent/, `${name} vault must persist woo.pricePercent`);
+  }
+  // 2. Reconciliation treats the adjusted price as the correct one.
+  assert.match(workerMaint, /name:'ووکامرس',pricePercent:Number\(c\.woo\.pricePercent\)\|\|0/);
+  assert.match(nodeMaint, /pricePercent:\s*Number\(c\.woo\.pricePercent\)\s*\|\|\s*0/);
+  // 3. Sync actually pushes the adjusted price.
+  assert.match(workerSync, /const wooPercent=Number\(c\.pricePercent\)\|\|0/);
+  assert.match(workerSync, /regular_price:wooPrice\(product\.price\)/, 'the simple product price must be adjusted');
+  assert.match(workerSync, /regular_price:wooPrice\(keyedPrices\[0\]\|\|product\.price\)/, 'variations must be adjusted too');
+  assert.match(nodeSync, /regular_price: String\(Math\.round\(product\.price \* \(1 \+ wooPercent \/ 100\)\)\)/);
+});
+
+test('the default basalam shop has its own price percentage', async () => {
+  const [dashboard, workerSync, nodeSync, workerMaint, nodeMaint] = await Promise.all([
+    readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/maintenance.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8')
+  ]);
+  assert.match(dashboard, /BCON\('basalam\.pricePercent'\)/, 'the default shop needs its own field');
+  for (const [name, sync] of [['worker', workerSync], ['node', nodeSync]]) {
+    assert.match(sync, /name:'پیش‌فرض',token:c\.token,vendorId:c\.vendorId,pricePercent:Number\(c\.pricePercent\)\|\|0/,
+      `${name} sync must stop hardcoding the default shop to 0%`);
+  }
+  assert.match(workerMaint, /غرفهٔ پیش‌فرض',pricePercent:Number\(c\.basalam\.pricePercent\)\|\|0/);
+  assert.match(nodeMaint, /pricePercent:\s*Number\(c\.basalam\.pricePercent\)\s*\|\|\s*0/);
+});
+
+test('expectedPriceFor applies the configured percentage', async () => {
+  const out = join(temporary, 'recon-core-test.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+  assert.equal(core.expectedPriceFor(100000, { pricePercent: 10 }), 110000);
+  assert.equal(core.expectedPriceFor(100000, { pricePercent: 0 }), 100000);
+  assert.equal(core.expectedPriceFor(100000, { pricePercent: 10, toRial: true }), 1100000);
+});

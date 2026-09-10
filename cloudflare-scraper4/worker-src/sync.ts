@@ -16,7 +16,11 @@ export async function syncWoo(product:Product,profile:Profile):Promise<'created'
   }
   const groups=(product.variationGroups||[]).filter(group=>group.name&&group.values?.length);
   const contentSync=(await getState<any>('settings',{}))?.general?.contentSync!==false;
-  const payload:any={name:product.title,sku,type:groups.length?'variable':'simple',regular_price:String(product.price)};
+  // The configured WooCommerce adjustment percentage, applied to every price
+  // pushed to the destination (0 = send the source price unchanged).
+  const wooPercent=Number(c.pricePercent)||0;
+  const wooPrice=(value:number)=>String(Math.round((Number(value)||0)*(1+wooPercent/100)));
+  const payload:any={name:product.title,sku,type:groups.length?'variable':'simple',regular_price:wooPrice(product.price)};
   if(!id||contentSync){payload.description=product.longDesc||'';payload.short_description=product.shortDesc||'';if(product.images.length)payload.images=product.images.map(src=>({src}))}
   if(product.destinationStatus)payload.status=product.destinationStatus;
   if(product.stock!==undefined)Object.assign(payload,{manage_stock:true,stock_quantity:product.stock});
@@ -29,19 +33,20 @@ export async function syncWoo(product:Product,profile:Profile):Promise<'created'
   if(remoteId){
     await setRemoteId(profile.id,product.sourceKey,'woo',remoteId);
     await setDestinationId(profile.id,product.sourceKey,'woo','default',remoteId);
-    if(groups.length)await syncWooVariations(base,remoteId,sku,groups,product,auth);
+    if(groups.length)await syncWooVariations(base,remoteId,sku,groups,product,auth,wooPercent);
   }
   return id?'updated':'created';
 }
 
-async function syncWooVariations(base:string,parentId:number,parentSku:string,groups:VariationGroup[],product:Product,auth:string):Promise<void>{
+async function syncWooVariations(base:string,parentId:number,parentSku:string,groups:VariationGroup[],product:Product,auth:string,pricePercent=0):Promise<void>{
+  const wooPrice=(value:number)=>String(Math.round((Number(value)||0)*(1+pricePercent/100)));
   const combinations=cartesian(groups).slice(0,100);
   for(let index=0;index<combinations.length;index++){
     const options=combinations[index],sku=`${parentSku}-v${index+1}`.slice(0,100);
     const search=await safeWooFetch(`${base}/${parentId}/variations?sku=${encodeURIComponent(sku)}&per_page=1`,{headers:{authorization:auth,accept:'application/json'}},1_000_000);
     const found=search.ok?await search.json().catch(()=>[]) as any[]:[],existing=Number(found[0]?.id)||0;
     const keyedPrices=options.map(option=>product.variationPrices?.[option.value]).filter((price):price is number=>Number(price)>0);
-    const payload:any={sku,regular_price:String(keyedPrices[0]||product.price),attributes:options.map(({name,option})=>({name,option}))};
+    const payload:any={sku,regular_price:wooPrice(keyedPrices[0]||product.price),attributes:options.map(({name,option})=>({name,option}))};
     if(product.stock!==undefined)Object.assign(payload,{manage_stock:true,stock_quantity:product.stock});
     if(product.image)payload.image={src:product.image};
     const result=await safeWooFetch(existing?`${base}/${parentId}/variations/${existing}`:`${base}/${parentId}/variations`,{method:'POST',headers:{authorization:auth,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},2_000_000);
@@ -120,7 +125,7 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
   const learned=c.autoCategory?await findLearnedCategory(product.title):null;
   const categories=[profile.basalamCategoryId,learned?.categoryId,c.categoryId,...(profile.basalamFallbackCategoryIds||[]),...c.fallbackCategoryIds].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index);
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
-  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:0},...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
+  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0},...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
   for(const account of accounts){
     const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;

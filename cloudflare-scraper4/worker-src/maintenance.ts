@@ -105,9 +105,9 @@ export async function recon(target:Target,profileId=''){
  */
 export async function reconAccounts():Promise<ReconAccount[]>{
   const c=await loadConnections(),accounts:ReconAccount[]=[];
-  if(c.woo?.url&&c.woo?.key&&c.woo?.secret)accounts.push({target:'woo',accountKey:'default',name:'ووکامرس',pricePercent:0});
+  if(c.woo?.url&&c.woo?.key&&c.woo?.secret)accounts.push({target:'woo',accountKey:'default',name:'ووکامرس',pricePercent:Number(c.woo.pricePercent)||0});
   if(c.basalam?.token&&c.basalam?.vendorId){
-    accounts.push({target:'basalam',accountKey:String(c.basalam.vendorId),name:'باسلام — غرفهٔ پیش‌فرض',pricePercent:0,toRial:true});
+    accounts.push({target:'basalam',accountKey:String(c.basalam.vendorId),name:'باسلام — غرفهٔ پیش‌فرض',pricePercent:Number(c.basalam.pricePercent)||0,toRial:true});
     for(const shop of (c.basalam.shops||[])){
       if(!shop.token||!shop.vendorId||String(shop.vendorId)===String(c.basalam.vendorId))continue;
       accounts.push({target:'basalam',accountKey:String(shop.vendorId),name:`باسلام — ${shop.name||shop.vendorId}`,pricePercent:Number(shop.pricePercent)||0,toRial:true});
