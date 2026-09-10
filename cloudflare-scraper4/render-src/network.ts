@@ -32,7 +32,15 @@ export async function safeFetch(raw: string, init: RequestInit = {}, maxBytes = 
         ...init,
         redirect: 'manual',
         signal: controller.signal,
-        headers: { 'user-agent': config.userAgent, accept: 'text/html,application/json;q=0.9,*/*;q=0.8', ...init.headers }
+        // Match the Cloudflare Worker's request shape: several shops return a
+        // stripped page or a challenge when these browser headers are missing.
+        headers: {
+          'user-agent': config.userAgent,
+          accept: 'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5',
+          'accept-language': 'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6',
+          'cache-control': 'no-cache',
+          ...init.headers
+        }
       });
       if ([301,302,303,307,308].includes(response.status)) {
         const location = response.headers.get('location');

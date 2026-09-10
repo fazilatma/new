@@ -30,7 +30,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.83.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.84.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -51,7 +51,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.83.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.84.0')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -85,7 +85,7 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.83.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.84.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/runtime/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 app.get('/api/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 
@@ -193,6 +193,7 @@ app.post('/api/queue-watchdog',async c=>{const b=await jsonBody(c);const setting
 app.post('/api/source-test',async c=>{const b=await jsonBody(c),result=await safeText(String(b.url||''),1_000_000);return c.json({ok:true,bytes:byteLength(result.text),url:result.url,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()})});
 
 const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
+const MIN_BENCHMARK_PRODUCTS=2;
 const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString();
@@ -210,11 +211,15 @@ async function benchmarkProfileEngines(profile:Profile){
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
     results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
   }
-  const fastest=results.filter(r=>r.ok&&r.available).sort((a,b)=>b.productsPerMinute-a.productsPerMinute||a.elapsedMs-b.elapsedMs)[0]||null;
+  // Same coverage-first rule as the Node runtime so both runtimes agree on the
+  // engine, instead of one picking a shallow engine that finds a stray card.
+  const usable=results.filter(r=>r.ok&&r.available);
+  const best=usable.sort((a,b)=>b.products-a.products||a.elapsedMs-b.elapsedMs)[0]||null;
+  const fastest=best&&best.products>=MIN_BENCHMARK_PRODUCTS?best:null;
   (profile as any).extractionEngineBenchmarks=results;
   if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
   await saveProfile({...profile,updatedAt:new Date().toISOString()});
-  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`Fastest engine saved as profile default: ${fastest.engine}.`]:['No engine extracted products from the first three pages. Check network access, anti-bot responses, and selectors.']};
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(best&&best.products>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${best.products}). موتور پیش‌فرض پروفایل تغییر نکرد.`]:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
 app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await jsonBody(c);return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
 app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);return c.json(await benchmarkProfileEngines(profile))});

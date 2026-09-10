@@ -376,3 +376,75 @@ test('esbuild failures never give Windows-only advice to Termux users', async ()
   assert.match(loader, /ESBUILD_BINARY_PATH/, 'a system esbuild must be usable');
   assert.match(loader, /!== '\/usr\/bin\/esbuild'/, 'the path esbuild refuses must be skipped');
 });
+
+test('the engine benchmark never saves a near-empty engine as the profile default', async () => {
+  // On Termux the benchmark ranked purely by products/minute, so "heuristic"
+  // with ONE stray card beat everything else and was saved as the profile
+  // default. Every later run then extracted 0 products, while the very same
+  // profile extracted 660 on Cloudflare.
+  const server = await readProjectFile('render-src/server.ts');
+
+  // Execute the REAL selection logic from the shipped source.
+  const start = server.indexOf('const usable=results.filter');
+  const end = server.indexOf('(profile as any).extractionEngineBenchmarks', start);
+  const body = server.slice(start, end).replace(/const MIN_BENCHMARK_PRODUCTS[^\n]*\n/, '');
+  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS',
+    `${body}; return { fastest, bestCount };`)(results, 2);
+
+  // The user's real Termux numbers.
+  const termux = [
+    { engine: 'jsonld', products: 0, elapsedMs: 1386, ok: false, available: true, productsPerMinute: 0 },
+    { engine: 'heuristic', products: 1, elapsedMs: 1439, ok: true, available: true, productsPerMinute: 41.7 },
+    { engine: 'cheerio', products: 0, elapsedMs: 1701, ok: false, available: true, productsPerMinute: 0 }
+  ];
+  assert.equal(pick(termux).fastest, null, 'a single product across 3 pages must not become the default');
+  assert.equal(pick(termux).bestCount, 1, 'the best count is still reported so the user learns why');
+
+  // Coverage must win over raw speed.
+  const mixed = [
+    { engine: 'heuristic', products: 3, elapsedMs: 100, ok: true, available: true, productsPerMinute: 1800 },
+    { engine: 'htmlrewriter', products: 660, elapsedMs: 12000, ok: true, available: true, productsPerMinute: 3300 }
+  ];
+  assert.equal(pick(mixed).fastest.engine, 'htmlrewriter', 'the engine that finds the catalogue must win');
+
+  // A genuinely empty run must leave the profile untouched.
+  assert.equal(pick([{ engine: 'jsonld', products: 0, ok: false, available: true, elapsedMs: 10 }]).fastest, null);
+});
+
+test('the selector engine is benchmarked on Node, not only on Cloudflare', async () => {
+  // htmlrewriter is the engine that works for the user on Cloudflare and it is
+  // implemented on Node too, but it was missing from the Node benchmark list,
+  // so the benchmark could never choose it.
+  const server = await readProjectFile('render-src/server.ts');
+  const line = server.split('\n').find(l => l.includes('const BENCHMARK_ENGINES'));
+  assert.ok(line.includes("'htmlrewriter'"), 'htmlrewriter must be benchmarked on Node');
+  assert.ok(line.includes("'cheerio'"), 'cheerio must stay in the list');
+
+  const scraper = await readProjectFile('render-src/scraper.ts');
+  assert.match(scraper, /name === 'cheerio' \|\| name === 'htmlrewriter'/, 'Node must implement htmlrewriter');
+
+  // Browser engines have no Android build; report them as unavailable rather
+  // than as a scary download failure.
+  assert.match(server, /BROWSER_ENGINES_UNAVAILABLE\s*=\s*process\.platform\s*===\s*'android'/, 'Termux must mark browser engines unavailable');
+  assert.match(server, /available:\s*false/, 'unavailable engines must not look like failures');
+});
+
+test('the Node runtime fetches pages the same way the Worker does', async () => {
+  // The Worker sent a real browser User-Agent and got full pages; Node sent
+  // "Scraper4Render/1.0" with no accept-language, so shops served a stripped
+  // page and the same profile extracted nothing on Termux.
+  const config = await readProjectFile('render-src/config.ts');
+  const network = await readProjectFile('render-src/network.ts');
+  const worker = await readProjectFile('worker-src/network.ts');
+
+  assert.ok(!/Scraper4Render/.test(config), 'the obvious bot User-Agent must be gone');
+  const ua = config.match(/userAgent:[^\n]*/)[0];
+  assert.match(ua, /Mozilla\/5\.0/, 'Node must send a browser User-Agent');
+  assert.match(ua, /process\.env\.USER_AGENT/, 'the User-Agent must stay overridable');
+
+  // The headers the Worker relies on must also be present on Node.
+  for (const header of ['accept-language', 'cache-control']) {
+    assert.ok(worker.includes(header), `precondition: the Worker sends ${header}`);
+    assert.ok(network.includes(header), `Node must also send ${header}`);
+  }
+});

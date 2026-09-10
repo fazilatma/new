@@ -6,7 +6,7 @@ export const config = {
   runWorkerInWeb: process.env.RUN_WORKER_IN_WEB !== 'false',
   workerPollMs: Math.max(500, Number(process.env.WORKER_POLL_MS || 2000)),
   requestTimeoutMs: Math.max(5_000, Number(process.env.REQUEST_TIMEOUT_MS || 30_000)),
-  userAgent: process.env.USER_AGENT || 'Mozilla/5.0 (compatible; Scraper4Render/1.0)',
+  userAgent: process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   woo: {
     url: process.env.WOO_URL || '',
     key: process.env.WOO_KEY || '',

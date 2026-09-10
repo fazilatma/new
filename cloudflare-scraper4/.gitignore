@@ -10,3 +10,6 @@ worker-dist/
 dist/
 .deploy/
 data/
+
+# Crawlee scratch data (request queues, session state) created at runtime
+storage/

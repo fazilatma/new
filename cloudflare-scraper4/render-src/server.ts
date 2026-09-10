@@ -23,7 +23,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.83.0'; } catch { return process.env.npm_package_version || '1.83.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.84.0'; } catch { return process.env.npm_package_version || '1.84.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -286,11 +286,20 @@ app.post('/api/profiles/:id/sync', async c => {
   return c.json({ ok: true, job, processor:job.kind==='sync'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 
-const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','playwright','puppeteer','crawlee_playwright'];
+// A 3-page scan that yields a single product means the engine matched a stray
+// card, not the product grid; saving it as the default breaks every later run.
+const MIN_BENCHMARK_PRODUCTS=2;
+// Playwright/Puppeteer/Crawlee have no Android build, so on Termux they are
+// unavailable rather than broken -- report them the way the Worker reports its
+// own unavailable engines instead of showing a scary download error.
+const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+const BROWSER_ENGINES_UNAVAILABLE=process.platform==='android';
+const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString();
   for(const engine of BENCHMARK_ENGINES){
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
+    if(BROWSER_ENGINES_UNAVAILABLE&&BROWSER_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'موتورهای مرورگر روی اندروید/ترموکس نصب‌شدنی نیستند؛ از htmlrewriter یا cheerio استفاده کنید.'});continue}
     try{
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,engine,undefined,false);
@@ -301,11 +310,19 @@ async function benchmarkProfileEngines(profile:Profile){
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
     results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
   }
-  const fastest=results.filter(r=>r.ok&&r.available).sort((a,b)=>b.productsPerMinute-a.productsPerMinute||a.elapsedMs-b.elapsedMs)[0]||null;
+  const usable=results.filter(r=>r.ok&&r.available);
+  // Rank by coverage first. Ranking purely by products/minute let a shallow
+  // engine that found a single stray card beat the selector engine that found
+  // hundreds, and the winner was then saved as the profile default -- so every
+  // later run extracted almost nothing.
+  const best=usable.sort((a,b)=>b.products-a.products||a.elapsedMs-b.elapsedMs)[0]||null;
+  const bestCount=best?best.products:0;
+  // A single product from a 3-page scan is noise, not a working engine.
+  const fastest=best&&bestCount>=MIN_BENCHMARK_PRODUCTS?best:null;
   (profile as any).extractionEngineBenchmarks=results;
   if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
   await saveProfile({...profile,updatedAt:new Date().toISOString()});
-  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`Fastest engine saved as profile default: ${fastest.engine}.`]:['No engine extracted products from the first three pages. Check network access, anti-bot responses, and selectors.']};
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(bestCount>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${bestCount}). موتور پیش‌فرض پروفایل تغییر نکرد تا یک نتیجهٔ نادرست جایگزین تنظیم درست شما نشود.`,'سلکتور ظرف محصول را بررسی کنید؛ اگر روی Cloudflare درست کار می‌کند، همان htmlrewriter را دستی انتخاب کنید.']:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
 app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);return c.json(await benchmarkProfileEngines(profile))});
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
