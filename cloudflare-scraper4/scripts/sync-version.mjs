@@ -43,7 +43,11 @@ const rules = [
   { file: 'scripts/local-deployer-ui.mjs', label: 'deployer guide expected health version', find: new RegExp(String.raw`([Ee]xpected version: )${N}`, 'g'), to: `$1${V}` },
   { file: 'scraper4.ts', label: 'header docs expected version', find: new RegExp(String.raw`(# Expected: )${N}`, 'g'), to: `$1${V}` },
   { file: 'scraper4.ts', label: 'header docs health version', find: new RegExp(String.raw`(verify version is )${N}`, 'g'), to: `$1${V}` },
-  { file: 'worker-tests/runtime.test.mjs', label: 'runtime test wrangler assertion', find: new RegExp(String.raw`(WORKER_VERSION\\s\*=\\s\*")${N}(")`, 'g'), to: `$1${V}$2` }
+  { file: 'worker-tests/runtime.test.mjs', label: 'runtime test wrangler assertion', find: new RegExp(String.raw`(WORKER_VERSION\\s\*=\\s\*")${N}(")`, 'g'), to: `$1${V}$2` },
+  // The lockfile carries the version twice. If it drifts, every `npm install`
+  // rewrites it, the worktree is permanently dirty, and the deployer's
+  // auto-update refuses to run (it must never reset --hard over local work).
+  { file: 'package-lock.json', label: 'lockfile version', find: new RegExp(String.raw`("name": "scraper4-cloudflare",\s*\n(\s*)"version": ")${N}(")`, 'g'), to: `$1${V}$3` }
 ];
 
 const drift = [];

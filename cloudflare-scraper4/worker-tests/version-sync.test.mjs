@@ -253,3 +253,38 @@ test('a scraper that exited is restarted, and the failure is explained', async (
   assert.match(deployer, /log: tail/, 'the response must carry the tail of the scraper log');
   assert.match(deployer, /still starting and did not answer/, 'a slow start must be reported as slow, not broken');
 });
+
+test('the lockfile version matches package.json, so npm install cannot dirty the tree', async () => {
+  // Root cause of "the fix never reached my device": package-lock.json carried a
+  // stale version, so every `npm install` rewrote it. The deployer's auto-update
+  // refuses to run on a dirty worktree (correctly -- it uses git reset --hard),
+  // so the device stayed on old code forever and kept showing the old error.
+  const lock = JSON.parse(await readProjectFile('package-lock.json'));
+  assert.equal(lock.version, version, 'package-lock.json root version drifted from package.json');
+  assert.equal(lock.packages?.['']?.version, version, 'package-lock.json packages[""] version drifted');
+});
+
+test('sync-version keeps the lockfile in step and touches nothing else in it', async () => {
+  const script = await readProjectFile('scripts/sync-version.mjs');
+  assert.match(script, /file: 'package-lock\.json'/, 'the lockfile must be a sync target');
+  // The anchor must be the project's own name, not a bare "version" key, or the
+  // script would rewrite the version of all ~950 dependencies.
+  assert.match(script, /"name": "scraper4-cloudflare"/, 'the lockfile rule must be anchored on the project name');
+});
+
+test('auto-update ignores lockfile-only churn but still protects real local work', async () => {
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  assert.match(deployer, /const lockOnly = dirtyProbe\.stdout/, 'the updater must detect lockfile-only churn');
+  assert.match(deployer, /runSync\('git', \['checkout', '--', 'package-lock\.json'\]\)/, 'it must restore the lockfile rather than reset --hard');
+
+  // Exercise the predicate itself against real `git status --porcelain` output.
+  const lockOnly = out => out.trim().split('\n').every(line => /\s(?:cloudflare-scraper4\/)?package-lock\.json$/.test(line));
+  assert.equal(lockOnly(' M cloudflare-scraper4/package-lock.json'), true, 'lockfile churn must be ignorable');
+  assert.equal(lockOnly(' M package-lock.json'), true, 'also when the deployer runs inside the project dir');
+  assert.equal(lockOnly(' M cloudflare-scraper4/package-lock.json\n M cloudflare-scraper4/worker-src/ai.ts'), false,
+    'a real edit alongside the lockfile must still pause the update');
+  assert.equal(lockOnly(' M cloudflare-scraper4/worker-src/ai.ts'), false, 'a real edit must pause the update');
+
+  // The dirty guard itself must survive: it is what stops reset --hard eating work.
+  assert.match(deployer, /Auto-update skipped: \$\{files\} uncommitted change\(s\)/, 'the dirty-worktree guard must remain');
+});
