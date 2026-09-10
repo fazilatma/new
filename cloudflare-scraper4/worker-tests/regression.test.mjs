@@ -901,3 +901,54 @@ test('the Basalam Python SDK bridge exists and is wired in', async () => {
   assert.ok(sync.indexOf('runBasalamSdkBridge') < sync.indexOf('sendBasalamWithNpmSdk'),
     'the SDK bridge must be tried before falling back');
 });
+
+// --- The Basalam payload made every real send fail with HTTP 400:
+//   {"fields":["photo"],"message":"Input should be a valid integer..."}
+//   {"fields":["status"],"message":"Field required"}
+// `photo` is the integer id of a file uploaded to /v1/files, `status` is
+// required (2976 = PUBLISHED) and the price field is `primary_price`.
+test('the Basalam payload uses primary_price, an integer photo id and a status', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const start = source.indexOf('function basalamPayload(');
+    assert.ok(start > 0, `${file}: basalamPayload must exist`);
+    const body = source.slice(start, start + 1400);
+    assert.ok(body.includes('primary_price:'), `${file}: must send primary_price`);
+    assert.ok(!/[^_]\bprice:/.test(body), `${file}: must not send the rejected "price" field`);
+    assert.ok(body.includes('status:BASALAM_STATUS_PUBLISHED'), `${file}: status is required`);
+    assert.ok(!/photo:product\.image/.test(source), `${file}: photo must never be an image URL`);
+    assert.ok(source.includes('const BASALAM_STATUS_PUBLISHED=2976'), `${file}: PUBLISHED is 2976`);
+    assert.ok(source.includes('uploadBasalamPhotos'), `${file}: must upload photos to get ids`);
+    assert.ok(/Number\.isFinite\(id\)&&id>0/.test(source), `${file}: only valid integer ids are sent`);
+    assert.ok(source.includes("form.append('file_type','product.photo')"), `${file}: correct upload file_type`);
+  }
+});
+
+// --- Request: testing a Basalam token must fill the remaining fields.
+test('the Basalam connection test returns autofill data in both runtimes', async () => {
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  for (const [name, source] of [['worker', app], ['node', server]]) {
+    assert.ok(source.includes('autofill'), `${name}: the diagnostic must return an autofill block`);
+    assert.ok(source.includes('/users/me'), `${name}: must query users/me to identify the vendor`);
+    assert.ok(/autofill\.vendorId=vendorId/.test(source), `${name}: vendor id must be offered for autofill`);
+  }
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function applyBasalamAutofill('), 'the dashboard must apply the autofill');
+  assert.ok(dashboard.includes("set('bsVid',a.vendorId"), 'the vendor id field must be filled');
+});
+
+// --- Results section: one column, code suffix on the name, base price struck
+// through next to the final price, and a product modal with gallery/details.
+test('the results list is single column with suffix, prices and a modal', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('.products{display:grid;grid-template-columns:1fr;'),
+    'the results grid must be a single column');
+  assert.ok(!/\.products\{grid-template-columns:repeat\(2/.test(dashboard),
+    'no breakpoint may put the results back into two columns');
+  for (const token of ['function productCodeSuffix(', 'function productRowHtml(', 'function openProductModal(',
+    'price-base', 'price-final', 'psuffix', 'pgallery', 'data-product-open'])
+    assert.ok(dashboard.includes(token), `results section must define ${token}`);
+  assert.ok(dashboard.includes('allDestinationsForPricing()'), 'the modal must price every destination');
+  assert.ok(dashboard.includes('قیمت نهایی در همهٔ مقصدها'), 'the modal must show the all-destination table');
+});

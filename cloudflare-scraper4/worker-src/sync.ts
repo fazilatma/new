@@ -67,10 +67,62 @@ function basalamPrice(product:Product,percent=0):number{
 
 type BasalamAccount={name:string;token:string;vendorId:string;pricePercent?:number};
 type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
-type BasalamPayload={name:string;price:number;stock:any;description:string;photo?:string;category_id?:number;weight:any;package_weight:any;preparation_days:any};
+/**
+ * Basalam's product schema (openapi.basalam.com/v1). Three fields were wrong and
+ * made every real send fail with HTTP 400:
+ *   - `photo` is the INTEGER id of a file uploaded to /v1/files, not an image URL
+ *     ("Input should be a valid integer, unable to parse string as an integer").
+ *   - `status` is required ("Field required"); 2976 = PUBLISHED.
+ *   - the price field is `primary_price`, not `price`.
+ */
+const BASALAM_STATUS_PUBLISHED=2976;
+type BasalamPayload={name:string;primary_price:number;stock:any;description:string;status:number;photo?:number;photos?:number[];category_id?:number;weight:any;package_weight:any;preparation_days:any;sku?:string};
 
-function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined):BasalamPayload{
-  return {name:product.title,price:basalamPrice(product,account.pricePercent||0),stock:product.stock??c.stock,description:(product.longDesc||product.shortDesc||'')+(product.variations?.length?`\n\nتنوع‌ها: ${product.variations.join('، ')}`:''),photo:product.image||undefined,category_id:categoryId,weight:product.weight||c.weight,package_weight:c.packageWeight,preparation_days:c.preparationDays};
+function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[]):BasalamPayload{
+  const payload:BasalamPayload={
+    name:product.title,
+    primary_price:basalamPrice(product,account.pricePercent||0),
+    stock:product.stock??c.stock,
+    description:(product.longDesc||product.shortDesc||'')+(product.variations?.length?`\n\nتنوع‌ها: ${product.variations.join('، ')}`:''),
+    status:BASALAM_STATUS_PUBLISHED,
+    category_id:categoryId,
+    weight:product.weight||c.weight,
+    package_weight:c.packageWeight,
+    preparation_days:c.preparationDays,
+  };
+  if(product.sku)payload.sku=String(product.sku).slice(0,100);
+  // Only send photo ids we actually obtained; an empty/failed upload must not
+  // put a string (or a 0) into an integer field.
+  const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
+  if(ids.length){payload.photo=ids[0];payload.photos=ids.slice(0,10)}
+  return payload;
+}
+
+/**
+ * Uploads product images to Basalam and returns their integer file ids.
+ * Failures are non-fatal: the product is still published, just without photos,
+ * which is far better than losing the whole send to an HTTP 400.
+ */
+async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,limit=3):Promise<number[]> {
+  const urls=[product.image,...(product.images||[])].filter(Boolean).filter((url,index,all)=>all.indexOf(url)===index).slice(0,limit);
+  const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
+  const ids:number[]=[];
+  for(const url of urls){
+    try{
+      const image=await safeFetch(String(url),{headers:{accept:'image/*'}},12_000_000);
+      if(!image.ok)continue;
+      const blob=await image.blob();
+      if(!blob.size)continue;
+      const form=new FormData();
+      form.append('file',blob,(String(url).split('/').pop()||'photo.jpg').split('?')[0]);
+      form.append('file_type','product.photo');
+      const uploaded=await safeFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
+      const body=await uploaded.json().catch(()=>({})) as any;
+      const id=Number(body?.id);
+      if(uploaded.ok&&Number.isFinite(id)&&id>0)ids.push(id);
+    }catch{/* one bad image must not abort the product */}
+  }
+  return ids;
 }
 
 async function tryImportBasalamSdk():Promise<any>{
@@ -82,14 +134,14 @@ async function tryImportBasalamSdk():Promise<any>{
 }
 
 async function callMaybe(fn:any,...args:any[]):Promise<any>{return typeof fn==='function'?fn(...args):undefined}
-async function sendBasalamWithSdk(product:Product,profile:Profile,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined):Promise<{id:number;body:any;packageName:string}>{
+async function sendBasalamWithSdk(product:Product,profile:Profile,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{
   const loaded=await tryImportBasalamSdk();
   if(!loaded.module)throw new Error(`Basalam SDK package is not installed/available in this runtime (${loaded.error||'no candidates'}).`);
   const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient;
   const options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};
   const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;
   if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);
-  const payload=basalamPayload(product,c,account,categoryId);
+  const payload=basalamPayload(product,c,account,categoryId,photoIds);
   const productApi=client.products||client.product||client.core?.products||client.core||client;
   const methods=existing?
     [['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:
@@ -105,12 +157,12 @@ async function sendBasalamWithSdk(product:Product,profile:Profile,c:any,account:
   throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`);
 }
 
-async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>):Promise<{id:number;body:any;categoryId:number|undefined}> {
+async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any;categoryId:number|undefined}> {
   const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;
   let response:Response|undefined,body:any={},usedCategory: number|undefined;
   for(const categoryId of categories){
     usedCategory=categoryId;
-    const payload=basalamPayload(product,c,account,categoryId);
+    const payload=basalamPayload(product,c,account,categoryId,photoIds);
     response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
     body=await response.json().catch(()=>({}));
     if(response.ok)break;
@@ -133,13 +185,16 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
     const price=basalamPrice(product,Number(account.pricePercent)||0);
     let remoteId=0,transport:BasalamSyncResult['transport']='sdk',fallback='';
     try{
+      // Photos are uploaded once per stall and reused by both transports, because
+      // Basalam wants integer file ids in `photo`/`photos`, not image URLs.
+      const photoIds=await uploadBasalamPhotos(product,c,account);
       // SDK first, REST API as the fallback.
       try{
-        const sdk=await sendBasalamWithSdk(product,profile,c,account,existing,categoryAttempts[0]);
+        const sdk=await sendBasalamWithSdk(product,profile,c,account,existing,categoryAttempts[0],photoIds);
         remoteId=Number(sdk.id||existing);transport='sdk';
       }catch(error){
         fallback=error instanceof Error?error.message:String(error);
-        const api=await sendBasalamWithApi(product,profile,c,account,existing,categoryAttempts);
+        const api=await sendBasalamWithApi(product,profile,c,account,existing,categoryAttempts,photoIds);
         remoteId=Number(api.id||existing);transport='api';
       }
     }catch(error){

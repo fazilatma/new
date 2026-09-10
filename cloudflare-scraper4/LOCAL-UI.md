@@ -175,3 +175,28 @@ You still need to pull once if your current Codespace does not yet have `npm run
   `dedup-runs` routes existed only on Cloudflare, so those buttons were dead on Termux, VPS, Render
   and Codespaces. `render-src/dedup-run.ts` implements them in-process with the same public shape.
 - Termux setup now installs the SDK: `pip install basalam-sdk`.
+
+## 1.102.0 — Basalam HTTP 400 fixed, single-column results with a product modal, Basalam settings autofill
+
+- **Fixed the Basalam `HTTP 400` that blocked every real send.** The reported errors
+  (`photo: Input should be a valid integer, unable to parse string as an integer` and
+  `status: Field required`) came from three wrong fields in the product payload:
+  - `photo` must be the **integer id of a file uploaded to `/v1/files`**, not an image URL.
+    Images are now uploaded first (`file_type=product.photo`) and only their numeric ids are sent,
+    in `photo` plus `photos[]`. Upload failures are non-fatal: the product still publishes, without
+    photos, instead of losing the whole send.
+  - `status` is **required**; it is now sent as `2976` (PUBLISHED).
+  - the price field is **`primary_price`**, not `price`.
+  Verified against the official `basalam-sdk` 1.2.0 `ProductRequestSchema`: the new payload validates
+  and the old one reproduces exactly the reported error.
+- **The results section is a single-column list.** Each row shows the image, the product name with
+  its «(کد ایکس)» code suffix, the **base price struck through** and the **final price in Toman** for
+  the default Basalam stall.
+- **Clicking a product opens its modal**: image gallery, a table of the final price for **every**
+  destination (WooCommerce and each Basalam stall, with the Rial equivalent), product details,
+  variations and the full description.
+- **Basalam settings autofill.** Entering a token and pressing Test now queries `users/me` and fills
+  the vendor id and preparation days automatically; testing an extra stall fills that stall's vendor
+  id and name. The Node runtime previously only called `/categories` and returned no vendor data.
+- Fixed: `POST /api/profiles/:id/import` threw an unhandled `SyntaxError` in the server log when the
+  body was not JSON; it now returns a 400.

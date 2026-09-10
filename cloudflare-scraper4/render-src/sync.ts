@@ -34,8 +34,43 @@ function basalamPrice(product:Product,percent=0):number{const base=Math.round(pr
 
 type BasalamAccount={name:string;token:string;vendorId:string;pricePercent?:number};
 type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
-type BasalamPayload={name:string;price:number;stock:any;description:string;photo?:string;category_id?:number;weight:any;package_weight:any;preparation_days:any};
-function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined):BasalamPayload{return{name:product.title,price:basalamPrice(product,account.pricePercent||0),stock:product.stock??c.stock,description:product.longDesc||product.shortDesc||'',photo:product.image||undefined,category_id:categoryId,weight:product.weight||c.weight,package_weight:c.packageWeight,preparation_days:c.preparationDays}}
+/**
+ * Basalam's product schema. `photo` must be the INTEGER id of a file uploaded to
+ * /v1/files (not a URL), `status` is required (2976 = PUBLISHED) and the price
+ * field is `primary_price`. Sending a URL string produced
+ * "Input should be a valid integer" and omitting status produced "Field required".
+ */
+const BASALAM_STATUS_PUBLISHED=2976;
+type BasalamPayload={name:string;primary_price:number;stock:any;description:string;status:number;photo?:number;photos?:number[];category_id?:number;weight:any;package_weight:any;preparation_days:any;sku?:string};
+function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[]):BasalamPayload{
+  const payload:BasalamPayload={name:product.title,primary_price:basalamPrice(product,account.pricePercent||0),stock:product.stock??c.stock,description:product.longDesc||product.shortDesc||'',status:BASALAM_STATUS_PUBLISHED,category_id:categoryId,weight:product.weight||c.weight,package_weight:c.packageWeight,preparation_days:c.preparationDays};
+  if(product.sku)payload.sku=String(product.sku).slice(0,100);
+  const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
+  if(ids.length){payload.photo=ids[0];payload.photos=ids.slice(0,10)}
+  return payload;
+}
+/** Uploads images to /v1/files and returns integer ids; failures are non-fatal. */
+async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,limit=3):Promise<number[]>{
+  const urls=[product.image,...(product.images||[])].filter(Boolean).filter((url,index,all)=>all.indexOf(url)===index).slice(0,limit);
+  const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
+  const ids:number[]=[];
+  for(const url of urls){
+    try{
+      const image=await safeFetch(String(url),{headers:{accept:'image/*'}},12_000_000);
+      if(!image.ok)continue;
+      const blob=await image.blob();
+      if(!blob.size)continue;
+      const form=new FormData();
+      form.append('file',blob,(String(url).split('/').pop()||'photo.jpg').split('?')[0]);
+      form.append('file_type','product.photo');
+      const uploaded=await safeFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
+      const body=await uploaded.json().catch(()=>({})) as any;
+      const id=Number(body?.id);
+      if(uploaded.ok&&Number.isFinite(id)&&id>0)ids.push(id);
+    }catch{/* one bad image must not abort the product */}
+  }
+  return ids;
+}
 async function tryImportBasalamSdk():Promise<any>{const importer=new Function('specifier','return import(specifier)') as (specifier:string)=>Promise<any>;const candidates=['@basalam/sdk','@basalam/node-sdk','basalam-sdk','basalam'];const errors:string[]=[];for(const name of candidates)try{return{module:await importer(name),name}}catch(error){errors.push(`${name}: ${error instanceof Error?error.message:String(error)}`)}return{module:null,name:'',error:errors.join(' | ')}}
 // Basalam ships an official SDK for Python only (`pip install basalam-sdk`);
 // no npm package exists. We therefore run the real SDK through a short-lived
@@ -66,8 +101,8 @@ export async function runBasalamSdkBridge(request:any,timeoutMs=Number(process.e
   });
 }
 async function callMaybe(fn:any,...args:any[]):Promise<any>{return typeof fn==='function'?fn(...args):undefined}
-async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined):Promise<{id:number;body:any;packageName:string}>{
-  const payloadForSdk=basalamPayload(product,c,account,categoryId);
+async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{
+  const payloadForSdk=basalamPayload(product,c,account,categoryId,photoIds);
   try{
     const answer=await runBasalamSdkBridge({action:existing?'update':'create',token:account.token,refreshToken:c.refreshToken||'',vendorId:account.vendorId,productId:existing||0,payload:payloadForSdk});
     if(answer?.ok)return{id:Number(answer.id||existing||0),body:answer,packageName:`basalam-sdk (python${answer.sdkVersion?' '+answer.sdkVersion:''})`};
@@ -76,11 +111,11 @@ async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,e
     const bridgeText=bridgeError instanceof Error?bridgeError.message:String(bridgeError);
     const loaded=await tryImportBasalamSdk();
     if(!loaded.module)throw new Error(`Basalam SDK unavailable — python bridge: ${bridgeText}`);
-    return await sendBasalamWithNpmSdk(loaded,product,c,account,existing,categoryId);
+    return await sendBasalamWithNpmSdk(loaded,product,c,account,existing,categoryId,photoIds);
   }
 }
-async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined):Promise<{id:number;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:Number(body?.id||body?.product?.id||existing),body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
-async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId);response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
+async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:Number(body?.id||body?.product?.id||existing),body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
+async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds);response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
   const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');
@@ -95,9 +130,11 @@ export async function syncBasalam(product: Product, profile: Profile): Promise<B
     const price=basalamPrice(product,Number(account.pricePercent)||0);
     let remoteId=0,transport:BasalamSyncResult['transport']='sdk',fallback='';
     try{
+      // Photos are uploaded once per stall and reused by both transports.
+      const photoIds=await uploadBasalamPhotos(product,c,account);
       // SDK first, REST API as the fallback.
-      try{const sdk=await sendBasalamWithSdk(product,c,account,existing,categoryAttempts[0]);remoteId=Number(sdk.id||existing);transport='sdk'}
-      catch(error){fallback=error instanceof Error?error.message:String(error);const api=await sendBasalamWithApi(product,c,account,existing,categoryAttempts);remoteId=Number(api.id||existing);transport='api'}
+      try{const sdk=await sendBasalamWithSdk(product,c,account,existing,categoryAttempts[0],photoIds);remoteId=Number(sdk.id||existing);transport='sdk'}
+      catch(error){fallback=error instanceof Error?error.message:String(error);const api=await sendBasalamWithApi(product,c,account,existing,categoryAttempts,photoIds);remoteId=Number(api.id||existing);transport='api'}
     }catch(error){
       // Both transports failed for THIS stall; keep publishing to the others.
       results.push({shop:account.name,action,id:0,transport:'api',price,error:error instanceof Error?error.message:String(error),fallback:fallback||undefined});
