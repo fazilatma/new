@@ -219,7 +219,7 @@ test('a provider without its own key falls back to the shared AI key', async () 
   // render: same fallback, applied where aiProviders() maps the rows.
   const render = await read('../render-src/ai.ts');
   const renderMap = render.slice(render.indexOf('export async function aiProviders'), render.indexOf('export function aiConfigProblem'));
-  assert.match(renderMap, /apiKey:String\(provider\.apiKey\|\|''\)\.trim\(\)\|\|\(borrow/, 'the render server must adopt the shared key');
+  assert.match(renderMap, /apiKey:String\(provider\.apiKey\|\|''\)\.trim\(\)\|\|fromList\|\|\(borrow/, 'the render server must adopt the shared key after its own apiKeys[]');
 
   // Execute the real rule rather than trusting the shape of the source.
   const source = await read('../worker-src/ai.ts');

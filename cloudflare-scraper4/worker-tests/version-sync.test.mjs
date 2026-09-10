@@ -448,3 +448,49 @@ test('the Node runtime fetches pages the same way the Worker does', async () => 
     assert.ok(network.includes(header), `Node must also send ${header}`);
   }
 });
+
+test('the Node runtime finds keys stored only in apiKeys[]', async () => {
+  // The importer and the multi-key editor store keys in apiKeys[] (plain
+  // strings, {label,token}, or Cloudflare {accountId,token}). render-src/ai.ts
+  // read only provider.apiKey, so every such provider reported
+  // «کلید API ... وارد نشده است» even though its key was saved correctly.
+  const ai = await readProjectFile('render-src/ai.ts');
+  const start = ai.indexOf('export async function aiProviders()');
+  const body = ai.slice(start, ai.indexOf('\n/**', start));
+
+  // Execute the REAL mapping from the shipped source.
+  const mapper = body.slice(body.indexOf('return ai.providers.map('), body.lastIndexOf('})}') + 3)
+    .replace(/^return /, '').replace(/\}\)\}$/, '})')
+    .replace(/\(provider:any\)/g, '(provider)').replace(/\(k:any\)/g, '(k)');
+  const run = (providers) => new Function('ai', 'sharedKeyFitsProvider',
+    `return ${mapper};`)({ providers, apiKey: '', baseUrl: '' }, () => false);
+
+  const out = run([
+    { id: 'plain', baseUrl: 'https://a.test/v1', apiKeys: ['sk-plain'], models: ['m'] },
+    { id: 'labelled', baseUrl: 'https://b.test/v1', apiKeys: [{ label: 'main', token: 'gsk-1' }], models: ['m'] },
+    { id: 'cf', baseUrl: 'https://c.test/v1', apiKeys: [{ accountId: 'A1', token: 't1' }], models: ['m'] },
+    { id: 'mixed', baseUrl: 'https://d.test/v1', apiKeys: [{ token: 'off', enabled: false }, { token: 'on' }], models: ['m'] }
+  ]);
+  const key = (id) => out.find(p => p.id === id).apiKey;
+  assert.equal(key('plain'), 'sk-plain', 'a plain string key must be found');
+  assert.equal(key('labelled'), 'gsk-1', 'a {label,token} key must be found');
+  assert.equal(key('cf'), 't1', 'a Cloudflare {accountId,token} key must be found');
+  assert.equal(key('mixed'), 'on', 'a key switched off must not be preferred over an active one');
+
+  // An explicit apiKey still wins, and nothing invents a key out of nothing.
+  const direct = run([{ id: 'x', baseUrl: 'https://e.test/v1', apiKey: 'primary', apiKeys: ['other'], models: ['m'] }]);
+  assert.equal(direct[0].apiKey, 'primary');
+  assert.equal(run([{ id: 'y', baseUrl: 'https://f.test/v1', models: ['m'] }])[0].apiKey, '');
+});
+
+test('the Node vault keeps Cloudflare account ids and multi-key metadata', async () => {
+  // render-src/vault.ts typed apiKeys as string[] and flattened every entry to
+  // a bare token, so a Cloudflare provider lost its accountId on every save and
+  // could no longer build its endpoint.
+  const vault = await readProjectFile('render-src/vault.ts');
+  assert.ok(!/apiKeys\?:string\[\]/.test(vault), 'apiKeys must not be limited to plain strings');
+  assert.match(vault, /accountId/, 'the Node vault must persist Cloudflare account ids');
+
+  const worker = await readProjectFile('worker-src/vault.ts');
+  assert.match(worker, /accountId/, 'precondition: the Worker vault already persists them');
+});

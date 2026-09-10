@@ -21,9 +21,14 @@ function sharedKeyFitsProvider(ai:any,provider:any):boolean{
 }
 export async function aiProviders():Promise<Provider[]>{const ai=(await loadConnections()).ai;if(!ai.providers.length)return [{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,models:ai.model?[ai.model]:[],enabled:true}];
   return ai.providers.map((provider:any)=>{const borrow=sharedKeyFitsProvider(ai,provider);
+    const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:[];
+    const active=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():(k.enabled!==false&&String(k.token||k.key||'').trim())));
+    const usable=active.length?active:rawKeys;
+    const first=usable[0];
+    const fromList=typeof first==='string'?first.trim():String(first?.token||first?.key||'').trim();
     return {...provider,
       baseUrl:String(provider.baseUrl||'').trim()||(borrow?String(ai.baseUrl||''):''),
-      apiKey:String(provider.apiKey||'').trim()||(borrow?String(ai.apiKey||''):'')};
+      apiKey:String(provider.apiKey||'').trim()||fromList||(borrow?String(ai.apiKey||''):'')};
   })}
 /**
  * Mirrors worker-src/ai.ts: report exactly which field is missing instead of one
