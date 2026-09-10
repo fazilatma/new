@@ -288,3 +288,34 @@ test('auto-update ignores lockfile-only churn but still protects real local work
   // The dirty guard itself must survive: it is what stops reset --hard eating work.
   assert.match(deployer, /Auto-update skipped: \$\{files\} uncommitted change\(s\)/, 'the dirty-worktree guard must remain');
 });
+
+test('the deployer detects that it is running older code than is on disk', async () => {
+  // A long-lived deployer loads its own source once. After a git update the
+  // files change but the process keeps serving the old code -- and reported the
+  // old version, so a stale process and a live bug produced identical output.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  assert.match(deployer, /const bootVersion = pkg\.version;/, 'the boot version must be captured');
+  assert.match(deployer, /function staleCode\(\)/, 'the deployer must compare disk against boot');
+  assert.match(deployer, /code: staleCode\(\)/, '/api/status must expose it');
+  assert.match(deployer, /WARNING: this process is running v/, 'the terminal must warn on startup');
+
+  // Execute the REAL staleCode() from the shipped source rather than a copy, so
+  // gutting the implementation cannot leave this test green.
+  const body = deployer.slice(deployer.indexOf('function staleCode()'), deployer.indexOf('\n}', deployer.indexOf('function staleCode()')) + 2);
+  const make = (boot, onDisk) => new Function('bootVersion', 'diskVersion', `${body}; return staleCode;`)(boot, () => onDisk)();
+  assert.equal(make('1.81.0', '1.82.0').stale, true, 'a newer file on disk means the process is stale');
+  assert.deepEqual(make('1.81.0', '1.82.0'), { stale: true, running: '1.81.0', onDisk: '1.82.0' });
+  assert.equal(make('1.81.0', '1.81.0').stale, false, 'matching versions are not stale');
+  assert.equal(make('1.81.0', '').stale, false, 'an unreadable package.json must not cry wolf');
+});
+
+test('the proxy error names the deployer version that produced it', async () => {
+  // Three rounds of this bug were reported with byte-identical two-field JSON,
+  // which cannot distinguish "fix not deployed" from "fix does not work".
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  const proxy = deployer.slice(deployer.indexOf('async function proxyScraper('), deployer.indexOf('function requireAuth('));
+  assert.match(proxy, /deployerVersion: pkg\.version/, 'the proxy error must carry the running version');
+  assert.match(proxy, /staleWarning/, 'a stale process must say so in the error itself');
+  assert.match(proxy, /scraperExitCode/, 'the error must carry the scraper exit code');
+  assert.match(proxy, /log: String\(scraperLog/, 'the error must carry the scraper log tail');
+});
