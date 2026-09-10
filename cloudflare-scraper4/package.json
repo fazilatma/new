@@ -20,7 +20,7 @@
     "worker:build": "node build-worker.mjs",
     "worker:typecheck": "tsc -p tsconfig.worker.json --noEmit",
     "worker:dev": "wrangler dev --ip 0.0.0.0",
-    "worker:test": "npm run version:check && npm run worker:typecheck && npm run worker:build && node --test worker-tests/*.test.mjs",
+    "worker:test": "npm run version:check && npm run worker:typecheck && npm run worker:build && npm run render:build && node --test worker-tests/*.test.mjs",
     "esbuild:check": "node scripts/esbuild-check.mjs",
     "worker:deploy": "node scripts/deploy-cloudflare.mjs",
     "worker:db:local": "wrangler d1 migrations apply DB --local",

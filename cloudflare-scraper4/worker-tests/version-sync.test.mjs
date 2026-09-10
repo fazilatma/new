@@ -6,6 +6,27 @@ import test from 'node:test';
 const projectUrl = new URL('../', import.meta.url);
 const readProjectFile = name => readFile(new URL(name, projectUrl), 'utf8');
 const pkg = JSON.parse(await readProjectFile('package.json'));
+/**
+ * Reads the built Node bundle, building it first if it is missing.
+ *
+ * render-dist/ is a build artifact and is gitignored, so on a clean checkout
+ * (Cloudflare Pages, CI, a fresh clone) it does not exist. The tests below
+ * execute the REAL shipped helpers out of that bundle, and without this they
+ * died with a bare ENOENT that looked like a broken repository rather than a
+ * missing build step.
+ */
+let renderBundlePromise;
+const readRenderBundle = () => (renderBundlePromise ??= (async () => {
+  try {
+    return await readProjectFile('render-dist/server.js');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    execFileSync(process.execPath, ['build-render.mjs'], {
+      cwd: new URL('.', projectUrl).pathname, encoding: 'utf8', stdio: 'pipe'
+    });
+    return readProjectFile('render-dist/server.js');
+  }
+})());
 const version = pkg.version;
 const faVersion = String(version).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
 
@@ -896,7 +917,7 @@ test('list extraction finds fields on the container itself, not only its childre
 
   // Execute the REAL shipped helpers from the built bundle.
   const cheerio = await import('cheerio');
-  const bundle = await readProjectFile('render-dist/server.js');
+  const bundle = await readRenderBundle();
   const grab = name => { const i = bundle.indexOf('function ' + name + '('); return bundle.slice(i, bundle.indexOf('\nfunction ', i + 1)); };
   const normalize = v => String(v || '').replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
   const { firstText } = new Function('cheerio', 'normalize',
@@ -914,7 +935,7 @@ test('absolute picker paths still resolve inside each product card', async () =>
   // was skipped: 0 products while the whole-page evidence check stayed green --
   // exactly the contradiction in the user's barfbox.ir report.
   const cheerio = await import('cheerio');
-  const bundle = await readProjectFile('render-dist/server.js');
+  const bundle = await readRenderBundle();
   const grab = name => { const i = bundle.indexOf('function ' + name + '('); return bundle.slice(i, bundle.indexOf('\nfunction ', i + 1)); };
   const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
   const F = new Function('cheerio', 'normalize',
@@ -1093,7 +1114,7 @@ test('a database failure is reported with a real message, not an empty string', 
   assert.match(body, /Array\.isArray\(value\.errors\)/, 'AggregateError.errors must be unwrapped');
 
   // Execute the COMPILED helper so no TypeScript syntax can leak in.
-  const bundle = await readProjectFile('render-dist/server.js');
+  const bundle = await readRenderBundle();
   const bAt = bundle.indexOf('function describeDatabaseError(');
   const compiled = bundle.slice(bAt, bundle.indexOf('\nasync function initializeDatabase', bAt));
   const describeDatabaseError = new Function('databaseDriver', compiled + '; return describeDatabaseError;')('postgres');
@@ -1281,7 +1302,7 @@ test('the AI description generator fills only missing fields, using the master m
   assert.doesNotMatch(gen, /parsed\.images/, 'gallery images must never come from the model');
 
   // Exercise the REAL compiled helper so no TypeScript syntax can leak in.
-  const bundle = await readProjectFile('render-dist/server.js');
+  const bundle = await readRenderBundle();
   const bAt = bundle.indexOf('function productNeedsEnrichment(');
   const detect = new Function(bundle.slice(bAt, bundle.indexOf('\nfunction ', bAt + 1)) + '; return productNeedsEnrichment;')();
   assert.equal(detect({ title: 'X' }).any, true, 'an empty product needs enrichment');
@@ -1436,4 +1457,28 @@ test('the product link survives a selector that points at an image', async () =>
   // The Worker recovers the anchor through its card-scoped link fallback.
   const worker = await readProjectFile('worker-src/scraper.ts');
   assert.match(worker, /a\[href\]/, 'the Worker must keep its card-level anchor fallback');
+});
+
+test('the test command builds every artifact the tests read', async () => {
+  // The Cloudflare Pages build ran `npm ci && npm run worker:test` on a clean
+  // checkout and failed with ENOENT on render-dist/server.js: four tests execute
+  // the real shipped helpers from the Node bundle, but worker:test only built
+  // the Worker bundle and render-dist/ is gitignored. It passed locally purely
+  // because a stale build was lying around.
+  const command = pkg.scripts['worker:test'];
+  const suite = await readProjectFile('worker-tests/version-sync.test.mjs');
+
+  const artifacts = [
+    { dir: 'render-dist', script: 'render:build' },
+    { dir: 'scraper4.worker.js', script: 'worker:build' },
+  ];
+  for (const { dir, script } of artifacts) {
+    if (!suite.includes(dir)) continue;
+    assert.ok(command.includes(script),
+      `the tests read ${dir}, so worker:test must run ${script} first (it is gitignored and absent on a clean checkout)`);
+  }
+
+  // Anything the tests read must be produced by the build, never committed.
+  const ignore = await readProjectFile('.gitignore');
+  assert.match(ignore, /^render-dist\/$/m, 'render-dist must stay a build artifact, not committed output');
 });
