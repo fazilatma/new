@@ -1590,3 +1590,14 @@ test('untracked files never pause the auto-update', async () => {
   const rootIgnore = await readFile(new URL('../.gitignore', projectUrl), 'utf8');
   assert.match(rootIgnore, /^node_modules\/$/m, 'the repo root must ignore node_modules');
 });
+
+test('an optional credential-helper cleanup cannot fail the auto-update', async () => {
+  const source = await readFile(new URL('scripts/local-deployer-ui.mjs', projectUrl), 'utf8');
+  // `git config --unset-all` exits non-zero when the key is simply absent, which
+  // is the normal state of a fresh clone. Counting it made a fully successful
+  // update report ok:false.
+  const line = source.split('\n').find(text => text.includes("'--unset-all', 'credential.helper'"));
+  assert.ok(line, 'the credential-helper cleanup step must still exist');
+  assert.match(line, /optional:\s*true/, 'the cleanup must be marked optional');
+  assert.match(line, /ok:\s*true/, 'its result must not drag the overall ok down');
+});
