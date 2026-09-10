@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, getCurrentAiRun, getLeaderboard, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
+import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, preferredAiChatModel, productNeedsEnrichment, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
@@ -24,7 +24,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.93.0'; } catch { return process.env.npm_package_version || '1.93.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.94.0'; } catch { return process.env.npm_package_version || '1.94.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -259,6 +259,40 @@ app.post('/api/destination/basalam/category-runs/reset', c => c.json({ ok: true,
 app.post('/api/destination/basalam/category/suggest', c => c.json(nodeUnsupported('پیشنهاد خودکار دستهٔ باسلام'), 501));
 app.post('/api/import/analyze', c => c.json(nodeUnsupported('تحلیل فایل ورودی'), 501));
 app.post('/api/ai/diagnose',async c=>c.json(await aiConnectionDiagnostic()));
+// --- AI description generator -------------------------------------------
+// Always-on by default: it fills descriptions/variations that the source page
+// did not provide, using the pinned master model.
+app.get('/api/ai/description-settings',async c=>{
+  const settings=await getState<any>('ai_description_settings',{enabled:true});
+  const picked=await preferredAiChatModel();
+  return c.json({ok:true,settings:{enabled:settings?.enabled!==false},master:picked?{provider:picked.provider.id,model:picked.model}:null});
+});
+app.post('/api/ai/description-settings',async c=>{
+  const body=await c.req.json().catch(()=>({}))as any;
+  const enabled=body.enabled!==false&&body.enabled!=='false';
+  await setState('ai_description_settings',{enabled});
+  return c.json({ok:true,settings:{enabled}});
+});
+app.post('/api/profiles/:id/ai-descriptions',async c=>{
+  const profile=await getProfile(c.req.param('id'));
+  if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);
+  const body=await c.req.json().catch(()=>({}))as any;
+  const force=body.force===true||body.force==='true';
+  const limit=Math.max(1,Math.min(200,Number(body.limit)||25));
+  const picked=await preferredAiChatModel();
+  if(!picked)return c.json({ok:false,error:'هیچ مدل هوش مصنوعی فعالی پیدا نشد. ابتدا یک ارائه‌دهنده و مدل مستر تنظیم کنید.'},400);
+  const stored=(await listProducts(profile.id,1000,0,'')).products||[];
+  const targets=stored.filter((row:any)=>force||productNeedsEnrichment(row.data||row).any).slice(0,limit);
+  let filled=0;const failures:any[]=[];
+  for(const row of targets){
+    const product=(row as any).data||row;
+    const result=await generateProductDescription(product,{force});
+    if(result.changed){await upsertProduct(profile.id,product);filled++}
+    else if(!result.ok)failures.push({title:product.title,error:result.error});
+  }
+  return c.json({ok:true,profileId:profile.id,model:picked.model,provider:picked.provider.id,
+    candidates:targets.length,filled,failed:failures.length,failures:failures.slice(0,5)});
+});
 app.get('/api/import/history',async c=>c.json({ok:true,items:await getImportHistory()}));
 app.post('/api/import/history/clear',async c=>{await clearImportHistory();return c.json({ok:true})});
 app.post('/api/jobs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,ids=Array.isArray(b.ids)?b.ids.map(String):[];if(!ids.length)return c.json({ok:false,error:'هیچ کاری برای اولویت‌بندی ارسال نشد.'},400);const valid:string[]=[];for(const id of ids){const job=await getJob(id);if(job&&job.status==='queued')valid.push(id)}

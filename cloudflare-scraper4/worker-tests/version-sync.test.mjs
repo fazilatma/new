@@ -1164,3 +1164,89 @@ test('the visual picker saves a repeating container and card-relative field sele
   assert.equal(generalize(elsewhere, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card:nth-of-type(1)',
     'a widening that drops the picked element must be rejected');
 });
+
+test('every engine the benchmark can select is offered in the dropdowns', async () => {
+  // The 3-page speed test benchmarks cheerio and SAVES the winner as the
+  // profile's extractionEngine. The dropdown had no cheerio <option>, so a
+  // <select> with no matching option fell back to its first entry ("auto") and
+  // the saved engine was silently lost the next time the profile was saved.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  const at = dash.indexOf('const extractionEngineOptions=');
+  const options = new Function(dash.slice(at, dash.indexOf('];', at) + 2) + ' return extractionEngineOptions;')();
+  const ids = options.map(o => o[0]);
+  assert.ok(ids.includes('cheerio'), 'the JS-rendered dropdown must offer cheerio');
+  assert.ok(dash.includes('<option value="cheerio">'), 'the static profile-editor dropdown must offer cheerio too');
+
+  // Whatever the Node benchmark can pick must be selectable in the UI.
+  const server = await readProjectFile('render-src/server.ts');
+  const line = server.slice(server.indexOf('const BENCHMARK_ENGINES'), server.indexOf('\n', server.indexOf('const BENCHMARK_ENGINES')));
+  const benchmarked = [...line.matchAll(/'([a-z_]+)'/g)].map(m => m[1]);
+  assert.ok(benchmarked.includes('cheerio'), 'sanity: the benchmark really does test cheerio');
+  for (const engine of benchmarked) {
+    assert.ok(ids.includes(engine), `benchmarked engine "${engine}" must be selectable in the dropdown`);
+  }
+  // And every offered engine must be one the server will actually accept.
+  const accepted = server.slice(server.indexOf("['auto','cheerio'"), server.indexOf(']', server.indexOf("['auto','cheerio'")) + 1);
+  for (const id of ids) assert.ok(accepted.includes(`'${id}'`), `dropdown engine "${id}" must be accepted by normalizeProfile`);
+});
+
+test('manual sync runs list, details and delivery in one click', async () => {
+  // The home button was labelled "automatic extraction" and createJob() sent an
+  // empty body for scrape jobs, so the backend defaulted to target 'none' and
+  // the run always stopped after extraction -- details/sync never happened.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  assert.ok(dash.includes('🔄 همگام‌سازی دستی'), 'the button must be relabelled manual sync');
+  assert.match(dash, /body=\{target\}/, 'a scrape job must forward its destination');
+  assert.doesNotMatch(dash, /body=kind==='sync'\?\{target\}:\{\}/, 'the scrape branch must not drop the target again');
+
+  // The target must follow the profile's own destination switches.
+  const at = dash.indexOf('function homeJobTarget()');
+  const body = dash.slice(at, dash.indexOf('\n', at));
+  assert.match(body, /homeSyncWoo/, 'the WooCommerce switch must be considered');
+  assert.match(body, /homeSyncBasalam/, 'the Basalam switch must be considered');
+  const homeJobTarget = new Function('$', body + '; return homeJobTarget;')(id => ({
+    homeSyncTarget: { value: 'none' }, homeSyncWoo: { checked: true }, homeSyncBasalam: { checked: true }
+  }[id]));
+  assert.equal(homeJobTarget(), 'both', 'both destinations enabled must send to both');
+
+  // The processor already ordered the phases; assert the order is still list -> details -> sync.
+  const proc = await readProjectFile('render-src/processor.ts');
+  const details = proc.indexOf("job.phase = 'details'");
+  const save = proc.indexOf("job.phase = 'save'");
+  const sync = proc.indexOf('await runSync(job, profile, products)');
+  assert.ok(details > 0 && save > details && sync > save, 'details must run before save, and delivery last');
+  assert.match(proc, /if \(job\.target !== 'none'\) await runSync/, 'delivery must run whenever a destination is set');
+});
+
+test('the AI description generator fills only missing fields, using the master model', async () => {
+  const ai = await readProjectFile('render-src/ai.ts');
+  assert.match(ai, /export async function preferredAiChatModel/, 'the master model must be resolvable on Node');
+  const picker = ai.slice(ai.indexOf('export async function preferredAiChatModel'));
+  assert.ok(picker.indexOf('ai.master') < picker.indexOf('ai.model'), 'the pinned master model must win over ai.model');
+
+  assert.match(ai, /export async function generateProductDescription/, 'the generator must exist');
+  const gen = ai.slice(ai.indexOf('export async function generateProductDescription'));
+  // Never overwrite real scraped content.
+  assert.match(gen, /options\.force \|\| need\.shortDesc/, 'shortDesc must only be written when missing');
+  assert.match(gen, /options\.force \|\| need\.longDesc/, 'longDesc must only be written when missing');
+  assert.match(gen, /options\.force \|\| need\.variations/, 'variations must only be written when missing');
+  // Images must never be invented.
+  assert.doesNotMatch(gen, /parsed\.images/, 'gallery images must never come from the model');
+
+  // Exercise the REAL compiled helper so no TypeScript syntax can leak in.
+  const bundle = await readProjectFile('render-dist/server.js');
+  const bAt = bundle.indexOf('function productNeedsEnrichment(');
+  const detect = new Function(bundle.slice(bAt, bundle.indexOf('\nfunction ', bAt + 1)) + '; return productNeedsEnrichment;')();
+  assert.equal(detect({ title: 'X' }).any, true, 'an empty product needs enrichment');
+  assert.equal(detect({ title: 'X', shortDesc: 'a short one', longDesc: 'x'.repeat(60), images: ['a', 'b'], variations: ['s'] }).any,
+    false, 'a fully populated product must be left alone');
+
+  // Always-on by default, and a failure must never fail the scrape.
+  const proc = await readProjectFile('render-src/processor.ts');
+  assert.match(proc, /ai_description_settings/, 'the toggle must be read from stored settings');
+  assert.match(proc, /aiSettings\?\.enabled !== false/, 'the generator must default to ON');
+  const block = proc.slice(proc.indexOf("job.phase = 'ai-descriptions'"), proc.indexOf("job.phase = 'save'", proc.indexOf('ai-descriptions')));
+  assert.match(block, /catch \(error\)/, 'an AI failure must be caught, never failing the run');
+  assert.ok(proc.indexOf("job.phase = 'ai-descriptions'") > proc.indexOf("job.phase = 'details'"),
+    'enrichment must run after real detail extraction, so it only fills what is genuinely missing');
+});

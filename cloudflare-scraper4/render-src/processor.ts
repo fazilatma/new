@@ -1,6 +1,7 @@
-import { allProducts, claimJob, getJob, getProfile, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
+import { allProducts, claimJob, getJob, getProfile, getState, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
+import { generateProductDescription, productNeedsEnrichment } from './ai.js';
 import type { Job, Product } from './types.js';
 
 let stopping = false;
@@ -46,6 +47,27 @@ export async function processOneJob(): Promise<boolean> {
           try { await scrapeDetails(product, profile.selectors); }
           catch (error) { job.failed++; append(job, `${product.title}: ${message(error)}`, 'error'); }
         });
+        // AI enrichment: fill descriptions / variations the source page did not
+        // provide, using the pinned master model. Always-on by default; a
+        // failure here must never fail the scrape, so each product is guarded.
+        const aiSettings = await getState<any>('ai_description_settings', { enabled: true });
+        if (aiSettings?.enabled !== false) {
+          const pending = products.filter(product => productNeedsEnrichment(product).any);
+          if (pending.length) {
+            job.phase = 'ai-descriptions'; await save(job);
+            let filled = 0, failed = 0; let reported = '';
+            await mapLimit(pending, Math.max(1, Number(process.env.AI_DESCRIPTION_CONCURRENCY || 2)), async product => {
+              if (await stopRequested(job.id)) return;
+              try {
+                const result = await generateProductDescription(product);
+                if (result.changed) filled++;
+                else if (!result.ok) { failed++; if (!reported && result.error) reported = result.error; }
+              } catch (error) { failed++; if (!reported) reported = message(error); }
+            });
+            if (filled) append(job, `توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
+            if (failed) append(job, `تکمیل توضیحات برای ${failed} محصول انجام نشد${reported ? ': ' + reported : ''}`, 'warning');
+          }
+        }
         job.phase = 'save'; await save(job);
         for (const product of products) { const result = await upsertProduct(profile.id, product); result === 'added' ? job.added++ : job.updated++; }
         const retired=await markMissingProducts(profile.id,products.map(p=>p.sourceKey));if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');

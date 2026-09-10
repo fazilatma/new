@@ -48,7 +48,7 @@ export function aiConfigProblem(provider:Provider,model:string):string{
   return '';
 }
 
-export async function aiCall(provider:Provider,model:string,prompt:string){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:200,temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
+export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
 export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),results});return results}
 /**
  * Server-side AI test run for the Node runtime.
@@ -235,4 +235,106 @@ export async function aiConnectionDiagnostic() {
 
   const failed = checks.filter(check => !check.ok);
   return { ok: failed.length === 0, target: 'ai', mode, durationMs: Date.now() - started, checks, recommendations, summary: { passed: checks.length - failed.length, failed: failed.length } };
+}
+
+/**
+ * Resolve the model the user pinned as "master" (ai.master), falling back to
+ * ai.model, then the candidate list, then any enabled chat model. Mirrors the
+ * Worker's preferredAiChatModel() so both runtimes pick the same model.
+ */
+export async function preferredAiChatModel(): Promise<{ provider: Provider; model: string } | null> {
+  const ai = (await loadConnections()).ai as any;
+  const providers = (await aiProviders()).filter(provider => provider.enabled !== false);
+  const preferred = [ai.master, ai.model, ...(Array.isArray(ai.candidates) ? ai.candidates : [])].map(String).filter(Boolean);
+  for (const key of preferred) {
+    const [providerId, ...parts] = key.split('::');
+    const model = parts.length ? parts.join('::') : key;
+    const provider = parts.length ? providers.find(item => item.id === providerId) : providers.find(item => item.models.includes(model));
+    if (provider && provider.models.includes(model) && !aiConfigProblem(provider, model)) return { provider, model };
+  }
+  for (const provider of providers) {
+    const model = provider.models.find(item => !aiConfigProblem(provider, item));
+    if (model) return { provider, model };
+  }
+  return null;
+}
+
+/** A product needs enrichment when the scraper could not fill these in. */
+export function productNeedsEnrichment(product: any): { longDesc: boolean; shortDesc: boolean; images: boolean; variations: boolean; any: boolean } {
+  const text = (value: unknown) => String(value ?? '').trim();
+  const longDesc = text(product?.longDesc).length < 40;
+  const shortDesc = text(product?.shortDesc).length < 10;
+  const images = !Array.isArray(product?.images) || product.images.filter((x: unknown) => text(x)).length < 2;
+  const variations = !Array.isArray(product?.variations) || product.variations.length === 0;
+  return { longDesc, shortDesc, images, variations, any: longDesc || shortDesc || variations };
+}
+
+function firstJsonObject(text: string): any {
+  const raw = String(text || '').replace(/```json/gi, '```').replace(/```/g, '');
+  const start = raw.indexOf('{');
+  if (start < 0) return null;
+  for (let end = raw.lastIndexOf('}'); end > start; end = raw.lastIndexOf('}', end - 1)) {
+    try { return JSON.parse(raw.slice(start, end + 1)); } catch { /* keep shrinking */ }
+  }
+  return null;
+}
+
+export type DescriptionResult = {
+  ok: boolean;
+  changed: boolean;
+  fields: string[];
+  model?: string;
+  provider?: string;
+  error?: string;
+};
+
+/**
+ * Fill missing description / gallery / variation data for ONE product using the
+ * master AI model. Only empty fields are written: a real value scraped from the
+ * source site is never overwritten by generated text.
+ */
+export async function generateProductDescription(product: any, options: { force?: boolean } = {}): Promise<DescriptionResult> {
+  const need = productNeedsEnrichment(product);
+  if (!options.force && !need.any) return { ok: true, changed: false, fields: [] };
+  const picked = await preferredAiChatModel();
+  if (!picked) return { ok: false, changed: false, fields: [], error: 'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.' };
+
+  const context = [
+    `نام محصول: ${String(product?.title || '').trim()}`,
+    product?.brand ? `برند: ${product.brand}` : '',
+    product?.category ? `دسته‌بندی: ${product.category}` : '',
+    product?.priceText ? `قیمت: ${product.priceText}` : '',
+    product?.sku ? `کد کالا: ${product.sku}` : '',
+    String(product?.shortDesc || '').trim() ? `توضیح کوتاه موجود: ${product.shortDesc}` : ''
+  ].filter(Boolean).join('\n');
+
+  const prompt = `تو یک کارشناس تولید محتوای فروشگاهی فارسی هستی. بر اساس اطلاعات زیر، محتوای فروشگاهی بنویس.
+${context}
+
+فقط و فقط یک شیء JSON معتبر برگردان، بدون هیچ متن اضافه و بدون بلوک کد، دقیقاً با این کلیدها:
+{"shortDesc":"یک جملهٔ کوتاه جذاب","longDesc":"<p>توضیح کامل در دو تا سه پاراگراف HTML ساده</p>","variations":["تنوع ۱","تنوع ۲"]}
+
+قوانین: همه‌چیز فارسی و روان باشد. اگر تنوع مشخصی از نام محصول قابل استنباط نیست، آرایهٔ variations را خالی بگذار. هیچ ادعای نادرست یا مشخصات فنی ساختگی ننویس.`;
+
+  try {
+    const answer = await aiCall(picked.provider, picked.model, prompt, 900);
+    const parsed = firstJsonObject(answer.text);
+    if (!parsed) return { ok: false, changed: false, fields: [], provider: picked.provider.id, model: picked.model, error: 'پاسخ مدل قابل تبدیل به JSON نبود.' };
+    const fields: string[] = [];
+    const clean = (value: unknown) => String(value ?? '').trim();
+    if ((options.force || need.shortDesc) && clean(parsed.shortDesc)) { product.shortDesc = clean(parsed.shortDesc); fields.push('shortDesc'); }
+    if ((options.force || need.longDesc) && clean(parsed.longDesc)) { product.longDesc = clean(parsed.longDesc); fields.push('longDesc'); }
+    if ((options.force || need.variations) && Array.isArray(parsed.variations)) {
+      const list = parsed.variations.map(clean).filter(Boolean).slice(0, 20);
+      if (list.length) { product.variations = list; fields.push('variations'); }
+    }
+    // The gallery is never invented: images must come from the source site.
+    if (need.images && Array.isArray(product?.images) && product.image && !product.images.includes(product.image)) {
+      product.images = [product.image, ...product.images];
+    }
+    product.aiEnrichedAt = new Date().toISOString();
+    return { ok: true, changed: fields.length > 0, fields, provider: picked.provider.id, model: picked.model };
+  } catch (error) {
+    return { ok: false, changed: false, fields: [], provider: picked.provider.id, model: picked.model, error: error instanceof Error ? error.message : String(error) };
+  }
 }
