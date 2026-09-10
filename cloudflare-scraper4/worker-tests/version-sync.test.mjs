@@ -1482,3 +1482,88 @@ test('the test command builds every artifact the tests read', async () => {
   const ignore = await readProjectFile('.gitignore');
   assert.match(ignore, /^render-dist\/$/m, 'render-dist must stay a build artifact, not committed output');
 });
+
+test('the sync preview is a colour-coded matrix, not a text dump', async () => {
+  // The preview used to be `JSON.stringify(d, null, 2)` in a <pre>: technically
+  // complete, but unreadable. It must be a product x destination table where the
+  // COLOUR of each cell says whether that product is in sync at that destination.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  const handlerAt = dash.indexOf("if(action==='recon-unified-preview'");
+  assert.ok(handlerAt > -1, 'the unified preview handler must exist');
+  const handler = dash.slice(handlerAt, dash.indexOf("if(action.startsWith('recontable-')", handlerAt));
+  assert.doesNotMatch(handler, /textContent=JSON\.stringify/, 'the preview must not dump raw JSON');
+  assert.match(handler, /innerHTML=html/, 'the preview must render real markup');
+  assert.match(dash, /renderReconMatrix\(d,\{limit:\d+,applied:apply\}\)/, 'both preview and apply must render the matrix');
+
+  // Run the REAL renderer, extracted from the shipping source.
+  const grab = name => {
+    const at = dash.indexOf(`function ${name}(`);
+    assert.ok(at > -1, `${name} must exist`);
+    return dash.slice(at, dash.indexOf('\nfunction ', at + 1));
+  };
+  const cssAt = dash.indexOf('const RECON_MATRIX_CSS=');
+  assert.ok(cssAt > -1, 'the matrix must ship its own styles');
+  const css = dash.slice(cssAt, dash.indexOf("</style>';", cssAt) + 10);
+  const helpers = `
+    function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    function fa(v){return Number(v||0).toLocaleString('fa-IR')}`;
+  const { renderReconMatrix } = new Function(
+    `${helpers}${css}${grab('reconCellStyle')}${grab('reconMatrixCell')}${grab('renderReconMatrix')}; return { renderReconMatrix };`)();
+
+  const row = (bucket, accountKey, accountName, over) => ({
+    bucket, target: accountKey === 'default' ? 'woo' : 'basalam', accountKey, accountName,
+    profileId: 'p1', profileName: 'پروفایل', sourceKey: 'a', title: 'کالای نمونه',
+    sourcePrice: 1000, expectedPrice: 1000, remotePrice: 1000, remoteId: 5, why: '', ...over });
+  const data = {
+    ok: true, dryRun: true, planned: 2, matched: 1, priceDiff: 1, missing: 1, extra: 0, noPrice: 0,
+    inSync: false, local: 2, accounts: 2, failures: [],
+    rows: [
+      row('matched', 'default', 'ووکامرس'),
+      row('priceDiff', '200', 'غرفهٔ دوم', { remotePrice: 1200, expectedPrice: 1100 }),
+      row('missing', 'default', 'ووکامرس', { sourceKey: 'b', title: 'کالای دوم', remotePrice: null, remoteId: null }),
+    ],
+  };
+  const html = renderReconMatrix(data, { limit: 400, applied: false });
+
+  // One column per destination, one row per product.
+  assert.ok(html.includes('ووکامرس') && html.includes('غرفهٔ دوم'), 'every destination must be a column');
+  assert.ok(html.includes('کالای نمونه') && html.includes('کالای دوم'), 'every product must be a row');
+
+  // Each state must carry its OWN colour, and they must all differ.
+  const colours = [...html.matchAll(/class="rc-cell" style="color:(#[0-9a-f]{6})/g)].map(m => m[1]);
+  assert.ok(colours.length >= 3, 'every comparison must produce a coloured cell');
+  assert.equal(new Set(colours).size, 3, 'matched, priceDiff and missing must be visually distinct');
+
+  // A cell the user cannot act on must be visibly inert, not fake-green.
+  assert.match(html, /rc-none/, 'a product not sent to a destination must render as an inert cell');
+  // Colour alone is not accessible: each state also carries a glyph and a label.
+  for (const glyph of ['✓', '≠', '+']) assert.ok(html.includes(glyph), `state glyph ${glyph} must be present`);
+  assert.ok(html.includes('rc-legend'), 'the colour code must be explained by a legend');
+  assert.match(html, /title="/, 'cells must expose the full comparison on hover');
+  // A dry run must never look like it changed something.
+  assert.ok(html.includes('هیچ تغییری'), 'the preview must state that nothing was written yet');
+  assert.ok(!html.includes('"bucket"'), 'no raw JSON may leak into the table');
+
+  const empty = renderReconMatrix({ ok: true, rows: [] }, {});
+  assert.match(empty, /rc-empty/, 'an empty result must explain itself instead of rendering a blank table');
+});
+
+test('the sync preview returns the data its table needs, in both runtimes', async () => {
+  // The dry run used to return only a flat action list, so a matrix drawn from
+  // it would have been empty. Both runtimes must return the rows and totals.
+  for (const runtime of ['render-src/maintenance.ts', 'worker-src/maintenance.ts']) {
+    const src = await readProjectFile(runtime);
+    const at = src.indexOf('export async function unifiedReconApply');
+    assert.ok(at > -1, `${runtime} must expose unifiedReconApply`);
+    const body = src.slice(at, src.indexOf('\nasync function basalamUpdateShop', at));
+    const dry = body.slice(body.indexOf('if (!apply)') >= 0 ? body.indexOf('if (!apply)') : body.indexOf('if(!apply)'),
+      body.indexOf('changed'));
+    for (const field of ['rows', 'accountsBreakdown', 'matched', 'priceDiff', 'missing']) {
+      assert.match(dry, new RegExp(`${field}\\s*:\\s*(?:report|after)\\.${field}`),
+        `${runtime}: the dry run must return ${field} so the table can be drawn`);
+    }
+    // After applying, the table must show the real post-sync state.
+    assert.match(body, /const after\s*=\s*changed\s*\?\s*await unifiedRecon\(profileId\)\s*:\s*report/,
+      `${runtime}: applying must re-read the state so the table reflects reality`);
+  }
+});

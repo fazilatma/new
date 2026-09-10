@@ -94,6 +94,10 @@ Surfaced as:
   fixes prices and republishes missing products through the normal sync path. Products
   that exist only at the destination are reported, never auto-deleted.
 - `GET /api/maintenance/recon-accounts` - the destinations taking part.
+- The dry run returns the full comparison (`rows`, per-account and per-profile
+  breakdowns), so the dashboard renders a product x destination matrix where each
+  cell is coloured by that pair's state instead of printing raw JSON (1.96.0).
+  Applying re-runs the comparison so the table shows the real post-sync state.
 - The comparison itself lives in `worker-src/recon-core.ts`, which imports no database
   or network module, so both runtimes share one algorithm. Before 1.95.0 the Node
   runtime re-exported the Worker implementation and every non-Cloudflare install failed

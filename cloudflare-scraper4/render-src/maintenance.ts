@@ -85,7 +85,11 @@ export async function unifiedRecon(profileId = '') {
 export async function unifiedReconApply(profileId = '', apply = false, limit = 200) {
   const report = await unifiedRecon(profileId);
   const actions = planActions(report.rows as UnifiedReconRow[]).slice(0, Math.max(1, Math.min(1000, limit)));
-  if (!apply) return { ok: true, dryRun: true, planned: actions.length, actions: actions.slice(0, 200), extra: report.extra };
+  if (!apply) return { ok: true, dryRun: true, planned: actions.length, actions: actions.slice(0, 200),
+    matched: report.matched, priceDiff: report.priceDiff, missing: report.missing, extra: report.extra,
+    noPrice: report.noPrice, inSync: report.inSync, local: report.local, accounts: report.accounts,
+    accountsBreakdown: report.accountsBreakdown, profiles: report.profiles, failures: report.failures,
+    rows: report.rows };
   let changed = 0; const failed: any[] = [];
   const products = new Map<string, any>();
   for (const action of actions) {
@@ -105,7 +109,12 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
       }
     } catch (error) { failed.push({ title: action.title, account: action.accountName, error: msg(error) }); }
   }
-  return { ok: failed.length === 0, dryRun: false, planned: actions.length, changed, failed: failed.slice(0, 20) };
+  const after = changed ? await unifiedRecon(profileId) : report;
+  return { ok: failed.length === 0, dryRun: false, planned: actions.length, changed, failed: failed.slice(0, 20),
+    matched: after.matched, priceDiff: after.priceDiff, missing: after.missing, extra: after.extra,
+    noPrice: after.noPrice, inSync: after.inSync, local: after.local, accounts: after.accounts,
+    accountsBreakdown: after.accountsBreakdown, profiles: after.profiles, failures: after.failures,
+    rows: after.rows };
 }
 
 async function basalamUpdateShop(accountKey: string, id: number, payload: any) {
