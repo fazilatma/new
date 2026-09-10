@@ -275,7 +275,7 @@ test('sync-version keeps the lockfile in step and touches nothing else in it', a
 test('auto-update ignores lockfile-only churn but still protects real local work', async () => {
   const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
   assert.match(deployer, /const lockOnly = dirtyProbe\.stdout/, 'the updater must detect lockfile-only churn');
-  assert.match(deployer, /runSync\('git', \['checkout', '--', 'package-lock\.json'\]\)/, 'it must restore the lockfile rather than reset --hard');
+  assert.match(deployer, /runSync\('git', \['checkout', '--', \.\.\.lockPaths\]\)/, 'it must restore the lockfile at its real repo-relative path, not a bare filename');
 
   // Exercise the predicate itself against real `git status --porcelain` output.
   const lockOnly = out => out.trim().split('\n').every(line => /\s(?:cloudflare-scraper4\/)?package-lock\.json$/.test(line));
@@ -862,4 +862,118 @@ test('Node diagnostics report the real local runtime, not Cloudflare bindings', 
   }
   // runtimeEnvironment is a descriptor object; interpolating it printed "[object Object]".
   assert.doesNotMatch(diag, /environment=\$\{runtimeEnvironment\}/, 'the environment must be printed by id/label, not as a raw object');
+});
+
+test('list extraction finds fields on the container itself, not only its children', async () => {
+  // Root cause of "Cloudflare extracts, Termux extracts nothing": firstText used
+  // $root.find(), which searches DESCENDANTS ONLY. On shops where the product
+  // card IS the matching element (container 'a[href*="/product/"]' and title
+  // 'a[href*="/product/"]'), the title came back empty and `if (!title) return`
+  // skipped every product. The Worker's HTMLRewriter has no such restriction,
+  // which is exactly why the two runtimes disagreed.
+  const src = await readProjectFile('render-src/scraper.ts');
+  const at = src.indexOf('function firstText(');
+  const body = src.slice(at, src.indexOf('\nfunction ', at + 10));
+  assert.match(body, /\$root\.filter\(selector\)/, 'firstText must be able to match the container element itself');
+  assert.match(body, /\$root\.find\(selector\)/, 'firstText must still match descendants');
+  // Descendants must win, otherwise a broad selector swallows the whole card text.
+  assert.ok(body.indexOf('.find(selector)') < body.indexOf('.filter(selector)'),
+    'a descendant match must be preferred over the container itself');
+
+  const attrAt = src.indexOf('function firstAttr(');
+  const attrBody = src.slice(attrAt, src.indexOf('\nexport ', attrAt));
+  assert.match(attrBody, /\$root\.filter\(selector\)/, 'firstAttr must also consider the container itself (the card is often the <a>)');
+
+  // Execute the real helpers against markup shaped like the reported site.
+  const cheerio = await import('cheerio');
+  const normalize = v => v.replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
+  const jsBody = body
+    .replace(/\$root: cheerio\.Cheerio<any>/g, '$root')
+    .replace(/selector: string/g, 'selector')
+    .replace(/\): string \{/, ') {');
+  const firstText = new Function('normalize', `${jsBody}; return firstText;`)(normalize);
+  const $ = cheerio.load('<a href="/product/1" class="product"><div class="t">عنوان</div><div class="p">۱۲۳</div></a>');
+  const card = $('a.product');
+  assert.equal(firstText(card, 'a[href*="/product/"], [class*="t"]'), 'عنوان', 'the inner title must win over the whole card text');
+  const $2 = cheerio.load('<a href="/product/2" class="product">فقط عنوان</a>');
+  assert.equal(firstText($2('a.product'), 'a[href*="/product/"]'), 'فقط عنوان', 'a card that IS the title must still extract');
+});
+
+test('an empty href or src never resolves to the listing page URL', async () => {
+  // new URL('', base) returns the BASE url, so an element with no href produced
+  // a link that looked valid. The diagnostic then showed a green "link ok"
+  // whose sample was the listing page itself -- the misleading evidence in the
+  // user's report.
+  const src = await readProjectFile('render-src/scraper.ts');
+  const line = src.slice(src.indexOf('const absolute ='), src.indexOf('\n', src.indexOf('const absolute =')));
+  assert.match(line, /if \(!String\(value \|\| ''\)\.trim\(\)\) return ''/, 'absolute() must reject empty input before resolving');
+  const absolute = new Function(`${line.replace(/value: string/, 'value').replace(/base: string/, 'base')} return absolute;`)();
+  assert.equal(absolute('', 'https://barfbox.ir/search/?page=1'), '', 'an empty href must not become the page URL');
+  assert.equal(absolute('   ', 'https://barfbox.ir/search/?page=1'), '', 'whitespace must not become the page URL');
+  assert.equal(absolute('/p/1', 'https://barfbox.ir/search/?page=1'), 'https://barfbox.ir/p/1', 'real links must still resolve');
+});
+
+test('the diagnostic reports the evidence-vs-extraction contradiction', async () => {
+  // The user saw every selector green while 0 products were extracted, and the
+  // report still blamed the container selector generically. Evidence is
+  // document-wide; extraction is container-scoped. That gap IS the diagnosis.
+  const src = await readProjectFile('render-src/scraper.ts');
+  const at = src.indexOf('export async function diagnoseExtraction');
+  const body = src.slice(at);
+  assert.match(body, /const contradiction = evidenceOk && products\.length === 0/, 'the contradiction must be detected explicitly');
+  assert.match(body, /add\('selector-evidence', evidenceOk && !contradiction/, 'the evidence stage must FAIL when it contradicts extraction, not show green');
+  assert.match(body, /containerCount/, 'the report must say how many containers matched, which distinguishes the two causes');
+});
+
+test('the deployer restores the lockfile using its real repo-relative path', async () => {
+  // git status --porcelain reports 'cloudflare-scraper4/package-lock.json', but
+  // the restore ran `git checkout -- package-lock.json` from the repo root,
+  // which fails with "pathspec did not match". The tree stayed dirty and EVERY
+  // auto-update was skipped forever -- why auto-update never worked on Termux.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  const at = deployer.indexOf('const dirtyProbe');
+  const body = deployer.slice(at, deployer.indexOf('const dirty =', at));
+  assert.doesNotMatch(body, /\['checkout', '--', 'package-lock\.json'\]/, 'the bare filename does not exist at the repo root');
+  assert.match(body, /lockPaths/, 'the real reported paths must be restored');
+
+  // Execute the real parsing against porcelain output.
+  const parse = new Function('stdout', `
+    const lockPaths = stdout.split('\\n')
+      .map(line => (line.match(/^..\\s+(.*)$/) || [])[1] || '')
+      .map(path => path.trim().replace(/^"|"$/g, ''))
+      .filter(path => /package-lock\\.json$/.test(path));
+    return lockPaths;`);
+  assert.deepEqual(parse(' M cloudflare-scraper4/package-lock.json'), ['cloudflare-scraper4/package-lock.json'],
+    'a lockfile in a subdirectory must be restored at its real path');
+  assert.deepEqual(parse(' M package-lock.json'), ['package-lock.json'], 'a root lockfile must still work');
+  assert.deepEqual(parse(' M src/app.ts'), [], 'unrelated files must never be reverted');
+});
+
+test('the AI diagnose button runs a real AI check, not the installation debug', async () => {
+  // It was wired to the generic 'debug' action -> /api/debug, which reports
+  // database/tables/browsers and never touches the AI settings, so it always
+  // said ok while every model test failed through a broken proxy.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  const at = dash.indexOf("mButton('🩺 عیب");
+  const button = dash.slice(at, dash.indexOf('+mButton', at + 5));
+  assert.match(button, /'ai-diagnose'/, 'the AI card must use its own diagnose action');
+  assert.doesNotMatch(button, /'debug'/, 'it must not reuse the installation debug action');
+  assert.match(dash, /action==='ai-diagnose'/, 'the action must be handled');
+  assert.match(dash, /\/api\/ai\/diagnose/, 'it must call the AI diagnostic endpoint');
+
+  const ai = await readProjectFile('render-src/ai.ts');
+  assert.match(ai, /export async function aiConnectionDiagnostic/, 'the Node runtime must implement the AI diagnostic');
+  const body = ai.slice(ai.indexOf('export async function aiConnectionDiagnostic'));
+  assert.match(body, /worker-proxy/, 'it must test the indirect Worker proxy, which is what silently breaks model calls');
+  assert.match(body, /await aiCall\(/, 'it must make one real model call through the same path the tests use');
+  assert.match(body, /connection-mode/, 'it must report which connection mode is in effect');
+});
+
+test('a failing diagnostic stage is shown as a red card', async () => {
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  const css = dash.slice(dash.indexOf('stage-card.bad{'), dash.indexOf('}', dash.indexOf('stage-card.bad{')) + 1);
+  assert.match(css, /background:#2a1116/, 'the failing card itself must be tinted red, not just edged');
+  assert.match(dash, /function openStageModal/, 'stage reports must have a shared renderer');
+  const modal = dash.slice(dash.indexOf('function openStageModal'), dash.indexOf('function openResultModal'));
+  assert.match(modal, /ok\?'ok':'bad'/, 'each stage card must carry the ok/bad class that colours it');
 });

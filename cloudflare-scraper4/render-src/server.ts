@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiProviders, controlAiTestRun, getCurrentAiRun, getLeaderboard, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
+import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, getCurrentAiRun, getLeaderboard, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
@@ -24,7 +24,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.91.0'; } catch { return process.env.npm_package_version || '1.91.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.92.0'; } catch { return process.env.npm_package_version || '1.92.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -208,6 +208,17 @@ app.post('/api/agent/runs/reset', c => c.json({ ok: true }));
 
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
+app.get('/api/ai/diagnose',async c=>c.json(await aiConnectionDiagnostic()));
+const nodeUnsupported = (feature: string) => ({ ok: false, unsupported: true, runtime: 'node',
+  error: feature + ' روی این محیط (اجرای محلی/نود) پیاده‌سازی نشده و فقط روی Cloudflare Worker کار می‌کند.',
+  recommendations: ['برای این قابلیت از نسخهٔ Cloudflare استفاده کنید.', 'بقیهٔ بخش‌های مدیریت مقصد در همین محیط کار می‌کنند.'] });
+app.get('/api/destination/basalam/category-runs/current', c => c.json({ ok: true, run: null, unsupported: true, runtime: 'node' }));
+app.post('/api/destination/basalam/category-runs', c => c.json(nodeUnsupported('اجرای گروهی دسته‌بندی باسلام'), 501));
+app.post('/api/destination/basalam/category-runs/control', c => c.json(nodeUnsupported('کنترل اجرای دسته‌بندی باسلام'), 501));
+app.post('/api/destination/basalam/category-runs/reset', c => c.json({ ok: true, unsupported: true, runtime: 'node' }));
+app.post('/api/destination/basalam/category/suggest', c => c.json(nodeUnsupported('پیشنهاد خودکار دستهٔ باسلام'), 501));
+app.post('/api/import/analyze', c => c.json(nodeUnsupported('تحلیل فایل ورودی'), 501));
+app.post('/api/ai/diagnose',async c=>c.json(await aiConnectionDiagnostic()));
 app.get('/api/import/history',async c=>c.json({ok:true,items:await getImportHistory()}));
 app.post('/api/import/history/clear',async c=>{await clearImportHistory();return c.json({ok:true})});
 app.post('/api/jobs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,ids=Array.isArray(b.ids)?b.ids.map(String):[];if(!ids.length)return c.json({ok:false,error:'هیچ کاری برای اولویت‌بندی ارسال نشد.'},400);const valid:string[]=[];for(const id of ids){const job=await getJob(id);if(job&&job.status==='queued')valid.push(id)}

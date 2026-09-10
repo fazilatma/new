@@ -153,3 +153,86 @@ export async function getLeaderboard(){return leaderboard(await getState<any>('a
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
 async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertPublicUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=net.workerUrl.includes('{url}')?net.workerUrl.replace('{url}',encodeURIComponent(url)):net.workerUrl+(net.workerUrl.includes('?')?'&':'?')+'url='+encodeURIComponent(url);return safeFetch(target,init,3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(privateIp(ip))throw Error('IP خصوصی برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,init,3_000_000)}
 async function doh(host:string,url:string){const endpoint=url+(url.includes('?')?'&':'?')+'name='+encodeURIComponent(host)+'&type=A',r=await safeFetch(endpoint,{headers:{accept:'application/dns-json'}},500_000),j=await r.json() as any,ip=(j.Answer||[]).find((x:any)=>x.type===1)?.data;if(!ip)throw Error('DoH پاسخی برای دامنه نداد');return String(ip)}
+
+/**
+ * Real AI connectivity diagnostic.
+ *
+ * The dashboard's AI "عیب‌یابی" button used to call /api/debug, which reports
+ * installation health (database, tables, browsers) and never touches the AI
+ * settings at all -- so it always answered "ok" even when every model test was
+ * failing. It also could not see the indirect-connection setting: a Worker/proxy
+ * URL is applied to model calls but was not exercised by any test, so a broken
+ * proxy stayed invisible. This checks the path the model calls actually take.
+ */
+export async function aiConnectionDiagnostic() {
+  const started = Date.now(), checks: any[] = [], recommendations: string[] = [];
+  const add = (name: string, ok: boolean, detail: string, data?: any) => checks.push({ name, ok, detail, ...(data === undefined ? {} : { data }) });
+  const ai = (await loadConnections()).ai;
+  const net: any = ai.network || {};
+  const mode = String(net.mode || 'direct');
+
+  const providers = await aiProviders();
+  const enabled = providers.filter((p: any) => p.enabled);
+  const models = enabled.flatMap((p: any) => (p.models || []).map((m: string) => `${p.id}::${m}`));
+  add('providers', enabled.length > 0,
+    enabled.length ? `${enabled.length} ارائه‌دهندهٔ فعال با ${models.length} مدل.` : 'هیچ ارائه‌دهندهٔ فعالی وجود ندارد؛ تست مدل‌ها چیزی برای اجرا ندارد.',
+    { enabled: enabled.map((p: any) => p.id), models: models.length });
+  if (!enabled.length) recommendations.push('در بخش ارائه‌دهنده‌ها حداقل یک ارائه‌دهنده را فعال کنید.');
+
+  const missingKey = enabled.filter((p: any) => !String(p.apiKey || '').trim() && !isKeylessAiProvider(p));
+  add('api-keys', missingKey.length === 0,
+    missingKey.length ? `${missingKey.length} ارائه‌دهندهٔ فعال کلید API ندارند: ${missingKey.map((p: any) => p.id).join(', ')}` : 'همهٔ ارائه‌دهنده‌های فعال کلید دارند یا بدون‌کلید هستند.',
+    { missing: missingKey.map((p: any) => p.id) });
+  if (missingKey.length) recommendations.push('برای ارائه‌دهنده‌های بدون کلید، کلید API را ثبت کنید یا آن‌ها را غیرفعال کنید.');
+
+  add('connection-mode', true, mode === 'direct'
+    ? 'روش اتصال: مستقیم. درخواست‌های مدل‌ها مستقیم به ارائه‌دهنده می‌روند.'
+    : `روش اتصال: ${mode}. همهٔ درخواست‌های مدل‌ها از این مسیر عبور می‌کنند.`, { mode, workerUrl: net.workerUrl || null, proxyUrl: net.proxyUrl ? 'set' : null });
+
+  // The indirect path is the thing that silently breaks model tests, so probe it
+  // exactly the way aiCall() would build the request.
+  if (mode === 'worker' && net.workerUrl) {
+    const probeTarget = 'https://api.openai.com/v1/models';
+    const target = String(net.workerUrl).includes('{url}')
+      ? String(net.workerUrl).replace('{url}', encodeURIComponent(probeTarget))
+      : String(net.workerUrl) + (String(net.workerUrl).includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(probeTarget);
+    try {
+      const response = await safeFetch(target, { headers: { accept: 'application/json' } }, 2_000_000);
+      const text = (await response.text().catch(() => '')).slice(0, 400);
+      // A forwarding proxy reaches the provider, which then complains about the
+      // missing key. That is a HEALTHY proxy: it proves the hop works.
+      const forwarded = /authenticat|api key|bearer|unauthorized/i.test(text) || response.ok;
+      add('worker-proxy', forwarded,
+        forwarded
+          ? `Worker واسط درخواست را به مقصد رساند (کد ${response.status}). مسیر غیرمستقیم سالم است.`
+          : `Worker واسط پاسخ داد ولی درخواست را به مقصد نرساند (کد ${response.status}).`,
+        { target, status: response.status, sample: text });
+      if (!forwarded) recommendations.push('Worker واسط باید پارامتر url را بگیرد و متد، هدرها (به‌ویژه authorization) و بدنهٔ درخواست را بدون تغییر ارسال کند.');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      add('worker-proxy', false, `Worker واسط در دسترس نیست: ${detail}`, { target });
+      recommendations.push('آدرس Worker واسط را بررسی کنید؛ اگر مستقر نیست روش اتصال را روی «مستقیم» بگذارید تا تست مدل‌ها کار کند.');
+    }
+  } else if (mode === 'proxy' && net.proxyUrl) {
+    add('proxy', true, 'حالت proxy انتخاب شده است؛ درخواست‌ها از این پروکسی عبور می‌کنند.', { proxy: 'set' });
+  }
+
+  // One real end-to-end model call through the very same path aiCall() uses.
+  const first = enabled[0];
+  if (first && (first.models || []).length) {
+    const model = first.models[0];
+    try {
+      const result = await aiCall(first, model, 'Reply with exactly: SCRAPER4_OK');
+      add('live-call', true, `تماس واقعی با ${first.id}::${model} موفق بود (${result.latencyMs} میلی‌ثانیه).`, { provider: first.id, model, reply: String(result.text || '').slice(0, 120) });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      add('live-call', false, `تماس واقعی با ${first.id}::${model} شکست خورد: ${detail}`, { provider: first.id, model });
+      recommendations.push(mode === 'direct'
+        ? 'کلید API، آدرس پایه و نام مدل را بررسی کنید.'
+        : 'چون روش اتصال غیرمستقیم است، ابتدا سالم‌بودن Worker/پروکسی را بررسی کنید؛ همین خطا در تست مدل‌ها هم تکرار می‌شود.');
+    }
+  }
+
+  const failed = checks.filter(check => !check.ok);
+  return { ok: failed.length === 0, target: 'ai', mode, durationMs: Date.now() - started, checks, recommendations, summary: { passed: checks.length - failed.length, failed: failed.length } };
+}

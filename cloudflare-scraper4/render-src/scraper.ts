@@ -4,7 +4,7 @@ import { safeText } from './network.js';
 import type { ExtractionEngine, Product, Profile, Selectors } from './types.js';
 
 const normalize = (value: string) => value.replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
-const absolute = (value: string, base: string) => { try { const url = new URL(value, base); return ['http:','https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };
+const absolute = (value: string, base: string) => { if (!String(value || '').trim()) return ''; try { const url = new URL(value, base); return ['http:','https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };
 
 export function numberFromText(value: string): number {
   const en = value.replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
@@ -20,10 +20,21 @@ export function numberFromText(value: string): number {
 }
 
 function sourceKey(url: string, title: string): string { return createHash('sha256').update(url || title).digest('hex').slice(0, 32); }
-function firstText($root: cheerio.Cheerio<any>, selector: string): string { return normalize($root.find(selector).first().text()); }
+function firstText($root: cheerio.Cheerio<any>, selector: string): string {
+  if (!String(selector || '').trim()) return '';
+  const inner = $root.find(selector).first();
+  if (inner.length) return normalize(inner.text());
+  const own = $root.filter(selector);
+  return own.length ? normalize(own.first().text()) : '';
+}
 function firstAttr($root: cheerio.Cheerio<any>, selector: string, attrs: string[]): string {
-  const node = $root.find(selector).first();
-  for (const attr of attrs) { const value = node.attr(attr); if (value && value !== '#') return value; }
+  if (!String(selector || '').trim()) return '';
+  // Same self-or-descendant rule as firstText: the product link/image is very
+  // often the container element itself, not a child of it.
+  for (const node of [$root.find(selector).first(), $root.filter(selector).first()]) {
+    if (!node.length) continue;
+    for (const attr of attrs) { const value = node.attr(attr); if (value && value !== '#') return value; }
+  }
   return '';
 }
 
@@ -291,7 +302,18 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     } catch (error) { evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) }; }
   }
   const evidenceOk = ['container', 'title'].every(key => (evidence[key] as any)?.ok);
-  add('selector-evidence', evidenceOk, evidenceOk ? 'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.' : 'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.', { evidence });
+  const containerCount = Number((evidence.container as any)?.count || 0);
+  // Document-wide evidence can be green while container-scoped extraction finds
+  // nothing. That contradiction is itself the diagnosis, so surface it.
+  const contradiction = evidenceOk && products.length === 0;
+  add('selector-evidence', evidenceOk && !contradiction,
+    contradiction
+      ? 'سلکتورها روی کل صفحه نتیجه دارند اما داخل هر ظرف محصول چیزی پیدا نشد؛ یعنی سلکتور ظرف به کارت محصول اشاره نمی‌کند (احتمالاً کل فهرست را گرفته) یا عنوان/قیمت داخل ظرف نیست.'
+      : evidenceOk ? 'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.' : 'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.',
+    { evidence, containerCount, scope: 'این بررسی روی کل صفحه انجام می‌شود، ولی استخراج واقعی فقط داخل هر ظرف را می‌بیند.' });
+  if (contradiction) recommendations.push(containerCount <= 1
+    ? 'سلکتور ظرف فقط ' + containerCount + ' مورد در کل صفحه پیدا کرد؛ یعنی به‌جای هر کارت محصول، کل فهرست را گرفته است. سلکتوری بنویسید که به تعداد محصولات صفحه تکرار شود.'
+    : 'سلکتور ظرف ' + containerCount + ' مورد پیدا کرد ولی عنوان داخل آن‌ها نبود؛ سلکتور عنوان باید نسبت به ظرف داخلی باشد یا خودِ ظرف را هدف بگیرد.');
   let detail: any = null;
   const candidate = products.find(product => product.url);
   const detailKeys = ['shortDesc', 'longDesc', 'sku', 'category', 'tags', 'weight', 'stock', 'brand', 'detailImage', 'gallery', 'variations'];
