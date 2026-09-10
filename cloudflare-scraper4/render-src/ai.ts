@@ -191,8 +191,8 @@ export async function aiConnectionDiagnostic() {
 
   // The indirect path is the thing that silently breaks model tests, so probe it
   // exactly the way aiCall() would build the request.
+  const probeTarget = 'https://api.openai.com/v1/models';
   if (mode === 'worker' && net.workerUrl) {
-    const probeTarget = 'https://api.openai.com/v1/models';
     const target = String(net.workerUrl).includes('{url}')
       ? String(net.workerUrl).replace('{url}', encodeURIComponent(probeTarget))
       : String(net.workerUrl) + (String(net.workerUrl).includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(probeTarget);
@@ -214,7 +214,23 @@ export async function aiConnectionDiagnostic() {
       recommendations.push('آدرس Worker واسط را بررسی کنید؛ اگر مستقر نیست روش اتصال را روی «مستقیم» بگذارید تا تست مدل‌ها کار کند.');
     }
   } else if (mode === 'proxy' && net.proxyUrl) {
-    add('proxy', true, 'حالت proxy انتخاب شده است؛ درخواست‌ها از این پروکسی عبور می‌کنند.', { proxy: 'set' });
+    // Previously this only printed a message, so a dead or mistyped proxy still
+    // looked "healthy" here while every real request failed. Probe it for real.
+    try {
+      const response = await networkFetch(probeTarget, { method: 'GET', headers: { accept: 'application/json' } }, net);
+      const text = (await response.text().catch(() => '')).slice(0, 400);
+      const forwarded = /authenticat|api key|bearer|unauthorized/i.test(text) || response.ok;
+      add('proxy', forwarded,
+        forwarded
+          ? `پروکسی درخواست را به مقصد رساند (کد ${response.status}). مسیر غیرمستقیم سالم است.`
+          : `پروکسی پاسخ داد ولی درخواست را به مقصد نرساند (کد ${response.status}).`,
+        { proxy: 'set', status: response.status, sample: text });
+      if (!forwarded) recommendations.push('پروکسی باید درخواست HTTPS را بدون تغییر عبور دهد؛ آدرس و پورت را بررسی کنید.');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      add('proxy', false, `پروکسی در دسترس نیست: ${detail}`, { proxy: 'set' });
+      recommendations.push('آدرس پروکسی را بررسی کنید (قالب درست: http://host:port). اگر کار نمی‌کند روش اتصال را روی «مستقیم» یا «Worker» بگذارید.');
+    }
   }
 
   // One real end-to-end model call through the very same path aiCall() uses.

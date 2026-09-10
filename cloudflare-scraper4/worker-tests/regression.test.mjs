@@ -790,3 +790,58 @@ class TestHTMLRewriter {
 }
 function selectNodes(html,selector){const last=selector.trim().split(/\s+/).at(-1),nodes=[];for(const match of html.matchAll(/<([a-z0-9-]+)([^>]*)>/gi)){const tag=match[1].toLowerCase(),attrs={};for(const attr of match[2].matchAll(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g))attrs[attr[1]]=attr[2]??attr[3]??attr[4]??'';if(!matches(tag,attrs,last))continue;const tail=html.slice(match.index+match[0].length),end=tail.search(new RegExp(`<\\/${tag}\\s*>`,'i')),inner=end>=0?tail.slice(0,end):'';nodes.push({attrs,text:inner.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()})}return nodes}
 function matches(tag,attrs,selector){const tagName=selector.match(/^[a-z][\w-]*/i)?.[0]?.toLowerCase();if(tagName&&tagName!==tag)return false;const id=selector.match(/#([\w-]+)/)?.[1];if(id&&attrs.id!==id)return false;for(const cls of [...selector.matchAll(/\.([\w-]+)/g)].map(x=>x[1]))if(!String(attrs.class||'').split(/\s+/).includes(cls))return false;for(const part of selector.matchAll(/\[([:\w-]+)(?:([*^$]?=)["']?([^\]"']*)["']?)?\]/g)){const [,name,op,value]=part;if(!(name in attrs))return false;if(op==='='&&attrs[name]!==value)return false;if(op==='*='&&!attrs[name].includes(value))return false}return true}
+
+// --- Request 34b: a Cloudflare proxy/Worker URL entered in «روش اتصال» must be
+// used for SOURCE-PAGE traffic, not only for AI model calls. Node's safeFetch()
+// previously called the global fetch() directly, so a user who configured a
+// proxy to get around a sanction block still hit the block on every extraction.
+test('node source fetching honours the configured proxy and worker route', async () => {
+  const { build } = await import('esbuild');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const http = await import('node:http');
+  const nodeNet = await import('node:net');
+
+  const directory = await mkdtemp(join(new URL('..', import.meta.url).pathname, '.tmp-proxy-'));
+  const outfile = join(directory, 'network.mjs');
+  await build({ entryPoints: [new URL('../render-src/network.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile, logLevel: 'error' });
+  const network = await import(pathToFileURL(outfile));
+
+  const BODY = '<html><body><h1>through the proxy</h1></body></html>';
+  const origin = http.createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(BODY); });
+  await new Promise(resolve => origin.listen(0, '127.0.0.1', resolve));
+  const originPort = origin.address().port;
+
+  const tunnels = [];
+  const proxy = http.createServer((request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(BODY); });
+  proxy.on('connect', (request, socket, head) => {
+    tunnels.push(request.url);
+    const upstream = nodeNet.connect(originPort, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length) upstream.write(head);
+      upstream.pipe(socket); socket.pipe(upstream);
+    });
+    upstream.on('error', () => socket.destroy());
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+
+  try {
+    network.configureSourceNetwork({ mode: 'proxy', proxyUrl: 'http://127.0.0.1:' + proxy.address().port });
+    const result = await network.safeText('http://example.com/shop/');
+    assert.ok(result.text.includes('through the proxy'), 'source page must be fetched through the proxy');
+    assert.deepEqual(tunnels, ['example.com:80'], 'the proxy must receive the source request');
+
+    // The Worker route wraps the target URL instead of tunnelling it.
+    assert.equal(network.viaWorkerUrl('https://gw.example.com/fetch', 'https://shop.ir/a?b=1'), 'https://gw.example.com/fetch?url=https%3A%2F%2Fshop.ir%2Fa%3Fb%3D1');
+    assert.equal(network.viaWorkerUrl('https://gw.example.com/{url}', 'https://shop.ir/a'), 'https://gw.example.com/https%3A%2F%2Fshop.ir%2Fa');
+
+    // An anti-bot challenge page must raise a clear error instead of being
+    // parsed as a product listing (zero-product "success").
+    assert.throws(() => network.ensureTextResponse('<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>', 'text/html', 'https://shop.ir/'), /چالش|ضدربات/);
+  } finally {
+    network.configureSourceNetwork({ mode: 'direct' });
+    origin.close(); proxy.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

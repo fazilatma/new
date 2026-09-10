@@ -734,7 +734,15 @@ test('Node auto mode tries htmlrewriter before browser-only engines', async () =
   // from the shipped source so gutting it cannot leave this test green.
   const src = await readProjectFile('render-src/scraper.ts');
   const head = src.indexOf('const RENDER_DISCOVERY_ENGINES');
-  const seg = src.slice(head, src.indexOf('\n', src.indexOf('function engineOrder')));
+  // engineOrder() is no longer a one-liner, so slice it by matching braces
+  // instead of stopping at the first newline.
+  const fnStart = src.indexOf('function engineOrder');
+  let depth = 0, fnEnd = src.indexOf('{', fnStart);
+  for (let i = fnEnd; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) { fnEnd = i + 1; break; }
+  }
+  const seg = src.slice(head, fnEnd);
   const body = seg
     .replace(/:ExtractionEngine\[\]/g, '')
     .replace(/<ExtractionEngine>/g, '')

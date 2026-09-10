@@ -27,6 +27,27 @@ The dropdown exists in more than one place (profile settings and the start page)
 identical and a test compares them against each other: in 1.94.0 only the settings dropdown offered `cheerio`,
 so opening a profile from the start page still reset a saved `cheerio` engine to `auto`.
 
+## An explicitly chosen engine now really runs first (1.99.0)
+
+Until 1.99.0 `engineOrder()` put the automatic discovery engines (`jsonld`, `next_data`, `script_json`,
+`heuristic`, `metadata`) *before* an engine the user had explicitly chosen. Any shop page carrying an inline
+JSON blob — analytics config, a decoy `ld+json` product, a `dataLayer` push — therefore let a discovery engine
+win first, and a profile set to `cheerio` silently extracted with `heuristic`.
+
+It was only visible as a *slight* wrongness because the 3-page speed test calls the scraper with
+`autoFirst=false` (single-engine probe) while a real scrape uses the default `autoFirst=true`. The benchmark
+honoured the chosen engine, the real run did not, and the two disagreed on `usedEngine`.
+
+Two fixes, in both runtimes:
+
+1. An explicit choice is placed **first** in the order; the remaining engines stay only as fallbacks.
+2. The early `return` that stopped the loop as soon as the chosen engine had run was removed. It made an
+   explicit engine that found nothing return 0 products instead of falling through, so the fallback chain now
+   also includes the selector engine (`htmlrewriter` / `cheerio`) — a page only the configured selectors can
+   read no longer ends up empty. The heavy browser engines stay opt-in and are never auto-started.
+
+`auto` behaves exactly as before.
+
 ## When a profile extracts 0 products
 
 Two causes were fixed in 1.95.0, both invisible to the diagnostic tools (the diagnostic and the 3-page test

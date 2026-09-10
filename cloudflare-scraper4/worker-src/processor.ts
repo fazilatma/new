@@ -147,9 +147,34 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));
     try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title}: جزئیات: ${errorText}؛ اطلاعات معتبر قبلی حفظ شد.`,'error','failed',reportItem(product,{error:errorText}))}
   });
-  // AI enrichment: fill descriptions/variations the source page did not provide,
-  // using the pinned master model. Always-on by default, runs after real detail
-  // extraction and before save/sync, and can never fail the scrape.
+  // SCRAPER-FIRST RESCUE (before any AI): an empty description usually means
+  // the detail selectors do not match THIS product's template, not that the
+  // page has no text. Rediscover the detail selectors from a product that is
+  // actually missing data and re-scrape those products; the AI generator below
+  // is the fallback, because real page content beats generated text.
+  const needsDetail=batch.filter(product=>product.url&&productNeedsEnrichment(product).any);
+  if(needsDetail.length&&!checkpoint.detailRescued){
+    checkpoint.detailRescued=true;
+    append(job,`${needsDetail.length} محصول بدون توضیحات ماند؛ ابتدا موتور استخراج دوباره سلکتورهای جزئیات را پیدا می‌کند…`);
+    const filled=await applySelectorSuggestions(profile,needsDetail[0].url,'detail',job,false);
+    if(filled){
+      let recovered=0;
+      await mapLimit(needsDetail,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
+        if(await stopRequested(job.id))return;
+        const before=productNeedsEnrichment(product).any;
+        try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch{return}
+        if(before&&!productNeedsEnrichment(product).any)recovered++;
+      });
+      append(job,recovered
+        ?`${recovered} محصول با سلکتورهای بازتنظیم‌شده از خود صفحه تکمیل شد (بدون نیاز به هوش مصنوعی).`
+        :'سلکتورهای بازتنظیم‌شده هم چیزی اضافه نکردند؛ توضیح‌ساز هوشمند به‌عنوان فال‌بک اجرا می‌شود.',
+        recovered?'info':'warning');
+    }
+    await setState(key,checkpoint);
+  }
+  // AI enrichment FALLBACK: fill only what the page itself could not provide,
+  // using the pinned master model. Runs after the scraper-first rescue above
+  // and before save/sync, and can never fail the scrape.
   const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
   if(aiSettings?.enabled!==false){
     const pending=batch.filter(product=>productNeedsEnrichment(product).any);

@@ -115,9 +115,36 @@ export async function processOneJob(): Promise<boolean> {
           try { await scrapeDetails(product, profile.selectors); }
           catch (error) { job.failed++; append(job, `${product.title}: ${message(error)}`, 'error'); }
         });
-        // AI enrichment: fill descriptions / variations the source page did not
-        // provide, using the pinned master model. Always-on by default; a
-        // failure here must never fail the scrape, so each product is guarded.
+        // SCRAPER-FIRST RESCUE (before any AI): products can come back with an
+        // empty description simply because the detail selectors do not match
+        // THIS product's template (shops routinely mix layouts). Rediscover the
+        // detail selectors from a product that is actually missing data and
+        // re-scrape just those products. The AI description generator below is
+        // the fallback, not the first responder -- real page content always
+        // beats generated text.
+        const needsDetail = products.filter(product => product.url && productNeedsEnrichment(product).any);
+        if (needsDetail.length && !detailRescued) {
+          detailRescued = true;
+          const probeUrl = needsDetail[0].url;
+          append(job, `${needsDetail.length} محصول بدون توضیحات ماند؛ ابتدا موتور استخراج دوباره سلکتورهای جزئیات را پیدا می‌کند…`);
+          const filled = await applySelectorSuggestions(profile, probeUrl, 'detail', job, false);
+          if (filled) {
+            let recovered = 0;
+            await mapLimit(needsDetail, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
+              if (await stopRequested(job.id)) return;
+              const before = productNeedsEnrichment(product).any;
+              try { await scrapeDetails(product, profile.selectors); } catch { return; }
+              if (before && !productNeedsEnrichment(product).any) recovered++;
+            });
+            append(job, recovered
+              ? `${recovered} محصول با سلکتورهای بازتنظیم‌شده از خود صفحه تکمیل شد (بدون نیاز به هوش مصنوعی).`
+              : 'سلکتورهای بازتنظیم‌شده هم چیزی اضافه نکردند؛ توضیح‌ساز هوشمند به‌عنوان فال‌بک اجرا می‌شود.',
+              recovered ? 'info' : 'warning');
+          }
+        }
+        // AI enrichment FALLBACK: fill only what the page itself could not
+        // provide, using the pinned master model. A failure here must never
+        // fail the scrape, so each product is guarded.
         const aiSettings = await getState<any>('ai_description_settings', { enabled: true });
         if (aiSettings?.enabled !== false) {
           const pending = products.filter(product => productNeedsEnrichment(product).any);

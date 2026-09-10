@@ -175,7 +175,29 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
 const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','cheerio','playwright','puppeteer','crawlee_playwright'];
-function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};if(!autoFirst&&requested!=='auto'){add(requested);return out}if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);if(requested!=='auto')add(requested);else for(const engine of RENDER_AUTO_ENGINES)add(engine);return out}
+function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
+  const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
+  if(!autoFirst&&requested!=='auto'){add(requested);return out}
+  // An EXPLICIT engine choice must be tried first. Discovery engines used to be
+  // prepended even when the user had picked one, so choosing `cheerio` silently
+  // ran `heuristic` whenever a page had any inline JSON -- the profile said one
+  // engine, the run used another, and the 3-page benchmark (which passes
+  // autoFirst=false) disagreed with the real scrape. The other engines stay in
+  // the list as fallbacks, just no longer ahead of the explicit choice.
+  if(requested!=='auto'){
+    add(requested);
+    if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);
+    // Discovery engines AND the selector engines are fallbacks; the browser
+    // engines stay opt-in so an explicit choice never silently launches one.
+    for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);
+    add('htmlrewriter');add('cheerio');
+    return out;
+  }
+  if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);
+  for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);
+  for(const engine of RENDER_AUTO_ENGINES)add(engine);
+  return out;
+}
 
 export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true): Promise<ScrapeListResult> {
   const started=Date.now();
@@ -198,7 +220,9 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     try{
       const products=dedupe(await pick(name));
       if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started};
-      if(engine!=='auto'&&name===engine)return{products,usedEngine:name,elapsedMs:Date.now()-started};
+      // The explicit engine ran and found nothing: fall through to the
+      // remaining engines instead of returning an empty result, but remember
+      // the requested engine so an all-empty run still reports what was asked.
     }catch(error){
       if(engine!=='auto'&&name===engine)throw error;
     }

@@ -717,3 +717,49 @@ test('expectedPriceFor applies the configured percentage', async () => {
   assert.equal(core.expectedPriceFor(100000, { pricePercent: 0 }), 100000);
   assert.equal(core.expectedPriceFor(100000, { pricePercent: 10, toRial: true }), 1100000);
 });
+
+// --- Request 34d: an explicitly chosen engine must actually be the engine that
+// runs, in the real scrape path (autoFirst=true) exactly as in the 3-page
+// benchmark (autoFirst=false). Discovery engines used to be prepended before
+// the explicit choice, so picking "cheerio" silently ran "heuristic" during a
+// real run while the diagnostic reported the chosen engine.
+test('explicitly chosen engine wins in the real scrape path, not just the 3-page benchmark',async()=>{
+  // Head blobs that let the discovery engines produce a bogus early win.
+  const html=`<html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"LD Decoy","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}</script></head>`
+    +`<body><ul><li class="product"><h2 class="woocommerce-loop-product__title">Real Card A</h2><span class="price">120,000</span><a class="woocommerce-LoopProduct-link" href="/p/a"></a><img src="/a.jpg"></li>`
+    +`<li class="product"><h2 class="woocommerce-loop-product__title">Real Card B</h2><span class="price">130,000</span><a class="woocommerce-LoopProduct-link" href="/p/b"></a><img src="/b.jpg"></li></ul></body></html>`;
+  const previousFetch=globalThis.fetch;
+  env.configureEnv({DB:{prepare(){return {bind(){return this},first:async()=>null,all:async()=>({success:true,results:[]}),run:async()=>({success:true,meta:{}})}},batch:async()=>[],exec:async()=>({count:0,duration:0})}});
+  globalThis.fetch=async()=>new Response(html,{headers:{'content-type':'text/html'}});
+  try{
+    const selectors={container:'li.product',title:'.woocommerce-loop-product__title',price:'.price',link:'a.woocommerce-LoopProduct-link',image:'img'};
+    for(const engine of ['htmlrewriter','jsonld']){
+      const real=await scraper.scrapeListPage('https://shop.test/list',selectors,'',false,engine,undefined,true);
+      const bench=await scraper.scrapeListPage('https://shop.test/list',selectors,'',false,engine,undefined,false);
+      // When the chosen engine can read the page at all, the real scrape and the
+      // 3-page benchmark must report the SAME engine. (If it reads nothing the
+      // real run legitimately continues to a fallback, which the benchmark -- by
+      // design a single-engine probe -- never does.)
+      if(bench.products.length)assert.equal(real.usedEngine,bench.usedEngine,`engine ${engine}: real run and 3-page test must agree`);
+      assert.equal(bench.usedEngine,engine,`3-page test must probe exactly the chosen engine (${engine})`);
+    }
+    // The chosen engine runs first rather than losing to a discovery engine.
+    const chosen=await scraper.scrapeListPage('https://shop.test/list',selectors,'',false,'htmlrewriter',undefined,true);
+    assert.equal(chosen.usedEngine,'htmlrewriter');
+    assert.equal(chosen.products.length,2);
+  }finally{globalThis.fetch=previousFetch}
+});
+
+test('an explicit engine that finds nothing still falls back instead of returning zero products',async()=>{
+  // No JSON-LD at all, so "jsonld" must yield nothing and hand off to a fallback.
+  const html=`<html><body><ul><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 1</h2><span class="price">91,000</span><a class="woocommerce-LoopProduct-link" href="/p/f1"></a><img src="/f1.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 2</h2><span class="price">92,000</span><a class="woocommerce-LoopProduct-link" href="/p/f2"></a><img src="/f2.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 3</h2><span class="price">93,000</span><a class="woocommerce-LoopProduct-link" href="/p/f3"></a><img src="/f3.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 4</h2><span class="price">94,000</span><a class="woocommerce-LoopProduct-link" href="/p/f4"></a><img src="/f4.jpg"></li></ul></body></html>`;
+  const previousFetch=globalThis.fetch;
+  env.configureEnv({DB:{prepare(){return {bind(){return this},first:async()=>null,all:async()=>({success:true,results:[]}),run:async()=>({success:true,meta:{}})}},batch:async()=>[],exec:async()=>({count:0,duration:0})}});
+  globalThis.fetch=async()=>new Response(html,{headers:{'content-type':'text/html'}});
+  try{
+    const result=await scraper.scrapeListPage('https://shop.test/list',{container:'li.product',title:'.woocommerce-loop-product__title',price:'.price',link:'a.woocommerce-LoopProduct-link',image:'img'},'',false,'jsonld',undefined,true);
+    assert.ok(result.products.length>0,'empty explicit engine must fall back, not return 0 products');
+    assert.notEqual(result.usedEngine,'jsonld');
+  }finally{globalThis.fetch=previousFetch}
+});
+

@@ -55,10 +55,15 @@ const VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','li
 function hasEndTag(element:HtmlElement):boolean{return !VOID_TAGS.has(String(element.tagName||'').toLowerCase())}
 async function sourceKey(value:string):Promise<string>{return (await sha256(value)).slice(0,32)}
 async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
-  if(!indirect)return safeText(url,maxBytes);
   const network=(await loadConnections()).ai.network;
-  if(network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود.');
-  return safeTextViaWorker(url,network.workerUrl,maxBytes);
+  // A Worker URL saved in «روش اتصال» now applies to source pages too, not only
+  // to AI calls. Previously it was used only when a profile had ticked the
+  // per-profile «اتصال غیرمستقیم» box, so users who configured the gateway to
+  // bypass a sanction block still hit the block on every extraction.
+  const useWorker=Boolean(network.workerUrl)&&(indirect||network.mode==='worker');
+  if(useWorker)return safeTextViaWorker(url,network.workerUrl,maxBytes);
+  if(indirect&&network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود. (در محیط Cloudflare پروکسی HTTP در دسترس نیست؛ آدرس Worker واسط را وارد کنید.)');
+  return safeText(url,maxBytes);
 }
 function toAbsoluteUrl(value:string,base:string):string{try{return new URL(value,base).href}catch{return ''}}
 
@@ -453,9 +458,21 @@ const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlr
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
   if(!autoFirst&&requested!=='auto'){add(requested);return out}
+  // An EXPLICIT engine choice must be tried first (see the Node twin): putting
+  // the discovery engines ahead of it meant a chosen engine was silently
+  // replaced whenever the page carried any inline JSON.
+  if(requested!=='auto'){
+    add(requested);
+    if(master&&!NODE_ONLY_ENGINES.has(master)&&!WORKER_MANUAL_ENGINES.has(master))add(master);
+    // Fall back through the discovery engines AND the selector engine. Leaving
+    // htmlrewriter out meant a page that only the configured selectors can read
+    // returned zero products whenever the chosen engine came up empty.
+    for(const engine of WORKER_AUTO_ENGINES)add(engine);
+    return out;
+  }
   if(master&&!NODE_ONLY_ENGINES.has(master)&&!WORKER_MANUAL_ENGINES.has(master))add(master);
   for(const engine of WORKER_DISCOVERY_ENGINES)add(engine);
-  if(requested!=='auto')add(requested);else for(const engine of WORKER_AUTO_ENGINES)add(engine);
+  for(const engine of WORKER_AUTO_ENGINES)add(engine);
   return out;
 }
 
@@ -481,7 +498,7 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
   for(const name of engineOrder(engine,master,autoFirst)){
     const products=dedupeProducts(await tryOne(name));
     if(products.length)return{products,usedEngine:name};
-    if(engine!=='auto'&&name===engine)return{products,usedEngine:name};
+    // Empty result from the explicit engine: keep trying the fallbacks.
   }
   return{products:[],usedEngine:engine};
 }
