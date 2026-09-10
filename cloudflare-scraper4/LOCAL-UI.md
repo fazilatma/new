@@ -133,3 +133,15 @@ You still need to pull once if your current Codespace does not yet have `npm run
 - **The sync preview reports progress.** It runs inside a single HTTP request and never created a background run, so the task manager stayed empty and the button looked dead. It now shows an immediate "reading destinations…" message and registers a live row in the task manager that reports the result when it finishes.
 - **An empty preview says why.** Instead of one vague sentence it now distinguishes "no destination configured", "no products extracted yet", and "everything is already in sync".
 - **The changelog no longer buries the menu.** All 112 entries were rendered expanded, so reaching the lower hamburger-menu sections took a long scroll. Only the 12 most recent are shown; the rest sit in a collapsed "show older changes" block with its own scroll area.
+
+## Version 1.100.0
+
+- Refreshing the deployer page rescans all branches and installs the newest
+  version (throttled to once per 10s), so you no longer have to wait for the
+  background timer.
+- Reconciliation and sync only cover products whose title ends with a
+  «(کد ایکس)» code suffix, where x is any letter or digit. The «فرمت پسوند کد»
+  field in the duplicate-remover menu configures the accepted formats.
+- The sync preview gained a «تکراری» column: how many products share a title
+  once the code suffix is ignored.
+- The AI model-test results table no longer opens on every dashboard refresh.

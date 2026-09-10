@@ -4,6 +4,7 @@ import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from '../
 import { loadConnections } from './connections.js';
 import { getProduct, getProfile, getState, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
 import { safeFetch } from './network.js';
+import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { syncBasalam, syncWoo } from './sync.js';
 
 const norm=(v:string)=>normalizePersianText(v).replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
@@ -59,16 +60,23 @@ export async function unifiedRecon(profileId = '') {
   const local = await maintenanceRows(profileId) as ReconLocal[];
   const profileNames: Record<string, string> = {};
   for (const profile of await listProfiles()) profileNames[profile.id] = profile.name || profile.id;
+  // Same rule as the Worker runtime: only products whose title carries a
+  // «(کد ایکس)» suffix are reconciled.
+  const settings = await getState<any>('settings', {});
+  const suffixFormats = (settings as any)?.dedup?.suffixFormats || '';
+  const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
+  const eligible = local.filter(row => hasCodeSuffix(String(row.title || ''), patterns));
+  const skippedNoCode = local.length - eligible.length;
   const accounts = await reconAccounts();
   const rows: UnifiedReconRow[] = [];
   const failures: Array<{ account: string; error: string }> = [];
   for (const account of accounts) {
-    try { rows.push(...reconcileAccount(local, await remoteForAccount(account), account, profileNames)); }
+    try { rows.push(...reconcileAccount(local, await remoteForAccount(account), account, profileNames, suffixFormats)); }
     catch (error) { failures.push({ account: account.name, error: msg(error) }); }
   }
   const report = {
     ok: failures.length === 0, at: new Date().toISOString(), profileId,
-    local: local.length, accounts: accounts.length,
+    local: eligible.length, localAll: local.length, skippedNoCode, suffixFormats, accounts: accounts.length,
     ...summarize(rows), accountsBreakdown: byAccount(rows), profiles: byProfile(rows),
     actions: planActions(rows).length, failures, rows,
   };
@@ -87,7 +95,7 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
   const actions = planActions(report.rows as UnifiedReconRow[]).slice(0, Math.max(1, Math.min(1000, limit)));
   if (!apply) return { ok: true, dryRun: true, planned: actions.length, actions: actions.slice(0, 200),
     matched: report.matched, priceDiff: report.priceDiff, missing: report.missing, extra: report.extra,
-    noPrice: report.noPrice, inSync: report.inSync, local: report.local, accounts: report.accounts,
+    noPrice: report.noPrice, inSync: report.inSync, local: report.local, localAll: report.localAll, skippedNoCode: report.skippedNoCode, accounts: report.accounts,
     accountsBreakdown: report.accountsBreakdown, profiles: report.profiles, failures: report.failures,
     rows: report.rows };
   let changed = 0; const failed: any[] = [];
@@ -112,7 +120,7 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
   const after = changed ? await unifiedRecon(profileId) : report;
   return { ok: failed.length === 0, dryRun: false, planned: actions.length, changed, failed: failed.slice(0, 20),
     matched: after.matched, priceDiff: after.priceDiff, missing: after.missing, extra: after.extra,
-    noPrice: after.noPrice, inSync: after.inSync, local: after.local, accounts: after.accounts,
+    noPrice: after.noPrice, inSync: after.inSync, local: after.local, localAll: after.localAll, skippedNoCode: after.skippedNoCode, accounts: after.accounts,
     accountsBreakdown: after.accountsBreakdown, profiles: after.profiles, failures: after.failures,
     rows: after.rows };
 }

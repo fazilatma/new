@@ -1378,7 +1378,16 @@ test('the Node runtime never reaches into the Cloudflare D1 data layer', async (
   // recon-core is the shared piece: it must stay free of every data dependency.
   const core = await readProjectFile('worker-src/recon-core.ts');
   const imports = [...core.matchAll(/from '([^']+)'/g)].map(m => m[1]);
-  assert.deepEqual(imports, ['./utils.js'], 'recon-core must only depend on pure helpers');
+  const allowed = ['./utils.js', './dedup.js'];
+  for (const spec of imports) assert.ok(allowed.includes(spec), `recon-core must only depend on pure helpers, found ${spec}`);
+  // The allow-list is only safe while every entry is itself IO-free.
+  for (const spec of imports) {
+    const dep = await readProjectFile(`worker-src/${spec.replace('./', '').replace('.js', '.ts')}`);
+    const depImports = [...dep.matchAll(/from '([^']+)'/g)].map(m => m[1]);
+    for (const nested of depImports) assert.ok(allowed.includes(nested), `${spec} must stay pure, but imports ${nested}`);
+    const depCode = dep.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    assert.doesNotMatch(depCode, /\b(env\.DB|getState|setState|maintenanceRows)\b/, `${spec} must not touch IO`);
+  }
   const coreCode = core.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.doesNotMatch(coreCode, /\b(fetch|env\.DB|getState|setState|maintenanceRows)\b/, 'recon-core must not touch IO');
 });
@@ -1608,4 +1617,50 @@ test('an optional credential-helper cleanup cannot fail the auto-update', async 
   assert.ok(line, 'the credential-helper cleanup step must still exist');
   assert.match(line, /optional:\s*true/, 'the cleanup must be marked optional');
   assert.match(line, /ok:\s*true/, 'its result must not drag the overall ok down');
+});
+
+// --- Request 35a: refreshing the deployer page must be enough to pick up a new
+// version. The background timer can be disabled or throttled, and users kept
+// sitting on an old version because GET /api/branches only replayed cached state.
+test('refreshing the deployer page scans branches and installs the newest version', async () => {
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  const handler = deployer.match(/if \(req\.method === 'GET' && url\.pathname === '\/api\/branches'\) \{[\s\S]*?\n    \}/);
+  assert.ok(handler, 'the GET /api/branches handler must exist');
+  const body = handler[0];
+  assert.match(body, /scanAllBranches\('page-refresh'\)/, 'a page refresh must trigger a real branch scan');
+  assert.match(body, /maybeAutoInstallNewest\(\)/, 'a refresh must also install the newest version');
+  assert.match(body, /autoUpdateEnabled/, 'the refresh scan must honour LOCAL_DEPLOYER_AUTO_UPDATE=false');
+  assert.match(body, /branchState\.scanning/, 'a refresh must not start a second concurrent scan');
+  assert.match(body, /REFRESH_SCAN_MIN_MS/, 'rapid refreshes must be throttled');
+  const throttle = deployer.match(/const REFRESH_SCAN_MIN_MS = ([\d_]+);/);
+  assert.ok(throttle, 'the throttle window must be defined');
+  const ms = Number(throttle[1].replace(/_/g, ''));
+  assert.ok(ms > 0 && ms <= 60_000, `throttle window should be a short positive interval, got ${ms}`);
+});
+
+// --- Request 35b: the AI model-test results table must not pop open on every
+// dashboard refresh. It should appear only when this tab watched a run finish.
+test('a dashboard refresh does not reopen the AI model-test results table', async () => {
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  assert.match(dash, /await loadJobs\(false\);refreshCurrentAiRun\(false\)/,
+    'the page bootstrap must not ask for the finished-run table');
+  assert.match(dash, /if\(presentDone&&aiWatchedRunning!==run\.id\)presentDone=false;/,
+    'only a run this tab watched running may auto-open its table');
+  assert.match(dash, /aiWatchedRunning=run\.id/,
+    'a run observed while polling must be remembered');
+});
+
+// Node/Worker drift is a recurring defect: the code-suffix rule was first added
+// only to the Worker, so the Node runtime silently reconciled everything.
+test('both runtimes apply the (کد ایکس) rule to reconciliation and sync', async () => {
+  for (const path of ['worker-src/maintenance.ts', 'render-src/maintenance.ts']) {
+    const src = await readProjectFile(path);
+    assert.match(src, /hasCodeSuffix/, `${path} must filter by the code suffix`);
+    assert.match(src, /skippedNoCode/, `${path} must report how many products were skipped`);
+    assert.match(src, /reconcileAccount\([\s\S]{0,120}suffixFormats\)/, `${path} must pass the configured formats through`);
+  }
+  for (const path of ['worker-src/processor.ts', 'render-src/processor.ts']) {
+    const src = await readProjectFile(path);
+    assert.match(src, /hasCodeSuffix/, `${path} must skip publishing products without a code suffix`);
+  }
 });

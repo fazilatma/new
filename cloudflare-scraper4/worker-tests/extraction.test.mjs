@@ -763,3 +763,53 @@ test('an explicit engine that finds nothing still falls back instead of returnin
   }finally{globalThis.fetch=previousFetch}
 });
 
+
+// --- Request 35c: reconciliation and sync only cover products whose title ends
+// with a «(کد ایکس)» code suffix, where x is any letter or digit. Products
+// without one are base/draft titles and must be ignored at both ends.
+test('reconciliation only covers products carrying a (کد ایکس) suffix', async () => {
+  const out = join(temporary, 'recon-suffix-test.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+
+  const account = { target: 'woo', accountKey: 'default', name: 'Woo', pricePercent: 0 };
+  const local = [
+    { profile_id: 'p1', source_key: 'a', title: 'تیشرت مردانه (کد 1)', price: 100000, active: 1, data: {}, maps: [] },
+    { profile_id: 'p1', source_key: 'b', title: 'تیشرت مردانه (کد A2)', price: 100000, active: 1, data: {}, maps: [] },
+    { profile_id: 'p1', source_key: 'c', title: 'تیشرت مردانه', price: 100000, active: 1, data: {}, maps: [] },
+    { profile_id: 'p1', source_key: 'd', title: 'کفش تکی (کد ۹)', price: 50000, active: 1, data: {}, maps: [] },
+  ];
+  const rows = core.reconcileAccount(local, [], account, {});
+  const titles = rows.map(r => r.title);
+  assert.ok(!titles.includes('تیشرت مردانه'), 'a title with no code suffix must be excluded');
+  assert.equal(rows.length, 3, 'only the three suffixed products take part');
+
+  // Duplicate count = size of the group sharing a title once the code is removed.
+  const byTitle = Object.fromEntries(rows.map(r => [r.title, r.duplicateCount]));
+  assert.equal(byTitle['تیشرت مردانه (کد 1)'], 2, 'both تیشرت variants count as one group of 2');
+  assert.equal(byTitle['تیشرت مردانه (کد A2)'], 2, 'a letter code groups with a digit code');
+  assert.equal(byTitle['کفش تکی (کد ۹)'], 1, 'a product with no sibling reports 1');
+
+  // A destination product outside the convention is not reported as "extra".
+  const remoteRows = core.reconcileAccount([], [{ id: 7, name: 'محصول دستی بدون کد', price: 1000 }], account, {});
+  assert.equal(remoteRows.length, 0, 'destination products without a code suffix are out of scope');
+});
+
+test('code suffix accepts any letter or digit and strips repeated codes', async () => {
+  const out = join(temporary, 'dedup-suffix-test.mjs');
+  await build({ entryPoints: [new URL('../worker-src/dedup.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const dedup = await import(pathToFileURL(out).href);
+  const patterns = dedup.suffixPatterns(dedup.parseSuffixFormats(''));
+
+  for (const title of ['کالا (کد 12)', 'کالا (کد A5)', 'کالا (کد:ب۳)', 'کالا (code B2)', 'کالا #77'])
+    assert.equal(dedup.hasCodeSuffix(title, patterns), true, `${title} must be recognised`);
+  for (const title of ['کالای بدون کد', 'لپ تاپ (رنگ مشکی)', ''])
+    assert.equal(dedup.hasCodeSuffix(title, patterns), false, `${title} must NOT be recognised`);
+
+  // The grouping key ignores the code, so variants collapse together.
+  assert.equal(dedup.stripCodeSuffix('کالا (کد 12)', patterns), 'کالا');
+  assert.equal(dedup.stripCodeSuffix('کالا (کد A5)', patterns), 'کالا');
+  assert.equal(dedup.stripCodeSuffix('کالا (کد:2) (کد A5)', patterns), 'کالا');
+});

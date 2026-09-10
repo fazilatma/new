@@ -218,3 +218,13 @@ Important browser limitation: static HTML cannot directly install a project or w
 - **The sync preview reports progress.** It runs inside a single HTTP request and never created a background run, so the task manager stayed empty and the button looked dead. It now shows an immediate "reading destinations…" message and registers a live row in the task manager that reports the result when it finishes.
 - **An empty preview says why.** Instead of one vague sentence it now distinguishes "no destination configured", "no products extracted yet", and "everything is already in sync".
 - **The changelog no longer buries the menu.** All 112 entries were rendered expanded, so reaching the lower hamburger-menu sections took a long scroll. Only the 12 most recent are shown; the rest sit in a collapsed "show older changes" block with its own scroll area.
+
+## Version 1.100.0
+
+- **A page refresh now updates the deployer.** `GET /api/branches` used to replay
+  cached state only, so with the background timer disabled, throttled, or simply
+  not yet fired, the machine could sit on an old version indefinitely. Refreshing
+  the page now rescans every branch and installs the newest version before
+  answering. Repeat refreshes are throttled (10s) and the scan still honours
+  `LOCAL_DEPLOYER_AUTO_UPDATE=false`, an in-flight scan, and the dirty-worktree
+  and unpushed-commit guards.
