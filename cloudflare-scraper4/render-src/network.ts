@@ -22,10 +22,25 @@ export function configureSourceNetwork(value: Partial<SourceNetwork> | null | un
 }
 export function sourceNetworkConfig(): SourceNetwork { return sourceNetwork; }
 /** Wraps a target URL in the configured Worker/gateway URL. */
+/**
+ * Normalises a user-entered proxy/Worker address.
+ *
+ * A bare hostname like "proxy.example.workers.dev" is a RELATIVE URL: it used to
+ * resolve against our own origin, so every proxied request returned 404.
+ */
+export function normalizeProxyUrl(raw: string): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('/')) throw new Error(`آدرس پراکسی «${value}» نسبی است؛ باید با https:// شروع شود.`);
+  return 'https://' + value.replace(/^\/+/, '');
+}
+
 export function viaWorkerUrl(workerUrl: string, target: string): string {
-  return workerUrl.includes('{url}')
-    ? workerUrl.replace('{url}', encodeURIComponent(target))
-    : workerUrl + (workerUrl.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(target);
+  const base = normalizeProxyUrl(workerUrl);
+  return base.includes('{url}')
+    ? base.replace('{url}', encodeURIComponent(target))
+    : base + (base.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(target);
 }
 
 export function privateIp(ip: string): boolean {

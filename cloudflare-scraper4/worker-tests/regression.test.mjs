@@ -952,3 +952,60 @@ test('the results list is single column with suffix, prices and a modal', async 
   assert.ok(dashboard.includes('allDestinationsForPricing()'), 'the modal must price every destination');
   assert.ok(dashboard.includes('قیمت نهایی در همهٔ مقصدها'), 'the modal must show the all-destination table');
 });
+
+// --- A bare hostname such as "proxy.example.workers.dev" is a RELATIVE url, so
+// it resolved against our own origin and every AI model answered HTTP 404.
+test('a proxy address without a scheme is normalised instead of 404ing', async () => {
+  const worker = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  for (const [name, source] of [['worker', worker], ['node', node]])
+    assert.ok(source.includes('export function normalizeProxyUrl('), `${name}: needs normalizeProxyUrl`);
+
+  // Behavioural check on the exact string the user reported.
+  const normalize = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('/')) throw new Error('relative');
+    return 'https://' + value.replace(/^\/+/, '');
+  };
+  const built = (base, target) => base.includes('{url}')
+    ? base.replace('{url}', encodeURIComponent(target))
+    : base + (base.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(target);
+  const target = 'https://api.openai.com/v1/chat/completions';
+  const url = new URL(built(normalize('proxy.fazilat-ma.workers.dev'), target));
+  assert.equal(url.origin, 'https://proxy.fazilat-ma.workers.dev');
+  assert.equal(url.searchParams.get('url'), target);
+  // An address that already has a scheme must be left alone.
+  assert.equal(normalize('https://p.dev'), 'https://p.dev');
+
+  // Both AI paths must go through the normaliser, not raw concatenation.
+  const workerAi = await readFile(new URL('../worker-src/ai.ts', import.meta.url), 'utf8');
+  const nodeAi = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(workerAi.includes('normalizeProxyUrl(net.workerUrl)'), 'worker ai must normalise');
+  assert.ok(nodeAi.includes('viaWorkerUrl(net.workerUrl'), 'node ai must use viaWorkerUrl');
+  assert.ok(!/net\.workerUrl\+\(net\.workerUrl\.includes/.test(workerAi + nodeAi),
+    'no raw concatenation of an unnormalised proxy url may remain');
+});
+
+// --- The reconciliation preview rendered chips only while apply rendered the
+// full matrix, so the same data looked completely different before and after.
+test('the reconciliation preview and apply both render the matrix table', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const preview = dashboard.indexOf("action==='recon-unified'){");
+  assert.ok(preview > 0, 'the preview action must exist');
+  const body = dashboard.slice(preview, preview + 400);
+  assert.ok(body.includes('renderReconMatrix('), 'the preview must use the matrix renderer');
+  assert.ok(!body.includes('renderUnifiedRecon('), 'the preview must not use the chips-only renderer');
+  // All destinations failing is not "in sync".
+  assert.ok(dashboard.includes('const anyFailed=(d.failures||[]).length>0;'),
+    'a failed destination must suppress the green in-sync banner');
+  assert.ok(dashboard.includes(".rc-banner.rc-bad{"), 'the failure banner needs its own style');
+});
+
+// --- Ship a proxy Worker that implements the contract the client expects.
+test('the bundled AI proxy Worker answers the shapes the client sends', async () => {
+  const source = await readFile(new URL('../scripts/ai-proxy-worker.js', import.meta.url), 'utf8');
+  for (const token of ["searchParams.get('url')", "x-scraper-target", "x-target-url", 'ALLOWED_HOSTS'])
+    assert.ok(source.includes(token), `the proxy Worker must handle ${token}`);
+});

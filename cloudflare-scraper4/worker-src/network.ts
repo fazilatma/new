@@ -54,12 +54,29 @@ async function responseText(response:Response,url:string):Promise<{text:string;u
   if(!response.ok)throw new Error(`HTTP ${response.status} from ${url}`);const contentType=response.headers.get('content-type')||'',bytes=new Uint8Array(await response.arrayBuffer()),text=decodeResponseBody(bytes,contentType),finalUrl=response.headers.get('x-scraper-final-url')||url;ensureTextResponse(text,contentType,finalUrl);return{text,url:finalUrl,contentType};
 }
 export async function safeText(raw:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{return responseText(await safeFetch(raw,{},maxBytes),raw)}
+/**
+ * Normalises a user-entered proxy/Worker address.
+ *
+ * People paste the bare hostname they see in the Cloudflare dashboard, e.g.
+ * "proxy.example.workers.dev". Without a scheme that string is a RELATIVE URL,
+ * so it used to resolve against the scraper's own origin and every request came
+ * back 404. Adding https:// turns it back into the absolute address the user meant.
+ * Returns '' for an empty value so callers keep their own "not configured" errors.
+ */
+export function normalizeProxyUrl(raw:string):string{
+  const value=String(raw||'').trim();
+  if(!value)return '';
+  if(/^https?:\/\//i.test(value))return value;
+  // Reject anything that is clearly not a host (a path, or a bare word).
+  if(value.startsWith('/'))throw new Error(`آدرس پراکسی «${value}» نسبی است؛ باید با https:// شروع شود.`);
+  return 'https://'+value.replace(/^\/+/,'');
+}
 export async function safeTextViaWorker(raw:string,workerUrl:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{
-  const target=assertPublicUrl(raw).href,base=workerUrl.trim();if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'');const response=await safeFetch(gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},maxBytes),result=await responseText(response,target);return {...result,url:target};
+  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'');const response=await safeFetch(gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},maxBytes),result=await responseText(response,target);return {...result,url:target};
 }
 
 const WOO_EDGE_ERRORS=new Set([520,521,522,523,524,525,526]);
-function wooGatewayUrl(target:string,workerUrl:string):string{const base=workerUrl.trim();if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'')}
+function wooGatewayUrl(target:string,workerUrl:string):string{const base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'')}
 async function tagNetwork(response:Response,mode:'direct'|'worker',fallbackStatus=0):Promise<Response>{const headers=new Headers(response.headers);headers.set('x-scraper-network-mode',mode);if(fallbackStatus)headers.set('x-scraper-direct-status',String(fallbackStatus));return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers})}
 async function workerFetch(target:string,workerUrl:string,init:RequestInit,maxBytes:number|undefined,fallbackStatus=0):Promise<Response>{const headers=new Headers(init.headers);headers.set('x-target-url',target);headers.set('x-scraper-target-url',target);return tagNetwork(await safeFetch(wooGatewayUrl(target,workerUrl),{...init,headers},maxBytes),'worker',fallbackStatus)}
 /**

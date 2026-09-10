@@ -200,3 +200,25 @@ You still need to pull once if your current Codespace does not yet have `npm run
   id and name. The Node runtime previously only called `/categories` and returned no vendor data.
 - Fixed: `POST /api/profiles/:id/import` threw an unhandled `SyntaxError` in the server log when the
   body was not JSON; it now returns a 400.
+
+## 1.103.0 — AI proxy 404 fixed, reconciliation matrix restored
+
+- **Fixed: a proxy address without a scheme made every AI model return 404.**
+  Entering `proxy.example.workers.dev` (exactly as Cloudflare shows it) produced a **relative**
+  URL, so the request resolved against the scraper's own origin — e.g.
+  `https://your-scraper.workers.dev/api/ai/proxy.example.workers.dev?url=...` — which does not
+  exist, hence 404 for every model while direct connections kept working. Proxy addresses are now
+  normalised (`https://` added when missing) in **both runtimes**, for AI, WooCommerce and scraping.
+  The two address fields also accept a bare hostname now instead of being rejected by the browser.
+- **New `scripts/ai-proxy-worker.js`** — a paste-and-deploy Cloudflare Worker. A correct address
+  still 404s if the Worker behind it does not implement the expected contract, so this one does:
+  it accepts `/?url=<encoded>`, the `x-scraper-target` / `x-target-url` headers **and** the path
+  form, forwards method/body/Authorization unchanged, answers CORS preflight, exposes `/health`,
+  and keeps an `ALLOWED_HOSTS` allowlist so it cannot be abused as an open relay.
+- **The reconciliation preview shows the matrix table again.** Preview used a chips-only renderer
+  while apply used the full matrix, so the same data looked completely different before and after
+  running. Preview now renders the same table (products × destinations).
+- **Fixed: "everything is in sync" was shown when every destination had failed.** Three HTTP 401s
+  used to end with a green "all destinations match the source" banner. A red
+  "no destination responded" banner with the error list is shown instead, and a green banner is
+  never shown while any destination failed.
