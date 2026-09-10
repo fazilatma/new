@@ -28,12 +28,41 @@ const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 function platformBinaryPackage() {
   if (process.platform === 'win32') return process.arch === 'arm64' ? '@esbuild/win32-arm64' : '@esbuild/win32-x64';
   if (process.platform === 'darwin') return process.arch === 'arm64' ? '@esbuild/darwin-arm64' : '@esbuild/darwin-x64';
+  // Termux reports process.platform === 'android'. Without this branch the
+  // repair installed nothing useful and the build died with a message telling
+  // an Android user to fix their "Windows" install.
+  if (process.platform === 'android') {
+    if (process.arch === 'arm64') return '@esbuild/android-arm64';
+    if (process.arch === 'arm') return '@esbuild/android-arm';
+    return '@esbuild/android-x64';
+  }
   if (process.platform === 'linux') {
     if (process.arch === 'arm64') return '@esbuild/linux-arm64';
     if (process.arch === 'arm') return '@esbuild/linux-arm';
     return '@esbuild/linux-x64';
   }
   return '';
+}
+
+const isTermux = process.platform === 'android' || /com\.termux/.test(process.env.PREFIX || '') || /com\.termux/.test(projectRoot);
+
+// Termux ships a native esbuild through `pkg install esbuild`. esbuild's own
+// loader honours ESBUILD_BINARY_PATH, so an existing system binary is by far
+// the most reliable way to build on Android -- no npm optional package, no
+// postinstall download.
+function systemEsbuildBinary() {
+  const candidates = [
+    process.env.ESBUILD_BINARY_PATH,
+    join(projectRoot, 'node_modules', ...(platformBinaryPackage() || 'x').split('/'), 'bin', 'esbuild'),
+    process.env.PREFIX ? join(process.env.PREFIX, 'bin', 'esbuild') : '',
+    '/data/data/com.termux/files/usr/bin/esbuild'
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try { if (existsSync(candidate) && candidate !== '/usr/bin/esbuild') return candidate; } catch { /* keep looking */ }
+  }
+  const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['esbuild'], { encoding: 'utf8' });
+  const found = which.status === 0 ? String(which.stdout || '').split('\n')[0].trim() : '';
+  return found && found !== '/usr/bin/esbuild' && existsSync(found) ? found : '';
 }
 
 function desiredEsbuildVersion() {
@@ -79,7 +108,9 @@ function repairEsbuild() {
       throw new Error(
         '[esbuild] Automatic repair failed. Run this manually inside cloudflare-scraper4:\n' +
         `  ${npmCommand} install esbuild@${pin} --no-audit\n` +
-        '(do NOT use --ignore-scripts; esbuild needs its postinstall/optional binary to run on Windows)'
+        (isTermux
+          ? '(on Termux the simplest fix is the system build: pkg install esbuild)'
+          : '(do NOT use --ignore-scripts; esbuild needs its postinstall/optional binary to run)')
       );
     }
   }
@@ -101,7 +132,30 @@ function isMissingBinaryError(error) {
   return /cannot find module|binary|not installed|another platform|host environment|EACCES|ENOENT|spawn|dlopen|is not a valid Win32 application/i.test(message);
 }
 
+// Last resort: esbuild-wasm is pure WebAssembly, so it runs anywhere Node runs.
+// Slower than the native binary, but a slow build beats a build that cannot run
+// at all -- which is what Termux users were hitting.
+async function loadWasmFallback(reason) {
+  const pin = desiredEsbuildVersion();
+  console.error(`[esbuild-loader] Falling back to esbuild-wasm@${pin} (${reason}).`);
+  try {
+    return await verifyEsbuildBinary(await import('esbuild-wasm'));
+  } catch {
+    const install = runNpm(['install', `esbuild-wasm@${pin}`, '--no-save', '--no-audit', '--prefer-online']);
+    if (install.status !== 0) return null;
+    try {
+      return await verifyEsbuildBinary(await import(`esbuild-wasm?fresh=${Date.now()}`).catch(() => import('esbuild-wasm')));
+    } catch { return null; }
+  }
+}
+
 export async function loadEsbuild() {
+  // A usable binary already on the machine beats any download. On Termux this
+  // is `pkg install esbuild`, which is the officially supported route.
+  if (!process.env.ESBUILD_BINARY_PATH) {
+    const system = systemEsbuildBinary();
+    if (system) process.env.ESBUILD_BINARY_PATH = system;
+  }
   let module = null;
   try {
     module = await import('esbuild');
@@ -110,16 +164,22 @@ export async function loadEsbuild() {
     const reason = (firstError && firstError.message) || String(firstError);
     if (module && !isMissingBinaryError(firstError)) throw firstError; // a genuine transform bug, not a broken install
     console.error(`[esbuild-loader] esbuild is not usable: ${reason}`);
-    repairEsbuild();
     try {
+      repairEsbuild();
       // Bust the ESM cache so the freshly installed copy is loaded.
       const fresh = await import(`esbuild?repaired=${Date.now()}`).catch(() => import('esbuild'));
       return await verifyEsbuildBinary(fresh);
     } catch (secondError) {
+      // The native binary is unavailable on this device. Rather than failing the
+      // whole build (which stops the scraper from ever starting), run the
+      // WebAssembly build, which needs no platform-specific executable.
+      const wasm = await loadWasmFallback((secondError && secondError.message) || String(secondError));
+      if (wasm) return wasm;
       throw new Error(
         '[esbuild] esbuild still cannot be loaded after repair: ' + ((secondError && secondError.message) || secondError) +
-        '\nOn Windows make sure Node.js LTS is installed and that this folder was not copied from another OS, then run:\n' +
-        `  ${npmCommand} install esbuild@${desiredEsbuildVersion()} --no-audit --prefer-online`
+        (isTermux
+          ? `\nOn Termux install the system build, then start the deployer again:\n  pkg install esbuild\n  ${npmCommand} install esbuild-wasm@${desiredEsbuildVersion()} --no-audit`
+          : `\nMake sure Node.js LTS is installed and that this folder was not copied from another OS, then run:\n  ${npmCommand} install esbuild@${desiredEsbuildVersion()} --no-audit --prefer-online`)
       );
     }
   }

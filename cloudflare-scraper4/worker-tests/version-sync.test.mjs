@@ -319,3 +319,60 @@ test('the proxy error names the deployer version that produced it', async () => 
   assert.match(proxy, /scraperExitCode/, 'the error must carry the scraper exit code');
   assert.match(proxy, /log: String\(scraperLog/, 'the error must carry the scraper log tail');
 });
+
+test('esbuild resolves a native package on Termux/Android', async () => {
+  // Termux reports process.platform === 'android'. The loader had no android
+  // branch, so platformBinaryPackage() returned '' -> the "repair" installed
+  // nothing, render:build died, the scraper exited 1 and "Open scraper" 502'd.
+  const loader = await readProjectFile('scripts/esbuild-loader.mjs');
+
+  // Execute the REAL function from the shipped source. Re-implementing it here
+  // would keep this test green even if the android branch were deleted again.
+  const body = loader.slice(loader.indexOf('function platformBinaryPackage()'), loader.indexOf('const isTermux'));
+  const pkgFor = (platform, arch) => new Function('process', `${body}; return platformBinaryPackage();`)({ platform, arch });
+
+  assert.equal(pkgFor('android', 'arm64'), '@esbuild/android-arm64', 'Termux on arm64 needs its own esbuild binary');
+  assert.equal(pkgFor('android', 'arm'), '@esbuild/android-arm');
+  assert.equal(pkgFor('android', 'x64'), '@esbuild/android-x64');
+  // Guard the platforms that already worked, so the android fix cannot regress them.
+  assert.equal(pkgFor('linux', 'arm64'), '@esbuild/linux-arm64');
+  assert.equal(pkgFor('win32', 'x64'), '@esbuild/win32-x64');
+  assert.equal(pkgFor('darwin', 'arm64'), '@esbuild/darwin-arm64');
+});
+
+test('a build that cannot load native esbuild falls back to WebAssembly', async () => {
+  // A missing platform binary must not be fatal: esbuild-wasm needs no native
+  // executable, so the scraper can still be built and served.
+  const loader = await readProjectFile('scripts/esbuild-loader.mjs');
+  assert.match(loader, /esbuild-wasm/, 'a WebAssembly fallback must exist');
+  assert.match(loader, /async function loadWasmFallback/, 'the fallback must be a real code path');
+  assert.match(loader, /const wasm = await loadWasmFallback\(/, 'the fallback must run when repair fails');
+  assert.match(loader, /if \(wasm\) return wasm;/, 'the fallback result must be returned instead of throwing');
+
+  // It must be a declared dependency; installing the native package with
+  // --no-save prunes anything that is only present ad hoc.
+  const pkg = JSON.parse(await readProjectFile('package.json'));
+  assert.ok(pkg.devDependencies['esbuild-wasm'], 'esbuild-wasm must be declared so it is always installed');
+  assert.equal(pkg.devDependencies['esbuild-wasm'], pkg.devDependencies.esbuild, 'both esbuild builds must be pinned together');
+});
+
+test('esbuild failures never give Windows-only advice to Termux users', async () => {
+  // The old text told an Android user their "Windows" install was broken.
+  const loader = await readProjectFile('scripts/esbuild-loader.mjs');
+  assert.match(loader, /const isTermux/, 'the loader must know when it is on Termux');
+  assert.match(loader, /pkg install esbuild/, 'Termux users need the Termux remedy');
+  // Check executable code, not comments: an earlier version of this assertion
+  // matched one exact sentence, so restoring the Windows-only text elsewhere
+  // slipped through. Strip comments and require that no message mentions
+  // Windows unless it is chosen by a platform check.
+  const code = loader.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const line of code.split('\n')) {
+    if (!line.includes('Windows')) continue;
+    assert.ok(/isTermux|process\.platform/.test(line), `unconditional Windows advice: ${line.trim()}`);
+  }
+
+  // An existing system binary is the most reliable route on Termux, but esbuild
+  // ignores ESBUILD_BINARY_PATH when it is exactly /usr/bin/esbuild.
+  assert.match(loader, /ESBUILD_BINARY_PATH/, 'a system esbuild must be usable');
+  assert.match(loader, /!== '\/usr\/bin\/esbuild'/, 'the path esbuild refuses must be skipped');
+});
