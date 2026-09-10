@@ -14,7 +14,22 @@ function append(job: Job, message: string, level = 'info'): void {
 async function save(job: Job): Promise<void> { const current=await getJob(job.id); if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return; if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')} await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); }
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
 function isManualListEngine(engine?: string): boolean { return !!engine && MANUAL_LIST_ENGINES.has(engine); }
-async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job, onlyMissing = true): Promise<void> { try { const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim())); if(!entries.length)return; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveProfile({...profile,updatedAt:new Date().toISOString()}); append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`); } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); } }
+async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job, onlyMissing = true): Promise<number> { try { const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim())); if(!entries.length)return 0; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveProfile({...profile,updatedAt:new Date().toISOString()}); append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`); return entries.length; } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); return 0; } }
+
+const LIST_KEYS = ['container','title','price','link','image'] as const;
+const DETAIL_KEYS = ['shortDesc','longDesc','sku','brand','category','stock','weight','gallery','detailImage','variations'] as const;
+/** True when the profile actually configures detail extraction. */
+function hasDetailSelectors(selectors: any): boolean {
+  return DETAIL_KEYS.some(key => String(selectors?.[key] || '').trim());
+}
+/** Scrapes one product and reports whether ANY detail field was populated. */
+async function detailProbe(sample: Product, selectors: any): Promise<boolean> {
+  try {
+    const before = JSON.stringify(DETAIL_KEYS.map(key => (sample as any)[key] ?? null));
+    const probe = await scrapeDetails({ ...sample }, selectors);
+    return JSON.stringify(DETAIL_KEYS.map(key => (probe as any)[key] ?? null)) !== before;
+  } catch { return false; }
+}
 
 export async function processOneJob(): Promise<boolean> {
   const job = await claimJob(); if (!job) return false;
@@ -22,12 +37,19 @@ export async function processOneJob(): Promise<boolean> {
     const profile = await getProfile(job.profileId); if (!profile) throw new Error('Profile not found');
     append(job, `شروع ${job.kind === 'scrape' ? 'استخراج' : 'همگام‌سازی'} «${profile.name}»`);
     if (job.kind === 'scrape') {
-      job.phase = 'list'; await save(job); const found = new Map<string, Product>(); let autoSelectorsAllowed=false;
+      job.phase = 'list'; await save(job); const found = new Map<string, Product>(); let autoSelectorsAllowed=false; let listRescued=false; let detailRescued=false;
       // pages === 0 means "auto" everywhere in the UI: keep paging until an
       // empty page, with the same 100-page safety cap the Worker uses. Looping
       // to profile.pages directly made a 0-page profile scan nothing at all and
       // report a successful run with zero products.
       const pageLimit = profile.pages > 0 ? profile.pages : 100;
+      // TRIGGER 1 (selectors empty): the Worker already fills blank list
+      // selectors before the first fetch; Node did not, so a fresh profile with
+      // no selectors relied purely on the discovery engines.
+      if (!LIST_KEYS.some(key => String((profile.selectors as any)?.[key] || '').trim())) {
+        append(job, 'سلکتورهای فهرست خالی است؛ پیشنهاد خودکار اجرا می‌شود…');
+        await applySelectorSuggestions(profile, pageUrl(profile, 1), 'list', job, true);
+      }
       for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
@@ -41,7 +63,29 @@ export async function processOneJob(): Promise<boolean> {
           append(job, `موتور مستر این پروفایل: ${scraped.usedEngine}${scraped.elapsedMs ? ` · ${scraped.elapsedMs}ms` : ''}`);
         }
         if (scraped.usedEngine && list.length && !isManualListEngine(scraped.usedEngine)) { autoSelectorsAllowed=true; await applySelectorSuggestions(profile,url,'list',job,true); }
-        if (!list.length) { append(job, 'محصولی پیدا نشد', 'warning'); break; }
+        if (!list.length) {
+          // LAST-RESORT FALLBACK: the page was fetched but nothing came out of
+          // it -- empty selectors, selectors that no longer match the site, or
+          // an engine that found no cards. Before giving up, run the same
+          // discovery the "auto suggest" button uses and retry the page ONCE.
+          // onlyMissing=false because selectors that exist but match nothing are
+          // exactly the failure being recovered from.
+          if (page === 1 && !listRescued) {
+            listRescued = true;
+            append(job, 'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
+            const filled = await applySelectorSuggestions(profile, url, 'list', job, false);
+            if (filled) {
+              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster);
+              if (retry.products.length) {
+                append(job, `پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);
+                if (retry.usedEngine) { profile.extractionEngineMaster = retry.usedEngine; await saveProfile({ ...profile, updatedAt: new Date().toISOString() }); }
+                page--; continue; // re-run this page with the repaired selectors
+              }
+              append(job, 'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.', 'warning');
+            }
+          }
+          append(job, 'محصولی پیدا نشد', 'warning'); break;
+        }
         const before = found.size;
         for (const raw of list) { const p = transformProduct(raw, profile); if (!profile.minPrice || p.price >= profile.minPrice) found.set(p.sourceKey, p); }
         job.total = found.size; job.processed += list.length; await save(job);
@@ -52,6 +96,20 @@ export async function processOneJob(): Promise<boolean> {
       }
       if (job.status !== 'stopped') {
         job.phase = 'details'; const products = [...found.values()]; const sample=products.find(p=>p.url); if(sample?.url&&autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true); await save(job);
+        // LAST-RESORT FALLBACK for the detail stage: probe one real product
+        // first. If the configured detail selectors enrich nothing at all, the
+        // whole stage would silently return empty descriptions for every
+        // product, so rediscover the detail selectors and re-probe once.
+        if (sample?.url && hasDetailSelectors(profile.selectors)) {
+          const probe = await detailProbe(sample, profile.selectors);
+          if (!probe && !detailRescued) {
+            detailRescued = true;
+            append(job, 'سلکتورهای جزئیات هیچ فیلدی را پر نکردند؛ پیشنهاد خودکار به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
+            const filled = await applySelectorSuggestions(profile, sample.url, 'detail', job, false);
+            if (filled && await detailProbe(sample, profile.selectors)) append(job, 'پیشنهاد خودکار جواب داد: سلکتورهای جزئیات بازتنظیم شدند.');
+            else if (filled) append(job, 'پیشنهاد خودکار هم فیلدی پیدا نکرد؛ سلکتورهای جزئیات را دستی بررسی کنید.', 'warning');
+          }
+        }
         await mapLimit(products, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
           if (await stopRequested(job.id)) return;
           try { await scrapeDetails(product, profile.selectors); }

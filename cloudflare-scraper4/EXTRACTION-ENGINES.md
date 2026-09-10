@@ -55,3 +55,22 @@ npx puppeteer browsers install chrome
 ```
 
 For Codespaces/VPS Linux, browser packages may require additional system dependencies. Use browser engines only for sites you are authorized to access and do not use them to bypass access controls.
+
+## Last-resort selector rediscovery (1.97.0)
+
+Engine selection answers "how do we parse this page". It does not help when the
+answer is "nothing matched". Since 1.97.0 a run that extracts zero products does
+not fail immediately: the scraper re-runs the same curated discovery the
+"auto-suggest selectors" button uses, merges any non-empty proposals into the
+profile, and retries the page once. The detail stage does the same when the
+configured detail selectors populate no field on a real product.
+
+Note that this is a different algorithm from the `heuristic` engine. The
+heuristic engine infers cards from price-shaped text in the markup; the
+suggestion pass tests a curated list of well-known e-commerce selectors
+(`li.product`, `.woocommerce-loop-product__title`, `.product-card`, …). A
+catalogue whose cards carry no price text defeats the former but not the latter,
+which is precisely the case this rescue recovers.
+
+Each rescue happens at most once per job, so a genuinely broken source still
+fails fast instead of looping.

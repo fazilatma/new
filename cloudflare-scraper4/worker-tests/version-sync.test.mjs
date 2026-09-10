@@ -209,7 +209,7 @@ test('auto-update never discards uncommitted work', async () => {
   const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
   const server = await readProjectFile('render-src/server.ts');
   for (const [name, source] of [['deployer', deployer], ['render server', server]]) {
-    assert.match(source, /status', '--porcelain'\]/, `${name} must check for a dirty worktree before resetting`);
+    assert.match(source, /status', '--porcelain'/, `${name} must check for a dirty worktree before resetting`);
     assert.match(source, /reset', '--hard'/, `${name} still performs the reset when the tree is clean`);
   }
   // The deployer guards inside autoUpdateFromGit, which is what the timer calls;
@@ -1566,4 +1566,27 @@ test('the sync preview returns the data its table needs, in both runtimes', asyn
     assert.match(body, /const after\s*=\s*changed\s*\?\s*await unifiedRecon\(profileId\)\s*:\s*report/,
       `${runtime}: applying must re-read the state so the table reflects reality`);
   }
+});
+
+test('untracked files never pause the auto-update', async () => {
+  // `git reset --hard` only rewrites TRACKED files; it never deletes untracked
+  // ones. Counting them meant a device with node_modules/, data/, storage/ or a
+  // personal notes file was paused forever for a danger that does not exist --
+  // which is why "Update from GitHub" still had to be pressed by hand.
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  const at = deployer.indexOf('function autoUpdateFromGit');
+  assert.ok(at > -1, 'the auto-updater must exist');
+  const body = deployer.slice(at, deployer.indexOf('\nfunction ', at + 10));
+
+  const probes = [...body.matchAll(/runSync\('git', \['status', '--porcelain'([^\]]*)\]\)/g)].map(m => m[1]);
+  assert.ok(probes.length >= 2, 'the updater must probe the worktree before resetting');
+  for (const args of probes) {
+    assert.match(args, /--untracked-files=no/,
+      'every dirty probe must ignore untracked files, since reset --hard cannot destroy them');
+  }
+
+  // The repository root must ignore installed dependencies, or a plain install
+  // shows up as untracked noise on every device.
+  const rootIgnore = await readFile(new URL('../.gitignore', projectUrl), 'utf8');
+  assert.match(rootIgnore, /^node_modules\/$/m, 'the repo root must ignore node_modules');
 });

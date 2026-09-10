@@ -481,3 +481,128 @@ test('HTML entities in card text are decoded',async()=>{
   assert.match(source,/normalizeDigits\(decodeEntities\(String\(value\|\|''\)\)\)/,'cleanText must decode entities');
   assert.match(source,/&\(\?:amp\|#38\|#x26\);/,'&amp; must be decoded last so &amp;lt; does not become <');
 });
+
+// ---------------------------------------------------------------------------
+// Last-resort auto-suggest fallback (request 32b).
+//
+// Three triggers must recover a run instead of failing it: empty selectors, a
+// successful connection that yields zero products, and an engine that finds
+// nothing. These tests assert the WIRING in both processors (the behaviour of
+// suggestSelectors itself is covered separately below).
+// ---------------------------------------------------------------------------
+const nodeProcessor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+const workerProcessor = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+const stripComments = source => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+test('node: zero extracted products triggers the auto-suggest fallback', () => {
+  const source = stripComments(nodeProcessor);
+  const bail = source.indexOf("'محصولی پیدا نشد'");
+  assert.ok(bail > 0, 'the zero-product branch must still exist');
+  const branch = source.slice(source.indexOf('if (!list.length)'), bail);
+  assert.match(branch, /applySelectorSuggestions\(profile, url, 'list', job, false\)/,
+    'the empty-list branch must rediscover list selectors before giving up');
+  assert.match(branch, /scrapeListWithMeta/, 'it must retry the page after repairing the selectors');
+  assert.match(branch, /listRescued/, 'the retry must be guarded so it cannot loop forever');
+});
+
+test('node: the rescue reruns the same page instead of skipping it', () => {
+  const source = stripComments(nodeProcessor);
+  const branch = source.slice(source.indexOf('if (!list.length)'), source.indexOf("'محصولی پیدا نشد'"));
+  assert.match(branch, /page--;\s*continue/, 'a rescued page must be re-scraped, not skipped');
+});
+
+test('node: empty list selectors are filled before the first fetch', () => {
+  const source = stripComments(nodeProcessor);
+  assert.match(source, /LIST_KEYS\.some\(key => String\(\(profile\.selectors as any\)\?\.\[key\] \|\| ''\)\.trim\(\)\)/,
+    'a profile with no list selectors must run discovery first');
+});
+
+test('node: the detail stage falls back when no detail field is populated', () => {
+  const source = stripComments(nodeProcessor);
+  assert.match(source, /if \(!probe && !detailRescued\)/, 'an unproductive detail probe must trigger the rescue');
+  assert.match(source, /applySelectorSuggestions\(profile, sample\.url, 'detail', job, false\)/,
+    'the detail rescue must re-run discovery with onlyMissing=false');
+});
+
+test('node: applySelectorSuggestions reports how many selectors it filled', () => {
+  const source = stripComments(nodeProcessor);
+  assert.match(source, /mode: 'list'\|'detail', job: Job, onlyMissing = true\): Promise<number>/,
+    'callers branch on the count, so void would always be falsy');
+  assert.match(source, /return entries\.length;/, 'the success path must return the number of filled entries');
+});
+
+test('worker: zero extracted products triggers the auto-suggest fallback', () => {
+  const source = stripComments(workerProcessor);
+  assert.match(source, /if\(!page\.products\.length&&!checkpoint\.listRescued\)/,
+    'the worker must rescue an empty page before throwing');
+  const branch = source.slice(source.indexOf('if(!page.products.length&&!checkpoint.listRescued)'));
+  assert.match(branch.slice(0, 900), /applySelectorSuggestions\(profile,page\.url,'list',job,false\)/);
+  assert.match(branch.slice(0, 900), /scrapeListPage\(/, 'the worker must retry the page after repairing selectors');
+});
+
+test('worker: the rescue flags live on the checkpoint so resumes do not loop', () => {
+  const source = stripComments(workerProcessor);
+  assert.match(source, /listRescued\?:boolean;detailRescued\?:boolean/,
+    'both flags must be persisted on ScrapeCheckpoint');
+});
+
+test('worker: the detail stage falls back when no detail field is populated', () => {
+  const source = stripComments(workerProcessor);
+  assert.match(source, /if\(!checkpoint\.detailRescued&&hasDetailSelectors\(profile\.selectors\)\)/);
+  assert.match(source, /applySelectorSuggestions\(profile,sample\.url,'detail',job,false\)/);
+});
+
+test('both runtimes probe the same detail fields', () => {
+  const extract = source => {
+    const match = source.match(/const DETAIL_KEYS\s*=\s*\[([^\]]+)\]/);
+    assert.ok(match, 'DETAIL_KEYS must exist');
+    return match[1].split(',').map(part => part.trim().replace(/^'|'$/g, '')).filter(Boolean).sort();
+  };
+  assert.deepEqual(extract(nodeProcessor), extract(workerProcessor),
+    'node and worker must agree on what counts as a populated detail');
+});
+
+test('end to end: auto-suggest rescues a page that extracted zero products', async () => {
+  // A real catalogue whose saved selectors are stale AND whose cards carry no
+  // price text, so the discovery engines find nothing either. This is exactly
+  // the "connection succeeds but zero products" report.
+  const html = `<html><body><div class="products">${[1, 2, 3].map(i => `
+    <li class="product">
+      <a href="/p/item-${i}/" class="woocommerce-LoopProduct-link">
+        <img src="https://cdn.example.test/${i}.jpg">
+        <h2 class="woocommerce-loop-product__title">کالای شمارهٔ ${i}</h2>
+      </a>
+    </li>`).join('')}</div></body></html>`;
+  const stale = { container: '.legacy-grid .card', title: '.legacy-title', price: '.legacy-price', link: 'a.legacy', image: 'img.legacy' };
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(html, { headers: { 'content-type': 'text/html' } });
+  try {
+    const before = await scraper.scrapeListPage('https://shop.example.test/c/', stale, '', false, 'auto');
+    assert.equal(before.products.length, 0, 'the stale selectors must genuinely extract nothing');
+
+    // What the fallback does: ask for suggestions and merge the non-empty ones.
+    const suggestion = await scraper.suggestSelectors('https://shop.example.test/c/', 'list');
+    const repaired = { ...stale, ...Object.fromEntries(Object.entries(suggestion.selectors || {}).filter(([, value]) => String(value || '').trim())) };
+    assert.ok(repaired.container !== stale.container, 'discovery must propose a new container');
+
+    const after = await scraper.scrapeListPage('https://shop.example.test/c/', repaired, '', false, 'auto');
+    assert.equal(after.products.length, 3, 'the repaired selectors must recover every card');
+    assert.equal(after.products[0].title, 'کالای شمارهٔ 1');
+    assert.match(after.products[0].url, /\/p\/item-1\/?$/, 'links must survive the rescue');
+  } finally { globalThis.fetch = previousFetch }
+});
+
+test('dashboard: the selector test buttons run auto-suggest as a last resort', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const slice = name => {
+    const start = dashboard.indexOf(`async function ${name}(`);
+    assert.ok(start > 0, `${name} must exist`);
+    return dashboard.slice(start, dashboard.indexOf('\nasync function ', start + 10));
+  };
+  const list = slice('testSelectors');
+  assert.match(list, /results\.every\(x=>!x\.ok\)\)\{[^}]*await suggestSelectorFields\(\)/,
+    'a list test where nothing matched must invoke the auto-suggest button handler');
+  const detail = slice('testDetailSelectors');
+  assert.match(detail, /results\.every\(x=>!x\.ok\)\)\{[^}]*await suggestDetailFields\(\)/,
+    'a detail test where nothing matched must invoke the detail auto-suggest handler');
+});

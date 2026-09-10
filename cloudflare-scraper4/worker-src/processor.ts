@@ -7,7 +7,7 @@ import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean};
+type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean};
 type SyncCheckpoint={offset:number};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
@@ -25,6 +25,17 @@ function preserveExisting(fresh:Product,previous:Product|null):Product{
 }
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
 function isManualListEngine(engine?:string):boolean{return !!engine&&MANUAL_LIST_ENGINES.has(engine)}
+const DETAIL_KEYS=['shortDesc','longDesc','sku','brand','category','stock','weight','gallery','detailImage','variations'] as const;
+/** True when the profile actually configures detail extraction. */
+function hasDetailSelectors(selectors:any):boolean{return DETAIL_KEYS.some(key=>String(selectors?.[key]||'').trim())}
+/** Scrapes one product and reports whether ANY detail field was populated. */
+async function detailProbe(sample:Product,selectors:any,indirect:boolean):Promise<boolean>{
+  try{
+    const before=JSON.stringify(DETAIL_KEYS.map(key=>(sample as any)[key]??null));
+    const probe=await scrapeDetails({...sample},selectors,indirect);
+    return JSON.stringify(DETAIL_KEYS.map(key=>(probe as any)[key]??null))!==before;
+  }catch{return false}
+}
 async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job,onlyMissing=true):Promise<number>{
   try{
     const suggested=await suggestSelectors(url,mode),selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));
@@ -81,11 +92,25 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     job.phase='list';
     if(!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,checkpoint.url,'list',job);checkpoint.listSelectorsFilled=true}
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
-    const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+    let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
     if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
       profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;
       await saveProfile({...profile,updatedAt:new Date().toISOString()});
       append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
+    }
+    // LAST-RESORT FALLBACK: the page was fetched but produced nothing. Before
+    // failing the run, rediscover the selectors exactly like the "auto suggest"
+    // button and retry this page once. onlyMissing=false because selectors that
+    // exist but no longer match are precisely the failure being recovered from.
+    if(!page.products.length&&!checkpoint.listRescued){
+      checkpoint.listRescued=true;
+      append(job,'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…','warning');
+      const filled=await applySelectorSuggestions(profile,page.url,'list',job,false);
+      if(filled){
+        const retry=await scrapeListPage(page.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+        if(retry.products.length){append(job,`پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);page=retry}
+        else append(job,'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.','warning');
+      }
     }
     checkpoint.autoSelectorsAllowed=!!(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine));
     if(checkpoint.autoSelectorsAllowed&&!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,page.url,'list',job,true);checkpoint.listSelectorsFilled=true}
@@ -103,6 +128,20 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   }
   job.phase='details-save-sync';
   if(!checkpoint.detailSelectorsFilled){const sample=checkpoint.products.find(p=>p.url);if(sample?.url&&checkpoint.autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true);checkpoint.detailSelectorsFilled=true;await setState(key,checkpoint)}
+  // LAST-RESORT FALLBACK for the detail stage: if the configured detail
+  // selectors enrich nothing on a real product, every product would be saved
+  // with empty descriptions. Rediscover them once and re-probe.
+  if(!checkpoint.detailRescued&&hasDetailSelectors(profile.selectors)){
+    const sample=checkpoint.products.find(p=>p.url);
+    if(sample?.url&&!await detailProbe(sample,profile.selectors,Boolean(profile.networkIndirect))){
+      checkpoint.detailRescued=true;
+      append(job,'سلکتورهای جزئیات هیچ فیلدی را پر نکردند؛ پیشنهاد خودکار به‌عنوان آخرین راه اجرا می‌شود…','warning');
+      const filled=await applySelectorSuggestions(profile,sample.url,'detail',job,false);
+      if(filled&&await detailProbe(sample,profile.selectors,Boolean(profile.networkIndirect)))append(job,'پیشنهاد خودکار جواب داد: سلکتورهای جزئیات بازتنظیم شدند.');
+      else if(filled)append(job,'پیشنهاد خودکار هم فیلدی پیدا نکرد؛ سلکتورهای جزئیات را دستی بررسی کنید.','warning');
+      await setState(key,checkpoint);
+    }
+  }
   const start=checkpoint.index,end=Math.min(checkpoint.products.length,start+chunkSize()),batch=checkpoint.products.slice(start,end),previousByKey=new Map<string,Product|null>(),rawPriceByKey=new Map<string,number>();
   await mapLimit(batch,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));
