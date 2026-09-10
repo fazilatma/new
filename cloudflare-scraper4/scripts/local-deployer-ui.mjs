@@ -332,7 +332,11 @@ function autoUpdateFromGit({ branch, reason = 'timer', force = true, install = t
     // Only restore when EVERY change is generated: if the user also edited real
     // source, nothing is touched and the update still pauses as before.
     if (generated.length && generated.length === dirtyPaths.length) {
-      runSync('git', ['checkout', '--', ...generated]);
+      // `git status --porcelain` prints paths relative to the REPO ROOT, but
+      // runSync executes in the project subdirectory, so a bare path fails with
+      // "pathspec did not match". The ':/' prefix makes each path repo-root
+      // relative regardless of the working directory.
+      runSync('git', ['checkout', '--', ...generated.map(path => `:/${path}`)]);
     }
   }
   const dirty = runSync('git', ['status', '--porcelain']);
