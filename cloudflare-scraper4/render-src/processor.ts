@@ -23,7 +23,12 @@ export async function processOneJob(): Promise<boolean> {
     append(job, `شروع ${job.kind === 'scrape' ? 'استخراج' : 'همگام‌سازی'} «${profile.name}»`);
     if (job.kind === 'scrape') {
       job.phase = 'list'; await save(job); const found = new Map<string, Product>(); let autoSelectorsAllowed=false;
-      for (let page = 1; page <= profile.pages; page++) {
+      // pages === 0 means "auto" everywhere in the UI: keep paging until an
+      // empty page, with the same 100-page safety cap the Worker uses. Looping
+      // to profile.pages directly made a 0-page profile scan nothing at all and
+      // report a successful run with zero products.
+      const pageLimit = profile.pages > 0 ? profile.pages : 100;
+      for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
         const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster);
@@ -37,8 +42,13 @@ export async function processOneJob(): Promise<boolean> {
         }
         if (scraped.usedEngine && list.length && !isManualListEngine(scraped.usedEngine)) { autoSelectorsAllowed=true; await applySelectorSuggestions(profile,url,'list',job,true); }
         if (!list.length) { append(job, 'محصولی پیدا نشد', 'warning'); break; }
+        const before = found.size;
         for (const raw of list) { const p = transformProduct(raw, profile); if (!profile.minPrice || p.price >= profile.minPrice) found.set(p.sourceKey, p); }
         job.total = found.size; job.processed += list.length; await save(job);
+        // Auto paging (pages = 0) stops as soon as a page adds nothing new.
+        // Misconfigured pagination often returns page 1 forever, which would
+        // otherwise re-scan the same page up to the safety cap.
+        if (profile.pages === 0 && page > 1 && found.size === before) { append(job, `صفحهٔ ${page} محصول تازه‌ای نداشت؛ صفحه‌بندی همین‌جا پایان یافت.`); break; }
       }
       if (job.status !== 'stopped') {
         job.phase = 'details'; const products = [...found.values()]; const sample=products.find(p=>p.url); if(sample?.url&&autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true); await save(job);

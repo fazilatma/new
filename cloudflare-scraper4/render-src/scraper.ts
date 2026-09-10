@@ -88,6 +88,31 @@ function firstAttr($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector:
   for (const attr of attrs) { const value = found.first().attr(attr); if (value && value !== '#') return value; }
   return '';
 }
+/**
+ * Resolve a product link even when the saved selector does not point at the
+ * anchor itself. Visual pickers and "suggest selectors" often land on the <img>
+ * inside the product link (or on a wrapper), which yields no href at all: the
+ * product then has no URL, detail extraction is skipped and destinations get
+ * a product that links nowhere. Look at the matched node, then the anchor that
+ * wraps it, then an anchor inside it, and finally any anchor in the card.
+ */
+function productLink($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector: string): string {
+  const attrs = ['href', 'data-href', 'data-url', 'data-product-url', 'data-link'];
+  const direct = firstAttr($, $root, selector, attrs);
+  if (direct) return direct;
+  const found = String(selector || '').trim() ? scopedMatches($, $root, selector) : null;
+  const candidates = [] as any[];
+  if (found && found.length) {
+    const node = found.first();
+    candidates.push(node.closest('a[href]'), node.find('a[href]').first(), node.parent().find('a[href]').first());
+  }
+  candidates.push($root.find('a[href]').first());
+  for (const candidate of candidates) {
+    const href = candidate && candidate.length ? candidate.attr('href') : '';
+    if (href && href !== '#' && !/^javascript:/i.test(href)) return href;
+  }
+  return '';
+}
 
 export function pageUrl(profile: Profile, page: number): string {
   const url = new URL(profile.url);
@@ -132,7 +157,7 @@ function scrapeListCheerioFromHtml(text: string, finalUrl: string, selectors: Se
   containerNodes($, selectors.container).each((_index, element) => {
     const root = $(element); const title = firstText($, root, selectors.title); if (!title) return;
     const priceText = firstText($, root, selectors.price);
-    const link = absolute(firstAttr($, root, selectors.link, ['href','data-href','data-url','data-product-url']), finalUrl);
+    const link = absolute(productLink($, root, selectors.link), finalUrl);
     let imageValue = firstAttr($, root, selectors.image, ['data-src','data-lazy-src','data-original','src']);
     if (!imageValue) imageValue = (firstAttr($, root, selectors.image, ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
     const image = absolute(imageValue, finalUrl);
@@ -232,7 +257,7 @@ function parseProductsFromHtml(html: string, baseUrl: string, selectors: Selecto
   containerNodes($, selectors.container).each((_index, element) => {
     const root = $(element); const title = firstText($, root, selectors.title); if (!title) return;
     const priceText = firstText($, root, selectors.price);
-    const link = absolute(firstAttr($, root, selectors.link, ['href','data-href','data-url','data-product-url']), baseUrl);
+    const link = absolute(productLink($, root, selectors.link), baseUrl);
     let imageValue = firstAttr($, root, selectors.image, ['data-src','data-lazy-src','data-original','src']);
     if (!imageValue) imageValue = (firstAttr($, root, selectors.image, ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
     const image = absolute(imageValue, baseUrl);

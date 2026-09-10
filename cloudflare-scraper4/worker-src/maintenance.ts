@@ -1,5 +1,7 @@
 import { loadConnections } from './connections.js';
-import { getState, learnCategory, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
+import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
+import { byAccount, byProfile, planActions, reconcileAccount, summarize } from './recon-core.js';
+import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
 import { buildDedupGroups, normalizeDedupKeep, parseSuffixFormats } from './dedup.js';
 import { safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, normalizePersianText } from './utils.js';
@@ -39,14 +41,10 @@ export type ReconRow={
   matchedBy:'id'|'sku'|'title'|'none';
   shopId:string;shopName:string;status:string;why:string;
 };
-/** Title key for reconciliation: Persian-normalized and stripped of a trailing product code. */
-export function reconNormTitle(value:string):string{
-  return normalizePersianText(value)
-    .replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*[\d]+[\])]\s*$/i,'')
-    .replace(/[^\p{L}\p{N}\s]/gu,' ')
-    .replace(/\s+/g,' ')
-    .trim();
-}
+/* Title key for reconciliation lives in the shared core so the Worker, the Node
+   runtime and the unified table all group titles identically. */
+export { reconNormTitle } from './recon-core.js';
+import { reconNormTitle } from './recon-core.js';
 const reconPrice=(value:unknown):number|null=>{const n=Math.round(Number(value)||0);return n>0?n:null};
 
 export type ReconTable=Awaited<ReturnType<typeof reconTable>>;
@@ -101,6 +99,74 @@ export async function recon(target:Target,profileId=''){
   for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''})}
   const result={target,at:new Date().toISOString(),local:local.length,remote:remote.length,matched:items.filter(x=>x.remoteId).length,missingRemote:items.filter(x=>!x.remoteId&&x.active).length,retired:items.filter(x=>!x.active).length,extraRemote:remote.filter(x=>!used.has(x.id)).map(x=>({id:x.id,title:x.name,status:x.status})),items};await setState(`recon_${target}`,result);return result;
 }
+/**
+ * Unified reconciliation across profiles, WooCommerce and every Basalam stall.
+ * Same shared algorithm the Node runtime uses; only the data access differs.
+ */
+export async function reconAccounts():Promise<ReconAccount[]>{
+  const c=await loadConnections(),accounts:ReconAccount[]=[];
+  if(c.woo?.url&&c.woo?.key&&c.woo?.secret)accounts.push({target:'woo',accountKey:'default',name:'ووکامرس',pricePercent:0});
+  if(c.basalam?.token&&c.basalam?.vendorId){
+    accounts.push({target:'basalam',accountKey:String(c.basalam.vendorId),name:'باسلام — غرفهٔ پیش‌فرض',pricePercent:0,toRial:true});
+    for(const shop of (c.basalam.shops||[])){
+      if(!shop.token||!shop.vendorId||String(shop.vendorId)===String(c.basalam.vendorId))continue;
+      accounts.push({target:'basalam',accountKey:String(shop.vendorId),name:`باسلام — ${shop.name||shop.vendorId}`,pricePercent:Number(shop.pricePercent)||0,toRial:true});
+    }
+  }
+  return accounts;
+}
+async function remoteForAccount(account:ReconAccount):Promise<ReconRemote[]>{
+  if(account.target==='woo')return (await wooProducts()).map(x=>({id:x.id,name:x.name,sku:x.sku,price:x.price,status:x.status}));
+  const out:ReconRemote[]=[];
+  for(let page=1;page<=100;page++){
+    const data=await basalamCatalog({page,perPage:100,q:'',status:'all',shopId:account.accountKey});
+    for(const x of data.products)out.push({id:x.id,name:x.name,sku:x.sku,price:x.price,status:x.status,shopId:String(account.accountKey),shopName:account.name});
+    if(page>=data.totalPages)break;
+  }
+  return out;
+}
+export async function unifiedRecon(profileId=''){
+  const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
+  for(const profile of await listProfiles())profileNames[profile.id]=profile.name||profile.id;
+  const accounts=await reconAccounts(),rows:UnifiedReconRow[]=[],failures:Array<{account:string;error:string}>=[];
+  for(const account of accounts){
+    try{rows.push(...reconcileAccount(local,await remoteForAccount(account),account,profileNames))}
+    catch(error){failures.push({account:account.name,error:error instanceof Error?error.message:String(error)})}
+  }
+  const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:local.length,accounts:accounts.length,
+    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows).length,failures,rows};
+  await setState('recon_unified',report);
+  return report;
+}
+export async function unifiedReconApply(profileId='',apply=false,limit=200){
+  const report=await unifiedRecon(profileId);
+  const actions=planActions(report.rows as UnifiedReconRow[]).slice(0,Math.max(1,Math.min(1000,limit)));
+  if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),extra:report.extra};
+  let changed=0;const failed:any[]=[];
+  for(const action of actions){
+    try{
+      if(action.kind==='updatePrice'&&action.remoteId&&action.toPrice){
+        if(action.target==='woo')await wooUpdate(action.remoteId,{regular_price:String(action.toPrice)});
+        else await basalamUpdateShop(action.accountKey,action.remoteId,{price:action.toPrice});
+        changed++;
+      }else if(action.kind==='create'){
+        // Re-publishing goes through the queue so category/photo/stock rules and
+        // the Worker's CPU budget are respected.
+        await createJob(action.profileId,'sync',action.target==='woo'?'woo':'basalam');
+        changed++;
+      }
+    }catch(error){failed.push({title:action.title,account:action.accountName,error:error instanceof Error?error.message:String(error)})}
+  }
+  return{ok:failed.length===0,dryRun:false,planned:actions.length,changed,failed:failed.slice(0,20)};
+}
+async function basalamUpdateShop(accountKey:string,id:number,payload:any){
+  const c=(await loadConnections()).basalam;
+  const shop=String(accountKey)===String(c.vendorId)?{token:c.token,vendorId:String(c.vendorId)}:(c.shops||[]).find(s=>String(s.vendorId)===String(accountKey));
+  if(!shop?.token)throw Error('توکن این غرفه در دسترس نیست');
+  const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);
+  if(!r.ok)throw Error(`Basalam update ${id}: HTTP ${r.status}`);
+}
+
 export async function rebuildMap(target:Target,profileId=''){const report=await recon(target,profileId);let mapped=0;for(const item of report.items)if(item.remoteId){await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);mapped++}return{ok:true,target,mapped,unmatched:report.items.length-mapped}}
 export async function retire(target:Target,profileId:string,action:string,apply=false){const rows=(await maintenanceRows(profileId)).filter(x=>!x.active),preview=rows.map(x=>({profileId:x.profile_id,sourceKey:x.source_key,title:x.title,remoteId:target==='woo'?x.remote_woo_id:x.remote_basalam_id,missingSince:x.missing_since,action}));if(!apply||action==='report')return{ok:true,dryRun:true,count:preview.length,items:preview};let changed=0,failed:any[]=[];for(const item of preview){if(!item.remoteId)continue;try{if(target==='woo')await wooUpdate(item.remoteId,action==='trash'?{status:'trash'}:{status:action==='draft'?'draft':'private'});else await basalamUpdate(item.remoteId,{status:action==='trash'?4184:3790});changed++}catch(error){failed.push({title:item.title,error:msg(error)})}}return{ok:failed.length===0,dryRun:false,changed,failed}}
 

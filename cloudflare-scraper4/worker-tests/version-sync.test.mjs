@@ -274,16 +274,27 @@ test('sync-version keeps the lockfile in step and touches nothing else in it', a
 
 test('auto-update ignores lockfile-only churn but still protects real local work', async () => {
   const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
-  assert.match(deployer, /const lockOnly = dirtyProbe\.stdout/, 'the updater must detect lockfile-only churn');
-  assert.match(deployer, /runSync\('git', \['checkout', '--', \.\.\.lockPaths\]\)/, 'it must restore the lockfile at its real repo-relative path, not a bare filename');
+  assert.match(deployer, /const GENERATED = /, 'the updater must detect generated-file churn');
+  assert.match(deployer, /runSync\('git', \['checkout', '--', \.\.\.generated\]\)/, 'it must restore generated files at their real repo-relative paths, not bare filenames');
 
-  // Exercise the predicate itself against real `git status --porcelain` output.
-  const lockOnly = out => out.trim().split('\n').every(line => /\s(?:cloudflare-scraper4\/)?package-lock\.json$/.test(line));
-  assert.equal(lockOnly(' M cloudflare-scraper4/package-lock.json'), true, 'lockfile churn must be ignorable');
-  assert.equal(lockOnly(' M package-lock.json'), true, 'also when the deployer runs inside the project dir');
-  assert.equal(lockOnly(' M cloudflare-scraper4/package-lock.json\n M cloudflare-scraper4/worker-src/ai.ts'), false,
-    'a real edit alongside the lockfile must still pause the update');
-  assert.equal(lockOnly(' M cloudflare-scraper4/worker-src/ai.ts'), false, 'a real edit must pause the update');
+  // Exercise the real predicate against real `git status --porcelain` output.
+  const GENERATED = /(?:^|\/)(?:package-lock\.json|scraper4\.worker\.js|scraper4\.ts)$/;
+  const generatedOnly = out => {
+    const paths = out.split('\n').map(line => (line.match(/^..\s+(.*)$/) || [])[1] || '').filter(Boolean);
+    const generated = paths.filter(path => GENERATED.test(path));
+    return generated.length > 0 && generated.length === paths.length;
+  };
+  assert.equal(generatedOnly(' M cloudflare-scraper4/package-lock.json'), true, 'lockfile churn must be ignorable');
+  assert.equal(generatedOnly(' M package-lock.json'), true, 'also when the deployer runs inside the project dir');
+  // scraper4.worker.js is a tracked build output: `npm run worker:build` rewrites
+  // it, which used to pause every future auto-update on that device.
+  assert.equal(generatedOnly(' M cloudflare-scraper4/scraper4.worker.js'), true, 'a rebuilt worker bundle must be ignorable');
+  assert.equal(generatedOnly(' M cloudflare-scraper4/scraper4.worker.js\n M cloudflare-scraper4/package-lock.json'), true,
+    'a rebuild plus an install must still be ignorable');
+  assert.equal(generatedOnly(' M cloudflare-scraper4/package-lock.json\n M cloudflare-scraper4/worker-src/ai.ts'), false,
+    'a real edit alongside a generated file must still pause the update');
+  assert.equal(generatedOnly(' M cloudflare-scraper4/worker-src/ai.ts'), false, 'a real edit must pause the update');
+  assert.equal(generatedOnly(''), false, 'a clean tree is not "generated churn"');
 
   // The dirty guard itself must survive: it is what stops reset --hard eating work.
   assert.match(deployer, /Auto-update skipped: \$\{files\} uncommitted change\(s\)/, 'the dirty-worktree guard must remain');
@@ -969,19 +980,24 @@ test('the deployer restores the lockfile using its real repo-relative path', asy
   const at = deployer.indexOf('const dirtyProbe');
   const body = deployer.slice(at, deployer.indexOf('const dirty =', at));
   assert.doesNotMatch(body, /\['checkout', '--', 'package-lock\.json'\]/, 'the bare filename does not exist at the repo root');
-  assert.match(body, /lockPaths/, 'the real reported paths must be restored');
+  assert.match(body, /generated/, 'the real reported paths must be restored');
 
   // Execute the real parsing against porcelain output.
   const parse = new Function('stdout', `
-    const lockPaths = stdout.split('\\n')
+    const GENERATED = /(?:^|\\/)(?:package-lock\\.json|scraper4\\.worker\\.js|scraper4\\.ts)$/;
+    const dirtyPaths = stdout.split('\\n')
       .map(line => (line.match(/^..\\s+(.*)$/) || [])[1] || '')
       .map(path => path.trim().replace(/^"|"$/g, ''))
-      .filter(path => /package-lock\\.json$/.test(path));
-    return lockPaths;`);
+      .filter(Boolean);
+    return dirtyPaths.filter(path => GENERATED.test(path));`);
   assert.deepEqual(parse(' M cloudflare-scraper4/package-lock.json'), ['cloudflare-scraper4/package-lock.json'],
     'a lockfile in a subdirectory must be restored at its real path');
   assert.deepEqual(parse(' M package-lock.json'), ['package-lock.json'], 'a root lockfile must still work');
+  assert.deepEqual(parse(' M cloudflare-scraper4/scraper4.worker.js'), ['cloudflare-scraper4/scraper4.worker.js'],
+    'the tracked worker bundle must be restored at its real path');
   assert.deepEqual(parse(' M src/app.ts'), [], 'unrelated files must never be reverted');
+  // A filename that merely ends with the same text must not be swept up.
+  assert.deepEqual(parse(' M docs/my-package-lock.json'), [], 'only the real generated paths may be restored');
 });
 
 test('the AI diagnose button runs a real AI check, not the installation debug', async () => {
@@ -1312,4 +1328,111 @@ test('the AI description endpoints exist in BOTH runtimes, so the tab is never d
     assert.ok(proc.indexOf('generateProductDescription') > proc.indexOf('scrapeDetails('), `${runtime} must enrich AFTER detail extraction`);
     assert.ok(proc.indexOf('generateProductDescription') < proc.indexOf('upsertProduct('), `${runtime} must enrich BEFORE the product is saved`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// v1.95.0 regressions
+// ---------------------------------------------------------------------------
+
+test('the Node runtime never reaches into the Cloudflare D1 data layer', async () => {
+  // Pressing the reconciliation-table button on Termux/VPS/Render failed with
+  // "D1 binding DB is not configured": render-src/maintenance.ts re-exported the
+  // Worker implementation, which imports worker-src/db.js -> the D1 binding.
+  // Sharing pure logic is fine; sharing anything that reaches a database is not.
+  const files = ['maintenance', 'server', 'processor', 'scraper', 'db', 'sync', 'ai', 'vault'];
+  const banned = /from '\.\.\/worker-src\/(db|env|schema|queue)\.js'/;
+  for (const name of files) {
+    const src = await readProjectFile(`render-src/${name}.ts`);
+    assert.doesNotMatch(src, banned, `render-src/${name}.ts must not import the Worker's database layer`);
+  }
+  // recon-core is the shared piece: it must stay free of every data dependency.
+  const core = await readProjectFile('worker-src/recon-core.ts');
+  const imports = [...core.matchAll(/from '([^']+)'/g)].map(m => m[1]);
+  assert.deepEqual(imports, ['./utils.js'], 'recon-core must only depend on pure helpers');
+  const coreCode = core.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(coreCode, /\b(fetch|env\.DB|getState|setState|maintenanceRows)\b/, 'recon-core must not touch IO');
+});
+
+test('reconciliation compares prices AFTER each destination adjustment', async () => {
+  const core = await readProjectFile('worker-src/recon-core.ts');
+  const start = core.indexOf('export function expectedPriceFor');
+  assert.ok(start > -1, 'expectedPriceFor must exist');
+  const body = core.slice(start, core.indexOf('\n}', start) + 2)
+    .replace(/export function expectedPriceFor\s*\([^)]*\)\s*:\s*number\s*\|\s*null/, 'function expectedPriceFor(sourcePrice, account)');
+  assert.doesNotMatch(body, /:\s*(?:number|string|ReconAccount)/, 'the spliced function must be plain JS');
+  const expectedPriceFor = new Function(`${body}; return expectedPriceFor;`)();
+
+  // A stall selling at +10% in Rial is CORRECT at 110% x 10, not "different".
+  assert.equal(expectedPriceFor(86000, { pricePercent: 10, toRial: true }), 946000);
+  assert.equal(expectedPriceFor(86000, { pricePercent: 0, toRial: false }), 86000);
+  assert.equal(expectedPriceFor(1000, { pricePercent: -20, toRial: false }), 800);
+  assert.equal(expectedPriceFor(0, { pricePercent: 10, toRial: false }), null, 'no source price is not comparable');
+});
+
+test('the unified reconciliation endpoints exist in BOTH runtimes', async () => {
+  // The dashboard is shared, so a route that exists in only one runtime is a
+  // dead button in the other.
+  const routes = ['/api/maintenance/recon-unified', '/api/maintenance/recon-unified/apply', '/api/maintenance/recon-accounts'];
+  const worker = await readProjectFile('worker-src/app.ts');
+  const node = await readProjectFile('render-src/server.ts');
+  for (const route of routes) {
+    assert.ok(worker.includes(route), `the Worker must serve ${route}`);
+    assert.ok(node.includes(route), `the Node server must serve ${route}`);
+  }
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  assert.match(dash, /action==='recon-unified'/, 'the dashboard must handle the unified action');
+  assert.match(dash, /renderUnifiedRecon/, 'the dashboard must render the unified table');
+  // Applying real changes must be explicit, and extras must never be deleted.
+  const core = await readProjectFile('worker-src/recon-core.ts');
+  assert.doesNotMatch(core, /kind:\s*'delete'/, 'extra destination products must never be auto-deleted');
+  for (const runtime of ['worker-src/maintenance.ts', 'render-src/maintenance.ts']) {
+    const src = await readProjectFile(runtime);
+    assert.match(src, /apply\s*=\s*false/, `${runtime} must default to a dry run`);
+  }
+});
+
+test('every engine dropdown offers the same engines, including cheerio', async () => {
+  // cheerio was selectable in the settings dropdown but missing from the home
+  // dropdown, so opening a profile silently reset a saved cheerio engine.
+  const dash = await readProjectFile('worker-src/dashboard.ts');
+  const ids = ['extractionEngine', 'homeExtractionEngine'];
+  const seen = [];
+  for (const id of ids) {
+    const at = dash.indexOf(`<select id="${id}">`);
+    assert.ok(at > -1, `the ${id} dropdown must exist`);
+    const block = dash.slice(at, dash.indexOf('</select>', at));
+    const engines = [...block.matchAll(/value="([a-z_]+)"/g)].map(m => m[1]);
+    assert.ok(engines.includes('cheerio'), `the ${id} dropdown must offer cheerio`);
+    seen.push(engines.join(','));
+  }
+  assert.equal(new Set(seen).size, 1, 'every engine dropdown must offer exactly the same engines');
+});
+
+test('a page count of 0 means "auto", never "scan nothing", in both runtimes', async () => {
+  // Profiles saved with pages=0 extracted 0 products on Node while the Worker
+  // happily scanned up to 100 pages: the Node loop ran zero iterations.
+  for (const runtime of ['worker-src/processor.ts', 'render-src/processor.ts']) {
+    const src = await readProjectFile(runtime);
+    assert.match(src, /pageLimit\s*=\s*[^;]*profile\.pages\s*>\s*0\s*\?\s*profile\.pages\s*:\s*100/,
+      `${runtime} must treat pages=0 as the automatic 100-page cap`);
+  }
+});
+
+test('the product link survives a selector that points at an image', async () => {
+  // The saved link selector matched the card's <img>, so every product URL came
+  // back empty and the run stored 0 products while diagnostics found 20.
+  const scraper = await readProjectFile('render-src/scraper.ts');
+  const start = scraper.indexOf('function productLink');
+  assert.ok(start > -1, 'render-src/scraper.ts must resolve links defensively');
+  const body = scraper.slice(start, scraper.indexOf('\nfunction ', start + 10));
+  for (const step of ['closest', 'href']) {
+    assert.ok(body.includes(step), `the link resolver must try ${step}`);
+  }
+  assert.match(body, /javascript:/, 'javascript: links must be rejected');
+  // Both Node extraction paths must use it, not just the one that was reported.
+  const uses = (scraper.match(/productLink\(/g) || []).length;
+  assert.ok(uses >= 3, `productLink must be used by every extraction path (found ${uses})`);
+  // The Worker recovers the anchor through its card-scoped link fallback.
+  const worker = await readProjectFile('worker-src/scraper.ts');
+  assert.match(worker, /a\[href\]/, 'the Worker must keep its card-level anchor fallback');
 });

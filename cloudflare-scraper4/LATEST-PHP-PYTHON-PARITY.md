@@ -87,6 +87,17 @@ Surfaced as:
 
 - `POST /api/maintenance/recon-table/<target>` in both `worker-src/app.ts` and
   `render-src/server.ts`.
+- `POST /api/maintenance/recon-unified` (1.95.0) - one table across every profile,
+  WooCommerce and each Basalam stall, comparing price *after* that destination's own
+  percentage adjustment and Rial conversion, plus presence/absence.
+- `POST /api/maintenance/recon-unified/apply` - dry run by default; `{"confirm":"APPLY"}`
+  fixes prices and republishes missing products through the normal sync path. Products
+  that exist only at the destination are reported, never auto-deleted.
+- `GET /api/maintenance/recon-accounts` - the destinations taking part.
+- The comparison itself lives in `worker-src/recon-core.ts`, which imports no database
+  or network module, so both runtimes share one algorithm. Before 1.95.0 the Node
+  runtime re-exported the Worker implementation and every non-Cloudflare install failed
+  with `D1 binding DB is not configured`.
 - Two "جدول مغایرت" buttons on the existing reconciliation card, rendering a sorted,
   colour-coded table (discrepancies first) instead of the previous raw JSON dump.
 

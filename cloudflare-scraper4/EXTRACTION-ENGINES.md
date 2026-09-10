@@ -23,6 +23,22 @@ The 3-page speed test (profile → speed test) runs the engines above and saves 
 `extractionEngine`. Every engine it can pick is also offered in the profile dropdown and accepted by both runtimes,
 so a benchmarked result is never silently rewritten back to `auto` when the profile is saved.
 
+The dropdown exists in more than one place (profile settings and the start page). Since 1.95.0 they are kept
+identical and a test compares them against each other: in 1.94.0 only the settings dropdown offered `cheerio`,
+so opening a profile from the start page still reset a saved `cheerio` engine to `auto`.
+
+## When a profile extracts 0 products
+
+Two causes were fixed in 1.95.0, both invisible to the diagnostic tools (the diagnostic and the 3-page test
+bypass the job processor and ignore the profile's page count):
+
+- **Pages = 0.** Zero means "automatic". The Worker scanned up to 100 pages, but the Node runtime ran zero
+  iterations and finished with `0 of 0`. Both runtimes now use the same limit.
+- **A link selector that points at the image.** Visual selection often lands on the card's `<img>`. The product
+  URL then came back empty and every product was discarded, which is why the report said
+  "no product with a link was found" while the diagnostic had just listed 20 products. The link is now taken
+  from the element itself, its parent, or the nearest `a[href]` inside the card, on every extraction path.
+
 ## Node.js-only browser engines
 
 These require the Node/Render/VPS runtime because Cloudflare Workers cannot launch Chromium:

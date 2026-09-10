@@ -1,15 +1,134 @@
 import { normalizePersianText } from '../worker-src/utils.js';
+import { byAccount, byProfile, planActions, reconcileAccount, summarize } from '../worker-src/recon-core.js';
+import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from '../worker-src/recon-core.js';
 import { loadConnections } from './connections.js';
-import { getState, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
+import { getProduct, getProfile, getState, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
 import { safeFetch } from './network.js';
+import { syncBasalam, syncWoo } from './sync.js';
 
 const norm=(v:string)=>normalizePersianText(v).replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
 
 type Remote={id:number;name:string;sku:string;images:any[];status:string;price:number;raw:any};
-/* v10.170 parity: the richer reconciliation table lives in worker-src and is re-exported
-   so the Node/VPS runtime and the Worker cannot drift apart. */
-export { reconNormTitle } from '../worker-src/maintenance.js';
-export { reconTable } from '../worker-src/maintenance.js';
+/* The comparison ALGORITHM is shared (worker-src/recon-core.ts, no database of
+   its own); only the data access below is runtime-specific. Re-exporting the
+   Worker's reconTable used to drag its D1 helpers into the Node runtime, so the
+   button failed with "D1 binding DB is not configured" on Termux/VPS/Render. */
+export { reconNormTitle } from '../worker-src/recon-core.js';
+
+/** Every destination account: the WooCommerce site plus each Basalam stall. */
+export async function reconAccounts(): Promise<ReconAccount[]> {
+  const c = await loadConnections();
+  const accounts: ReconAccount[] = [];
+  if (c.woo?.url && c.woo?.key && c.woo?.secret) accounts.push({ target: 'woo', accountKey: 'default', name: 'ووکامرس', pricePercent: 0 });
+  if (c.basalam?.token && c.basalam?.vendorId) {
+    accounts.push({ target: 'basalam', accountKey: String(c.basalam.vendorId), name: 'باسلام — غرفهٔ پیش‌فرض', pricePercent: 0, toRial: true });
+    for (const shop of (c.basalam.shops || [])) {
+      if (!shop.token || !shop.vendorId) continue;
+      if (String(shop.vendorId) === String(c.basalam.vendorId)) continue;
+      accounts.push({ target: 'basalam', accountKey: String(shop.vendorId), name: `باسلام — ${shop.name || shop.vendorId}`, pricePercent: Number(shop.pricePercent) || 0, toRial: true });
+    }
+  }
+  return accounts;
+}
+
+async function remoteForAccount(account: ReconAccount): Promise<ReconRemote[]> {
+  if (account.target === 'woo') return (await wooProducts()).map(x => ({ id: x.id, name: x.name, sku: x.sku, price: x.price, status: x.status }));
+  const c = (await loadConnections()).basalam;
+  const shop = String(account.accountKey) === String(c.vendorId)
+    ? { token: c.token, vendorId: String(c.vendorId) }
+    : (c.shops || []).find(s => String(s.vendorId) === String(account.accountKey));
+  if (!shop?.token) throw Error(`توکن غرفهٔ ${account.name} در دسترس نیست`);
+  const out: ReconRemote[] = [];
+  for (let page = 1; page <= 100; page++) {
+    const r = await safeFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products?per_page=100&page=${page}`, { headers: { authorization: `Bearer ${shop.token}`, accept: 'application/json' } }, 10_000_000);
+    const body = await r.json() as any;
+    if (!r.ok) throw Error(`Basalam ${account.name} HTTP ${r.status}`);
+    const data = body.data || body.products || body.results || body.items || [];
+    for (const x of data) out.push({ id: Number(x.id), name: String(x.name || x.title || ''), sku: String(x.sku || ''), price: Number(x.price || 0), status: String(x.status || ''), shopId: String(shop.vendorId), shopName: account.name });
+    if (data.length < 100) break;
+  }
+  return out;
+}
+
+/**
+ * Unified reconciliation across profiles, the WooCommerce site and every
+ * Basalam stall. One row per (product, destination), prices compared after each
+ * destination's own adjustment.
+ */
+export async function unifiedRecon(profileId = '') {
+  const local = await maintenanceRows(profileId) as ReconLocal[];
+  const profileNames: Record<string, string> = {};
+  for (const profile of await listProfiles()) profileNames[profile.id] = profile.name || profile.id;
+  const accounts = await reconAccounts();
+  const rows: UnifiedReconRow[] = [];
+  const failures: Array<{ account: string; error: string }> = [];
+  for (const account of accounts) {
+    try { rows.push(...reconcileAccount(local, await remoteForAccount(account), account, profileNames)); }
+    catch (error) { failures.push({ account: account.name, error: msg(error) }); }
+  }
+  const report = {
+    ok: failures.length === 0, at: new Date().toISOString(), profileId,
+    local: local.length, accounts: accounts.length,
+    ...summarize(rows), accountsBreakdown: byAccount(rows), profiles: byProfile(rows),
+    actions: planActions(rows).length, failures, rows,
+  };
+  await setState('recon_unified', report);
+  return report;
+}
+
+/**
+ * Apply the differences the table found. Price mismatches are pushed to the
+ * destination; products missing at a destination are re-published through the
+ * normal sync path so category/photo/stock rules stay identical. Products that
+ * exist only at the destination are reported but never auto-deleted.
+ */
+export async function unifiedReconApply(profileId = '', apply = false, limit = 200) {
+  const report = await unifiedRecon(profileId);
+  const actions = planActions(report.rows as UnifiedReconRow[]).slice(0, Math.max(1, Math.min(1000, limit)));
+  if (!apply) return { ok: true, dryRun: true, planned: actions.length, actions: actions.slice(0, 200), extra: report.extra };
+  let changed = 0; const failed: any[] = [];
+  const products = new Map<string, any>();
+  for (const action of actions) {
+    try {
+      if (action.kind === 'updatePrice' && action.remoteId && action.toPrice) {
+        if (action.target === 'woo') await wooUpdate(action.remoteId, { regular_price: String(action.toPrice) });
+        else await basalamUpdateShop(action.accountKey, action.remoteId, { price: action.toPrice });
+        changed++;
+      } else if (action.kind === 'create') {
+        const key = `${action.profileId}\u0000${action.sourceKey}`;
+        if (!products.has(key)) products.set(key, await getProduct(action.profileId, action.sourceKey));
+        const product = products.get(key);
+        const profile = await getProfile(action.profileId);
+        if (!product || !profile) { failed.push({ title: action.title, error: 'محصول یا پروفایل پیدا نشد' }); continue; }
+        if (action.target === 'woo') await syncWoo(product, profile); else await syncBasalam(product, profile);
+        changed++;
+      }
+    } catch (error) { failed.push({ title: action.title, account: action.accountName, error: msg(error) }); }
+  }
+  return { ok: failed.length === 0, dryRun: false, planned: actions.length, changed, failed: failed.slice(0, 20) };
+}
+
+async function basalamUpdateShop(accountKey: string, id: number, payload: any) {
+  const c = (await loadConnections()).basalam;
+  const shop = String(accountKey) === String(c.vendorId) ? { token: c.token, vendorId: String(c.vendorId) } : (c.shops || []).find(s => String(s.vendorId) === String(accountKey));
+  if (!shop?.token) throw Error('توکن این غرفه در دسترس نیست');
+  const r = await safeFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`, { method: 'PATCH', headers: { authorization: `Bearer ${shop.token}`, 'content-type': 'application/json' }, body: JSON.stringify(payload) }, 3_000_000);
+  if (!r.ok) throw Error(`Basalam update ${id}: HTTP ${r.status}`);
+}
+
+/** Single-destination table, kept for the existing per-target buttons. */
+export async function reconTable(target: 'woo' | 'basalam', profileId = '') {
+  const local = await maintenanceRows(profileId) as ReconLocal[];
+  const profileNames: Record<string, string> = {};
+  for (const profile of await listProfiles()) profileNames[profile.id] = profile.name || profile.id;
+  const accounts = (await reconAccounts()).filter(a => a.target === target);
+  if (!accounts.length) throw Error(target === 'woo' ? 'اتصال ووکامرس کامل نیست' : 'اتصال باسلام کامل نیست');
+  const rows: UnifiedReconRow[] = [];
+  for (const account of accounts) rows.push(...reconcileAccount(local, await remoteForAccount(account), account, profileNames));
+  const report = { ok: true, target, at: new Date().toISOString(), profileId, local: local.length, remote: rows.filter(r => r.remoteId).length, ...summarize(rows), accountsBreakdown: byAccount(rows), rows };
+  await setState(`recon_table_${target}`, report);
+  return report;
+}
 export async function recon(target:'woo'|'basalam',profileId=''){const local=await maintenanceRows(profileId),remote=await remoteProducts(target),byId=new Map(remote.map(x=>[x.id,x])),bySku=new Map(remote.filter(x=>x.sku).map(x=>[x.sku,x])),byName=new Map(remote.map(x=>[norm(x.name),x])),used=new Set<number>(),items:any[]=[];for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''})}const result={target,at:new Date().toISOString(),local:local.length,remote:remote.length,matched:items.filter(x=>x.remoteId).length,missingRemote:items.filter(x=>!x.remoteId&&x.active).length,retired:items.filter(x=>!x.active).length,extraRemote:remote.filter(x=>!used.has(x.id)).map(x=>({id:x.id,title:x.name,status:x.status})),items};await setState(`recon_${target}`,result);return result}
 export async function rebuildMap(target:'woo'|'basalam',profileId=''){const report=await recon(target,profileId);let mapped=0;for(const item of report.items)if(item.remoteId){await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);mapped++}return{ok:true,target,mapped,unmatched:report.items.length-mapped}}
 export async function retire(target:'woo'|'basalam',profileId:string,action:string,apply=false){const rows=(await maintenanceRows(profileId)).filter(x=>!x.active),preview=rows.map(x=>({profileId:x.profile_id,sourceKey:x.source_key,title:x.title,remoteId:target==='woo'?x.remote_woo_id:x.remote_basalam_id,missingSince:x.missing_since,action}));if(!apply||action==='report')return{ok:true,dryRun:true,count:preview.length,items:preview};let changed=0,failed:any[]=[];for(const item of preview){if(!item.remoteId)continue;try{if(target==='woo')await wooUpdate(item.remoteId,action==='trash'?{status:'trash'}:{status:action==='draft'?'draft':'private'});else await basalamUpdate(item.remoteId,{status:action==='trash'?'archived':action});changed++}catch(error){failed.push({title:item.title,error:msg(error)})}}return{ok:failed.length===0,dryRun:false,changed,failed}}

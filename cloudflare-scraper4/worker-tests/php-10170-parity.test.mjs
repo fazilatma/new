@@ -106,9 +106,18 @@ async function loadReconTable(local, remote) {
   const end = src.indexOf("export async function recon(target:Target,profileId=''){");
   assert.ok(start > -1 && end > start, 'reconTable block must exist in worker-src/maintenance.ts');
   const utils = await read('../worker-src/utils.ts');
+  const core = await read('../worker-src/recon-core.ts');
+  // reconNormTitle now lives in the shared recon-core module; splice in the real
+  // function so the parity test still runs the code that actually ships.
+  const normStart = core.indexOf('export function reconNormTitle');
+  assert.ok(normStart > -1, 'reconNormTitle must exist in worker-src/recon-core.ts');
+  const normSrc = core.slice(normStart, core.indexOf('\n}', normStart) + 2)
+    .replace(/export function reconNormTitle\s*\(\s*value\s*:\s*string\s*\)\s*:\s*string/, 'function reconNormTitle(value)');
+  assert.doesNotMatch(normSrc, /:\s*string/, 'the spliced reconNormTitle must be plain JS');
   const helpers = utils
     .slice(utils.indexOf('const PERSIAN_FOLD_MAP'))
-    .replace(/: Record<string,string>/g, '').replace(/: unknown/g, '').replace(/: string/g, '');
+    .replace(/: Record<string,string>/g, '').replace(/: unknown/g, '').replace(/: string/g, '')
+    + '\n' + normSrc;
   const block = src.slice(start, end)
     .replace(/export type ReconRow=\{[\s\S]*?\};\n/, '')
     .replace(/export type ReconTable=[^\n]*\n/, '')
@@ -116,13 +125,14 @@ async function loadReconTable(local, remote) {
     .replace(/:ReconRow\[\]/g, '').replace(/<string,any\[\]>/g, '').replace(/<string,any>/g, '')
     .replace(/<number,any>/g, '').replace(/<any>/g, '')
     .replace(/\(value:unknown\)/g, '(value)').replace(/:number\|null=>/g, '=>')
-    .replace(/export function reconNormTitle\(value:string\):string/, 'export function reconNormTitle(value)')
+    .replace(/\/\* Title key for reconciliation[\s\S]*?import \{ reconNormTitle \} from '\.\/recon-core\.js';/, '')
     .replace(/export async function reconTable\(target:Target,profileId=''\)/, 'export async function reconTable(target,profileId="")');
   const code = `
     const LOCAL=${JSON.stringify(local)},REMOTE=${JSON.stringify(remote)};
     const maintenanceRows=async()=>LOCAL;const remoteProducts=async()=>REMOTE;const setState=async()=>{};
     ${helpers}
-    ${block}`;
+    ${block}
+    export { reconNormTitle };`;
   return import(`data:text/javascript,${encodeURIComponent(code)}`);
 }
 
