@@ -3,7 +3,7 @@ import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAcc
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from '../worker-src/recon-core.js';
 import { loadConnections } from './connections.js';
 import { getProduct, getProfile, getState, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
-import { safeFetch } from './network.js';
+import { safeBasalamFetch, safeFetch } from './network.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { syncBasalam, syncWoo } from './sync.js';
 
@@ -41,7 +41,7 @@ async function remoteForAccount(account: ReconAccount): Promise<ReconRemote[]> {
   if (!shop?.token) throw Error(`توکن غرفهٔ ${account.name} در دسترس نیست`);
   const out: ReconRemote[] = [];
   for (let page = 1; page <= 100; page++) {
-    const r = await safeFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products?per_page=100&page=${page}`, { headers: { authorization: `Bearer ${shop.token}`, accept: 'application/json' } }, 10_000_000);
+    const r = await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products?per_page=100&page=${page}`, { headers: { authorization: `Bearer ${shop.token}`, accept: 'application/json' } }, 10_000_000);
     const body = await r.json() as any;
     if (!r.ok) throw Error(`Basalam ${account.name} HTTP ${r.status}`);
     const data = body.data || body.products || body.results || body.items || [];
@@ -163,7 +163,7 @@ async function basalamUpdateShop(accountKey: string, id: number, payload: any) {
   const c = (await loadConnections()).basalam;
   const shop = String(accountKey) === String(c.vendorId) ? { token: c.token, vendorId: String(c.vendorId) } : (c.shops || []).find(s => String(s.vendorId) === String(accountKey));
   if (!shop?.token) throw Error('توکن این غرفه در دسترس نیست');
-  const r = await safeFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`, { method: 'PATCH', headers: { authorization: `Bearer ${shop.token}`, 'content-type': 'application/json' }, body: JSON.stringify(payload) }, 3_000_000);
+  const r = await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`, { method: 'PATCH', headers: { authorization: `Bearer ${shop.token}`, 'content-type': 'application/json' }, body: JSON.stringify(payload) }, 3_000_000);
   if (!r.ok) throw Error(`Basalam update ${id}: HTTP ${r.status}`);
 }
 
@@ -206,5 +206,5 @@ async function remoteProducts(target:'woo'|'basalam'):Promise<Remote[]>{return l
 async function wooProducts(){const c=(await loadConnections()).woo;if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');const auth=`Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`,out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.url}/wp-json/wc/v3/products?per_page=100&page=${page}&status=any`,{headers:{authorization:auth,accept:'application/json'}},10_000_000),data=await r.json() as any[];if(!r.ok)throw Error(`Woo HTTP ${r.status}`);for(const x of data)out.push({id:Number(x.id),name:String(x.name||''),sku:String(x.sku||''),images:x.images||[],status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}
 async function basalamProducts(){const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products?per_page=100&page=${page}`,{headers:{authorization:`Bearer ${c.token}`,accept:'application/json'}},10_000_000),body=await r.json() as any;if(!r.ok)throw Error(`Basalam HTTP ${r.status}`);const data=body.data||body.products||body.results||body.items||[];for(const x of data)out.push({id:Number(x.id),name:String(x.name||x.title||''),sku:String(x.sku||''),images:x.photos||x.images||(x.photo?[x.photo]:[]),status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}
 async function wooUpdate(id:number,payload:any){const c=(await loadConnections()).woo,auth=`Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`,r=await safeFetch(`${c.url}/wp-json/wc/v3/products/${id}`,{method:'PUT',headers:{authorization:auth,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);if(!r.ok)throw Error(`Woo update ${id}: HTTP ${r.status}`)}
-async function basalamUpdate(id:number,payload:any){const c=(await loadConnections()).basalam,r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${c.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);if(!r.ok)throw Error(`Basalam update ${id}: HTTP ${r.status}`)}
+async function basalamUpdate(id:number,payload:any){const c=(await loadConnections()).basalam,r=await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${c.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);if(!r.ok)throw Error(`Basalam update ${id}: HTTP ${r.status}`)}
 const msg=(e:unknown)=>e instanceof Error?e.message:String(e);

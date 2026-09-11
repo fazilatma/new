@@ -1,6 +1,6 @@
 import { loadConnections } from './connections.js';
 import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId } from './db.js';
-import { safeFetch, safeWooFetch } from './network.js';
+import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
 import { basicAuth } from './utils.js';
 import type { Product, Profile, VariationGroup } from './types.js';
 
@@ -128,7 +128,7 @@ export function describeBasalamToken(raw:string):{ok:boolean;reason:string;expir
 async function basalamTokenProbe(c:any,account:BasalamAccount):Promise<string>{
   try{
     const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
-    const response=await safeFetch(`${base}/users/me`,{headers:{authorization:`Bearer ${account.token}`,accept:'application/json'}},2_000_000);
+    const response=await safeBasalamFetch(`${base}/users/me`,{headers:{authorization:`Bearer ${account.token}`,accept:'application/json'}},2_000_000);
     if(response.status===401)
       return 'همین توکن روی users/me هم ۴۰۱ گرفت، یعنی خود توکن نامعتبر یا باطل شده است؛ از پنل توسعه‌دهندگان باسلام یک توکن تازه بسازید.';
     if(!response.ok)return `users/me کد ${response.status} برگرداند.`;
@@ -187,7 +187,7 @@ async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,
       const form=new FormData();
       form.append('file',blob,(String(url).split('/').pop()||'photo.jpg').split('?')[0]);
       form.append('file_type','product.photo');
-      const uploaded=await safeFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
+      const uploaded=await safeBasalamFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
       const body=await uploaded.json().catch(()=>({})) as any;
       const id=Number(body?.id);
       if(uploaded.ok&&Number.isFinite(id)&&id>0)ids.push(id);
@@ -234,7 +234,7 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
   for(const categoryId of categories){
     usedCategory=categoryId;
     const payload=basalamPayload(product,c,account,categoryId,photoIds);
-    response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
+    response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
     body=await response.json().catch(()=>({}));
     if(response.ok)break;
   }

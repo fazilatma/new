@@ -3,7 +3,7 @@ import { findLearnedCategory, getDestinationId, getRemoteId, setDestinationId, s
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { safeFetch } from './network.js';
+import { safeBasalamFetch, safeFetch } from './network.js';
 import type { Product, Profile } from './types.js';
 
 export async function syncWoo(product: Product, profile: Profile): Promise<'created'|'updated'> {
@@ -92,7 +92,7 @@ export function describeBasalamToken(raw:string):{ok:boolean;reason:string;expir
 async function basalamTokenProbe(c:any,account:BasalamAccount):Promise<string>{
   try{
     const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
-    const response=await safeFetch(`${base}/users/me`,{headers:{authorization:`Bearer ${account.token}`,accept:'application/json'}},2_000_000);
+    const response=await safeBasalamFetch(`${base}/users/me`,{headers:{authorization:`Bearer ${account.token}`,accept:'application/json'}},2_000_000);
     if(response.status===401)
       return 'همین توکن روی users/me هم ۴۰۱ گرفت، یعنی خود توکن نامعتبر یا باطل شده است؛ از پنل توسعه‌دهندگان باسلام یک توکن تازه بسازید.';
     if(!response.ok)return `users/me کد ${response.status} برگرداند.`;
@@ -134,7 +134,7 @@ async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,
       const form=new FormData();
       form.append('file',blob,(String(url).split('/').pop()||'photo.jpg').split('?')[0]);
       form.append('file_type','product.photo');
-      const uploaded=await safeFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
+      const uploaded=await safeBasalamFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
       const body=await uploaded.json().catch(()=>({})) as any;
       const id=Number(body?.id);
       if(uploaded.ok&&Number.isFinite(id)&&id>0)ids.push(id);
@@ -186,7 +186,7 @@ async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,e
   }
 }
 async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:Number(body?.id||body?.product?.id||existing),body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
-async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds);response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
+async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds);response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
   const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');

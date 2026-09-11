@@ -3,7 +3,7 @@ import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setD
 import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, summarize } from './recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
 import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, suffixPatterns } from './dedup.js';
-import { safeFetch, safeWooFetch } from './network.js';
+import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
 
@@ -217,7 +217,7 @@ async function basalamUpdateShop(accountKey:string,id:number,payload:any){
   const c=(await loadConnections()).basalam;
   const shop=String(accountKey)===String(c.vendorId)?{token:c.token,vendorId:String(c.vendorId)}:(c.shops||[]).find(s=>String(s.vendorId)===String(accountKey));
   if(!shop?.token)throw Error('توکن این غرفه در دسترس نیست');
-  const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);
+  const r=await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);
   if(!r.ok)throw Error(`Basalam update ${id}: HTTP ${r.status}`);
 }
 
@@ -364,7 +364,7 @@ async function basalamStatusCounts(shopId:string){const statuses=['all','2976','
 async function basalamGet(id:number,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{const result=await basalamFetch(shop,endpoint),raw=unwrapProduct(result.body);if(Number(raw?.id||0)>0)return normalizeRemote('basalam',raw,shop.vendorId,shop.name)}catch(error){last=error}}throw last instanceof Error?last:Error(`محصول باسلام #${id} پیدا نشد.`)}
 async function basalamUpdate(id:number,payload:any,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');if(!shops.length)throw Error('غرفهٔ باسلام پیدا نشد.');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{return(await basalamFetch(shop,endpoint,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})).body}catch(error){last=error;if(!(error instanceof DestinationHttpError&&error.status===404))throw error}}throw last instanceof Error?last:Error(`ویرایش محصول باسلام #${id} ناموفق بود.`)}
 async function basalamBatchUpdate(shopId:string,items:any[]){const shop=(await basalamShops()).find(item=>item.vendorId===shopId);if(!shop)throw Error('غرفهٔ باسلام پیدا نشد.');return(await basalamFetch(shop,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/batch-updates`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({data:items})})).body}
-async function basalamFetch(shop:Shop,url:string,init:RequestInit={}){return fetchJson(url,{...init,headers:{authorization:`Bearer ${shop.token}`,accept:'application/json',...init.headers}})}
+async function basalamFetch(shop:Shop,url:string,init:RequestInit={}){return fetchJson(url,{...init,headers:{authorization:`Bearer ${shop.token}`,accept:'application/json',...init.headers}},'basalam')}
 async function basalamShops():Promise<Shop[]>{const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const rows:Shop[]=[{name:'غرفه پیش‌فرض',token:c.token,vendorId:String(c.vendorId),pricePercent:0,primary:true},...c.shops.filter(shop=>shop.token&&shop.vendorId).map(shop=>({...shop,vendorId:String(shop.vendorId),primary:false}))],seen=new Set<string>();return rows.filter(row=>row.vendorId&&!seen.has(row.vendorId)&&(seen.add(row.vendorId),true))}
 function selectShops(shops:Shop[],shopId:string){return !shopId||shopId==='all'||shopId==='0'?shops:shops.filter(shop=>shop.vendorId===String(shopId))}
 function basalamStatuses(status:string){const map:Record<string,string[]>={all:['2976','3790','3567','3568','4184','2977','2978','3248','4221'],active:['2976'],inactive:['3790'],not_approved:['3567'],pending:['3568'],archived:['4184']};return map[status]||([2976,3790,3567,3568,4184].includes(Number(status))?[String(status)]:map.all)}
@@ -387,5 +387,5 @@ function normalizeCategoryAssignments(value:any){const rows=Array.isArray(value)
 function clamp(value:any,min:number,max:number,fallback:number){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.round(n))):fallback}
 
 class DestinationHttpError extends Error{constructor(public status:number,public body:any,url:string){super(`HTTP ${status} از ${new URL(url).hostname}: ${String(body?.message||body?.error||JSON.stringify(body)).slice(0,300)}`)}}
-async function fetchJson(url:string,init:RequestInit={},woo=false){const response=await (woo?safeWooFetch(url,init,10_000_000):safeFetch(url,init,10_000_000)),text=await response.text();let body:any;try{body=text?JSON.parse(text):{}}catch{body={message:text.slice(0,500)}}if(!response.ok)throw new DestinationHttpError(response.status,body,url);return{response,body}}
+async function fetchJson(url:string,init:RequestInit={},woo:boolean|'basalam'=false){const response=await (woo==='basalam'?safeBasalamFetch(url,init,10_000_000):woo?safeWooFetch(url,init,10_000_000):safeFetch(url,init,10_000_000)),text=await response.text();let body:any;try{body=text?JSON.parse(text):{}}catch{body={message:text.slice(0,500)}}if(!response.ok)throw new DestinationHttpError(response.status,body,url);return{response,body}}
 const msg=(e:unknown)=>e instanceof Error?e.message:String(e);

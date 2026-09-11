@@ -327,3 +327,25 @@ revoked or belongs to a different account: create a new personal access token wi
 - **Fixed a misleading verdict.** A JWT with no scope claim silently passed the scope check and was
   reported as "structurally fine", which dead-ended the user. It now says the scope list is absent
   from the token and what to rebuild it with.
+
+## 1.108.0 — the Basalam indirect-connection switch now works, cPanel card, collapsible menus
+
+- **Fixed: «اتصال غیرمستقیم» for Basalam was stored but never read.** No request looked at the flag,
+  so switching it on changed nothing. The evidence that this — not the token — was the problem:
+  **two different stall tokens returned 401 at the same time**, and WooCommerce simultaneously
+  returned `error code: 522`. A token cannot cause a 522; the destination edge was refusing the
+  traffic. Basalam rejects requests from datacenter ranges before the token is ever validated, which
+  it reports as `invalid authorization header`.
+  With the switch on, **every** Basalam call (`users/me`, photo upload, product create/update,
+  vendor product list, status change) is routed through the configured reverse Worker in both
+  runtimes, with the `Authorization` header preserved end-to-end. The source product image stays on
+  the direct path, because it is fetched from the source shop and not from Basalam. Turning the
+  switch on without a Worker address now reports that instead of failing silently.
+- `scripts/ai-proxy-worker.js` now allows `openapi.basalam.com`, `auth.basalam.com` and
+  `core.basalam.com` — otherwise the proxy itself answered 403.
+- **New cPanel card in the install section** with the full step-by-step commands; its download is a
+  `scraper4-install-cpanel.sh` shell script.
+- **The menu no longer forces an endless scroll.** Only the newest changelog card stays open; the
+  previous 14 moved into a «recent changes» fold (the older 108 keep their own fold).
+- **Every environment install guide is collapsible** and closed by default; the copy and download
+  buttons are unchanged.

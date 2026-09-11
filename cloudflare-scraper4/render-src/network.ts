@@ -63,6 +63,28 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   return url;
 }
 
+/**
+ * Basalam-aware request path. The «اتصال غیرمستقیم» checkbox was stored but never
+ * read, so enabling it changed nothing. When it is on, Basalam calls are routed
+ * through the configured reverse Worker so they do not leave from a datacenter
+ * IP that Basalam's edge rejects (which surfaces as a 401 for a valid token).
+ */
+export async function safeBasalamFetch(raw: string, init: RequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
+  const { loadConnections } = await import('./connections.js');
+  const connections = await loadConnections();
+  const indirect = Boolean((connections.basalam as any)?.netIndirect);
+  const workerUrl = (connections as any).ai?.network?.workerUrl || sourceNetwork.workerUrl || '';
+  if (indirect && !workerUrl)
+    throw new Error('«اتصال غیرمستقیم» برای باسلام روشن است اما آدرس Worker واسط وارد نشده؛ آن را در «🤖 هوش مصنوعی ← روش اتصال» تنظیم کنید.');
+  if (indirect && workerUrl) {
+    const headers = new Headers(init.headers);
+    headers.set('x-scraper-target', raw);
+    headers.set('x-target-url', raw);
+    return safeFetch(viaWorkerUrl(workerUrl, raw), { ...init, headers }, maxBytes);
+  }
+  return safeFetch(raw, init, maxBytes);
+}
+
 export async function safeFetch(raw: string, init: RequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
   let url = await assertPublicUrl(raw);
   for (let redirects = 0; redirects < 5; redirects++) {

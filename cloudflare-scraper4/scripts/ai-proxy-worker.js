@@ -34,7 +34,14 @@ const ALLOWED_HOSTS = [
   'api.cohere.ai',
   'api.x.ai',
   'gateway.ai.cloudflare.com',
+  // Basalam — needed when «اتصال غیرمستقیم» is enabled for Basalam.
+  'openapi.basalam.com',
+  'auth.basalam.com',
+  'core.basalam.com',
 ];
+
+// Add your own WooCommerce shop host here if you route Woo through this proxy,
+// e.g. 'shop.example.com'. Alternatively set ENFORCE_ALLOWLIST to false.
 
 // Set to false to allow ANY https host (simpler, but an open relay).
 const ENFORCE_ALLOWLIST = true;

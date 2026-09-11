@@ -84,6 +84,28 @@ async function workerFetch(target:string,workerUrl:string,init:RequestInit,maxBy
  * failure is retried once through the configured reverse Worker. The original
  * method/body/authentication are preserved and all normal safeFetch limits still apply.
  */
+/**
+ * Basalam-aware request path.
+ *
+ * The «اتصال غیرمستقیم» checkbox in the Basalam settings was stored but never
+ * read by any request, so turning it on did nothing. Basalam (like many Iranian
+ * services) rejects or blackholes traffic from datacenter ranges, which surfaces
+ * as a 401 "invalid authorization header" for a token that is provably valid —
+ * the edge answers before the token is ever checked.
+ *
+ * When indirect mode is on, Basalam calls are routed through the same reverse
+ * Worker used for WooCommerce, so they leave from that Worker instead. The
+ * Authorization header is preserved end-to-end.
+ */
+export async function safeBasalamFetch(raw:string,init:RequestInit={},maxBytes?:number):Promise<Response>{
+  const target=assertPublicUrl(raw).href,connections=await loadConnections();
+  const indirect=Boolean((connections.basalam as any)?.netIndirect);
+  const workerUrl=connections.woo.network?.workerUrl||'';
+  if(indirect&&workerUrl)return workerFetch(target,workerUrl,init,maxBytes);
+  if(indirect&&!workerUrl)
+    throw new Error('«اتصال غیرمستقیم» برای باسلام روشن است اما آدرس Worker واسط وارد نشده؛ آن را در «🛒 ووکامرس ← روش اتصال» تنظیم کنید.');
+  return safeFetch(target,init,maxBytes);
+}
 export async function safeWooFetch(raw:string,init:RequestInit={},maxBytes?:number):Promise<Response>{
   const target=assertPublicUrl(raw).href,connections=await loadConnections(),config=connections.woo.network||{mode:'auto',workerUrl:''},workerUrl=config.workerUrl||'';
   if(config.mode==='worker')return workerFetch(target,workerUrl,init,maxBytes);

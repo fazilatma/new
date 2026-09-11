@@ -1103,3 +1103,56 @@ test('a Basalam 401 is explained by probing the token, not just inspecting it', 
     assert.ok(source.includes('if(!scopes.length)'), `${file}: an absent scope claim must be reported`);
   }
 });
+
+// --- The «اتصال غیرمستقیم» checkbox in the Basalam settings was stored in the
+// vault but never read by any request, so enabling it did nothing. Basalam's
+// edge rejects datacenter IPs, which surfaces as a 401 for a valid token.
+test('Basalam requests honour the indirect-connection setting', async () => {
+  for (const file of ['../worker-src/network.ts', '../render-src/network.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export async function safeBasalamFetch('), `${file}: needs safeBasalamFetch`);
+    assert.ok(source.includes('netIndirect'), `${file}: must read the netIndirect flag`);
+    // Turning it on without a proxy configured must explain itself, not fail silently.
+    assert.ok(/اتصال غیرمستقیم/.test(source), `${file}: needs the missing-proxy error`);
+  }
+  // Every Basalam API call must go through it, in both runtimes.
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts',
+                      '../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('safeBasalamFetch'), `${file}: Basalam calls must be routed`);
+  }
+  // The product image is fetched from the SOURCE shop and must stay direct.
+  const workerSync = await readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8');
+  assert.ok(workerSync.includes("const image=await safeFetch(String(url)"),
+    'the source product image must not be routed through the Basalam proxy');
+  // The bundled proxy must allow the Basalam hosts, or it would answer 403.
+  const proxy = await readFile(new URL('../scripts/ai-proxy-worker.js', import.meta.url), 'utf8');
+  for (const host of ['openapi.basalam.com', 'auth.basalam.com'])
+    assert.ok(proxy.includes(`'${host}'`), `the proxy must allow ${host}`);
+});
+
+// --- The menu forced an endless scroll: 15 changelog cards always rendered
+// expanded, and every environment guide printed its full command block.
+test('the changelog and the install guides are collapsible', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('<div class="change-list">');
+  const older = dashboard.indexOf('<details class="change-older">', start);
+  const visible = dashboard.slice(start, older);
+  // Only the newest card may render outside a fold; the rest sit in change-recent.
+  assert.equal(visible.split('<div class="change-item">').length - 1 -
+    (visible.includes('<details class="change-recent">')
+      ? visible.slice(visible.indexOf('<details class="change-recent">')).split('<div class="change-item">').length - 1
+      : 0), 1, 'exactly one changelog card may be permanently expanded');
+  assert.ok(visible.includes('<details class="change-recent">'), 'recent entries need their own fold');
+  assert.ok(dashboard.includes('.change-recent{'), 'the recent fold needs styling');
+  // Each environment guide is its own <details>.
+  assert.ok(dashboard.includes('<details class="install-command-card"><summary>'),
+    'install guides must be collapsible');
+  const renderer = dashboard.slice(dashboard.indexOf('function renderInstallCommandCards('));
+  assert.ok(!renderer.slice(0, 900).includes('<article class="install-command-card">'),
+    'the install-guide renderer must not emit permanently expanded cards');
+  // cPanel instructions must exist and download as a shell script.
+  assert.ok(dashboard.includes('"key": "cpanel"') || dashboard.includes('"key":"cpanel"'),
+    'a cPanel guide must be present');
+  assert.ok(dashboard.includes("scraper4-install-cpanel.sh"), 'cPanel downloads as .sh');
+});
