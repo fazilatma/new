@@ -1156,3 +1156,33 @@ test('the changelog and the install guides are collapsible', async () => {
     'a cPanel guide must be present');
   assert.ok(dashboard.includes("scraper4-install-cpanel.sh"), 'cPanel downloads as .sh');
 });
+
+// --- Regression: the full reconciliation matrix disappeared. A destination that
+// threw contributed NO rows, so with every destination failing the table had
+// nothing to draw, and v1.103.0's guard then replaced it with a bare banner.
+// The comparison must survive a broken destination.
+test('the reconciliation table still renders when destinations fail', async () => {
+  const core = await readFile(new URL('../worker-src/recon-core.ts', import.meta.url), 'utf8');
+  assert.ok(core.includes('export function unreachableAccountRows('),
+    'a failing destination must still produce rows');
+  assert.ok(core.includes("'unreachable'"), 'the unreachable bucket must exist');
+
+  // Both runtimes must use it in their unifiedRecon loop.
+  for (const file of ['../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('unreachableAccountRows(local'),
+      `${file}: the catch branch must keep the rows`);
+  }
+
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  // The early return that hid the whole table must be gone.
+  assert.ok(!dashboard.includes('failList.length>=(d.accounts||0)&&!d.rows.length'),
+    'a failed destination must no longer suppress the table');
+  // The bucket needs a colour, a legend entry and the highest sort priority.
+  assert.ok(dashboard.includes("unreachable:['مقصد پاسخ نداد'"), 'legend entry missing');
+  assert.ok(dashboard.includes("unreachable:['#fb7185'"), 'cell colour missing');
+  assert.ok(dashboard.includes('{unreachable:0,priceDiff:1,missing:2,extra:3,noPrice:4,matched:5}'),
+    'unreachable rows must sort to the top');
+  assert.ok(dashboard.includes('cells:{},worst:5}'),
+    'the worst-rank sentinel must match the new ranking');
+});

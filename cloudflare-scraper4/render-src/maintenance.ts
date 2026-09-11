@@ -1,5 +1,5 @@
 import { normalizePersianText } from '../worker-src/utils.js';
-import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, summarize } from '../worker-src/recon-core.js';
+import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, unreachableAccountRows, summarize } from '../worker-src/recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from '../worker-src/recon-core.js';
 import { loadConnections } from './connections.js';
 import { getProduct, getProfile, getState, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
@@ -72,7 +72,9 @@ export async function unifiedRecon(profileId = '') {
   const failures: Array<{ account: string; error: string }> = [];
   for (const account of accounts) {
     try { rows.push(...reconcileAccount(local, await remoteForAccount(account), account, profileNames, suffixFormats)); }
-    catch (error) { failures.push({ account: account.name, error: msg(error) }); }
+    // Keep the table intact when a destination fails (see worker-src/maintenance.ts).
+    catch (error) { const message = msg(error); failures.push({ account: account.name, error: message });
+      rows.push(...unreachableAccountRows(local, account, profileNames, suffixFormats, message)); }
   }
   const report = {
     ok: failures.length === 0, at: new Date().toISOString(), profileId,

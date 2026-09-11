@@ -1,6 +1,6 @@
 import { loadConnections } from './connections.js';
 import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
-import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, summarize } from './recon-core.js';
+import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, unreachableAccountRows, summarize } from './recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
 import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
@@ -138,7 +138,9 @@ export async function unifiedRecon(profileId=''){
   const accounts=await reconAccounts(),rows:UnifiedReconRow[]=[],failures:Array<{account:string;error:string}>=[];
   for(const account of accounts){
     try{rows.push(...reconcileAccount(local,await remoteForAccount(account),account,profileNames,suffixFormats))}
-    catch(error){failures.push({account:account.name,error:error instanceof Error?error.message:String(error)})}
+    // A destination that cannot be read still contributes one cell per product,
+    // so the comparison table keeps its shape instead of vanishing entirely.
+    catch(error){const message=error instanceof Error?error.message:String(error);failures.push({account:account.name,error:message});rows.push(...unreachableAccountRows(local,account,profileNames,suffixFormats,message))}
   }
   const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
     ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows).length,failures,rows};

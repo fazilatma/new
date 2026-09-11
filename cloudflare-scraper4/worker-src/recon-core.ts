@@ -27,7 +27,7 @@ import { hasCodeSuffix, parseSuffixFormats, stripCodeSuffix, suffixPatterns } fr
  *   noPrice   - matched, but the source has no usable price to compare
  */
 
-export type ReconBucket = 'matched' | 'priceDiff' | 'missing' | 'extra' | 'noPrice';
+export type ReconBucket = 'matched' | 'priceDiff' | 'missing' | 'extra' | 'noPrice' | 'unreachable';
 export type MatchedBy = 'id' | 'sku' | 'title' | 'none';
 
 /** One destination account: the WooCommerce site, or a single Basalam stall. */
@@ -128,6 +128,34 @@ export function mappedRemoteId(row: ReconLocal, account: ReconAccount): number {
  * Compare every source product against ONE destination account.
  * Pure function: no database, no network, fully testable.
  */
+/**
+ * Rows for a destination that could not be read (401, 522, timeout...).
+ *
+ * Without this, a failing account contributed no rows at all, so the matrix had
+ * nothing to draw and the entire table vanished — even though the source side
+ * was known. Every eligible local product now still gets a cell, marked
+ * `unreachable`, so the table keeps its shape and the failure is visible per
+ * destination instead of wiping the report.
+ */
+export function unreachableAccountRows(local: ReconLocal[], account: ReconAccount, profileNames: Record<string, string> = {}, suffixFormats: unknown = '', error = ''): UnifiedReconRow[] {
+  const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
+  return local
+    .filter(row => hasCodeSuffix(String(row.title || ''), patterns))
+    .map(row => ({
+      bucket: 'unreachable' as ReconBucket,
+      target: account.target, accountKey: account.accountKey, accountName: account.name,
+      profileId: row.profile_id || '', profileName: profileNames[row.profile_id || ''] || '',
+      sourceKey: row.source_key || '', title: row.title || '', remoteTitle: '',
+      remoteId: null,
+      sourcePrice: Number.isFinite(Number(row.price)) ? Number(row.price) : null,
+      expectedPrice: null, remotePrice: null, delta: null,
+      pricePercent: Number(account.pricePercent) || 0,
+      matchedBy: 'none' as MatchedBy, status: 'unreachable',
+      why: error ? `مقصد پاسخ نداد: ${error}` : 'مقصد پاسخ نداد',
+      duplicateCount: 0,
+    }));
+}
+
 export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], account: ReconAccount, profileNames: Record<string, string> = {}, suffixFormats: unknown = ''): UnifiedReconRow[] {
   const rows: UnifiedReconRow[] = [];
   // Only products whose title carries a «(کد ایکس)» suffix take part: everything

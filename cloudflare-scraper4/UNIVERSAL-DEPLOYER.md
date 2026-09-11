@@ -396,3 +396,14 @@ revoked or belongs to a different account: create a new personal access token wi
   previous 14 moved into a «recent changes» fold (the older 108 keep their own fold).
 - **Every environment install guide is collapsible** and closed by default; the copy and download
   buttons are unchanged.
+
+## 1.109.0 — the reconciliation table comes back when a destination fails
+
+- **Fixed the regression that made the full comparison table disappear.** In the reconciliation
+  loop, a destination whose read threw contributed **no rows at all**. With every destination
+  failing (the 401/522 case) the matrix had nothing to draw, and the 1.103.0 guard then replaced it
+  with a plain error banner — so the table you used to get was gone.
+  A destination that cannot be read now still produces one cell per product, in a new
+  **«مقصد پاسخ نداد»** state (⛔, pink). The complete table renders again — every product row, every
+  destination column — with the per-destination errors listed above it. Unreachable cells sort to
+  the top so they are seen first. Fixed in both runtimes.
