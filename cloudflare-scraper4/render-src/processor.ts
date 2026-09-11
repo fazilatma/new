@@ -57,6 +57,7 @@ export async function processOneJob(): Promise<boolean> {
         append(job, 'سلکتورهای فهرست خالی است؛ پیشنهاد خودکار اجرا می‌شود…');
         await applySelectorSuggestions(profile, pageUrl(profile, 1), 'list', job, true);
       }
+      let repeatedPages = 0;
       for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
@@ -95,10 +96,12 @@ export async function processOneJob(): Promise<boolean> {
         }
         const before = found.size;
         for (const raw of list) { const p = transformProduct(raw, profile); if (!profile.minPrice || p.price >= profile.minPrice) found.set(p.sourceKey, p); }
-        job.total = found.size; job.processed += list.length; await save(job);
+        job.total = found.size; job.processed = found.size; await save(job);
         // Auto paging (pages = 0) stops as soon as a page adds nothing new.
         // Misconfigured pagination often returns page 1 forever, which would
         // otherwise re-scan the same page up to the safety cap.
+        if (found.size === before) repeatedPages++; else repeatedPages = 0;
+        if (repeatedPages >= 2) { append(job, `صفحهٔ ${page} و صفحهٔ قبل هیچ محصول تازه‌ای نداشتند؛ احتمالاً صفحه‌بندی کار نمی‌کند و همان صفحهٔ اول تکرار می‌شود. استخراج همین‌جا پایان یافت.`, 'warning'); break; }
         if (profile.pages === 0 && page > 1 && found.size === before) { append(job, `صفحهٔ ${page} محصول تازه‌ای نداشت؛ صفحه‌بندی همین‌جا پایان یافت.`); break; }
       }
       if (job.status !== 'stopped') {

@@ -601,3 +601,18 @@ was never in your Cloudflare settings.
   on the product page could not be opened to reach the fields inside them. The new **⏸ توقف انتخاب**
   button lets the page behave normally; press **▶ ادامهٔ انتخاب** to resume picking and select the
   newly revealed content. Added to both runtimes.
+
+## 1.122.0 — "1,200 of 20" explained: the site was repeating one page
+
+The two numbers counted different things: the first was every **raw item scanned**, the second the
+number of **unique products**. A shop that returns the same 20 products for every page number gives
+60 × 20 = 1,200 scanned but only 20 distinct products — so "20 in the results" was correct and
+"1,200" was the misleading number. Both now report unique products.
+
+More importantly, the "this page added nothing new" guard only ran in **auto** paging
+(`pages = 0`). With an explicit page count the same duplicate page was fetched to the very end. The
+guard now applies in every mode: two consecutive pages that add nothing stop the run, with a warning
+that pagination is probably not working.
+
+If the shop really has 1,200 products, check the profile's pagination type and pagination value.
+The Cloudflare runtime already stopped on a fully duplicate page and was never affected.

@@ -1542,3 +1542,37 @@ test('the visual picker can pause selection', async () => {
     assert.ok(visual.includes('function setPicking('), `${file}: the toggle must update its own label`);
   }
 });
+
+// --- "finished · 1,200 of 20": job.processed counted every RAW item scanned
+// while job.total was the DEDUPLICATED map size. A shop that serves the same
+// page for every page number therefore reported 1,200 processed but stored 20,
+// and the duplicate-page guard only ran when pages===0 (auto), so an explicit
+// page count re-scanned the identical page to the very end.
+test('pagination stops on repeated pages and the counter is consistent', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('job.total = found.size; job.processed = found.size;'),
+    'processed and total must both describe unique products');
+  assert.ok(!node.includes('job.processed += list.length'),
+    'processed must not count raw scanned items against a deduplicated total');
+  // The guard must no longer be limited to auto paging.
+  assert.ok(node.includes('if (found.size === before) repeatedPages++; else repeatedPages = 0;'),
+    'repeated pages must be counted for every paging mode');
+  assert.ok(/repeatedPages >= 2/.test(node), 'two barren pages in a row must end pagination');
+
+  // Behaviour: a site repeating one page stops early; a healthy site does not.
+  const run = (uniquePerPage) => {
+    const found = new Set(); let repeated = 0, pages = 0;
+    for (let page = 1; page <= 60; page++) {
+      const before = found.size;
+      for (let i = 0; i < 20; i++) found.add(uniquePerPage ? `p${page}-${i}` : `k${i}`);
+      if (found.size === before) repeated++; else repeated = 0;
+      pages = page;
+      if (repeated >= 2) break;
+    }
+    return { pages, size: found.size };
+  };
+  assert.equal(run(false).pages, 3, 'a repeating site must stop after two barren pages');
+  assert.equal(run(false).size, 20, 'and keep the 20 real products');
+  assert.equal(run(true).pages, 60, 'a healthy site must still paginate fully');
+  assert.equal(run(true).size, 1200, 'and collect every product');
+});
