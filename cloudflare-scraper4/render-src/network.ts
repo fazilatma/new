@@ -69,7 +69,10 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
  * through the configured reverse Worker so they do not leave from a datacenter
  * IP that Basalam's edge rejects (which surfaces as a 401 for a valid token).
  */
-export async function safeBasalamFetch(raw: string, init: RequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
+/** Send only the caller's headers (JSON APIs), with no browser defaults. */
+export type ApiRequestInit = RequestInit & { apiMode?: boolean };
+
+export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
   const { loadConnections } = await import('./connections.js');
   const connections = await loadConnections();
   const indirect = Boolean((connections.basalam as any)?.netIndirect);
@@ -80,12 +83,12 @@ export async function safeBasalamFetch(raw: string, init: RequestInit = {}, maxB
     const headers = new Headers(init.headers);
     headers.set('x-scraper-target', raw);
     headers.set('x-target-url', raw);
-    return safeFetch(viaWorkerUrl(workerUrl, raw), { ...init, headers }, maxBytes);
+    return safeFetch(viaWorkerUrl(workerUrl, raw), { ...init, headers, apiMode: true }, maxBytes);
   }
-  return safeFetch(raw, init, maxBytes);
+  return safeFetch(raw, { ...init, apiMode: true }, maxBytes);
 }
 
-export async function safeFetch(raw: string, init: RequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
+export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
   let url = await assertPublicUrl(raw);
   for (let redirects = 0; redirects < 5; redirects++) {
     const controller = new AbortController();
@@ -104,15 +107,20 @@ export async function safeFetch(raw: string, init: RequestInit = {}, maxBytes = 
         ...init,
         redirect: 'manual',
         signal: controller.signal,
-        // Match the Cloudflare Worker's request shape: several shops return a
-        // stripped page or a challenge when these browser headers are missing.
-        headers: {
-          'user-agent': config.userAgent,
-          accept: 'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5',
-          'accept-language': 'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6',
-          'cache-control': 'no-cache',
-          ...init.headers
-        }
+        // Browser-shaped defaults are for SCRAPING shop pages. They must never be
+        // sent to a JSON API: a desktop-Chrome user-agent with no matching browser
+        // fingerprint is a WAF signature, and Basalam/Cloudflare reject it with
+        // 401 "invalid authorization header" / 522 before reading the token.
+        // scraper4.php sends only Accept, Authorization and Content-Type.
+        headers: (init as ApiRequestInit).apiMode
+          ? { ...init.headers }
+          : {
+            'user-agent': config.userAgent,
+            accept: 'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5',
+            'accept-language': 'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6',
+            'cache-control': 'no-cache',
+            ...init.headers
+          }
       });
       if ([301,302,303,307,308].includes(response.status)) {
         const location = response.headers.get('location');

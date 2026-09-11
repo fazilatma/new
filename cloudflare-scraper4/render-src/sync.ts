@@ -13,7 +13,7 @@ export async function syncWoo(product: Product, profile: Profile): Promise<'crea
   let id = await getRemoteId(profile.id, product.sourceKey, 'woo');
   const sku = product.sku || `s4-${profile.id}-${product.sourceKey}`.slice(0, 100);
   if (!id) {
-    const search = await safeFetch(`${base}?sku=${encodeURIComponent(sku)}`, { headers: { authorization: auth, accept: 'application/json' } }, 2_000_000);
+    const search = await safeFetch(`${base}?sku=${encodeURIComponent(sku)}`, { headers: { authorization: auth, accept: 'application/json' }, apiMode: true }, 2_000_000);
     if (search.ok) { const rows = await search.json() as any[]; id = rows[0]?.id ? Number(rows[0].id) : null; }
   }
   // The configured WooCommerce adjustment percentage (0 = unchanged).
@@ -23,7 +23,7 @@ export async function syncWoo(product: Product, profile: Profile): Promise<'crea
   if (product.stock !== undefined) Object.assign(payload, { manage_stock: true, stock_quantity: product.stock });
   if (product.weight) payload.weight = String(product.weight);
   const wooCategory=profile.wooCategoryId||c.categoryId;if(wooCategory) payload.categories = [{ id: wooCategory }];
-  const response = await safeFetch(id ? `${base}/${id}` : base, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) }, 3_000_000);
+  const response = await safeFetch(id ? `${base}/${id}` : base, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) , apiMode: true }, 3_000_000);
   const body = await response.json().catch(() => ({})) as any;
   if (!response.ok) throw new Error(`WooCommerce HTTP ${response.status}: ${body.message || JSON.stringify(body).slice(0,300)}`);
   const remoteId = Number(body.id || id); if (remoteId) await setRemoteId(profile.id, product.sourceKey, 'woo', remoteId);

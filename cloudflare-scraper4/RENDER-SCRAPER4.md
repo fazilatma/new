@@ -380,3 +380,28 @@ exists and the next sync completes it.
 
 Also confirmed from the reference: the PHP auth header is plain `Authorization: Bearer <token>`,
 identical to ours, so the header format was never the problem.
+
+## 1.111.0 — stop disguising API calls as a browser (the real cause of 401 + 522)
+
+Diffing our HTTP layer against the PHP reference found the cause. `bslCurlOpts()` sends exactly
+three headers:
+
+```
+Accept: application/json
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+We were sending **five**, including a fake desktop-Chrome `user-agent` and a Persian
+`accept-language`. A browser user-agent on a JSON API, with none of the other browser signals, is a
+standard WAF signature. The edge rejects the request **before** the token is ever read and reports
+it as `invalid authorization header` — which is why:
+
+- the read-only `users/me` endpoint also returned 401,
+- two different, valid stall tokens failed identically,
+- and WooCommerce returned `error code: 522` in the very same run.
+
+Every API call now sends only the caller's own headers, in both runtimes: Basalam (direct and
+proxied) and the WooCommerce REST path. Scraping shop pages keeps the browser headers, because some
+shops serve a stripped page or a challenge without them — the two paths are now separated by an
+explicit, type-checked `apiMode` flag rather than one shared default.

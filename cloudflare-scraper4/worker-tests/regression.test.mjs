@@ -1206,3 +1206,36 @@ test('Basalam products are created as a draft, then published with photos', asyn
     assert.ok(/if\(!existing&&newId>0\)/.test(source), `${file}: publish only after a create`);
   }
 });
+
+// --- The fake desktop-Chrome user-agent was being sent to JSON APIs. A browser
+// UA with no matching browser fingerprint is a WAF signature: Basalam answered
+// 401 "invalid authorization header" (even on the read-only users/me endpoint,
+// and for two different valid tokens) and the WooCommerce edge answered 522 in
+// the same run. scraper4.php sends only Accept/Authorization/Content-Type.
+test('JSON API calls are not disguised as a browser', async () => {
+  for (const file of ['../worker-src/network.ts', '../render-src/network.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('apiMode'), `${file}: needs the apiMode switch`);
+    assert.ok(/ApiRequestInit/.test(source), `${file}: apiMode must be typed, not cast away`);
+  }
+  // Basalam always uses it, in both runtimes.
+  const worker = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\}/.test(worker),
+    'worker: safeBasalamFetch must send API-shaped headers');
+  assert.ok(node.includes('apiMode: true }, maxBytes)'), 'node: safeBasalamFetch must send API-shaped headers');
+  // WooCommerce REST too -- it is what produced the 522.
+  assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\},maxBytes\)/.test(worker),
+    'worker: the Woo REST path must use apiMode');
+  const nodeMaint = await readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8');
+  assert.ok(nodeMaint.includes('apiMode:true'), 'node: Woo REST calls must use apiMode');
+
+  // Scraping must KEEP the browser shape, or shops serve a stripped page.
+  assert.ok(worker.includes('Mozilla/5.0'), 'worker: the scraping user-agent must survive');
+  assert.ok(node.includes('config.userAgent'), 'node: the scraping user-agent must survive');
+  for (const [name, source] of [['worker', worker], ['node', node]])
+    assert.ok(/accept-language/.test(source), `${name}: scraping keeps accept-language`);
+  // The caller's own headers must still be merged in, or auth would be dropped.
+  assert.ok(worker.includes('new Headers(requestInit.headers).forEach'),
+    'worker: caller headers must always be applied');
+});

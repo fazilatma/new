@@ -22,13 +22,28 @@ function redirectedInit(init:RequestInit,from:URL,to:URL,status:number):RequestI
   if(status===303||((status===301||status===302)&&String(next.method||'GET').toUpperCase()==='POST'))next={...next,method:'GET',body:undefined};
   return next;
 }
-export async function safeFetch(raw:string,init:RequestInit={},maxBytes?:number,timeoutMs?:number):Promise<Response>{
+/**
+ * Extra flag understood by safeFetch: send ONLY the caller's headers, with no
+ * browser-shaped defaults. Required for JSON APIs (Basalam, WooCommerce REST).
+ */
+export type ApiRequestInit = RequestInit & { apiMode?: boolean };
+
+export async function safeFetch(raw:string,init:ApiRequestInit={},maxBytes?:number,timeoutMs?:number):Promise<Response>{
   let url=assertPublicUrl(raw),requestInit={...init};const env=getEnv(),limit=Math.min(25_000_000,Math.max(1000,maxBytes||Number(env.MAX_RESPONSE_BYTES)||8_000_000));
   for(let redirects=0;redirects<5;redirects++){
     const wait=Number(timeoutMs)>0?Math.max(50,Number(timeoutMs)):Math.max(1000,Number(env.REQUEST_TIMEOUT_MS)||25_000),controller=new AbortController(),timeout=setTimeout(()=>controller.abort('timeout'),wait);
     try{
-      const requestHeaders=new Headers({'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',accept:'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5','accept-language':'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6','cache-control':'no-cache'});new Headers(requestInit.headers).forEach((value,name)=>requestHeaders.set(name,value));
-      const response=await fetch(url.href,{...requestInit,redirect:'manual',signal:controller.signal,headers:requestHeaders});
+      // Browser-shaped defaults exist for SCRAPING shop pages. They must never
+      // reach a JSON API: a desktop-Chrome user-agent with no matching browser
+      // fingerprint is a classic WAF signature, and Basalam/Cloudflare answer it
+      // with 401 "invalid authorization header" / 522 before the token is read.
+      // The reference implementation (scraper4.php) sends only Accept,
+      // Authorization and Content-Type. `apiMode` reproduces exactly that.
+      const apiMode=init.apiMode===true;
+      const requestHeaders=apiMode?new Headers():new Headers({'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',accept:'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5','accept-language':'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6','cache-control':'no-cache'});
+      new Headers(requestInit.headers).forEach((value,name)=>requestHeaders.set(name,value));
+      const {apiMode:_apiMode,...fetchInit}=requestInit as any;
+      const response=await fetch(url.href,{...fetchInit,redirect:'manual',signal:controller.signal,headers:requestHeaders});
       if([301,302,303,307,308].includes(response.status)){
         const location=response.headers.get('location');await response.body?.cancel();if(!location)throw new Error('Redirect without location');const nextUrl=assertPublicUrl(new URL(location,url).href);requestInit=redirectedInit(requestInit,url,nextUrl,response.status);url=nextUrl;continue;
       }
@@ -78,7 +93,7 @@ export async function safeTextViaWorker(raw:string,workerUrl:string,maxBytes=8_0
 const WOO_EDGE_ERRORS=new Set([520,521,522,523,524,525,526]);
 function wooGatewayUrl(target:string,workerUrl:string):string{const base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'')}
 async function tagNetwork(response:Response,mode:'direct'|'worker',fallbackStatus=0):Promise<Response>{const headers=new Headers(response.headers);headers.set('x-scraper-network-mode',mode);if(fallbackStatus)headers.set('x-scraper-direct-status',String(fallbackStatus));return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers})}
-async function workerFetch(target:string,workerUrl:string,init:RequestInit,maxBytes:number|undefined,fallbackStatus=0):Promise<Response>{const headers=new Headers(init.headers);headers.set('x-target-url',target);headers.set('x-scraper-target-url',target);return tagNetwork(await safeFetch(wooGatewayUrl(target,workerUrl),{...init,headers},maxBytes),'worker',fallbackStatus)}
+async function workerFetch(target:string,workerUrl:string,init:ApiRequestInit,maxBytes:number|undefined,fallbackStatus=0):Promise<Response>{const headers=new Headers(init.headers);headers.set('x-target-url',target);headers.set('x-scraper-target-url',target);return tagNetwork(await safeFetch(wooGatewayUrl(target,workerUrl),{...init,headers},maxBytes),'worker',fallbackStatus)}
 /**
  * WooCommerce-aware request path. In automatic mode a Cloudflare 52x origin
  * failure is retried once through the configured reverse Worker. The original
@@ -101,16 +116,16 @@ export async function safeBasalamFetch(raw:string,init:RequestInit={},maxBytes?:
   const target=assertPublicUrl(raw).href,connections=await loadConnections();
   const indirect=Boolean((connections.basalam as any)?.netIndirect);
   const workerUrl=connections.woo.network?.workerUrl||'';
-  if(indirect&&workerUrl)return workerFetch(target,workerUrl,init,maxBytes);
+  if(indirect&&workerUrl)return workerFetch(target,workerUrl,{...init,apiMode:true},maxBytes);
   if(indirect&&!workerUrl)
     throw new Error('«اتصال غیرمستقیم» برای باسلام روشن است اما آدرس Worker واسط وارد نشده؛ آن را در «🛒 ووکامرس ← روش اتصال» تنظیم کنید.');
-  return safeFetch(target,init,maxBytes);
+  return safeFetch(target,{...init,apiMode:true},maxBytes);
 }
 export async function safeWooFetch(raw:string,init:RequestInit={},maxBytes?:number):Promise<Response>{
   const target=assertPublicUrl(raw).href,connections=await loadConnections(),config=connections.woo.network||{mode:'auto',workerUrl:''},workerUrl=config.workerUrl||'';
   if(config.mode==='worker')return workerFetch(target,workerUrl,init,maxBytes);
   try{
-    const direct=await safeFetch(target,init,maxBytes);
+    const direct=await safeFetch(target,{...init,apiMode:true},maxBytes);
     if(config.mode==='auto'&&workerUrl&&WOO_EDGE_ERRORS.has(direct.status)){const status=direct.status;await direct.body?.cancel();return workerFetch(target,workerUrl,init,maxBytes,status)}
     return tagNetwork(direct,'direct');
   }catch(error){if(config.mode==='auto'&&workerUrl)return workerFetch(target,workerUrl,init,maxBytes);throw error}
