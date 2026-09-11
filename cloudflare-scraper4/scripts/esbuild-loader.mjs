@@ -175,8 +175,14 @@ export async function loadEsbuild() {
       // WebAssembly build, which needs no platform-specific executable.
       const wasm = await loadWasmFallback((secondError && secondError.message) || String(secondError));
       if (wasm) return wasm;
+      const productionInstall = process.env.NODE_ENV === 'production';
       throw new Error(
         '[esbuild] esbuild still cannot be loaded after repair: ' + ((secondError && secondError.message) || secondError) +
+        (productionInstall
+          ? `\nNODE_ENV=production is set, so "npm install" skipped devDependencies.`
+            + `\nesbuild must be a normal dependency for the build to run on Render/Heroku-style hosts,`
+            + `\nor install it explicitly:\n  ${npmCommand} install esbuild@${desiredEsbuildVersion()} --no-audit`
+          : '') +
         (isTermux
           ? `\nOn Termux install the system build, then start the deployer again:\n  pkg install esbuild\n  ${npmCommand} install esbuild-wasm@${desiredEsbuildVersion()} --no-audit`
           : `\nMake sure Node.js LTS is installed and that this folder was not copied from another OS, then run:\n  ${npmCommand} install esbuild@${desiredEsbuildVersion()} --no-audit --prefer-online`)

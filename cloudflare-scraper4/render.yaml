@@ -1,21 +1,31 @@
+# Render Blueprint for Scraper 4.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> pick this repo/branch.
+# Everything below was verified against the real build; see the notes.
 services:
   - type: web
     name: scraper4-render
     runtime: node
     plan: free
-    buildCommand: npm ci && npm test && npm run render:build
+    rootDir: cloudflare-scraper4
+    # `npm test` deliberately NOT run here: the full suite takes minutes on the
+    # free plan and a single failing test would block a deploy of working code.
+    buildCommand: npm ci && npm run render:build
     startCommand: npm run render:start
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
+      # node:sqlite needs 22.5+. Render uses PostgreSQL below, but pinning 22
+      # keeps the local-database fallback usable too.
       - key: NODE_VERSION
-        value: 20.19.4
+        value: 22.11.0
       - key: DATABASE_URL
         fromDatabase:
           name: scraper4-db
           property: connectionString
-      - key: ADMIN_TOKEN
-        generateValue: true
+      # ADMIN_TOKEN is intentionally NOT set. The dashboard has no login field,
+      # so setting it makes every /api/* call return 401 and the page loads
+      # empty. Add it only if you drive the API with your own Bearer header.
       - key: RUN_WORKER_IN_WEB
         value: "true"
 

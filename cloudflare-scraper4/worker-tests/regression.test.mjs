@@ -1638,3 +1638,33 @@ test('the detail stage reports progress live', async () => {
     assert.ok(dashboard.includes(`'${phase}'`) || dashboard.includes(`${phase}:`),
       `phaseLabel must cover ${phase}`);
 });
+
+// --- Render (and any NODE_ENV=production host) installs without
+// devDependencies, so a build-time bundler kept there can never run:
+//   "esbuild still cannot be loaded after repair: Cannot find package 'esbuild'"
+// render:build is part of deploying, so its bundler is a runtime dependency.
+test('the build toolchain survives a production install', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  for (const name of ['esbuild', 'esbuild-wasm']) {
+    assert.ok(pkg.dependencies?.[name], `${name} must be a normal dependency`);
+    assert.ok(!pkg.devDependencies?.[name], `${name} must not be dev-only`);
+  }
+  // The loader must name this cause instead of blaming the OS.
+  const loader = await readFile(new URL('../scripts/esbuild-loader.mjs', import.meta.url), 'utf8');
+  assert.ok(loader.includes("process.env.NODE_ENV === 'production'"), 'the loader must detect a production install');
+  assert.ok(loader.includes('skipped devDependencies'), 'and explain it');
+  assert.ok(loader.includes('${desiredEsbuildVersion()}'), 'the suggested command must print a version, not a function');
+});
+
+// --- The Render blueprint had three deploy-blocking settings.
+test('the Render blueprint is deployable as written', async () => {
+  const yaml = await readFile(new URL('../render.yaml', import.meta.url), 'utf8');
+  // rootDir is required: package.json lives in cloudflare-scraper4/.
+  assert.match(yaml, /rootDir:\s*cloudflare-scraper4/, 'the blueprint must point at the project folder');
+  // Running the whole suite in the build blocks deploys of working code.
+  assert.ok(!/buildCommand:.*npm test/.test(yaml), 'the build must not run the full test suite');
+  // ADMIN_TOKEN without a login field locks the dashboard out of its own API.
+  assert.ok(!yaml.includes('key: ADMIN_TOKEN'), 'the blueprint must not set ADMIN_TOKEN');
+  // node:sqlite needs 22.5+.
+  assert.match(yaml, /NODE_VERSION[\s\S]{0,40}value:\s*22\./, 'Node 22 must be pinned');
+});

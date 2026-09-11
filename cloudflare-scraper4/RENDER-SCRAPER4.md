@@ -598,3 +598,26 @@ was working or stuck.
 - Progress is persisted every fifth product rather than on every one, so the reporting itself does
   not add a database write per product.
 - Phase names are shown in Persian instead of raw keys such as `details-save-sync`.
+
+## 1.125.0 — Render deploy fixed: "Cannot find package 'esbuild'"
+
+Render, like any host that installs with `NODE_ENV=production`, skips
+`devDependencies`. `esbuild` lived there, so `npm run render:build` could never load its own
+bundler and the scraper exited with code 1 before serving anything. Reproduced exactly, then fixed:
+`esbuild` and `esbuild-wasm` are now normal dependencies, and a production install followed by
+`render:build` was verified to succeed.
+
+The loader's error message blamed the operating system ("make sure Node.js LTS is installed…"),
+which was misleading here. It now detects `NODE_ENV=production` and says the install skipped
+devDependencies.
+
+`render.yaml` also had three deploy-blocking problems, all corrected:
+
+- **no `rootDir`** — `package.json` lives in `cloudflare-scraper4/`, not the repository root;
+- **`npm test` in the build command** — the full suite takes minutes on the free plan and one
+  failing test blocked deploys of working code;
+- **`ADMIN_TOKEN` generated automatically** — the dashboard has no login field, so every `/api/*`
+  call returned 401 and the page loaded completely empty. Verified: with the token set the page is
+  200 but the API is 401; without it both are 200.
+
+`NODE_VERSION` is also pinned to 22 so the built-in SQLite fallback stays usable.

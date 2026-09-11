@@ -385,8 +385,9 @@ test('a build that cannot load native esbuild falls back to WebAssembly', async 
   // It must be a declared dependency; installing the native package with
   // --no-save prunes anything that is only present ad hoc.
   const pkg = JSON.parse(await readProjectFile('package.json'));
-  assert.ok(pkg.devDependencies['esbuild-wasm'], 'esbuild-wasm must be declared so it is always installed');
-  assert.equal(pkg.devDependencies['esbuild-wasm'], pkg.devDependencies.esbuild, 'both esbuild builds must be pinned together');
+  const declared = name => pkg.dependencies?.[name] || pkg.devDependencies?.[name];
+  assert.ok(declared('esbuild-wasm'), 'esbuild-wasm must be declared so it is always installed');
+  assert.equal(declared('esbuild-wasm'), declared('esbuild'), 'both esbuild builds must be pinned together');
 });
 
 test('esbuild failures never give Windows-only advice to Termux users', async () => {
