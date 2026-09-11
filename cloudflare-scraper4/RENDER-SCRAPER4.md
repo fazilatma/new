@@ -405,3 +405,28 @@ Every API call now sends only the caller's own headers, in both runtimes: Basala
 proxied) and the WooCommerce REST path. Scraping shop pages keeps the browser headers, because some
 shops serve a stripped page or a challenge without them — the two paths are now separated by an
 explicit, type-checked `apiMode` flag rather than one shared default.
+
+## 1.112.0 — a Basalam doctor you can run on the machine that fails
+
+The 401 cannot be reproduced from the build environment (it has no route to Basalam), so instead of
+guessing again, `scripts/basalam-doctor.mjs` runs **on the failing machine** and reports exactly
+what Basalam answers.
+
+```bash
+node scripts/basalam-doctor.mjs <token>
+# or let it read the saved token from a running instance:
+SCRAPER_URL=http://127.0.0.1:3000 ADMIN_TOKEN=xxx node scripts/basalam-doctor.mjs
+```
+
+It sends the same token four ways and prints the status, body and edge headers of each:
+
+| probe | headers | what it proves |
+| --- | --- | --- |
+| A | Accept + Authorization + Content-Type (exactly what `scraper4.php` sends) | the token on a clean request |
+| B | plus a browser `user-agent` and `accept-language` | whether a WAF is rejecting the browser disguise |
+| C | Authorization only | whether any extra header matters |
+| D | `vendors/{id}/products` | whether the failure is auth or scope/vendor |
+
+If A returns 200 the token is fine and the problem is in the app; if all of A/B/C return 401 the
+token itself is refused. The token is never printed — only its length, shape, expiry, scopes and a
+short non-reversible fingerprint, so the output is safe to share.

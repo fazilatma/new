@@ -1239,3 +1239,26 @@ test('JSON API calls are not disguised as a browser', async () => {
   assert.ok(worker.includes('new Headers(requestInit.headers).forEach'),
     'worker: caller headers must always be applied');
 });
+
+// --- The 401 could not be reproduced from the sandbox (no egress to Basalam),
+// so ship a diagnostic the user can run ON the failing machine.
+test('the Basalam doctor probes every header shape without leaking the token', async () => {
+  const doctor = await readFile(new URL('../scripts/basalam-doctor.mjs', import.meta.url), 'utf8');
+  // It must compare the PHP-style minimal headers against the browser-shaped ones.
+  assert.ok(doctor.includes('minimal (PHP-style) headers'), 'probe A missing');
+  assert.ok(doctor.includes('with a browser user-agent'), 'probe B missing');
+  assert.ok(doctor.includes('Authorization only'), 'probe C missing');
+  assert.ok(doctor.includes('vendor products (read)'), 'probe D missing');
+  // The token must never be printed, only described.
+  assert.ok(doctor.includes('function fingerprint('), 'the token must be fingerprinted, not shown');
+  // The token may only reach console.log through describe(), never raw.
+  for (const call of doctor.match(/console\.log\([^\n]*\)/g) || []) {
+    const stripped = call.replace(/describe\(token\)/g, 'DESCRIBED');
+    assert.ok(!/\btoken\b(?!\s*(?:source|:))/.test(stripped.replace(/'[^']*'/g, "''")),
+      `the raw token must never be logged: ${call.slice(0, 60)}`);
+  }
+  // It must not boot a second copy of the server to read the token.
+  assert.ok(!doctor.includes("import('../render-dist/server.js')"),
+    'the doctor must not import the server entrypoint');
+  assert.ok(doctor.includes('/api/connections'), 'it should read from a running instance');
+});
