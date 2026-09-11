@@ -473,3 +473,19 @@ product has no image at all.
   selector is set, the selectors are auto-discovered first; if discovery also finds nothing the
   stage is skipped and says so, instead of silently fetching everything. The job log also reports
   how many products were enriched. Applied to both runtimes.
+
+## 1.119.0 — the AI proxy URL was wrapped twice (real cause of 1042 and the 404s)
+
+Your proxy was fine. The bug was ours.
+
+`networkFetch()` wrapped the target in the proxy URL — `proxy/?url=https://api.openai.com/…` — and
+then passed the result to `safeFetch()`, which applied the *same* connection setting again and
+wrapped it a **second** time. The proxy was therefore asked to fetch **itself**, which is a real
+"Worker fetching a Worker on the same zone" — exactly what Cloudflare rejects with `error code:
+1042`, returned as 404 for every model.
+
+An already-proxied URL now bypasses the second wrap (`directRoute`), in the live model call as well
+as in the diagnostic. Verified: the request is wrapped exactly once.
+
+The previous release's advice to enable `global_fetch_strictly_public` is withdrawn — the problem
+was never in your Cloudflare settings.

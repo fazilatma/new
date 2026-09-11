@@ -151,7 +151,7 @@ export async function resetAiTestRun():Promise<void>{
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}
 export async function getLeaderboard(){return leaderboard(await getState<any>('ai_votes',{scores:{},history:[]}))}
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
-async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertPublicUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=viaWorkerUrl(net.workerUrl,url);return safeFetch(target,init,3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(privateIp(ip))throw Error('IP خصوصی برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,init,3_000_000)}
+async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertPublicUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=viaWorkerUrl(net.workerUrl,url);return safeFetch(target,{...init,directRoute:true},3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(privateIp(ip))throw Error('IP خصوصی برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,init,3_000_000)}
 async function doh(host:string,url:string){const endpoint=url+(url.includes('?')?'&':'?')+'name='+encodeURIComponent(host)+'&type=A',r=await safeFetch(endpoint,{headers:{accept:'application/dns-json'}},500_000),j=await r.json() as any,ip=(j.Answer||[]).find((x:any)=>x.type===1)?.data;if(!ip)throw Error('DoH پاسخی برای دامنه نداد');return String(ip)}
 
 /**
@@ -195,7 +195,7 @@ export async function aiConnectionDiagnostic() {
   if (mode === 'worker' && net.workerUrl) {
     const target = viaWorkerUrl(String(net.workerUrl), probeTarget);
     try {
-      const response = await safeFetch(target, { headers: { accept: 'application/json' } }, 2_000_000);
+      const response = await safeFetch(target, { headers: { accept: 'application/json' }, directRoute: true }, 2_000_000);
       const text = (await response.text().catch(() => '')).slice(0, 400);
       // A forwarding proxy reaches the provider, which then complains about the
       // missing key. That is a HEALTHY proxy: it proves the hop works.
@@ -211,15 +211,13 @@ export async function aiConnectionDiagnostic() {
         // the global_fetch_strictly_public compatibility flag is set on both.
         // Without naming it, this looks like a broken proxy and is unfixable.
         if (/error code:\s*1042/i.test(text) || response.status === 1042) {
-          // This runtime is plain Node (Termux/VPS/cPanel), not a Worker, so the
-          // "same-account Worker fetch" restriction cannot apply to OUR request:
-          // Cloudflare only blocks Worker-to-Worker calls. Receiving 1042 here
-          // therefore means the response came from Cloudflare's edge instead of a
-          // running proxy -- almost always because no Worker is deployed on that
-          // hostname (a deleted/renamed Worker, or a route that was never created).
-          recommendations.push('کلودفلر برای این آدرس خطای ۱۰۴۲ برگرداند. چون این محیط یک سرور Node محلی است (نه Worker)، محدودیت «Worker به Worker» به درخواست شما مربوط نیست؛ یعنی روی این آدرس هیچ Workerِ فعالی مستقر نیست و پاسخ را خودِ لبهٔ کلودفلر داده است.');
-          recommendations.push('آدرس را در مرورگر باز کنید: اگر Worker مستقر باشد باید صفحهٔ /health آن پاسخ بدهد. فایل آمادهٔ scripts/ai-proxy-worker.js را در یک Worker جدید کپی و Deploy کنید و سپس همان آدرس workers.dev را اینجا بگذارید.');
-          recommendations.push('اگر پراکسی را از داخل یک Worker دیگرِ همان حساب کلودفلر صدا می‌زنید (نه از ترموکس)، آن‌وقت باید پرچم global_fetch_strictly_public را روی هر دو Worker فعال کنید.');
+          // 1042 means Cloudflare saw a Worker fetching a Worker on the same
+          // zone. From this Node runtime that can only happen if the target URL
+          // is ALREADY a proxy URL, i.e. it got wrapped twice and the proxy was
+          // asked to fetch itself. That double-wrap is fixed (directRoute), so
+          // if it still appears the saved Worker address is itself a proxy link.
+          recommendations.push('خطای ۱۰۴۲ کلودفلر یعنی پراکسی در نهایت خودش را صدا زده است. مطمئن شوید در فیلد «آدرس Worker» فقط آدرس سادهٔ پراکسی باشد (مثل https://proxy.example.workers.dev/) و خودش شامل ?url= نباشد.');
+          recommendations.push('اگر آدرس درست است، این نسخه اشکال «دوبار بسته‌بندی شدن آدرس» را رفع کرده؛ کافی است به‌روزرسانی کنید و دوباره تست بگیرید.');
         } else {
           recommendations.push('Worker واسط باید پارامتر url را بگیرد و متد، هدرها (به‌ویژه authorization) و بدنهٔ درخواست را بدون تغییر ارسال کند.');
         }

@@ -1403,19 +1403,34 @@ test('Workers invocations and subrequests are metered', async () => {
   assert.ok(dashboard.includes("d.peakSubrequests"), 'the bar must show peak subrequests');
 });
 
-// --- The 1042 advice was written for Cloudflare but lives in render-src, which
-// is the Node runtime (Termux/VPS/cPanel). A plain Node client is not a Worker,
-// so the same-account restriction cannot apply to its request.
-test('the 1042 hint matches the runtime it is shown in', async () => {
+// --- THE model-test 404: the AI proxy URL was wrapped TWICE. networkFetch()
+// built proxy?url=<target> and then handed it to safeFetch(), which applied
+// sourceNetwork (populated from the same ai.network) and wrapped it again, so
+// the proxy was told to fetch ITSELF. That is a genuine same-zone Worker call,
+// which Cloudflare rejects with "error code: 1042" -> 404 for every model.
+test('the AI proxy URL is wrapped exactly once', async () => {
   const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
-  assert.ok(ai.includes('چون این محیط یک سرور Node محلی است'),
-    'the Node runtime must say the Worker-to-Worker rule does not apply to it');
-  assert.ok(ai.includes('scripts/ai-proxy-worker.js'), 'it must point at the deployable proxy');
-  // The Cloudflare-only instruction may still appear, but only as the caveat for
-  // people calling the proxy FROM another Worker -- never as the primary fix.
-  const primary = ai.indexOf('چون این محیط یک سرور Node محلی است');
-  const caveat = ai.indexOf('global_fetch_strictly_public', primary);
-  assert.ok(caveat > primary, 'the Cloudflare flag must come after the Node explanation');
+  // Every place that pre-wraps a URL must opt out of the second wrap.
+  for (const line of ai.split('\n')) {
+    if (!line.includes('viaWorkerUrl(')) continue;
+    if (line.includes('export function')) continue;
+    const idx = ai.indexOf(line);
+    const following = ai.slice(idx, idx + 600);
+    assert.ok(following.includes('directRoute'),
+      `a pre-wrapped URL must set directRoute, otherwise it is proxied twice: ${line.trim().slice(0, 80)}`);
+  }
+  // The real model call path, not just the diagnostic.
+  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true},3_000_000)"),
+    'networkFetch must not let safeFetch re-proxy an already-proxied URL');
+
+  // Behavioural proof of the double-wrap that caused 1042.
+  const via = (w, t) => w.includes('{url}') ? w.replace('{url}', encodeURIComponent(t))
+    : w + (w.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(t);
+  const proxy = 'https://proxy.example.workers.dev/';
+  const once = via(proxy, 'https://api.openai.com/v1/models');
+  const twice = via(proxy, once);
+  assert.equal((once.match(/proxy\.example/g) || []).length, 1, 'one wrap is correct');
+  assert.equal((twice.match(/proxy\.example/g) || []).length, 2, 'two wraps make the proxy fetch itself');
 });
 
 // --- Detail extraction fetched every product page even with no detail selector
