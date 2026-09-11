@@ -205,7 +205,18 @@ export async function aiConnectionDiagnostic() {
           ? `Worker واسط درخواست را به مقصد رساند (کد ${response.status}). مسیر غیرمستقیم سالم است.`
           : `Worker واسط پاسخ داد ولی درخواست را به مقصد نرساند (کد ${response.status}).`,
         { target, status: response.status, sample: text });
-      if (!forwarded) recommendations.push('Worker واسط باید پارامتر url را بگیرد و متد، هدرها (به‌ویژه authorization) و بدنهٔ درخواست را بدون تغییر ارسال کند.');
+      if (!forwarded) {
+        // Cloudflare error 1042 is emitted by the EDGE, before the proxy Worker
+        // runs: a Worker may not fetch another Worker on the same account unless
+        // the global_fetch_strictly_public compatibility flag is set on both.
+        // Without naming it, this looks like a broken proxy and is unfixable.
+        if (/error code:\s*1042/i.test(text) || response.status === 1042) {
+          recommendations.push('خطای ۱۰۴۲ کلودفلر: یک Worker نمی‌تواند Worker دیگری از همان حساب را صدا بزند. در تنظیمات هر دو Worker (این اسکرپر و Worker واسط) گزینهٔ Settings ← Runtime ← Compatibility flags را باز کنید و پرچم global_fetch_strictly_public را اضافه و دوباره Deploy کنید.');
+          recommendations.push('راه دوم: Worker واسط را روی یک حساب کلودفلر دیگر مستقر کنید، یا برای آن یک دامنهٔ اختصاصی (Custom Domain) تعریف کنید و همان آدرس را اینجا بگذارید.');
+        } else {
+          recommendations.push('Worker واسط باید پارامتر url را بگیرد و متد، هدرها (به‌ویژه authorization) و بدنهٔ درخواست را بدون تغییر ارسال کند.');
+        }
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       add('worker-proxy', false, `Worker واسط در دسترس نیست: ${detail}`, { target });

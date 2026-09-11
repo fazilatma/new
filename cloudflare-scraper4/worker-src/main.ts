@@ -1,6 +1,6 @@
 import { app, scheduledTasks } from './app.js';
 import { configureEnv, type Env } from './env.js';
-import { ensureSchema, flushD1Usage, listQueuedJobs } from './db.js';
+import { ensureSchema, flushD1Usage, listQueuedJobs, meterInvocation } from './db.js';
 import { processJob } from './processor.js';
 import { listQueuedBackgroundRuns, processBackgroundMessage } from './background.js';
 import { isWriteQuotaError } from './utils.js';
@@ -12,9 +12,9 @@ type QueueMessage<T>={body:T;ack():void;retry(options?:{delaySeconds?:number}):v
 type MessageBatch<T>={messages:Array<QueueMessage<T>>;queue:string};
 
 export default {
-  fetch: app.fetch,
+  fetch(request:Request,env:Env,ctx:any){meterInvocation();return app.fetch(request,env,ctx)},
   async queue(batch:MessageBatch<JobMessage>,env:Env,ctx:ExecutionContext):Promise<void>{
-    configureEnv(env);await ensureSchema(env.DB);
+    meterInvocation();configureEnv(env);await ensureSchema(env.DB);
     for(const item of batch.messages){
       try{
         if(item.body?.task==='ai-test'||item.body?.task==='category-all'||item.body?.task==='dedup'||item.body?.task==='agent'){
@@ -77,6 +77,7 @@ export default {
     flushD1Usage(promise=>ctx.waitUntil(promise));
   },
   async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext):Promise<void>{
+    meterInvocation();
     await scheduledTasks(env,promise=>ctx.waitUntil(promise));
     flushD1Usage(promise=>ctx.waitUntil(promise));
   }

@@ -1,3 +1,4 @@
+import { meterSubrequest } from './db.js';
 import { getEnv } from './env.js';
 import { loadConnections } from './connections.js';
 
@@ -43,6 +44,7 @@ export async function safeFetch(raw:string,init:ApiRequestInit={},maxBytes?:numb
       const requestHeaders=apiMode?new Headers():new Headers({'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',accept:'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5','accept-language':'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6','cache-control':'no-cache'});
       new Headers(requestInit.headers).forEach((value,name)=>requestHeaders.set(name,value));
       const {apiMode:_apiMode,...fetchInit}=requestInit as any;
+      meterSubrequest();
       const response=await fetch(url.href,{...fetchInit,redirect:'manual',signal:controller.signal,headers:requestHeaders});
       if([301,302,303,307,308].includes(response.status)){
         const location=response.headers.get('location');await response.body?.cancel();if(!location)throw new Error('Redirect without location');const nextUrl=assertPublicUrl(new URL(location,url).href);requestInit=redirectedInit(requestInit,url,nextUrl,response.status);url=nextUrl;continue;

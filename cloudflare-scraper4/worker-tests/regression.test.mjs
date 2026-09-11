@@ -1369,3 +1369,36 @@ test('the task manager shows the D1 daily quota', async () => {
   const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
   assert.ok(server.includes("'/api/quota'"), 'the Node runtime must answer /api/quota');
 });
+
+// --- Cloudflare error 1042: a Worker may not fetch another Worker on the same
+// account. Routing AI traffic through a user-deployed proxy Worker hits it, and
+// the edge answers 404 before the proxy ever runs.
+test('the same-account proxy restriction is handled and explained', async () => {
+  const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  assert.match(wrangler, /compatibility_flags\s*=\s*\[[^\]]*global_fetch_strictly_public/,
+    'the flag that permits same-account Worker fetches must be set');
+  const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(/error code:\\s\*1042/.test(ai) || ai.includes('1042'), 'the diagnostic must detect 1042');
+  assert.ok(ai.includes('global_fetch_strictly_public'), 'it must name the exact fix');
+});
+
+// --- AI work never touches D1, so the quota panel understated the real ceiling.
+test('Workers invocations and subrequests are metered', async () => {
+  const db = await readFile(new URL('../worker-src/db.ts', import.meta.url), 'utf8');
+  for (const token of ['export function meterInvocation(', 'export function meterSubrequest(',
+    'WORKERS_FREE_DAILY_REQUESTS', 'WORKERS_FREE_SUBREQUESTS_PER_INVOCATION', 'peakSubrequests'])
+    assert.ok(db.includes(token), `db.ts must define ${token}`);
+
+  // Counted at every entry point, and on every outbound call.
+  const main = await readFile(new URL('../worker-src/main.ts', import.meta.url), 'utf8');
+  assert.equal((main.match(/meterInvocation\(\)/g) || []).length, 3,
+    'fetch, queue and scheduled must each count one invocation');
+  const network = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(network.includes('meterSubrequest();'), 'every outbound fetch must be counted');
+  // db.ts must not import network.ts back, or the metering would be circular.
+  assert.ok(!db.includes("from './network.js'"), 'db.ts must not import network.ts');
+
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('اجرای Worker'), 'the bar must show the Workers group');
+  assert.ok(dashboard.includes("d.peakSubrequests"), 'the bar must show peak subrequests');
+});

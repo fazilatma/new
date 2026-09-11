@@ -441,3 +441,19 @@ is gone.
 the 422 arrived with no explanation. A 422 that names `photo` now reports which image failed and
 why — for example `آپلود تصویر ناموفق بود … علت: a.jpg: HTTP 413` — or states plainly that the
 product has no image at all.
+
+## 1.117.0 — Cloudflare error 1042 on the AI proxy, and Workers-plan quota
+
+- **Diagnosed `error code: 1042`.** Cloudflare does not allow a Worker to fetch **another Worker on
+  the same account**; the edge answers 404 *before* the proxy Worker runs, which is why the AI
+  diagnostic reported "the proxy replied but did not forward the request". Added the documented fix,
+  `compatibility_flags = ["global_fetch_strictly_public"]`, to `wrangler.toml`.
+  **You must also enable that flag in the Cloudflare dashboard for BOTH Workers** (this scraper and
+  the proxy): *Settings → Runtime → Compatibility flags*, then Deploy. Alternatively, host the proxy
+  on a different Cloudflare account, or give it a Custom Domain and use that address. The AI
+  diagnostic now recognises 1042 and prints these exact steps instead of a generic message.
+- **The quota bar now covers AI work.** AI calls write nothing to D1, so they were invisible. Two
+  rows were added: Worker invocations per day (100,000 on Free) and the **peak number of outbound
+  requests in a single invocation** (50 on Free) — the limit that actually constrains model testing.
+  Invocations are counted in the fetch, queue and scheduled handlers; every outbound `fetch()` is
+  counted in one place in `network.ts`.

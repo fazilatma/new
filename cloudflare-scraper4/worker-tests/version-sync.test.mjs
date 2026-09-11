@@ -664,7 +664,7 @@ test('D1 usage is measured from real query meta, not guessed', async () => {
   const start = db.indexOf('export const D1_FREE_DAILY_ROWS_READ');
   const body = db.slice(start, db.indexOf('async function rows<T = any>'))
     .replace(/export /g, '')
-    .replace(/^type D1Usage = .*$/m, '')
+    .replace(/^type D1Usage = [\s\S]*?\};$/m, '')
     .replace(/let usageFlushing: Promise<void> \| null = null;/, 'let usageFlushing = null;')
     .replace(/: D1Usage/g, '').replace(/<D1Usage>/g, '')
     .replace(/\(at: Date = new Date\(\)\)/, '(at = new Date())')
@@ -673,7 +673,10 @@ test('D1 usage is measured from real query meta, not guessed', async () => {
     .replace(/function maybeFlushUsage\(waitUntil\?: \([^)]*\) => void\): void/, 'function maybeFlushUsage(waitUntil)')
     .replace(/async function getD1Usage\(\): Promise<\{[\s\S]*?\}> \{/, 'async function getD1Usage(){')
     .replace(/function flushD1Usage\(waitUntil\?: \([^)]*\) => void\): void/, 'function flushD1Usage(waitUntil)')
-    .replace(/const pct = \(used: number, limit: number\)/, 'const pct = (used, limit)');
+    .replace(/const pct = \(used: number, limit: number\)/, 'const pct = (used, limit)')
+    .replace(/function meterInvocation\(\): void/, 'function meterInvocation()')
+    .replace(/function meterSubrequest\(\): void/, 'function meterSubrequest()')
+    .replace(/function subrequestsUsed\(\): number/, 'function subrequestsUsed()');
 
   const build = stored => new Function(`
     let __store=${JSON.stringify(stored)},__sets=0,__fail=false;
