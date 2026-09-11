@@ -1441,7 +1441,8 @@ test('detail extraction is skipped or bootstrapped when no selector is set', asy
   assert.ok(node.includes('هیچ سلکتور جزئیاتی تنظیم نشده'),
     'it must try to discover detail selectors before fetching every product');
   // The main loop is guarded.
-  assert.ok(/if \(hasDetailSelectors\(profile\.selectors\)\) \{\s*await mapLimit\(products/.test(node),
+  const guarded = node.slice(node.indexOf('if (hasDetailSelectors(profile.selectors)) {'));
+  assert.ok(guarded.slice(0, 900).includes('await mapLimit(products'),
     'the per-product detail loop must be guarded');
   assert.ok(node.includes('استخراج جزئیات'), 'the job log must report the detail stage');
 
@@ -1608,4 +1609,32 @@ test('every pagination mode the UI offers is accepted and implemented', async ()
   assert.ok(processor.includes('followUrl'), 'the next link must carry between pages');
   assert.ok(processor.includes('scraped.nextUrl'), 'the scraper must return the next link');
   assert.ok(scraper.includes('nextUrl?:string'), 'ScrapeListResult must expose nextUrl');
+});
+
+// --- The detail stage ran silently: it never updated job.processed/total and
+// never saved, so the queue card froze on the list-phase numbers for the whole
+// stage and there was no way to tell it was working.
+test('the detail stage reports progress live', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('job.total = products.length; job.processed = 0;'),
+    'the detail stage must own the progress counter');
+  assert.ok(/done\+\+; job\.processed = done;/.test(node), 'progress must advance per product');
+  // Saving every product would cost one DB write each; every fifth is enough.
+  assert.ok(node.includes('done % 5 === 0 || done === products.length'),
+    'progress must be persisted periodically, not per product');
+  assert.ok(node.includes('جزئیات خوانده شد'), 'each product must appear in the live log');
+  assert.ok(node.includes('محصول تکمیل شد'), 'the stage must report how many were enriched');
+
+  // The Worker is checkpointed and already counts per product; it only needed
+  // the same per-product log line.
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('جزئیات خوانده شد'), 'the worker must log each product too');
+
+  // Phases must be shown by name, not as raw keys like "details-save-sync".
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function phaseLabel('), 'phases need readable labels');
+  assert.ok(dashboard.includes("esc(phaseLabel(job.phase))"), 'the job card must use them');
+  for (const phase of ['list', 'details', 'details-save-sync', 'sync'])
+    assert.ok(dashboard.includes(`'${phase}'`) || dashboard.includes(`${phase}:`),
+      `phaseLabel must cover ${phase}`);
 });

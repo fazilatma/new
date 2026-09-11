@@ -584,3 +584,17 @@ re-reading page 1.
 
 For a site whose URLs look like `/page/2/`, the simple **مسیر /page/2/** option is enough — a
 next-button selector is not required.
+
+## 1.124.0 — the detail stage now reports progress live
+
+The detail stage was silent: it never updated the job counter and never saved, so the queue card
+stayed frozen on the list-phase numbers for the whole stage and there was no way to tell whether it
+was working or stuck.
+
+- The stage owns its own counter now (for example "45 of 301") and advances per product.
+- Every product whose details are read is written to the live log as a clickable row, and a failure
+  is reported per product with its own name.
+- The stage ends with how many products were actually enriched.
+- Progress is persisted every fifth product rather than on every one, so the reporting itself does
+  not add a database write per product.
+- Phase names are shown in Persian instead of raw keys such as `details-save-sync`.

@@ -139,12 +139,27 @@ export async function processOneJob(): Promise<boolean> {
           }
         }
         if (hasDetailSelectors(profile.selectors)) {
+          job.total = products.length; job.processed = 0; await save(job);
+          let done = 0, enriched = 0;
           await mapLimit(products, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
             if (await stopRequested(job.id)) return;
-            try { await scrapeDetails(product, profile.selectors); }
-            catch (error) { job.failed++; append(job, `${product.title}: ${message(error)}`, 'error'); }
+            try {
+              const before = productNeedsEnrichment(product).any;
+              await scrapeDetails(product, profile.selectors);
+              if (before && !productNeedsEnrichment(product).any) enriched++;
+              append(job, `${product.title}: جزئیات خوانده شد.`, 'info', 'updated',
+                reportItem(product, { price: Number(product.price) || undefined }));
+            } catch (error) {
+              job.failed++;
+              append(job, `${product.title}: جزئیات: ${message(error)}`, 'error', 'failed',
+                reportItem(product, { error: message(error) }));
+            }
+            // Save every few products: often enough to look live, rare enough
+            // not to write a row per product.
+            done++; job.processed = done;
+            if (done % 5 === 0 || done === products.length) await save(job);
           });
-          append(job, `استخراج جزئیات ${products.length} محصول انجام شد.`);
+          append(job, `استخراج جزئیات ${products.length} محصول انجام شد؛ ${enriched} محصول تکمیل شد.`);
         }
         // SCRAPER-FIRST RESCUE (before any AI): products can come back with an
         // empty description simply because the detail selectors do not match

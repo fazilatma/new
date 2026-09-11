@@ -147,7 +147,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   await mapLimit(batch,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));
     if(!hasDetailSelectors(profile.selectors))return;
-    try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title}: جزئیات: ${errorText}؛ اطلاعات معتبر قبلی حفظ شد.`,'error','failed',reportItem(product,{error:errorText}))}
+    try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)));append(job,`${product.title}: جزئیات خوانده شد.`,'info','updated',reportItem(product,{price:Number(product.price)||undefined}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title}: جزئیات: ${errorText}؛ اطلاعات معتبر قبلی حفظ شد.`,'error','failed',reportItem(product,{error:errorText}))}
   });
   // SCRAPER-FIRST RESCUE (before any AI): an empty description usually means
   // the detail selectors do not match THIS product's template, not that the
