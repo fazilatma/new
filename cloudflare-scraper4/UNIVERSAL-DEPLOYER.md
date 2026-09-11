@@ -407,3 +407,23 @@ revoked or belongs to a different account: create a new personal access token wi
   **«مقصد پاسخ نداد»** state (⛔, pink). The complete table renders again — every product row, every
   destination column — with the per-destination errors listed above it. Unreachable cells sort to
   the top so they are seen first. Fixed in both runtimes.
+
+## 1.110.0 — Basalam sending matched to the PHP reference (scraper4.php v10.91)
+
+The reference implementation was read from `fazilatma/code` and two decisive differences were
+found. Both are now fixed:
+
+- **A product must be created as a draft.** `bslSendProduct()` creates every product with
+  `status = 3790` (UNPUBLISHED). We were creating straight into `2976` (PUBLISHED).
+- **The create call must not carry photos.** The PHP payload contains no `photo`/`photos` keys at
+  all: `['name','brief','description','primary_price','stock','preparation_days','weight',
+  'package_weight','is_wholesale','category_id','status']` plus an optional `sku`. Photos are
+  uploaded to `/files` and attached **afterwards**, together with `status = 2976`, in a separate
+  `PATCH`.
+
+Sending now performs exactly those two steps: create the draft without photos, then PATCH to
+publish with the uploaded photo ids. If the second step fails the product is not lost — it already
+exists and the next sync completes it.
+
+Also confirmed from the reference: the PHP auth header is plain `Authorization: Bearer <token>`,
+identical to ours, so the header format was never the problem.

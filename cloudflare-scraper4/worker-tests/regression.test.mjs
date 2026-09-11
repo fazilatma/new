@@ -915,7 +915,7 @@ test('the Basalam payload uses primary_price, an integer photo id and a status',
     const body = source.slice(start, start + 1400);
     assert.ok(body.includes('primary_price:'), `${file}: must send primary_price`);
     assert.ok(!/[^_]\bprice:/.test(body), `${file}: must not send the rejected "price" field`);
-    assert.ok(body.includes('status:BASALAM_STATUS_PUBLISHED'), `${file}: status is required`);
+    assert.ok(/status:(?:creating\?BASALAM_STATUS_DRAFT:)?BASALAM_STATUS_PUBLISHED/.test(body), `${file}: status is required`);
     assert.ok(!/photo:product\.image/.test(source), `${file}: photo must never be an image URL`);
     assert.ok(source.includes('const BASALAM_STATUS_PUBLISHED=2976'), `${file}: PUBLISHED is 2976`);
     assert.ok(source.includes('uploadBasalamPhotos'), `${file}: must upload photos to get ids`);
@@ -1185,4 +1185,24 @@ test('the reconciliation table still renders when destinations fail', async () =
     'unreachable rows must sort to the top');
   assert.ok(dashboard.includes('cells:{},worst:5}'),
     'the worst-rank sentinel must match the new ranking');
+});
+
+// --- Parity with the PHP reference (scraper4.php v10.91, fazilatma/code).
+// bslSendProduct() creates every product as status 3790 (draft) and never sends
+// `photo`/`photos` in the create call; photos and status 2976 are attached in a
+// second PATCH. Creating straight into 2976 with photo ids is rejected.
+test('Basalam products are created as a draft, then published with photos', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('const BASALAM_STATUS_DRAFT=3790'), `${file}: draft status missing`);
+    assert.ok(source.includes('creating?BASALAM_STATUS_DRAFT:BASALAM_STATUS_PUBLISHED'),
+      `${file}: create must use the draft status`);
+    assert.ok(source.includes('creating?[]:photoIds.filter'),
+      `${file}: photo ids must never be sent on create`);
+    assert.ok(source.includes('basalamPayload(product,c,account,categoryId,photoIds,!existing)'),
+      `${file}: the create/update distinction must reach the payload builder`);
+    // The publishing PATCH must exist and must not be able to lose the product.
+    assert.ok(source.includes('status:BASALAM_STATUS_PUBLISHED}'), `${file}: publish PATCH missing`);
+    assert.ok(/if\(!existing&&newId>0\)/.test(source), `${file}: publish only after a create`);
+  }
 });

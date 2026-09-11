@@ -41,6 +41,8 @@ type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transpo
  * "Input should be a valid integer" and omitting status produced "Field required".
  */
 const BASALAM_STATUS_PUBLISHED=2976;
+/** Basalam draft status. The PHP reference creates every product here first. */
+const BASALAM_STATUS_DRAFT=3790;
 type BasalamPayload={name:string;primary_price:number;stock:any;description:string;status:number;photo?:number;photos?:number[];category_id?:number;weight:any;package_weight:any;preparation_days:any;sku?:string};
 /**
  * A raw `401 invalid authorization header` tells the user nothing about what to
@@ -113,10 +115,10 @@ function basalamAuthHint(status:number,token=''):string{
   if(status===403)return 'توکن دسترسی (Scope) لازم برای این عملیات را ندارد. — ';
   return '';
 }
-function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[]):BasalamPayload{
-  const payload:BasalamPayload={name:product.title,primary_price:basalamPrice(product,account.pricePercent||0),stock:product.stock??c.stock,description:product.longDesc||product.shortDesc||'',status:BASALAM_STATUS_PUBLISHED,category_id:categoryId,weight:product.weight||c.weight,package_weight:c.packageWeight,preparation_days:c.preparationDays};
+function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[],creating=false):BasalamPayload{
+  const payload:BasalamPayload={name:product.title,primary_price:basalamPrice(product,account.pricePercent||0),stock:product.stock??c.stock,description:product.longDesc||product.shortDesc||'',status:creating?BASALAM_STATUS_DRAFT:BASALAM_STATUS_PUBLISHED,category_id:categoryId,weight:product.weight||c.weight,package_weight:c.packageWeight,preparation_days:c.preparationDays};
   if(product.sku)payload.sku=String(product.sku).slice(0,100);
-  const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
+  const ids=creating?[]:photoIds.filter(id=>Number.isFinite(id)&&id>0);
   if(ids.length){payload.photo=ids[0];payload.photos=ids.slice(0,10)}
   return payload;
 }
@@ -186,7 +188,16 @@ async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,e
   }
 }
 async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:Number(body?.id||body?.product?.id||existing),body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
-async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds);response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
+async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds,!existing);response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);const newId=Number(body.id||body.product?.id||existing);
+  // scraper4.php parity: publish the freshly created draft and attach the photo
+  // ids in a second PATCH. A failure here must not lose the created product.
+  if(!existing&&newId>0){
+    const finish:Record<string,any>={status:BASALAM_STATUS_PUBLISHED};
+    const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
+    if(ids.length){finish.photo=ids[0];finish.photos=ids.slice(0,10)}
+    try{await safeBasalamFetch(`${base}/${newId}`,{method:'PATCH',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(finish)},3_000_000)}catch{}
+  }
+  return{id:newId,body}}
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
   const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');

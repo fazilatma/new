@@ -76,6 +76,8 @@ type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transpo
  *   - the price field is `primary_price`, not `price`.
  */
 const BASALAM_STATUS_PUBLISHED=2976;
+/** Basalam draft status. The PHP reference creates every product here first. */
+const BASALAM_STATUS_DRAFT=3790;
 type BasalamPayload={name:string;primary_price:number;stock:any;description:string;status:number;photo?:number;photos?:number[];category_id?:number;weight:any;package_weight:any;preparation_days:any;sku?:string};
 
 /**
@@ -149,13 +151,14 @@ function basalamAuthHint(status:number,token=''):string{
   if(status===403)return 'توکن دسترسی (Scope) لازم برای این عملیات را ندارد. — ';
   return '';
 }
-function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[]):BasalamPayload{
+function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:number|undefined,photoIds:number[]=[],creating=false):BasalamPayload{
   const payload:BasalamPayload={
     name:product.title,
     primary_price:basalamPrice(product,account.pricePercent||0),
     stock:product.stock??c.stock,
     description:(product.longDesc||product.shortDesc||'')+(product.variations?.length?`\n\nتنوع‌ها: ${product.variations.join('، ')}`:''),
-    status:BASALAM_STATUS_PUBLISHED,
+    // Create as a draft, exactly like scraper4.php; the PATCH below publishes it.
+    status:creating?BASALAM_STATUS_DRAFT:BASALAM_STATUS_PUBLISHED,
     category_id:categoryId,
     weight:product.weight||c.weight,
     package_weight:c.packageWeight,
@@ -164,7 +167,8 @@ function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:
   if(product.sku)payload.sku=String(product.sku).slice(0,100);
   // Only send photo ids we actually obtained; an empty/failed upload must not
   // put a string (or a 0) into an integer field.
-  const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
+  // The reference implementation never sends photo ids on create — only on update.
+  const ids=creating?[]:photoIds.filter(id=>Number.isFinite(id)&&id>0);
   if(ids.length){payload.photo=ids[0];payload.photos=ids.slice(0,10)}
   return payload;
 }
@@ -233,13 +237,24 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
   let response:Response|undefined,body:any={},usedCategory: number|undefined;
   for(const categoryId of categories){
     usedCategory=categoryId;
-    const payload=basalamPayload(product,c,account,categoryId,photoIds);
+    const payload=basalamPayload(product,c,account,categoryId,photoIds,!existing);
     response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
     body=await response.json().catch(()=>({}));
     if(response.ok)break;
   }
   if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);
-  return{id:Number(body.id||body.product?.id||existing),body,categoryId:usedCategory};
+  const newId=Number(body.id||body.product?.id||existing);
+  // scraper4.php parity: a freshly created product is a draft with no photos.
+  // Publish it and attach the uploaded photo ids in a second PATCH. A failure
+  // here must not lose the product, which already exists at this point.
+  if(!existing&&newId>0){
+    const finish:Record<string,any>={status:BASALAM_STATUS_PUBLISHED};
+    const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
+    if(ids.length){finish.photo=ids[0];finish.photos=ids.slice(0,10)}
+    try{await safeBasalamFetch(`${base}/${newId}`,{method:'PATCH',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(finish)},3_000_000)}
+    catch{/* the product exists; publishing can be retried by a later sync */}
+  }
+  return{id:newId,body,categoryId:usedCategory};
 }
 
 export async function syncBasalam(product:Product,profile:Profile):Promise<BasalamSyncResult[]>{
