@@ -1449,3 +1449,53 @@ test('detail extraction is skipped or bootstrapped when no selector is set', asy
   assert.ok(worker.includes('if(!hasDetailSelectors(profile.selectors))return;'),
     'the Worker runtime must skip the page fetch too');
 });
+
+// --- 1,200 products scraped but only ~20 stored. sourceKey is a hash of the
+// canonical URL, and canonicalUrl(stripAllQuery=true) deleted the WHOLE query
+// string, so every product of a shop whose links are /product?id=N collapsed to
+// the same identity and upserted over each other.
+test('product identity keeps identifying query parameters', async () => {
+  const scraper = await readFile(new URL('../worker-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(!scraper.includes("if(stripAllQuery)url.search='';"),
+    'the whole query string must not be discarded: it carries the product id');
+  assert.ok(scraper.includes('const PAGING_PARAMS='), 'paging noise needs its own list');
+  assert.ok(/stripAllQuery\)\{[\s\S]{0,400}PAGING_PARAMS\.test\(key\)/.test(scraper),
+    'only tracking and paging parameters may be stripped');
+
+  // Behavioural proof of the collapse and the fix.
+  const TRACKING = /^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
+  const PAGING = /^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
+  const canon = (raw, stripAll) => {
+    const url = new URL(raw); url.hash = '';
+    if (stripAll) { for (const k of [...url.searchParams.keys()]) if (TRACKING.test(k) || PAGING.test(k)) url.searchParams.delete(k); url.searchParams.sort(); }
+    return url.toString().replace(/\/$/, '');
+  };
+  const urls = ['https://s.ir/p?id=1', 'https://s.ir/p?id=2', 'https://s.ir/p?id=3'];
+  assert.equal(new Set(urls.map(u => canon(u, true))).size, 3, 'distinct products must stay distinct');
+  assert.equal(canon('https://s.ir/p/x?utm_source=a', true), canon('https://s.ir/p/x?utm_source=b', true),
+    'tracking parameters must still collapse');
+  assert.equal(canon('https://s.ir/l?page=2&id=9', true), canon('https://s.ir/l?id=9', true),
+    'paging parameters must still be ignored');
+});
+
+// --- Products without a price cannot be published to any destination, so they
+// must not be stored, counted as results, or reconciled.
+test('products with no price are skipped everywhere', async () => {
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('job.skippedNoPrice=(job.skippedNoPrice||0)+1;'), 'worker must count the skip');
+  assert.ok(/rawPrice<=0\)\{[\s\S]{0,300}continue;/.test(worker), 'worker must skip before saving');
+
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('if (!(Number(product.price) > 0))'), 'node must skip before saving');
+  assert.ok(node.includes('محصول بدون قیمت نادیده گرفته شد'), 'node must report the count');
+
+  // The import path stores products too and must obey the same rule.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('if(!(importedPrice>0)){skippedNoPrice++;'), 'import must skip priceless rows');
+  assert.ok(server.includes('imported,failed,skippedNoPrice,errors'), 'import must report the count');
+
+  for (const file of ['../worker-src/types.ts', '../render-src/types.ts']) {
+    const types = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(types.includes('skippedNoPrice?: number;'), `${file}: Job must declare the counter`);
+  }
+});

@@ -185,7 +185,16 @@ export async function processOneJob(): Promise<boolean> {
           }
         }
         job.phase = 'save'; await save(job);
-        for (const product of products) { const result = await upsertProduct(profile.id, product); result === 'added' ? job.added++ : job.updated++; }
+        for (const product of products) {
+          if (!(Number(product.price) > 0)) {
+            job.skippedNoPrice = (job.skippedNoPrice || 0) + 1;
+            append(job, `${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`, 'warning', 'zero-price',
+              reportItem(product, { newPrice: Number(product.price) || 0 }));
+            continue;
+          }
+          const result = await upsertProduct(profile.id, product); result === 'added' ? job.added++ : job.updated++;
+        }
+        if (job.skippedNoPrice) append(job, `${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`, 'warning');
         const retired=await markMissingProducts(profile.id,products.map(p=>p.sourceKey));if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
         await markProfileRun(profile.id);
         if (job.target !== 'none') await runSync(job, profile, products);

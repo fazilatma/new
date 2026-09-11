@@ -489,3 +489,16 @@ as in the diagnostic. Verified: the request is wrapped exactly once.
 
 The previous release's advice to enable `global_fetch_strictly_public` is withdrawn — the problem
 was never in your Cloudflare settings.
+
+## 1.120.0 — thousands of scraped products collapsing into a handful, and priceless products
+
+- **Fixed: 1,200 products scraped, only ~20 stored.** A product's identity is a hash of its
+  canonical URL, but building that canonical form deleted the **entire query string**. On a shop
+  whose product links look like `/product?id=123`, every product therefore produced the *same*
+  identity and they all upserted over one another. Only tracking parameters (`utm_*`, `fbclid`, …)
+  and paging parameters (`page`, `sort`, …) are stripped now; anything that could identify the
+  product is preserved.
+- **Products with no price are skipped.** They cannot be published anywhere — WooCommerce requires
+  `regular_price` and Basalam rejects `primary_price <= 0` — so storing them only polluted the
+  results list and the reconciliation table. They are now skipped during scraping **and** during
+  file import, and the number skipped is reported in the job log and in the import response.

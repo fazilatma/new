@@ -78,7 +78,7 @@ export async function processJob(id:string):Promise<ProcessResult>{
       job.finishedAt=new Date().toISOString();job.phase='finished';append(job,'عملیات متوقف شد','warning');await save(job);return'complete';
     }
     if(more){job.status='queued';append(job,'نقطهٔ بازیابی ذخیره شد؛ ادامه در پیام بعدی صف');await save(job);return'continue'}
-    job.status='done';job.finishedAt=new Date().toISOString();job.phase='finished';append(job,'عملیات با موفقیت تمام شد');await deleteState(stateKey(job.id));await save(job);return'complete';
+    job.status='done';job.finishedAt=new Date().toISOString();job.phase='finished';if(job.skippedNoPrice)append(job,`${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`,'warning');append(job,'عملیات با موفقیت تمام شد');await deleteState(stateKey(job.id));await save(job);return'complete';
   }catch(error){
     job.status='failed';job.error=message(error);job.finishedAt=new Date().toISOString();job.phase='finished';append(job,job.error,'error');await save(job);return'complete';
   }
@@ -196,7 +196,11 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   for(const product of batch){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
     const previous=previousByKey.get(product.sourceKey)||null,rawPrice=rawPriceByKey.get(product.sourceKey)??product.price;
-    if(rawPrice<=0)append(job,`${product.title}: قیمت صفر یا نامعتبر از مبدأ دریافت شد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
+    if(rawPrice<=0){
+      job.skippedNoPrice=(job.skippedNoPrice||0)+1;
+      append(job,`${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
+      continue;
+    }
     if(product.stock===0)append(job,`${product.title}: موجودی مبدأ به صفر رسیده است.`,'warning','out-of-stock',reportItem(product));
     if(previous&&previous.price>0&&product.price>0&&previous.price!==product.price){const delta=product.price-previous.price,percent=Number((delta/previous.price*100).toFixed(2));append(job,`${product.title}: قیمت ${delta>0?'افزایش':'کاهش'} یافت (${percent}٪).`,delta>0?'warning':'info',delta>0?'price-increased':'price-decreased',reportItem(product,{oldPrice:previous.price,newPrice:product.price,delta,percent}))}
     let saved=false;

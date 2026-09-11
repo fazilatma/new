@@ -68,6 +68,8 @@ async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
 function toAbsoluteUrl(value:string,base:string):string{try{return new URL(value,base).href}catch{return ''}}
 
 const TRACKING_PARAMS=/^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
+/** Pagination/sorting noise: never part of a product's identity. */
+const PAGING_PARAMS=/^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
 
 function selectorParts(selector?:string):string[]{
   const out:string[]=[],value=String(selector||'');let part='',round=0,square=0,quote='';
@@ -131,7 +133,13 @@ function canonicalUrl(value:string,baseUrl:string,stripAllQuery=false):string{
   if(!absolute||!/^(https?):/i.test(absolute))return '';
   try{
     const url=new URL(absolute);url.hash='';
-    if(stripAllQuery)url.search='';
+    if(stripAllQuery){
+      for(const key of [...url.searchParams.keys()]){
+        // Keep identifying parameters (?id=, ?p=, ?product=...); drop only noise.
+        if(TRACKING_PARAMS.test(key)||PAGING_PARAMS.test(key))url.searchParams.delete(key);
+      }
+      url.searchParams.sort();
+    }
     else for(const key of [...url.searchParams.keys()])if(TRACKING_PARAMS.test(key))url.searchParams.delete(key);
     url.pathname=url.pathname.replace(/\/{2,}/g,'/');
     return url.toString().replace(/\/$/,'');
