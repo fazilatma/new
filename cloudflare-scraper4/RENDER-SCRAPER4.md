@@ -430,3 +430,26 @@ It sends the same token four ways and prints the status, body and edge headers o
 If A returns 200 the token is fine and the problem is in the app; if all of A/B/C return 401 the
 token itself is refused. The token is never printed — only its length, shape, expiry, scopes and a
 short non-reversible fingerprint, so the output is safe to share.
+
+## 1.113.0 — destination APIs no longer travel through the scraping proxy (the real 401)
+
+The doctor output from the failing Termux device settled it: **all four probes returned HTTP 200** —
+token valid to 2027, all 15 scopes present, `vendors/735703/products` readable — while the app still
+got 401. The token was never the problem; the app was.
+
+In the Node runtime `safeFetch()` applied `sourceNetwork` **unconditionally**. That is the
+*«اتصال به سایت مبدأ»* setting for **scraping**, populated from `ai.network`. With the AI connection
+method set to **Worker**, every authenticated Basalam and WooCommerce request was rewritten through
+that proxy Worker — which does not forward the `Authorization` header. Basalam therefore received a
+request with no token and answered `invalid authorization header`; the WooCommerce edge answered
+`522` in the same run. The doctor called `fetch` directly, bypassing all of it — which is exactly
+why its probes passed.
+
+Destination APIs now pick their own route:
+
+- **Basalam** follows its own «اتصال غیرمستقیم» switch — Worker when on, direct when off.
+- **WooCommerce REST** goes direct.
+- **Scraping** still uses the configured proxy, unchanged.
+
+The Cloudflare Worker runtime has no global `sourceNetwork` and was never affected, which matches
+the report that this reproduces on Termux.

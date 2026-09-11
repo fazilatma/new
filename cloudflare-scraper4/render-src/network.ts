@@ -70,7 +70,17 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
  * IP that Basalam's edge rejects (which surfaces as a 401 for a valid token).
  */
 /** Send only the caller's headers (JSON APIs), with no browser defaults. */
-export type ApiRequestInit = RequestInit & { apiMode?: boolean };
+export type ApiRequestInit = RequestInit & {
+  apiMode?: boolean;
+  /**
+   * Never reroute through `sourceNetwork`. That config belongs to SCRAPING the
+   * source shop; applying it to a destination API sent authenticated Basalam
+   * calls through the AI proxy Worker, which does not forward Authorization —
+   * so Basalam saw no token and answered 401 for a token that is provably
+   * valid (all four doctor probes return 200 on a direct request).
+   */
+  directRoute?: boolean;
+};
 
 export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
   const { loadConnections } = await import('./connections.js');
@@ -83,9 +93,9 @@ export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, m
     const headers = new Headers(init.headers);
     headers.set('x-scraper-target', raw);
     headers.set('x-target-url', raw);
-    return safeFetch(viaWorkerUrl(workerUrl, raw), { ...init, headers, apiMode: true }, maxBytes);
+    return safeFetch(viaWorkerUrl(workerUrl, raw), { ...init, headers, apiMode: true, directRoute: true }, maxBytes);
   }
-  return safeFetch(raw, { ...init, apiMode: true }, maxBytes);
+  return safeFetch(raw, { ...init, apiMode: true, directRoute: true }, maxBytes);
 }
 
 export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
@@ -97,8 +107,9 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
       // Honour the configured indirect route. `worker` rewrites the URL (the
       // gateway fetches the target for us); `proxy` keeps the URL and sends the
       // request through an HTTP(S) proxy via undici.
-      const useWorker = sourceNetwork.mode === 'worker' && sourceNetwork.workerUrl;
-      const useProxy = sourceNetwork.mode === 'proxy' && sourceNetwork.proxyUrl;
+      const routed = init.directRoute !== true;
+      const useWorker = routed && sourceNetwork.mode === 'worker' && sourceNetwork.workerUrl;
+      const useProxy = routed && sourceNetwork.mode === 'proxy' && sourceNetwork.proxyUrl;
       const requestUrl = useWorker ? viaWorkerUrl(sourceNetwork.workerUrl, url.href) : url.href;
       const doFetch: typeof fetch = useProxy
         ? ((input: any, options: any) => undiciFetch(input, { ...options, dispatcher: new ProxyAgent(sourceNetwork.proxyUrl) }) as any)

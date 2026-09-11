@@ -1223,7 +1223,7 @@ test('JSON API calls are not disguised as a browser', async () => {
   const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
   assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\}/.test(worker),
     'worker: safeBasalamFetch must send API-shaped headers');
-  assert.ok(node.includes('apiMode: true }, maxBytes)'), 'node: safeBasalamFetch must send API-shaped headers');
+  assert.ok(/apiMode: true(?:, directRoute: true)? \}, maxBytes\)/.test(node), 'node: safeBasalamFetch must send API-shaped headers');
   // WooCommerce REST too -- it is what produced the 522.
   assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\},maxBytes\)/.test(worker),
     'worker: the Woo REST path must use apiMode');
@@ -1261,4 +1261,30 @@ test('the Basalam doctor probes every header shape without leaking the token', a
   assert.ok(!doctor.includes("import('../render-dist/server.js')"),
     'the doctor must not import the server entrypoint');
   assert.ok(doctor.includes('/api/connections'), 'it should read from a running instance');
+});
+
+// --- Diagnosed from a doctor run on the failing Termux device: all four probes
+// returned HTTP 200 (token valid to 2027, every scope present, vendor readable),
+// yet the app still got 401. Cause: render-src/safeFetch unconditionally applied
+// `sourceNetwork` -- the SCRAPING proxy, configured from ai.network -- to every
+// request. With the AI proxy set to 'worker', authenticated Basalam and Woo
+// calls were rewritten through that Worker, which does not forward the
+// Authorization header, so the destination saw no token at all.
+test('destination APIs are never rerouted through the scraping proxy', async () => {
+  const network = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(network.includes('directRoute?: boolean'), 'needs an opt-out of source-network routing');
+  // The reroute must be conditional, not unconditional.
+  assert.ok(network.includes('const routed = init.directRoute !== true;'), 'routing must be skippable');
+  assert.ok(/useWorker = routed &&/.test(network), 'worker routing must honour directRoute');
+  assert.ok(/useProxy = routed &&/.test(network), 'proxy routing must honour directRoute');
+  // Basalam picks its own route via its own switch, never the scraping one.
+  assert.ok(network.includes('apiMode: true, directRoute: true }, maxBytes)'),
+    'safeBasalamFetch must opt out of the scraping route');
+  // WooCommerce REST too -- it produced the 522 in the same run.
+  for (const file of ['../render-src/maintenance.ts', '../render-src/server.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const flags = (source.match(/apiMode/g) || []).length;
+    const direct = (source.match(/directRoute/g) || []).length;
+    assert.equal(direct, flags, `${file}: every API call must also set directRoute`);
+  }
 });
