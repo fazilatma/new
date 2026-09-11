@@ -20,12 +20,12 @@ import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, sta
 import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
-import { syncBasalam, syncWoo } from './sync.js';
+import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.104.0'; } catch { return process.env.npm_package_version || '1.104.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.105.0'; } catch { return process.env.npm_package_version || '1.105.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -404,7 +404,12 @@ app.post('/api/test-connection/:target', async c => {
     const token=shop?.token||x.token,expectedVendorId=shop?.vendorId||x.vendorId;
     if(!token)return c.json({ok:false,error:'توکن باسلام خالی است'},400);
     const endpoint=String(x.api||'').replace(/\/$/,'')+'/users/me';
-    const r=await safeFetch(endpoint,{headers:{authorization:`Bearer ${token}`,accept:'application/json'}},2_000_000);
+    const tokenVerdict=describeBasalamToken(token);
+    let r:Response;
+    try{r=await safeFetch(endpoint,{headers:{authorization:`Bearer ${token}`,accept:'application/json'}},2_000_000)}
+    catch(error){return c.json({ok:false,target,service:'Basalam OpenAPI',
+      error:`${tokenVerdict.reason} — ${error instanceof Error?error.message:String(error)}`,
+      summary:{tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null}},200)}
     const raw=await r.json().catch(()=>({}))as any;
     const vendor=raw?.vendor||raw?.data?.vendor||{},user=raw?.data||raw||{},vendorId=String(vendor.id||user.vendor_id||'');
     const autofill:Record<string,any>={};
@@ -418,7 +423,8 @@ app.post('/api/test-connection/:target', async c => {
       summary:{userId:user.id||null,userName:user.name||user.username||null,vendorId:vendorId||null,
         vendorTitle:vendorTitle||shop?.name||null,vendorActive:vendor.is_active??null,
         configuredVendorId:expectedVendorId||null,
-        vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId,autofill}});
+        vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId,
+        tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null,autofill}});
   }
   if(target==='ai') { const ai=connections.ai;if(!ai.baseUrl||!ai.apiKey||!ai.model)return c.json({ok:false,error:'تنظیمات هوش مصنوعی کامل نیست'},400);const endpoint=ai.baseUrl+(ai.baseUrl.includes('/chat/completions')?'':'/chat/completions'),r=await safeFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${ai.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:ai.model,messages:[{role:'user',content:'Reply with exactly: SCRAPER4_OK'}],max_tokens:20})},2_000_000);return c.json({ok:r.ok,code:r.status,body:await r.json().catch(()=>null)}); }
   return c.json({ok:false,error:'Unknown connection'},404);

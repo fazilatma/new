@@ -47,8 +47,42 @@ type BasalamPayload={name:string;primary_price:number;stock:any;description:stri
  * fix, and the usual cause is a pasted token that still carries its "Bearer "
  * prefix or an expired personal access token.
  */
-function basalamAuthHint(status:number):string{
-  if(status===401)return 'توکن نامعتبر یا منقضی است. توکن را بدون واژهٔ Bearer و بدون فاصله/نویسهٔ اضافه از پنل توسعه'+'\u200c'+'دهندگان باسلام کپی کنید و دوباره ذخیره کنید. — ';
+/**
+ * Explains a Basalam token WITHOUT calling the network.
+ *
+ * `401 invalid authorization header` is a malformed-header complaint, so the
+ * useful question is what we actually put after "Bearer ". Basalam personal
+ * access tokens are JWTs, so an expired or truncated one can be identified
+ * locally and reported precisely instead of echoing Basalam's opaque message.
+ */
+export function describeBasalamToken(raw:string):{ok:boolean;reason:string;expiresAt?:string;scopes?:string[]}{
+  const token=String(raw||'');
+  if(!token)return{ok:false,reason:'توکن باسلام ذخیره نشده است؛ فیلد Token خالی است.'};
+  if(/\s/.test(token))return{ok:false,reason:'توکن فاصله یا خط جدید دارد؛ آن را دوباره و بدون فاصله کپی کنید.'};
+  if(/^bearer/i.test(token))return{ok:false,reason:'توکن هنوز با واژهٔ Bearer ذخیره شده است؛ فقط خود توکن را وارد کنید.'};
+  const parts=token.split('.');
+  if(parts.length!==3)return{ok:true,reason:'توکن قالب JWT ندارد؛ اگر باسلام آن را نمی‌پذیرد، از پنل توسعه‌دهندگان یک توکن دسترسی شخصی تازه بسازید.'};
+  try{
+    const pad=(s:string)=>s+'='.repeat((4-s.length%4)%4);
+    const json=atob(pad(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+    const payload=JSON.parse(json) as any;
+    const exp=Number(payload?.exp)||0;
+    const scopes=Array.isArray(payload?.scopes)?payload.scopes.map(String):(typeof payload?.scope==='string'?payload.scope.split(' '):[]);
+    const expiresAt=exp?new Date(exp*1000).toISOString():undefined;
+    if(exp&&exp*1000<Date.now())
+      return{ok:false,reason:`توکن در ${expiresAt} منقضی شده است؛ از پنل توسعه‌دهندگان باسلام یک توکن تازه بسازید.`,expiresAt,scopes};
+    const needed='vendor.product.write';
+    if(scopes.length&&!scopes.includes(needed))
+      return{ok:false,reason:`توکن دسترسی «${needed}» را ندارد (دسترسی‌های فعلی: ${scopes.join('، ')||'—'}); توکن را با این Scope بسازید.`,expiresAt,scopes};
+    return{ok:true,reason:'توکن از نظر ساختار سالم است.',expiresAt,scopes};
+  }catch{return{ok:true,reason:'محتوای توکن قابل خواندن نبود؛ ساختار آن را بررسی کنید.'}}
+}
+function basalamAuthHint(status:number,token=''):string{
+  if(status===401){
+    // Say WHY, using what can be determined from the token itself.
+    const verdict=describeBasalamToken(token);
+    return `${verdict.reason} — `;
+  }
   if(status===403)return 'توکن دسترسی (Scope) لازم برای این عملیات را ندارد. — ';
   return '';
 }
@@ -125,7 +159,7 @@ async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,e
   }
 }
 async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:Number(body?.id||body?.product?.id||existing),body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
-async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds);response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0)}${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
+async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds);response=await safeFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${body.message||JSON.stringify(body).slice(0,300)}`);return{id:Number(body.id||body.product?.id||existing),body}}
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
   const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');

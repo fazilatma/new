@@ -1048,6 +1048,39 @@ test('pasted Basalam tokens are cleaned before they reach the header', async () 
   for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
     const source = await readFile(new URL(file, import.meta.url), 'utf8');
     assert.ok(source.includes('function basalamAuthHint('), `${file}: needs the 401 hint`);
-    assert.ok(source.includes('basalamAuthHint(response?.status||0)'), `${file}: hint must be used`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0,account.token)'), `${file}: hint must be used`);
   }
+});
+
+// --- `401 invalid authorization header` kept coming back after the header itself
+// was proven well formed, so the token has to be explained locally: Basalam PATs
+// are JWTs, so expiry and scopes can be read without any network call.
+test('a Basalam token is diagnosed locally instead of echoing the opaque 401', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export function describeBasalamToken('), `${file}: needs the checker`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0,account.token)'),
+      `${file}: the 401 message must include the token verdict`);
+  }
+  // The connection test must surface it too, in both runtimes.
+  for (const file of ['../worker-src/app.ts', '../render-src/server.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('describeBasalamToken(token)'), `${file}: diagnostic must check the token`);
+    assert.ok(source.includes('tokenCheck:tokenVerdict.reason'), `${file}: must report the verdict`);
+  }
+
+  // Behaviour: expiry and scope are decoded from the JWT payload.
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt = (o) => 'eyJhbGciOiJSUzI1NiJ9.' + b64(o) + '.sig';
+  const decode = (token) => {
+    const parts = String(token).split('.');
+    if (parts.length !== 3) return null;
+    const pad = (x) => x + '='.repeat((4 - x.length % 4) % 4);
+    return JSON.parse(Buffer.from(pad(parts[1].replace(/-/g, '+').replace(/_/g, '/')), 'base64').toString('utf8'));
+  };
+  const past = Math.floor(Date.now() / 1000) - 86400;
+  const future = Math.floor(Date.now() / 1000) + 86400;
+  assert.ok(decode(jwt({ exp: past })).exp * 1000 < Date.now(), 'an expired token must be detectable');
+  assert.ok(decode(jwt({ exp: future })).exp * 1000 > Date.now(), 'a live token must be detectable');
+  assert.deepEqual(decode(jwt({ scopes: ['vendor.product.write'] })).scopes, ['vendor.product.write']);
 });

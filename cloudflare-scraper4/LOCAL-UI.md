@@ -241,3 +241,21 @@ You still need to pull once if your current Codespace does not yet have `npm run
 
 If sending still returns 401 after this, the token itself is invalid or expired — create a new
 personal access token in the Basalam developer panel with the required scopes.
+
+## 1.105.0 — pinpointing the cause of a Basalam 401
+
+- **Verified the request we send is correct.** Driving the real `safeFetch` with a stubbed
+  transport shows the outgoing header is exactly `Authorization: Bearer <token>` — no duplicated
+  scheme, no stray characters, correct URL. So a remaining
+  `401 invalid authorization header` is the token being rejected, not the header format.
+- **The token is now diagnosed locally, with no network call.** Basalam personal access tokens are
+  JWTs, so the payload is decoded to report the real cause: the token is empty, still carries the
+  word `Bearer`, contains a space or newline, has **expired** (the expiry date is printed), or lacks
+  the **`vendor.product.write`** scope (the scopes it does have are listed).
+- The verdict appears both in the send error and in the Basalam connection test, and it still works
+  when Basalam itself is unreachable — previously a network failure returned a bare `fetch failed`
+  with no information about the token at all.
+
+If the verdict says the token is structurally fine but Basalam still answers 401, the token has been
+revoked or belongs to a different account: create a new personal access token with the
+`vendor.product.write` scope at developers.basalam.com/panel/tokens.
