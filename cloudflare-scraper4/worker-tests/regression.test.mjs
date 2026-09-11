@@ -994,7 +994,7 @@ test('the reconciliation preview and apply both render the matrix table', async 
   const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
   const preview = dashboard.indexOf("action==='recon-unified'){");
   assert.ok(preview > 0, 'the preview action must exist');
-  const body = dashboard.slice(preview, preview + 400);
+  const body = dashboard.slice(preview, preview + 1400);
   assert.ok(body.includes('renderReconMatrix('), 'the preview must use the matrix renderer');
   assert.ok(!body.includes('renderUnifiedRecon('), 'the preview must not use the chips-only renderer');
   // All destinations failing is not "in sync".
@@ -1292,4 +1292,36 @@ test('destination APIs are never rerouted through the scraping proxy', async () 
     const direct = (source.match(/directRoute/g) || []).length;
     assert.equal(direct, flags, `${file}: every API call must also set directRoute`);
   }
+});
+
+// --- The reconciliation preview failed silently: unlike the apply path it had no
+// try/catch and no progress row, so a failed request left the panel blank with
+// no message anywhere.
+test('the reconciliation preview reports its own failures', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf("action==='recon-unified'){");
+  assert.ok(start > 0, 'the preview action must exist');
+  const body = dashboard.slice(start, start + 1200);
+  assert.ok(body.includes('catch(error)'), 'the preview must catch request failures');
+  assert.ok(body.includes('ساخت جدول ناموفق بود'), 'a failure must be shown in the panel');
+  assert.ok(body.includes("localTaskStart('recon-unified-preview'"), 'it must register a live task');
+  assert.ok(body.includes('در حال خواندن مقصدها'), 'it must show progress while running');
+});
+
+// --- Each Basalam stall must be priced with its OWN percentage.
+test('every Basalam stall is priced with its own percentage', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    // The price must be derived per account inside the loop, never hoisted.
+    assert.ok(source.includes('basalamPrice(product,account.pricePercent||0)'),
+      `${file}: the payload price must use the account percentage`);
+    assert.ok(source.includes('basalamPrice(product,Number(account.pricePercent)||0)'),
+      `${file}: the reported price must use the account percentage`);
+    // The stall list must carry each shop's own percent, not the default.
+    assert.ok(/\.\.\.c\.shops\.filter\(s=>s\.token&&s\.vendorId\)/.test(source),
+      `${file}: extra stalls must keep their own fields`);
+  }
+  // The vault must persist a per-shop percentage.
+  const vault = await readFile(new URL('../worker-src/vault.ts', import.meta.url), 'utf8');
+  assert.ok(vault.includes('pricePercent:num(shop?.pricePercent)'), 'shop percentages must persist');
 });
