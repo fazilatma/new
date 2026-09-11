@@ -1576,3 +1576,36 @@ test('pagination stops on repeated pages and the counter is consistent', async (
   assert.equal(run(true).pages, 60, 'a healthy site must still paginate fully');
   assert.equal(run(true).size, 1200, 'and collect every product');
 });
+
+// --- The pagination dropdown jumped back to the first option and only page 1
+// was scraped. The Node runtime whitelisted THREE of the seven modes the
+// dashboard offers, so the other four were silently rewritten to query_page.
+test('every pagination mode the UI offers is accepted and implemented', async () => {
+  const MODES = ['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'];
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  for (const mode of MODES)
+    assert.ok(dashboard.includes(`<option value="${mode}"`), `the UI must offer ${mode}`);
+
+  // Both runtimes must accept all of them, or saving silently downgrades.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  for (const mode of MODES) {
+    assert.ok(server.includes(`'${mode}'`), `the node runtime must accept ${mode}`);
+    assert.ok(app.includes(`'${mode}'`), `the worker runtime must accept ${mode}`);
+  }
+  const types = await readFile(new URL('../render-src/types.ts', import.meta.url), 'utf8');
+  for (const mode of MODES)
+    assert.ok(types.includes(`'${mode}'`), `the node Profile type must allow ${mode}`);
+
+  // And pageUrl must actually implement them, not fall through to ?page=N.
+  const scraper = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  for (const token of ["=== 'full_pattern'", "=== 'path_pattern'", "=== 'query_custom'", "=== 'next_selector'"])
+    assert.ok(scraper.includes(token), `pageUrl must handle ${token}`);
+
+  // next_selector has no computable URL: the processor must follow the link.
+  const processor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(processor.includes("profile.pagination === 'next_selector'"), 'the loop must detect the mode');
+  assert.ok(processor.includes('followUrl'), 'the next link must carry between pages');
+  assert.ok(processor.includes('scraped.nextUrl'), 'the scraper must return the next link');
+  assert.ok(scraper.includes('nextUrl?:string'), 'ScrapeListResult must expose nextUrl');
+});

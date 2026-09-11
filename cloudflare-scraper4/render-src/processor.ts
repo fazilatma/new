@@ -58,10 +58,16 @@ export async function processOneJob(): Promise<boolean> {
         await applySelectorSuggestions(profile, pageUrl(profile, 1), 'list', job, true);
       }
       let repeatedPages = 0;
+      const nextSelector = profile.pagination === 'next_selector' ? (profile.paginationValue || '') : '';
+      let followUrl = '';
       for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
-        const url = pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
-        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster);
+        const url = followUrl || pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
+        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector);
+        if (nextSelector) {
+          followUrl = scraped.nextUrl || '';
+          if (!followUrl && page < pageLimit) append(job, `لینک «صفحهٔ بعد» با سلکتور «${nextSelector}» پیدا نشد؛ صفحه‌بندی همین‌جا تمام شد.`, 'warning');
+        }
         const list = scraped.products;
         if (scraped.usedEngine && list.length && (profile.extractionEngine === 'auto' || profile.extractionEngineMaster !== scraped.usedEngine)) {
           profile.extractionEngineMaster = scraped.usedEngine;
@@ -100,6 +106,7 @@ export async function processOneJob(): Promise<boolean> {
         // Auto paging (pages = 0) stops as soon as a page adds nothing new.
         // Misconfigured pagination often returns page 1 forever, which would
         // otherwise re-scan the same page up to the safety cap.
+        if (nextSelector && !followUrl) { job.total = found.size; job.processed = found.size; await save(job); break; }
         if (found.size === before) repeatedPages++; else repeatedPages = 0;
         if (repeatedPages >= 2) { append(job, `صفحهٔ ${page} و صفحهٔ قبل هیچ محصول تازه‌ای نداشتند؛ احتمالاً صفحه‌بندی کار نمی‌کند و همان صفحهٔ اول تکرار می‌شود. استخراج همین‌جا پایان یافت.`, 'warning'); break; }
         if (profile.pages === 0 && page > 1 && found.size === before) { append(job, `صفحهٔ ${page} محصول تازه‌ای نداشت؛ صفحه‌بندی همین‌جا پایان یافت.`); break; }

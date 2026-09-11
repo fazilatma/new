@@ -24,7 +24,7 @@ export type Profile = {
   url: string;
   enabled: boolean;
   pages: number;
-  pagination: 'query_page' | 'path_page' | 'none';
+  pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none';
   extractionEngine: ExtractionEngine;
   extractionEngineMaster?: ExtractionEngine;
   extractionEngineHost?: string;

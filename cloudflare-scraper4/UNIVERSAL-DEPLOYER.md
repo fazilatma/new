@@ -616,3 +616,18 @@ that pagination is probably not working.
 
 If the shop really has 1,200 products, check the profile's pagination type and pagination value.
 The Cloudflare runtime already stopped on a fully duplicate page and was never affected.
+
+## 1.123.0 — the pagination dropdown reverted to the first option
+
+The dashboard offers seven pagination modes, but the Node runtime's whitelist accepted only three
+(`query_page`, `path_page`, `none`). Choosing any of the other four was silently rewritten to
+`query_page` on save, so the dropdown "jumped back" and only page 1 was ever scraped.
+
+All seven are now accepted **and** implemented in the Node runtime: custom query parameter, path
+pattern with `{page}`, full URL pattern, and the next-page button. `next_selector` has no
+computable URL, so the next link is read from the page already fetched (no extra request) and
+followed; when the link is missing, pagination ends with a clear message instead of silently
+re-reading page 1.
+
+For a site whose URLs look like `/page/2/`, the simple **مسیر /page/2/** option is enough — a
+next-button selector is not required.

@@ -116,18 +116,25 @@ function productLink($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selecto
 
 export function pageUrl(profile: Profile, page: number): string {
   const url = new URL(profile.url);
-  if (page <= 1 || profile.pagination === 'none') return url.href;
+  // next_selector follows a link found in the page, so the URL never changes here.
+  if (page <= 1 || profile.pagination === 'none' || profile.pagination === 'next_selector') return url.href;
   const pageNumber = (base: number) => Math.max(1, base) + (page - 1);
-  if (profile.pagination === 'path_page') {
-    const current = Number(url.pathname.match(/\/page\/(\d+)\/?$/i)?.[1] || 1);
-    url.pathname = url.pathname.replace(/\/page\/\d+\/?$/i, '').replace(/\/$/, '') + `/page/${pageNumber(current)}/`;
-    return url.href;
+  if (profile.pagination === 'full_pattern') return String(profile.paginationValue || '').split('{page}').join(String(pageNumber(1)));
+  if (profile.pagination === 'path_page' || profile.pagination === 'path_pattern') {
+    const next = profile.pagination === 'path_page'
+      ? pageNumber(Number(url.pathname.match(/\/page\/(\d+)\/?$/i)?.[1] || 1))
+      : page;
+    const pattern = profile.pagination === 'path_page' ? '/page/{page}/' : (profile.paginationValue || '/page/{page}/');
+    const basePath = url.pathname.replace(/\/page\/\d+\/?$/i, '').replace(/\/$/, '');
+    return url.origin + basePath + pattern.split('{page}').join(String(next));
   }
-  const param = profile.paginationValue || 'page';
+  const param = profile.pagination === 'query_custom' ? (profile.paginationValue || 'paged') : 'page';
   const current = Number(url.searchParams.get(param) || 1);
+  url.hash = '';
   url.searchParams.set(param, String(pageNumber(current)));
   return url.href;
 }
+
 
 /**
  * Resolve the container selector to every product card on the page.
@@ -171,7 +178,9 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
   return scrapeListCheerioFromHtml(text, finalUrl, selectors);
 }
 
-export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number};
+export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number;
+  /** Absolute URL of the 'next page' link, when a next-selector is configured. */
+  nextUrl?:string};
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
 const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','cheerio','playwright','puppeteer','crawlee_playwright'];
@@ -199,10 +208,23 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = ''): Promise<ScrapeListResult> {
   const started=Date.now();
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url);
+  // A 'next page' link is read from the same HTML, so it costs no extra fetch.
+  const nextLink=async():Promise<string>=>{
+    if(!nextSelector)return '';
+    try{
+      const {text,url:finalUrl}=await source();
+      const $=cheerio.load(text);
+      for(const part of nextSelector.split(',').map(x=>x.trim()).filter(Boolean)){
+        const href=$(part).first().attr('href');
+        if(href)return new URL(href,finalUrl).href;
+      }
+    }catch{/* a missing next link just ends pagination */}
+    return '';
+  };
   const pick = async (name: ExtractionEngine) => {
     if (name === 'playwright') return scrapeListWithPlaywright(url, selectors);
     if (name === 'puppeteer') return scrapeListWithPuppeteer(url, selectors);
@@ -219,7 +241,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
-      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started};
+      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink()};
       // The explicit engine ran and found nothing: fall through to the
       // remaining engines instead of returning an empty result, but remember
       // the requested engine so an all-empty run still reports what was asked.
@@ -227,7 +249,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if(engine!=='auto'&&name===engine)throw error;
     }
   }
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started};
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink()};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto'): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine)).products; }
 
