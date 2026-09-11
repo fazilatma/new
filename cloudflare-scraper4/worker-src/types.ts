@@ -17,6 +17,8 @@ export type Selectors = {
   galleryMax?: number;
   gallerySkipFirst?: boolean;
   variations?: string;
+  /** Specification table/list: rows become name/value pairs. */
+  specs?: string;
 };
 
 export type GalleryConfig = {
@@ -86,6 +88,8 @@ export type Product = {
   category?: string;
   tags?: string;
   variations?: string[];
+  /** Specification rows scraped from the product page. */
+  specs?: Array<{ name: string; value: string }>;
   variationGroups?: VariationGroup[];
   variationPrices?: Record<string,number>;
   /** WooCommerce publication status selected during spreadsheet import. */

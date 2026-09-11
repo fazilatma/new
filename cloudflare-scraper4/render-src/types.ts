@@ -12,6 +12,8 @@ export type Selectors = {
   weight?: string;
   category?: string;
   gallery?: string;
+  /** Specification table/list: rows become name/value pairs. */
+  specs?: string;
 };
 
 export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
@@ -60,6 +62,8 @@ export type Product = {
   stock?: number;
   weight?: number;
   category?: string;
+  /** Specification rows scraped from the product page. */
+  specs?: Array<{ name: string; value: string }>;
   sourcePage: string;
   scrapedAt: string;
 };

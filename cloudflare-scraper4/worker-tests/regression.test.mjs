@@ -1499,3 +1499,46 @@ test('products with no price are skipped everywhere', async () => {
     assert.ok(types.includes('skippedNoPrice?: number;'), `${file}: Job must declare the counter`);
   }
 });
+
+// --- The product modal showed the scraped description escaped inside a log box,
+// so a real shop page arrived as unreadable markup. It must render like the page
+// a visitor sees -- but the string reaches innerHTML, so it needs scrubbing.
+test('the product modal renders description HTML safely', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function safeProductHtml('), 'a client-side scrubber must exist');
+  assert.ok(dashboard.includes("'<h4>توضیحات</h4><div class=\"pdesc\">'+safeProductHtml(desc)"),
+    'the description must be rendered, not escaped into a text box');
+  assert.ok(!/توضیحات<\/h4><div class="logs"/.test(dashboard), 'the raw-text log box must be gone');
+  // Security: the scrub must remove executables and neutralise links.
+  for (const token of ['script,style,iframe,object,embed,form,input,button,link,meta',
+    "startsWith('on')", 'javascript|data', 'noopener noreferrer'])
+    assert.ok(dashboard.includes(token), `safeProductHtml must handle ${token}`);
+  assert.ok(dashboard.includes('.pdesc{'), 'rendered HTML needs product-page styling');
+});
+
+// --- New "specification table" detail selector, end to end.
+test('the specs selector is wired through both runtimes', async () => {
+  for (const file of ['../worker-src/types.ts', '../render-src/types.ts']) {
+    const types = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(types.includes('specs?: string;'), `${file}: Selectors needs specs`);
+    assert.ok(/specs\?: Array<\{ name: string; value: string \}>/.test(types), `${file}: Product needs specs`);
+  }
+  const worker = await readFile(new URL('../worker-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('function parseSpecFragment('), 'the worker must parse the specs block');
+  const node = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('if (selectors.specs)'), 'the node scraper must read the specs block');
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes("['specs','جدول مشخصات']"), 'the field must appear in the selector form');
+  assert.ok(dashboard.includes('<h4>جدول مشخصات</h4>'), 'the modal must show the specs table');
+});
+
+// --- The visual picker swallowed every click, so tabs and accordions on the
+// product page could not be opened to reach the fields inside them.
+test('the visual picker can pause selection', async () => {
+  for (const file of ['../worker-src/visual.ts', '../render-src/visual.ts']) {
+    const visual = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(visual.includes('__s4pause'), `${file}: needs a pause button`);
+    assert.ok(visual.includes('if(!picking)return;'), `${file}: clicks must pass through while paused`);
+    assert.ok(visual.includes('function setPicking('), `${file}: the toggle must update its own label`);
+  }
+});

@@ -30,6 +30,8 @@ type Card={values:Partial<Record<FieldName,RankedValue>>};
 type DetailResult={
   shortDesc:string;longDesc:string;price:string;sku:string;brand:string;stock:string;weight:string;category:string;tags:string;mainImage:string;
   images:string[];variations:string[];variationGroups:VariationGroup[];variationPrices:Record<string,number>;
+  /** Specification rows parsed from the marked specs block. */
+  specs?:Array<{name:string;value:string}>;
 };
 
 const DEFAULT_CONTAINER='.product, li.product, article.product, .product-item, .product-card, [data-product-id], [itemtype*="Product"]';
@@ -360,6 +362,29 @@ class VariationHandler {
   }
   text(chunk:TextChunk):void{for(const capture of this.captures)capture.text+=chunk.text}
 }
+/**
+ * Turns a captured specification block into name/value rows. Shops write it as a
+ * table, a definition list, or "name: value" bullets, so all three are accepted.
+ */
+function parseSpecFragment(html:string):Array<{name:string;value:string}>{
+  if(!html)return [];
+  const rows:Array<{name:string;value:string}>=[];
+  const cell=(value:string)=>cleanText(value.replace(/<[^>]*>/g,' '));
+  for(const match of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)){
+    const cells=[...match[1].matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)\s*>/gi)].map(m=>cell(m[1]));
+    if(cells.length>=2&&cells[0]&&cells[1])rows.push({name:cells[0],value:cells.slice(1).filter(Boolean).join(' ')});
+  }
+  if(!rows.length){
+    const terms=[...html.matchAll(/<dt\b[^>]*>([\s\S]*?)<\/dt\s*>/gi)].map(m=>cell(m[1]));
+    const values=[...html.matchAll(/<dd\b[^>]*>([\s\S]*?)<\/dd\s*>/gi)].map(m=>cell(m[1]));
+    terms.forEach((name,index)=>{const value=values[index]||'';if(name&&value)rows.push({name,value})});
+  }
+  if(!rows.length)for(const match of html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)){
+    const parts=cell(match[1]).split(/\s*[:：]\s*/);
+    if(parts.length>=2&&parts[0]&&parts[1])rows.push({name:parts[0],value:parts.slice(1).join(': ')});
+  }
+  return rows.filter(row=>row.name&&row.value).slice(0,60);
+}
 function extractMarkedFragment(html:string,marker:string):string{
   const start=`<!--${marker}:START-->`,end=`<!--${marker}:END-->`,from=html.indexOf(start);if(from<0)return '';
   const to=html.indexOf(end,from+start.length);return to<0?'':html.slice(from+start.length,to).trim();
@@ -373,6 +398,10 @@ export async function parseDetailPage(html:string,baseUrl:string,selectors:Selec
   const marker=`SCRAPER4_${Math.random().toString(36).slice(2)}`;
   for(const selector of selectorParts(selectors.longDesc)){
     safeOn(rewriter,selector,new LongDescriptionHandler(marker));
+  }
+  const specsMarker=`SCRAPER4S_${Math.random().toString(36).slice(2)}`;
+  for(const selector of multilineSelectorParts(selectors.specs)){
+    safeOn(rewriter,selector,new LongDescriptionHandler(specsMarker));
     for(const suffix of ['script','style','iframe','object','embed','form'])safeOn(rewriter,`${selector} ${suffix}`,new RemoveHandler());
     safeOn(rewriter,`${selector} *`,new SanitizeHandler());
   }
@@ -395,7 +424,8 @@ export async function parseDetailPage(html:string,baseUrl:string,selectors:Selec
   }
   let transformed='';try{transformed=await rewriter.transform(new Response(html,{headers:{'content-type':'text/html; charset=UTF-8'}})).text()}catch(error){throw new Error(`پردازش HTML جزئیات شکست خورد: ${error instanceof Error?error.message:String(error)}`)}
   for(const key of DETAIL_KEYS)result[key]=values.get(key)||'';
-  result.longDesc=stripUnsafeHtml(extractMarkedFragment(transformed,marker));if(includeGallery)for(const image of result.images)addGalleryImage(galleryImages,image,baseUrl,galleryMax);result.images=galleryImages;
+  result.longDesc=stripUnsafeHtml(extractMarkedFragment(transformed,marker));
+  const specRows=parseSpecFragment(extractMarkedFragment(transformed,specsMarker));if(specRows.length)result.specs=specRows;if(includeGallery)for(const image of result.images)addGalleryImage(galleryImages,image,baseUrl,galleryMax);result.images=galleryImages;
   applyJsonLdDetail(html,baseUrl,result,galleryMax,includeGallery);
   if(selectors.gallerySkipFirst&&result.images.length)result.images=result.images.slice(1);
   result.variations=[...new Set(result.variations.map(cleanText).filter(Boolean))];

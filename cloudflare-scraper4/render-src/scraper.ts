@@ -309,6 +309,27 @@ export async function scrapeDetails(product: Product, selectors: Selectors): Pro
   const textField = (selector?: string) => selector ? normalize(body.find(selector).first().text()) : '';
   product.shortDesc = textField(selectors.shortDesc) || product.shortDesc;
   product.longDesc = selectors.longDesc ? sanitizeHtml(body.find(selectors.longDesc).first().html() || '', url) : product.longDesc;
+  // Specification table: shops render it as <tr><td>name</td><td>value</td></tr>,
+  // as <dt>/<dd>, or as <li>name: value</li>. Accept all three shapes so one
+  // selector pointing at the block is enough.
+  if (selectors.specs) {
+    const rows: Array<{ name: string; value: string }> = [];
+    const block = body.find(selectors.specs).first();
+    block.find('tr').each((_i, el) => {
+      const cells = $(el).find('th,td');
+      if (cells.length >= 2) rows.push({ name: normalize($(cells[0]).text()), value: normalize($(cells[1]).text()) });
+    });
+    if (!rows.length) {
+      const terms = block.find('dt'), values = block.find('dd');
+      terms.each((i, el) => { const value = values[i] ? normalize($(values[i]).text()) : ''; if (value) rows.push({ name: normalize($(el).text()), value }); });
+    }
+    if (!rows.length) block.find('li').each((_i, el) => {
+      const parts = normalize($(el).text()).split(/\s*[:：]\s*/);
+      if (parts.length >= 2) rows.push({ name: parts[0], value: parts.slice(1).join(': ') });
+    });
+    const clean = rows.filter(r => r.name && r.value).slice(0, 60);
+    if (clean.length) product.specs = clean;
+  }
   product.sku = textField(selectors.sku) || product.sku;
   product.brand = textField(selectors.brand) || product.brand;
   product.category = textField(selectors.category) || product.category;

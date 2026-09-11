@@ -538,3 +538,19 @@ was never in your Cloudflare settings.
   `regular_price` and Basalam rejects `primary_price <= 0` — so storing them only polluted the
   results list and the reconciliation table. They are now skipped during scraping **and** during
   file import, and the number skipped is reported in the job log and in the import response.
+
+## 1.121.0 — the product modal renders like a real product page
+
+- **Descriptions are rendered, not printed as markup.** The modal showed the scraped description
+  escaped inside a log box, so a real shop page arrived as unreadable HTML. It is now rendered the
+  way a visitor sees it — headings, lists, tables, images and links. Because the string reaches
+  `innerHTML`, it is scrubbed first: scripts, iframes, forms, `on*` handlers and `javascript:` URLs
+  are removed and links open in a new tab.
+- **New "specification table" detail selector.** Point it at the specs block and the rows are
+  extracted as name/value pairs. Three common markups are supported: a table (`tr`/`td`), a
+  definition list (`dt`/`dd`), and "name: value" bullets. The rows appear as a table in the product
+  modal and are stored with the product.
+- **The visual picker can pause.** It used to swallow every click, so tabs, accordions and galleries
+  on the product page could not be opened to reach the fields inside them. The new **⏸ توقف انتخاب**
+  button lets the page behave normally; press **▶ ادامهٔ انتخاب** to resume picking and select the
+  newly revealed content. Added to both runtimes.
