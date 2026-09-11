@@ -1188,22 +1188,27 @@ test('the reconciliation table still renders when destinations fail', async () =
 });
 
 // --- Parity with the PHP reference (scraper4.php v10.91, fazilatma/code).
-// bslSendProduct() creates every product as status 3790 (draft) and never sends
-// `photo`/`photos` in the create call; photos and status 2976 are attached in a
-// second PATCH. Creating straight into 2976 with photo ids is rejected.
-test('Basalam products are created as a draft, then published with photos', async () => {
+// v1.110.0 read the extra-shop helper and wrongly concluded that `photo` must be
+// omitted on create. The MAIN send path does send it, and Basalam enforces it:
+//   422 {"fields":["photo"],"message":"شناسه تصویر الزامی است"}
+// The real rule: send the uploaded photo ids, and publish (2976) only when a
+// photo exists AND both texts are >= 3 chars; otherwise create a draft (3790).
+test('Basalam creates carry the photo ids and follow the PHP status rule', async () => {
   for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
     const source = await readFile(new URL(file, import.meta.url), 'utf8');
-    assert.ok(source.includes('const BASALAM_STATUS_DRAFT=3790'), `${file}: draft status missing`);
-    assert.ok(source.includes('creating?BASALAM_STATUS_DRAFT:BASALAM_STATUS_PUBLISHED'),
-      `${file}: create must use the draft status`);
-    assert.ok(source.includes('creating?[]:photoIds.filter'),
-      `${file}: photo ids must never be sent on create`);
-    assert.ok(source.includes('basalamPayload(product,c,account,categoryId,photoIds,!existing)'),
-      `${file}: the create/update distinction must reach the payload builder`);
-    // The publishing PATCH must exist and must not be able to lose the product.
-    assert.ok(source.includes('status:BASALAM_STATUS_PUBLISHED}'), `${file}: publish PATCH missing`);
-    assert.ok(/if\(!existing&&newId>0\)/.test(source), `${file}: publish only after a create`);
+    assert.ok(source.includes('const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);'),
+      `${file}: photo ids must reach the create payload`);
+    assert.ok(!source.includes('creating?[]:photoIds'),
+      `${file}: photos must NOT be stripped on create`);
+    assert.ok(/briefText\.length>=3&&descText\.length>=3/.test(source),
+      `${file}: the >=3 character rule must be applied`);
+    assert.ok(source.includes('BASALAM_STATUS_PUBLISHED:BASALAM_STATUS_DRAFT'),
+      `${file}: draft is the fallback, not the default`);
+    // A 422 about the photo must explain why the upload failed.
+    assert.ok(source.includes('function basalamPhotoHint('), `${file}: needs the 422 photo hint`);
+    assert.ok(source.includes('lastPhotoFailure'), `${file}: upload failures must be recorded`);
+    assert.ok(!/\}catch\{\/\* one bad image must not abort the product \*\/\}/.test(source),
+      `${file}: upload failures must no longer be swallowed silently`);
   }
 });
 

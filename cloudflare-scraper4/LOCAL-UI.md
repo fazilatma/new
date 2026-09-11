@@ -417,3 +417,27 @@ Destination APIs now pick their own route:
 
 The Cloudflare Worker runtime has no global `sourceNetwork` and was never affected, which matches
 the report that this reproduces on Termux.
+
+## 1.114.0 — fix the 422 «شناسه تصویر الزامی است» (correcting my 1.110.0 mistake)
+
+The 401 is gone: authentication now works. The next error was mine.
+
+In 1.110.0 I read `bslSendProduct()` — the helper for **extra shops** — and concluded that `photo`
+must not be sent on create. The **main** send path in the same PHP file does the opposite: it sends
+`'photo' => $pid` and `'photos' => [...]` in the create request, and Basalam enforces it.
+
+The real rule from `scraper4.php`:
+
+- upload the images first;
+- if an upload succeeded, send `photo` + `photos` and set status **2976** (published) when the brief
+  and the description are both at least 3 characters;
+- otherwise create with status **3790** (draft), so the product still lands instead of being
+  rejected.
+
+That is now implemented exactly, in both runtimes, and the redundant publish-PATCH added in 1.110.0
+is gone.
+
+**Photo upload failures are no longer silent.** They were swallowed by a bare `catch`, which is why
+the 422 arrived with no explanation. A 422 that names `photo` now reports which image failed and
+why — for example `آپلود تصویر ناموفق بود … علت: a.jpg: HTTP 413` — or states plainly that the
+product has no image at all.

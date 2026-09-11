@@ -142,6 +142,14 @@ async function basalamTokenProbe(c:any,account:BasalamAccount):Promise<string>{
     return 'توکن روی users/me معتبر است، پس مشکل نبودِ دسترسی «vendor.product.write» روی این توکن است؛ توکن را با این Scope دوباره بسازید.';
   }catch{return ''}
 }
+function basalamPhotoHint(status:number,body:any):string{
+  if(status!==422)return '';
+  const text=JSON.stringify(body||{});
+  if(!/photo|تصویر/i.test(text))return '';
+  return lastPhotoFailure
+    ? `آپلود تصویر ناموفق بود، برای همین باسلام محصول را رد کرد. علت: ${lastPhotoFailure} — `
+    : 'این محصول هیچ تصویری ندارد و باسلام بدون تصویر محصول را نمی‌پذیرد؛ برای محصولات بدون عکس، تصویر مبدأ را بررسی کنید. — ';
+}
 function basalamAuthHint(status:number,token=''):string{
   if(status===401){
     // Say WHY, using what can be determined from the token itself.
@@ -158,7 +166,7 @@ function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:
     stock:product.stock??c.stock,
     description:(product.longDesc||product.shortDesc||'')+(product.variations?.length?`\n\nتنوع‌ها: ${product.variations.join('، ')}`:''),
     // Create as a draft, exactly like scraper4.php; the PATCH below publishes it.
-    status:creating?BASALAM_STATUS_DRAFT:BASALAM_STATUS_PUBLISHED,
+    status:BASALAM_STATUS_PUBLISHED,
     category_id:categoryId,
     weight:product.weight||c.weight,
     package_weight:c.packageWeight,
@@ -168,8 +176,15 @@ function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:
   // Only send photo ids we actually obtained; an empty/failed upload must not
   // put a string (or a 0) into an integer field.
   // The reference implementation never sends photo ids on create — only on update.
-  const ids=creating?[]:photoIds.filter(id=>Number.isFinite(id)&&id>0);
+  const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
   if(ids.length){payload.photo=ids[0];payload.photos=ids.slice(0,10)}
+  // scraper4.php publishes (2976) only when a photo uploaded AND both texts are
+  // real; otherwise it creates a draft (3790) so the product still lands rather
+  // than being rejected. Basalam requires `photo` for a published product:
+  // 422 {"fields":["photo"],"message":"شناسه تصویر الزامی است"}.
+  const briefText=String(product.shortDesc||product.title||'').trim();
+  const descText=String(product.longDesc||product.shortDesc||'').trim();
+  payload.status=(ids.length&&briefText.length>=3&&descText.length>=3)?BASALAM_STATUS_PUBLISHED:BASALAM_STATUS_DRAFT;
   return payload;
 }
 
@@ -178,10 +193,14 @@ function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:
  * Failures are non-fatal: the product is still published, just without photos,
  * which is far better than losing the whole send to an HTTP 400.
  */
+/** Last photo-upload failure, surfaced in the 422 that Basalam raises when `photo` is missing. */
+let lastPhotoFailure='';
+const shortUrl=(u:unknown)=>String(u).split('/').pop()?.split('?')[0]?.slice(0,40)||String(u).slice(0,40);
 async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,limit=3):Promise<number[]> {
   const urls=[product.image,...(product.images||[])].filter(Boolean).filter((url,index,all)=>all.indexOf(url)===index).slice(0,limit);
   const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
   const ids:number[]=[];
+  const failures:string[]=[];
   for(const url of urls){
     try{
       const image=await safeFetch(String(url),{headers:{accept:'image/*'}},12_000_000);
@@ -194,9 +213,12 @@ async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,
       const uploaded=await safeBasalamFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
       const body=await uploaded.json().catch(()=>({})) as any;
       const id=Number(body?.id);
-      if(uploaded.ok&&Number.isFinite(id)&&id>0)ids.push(id);
-    }catch{/* one bad image must not abort the product */}
+      if(uploaded.ok&&Number.isFinite(id)&&id>0){ids.push(id);continue}
+      failures.push(`${shortUrl(url)}: HTTP ${uploaded.status} ${String(body?.message||body?.error||'').slice(0,80)}`);
+    }catch(error){failures.push(`${shortUrl(url)}: ${error instanceof Error?error.message.slice(0,80):String(error)}`)}
   }
+  if(!ids.length&&failures.length)lastPhotoFailure=failures.join(' | ');
+  else lastPhotoFailure='';
   return ids;
 }
 
@@ -242,18 +264,8 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
     body=await response.json().catch(()=>({}));
     if(response.ok)break;
   }
-  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);
+  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${basalamPhotoHint(response?.status||0,body)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);
   const newId=Number(body.id||body.product?.id||existing);
-  // scraper4.php parity: a freshly created product is a draft with no photos.
-  // Publish it and attach the uploaded photo ids in a second PATCH. A failure
-  // here must not lose the product, which already exists at this point.
-  if(!existing&&newId>0){
-    const finish:Record<string,any>={status:BASALAM_STATUS_PUBLISHED};
-    const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);
-    if(ids.length){finish.photo=ids[0];finish.photos=ids.slice(0,10)}
-    try{await safeBasalamFetch(`${base}/${newId}`,{method:'PATCH',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(finish)},3_000_000)}
-    catch{/* the product exists; publishing can be retried by a later sync */}
-  }
   return{id:newId,body,categoryId:usedCategory};
 }
 
