@@ -110,8 +110,35 @@ export function describeBasalamToken(raw:string):{ok:boolean;reason:string;expir
     const needed='vendor.product.write';
     if(scopes.length&&!scopes.includes(needed))
       return{ok:false,reason:`توکن دسترسی «${needed}» را ندارد (دسترسی‌های فعلی: ${scopes.join('، ')||'—'}); توکن را با این Scope بسازید.`,expiresAt,scopes};
-    return{ok:true,reason:'توکن از نظر ساختار سالم است.',expiresAt,scopes};
+    if(!scopes.length)
+      return{ok:true,reason:'ساختار و تاریخ توکن سالم است، اما فهرست دسترسی‌ها داخل توکن نیست؛ اگر باسلام ۴۰۱ می‌دهد، توکن را با Scope «vendor.product.write» و برای همین غرفه بسازید.',expiresAt,scopes};
+    return{ok:true,reason:'توکن از نظر ساختار، تاریخ و دسترسی سالم است.',expiresAt,scopes};
   }catch{return{ok:true,reason:'محتوای توکن قابل خواندن نبود؛ ساختار آن را بررسی کنید.'}}
+}
+/**
+ * Asks Basalam about the very token that just failed, using the read-only
+ * `users/me` endpoint. This is the only way to separate the two causes a local
+ * inspection cannot tell apart:
+ *   - `users/me` also 401 -> the token itself is dead/revoked/not a Basalam PAT;
+ *   - `users/me` is 200   -> the token is valid but not allowed to write this
+ *     vendor's products (missing `vendor.product.write`, or it belongs to a
+ *     different account than the vendorId configured for this stall).
+ * Any failure here is swallowed: this runs only to enrich an existing error.
+ */
+async function basalamTokenProbe(c:any,account:BasalamAccount):Promise<string>{
+  try{
+    const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
+    const response=await safeFetch(`${base}/users/me`,{headers:{authorization:`Bearer ${account.token}`,accept:'application/json'}},2_000_000);
+    if(response.status===401)
+      return 'همین توکن روی users/me هم ۴۰۱ گرفت، یعنی خود توکن نامعتبر یا باطل شده است؛ از پنل توسعه‌دهندگان باسلام یک توکن تازه بسازید.';
+    if(!response.ok)return `users/me کد ${response.status} برگرداند.`;
+    const body=await response.json().catch(()=>({})) as any;
+    const vendor=body?.vendor||body?.data?.vendor||{};
+    const vendorId=String(vendor.id||body?.vendor_id||body?.data?.vendor_id||'');
+    if(vendorId&&String(account.vendorId)&&vendorId!==String(account.vendorId))
+      return `توکن معتبر است اما به غرفهٔ ${vendorId} تعلق دارد، نه غرفهٔ ${account.vendorId} که اینجا تنظیم شده؛ شناسهٔ غرفه را اصلاح کنید یا توکن همان غرفه را بگذارید.`;
+    return 'توکن روی users/me معتبر است، پس مشکل نبودِ دسترسی «vendor.product.write» روی این توکن است؛ توکن را با این Scope دوباره بسازید.';
+  }catch{return ''}
 }
 function basalamAuthHint(status:number,token=''):string{
   if(status===401){
@@ -211,7 +238,7 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
     body=await response.json().catch(()=>({}));
     if(response.ok)break;
   }
-  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${body.message||JSON.stringify(body).slice(0,300)}`);
+  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);
   return{id:Number(body.id||body.product?.id||existing),body,categoryId:usedCategory};
 }
 

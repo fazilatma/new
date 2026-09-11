@@ -357,3 +357,20 @@ revoked or belongs to a different account: create a new personal access token wi
   entirely, and SQLite comes from Node's built-in `node:sqlite` (Node 22.5+), so no `better-sqlite3`
   build is needed. `pip install basalam-sdk` also works, because `pydantic-core` ships a prebuilt
   manylinux wheel.
+
+## 1.107.0 — explaining a Basalam 401 when the token itself looks fine
+
+- **Confirmed our request matches the official SDK exactly.** Reading `basalam-sdk` 1.2.0 shows it
+  posts to the same `/v1/vendors/{vendor_id}/products`, with the same JSON body, and builds the same
+  `Authorization: Bearer <token>` header. So a 401 whose local verdict says "the token is
+  structurally fine" is not a header-format problem, and no purely local check can explain it.
+- **The failing token is now probed against the read-only `users/me` endpoint at the moment of the
+  error**, which separates the three real causes:
+  - `users/me` also returns 401 → the token is revoked or invalid; create a new one.
+  - `users/me` returns 200 → the token is valid but lacks **`vendor.product.write`**.
+  - `users/me` returns a different vendor → the token belongs to another stall; the real and the
+    configured vendor id are both shown.
+  The probe is best-effort: if it fails, the original error is still reported unchanged.
+- **Fixed a misleading verdict.** A JWT with no scope claim silently passed the scope check and was
+  reported as "structurally fine", which dead-ended the user. It now says the scope list is absent
+  from the token and what to rebuild it with.

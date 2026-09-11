@@ -1084,3 +1084,22 @@ test('a Basalam token is diagnosed locally instead of echoing the opaque 401', a
   assert.ok(decode(jwt({ exp: future })).exp * 1000 > Date.now(), 'a live token must be detectable');
   assert.deepEqual(decode(jwt({ scopes: ['vendor.product.write'] })).scopes, ['vendor.product.write']);
 });
+
+// --- The local verdict reported "structurally fine" while Basalam still sent
+// 401, which dead-ends the user. A JWT carrying no scope claim silently passed
+// the scope check, and no local inspection can tell a revoked token apart from
+// a valid token that simply may not write this vendor's products.
+test('a Basalam 401 is explained by probing the token, not just inspecting it', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('async function basalamTokenProbe('), `${file}: needs the probe`);
+    // The probe must run only for a 401 and must be awaited into the message.
+    assert.ok(source.includes("response?.status===401?(await basalamTokenProbe(c,account))"),
+      `${file}: the probe must enrich the 401 message`);
+    // It must use the read-only endpoint, never a second write attempt.
+    const probe = source.slice(source.indexOf('async function basalamTokenProbe('));
+    assert.ok(probe.slice(0, 1600).includes('/users/me'), `${file}: probe must use users/me`);
+    // A token with no scope claim must not be called simply "fine".
+    assert.ok(source.includes('if(!scopes.length)'), `${file}: an absent scope claim must be reported`);
+  }
+});
