@@ -1402,3 +1402,35 @@ test('Workers invocations and subrequests are metered', async () => {
   assert.ok(dashboard.includes('اجرای Worker'), 'the bar must show the Workers group');
   assert.ok(dashboard.includes("d.peakSubrequests"), 'the bar must show peak subrequests');
 });
+
+// --- The 1042 advice was written for Cloudflare but lives in render-src, which
+// is the Node runtime (Termux/VPS/cPanel). A plain Node client is not a Worker,
+// so the same-account restriction cannot apply to its request.
+test('the 1042 hint matches the runtime it is shown in', async () => {
+  const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(ai.includes('چون این محیط یک سرور Node محلی است'),
+    'the Node runtime must say the Worker-to-Worker rule does not apply to it');
+  assert.ok(ai.includes('scripts/ai-proxy-worker.js'), 'it must point at the deployable proxy');
+  // The Cloudflare-only instruction may still appear, but only as the caveat for
+  // people calling the proxy FROM another Worker -- never as the primary fix.
+  const primary = ai.indexOf('چون این محیط یک سرور Node محلی است');
+  const caveat = ai.indexOf('global_fetch_strictly_public', primary);
+  assert.ok(caveat > primary, 'the Cloudflare flag must come after the Node explanation');
+});
+
+// --- Detail extraction fetched every product page even with no detail selector
+// configured, so it downloaded hundreds of pages and filled nothing.
+test('detail extraction is skipped or bootstrapped when no selector is set', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  // Discovery runs first when nothing is configured.
+  assert.ok(node.includes('هیچ سلکتور جزئیاتی تنظیم نشده'),
+    'it must try to discover detail selectors before fetching every product');
+  // The main loop is guarded.
+  assert.ok(/if \(hasDetailSelectors\(profile\.selectors\)\) \{\s*await mapLimit\(products/.test(node),
+    'the per-product detail loop must be guarded');
+  assert.ok(node.includes('استخراج جزئیات'), 'the job log must report the detail stage');
+
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('if(!hasDetailSelectors(profile.selectors))return;'),
+    'the Worker runtime must skip the page fetch too');
+});

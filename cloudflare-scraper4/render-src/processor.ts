@@ -107,6 +107,17 @@ export async function processOneJob(): Promise<boolean> {
         // first. If the configured detail selectors enrich nothing at all, the
         // whole stage would silently return empty descriptions for every
         // product, so rediscover the detail selectors and re-probe once.
+        // No detail selectors at all: discovering them is the only way this
+        // stage can enrich anything, so do it before fetching every product.
+        if (sample?.url && !hasDetailSelectors(profile.selectors) && !detailRescued) {
+          detailRescued = true;
+          append(job, 'هیچ سلکتور جزئیاتی تنظیم نشده؛ ابتدا به‌صورت خودکار کشف می‌شوند…', 'warning');
+          const filled = await applySelectorSuggestions(profile, sample.url, 'detail', job, false);
+          append(job, filled && hasDetailSelectors(profile.selectors)
+            ? 'سلکتورهای جزئیات خودکار پیدا شدند؛ استخراج جزئیات ادامه می‌یابد.'
+            : 'سلکتور جزئیاتی پیدا نشد؛ مرحلهٔ جزئیات رد می‌شود تا صفحات بی‌دلیل دانلود نشوند.',
+            filled && hasDetailSelectors(profile.selectors) ? 'info' : 'warning');
+        }
         if (sample?.url && hasDetailSelectors(profile.selectors)) {
           const probe = await detailProbe(sample, profile.selectors);
           if (!probe && !detailRescued) {
@@ -117,11 +128,14 @@ export async function processOneJob(): Promise<boolean> {
             else if (filled) append(job, 'پیشنهاد خودکار هم فیلدی پیدا نکرد؛ سلکتورهای جزئیات را دستی بررسی کنید.', 'warning');
           }
         }
-        await mapLimit(products, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
-          if (await stopRequested(job.id)) return;
-          try { await scrapeDetails(product, profile.selectors); }
-          catch (error) { job.failed++; append(job, `${product.title}: ${message(error)}`, 'error'); }
-        });
+        if (hasDetailSelectors(profile.selectors)) {
+          await mapLimit(products, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
+            if (await stopRequested(job.id)) return;
+            try { await scrapeDetails(product, profile.selectors); }
+            catch (error) { job.failed++; append(job, `${product.title}: ${message(error)}`, 'error'); }
+          });
+          append(job, `استخراج جزئیات ${products.length} محصول انجام شد.`);
+        }
         // SCRAPER-FIRST RESCUE (before any AI): products can come back with an
         // empty description simply because the detail selectors do not match
         // THIS product's template (shops routinely mix layouts). Rediscover the

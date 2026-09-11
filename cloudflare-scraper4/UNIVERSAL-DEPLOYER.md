@@ -540,3 +540,19 @@ product has no image at all.
   requests in a single invocation** (50 on Free) — the limit that actually constrains model testing.
   Invocations are counted in the fetch, queue and scheduled handlers; every outbound `fetch()` is
   counted in one place in `network.ts`.
+
+## 1.118.0 — correct the 1042 hint for Termux, and stop pointless detail fetches
+
+- **Fixed: the `error code: 1042` advice was Cloudflare-specific but only ever appears on Node.**
+  That diagnostic lives in `render-src/ai.ts`, which runs on Termux/VPS/cPanel — never on Cloudflare.
+  A plain Node client is not a Worker, so the "a Worker may not fetch another Worker on the same
+  account" rule cannot apply to its request. Getting 1042 there means something else: **no Worker is
+  deployed on that hostname**, so Cloudflare's edge answered instead of your proxy. The hint now
+  says that, and tells you to deploy `scripts/ai-proxy-worker.js` and check its `/health` route. The
+  `global_fetch_strictly_public` flag remains, but only as a footnote for calling the proxy *from
+  another Worker*.
+- **Fixed: the detail stage downloaded every product page even with no detail selector configured.**
+  Nothing could be filled, so those hundreds of requests were pure waste. Now, when no detail
+  selector is set, the selectors are auto-discovered first; if discovery also finds nothing the
+  stage is skipped and says so, instead of silently fetching everything. The job log also reports
+  how many products were enriched. Applied to both runtimes.

@@ -211,8 +211,15 @@ export async function aiConnectionDiagnostic() {
         // the global_fetch_strictly_public compatibility flag is set on both.
         // Without naming it, this looks like a broken proxy and is unfixable.
         if (/error code:\s*1042/i.test(text) || response.status === 1042) {
-          recommendations.push('خطای ۱۰۴۲ کلودفلر: یک Worker نمی‌تواند Worker دیگری از همان حساب را صدا بزند. در تنظیمات هر دو Worker (این اسکرپر و Worker واسط) گزینهٔ Settings ← Runtime ← Compatibility flags را باز کنید و پرچم global_fetch_strictly_public را اضافه و دوباره Deploy کنید.');
-          recommendations.push('راه دوم: Worker واسط را روی یک حساب کلودفلر دیگر مستقر کنید، یا برای آن یک دامنهٔ اختصاصی (Custom Domain) تعریف کنید و همان آدرس را اینجا بگذارید.');
+          // This runtime is plain Node (Termux/VPS/cPanel), not a Worker, so the
+          // "same-account Worker fetch" restriction cannot apply to OUR request:
+          // Cloudflare only blocks Worker-to-Worker calls. Receiving 1042 here
+          // therefore means the response came from Cloudflare's edge instead of a
+          // running proxy -- almost always because no Worker is deployed on that
+          // hostname (a deleted/renamed Worker, or a route that was never created).
+          recommendations.push('کلودفلر برای این آدرس خطای ۱۰۴۲ برگرداند. چون این محیط یک سرور Node محلی است (نه Worker)، محدودیت «Worker به Worker» به درخواست شما مربوط نیست؛ یعنی روی این آدرس هیچ Workerِ فعالی مستقر نیست و پاسخ را خودِ لبهٔ کلودفلر داده است.');
+          recommendations.push('آدرس را در مرورگر باز کنید: اگر Worker مستقر باشد باید صفحهٔ /health آن پاسخ بدهد. فایل آمادهٔ scripts/ai-proxy-worker.js را در یک Worker جدید کپی و Deploy کنید و سپس همان آدرس workers.dev را اینجا بگذارید.');
+          recommendations.push('اگر پراکسی را از داخل یک Worker دیگرِ همان حساب کلودفلر صدا می‌زنید (نه از ترموکس)، آن‌وقت باید پرچم global_fetch_strictly_public را روی هر دو Worker فعال کنید.');
         } else {
           recommendations.push('Worker واسط باید پارامتر url را بگیرد و متد، هدرها (به‌ویژه authorization) و بدنهٔ درخواست را بدون تغییر ارسال کند.');
         }
