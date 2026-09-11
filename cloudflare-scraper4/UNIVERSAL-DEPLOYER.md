@@ -342,3 +342,18 @@ personal access token in the Basalam developer panel with the required scopes.
 If the verdict says the token is structurally fine but Basalam still answers 401, the token has been
 revoked or belongs to a different account: create a new personal access token with the
 `vendor.product.write` scope at developers.basalam.com/panel/tokens.
+
+## 1.106.0 — cPanel shared-hosting support
+
+- **New `CPANEL-SHARED-HOSTING.md`** — a verified walkthrough for advanced shared plans that offer
+  *Setup Node.js App* (CloudLinux Node.js Selector + Phusion Passenger) and *Setup Python App*,
+  including exactly which libraries can and cannot be installed there.
+- **New `scripts/cpanel-app.js`** — the Passenger entry point. cPanel does not run `npm start`; it
+  imports a startup file and assigns the port itself. This wrapper imports the built server (which
+  already honours `process.env.PORT`) and logs startup crashes that Passenger would otherwise hide
+  behind a bare 503.
+- Verified on a clean install: the runtime needs only **6 pure-JS packages (56 modules, 17 MB)** and
+  **no compiler** — `playwright`, `puppeteer` and `crawlee` are lazy-loaded and can be omitted
+  entirely, and SQLite comes from Node's built-in `node:sqlite` (Node 22.5+), so no `better-sqlite3`
+  build is needed. `pip install basalam-sdk` also works, because `pydantic-core` ships a prebuilt
+  manylinux wheel.
