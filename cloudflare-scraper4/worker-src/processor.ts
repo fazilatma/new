@@ -261,10 +261,10 @@ async function syncProduct(job:Job,profile:Profile,product:Product):Promise<void
     for(const result of results){
       if(result.error){
         job.failed++;
-        append(job,`${product.title} [Basalam · ${result.shop}]: ${result.error}`,'error','failed',reportItem(product,{target:'basalam',shop:result.shop,error:result.error,transport:result.transport}));
+        append(job,`${product.title} [Basalam · ${result.shop}]: ${result.error}`,'error','failed',reportItem(product,{target:'basalam',shop:result.shop,price:result.price,error:result.error,transport:result.transport}));
         continue;
       }
-      append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.${result.transport?` (${result.transport==='sdk'?'SDK':'API'})`:''}`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop,transport:result.transport}));
+      append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.${result.transport?` (${result.transport==='sdk'?'SDK':'API'})`:''}`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop,price:result.price,transport:result.transport}));
     }
   }
 }

@@ -80,7 +80,7 @@ export async function unifiedRecon(profileId = '') {
     ok: failures.length === 0, at: new Date().toISOString(), profileId,
     local: eligible.length, localAll: local.length, skippedNoCode, suffixFormats, accounts: accounts.length,
     ...summarize(rows), accountsBreakdown: byAccount(rows), profiles: byProfile(rows),
-    actions: planActions(rows).length, failures, rows,
+    actions: planActions(rows, suffixFormats).length, failures, rows,
   };
   await setState('recon_unified', report);
   return report;
@@ -94,7 +94,7 @@ export async function unifiedRecon(profileId = '') {
  */
 export async function unifiedReconApply(profileId = '', apply = false, limit = 200) {
   const report = await unifiedRecon(profileId);
-  const actions = planActions(report.rows as UnifiedReconRow[]).slice(0, Math.max(1, Math.min(1000, limit)));
+  const actions = planActions(report.rows as UnifiedReconRow[], report.suffixFormats).slice(0, Math.max(1, Math.min(1000, limit)));
   if (!apply) return { ok: true, dryRun: true, planned: actions.length, actions: actions.slice(0, 200),
     matched: report.matched, priceDiff: report.priceDiff, missing: report.missing, extra: report.extra,
     noPrice: report.noPrice, inSync: report.inSync, local: report.local, localAll: report.localAll, skippedNoCode: report.skippedNoCode, accounts: report.accounts,
@@ -115,6 +115,10 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
         const profile = await getProfile(action.profileId);
         if (!product || !profile) { failed.push({ title: action.title, error: 'محصول یا پروفایل پیدا نشد' }); continue; }
         if (action.target === 'woo') await syncWoo(product, profile); else await syncBasalam(product, profile);
+        changed++;
+      } else if (action.kind === 'remove' && action.remoteId) {
+        // Only at the destination: Woo deletes, Basalam archives (4184).
+        await destinationDelete(action.target, action.remoteId, true, action.target === 'basalam' ? action.accountKey : '');
         changed++;
       }
     } catch (error) { failed.push({ title: action.title, account: action.accountName, error: msg(error) }); }

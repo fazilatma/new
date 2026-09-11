@@ -149,7 +149,7 @@ export async function unifiedRecon(profileId=''){
 }
 export async function unifiedReconApply(profileId='',apply=false,limit=200){
   const report=await unifiedRecon(profileId);
-  const actions=planActions(report.rows as UnifiedReconRow[]).slice(0,Math.max(1,Math.min(1000,limit)));
+  const actions=planActions(report.rows as UnifiedReconRow[],report.suffixFormats).slice(0,Math.max(1,Math.min(1000,limit)));
   if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),
     matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
     noPrice:report.noPrice,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
@@ -166,6 +166,11 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
         // Re-publishing goes through the queue so category/photo/stock rules and
         // the Worker's CPU budget are respected.
         await createJob(action.profileId,'sync',action.target==='woo'?'woo':'basalam');
+        changed++;
+      }else if(action.kind==='remove'&&action.remoteId){
+        // Present at the destination but gone from the source: WooCommerce is a
+        // real delete, Basalam has no permanent delete so it is archived (4184).
+        await destinationDelete(action.target,action.remoteId,true,action.target==='basalam'?action.accountKey:'');
         changed++;
       }
     }catch(error){failed.push({title:action.title,account:action.accountName,error:error instanceof Error?error.message:String(error)})}

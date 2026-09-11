@@ -1325,3 +1325,47 @@ test('every Basalam stall is priced with its own percentage', async () => {
   const vault = await readFile(new URL('../worker-src/vault.ts', import.meta.url), 'utf8');
   assert.ok(vault.includes('pricePercent:num(shop?.pricePercent)'), 'shop percentages must persist');
 });
+
+// --- The send queue showed the same price for every stall: the Basalam log line
+// never passed result.price, so reportItem fell back to the product's base price.
+test('the send queue reports each stall its own adjusted price', async () => {
+  for (const file of ['../worker-src/processor.ts', '../render-src/processor.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const lines = source.split('\n').filter(l => l.includes("shop: result.shop") || l.includes("shop:result.shop"));
+    assert.ok(lines.length >= 2, `${file}: both Basalam log lines must exist`);
+    for (const line of lines)
+      assert.ok(/price:\s*result\.price/.test(line),
+        `${file}: the per-stall price must be logged, not the base price`);
+  }
+});
+
+// --- Apply must also remove destination-only products, and the reconciliation
+// table needs a readable full-screen view.
+test('reconciliation apply removes destination-only products safely', async () => {
+  const core = await readFile(new URL('../worker-src/recon-core.ts', import.meta.url), 'utf8');
+  assert.ok(core.includes("kind: 'updatePrice' | 'create' | 'remove'"), 'the remove action must exist');
+  // It must only ever target products carrying the «(کد ایکس)» suffix.
+  assert.ok(core.includes('hasCodeSuffix(String(row.remoteTitle || row.title'),
+    'removal must be limited to code-suffixed products');
+  for (const file of ['../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(/kind\s*===\s*'remove'/.test(source), `${file}: apply must handle removal`);
+    assert.ok(source.includes('destinationDelete('), `${file}: Woo deletes, Basalam archives`);
+    assert.ok(/planActions\(.*suffixFormats\)/s.test(source), `${file}: the suffix rule must be passed in`);
+  }
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes("'recon-fullscreen'"), 'a full-screen button must exist');
+  assert.ok(dashboard.includes('.recon-full .rc-table{font-size:14px}'), 'full screen must enlarge the table');
+});
+
+// --- D1 free tier is a hard daily ceiling; show it where the work is visible.
+test('the task manager shows the D1 daily quota', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function renderQuotaBar('), 'the quota bar must exist');
+  assert.ok(dashboard.includes('body.innerHTML=quota+'), 'it must render inside the activity panel');
+  // Polling the quota costs reads, so it must be throttled.
+  assert.ok(dashboard.includes('quotaLoadedAt'), 'the quota poll must be throttled');
+  // Both runtimes must answer the route or the bar 404s outside Cloudflare.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes("'/api/quota'"), 'the Node runtime must answer /api/quota');
+});

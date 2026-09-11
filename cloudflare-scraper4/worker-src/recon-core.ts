@@ -281,7 +281,8 @@ export function byProfile(rows: UnifiedReconRow[]) {
  * stays a manual decision.
  */
 export type ReconAction = {
-  kind: 'updatePrice' | 'create';
+  /** 'remove' = the product exists ONLY at the destination: archive on Basalam, delete on Woo. */
+  kind: 'updatePrice' | 'create' | 'remove';
   target: 'woo' | 'basalam';
   accountKey: string;
   accountName: string;
@@ -293,7 +294,7 @@ export type ReconAction = {
   toPrice: number | null;
 };
 
-export function planActions(rows: UnifiedReconRow[]): ReconAction[] {
+export function planActions(rows: UnifiedReconRow[], suffixFormats: unknown = ''): ReconAction[] {
   const actions: ReconAction[] = [];
   for (const row of rows) {
     if (row.bucket === 'priceDiff' && row.remoteId && row.expectedPrice) {
@@ -304,6 +305,14 @@ export function planActions(rows: UnifiedReconRow[]): ReconAction[] {
       actions.push({ kind: 'create', target: row.target, accountKey: row.accountKey, accountName: row.accountName,
         profileId: row.profileId, sourceKey: row.sourceKey, title: row.title, remoteId: null,
         fromPrice: null, toPrice: row.expectedPrice });
+    } else if (row.bucket === 'extra' && row.remoteId
+        && hasCodeSuffix(String(row.remoteTitle || row.title || ''), suffixPatterns(parseSuffixFormats(suffixFormats)))) {
+      // Only remove destination products carrying the «(کد ایکس)» suffix — those
+      // are ours. Anything the shop owner added by hand has no suffix and is
+      // reported as `extra` but never touched.
+      actions.push({ kind: 'remove', target: row.target, accountKey: row.accountKey, accountName: row.accountName,
+        profileId: row.profileId, sourceKey: row.sourceKey, title: row.title || row.remoteTitle,
+        remoteId: row.remoteId, fromPrice: row.remotePrice, toPrice: null });
     }
   }
   return actions;
