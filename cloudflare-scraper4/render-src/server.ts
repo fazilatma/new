@@ -18,14 +18,14 @@ import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
 import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
-import { diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
+import { diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
 import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.135.0'; } catch { return process.env.npm_package_version || '1.135.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.137.0'; } catch { return process.env.npm_package_version || '1.137.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -462,9 +462,13 @@ const BROWSER_ENGINES_UNAVAILABLE=process.platform==='android';
 const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString(),benchmarkDiscovered:Record<string,string>={};
+  // 1.137.0 — one shared first-page fetch for every engine's diagnosis (signal
+  // checks run on this HTML; the per-engine products come from the loop below).
+  let diagHtml='',diagUrl='';
+  try{const first=await safeText(pageUrl(profile,1),1_000_000);diagHtml=first.text;diagUrl=first.url||pageUrl(profile,1)}catch{/* diagnosis degrades to product-only signals */}
   for(const engine of BENCHMARK_ENGINES){
-    const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
-    if(BROWSER_ENGINES_UNAVAILABLE&&BROWSER_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'موتورهای مرورگر روی اندروید/ترموکس نصب‌شدنی نیستند؛ از htmlrewriter یا cheerio استفاده کنید.'});continue}
+    const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();const engineProducts:any[]=[];let engineSelectors:any=null;
+    if(BROWSER_ENGINES_UNAVAILABLE&&BROWSER_ENGINES.has(engine)){const unavailable='موتورهای مرورگر روی اندروید/ترموکس نصب‌شدنی نیستند؛ از htmlrewriter یا cheerio استفاده کنید.';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:'روی Termux از موتورهای htmlrewriter، cheerio یا heuristic استفاده کنید.',signals:{available:false}}});continue}
     try{
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,engine,undefined,false);
@@ -473,11 +477,14 @@ async function benchmarkProfileEngines(profile:Profile){
         // the repair so the remaining probes (and later runs) use real
         // selectors. The end-of-benchmark saveProfile persists it.
         if(scraped.discoveredSelectors&&Object.keys(scraped.discoveredSelectors).length){profile.selectors={...profile.selectors,...scraped.discoveredSelectors};Object.assign(benchmarkDiscovered,scraped.discoveredSelectors)}
-        for(const product of scraped.products){const key=product.sourceKey||product.url||product.title;if(key&&!seen.has(key)){seen.add(key);products++}}
+        if(pageNo===1&&scraped.selectorsUsed)engineSelectors=scraped.selectorsUsed;
+        for(const product of scraped.products){const key=product.sourceKey||product.url||product.title;if(key&&!seen.has(key)){seen.add(key);products++;engineProducts.push(product)}}
       }
     }catch(err){error=err instanceof Error?err.message:String(err)}
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
-    results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
+    let diagnosis:any=null;
+    try{diagnosis=await diagnoseBenchmarkEngine(engine,diagHtml,diagUrl||pageUrl(profile,1),engineSelectors||profile.selectors,engineProducts,error)}catch{diagnosis=null}
+    results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
   }
   const usable=results.filter(r=>r.ok&&r.available);
   // Rank by coverage first. Ranking purely by products/minute let a shallow

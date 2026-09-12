@@ -57,7 +57,7 @@ const SKU_ATTRS=['data-sku','data-product-sku','content','value'];
 const VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
 function hasEndTag(element:HtmlElement):boolean{return !VOID_TAGS.has(String(element.tagName||'').toLowerCase())}
 async function sourceKey(value:string):Promise<string>{return (await sha256(value)).slice(0,32)}
-async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
+export async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
   const network=(await loadConnections()).ai.network;
   // A Worker URL saved in «روش اتصال» now applies to source pages too, not only
   // to AI calls. Previously it was used only when a profile had ticked the
@@ -604,6 +604,101 @@ function heuristicImage(chunk:string,baseUrl:string):string{
 export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];const seenUrls=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||seenUrls.has(url)||!/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2])||chunkTitle(chunk);const image=heuristicImage(chunk,baseUrl);const priceText=cleanText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0]||'');if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;seenUrls.add(url);out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
 
 /** Runs the same network, list parser and detail parser used by real jobs, but never writes or syncs products. */
+export type EngineDiagnosis={engine:ExtractionEngine;candidates:number;extracted:number;complete:{title:number;price:number;link:number;image:number};sample:{title:string;priceText:string;url:string;image:string}|null;dropReasons:string[];hint:string;signals:Record<string,number|string|boolean>};
+const countMatches=(html:string,re:RegExp):number=>{const global=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');let n=0;global.lastIndex=0;while(global.exec(html)){n++;if(n>5000)break}return n};
+/** Per-engine diagnosis for the 3-page speed test (1.137.0). Twin: render-src/scraper.ts diagnoseBenchmarkEngine — same shape, same Persian copy. */
+export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:string,baseUrl:string,selectors:Selectors,products:Product[],error=''):Promise<EngineDiagnosis>{
+  const list=Array.isArray(products)?products:[];
+  const complete={title:0,price:0,link:0,image:0};
+  for(const p of list){if(p.title)complete.title++;if(Number(p.price)>0)complete.price++;if(p.url)complete.link++;if(p.image)complete.image++}
+  const first=list.find(p=>p.title||p.url)||list[0];
+  const sample=first?{title:String(first.title||''),priceText:String(first.priceText||''),url:String(first.url||''),image:String(first.image||'')}:null;
+  const dropReasons:string[]=[];
+  const signals:Record<string,number|string|boolean>={};
+  const text=String(html||'');
+  let candidates=0,hint='';
+  const partialNote=():string=>{const missing:string[]=[];if(complete.title<list.length)missing.push('عنوان');if(complete.price<list.length)missing.push('قیمت');if(complete.link<list.length)missing.push('لینک');if(complete.image<list.length)missing.push('تصویر');return missing.length?` ولی ${list.length-Math.min(complete.title,complete.price,complete.link,complete.image)} محصول ${missing.join('/')} کامل ندارند`:''};
+  if(!text){
+    candidates=list.length;signals.pageFetched=false;
+    if(error)dropReasons.push(error);
+    else if(!list.length)dropReasons.push('صفحهٔ اول برای بررسی سیگنال‌ها دریافت نشد و محصولی هم استخراج نشد.');
+    hint=list.length?`موتور ${list.length} محصول استخراج کرد (صفحهٔ اول برای بررسی عمیق در دسترس نبود).`:'دسترسی شبکه به صفحهٔ اول ناموفق بود؛ آدرس و اتصال را بررسی کنید.';
+    return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
+  }
+  signals.pageFetched=true;
+  if(engine==='cheerio'||engine==='htmlrewriter'){
+    let verified:ListSelectorVerification|null=null;
+    try{verified=await verifyListSelectors(text,baseUrl,selectors)}catch{verified=null}
+    const containers=verified?.containerCount||0,titles=verified?.title.count||0,prices=verified?.price.count||0,links=verified?.link.count||0,images=verified?.image.count||0;
+    candidates=containers;signals.containers=containers;signals.titles=titles;signals.prices=prices;signals.links=links;signals.images=images;
+    const containerSel=String((selectors as any)?.container||'').trim();
+    if(!containerSel){dropReasons.push('سلکتور ظرف خالی است؛ موتور سلکتوری بدون ظرف نمی‌تواند کارتی پیدا کند.');hint='سلکتور ظرف را وارد کنید یا «پیشنهاد خودکار سلکتورها» را بزنید.'}
+    else if(!containers){dropReasons.push(`سلکتور ظرف «${containerSel}» هیچ کارتی در صفحه پیدا نکرد.`);hint='سلکتور ظرف اشتباه است یا صفحه جاوااسکریپتی است؛ «پیشنهاد خودکار سلکتورها» را بزنید.'}
+    else if(!titles){dropReasons.push(`${containers} کارت پیدا شد ولی داخل هیچ‌کدام عنوانی نیست؛ یعنی سلکتور عنوان بیرون از ظرف را می‌بیند یا ظرف کل فهرست را گرفته است.`);hint='سلکتور عنوان باید نسبت به ظرف داخلی باشد، یا ظرف باید هر کارت باشد نه کل فهرست.'}
+    else if(!list.length){
+      if(error)dropReasons.push(error);
+      if(!prices)dropReasons.push(`${containers} کارت و ${titles} عنوان هست ولی قیمت داخل کارت‌ها پیدا نشد.`);
+      if(!links)dropReasons.push('لینک محصول داخل کارت‌ها پیدا نشد.');
+      if(!images)dropReasons.push('تصویر داخل کارت‌ها پیدا نشد.');
+      if(!dropReasons.length)dropReasons.push(`${containers} کارت دیده شد ولی هیچ محصول کاملی استخراج نشد.`);
+      hint='سلکتورهای عنوان/قیمت/لینک/تصویر را نسبت به ظرف اصلاح کنید.';
+    }else{
+      if(containers>list.length)dropReasons.push(`از ${containers} کارت، ${list.length} محصول نگه داشته شد؛ بقیه عنوان/قیمت/تصویر کامل نداشتند.`);
+      hint=`موتور سالم است: ${list.length} محصول استخراج شد${partialNote()}.`;
+    }
+  }else if(engine==='jsonld'){
+    const blocks=[...text.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]||'');
+    const productBlocks=blocks.filter(b=>/"@type"\s*:\s*"(Product|ItemList|ProductGroup|Offer|AggregateOffer|SearchResultsPage)"/i.test(b)).length;
+    candidates=countMatches(text,/"@type"\s*:\s*"Product"/i)+countMatches(text,/"@type"\s*:\s*"ListItem"/i);
+    signals.ldBlocks=blocks.length;signals.productBlocks=productBlocks;
+    if(!blocks.length){dropReasons.push('صفحه هیچ بلوک JSON-LD ندارد.');hint='این سایت دادهٔ ساخت‌یافته ندارد؛ htmlrewriter یا heuristic را امتحان کنید.'}
+    else if(!list.length){dropReasons.push(`${blocks.length} بلوک JSON-LD هست ولی هیچ‌کدام محصول یا فهرست محصول نیست.`);hint='بلوک‌های JSON-LD این صفحه محصول ندارند؛ htmlrewriter یا heuristic را امتحان کنید.'}
+    else hint=`موتور سالم است: ${list.length} محصول از JSON-LD استخراج شد${partialNote()}.`;
+  }else if(engine==='next_data'){
+    const m=text.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i),payload=m?.[1]||'';
+    candidates=countMatches(payload,/"(price|priceText|finalPrice|salePrice)"\s*:/i);
+    signals.hasNextData=Boolean(m);signals.nextBytes=payload.length;signals.priceKeys=candidates;
+    if(!m){dropReasons.push('صفحه دادهٔ __NEXT_DATA__ ندارد (سایت Next.js نیست).');hint='این موتور فقط برای سایت‌های Next.js است؛ موتور دیگری را امتحان کنید.'}
+    else if(!list.length){dropReasons.push('دادهٔ __NEXT_DATA__ هست ولی موتور محصولی از آن استخراج نکرد؛ ساختار کاتالوگ با الگوهای شناخته‌شده فرق دارد.');hint='کاتالوگ داخل __NEXT_DATA__ ساختار غیراستاندارد دارد؛ heuristic یا موتور سلکتوری را امتحان کنید.'}
+    else hint=`موتور سالم است: ${list.length} محصول از __NEXT_DATA__ استخراج شد${partialNote()}.`;
+  }else if(engine==='script_json'){
+    const inline=[...text.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]||'');
+    const withProduct=inline.filter(s=>/"(price|priceText|finalPrice|salePrice)"\s*:/i.test(s)&&/"(title|name|productName)"\s*:/i.test(s)).length;
+    candidates=countMatches(text,/"(price|priceText|finalPrice|salePrice)"\s*:/i);
+    signals.inlineScripts=inline.length;signals.productScripts=withProduct;signals.priceKeys=candidates;
+    if(!withProduct){dropReasons.push('هیچ اسکریپت درون‌خطی‌ای آبجکت محصول (نام+قیمت) ندارد.');hint='این صفحه کاتالوگ JSON در اسکریپت ندارد؛ heuristic یا موتور سلکتوری را امتحان کنید.'}
+    else if(!list.length){dropReasons.push(`${withProduct} اسکریپت دادهٔ محصول‌دار هست ولی موتور نتوانست آن‌ها را بخواند (ساختار غیراستاندارد).`);hint='ساختار JSON اسکریپت‌ها غیراستاندارد است؛ heuristic یا موتور سلکتوری را امتحان کنید.'}
+    else hint=`موتور سالم است: ${list.length} محصول از JSON اسکریپت استخراج شد${partialNote()}.`;
+  }else if(engine==='metadata'){
+    const og=countMatches(text,/<meta\b[^>]*property=["']og:/i);
+    candidates=/<meta\b[^>]*property=["']og:title["']/i.test(text)?1:0;signals.ogTags=og;
+    if(!og){dropReasons.push('صفحه متاتگ OpenGraph ندارد.');hint='این موتور فقط برای صفحات دارای متاتگ og است؛ موتور دیگری را امتحان کنید.'}
+    else if(!list.length){dropReasons.push('متاتگ og هست ولی محصول کاملی از آن ساخته نشد (این موتور تک‌محصولی است و برای صفحهٔ فهرست مناسب نیست).');hint='موتور metadata برای صفحهٔ جزئیات تک‌محصول است، نه فهرست؛ heuristic یا موتور سلکتوری را امتحان کنید.'}
+    else hint=`موتور سالم است: ${list.length} محصول از متاتگ‌ها استخراج شد${partialNote()}.`;
+  }else if(engine==='heuristic'){
+    let anchors=0;
+    for(const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)){if(/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1]||''))anchors++;if(anchors>5000)break}
+    const priceHints=countMatches(text,PRICE_HINT_RE),images=countMatches(text,/<img\b/i);
+    candidates=anchors;signals.productAnchors=anchors;signals.priceHints=priceHints;signals.images=images;
+    if(!anchors){dropReasons.push('هیچ لینکی با الگوی آدرس محصول (/product/ ،/shop/ ،snp- و…) پیدا نشد.');hint='آدرس محصولات این سایت الگوی شناخته‌شده ندارد؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.'}
+    else if(!list.length){
+      if(error)dropReasons.push(error);
+      dropReasons.push(`${anchors} لینک محصول هست ولی هیچ‌کدام داخل کارتی با تصویر+قیمت کامل نبودند (حذف شدند).`);
+      if(!priceHints)dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');
+      hint=!priceHints?'قیمت‌ها احتمالاً با جاوااسکریپت بارگذاری می‌شوند؛ موتور مرورگری (نمایشی) را امتحان کنید.':'کارت‌ها تصویر یا قیمت کامل ندارند؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.';
+    }else{
+      if(anchors>list.length)dropReasons.push(`از ${anchors} لینک محصول، ${list.length} محصول کامل نگه داشته شد؛ بقیه تصویر/قیمت/عنوان کامل نداشتند.`);
+      hint=`موتور سالم است: ${list.length} محصول بدون نیاز به سلکتور پیدا شد${partialNote()}.`;
+    }
+  }else{
+    candidates=list.length;signals.note='engine-specific signals are not measured for this engine';
+    if(error)dropReasons.push(error);
+    else if(!list.length)dropReasons.push('موتور محصولی استخراج نکرد.');
+    hint=list.length?`موتور ${list.length} محصول استخراج کرد${partialNote()}.`:(error||'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
+  }
+  if(error&&!dropReasons.includes(error)&&!list.length)dropReasons.unshift(error);
+  return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
+}
 export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
   const add=(name:string,ok:boolean,summary:string,details:any={})=>stages.push({name,ok,summary,...details});

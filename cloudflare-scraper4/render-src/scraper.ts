@@ -958,6 +958,167 @@ export async function testSelector(url: string, selector: string, type = 'text')
  * scrape uses (safeText -> scrapeListWithMeta -> scrapeDetails) so the report
  * reflects what the scraper actually does, not a re-implementation.
  */
+export type EngineDiagnosis = {
+  engine: ExtractionEngine;
+  /** Cards/candidates the engine's source sees on the benchmark's first page. */
+  candidates: number;
+  /** Unique products this engine kept across the scanned pages. */
+  extracted: number;
+  complete: { title: number; price: number; link: number; image: number };
+  sample: { title: string; priceText: string; url: string; image: string } | null;
+  /** Persian: why zero / why partial. Empty when the engine is fully healthy. */
+  dropReasons: string[];
+  /** Persian one-liner: what this means and what to do next. */
+  hint: string;
+  signals: Record<string, number | string | boolean>;
+};
+
+const countMatches = (html: string, re: RegExp): number => {
+  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+  let n = 0;
+  global.lastIndex = 0;
+  while (global.exec(html)) { n++; if (n > 5000) break; }
+  return n;
+};
+
+/**
+ * Per-engine diagnosis for the 3-page speed test (1.137.0). The benchmark
+ * used to report counts only, so a zero meant nothing actionable. This runs
+ * cheap signal checks on ONE shared first-page fetch (the caller fetches it
+ * once per benchmark, not once per engine) plus field completeness over the
+ * engine's own products, and turns both into Persian why/why-partial reasons
+ * and a next-step hint. Twin: worker-src/scraper.ts diagnoseBenchmarkEngine.
+ */
+export async function diagnoseBenchmarkEngine(
+  engine: ExtractionEngine, html: string, baseUrl: string, selectors: Selectors,
+  products: Product[], error = ''
+): Promise<EngineDiagnosis> {
+  const list = Array.isArray(products) ? products : [];
+  const complete = { title: 0, price: 0, link: 0, image: 0 };
+  for (const p of list) {
+    if (p.title) complete.title++;
+    if (Number(p.price) > 0) complete.price++;
+    if (p.url) complete.link++;
+    if (p.image) complete.image++;
+  }
+  const first = list.find(p => p.title || p.url) || list[0];
+  const sample = first
+    ? { title: String(first.title || ''), priceText: String(first.priceText || ''), url: String(first.url || ''), image: String(first.image || '') }
+    : null;
+  const dropReasons: string[] = [];
+  const signals: Record<string, number | string | boolean> = {};
+  const text = String(html || '');
+  let candidates = 0, hint = '';
+  const partialNote = (): string => {
+    const missing: string[] = [];
+    if (complete.title < list.length) missing.push('عنوان');
+    if (complete.price < list.length) missing.push('قیمت');
+    if (complete.link < list.length) missing.push('لینک');
+    if (complete.image < list.length) missing.push('تصویر');
+    return missing.length ? ` ولی ${list.length - Math.min(complete.title, complete.price, complete.link, complete.image)} محصول ${missing.join('/')} کامل ندارند` : '';
+  };
+  if (!text) {
+    candidates = list.length;
+    signals.pageFetched = false;
+    if (error) dropReasons.push(error);
+    else if (!list.length) dropReasons.push('صفحهٔ اول برای بررسی سیگنال‌ها دریافت نشد و محصولی هم استخراج نشد.');
+    hint = list.length
+      ? `موتور ${list.length} محصول استخراج کرد (صفحهٔ اول برای بررسی عمیق در دسترس نبود).`
+      : 'دسترسی شبکه به صفحهٔ اول ناموفق بود؛ آدرس و اتصال را بررسی کنید.';
+    return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
+  }
+  signals.pageFetched = true;
+  if (engine === 'cheerio' || engine === 'htmlrewriter') {
+    let verified: ListSelectorVerification | null = null;
+    try { verified = verifyListSelectors(text, baseUrl, selectors); } catch { verified = null; }
+    const containers = verified?.containerCount || 0;
+    const titles = verified?.title.count || 0, prices = verified?.price.count || 0;
+    const links = verified?.link.count || 0, images = verified?.image.count || 0;
+    candidates = containers;
+    signals.containers = containers; signals.titles = titles; signals.prices = prices; signals.links = links; signals.images = images;
+    const containerSel = String((selectors as any)?.container || '').trim();
+    if (!containerSel) {
+      dropReasons.push('سلکتور ظرف خالی است؛ موتور سلکتوری بدون ظرف نمی‌تواند کارتی پیدا کند.');
+      hint = 'سلکتور ظرف را وارد کنید یا «پیشنهاد خودکار سلکتورها» را بزنید.';
+    } else if (!containers) {
+      dropReasons.push(`سلکتور ظرف «${containerSel}» هیچ کارتی در صفحه پیدا نکرد.`);
+      hint = 'سلکتور ظرف اشتباه است یا صفحه جاوااسکریپتی است؛ «پیشنهاد خودکار سلکتورها» را بزنید.';
+    } else if (!titles) {
+      dropReasons.push(`${containers} کارت پیدا شد ولی داخل هیچ‌کدام عنوانی نیست؛ یعنی سلکتور عنوان بیرون از ظرف را می‌بیند یا ظرف کل فهرست را گرفته است.`);
+      hint = 'سلکتور عنوان باید نسبت به ظرف داخلی باشد، یا ظرف باید هر کارت باشد نه کل فهرست.';
+    } else if (!list.length) {
+      if (error) dropReasons.push(error);
+      if (!prices) dropReasons.push(`${containers} کارت و ${titles} عنوان هست ولی قیمت داخل کارت‌ها پیدا نشد.`);
+      if (!links) dropReasons.push('لینک محصول داخل کارت‌ها پیدا نشد.');
+      if (!images) dropReasons.push('تصویر داخل کارت‌ها پیدا نشد.');
+      if (!dropReasons.length) dropReasons.push(`${containers} کارت دیده شد ولی هیچ محصول کاملی استخراج نشد.`);
+      hint = 'سلکتورهای عنوان/قیمت/لینک/تصویر را نسبت به ظرف اصلاح کنید.';
+    } else {
+      if (containers > list.length) dropReasons.push(`از ${containers} کارت، ${list.length} محصول نگه داشته شد؛ بقیه عنوان/قیمت/تصویر کامل نداشتند.`);
+      hint = `موتور سالم است: ${list.length} محصول استخراج شد${partialNote()}.`;
+    }
+  } else if (engine === 'jsonld') {
+    const blocks = [...text.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1] || '');
+    const productBlocks = blocks.filter(b => /"@type"\s*:\s*"(Product|ItemList|ProductGroup|Offer|AggregateOffer|SearchResultsPage)"/i.test(b)).length;
+    candidates = countMatches(text, /"@type"\s*:\s*"Product"/i) + countMatches(text, /"@type"\s*:\s*"ListItem"/i);
+    signals.ldBlocks = blocks.length; signals.productBlocks = productBlocks;
+    if (!blocks.length) { dropReasons.push('صفحه هیچ بلوک JSON-LD ندارد.'); hint = 'این سایت دادهٔ ساخت‌یافته ندارد؛ htmlrewriter یا heuristic را امتحان کنید.'; }
+    else if (!list.length) { dropReasons.push(`${blocks.length} بلوک JSON-LD هست ولی هیچ‌کدام محصول یا فهرست محصول نیست.`); hint = 'بلوک‌های JSON-LD این صفحه محصول ندارند؛ htmlrewriter یا heuristic را امتحان کنید.'; }
+    else hint = `موتور سالم است: ${list.length} محصول از JSON-LD استخراج شد${partialNote()}.`;
+  } else if (engine === 'next_data') {
+    const m = text.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+    const payload = m?.[1] || '';
+    candidates = countMatches(payload, /"(price|priceText|finalPrice|salePrice)"\s*:/i);
+    signals.hasNextData = Boolean(m); signals.nextBytes = payload.length; signals.priceKeys = candidates;
+    if (!m) { dropReasons.push('صفحه دادهٔ __NEXT_DATA__ ندارد (سایت Next.js نیست).'); hint = 'این موتور فقط برای سایت‌های Next.js است؛ موتور دیگری را امتحان کنید.'; }
+    else if (!list.length) { dropReasons.push('دادهٔ __NEXT_DATA__ هست ولی موتور محصولی از آن استخراج نکرد؛ ساختار کاتالوگ با الگوهای شناخته‌شده فرق دارد.'); hint = 'کاتالوگ داخل __NEXT_DATA__ ساختار غیراستاندارد دارد؛ heuristic یا موتور سلکتوری را امتحان کنید.'; }
+    else hint = `موتور سالم است: ${list.length} محصول از __NEXT_DATA__ استخراج شد${partialNote()}.`;
+  } else if (engine === 'script_json') {
+    const inline = [...text.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1] || '');
+    const withProduct = inline.filter(s => /"(price|priceText|finalPrice|salePrice)"\s*:/i.test(s) && /"(title|name|productName)"\s*:/i.test(s)).length;
+    candidates = countMatches(text, /"(price|priceText|finalPrice|salePrice)"\s*:/i);
+    signals.inlineScripts = inline.length; signals.productScripts = withProduct; signals.priceKeys = candidates;
+    if (!withProduct) { dropReasons.push('هیچ اسکریپت درون‌خطی‌ای آبجکت محصول (نام+قیمت) ندارد.'); hint = 'این صفحه کاتالوگ JSON در اسکریپت ندارد؛ heuristic یا موتور سلکتوری را امتحان کنید.'; }
+    else if (!list.length) { dropReasons.push(`${withProduct} اسکریپت دادهٔ محصول‌دار هست ولی موتور نتوانست آن‌ها را بخواند (ساختار غیراستاندارد).`); hint = 'ساختار JSON اسکریپت‌ها غیراستاندارد است؛ heuristic یا موتور سلکتوری را امتحان کنید.'; }
+    else hint = `موتور سالم است: ${list.length} محصول از JSON اسکریپت استخراج شد${partialNote()}.`;
+  } else if (engine === 'metadata') {
+    const og = countMatches(text, /<meta\b[^>]*property=["']og:/i);
+    candidates = /<meta\b[^>]*property=["']og:title["']/i.test(text) ? 1 : 0;
+    signals.ogTags = og;
+    if (!og) { dropReasons.push('صفحه متاتگ OpenGraph ندارد.'); hint = 'این موتور فقط برای صفحات دارای متاتگ og است؛ موتور دیگری را امتحان کنید.'; }
+    else if (!list.length) { dropReasons.push('متاتگ og هست ولی محصول کاملی از آن ساخته نشد (این موتور تک‌محصولی است و برای صفحهٔ فهرست مناسب نیست).'); hint = 'موتور metadata برای صفحهٔ جزئیات تک‌محصول است، نه فهرست؛ heuristic یا موتور سلکتوری را امتحان کنید.'; }
+    else hint = `موتور سالم است: ${list.length} محصول از متاتگ‌ها استخراج شد${partialNote()}.`;
+  } else if (engine === 'heuristic') {
+    let anchors = 0;
+    for (const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
+      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || '')) anchors++;
+      if (anchors > 5000) break;
+    }
+    const priceHints = countMatches(text, PRICE_HINT_RE);
+    const images = countMatches(text, /<img\b/i);
+    candidates = anchors;
+    signals.productAnchors = anchors; signals.priceHints = priceHints; signals.images = images;
+    if (!anchors) { dropReasons.push('هیچ لینکی با الگوی آدرس محصول (/product/ ،/shop/ ،snp- و…) پیدا نشد.'); hint = 'آدرس محصولات این سایت الگوی شناخته‌شده ندارد؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.'; }
+    else if (!list.length) {
+      if (error) dropReasons.push(error);
+      dropReasons.push(`${anchors} لینک محصول هست ولی هیچ‌کدام داخل کارتی با تصویر+قیمت کامل نبودند (حذف شدند).`);
+      if (!priceHints) dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');
+      hint = !priceHints ? 'قیمت‌ها احتمالاً با جاوااسکریپت بارگذاری می‌شوند؛ موتور مرورگری (نمایشی) را امتحان کنید.' : 'کارت‌ها تصویر یا قیمت کامل ندارند؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.';
+    } else {
+      if (anchors > list.length) dropReasons.push(`از ${anchors} لینک محصول، ${list.length} محصول کامل نگه داشته شد؛ بقیه تصویر/قیمت/عنوان کامل نداشتند.`);
+      hint = `موتور سالم است: ${list.length} محصول بدون نیاز به سلکتور پیدا شد${partialNote()}.`;
+    }
+  } else {
+    candidates = list.length;
+    signals.note = 'engine-specific signals are not measured for this engine';
+    if (error) dropReasons.push(error);
+    else if (!list.length) dropReasons.push('موتور محصولی استخراج نکرد.');
+    hint = list.length ? `موتور ${list.length} محصول استخراج کرد${partialNote()}.` : (error || 'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
+  }
+  if (error && !dropReasons.includes(error) && !list.length) dropReasons.unshift(error);
+  return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
+};
+
 export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
   const stages: any[] = [], recommendations: string[] = [];
