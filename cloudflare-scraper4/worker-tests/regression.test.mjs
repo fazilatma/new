@@ -24,10 +24,11 @@ class MemoryStatement {
     if(s.startsWith('SELECT * FROM jobs WHERE id='))return this.db.jobs.get(v[0])||null;
     if(s.startsWith('SELECT * FROM jobs WHERE profile_id='))return[...this.db.jobs.values()].find(job=>job.profile_id===v[0]&&job.kind===v[1]&&['queued','running'].includes(job.status))||null;
     if(s.startsWith('SELECT 1 AS found FROM products'))return this.db.products.has(`${v[0]}:${v[1]}`)?{found:1}:null;
+    if(s.startsWith('SELECT count(*) AS total FROM products WHERE profile_id=?')){const like=v.length>1?String(v[1]).replace(/^%|%$/g,'').replace(/\\(.)/g,'$1'):'';let n=0;for(const row of this.db.products.values())if(row.profile_id===v[0]&&row.data!=null&&row.data!=='null'&&(!like||String(row.title||'').includes(like)))n++;return{total:n}}
     if(s.startsWith('SELECT * FROM category_learning WHERE phrase='))return[...this.db.categoryLearning.values()].filter(row=>row.phrase===v[0]).sort((a,b)=>b.hits-a.hits)[0]||null;
     return null;
   }
-  async all(){const s=this.sql;let results=[];if(s.startsWith('SELECT * FROM profiles ORDER BY'))results=[...this.db.profiles.values()];if(s.startsWith('SELECT * FROM jobs ORDER BY'))results=[...this.db.jobs.values()].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,Number(this.values[0])||200);if(s.startsWith('SELECT id FROM jobs WHERE status IN'))results=[...this.db.jobs.values()].filter(job=>['done','failed','stopped'].includes(job.status)).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map(job=>({id:job.id}));if(s.startsWith('SELECT * FROM category_learning ORDER BY'))results=[...this.db.categoryLearning.values()].sort((a,b)=>b.hits-a.hits).slice(0,Number(this.values[0])||1000);return{success:true,results}}
+  async all(){const s=this.sql;let results=[];if(s.startsWith('SELECT * FROM profiles ORDER BY'))results=[...this.db.profiles.values()];if(s.startsWith('SELECT * FROM jobs ORDER BY'))results=[...this.db.jobs.values()].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,Number(this.values[0])||200);if(s.startsWith('SELECT id FROM jobs WHERE status IN'))results=[...this.db.jobs.values()].filter(job=>['done','failed','stopped'].includes(job.status)).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map(job=>({id:job.id}));if(s.startsWith('SELECT * FROM category_learning ORDER BY'))results=[...this.db.categoryLearning.values()].sort((a,b)=>b.hits-a.hits).slice(0,Number(this.values[0])||1000);if(s.startsWith('SELECT data FROM products WHERE profile_id=?')){const hasLike=s.includes('title LIKE'),like=hasLike?String(this.values[1]).replace(/^%|%$/g,'').replace(/\\(.)/g,'$1'):'',rest=hasLike?this.values.slice(2):this.values.slice(1);let matches=[...this.db.products.values()].filter(row=>row.profile_id===this.values[0]&&row.data!=null&&row.data!=='null'&&(!like||String(row.title||'').includes(like)));if(rest.length>1)matches=matches.slice(Number(rest[rest.length-1]),Number(rest[rest.length-1])+Number(rest[rest.length-2]));results=matches.map(row=>({data:row.data}))}return{success:true,results}}
   async run(){const s=this.sql,v=this.values;
     if(this.db.quotaFail&&(s.startsWith('INSERT')||s.startsWith('UPDATE')||s.startsWith('DELETE')))throw new Error('you exceeded write operations quota');
     if(s.startsWith('UPDATE app_state SET value=')){if(this.db.states.get(v[2])===v[3]){this.db.states.set(v[2],v[0]);this.db.stateUpdatedAt.set(v[2],v[1]);return{success:true,meta:{changes:1}}}return{success:true,meta:{changes:0}}}
@@ -1883,4 +1884,15 @@ test('the deployer survives a blind port scan and a lost bind race', async () =>
   assert.ok(deployer.includes('retryDepth < 1'), 'the bind retry must happen exactly once, never in a loop');
   assert.ok(deployer.includes('if (retryDepth === 0) scraperLog'), 'the retry must continue the same log story, not wipe attempt #1');
   assert.ok(deployer.includes('pkill -f render-dist/server'), 'a port that stays held must end with a manual escape hatch');
+});
+
+test('results API skips poisoned product rows instead of serving nulls',async()=>{
+  const db=new MemoryD1();
+  db.products.set('pp:g',{profile_id:'pp',source_key:'g',data:JSON.stringify({sourceKey:'g',title:'Good',price:10,url:'',image:''}),title:'Good',price:10,source_url:''});
+  db.products.set('pp:bad1',{profile_id:'pp',source_key:'bad1',data:'null',title:'Bad1',price:0,source_url:''});
+  db.products.set('pp:bad2',{profile_id:'pp',source_key:'bad2',data:null,title:'Bad2',price:0,source_url:''});
+  const response=await call(db,'/api/profiles/pp/products?limit=200&q='),body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.total,1);
+  assert.deepEqual(body.products.map(p=>p.title),['Good']);
 });

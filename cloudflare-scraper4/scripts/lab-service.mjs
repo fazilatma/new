@@ -51,6 +51,7 @@ check('diagnostic names the browser cause and flags deep pages', src('render-src
 check('network_api engine sniffs XHR/fetch JSON via Playwright', src('render-src/scraper.ts').includes('export function networkApiProducts(') && src('render-src/scraper.ts').includes("page.on('response'") && src('render-src/scraper.ts').includes("name === 'network_api'") && src('render-src/server.ts').includes("'crawlee_playwright','network_api']"));
 check('network_api reports capture stats and dumps bodies', src('render-src/scraper.ts').includes('export type NetworkApiStats=') && src('render-src/scraper.ts').includes('SCRAPER4_DUMP_API_DIR') && src('render-src/scraper.ts').includes('walkApiObjects(JSON.parse(raw), baseUrl, out)'));
 check('network_api counts failed responses with statuses', src('render-src/scraper.ts').includes('failedResponses++') && src('render-src/scraper.ts').includes('response.status()') && src('render-src/scraper.ts').includes('failedResponses === 0'));
+check('poisoned product rows cannot blank the results page', src('worker-src/db.ts').includes('upsertProduct refused a non-object product') && src('render-src/db.ts').includes('upsertProduct refused a non-object product') && src('worker-src/dashboard.ts').includes("(data.products||[]).filter(p=>p&&typeof p==='object')"));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

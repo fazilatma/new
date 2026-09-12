@@ -302,7 +302,10 @@ export async function stopRequested(id: string): Promise<boolean> {
   return Boolean(rows[0]?.stop_requested);
 }
 
+function validProductRow(p: any): p is Product { return !!p && typeof p === 'object' && !Array.isArray(p); }
+
 export async function upsertProduct(profileId: string, product: Product): Promise<'added' | 'updated'> {
+  if (!validProductRow(product)) throw new Error('upsertProduct refused a non-object product');
   const { rows } = await pool.query('SELECT 1 FROM products WHERE profile_id=$1 AND source_key=$2', [profileId, product.sourceKey]);
   await pool.query(`INSERT INTO products(profile_id,source_key,data,title,price,source_url) VALUES($1,$2,$3,$4,$5,$6)
     ON CONFLICT(profile_id,source_key) DO UPDATE SET data=EXCLUDED.data,title=EXCLUDED.title,price=EXCLUDED.price,source_url=EXCLUDED.source_url,active=true,missing_since=NULL,updated_at=now()`,
@@ -313,23 +316,23 @@ export async function upsertProduct(profileId: string, product: Product): Promis
 export async function listProducts(profileId: string, limit = 100, offset = 0, q = ''): Promise<{ products: Product[]; total: number }> {
   if (useSqlite) {
     const like = `%${q}%`;
-    const where = q ? 'profile_id=? AND title LIKE ?' : 'profile_id=?';
+    const where = (q ? 'profile_id=? AND title LIKE ?' : 'profile_id=?') + ` AND data IS NOT NULL AND data<>'null'`;
     const params = q ? [profileId, like] : [profileId];
     const count = await query(`SELECT count(*) total FROM products WHERE ${where}`, params);
     const { rows } = await query(`SELECT data FROM products WHERE ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
-    return { products: rows.map(row => parseJson<Product>(row.data, row.data)), total: Number(count.rows[0]?.total || 0) };
+    return { products: rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow), total: Number(count.rows[0]?.total || 0) };
   }
-  const params: unknown[] = [profileId]; let where = 'profile_id=$1';
+  const params: unknown[] = [profileId]; let where = `profile_id=$1 AND data IS NOT NULL AND data::text<>'null'`;
   if (q) { params.push(`%${q}%`); where += ` AND title ILIKE $${params.length}`; }
   const count = await pool.query(`SELECT count(*)::int total FROM products WHERE ${where}`, params);
   params.push(limit, offset);
   const { rows } = await pool.query(`SELECT data FROM products WHERE ${where} ORDER BY updated_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
-  return { products: rows.map(row => parseJson<Product>(row.data, row.data)), total: Number(count.rows[0].total || 0) };
+  return { products: rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow), total: Number(count.rows[0].total || 0) };
 }
 
 export async function allProducts(profileId: string): Promise<Product[]> {
-  const { rows } = await pool.query('SELECT data FROM products WHERE profile_id=$1 ORDER BY updated_at', [profileId]);
-  return rows.map(row => parseJson<Product>(row.data, row.data));
+  const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND data::text<>'null' ORDER BY updated_at`, [profileId]);
+  return rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow);
 }
 export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const {rows}=await pool.query('SELECT data FROM products WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);return rows[0]?.data ? parseJson<Product>(rows[0].data, rows[0].data) : null}
 export async function deleteProduct(profileId:string,sourceKey:string):Promise<boolean>{

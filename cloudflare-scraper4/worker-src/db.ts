@@ -217,6 +217,7 @@ function jobFromRow(row: any): Job {
     startedAt:row.started_at ? String(row.started_at) : null,finishedAt:row.finished_at ? String(row.finished_at) : null,updatedAt:String(row.updated_at) };
 }
 function productFromRow(row: any): Product { return json<Product>(row.data, {} as Product); }
+function validProductRow(p: any): p is Product { return !!p && typeof p === 'object' && !Array.isArray(p); }
 
 export async function listProfiles(): Promise<Profile[]> { return (await rows('SELECT * FROM profiles ORDER BY updated_at DESC')).map(profileFromRow); }
 export async function getProfile(id: string): Promise<Profile | null> { const row = await statement('SELECT * FROM profiles WHERE id=?',[id]).first(); return row ? profileFromRow(row) : null; }
@@ -314,6 +315,7 @@ export async function pruneFinishedJobs(keep=20):Promise<number>{
 }
 
 export async function upsertProduct(profileId:string,product:Product):Promise<'added'|'updated'>{
+  if(!validProductRow(product))throw new Error('upsertProduct refused a non-object product');
   const existing=await statement('SELECT 1 AS found FROM products WHERE profile_id=? AND source_key=?',[profileId,product.sourceKey]).first();const timestamp=now();
   await run(`INSERT INTO products(profile_id,source_key,data,title,price,source_url,active,missing_since,created_at,updated_at) VALUES(?,?,?,?,?,?,1,NULL,?,?)
     ON CONFLICT(profile_id,source_key) DO UPDATE SET data=excluded.data,title=excluded.title,price=excluded.price,source_url=excluded.source_url,active=1,missing_since=NULL,updated_at=excluded.updated_at`,
@@ -321,14 +323,14 @@ export async function upsertProduct(profileId:string,product:Product):Promise<'a
 }
 export async function listProducts(profileId:string,limit=100,offset=0,q=''):Promise<{products:Product[];total:number}>{
   const filter=q?' AND title LIKE ? ESCAPE \'\\\'':'',pattern=`%${q.replace(/[\\%_]/g,'\\$&')}%`,params=q?[profileId,pattern]:[profileId];
-  const count=await statement(`SELECT count(*) AS total FROM products WHERE profile_id=?${filter}`,params).first<{total:number}>();
-  const result=await rows(`SELECT data FROM products WHERE profile_id=?${filter} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,[...params,limit,offset]);return{products:result.map(productFromRow),total:Number(count?.total||0)};
+  const count=await statement(`SELECT count(*) AS total FROM products WHERE profile_id=? AND data IS NOT NULL AND data<>'null'${filter}`,params).first<{total:number}>();
+  const result=await rows(`SELECT data FROM products WHERE profile_id=? AND data IS NOT NULL AND data<>'null'${filter} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,[...params,limit,offset]);return{products:result.map(productFromRow).filter(validProductRow),total:Number(count?.total||0)};
 }
-export async function allProducts(profileId:string):Promise<Product[]>{return(await rows('SELECT data FROM products WHERE profile_id=? ORDER BY updated_at',[profileId])).map(productFromRow);}
-export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const row=await statement('SELECT data FROM products WHERE profile_id=? AND source_key=?',[profileId,sourceKey]).first();return row?productFromRow(row):null;}
+export async function allProducts(profileId:string):Promise<Product[]>{return(await rows('SELECT data FROM products WHERE profile_id=? AND data IS NOT NULL AND data<>\'null\' ORDER BY updated_at',[profileId])).map(productFromRow).filter(validProductRow);}
+export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const row=await statement('SELECT data FROM products WHERE profile_id=? AND source_key=?',[profileId,sourceKey]).first();const found=row?productFromRow(row):null;return validProductRow(found)?found:null;}
 export async function deleteProduct(profileId:string,sourceKey:string):Promise<boolean>{await run('DELETE FROM destination_map WHERE profile_id=? AND source_key=?',[profileId,sourceKey]);return Boolean(await run('DELETE FROM products WHERE profile_id=? AND source_key=?',[profileId,sourceKey]));}
 export async function clearProducts(profileId:string):Promise<number>{await run('DELETE FROM destination_map WHERE profile_id=?',[profileId]);return run('DELETE FROM products WHERE profile_id=?',[profileId]);}
-export async function findMissingProducts(profileId:string,seenKeys:string[]):Promise<Product[]>{if(!seenKeys.length)return[];const seen=new Set(seenKeys),existing=await rows<{source_key:string;data:string}>('SELECT source_key,data FROM products WHERE profile_id=? AND active=1',[profileId]);return existing.filter(x=>!seen.has(x.source_key)).map(productFromRow)}
+export async function findMissingProducts(profileId:string,seenKeys:string[]):Promise<Product[]>{if(!seenKeys.length)return[];const seen=new Set(seenKeys),existing=await rows<{source_key:string;data:string}>('SELECT source_key,data FROM products WHERE profile_id=? AND active=1',[profileId]);return existing.filter(x=>!seen.has(x.source_key)).map(productFromRow).filter(validProductRow)}
 export async function markMissingProducts(profileId:string,seenKeys:string[]):Promise<number>{
   if(!seenKeys.length)return 0;const seen=new Set(seenKeys),existing=await rows<{source_key:string}>('SELECT source_key FROM products WHERE profile_id=? AND active=1',[profileId]),missing=existing.filter(x=>!seen.has(x.source_key));
   if(!missing.length)return 0;const timestamp=now(),db=getEnv().DB;for(let i=0;i<missing.length;i+=50)await db.batch(missing.slice(i,i+50).map(x=>db.prepare('UPDATE products SET active=0,missing_since=COALESCE(missing_since,?),updated_at=? WHERE profile_id=? AND source_key=?').bind(timestamp,timestamp,profileId,x.source_key)));return missing.length;
