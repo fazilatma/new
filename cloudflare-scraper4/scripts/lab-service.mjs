@@ -47,6 +47,7 @@ check('browser renders can be dumped for selector forensics', src('render-src/sc
 check('deployer runs Python auto-extraction', src('scripts/local-deployer-ui.mjs').includes('/api/py/extract') && src('scripts/py-extract-run.mjs').includes('export function pyExtract('));
 check('Node structural engine mirrors the Python extractor', src('render-src/scraper.ts').includes('export function structuralProducts(') && src('render-src/scraper.ts').includes("li.product,article[class*='product']") && src('render-src/scraper.ts').includes("name === 'structural'") && src('render-src/server.ts').includes("'heuristic','structural','metadata'"));
 check('browser engines rescue rendered HTML structural-then-heuristic', src('render-src/scraper.ts').includes('export function rescueRenderedProducts(') && src('render-src/scraper.ts').includes('rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors))') && src('render-src/scraper.ts').includes('browserLayer?:string'));
+check('diagnostic names the browser cause and flags deep pages', src('render-src/scraper.ts').includes('browserAvailable') && src('render-src/scraper.ts').includes('مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود') && src('render-src/scraper.ts').includes('بدون پارامتر صفحه') && src('worker-src/scraper.ts').includes('بدون پارامتر صفحه'));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

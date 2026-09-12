@@ -1966,14 +1966,21 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   try {
     const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster);
     products = result.products; usedEngine = result.usedEngine;
+    // 1.146.0 — a browser run that finds nothing must say WHY: no browser
+    // on the device, or rendered-but-empty (the layer names the outcome).
+    const browserProfile = BROWSER_ENGINES.has(profile.extractionEngine || 'auto');
+    const browserAvailable = browserProfile ? browserEngineAvailable() : true;
     if (!overriddenTestUrl && result.discoveredSelectors) for (const [key, value] of Object.entries(result.discoveredSelectors)) if (String(value || '').trim()) selectorsToSave[key] = String(value);
     const complete = {
       title: products.filter(x => x.title).length, price: products.filter(x => x.price > 0).length,
       link: products.filter(x => x.url).length, image: products.filter(x => x.image).length, sku: products.filter(x => x.sku).length
     };
     add('list-extraction', products.length > 0,
-      products.length ? `${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.` : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
-      { count: products.length, usedEngine, complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+      products.length ? `${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`
+        : !browserAvailable ? 'موتور مرورگری انتخاب شده ولی مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود.'
+        : browserProfile && result.browserLayer === 'none' ? 'مرورگر رندر کرد ولی هیچ لایه‌ای محصولی پیدا نکرد (نه سلکتور، نه structural، نه heuristic).'
+        : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
+      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
   }
@@ -2057,6 +2064,8 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     }
   }
   if (Object.keys(selectorsToSave).length) recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
+  const deepPage = Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i) || [])[2] || 0);
+  if (!products.length && deepPage > 1) recommendations.push(`آدرس صفحهٔ ${deepPage.toLocaleString('fa-IR')} است؛ اول همین عیب‌یاب را روی صفحهٔ اول (بدون پارامتر صفحه) اجرا کنید — صفحه‌های عمیق اغلب خالی‌اند یا ساختار دیگری دارند.`);
   if (!products.length) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
   else {
     if (!products.some(x => x.price > 0)) recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');
