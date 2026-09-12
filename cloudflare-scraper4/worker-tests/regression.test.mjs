@@ -1710,3 +1710,30 @@ test('browser engines find a system browser and explain themselves', async () =>
     assert.ok(group.body.includes('browsers:install'), `${key} must install the browser engines`);
   }
 });
+
+// A real phone proved a bare `npm install` dies on Termux: the wrangler
+// devDependency runs workerd's setup script, which has no Android build, and
+// npm aborts the whole install — leaving node_modules half-written so even
+// `npm run browsers:install` fails afterwards. Both Termux guides must skip
+// install scripts (nothing the scraper runs needs them: the browser comes
+// from the chromium system package and the build falls back from native
+// esbuild to system esbuild to WebAssembly).
+test('termux install guides skip install scripts that Android cannot run', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const groups = JSON.parse(dashboard.match(/const INSTALL_COMMAND_GROUPS=(\[[\s\S]*?\]);\n/)[1]);
+  const termux = groups.find(g => g.key === 'termux');
+  assert.ok(termux, 'the dashboard termux guide must exist');
+  assert.ok(termux.body.includes('npm install --ignore-scripts'), 'the dashboard termux guide must skip install scripts');
+  for (const line of termux.body.split('\n')) {
+    if (line.includes('npm install')) assert.ok(line.includes('--ignore-scripts'), `every npm install in the dashboard termux guide must skip scripts: ${line}`);
+  }
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  const start = deployer.indexOf('"Termux / Android"');
+  const end = deployer.indexOf('"Database: Docker local"');
+  assert.ok(start !== -1 && end !== -1 && start < end, 'guard: the deployer Termux block was located');
+  const block = deployer.slice(start, end);
+  const installs = (block.match(/npm install/g) || []).length;
+  const safeInstalls = (block.match(/npm install --ignore-scripts/g) || []).length;
+  assert.ok(installs > 0, 'guard: the deployer Termux block installs npm packages');
+  assert.equal(safeInstalls, installs, 'every npm install in the deployer Termux block must skip install scripts');
+});

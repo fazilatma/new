@@ -661,3 +661,26 @@ On the phone itself the whole setup is: `pkg install -y nodejs-lts git chromium`
 clone, `npm install`, `npm run browsers:install`, then start the scraper and pick
 the playwright/puppeteer/crawlee_playwright engine (the Termux guide prints the
 exact lines).
+
+## 1.132.0 — the Termux install actually completes (`--ignore-scripts`)
+
+A real phone run proved a bare `npm install` dies on Termux before anything
+else: the wrangler devDependency runs workerd's setup script, which has no
+Android build (`Unsupported platform: android arm64`), and npm aborts the
+whole install — leaving node_modules half-written so even
+`npm run browsers:install` fails afterwards.
+
+- **Both Termux guides now install with `--ignore-scripts`.** Nothing the
+  scraper runs needs install scripts on a phone: the browser comes from the
+  `chromium` system package and the build is covered by the native
+  `@esbuild/android-arm64` binary, with the system-esbuild / WebAssembly
+  fallback chain from v1.83.0 as backup. Desktop and Windows guides are
+  unchanged.
+- **Start with the deployer, not `npm start`.** `npm start`/`wrangler dev`
+  needs the workerd binary that cannot exist on Android; on Termux the app
+  runs through `npm run deployer:ui`, which builds and serves the
+  Render-mode server for you.
+
+If an older guide left you with a broken install, update the checkout,
+delete `node_modules` once, and reinstall with
+`npm install --ignore-scripts --no-audit --prefer-online`.
