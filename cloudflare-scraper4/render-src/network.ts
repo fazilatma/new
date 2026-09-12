@@ -98,8 +98,20 @@ export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, m
   return safeFetch(raw, { ...init, apiMode: true, directRoute: true }, maxBytes);
 }
 
+function sleepMs(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); }
+/**
+ * Retry-After in milliseconds: a seconds value (capped at 10s so one rude
+ * header cannot stall a whole benchmark) or an HTTP date; default 2s.
+ */
+function retryAfterMs(response: Response): number {
+  const raw = (response.headers.get('retry-after') || '').trim();
+  if (/^\d+$/.test(raw)) return Math.min(10_000, Number(raw) * 1000);
+  const when = raw ? Date.parse(raw) : NaN;
+  if (Number.isFinite(when)) return Math.min(10_000, Math.max(0, when - Date.now()));
+  return 2_000;
+}
 export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
-  let url = await assertPublicUrl(raw);
+  let url = await assertPublicUrl(raw), throttleRetries = 0;
   for (let redirects = 0; redirects < 5; redirects++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
@@ -137,6 +149,16 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
         const location = response.headers.get('location');
         if (!location) throw new Error('Redirect without location');
         url = await assertPublicUrl(new URL(location, url).href);
+        continue;
+      }
+      // 1.141.0 — one bounded retry on 429 (rate-limit). Shops throttle bursts
+      // (a benchmark fires ~30 fetches in seconds) and the throttle is usually
+      // a seconds-long window, so honour Retry-After (capped) or wait 2s once.
+      // Anything else (403 bans, 5xx) fails fast: retrying a ban digs deeper.
+      if (response.status === 429 && throttleRetries < 1) {
+        throttleRetries++;
+        await response.arrayBuffer().catch(() => undefined);
+        await sleepMs(retryAfterMs(response));
         continue;
       }
       const length = Number(response.headers.get('content-length') || 0);

@@ -76,6 +76,8 @@ npm test
    را بازتولید کن (مثلاً `heuristic: 0 products` یا `priceHints: 0`)؛ با
    `--selectors '{...}'` سلکتورهای پروفایل گزارش‌شده را هم تزریق کن و با
    `--python` خروجی Node را با پایپ‌لاین پایتون (`py-auto-extract`) مقایسه کن.
+   سلکتور XPath چسبانده‌شده از DevTools را همان‌طور تزریق کن: هر دو twin
+   آن را به CSS تبدیل می‌کنند و پایتون هم با lxml مستقیم می‌خواندش.
 3. اصلاح را **روی هر دو twin** انجام بده (`worker-src/scraper.ts` و
    `render-src/scraper.ts`) و دوباره پروب بگیر تا خروجی کامل شود.
 4. رفتار درست را در یک فایل تست تازه (`worker-tests/<shop>-report.test.mjs`)

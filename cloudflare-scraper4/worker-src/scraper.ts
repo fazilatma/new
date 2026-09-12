@@ -83,8 +83,118 @@ function selectorParts(selector?:string):string[]{
   if(part.trim())out.push(part.trim());return out;
 }
 function multilineSelectorParts(selector?:string):string[]{return String(selector||'').split(/[\r\n|]+/).flatMap(part=>selectorParts(part)).filter(Boolean)}
+/**
+ * 1.141.0 — Chrome copy-XPath → CSS converter. Users paste the container from
+ * DevTools ("Copy XPath"), e.g. `//*[@id="dq6e01"]/div[1]/div/div/div[3]/a[1]/article`.
+ * The convertible dialect is exactly what Chrome emits: absolute `/a/b` and `//a`
+ * paths, `*` steps, positional `[N]` / `[position()=N]` / `[last()]` predicates,
+ * `@attr="value"` equality, `contains()` / `starts-with()` / `ends-with()` on
+ * attributes, `and`-joined predicate lists, `./` + `.//` relative paths, and `|`
+ * unions of the above. Anything else (axes, `..`, `text()`, `or`, `name()`, bare
+ * `(//x)[N]`) returns null so the caller keeps the original selector and the run
+ * fails honestly with the tagged invalid-selector error instead of matching the
+ * wrong elements. Twin: render-src/scraper.ts.
+ */
+export function isXPathSelector(selector:string):boolean{
+  const value=String(selector||'').trim();if(!value)return false;
+  if(/^(\(\/\/|\/\/|\/html\b|\/\*|\.\/\/|\.\/)/.test(value))return true;
+  return value.startsWith('/')&&(value.includes('@')||value.includes('['));
+}
+function splitOutsideXPath(input:string,seps:string):string[]{
+  const parts:string[]=[];let depth=0,quote='',current='';
+  for(const ch of input){
+    if(quote){current+=ch;if(ch===quote)quote='';continue}
+    if(ch==='"'||ch==="'"){quote=ch;current+=ch;continue}
+    if(ch==='[')depth++;else if(ch===']')depth=Math.max(0,depth-1);
+    if(depth===0&&seps.includes(ch)){parts.push(current);current='';continue}
+    current+=ch;
+  }
+  parts.push(current);return parts;
+}
+function splitXPathAnd(predicate:string):string[]{
+  const parts:string[]=[];let depth=0,quote='',current='';
+  for(let i=0;i<predicate.length;i++){
+    const ch=predicate[i];
+    if(quote){current+=ch;if(ch===quote)quote='';continue}
+    if(ch==='"'||ch==="'"){quote=ch;current+=ch;continue}
+    if(ch==='['||ch==='(')depth++;else if(ch===']'||ch===')')depth=Math.max(0,depth-1);
+    if(depth===0&&predicate.startsWith(' and ',i)){parts.push(current);current='';i+=4;continue}
+    current+=ch;
+  }
+  parts.push(current);return parts;
+}
+function xpathSinglePredicateToCss(part:string,tag:string):string|null{
+  const nth=tag==='*'?'nth-child':'nth-of-type',last=tag==='*'?'last-child':'last-of-type';
+  let match=part.match(/^(\d+)$/)||part.match(/^position\(\)\s*=\s*(\d+)$/);
+  if(match)return `:${nth}(${match[1]})`;
+  if(/^last\(\)$/.test(part))return `:${last}`;
+  match=part.match(/^@([\w.-]+)\s*=\s*("([^"]*)"|'([^']*)')$/);
+  if(match)return `[${match[1]}="${String(match[3]??match[4]??'').replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"]`;
+  match=part.match(/^(contains|starts-with|ends-with)\(\s*@([\w.-]+)\s*,\s*("([^"]*)"|'([^']*)')\s*\)$/);
+  if(match){const operator=match[1]==='contains'?'*=':(match[1]==='starts-with'?'^=':'$=');return `[${match[2]}${operator}"${String(match[4]??match[5]??'').replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"]`}
+  return null;
+}
+function xpathPredicateToCss(predicate:string,tag:string):string|null{
+  let css='';for(const raw of splitXPathAnd(predicate.trim())){const converted=xpathSinglePredicateToCss(raw.trim(),tag);if(converted===null)return null;css+=converted}return css;
+}
+type XPathStep={axis:'child'|'descendant';tag:string;predicates:string[]};
+function xpathParseStep(raw:string):Omit<XPathStep,'axis'>|null{
+  const bracket=raw.indexOf('['),tag=(bracket<0?raw:raw.slice(0,bracket)).trim();
+  if(!/^(\*|[A-Za-z_][\w.-]*)$/.test(tag))return null;
+  const predicates:string[]=[];
+  if(bracket>=0){
+    const rest=raw.slice(bracket);let cursor=0;
+    while(cursor<rest.length){
+      if(rest[cursor]!=='[')return null;
+      let depth=0,quote='',end=cursor;
+      for(;end<rest.length;end++){const ch=rest[end];if(quote){if(ch===quote)quote=''}else if(ch==='"'||ch==="'")quote=ch;else if(ch==='[')depth++;else if(ch===']'){depth--;if(depth===0)break}}
+      if(depth!==0)return null;
+      predicates.push(rest.slice(cursor+1,end).trim());cursor=end+1;
+      while(rest[cursor]===' '||rest[cursor]==='\t')cursor++;
+    }
+  }
+  return{tag,predicates};
+}
+function xpathSingleToCss(input:string):string|null{
+  if(input.startsWith('('))return null;
+  let cursor=0,pendingAxis:'child'|'descendant'='descendant',scoped=false;
+  if(input.startsWith('.//'))cursor=3;
+  else if(input.startsWith('./')){cursor=2;pendingAxis='child';scoped=true}
+  else if(input.startsWith('//'))cursor=2;
+  else if(input.startsWith('/')){cursor=1;pendingAxis='child'}
+  else return null;
+  const steps:XPathStep[]=[];
+  while(cursor<input.length){
+    let end=cursor,depth=0,quote='';
+    for(;end<input.length;end++){const ch=input[end];if(quote){if(ch===quote)quote=''}else if(ch==='"'||ch==="'")quote=ch;else if(ch==='[')depth++;else if(ch===']'){depth--;if(depth<0)return null}else if(ch==='/'&&depth===0)break}
+    const step=xpathParseStep(input.slice(cursor,end).trim());if(!step)return null;
+    steps.push({...step,axis:pendingAxis});
+    if(end>=input.length)break;
+    if(input[end+1]==='/'){pendingAxis='descendant';cursor=end+2}else{pendingAxis='child';cursor=end+1}
+  }
+  if(!steps.length)return null;
+  let css=scoped?':scope':'';
+  for(let index=0;index<steps.length;index++){
+    const step=steps[index];let chunk=step.tag==='*'?'':cssEscapeIdent(step.tag);
+    for(const predicate of step.predicates){const converted=xpathPredicateToCss(predicate,step.tag);if(converted===null)return null;chunk+=converted}
+    if(!chunk)chunk='*';
+    if(index>0)css+=step.axis==='descendant'?' ':' > ';else if(scoped)css+=' > ';
+    css+=chunk;
+  }
+  return css||null;
+}
+export function xpathToCss(selector:string):string|null{
+  const input=String(selector||'').trim();
+  if(!isXPathSelector(input))return null;
+  const arms=splitOutsideXPath(input,'|');
+  if(arms.length>1){const converted:string[]=[];for(const arm of arms){const css=xpathSingleToCss(arm.trim());if(css===null)return null;converted.push(css)}return converted.join(', ')}
+  return xpathSingleToCss(input);
+}
 function safeOn(rewriter:HTMLRewriter,selector:string,handler:any):boolean{
-  try{rewriter.on(selector,handler);return true}catch{return false}
+  // Pasted copy-XPath compiles as its CSS equivalent; out-of-dialect XPath
+  // keeps the original text and still fails safe (skip) as before.
+  const css=xpathToCss(selector)??selector;
+  try{rewriter.on(css,handler);return true}catch{return false}
 }
 function cleanText(value:string):string{
   // HTMLRewriter hands text chunks and attributes over with entities still encoded,
@@ -632,6 +742,14 @@ function invalidSelectorMessage(error:unknown):string{
   if(/attribute selector|didn't terminate|not a valid selector|unknown pseudo/i.test(msg))return`سلکتور نامعتبر: ${msg}`;
   return'';
 }
+export function fetchErrorHint(error:unknown):string{
+  const message=error instanceof Error?error.message:String(error||'');
+  if(!message||/سلکتور نامعتبر/.test(message))return'';
+  if(/HTTP 429/.test(message))return'سایت درخواست‌ها را محدود کرده (خطای 429)؛ یک دقیقه صبر کنید و بعد با صفحه‌های کمتر دوباره تلاش کنید.';
+  if(/HTTP 403/.test(message))return'سایت دسترسی را بست (خطای 403)؛ معمولاً IP دیتاسنتر یا VPN است. اتصال غیرمستقیم (Worker واسط) را امتحان کنید.';
+  if(/مهلت|timeout|timed out|abort|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|Failed to fetch|network|Network|ERR_|HTTP (502|503|504)/.test(message))return'دریافت صفحه از سایت ناموفق بود؛ آدرس، اتصال اینترنت و وضعیت سایت را بررسی کنید و دوباره تلاش کنید.';
+  return'';
+}
 /** Per-engine diagnosis for the 3-page speed test (1.137.0). Twin: render-src/scraper.ts diagnoseBenchmarkEngine — same shape, same Persian copy. */
 export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:string,baseUrl:string,selectors:Selectors,products:Product[],error=''):Promise<EngineDiagnosis>{
   const list=Array.isArray(products)?products:[];
@@ -649,6 +767,7 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
     if(error)dropReasons.push(error);
     else if(!list.length)dropReasons.push('صفحهٔ اول برای بررسی سیگنال‌ها دریافت نشد و محصولی هم استخراج نشد.');
     hint=list.length?`موتور ${list.length} محصول استخراج کرد (صفحهٔ اول برای بررسی عمیق در دسترس نبود).`:'دسترسی شبکه به صفحهٔ اول ناموفق بود؛ آدرس و اتصال را بررسی کنید.';
+    if(!list.length){const bad=invalidSelectorMessage(error),fetch=fetchErrorHint(error);if(bad)hint='یکی از سلکتورهای ذخیره‌شده خراب است؛ آن را اصلاح کنید یا «پیشنهاد خودکار سلکتورها» را بزنید تا سلکتورهای سالم ساخته شوند.';else if(fetch)hint=fetch}
     return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
   }
   signals.pageFetched=true;
@@ -722,9 +841,12 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
     candidates=list.length;signals.note='engine-specific signals are not measured for this engine';
     if(error)dropReasons.push(error);
     else if(!list.length)dropReasons.push('موتور محصولی استخراج نکرد.');
-    hint=list.length?`موتور ${list.length} محصول استخراج کرد${partialNote()}.`:(error||'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
+    const badSelectorError=invalidSelectorMessage(error);
+    hint=list.length?`موتور ${list.length} محصول استخراج کرد${partialNote()}.`:(badSelectorError?'یکی از سلکتورهای ذخیره‌شده خراب است؛ آن را اصلاح کنید یا «پیشنهاد خودکار سلکتورها» را بزنید تا سلکتورهای سالم ساخته شوند.':(error||'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.'));
   }
   if(error&&!dropReasons.includes(error)&&!dropReasons.some(reason=>reason.includes(error))&&!list.length)dropReasons.unshift(error);
+  const fetchHint=!list.length?fetchErrorHint(error):'';
+  if(fetchHint&&!dropReasons.some(reason=>String(reason).includes('سلکتور نامعتبر')))hint=fetchHint;
   return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
 }
 export async function diagnoseExtraction(profile:Profile,urlOverride=''){
@@ -801,6 +923,17 @@ export function pageUrl(profile:Profile,page:number):string{
     return url.origin+basePath+pattern.split('{page}').join(String(next));
   }
   const param=profile.pagination==='query_custom'?(profile.paginationValue||'paged'):'page',current=Number(url.searchParams.get(param)||1);url.hash='';url.searchParams.set(param,String(pageNumber(current)));return url.href;
+}
+export function benchmarkProbeUrl(profile:Profile):string{
+  try{
+    const pagination=String((profile as any)?.pagination||'query');
+    if(pagination==='none'||pagination==='next_selector'||pagination==='full_pattern')return profile.url;
+    const url=new URL(profile.url);url.hash='';
+    if(pagination==='path_page'||pagination==='path_pattern'){url.pathname=url.pathname.replace(/\/page\/\d+\/?$/i,'')||'/';return url.href}
+    const custom=pagination==='query_custom'?String((profile as any)?.paginationValue||'paged'):'page';
+    for(const param of new Set([custom,'page','paged']))url.searchParams.delete(param);
+    return url.href;
+  }catch{return profile.url}
 }
 export async function mapLimit<T>(items:T[],limit:number,fn:(item:T,index:number)=>Promise<void>):Promise<void>{
   let next=0;await Promise.all(Array.from({length:Math.min(Math.max(1,limit),items.length)},async()=>{while(true){const index=next++;if(index>=items.length)return;await fn(items[index],index)}}));

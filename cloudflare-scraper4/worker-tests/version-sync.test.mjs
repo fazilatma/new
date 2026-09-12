@@ -948,10 +948,11 @@ test('list extraction finds fields on the container itself, not only its childre
   const src = await readProjectFile('render-src/scraper.ts');
   const at = src.indexOf('function scopedMatches(');
   const body = src.slice(at, src.indexOf('\nfunction ', at + 10));
-  assert.match(body, /\$root\.filter\(selector\)/, 'the lookup must be able to match the container element itself');
-  assert.match(body, /\$root\.find\(selector\)/, 'the lookup must still match descendants');
+  assert.match(body, /\$root\.filter\((selector|css)\)/, 'the lookup must be able to match the container element itself');
+  assert.match(body, /\$root\.find\((selector|css)\)/, 'the lookup must still match descendants');
   // Descendants must win, otherwise a broad selector swallows the whole card text.
-  assert.ok(body.indexOf('.find(selector)') < body.indexOf('.filter(selector)'),
+  const firstOf = (...needles) => Math.min(...needles.map(needle => body.indexOf(needle)).filter(at => at >= 0));
+  assert.ok(firstOf('.find(selector)', '.find(css)') < firstOf('.filter(selector)', '.filter(css)'),
     'a descendant match must be preferred over the container itself');
   assert.match(src.slice(src.indexOf('function firstText(')), /scopedMatches\(/, 'firstText must use the shared scoped lookup');
   assert.match(src.slice(src.indexOf('function firstAttr(')), /scopedMatches\(/, 'firstAttr must use the shared scoped lookup');
@@ -961,8 +962,9 @@ test('list extraction finds fields on the container itself, not only its childre
   const bundle = await readRenderBundle();
   const grab = name => { const i = bundle.indexOf('function ' + name + '('); return bundle.slice(i, bundle.indexOf('\nfunction ', i + 1)); };
   const normalize = v => String(v || '').replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
+  const xpath = ['isXPathSelector', 'splitOutsideXPath', 'splitXPathAnd', 'xpathAttrValue', 'xpathSinglePredicateToCss', 'xpathPredicateToCss', 'xpathParseStep', 'xpathSingleToCss', 'cssEscapeIdent', 'xpathToCss'].map(grab).join('');
   const { firstText } = new Function('cheerio', 'normalize',
-    `${grab('scopedMatches')}${grab('firstText')}; return { firstText };`)(cheerio, normalize);
+    `${xpath}${grab('invalidSelectorError')}${grab('scopedMatches')}${grab('firstText')}; return { firstText };`)(cheerio, normalize);
   const $ = cheerio.load('<a href="/product/1" class="product"><div class="t">عنوان</div><div class="p">۱۲۳</div></a>');
   assert.equal(firstText($, $('a.product'), 'a[href*="/product/"], [class*="t"]'), 'عنوان', 'the inner title must win over the whole card text');
   const $2 = cheerio.load('<a href="/product/2" class="product">فقط عنوان</a>');
@@ -979,8 +981,9 @@ test('absolute picker paths still resolve inside each product card', async () =>
   const bundle = await readRenderBundle();
   const grab = name => { const i = bundle.indexOf('function ' + name + '('); return bundle.slice(i, bundle.indexOf('\nfunction ', i + 1)); };
   const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const xpath = ['isXPathSelector', 'splitOutsideXPath', 'splitXPathAnd', 'xpathAttrValue', 'xpathSinglePredicateToCss', 'xpathPredicateToCss', 'xpathParseStep', 'xpathSingleToCss', 'cssEscapeIdent', 'xpathToCss'].map(grab).join('');
   const F = new Function('cheerio', 'normalize',
-    `${grab('containerNodes')}${grab('scopedMatches')}${grab('firstText')}${grab('firstAttr')}; return { containerNodes, firstText, firstAttr };`)(cheerio, normalize);
+    `${xpath}${grab('invalidSelectorError')}${grab('containerNodes')}${grab('scopedMatches')}${grab('firstText')}${grab('firstAttr')}; return { containerNodes, firstText, firstAttr };`)(cheerio, normalize);
 
   const card = n => `<div class="flex flex-shrink"><a class="flex w-full" href="/p/${n}">` +
     `<div class="relative x"><picture class="block h-full"><img class="h-full" src="/i/${n}.jpg"></picture></div>` +

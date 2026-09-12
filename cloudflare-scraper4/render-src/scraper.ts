@@ -52,6 +52,180 @@ function sourceKey(url: string, title: string): string { return createHash('sha2
  * evidence check stays green. Re-anchoring the same path inside the card keeps
  * those saved profiles working without asking the user to rewrite selectors.
  */
+/**
+ * 1.141.0 — Chrome copy-XPath → CSS converter. Users paste the container from
+ * DevTools ("Copy XPath"), e.g.
+ * `//*[@id="dq6e01"]/div[1]/div/div/div[3]/a[1]/article`. No engine here speaks
+ * XPath, so every one of them died on it with a tagged «سلکتور نامعتبر» error.
+ * The convertible dialect is exactly what Chrome emits: absolute `/a/b` and
+ * `//a` paths, `*` steps, positional `[N]` / `[position()=N]` / `[last()]`
+ * predicates, `@attr="value"` equality, `contains()` / `starts-with()` /
+ * `ends-with()` on attributes, `and`-joined predicate lists, `./` + `.//`
+ * relative paths, and `|` unions of the above.
+ *
+ * Anything outside that dialect (axes, `..`, `text()`, `or`, `name()`, bare
+ * `(//x)[N]` positional unions over node-sets) has no faithful CSS equivalent
+ * and returns null, so the caller keeps the original selector and the run
+ * fails honestly with the tagged invalid-selector error instead of matching
+ * the wrong elements. Twin: worker-src/scraper.ts.
+ */
+export function isXPathSelector(selector: string): boolean {
+  const value = String(selector || '').trim();
+  if (!value) return false;
+  if (/^(\(\/\/|\/\/|\/html\b|\/\*|\.\/\/|\.\/)/.test(value)) return true;
+  return value.startsWith('/') && (value.includes('@') || value.includes('['));
+}
+/** Split on any of `seps` outside `[...]` groups and quotes. */
+function splitOutsideXPath(input: string, seps: string): string[] {
+  const parts: string[] = []; let depth = 0, quote = '', current = '';
+  for (const ch of input) {
+    if (quote) { current += ch; if (ch === quote) quote = ''; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
+    if (ch === '[') depth++;
+    else if (ch === ']') depth = Math.max(0, depth - 1);
+    if (depth === 0 && seps.includes(ch)) { parts.push(current); current = ''; continue; }
+    current += ch;
+  }
+  parts.push(current);
+  return parts;
+}
+/** Split a predicate list on top-level ` and ` (values may contain the word). */
+function splitXPathAnd(predicate: string): string[] {
+  const parts: string[] = []; let depth = 0, quote = '', current = '';
+  for (let i = 0; i < predicate.length; i++) {
+    const ch = predicate[i];
+    if (quote) { current += ch; if (ch === quote) quote = ''; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
+    if (ch === '[' || ch === '(') depth++;
+    else if (ch === ']' || ch === ')') depth = Math.max(0, depth - 1);
+    if (depth === 0 && predicate.startsWith(' and ', i)) { parts.push(current); current = ''; i += 4; continue; }
+    current += ch;
+  }
+  parts.push(current);
+  return parts;
+}
+function xpathAttrValue(matched: RegExpMatchArray): string {
+  return String(matched[3] ?? matched[4] ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+function xpathSinglePredicateToCss(part: string, tag: string): string | null {
+  const nth = tag === '*' ? 'nth-child' : 'nth-of-type';
+  const last = tag === '*' ? 'last-child' : 'last-of-type';
+  let match = part.match(/^(\d+)$/) || part.match(/^position\(\)\s*=\s*(\d+)$/);
+  if (match) return `:${nth}(${match[1]})`;
+  if (/^last\(\)$/.test(part)) return `:${last}`;
+  match = part.match(/^@([\w.-]+)\s*=\s*("([^"]*)"|'([^']*)')$/);
+  if (match) return `[${match[1]}="${xpathAttrValue(match)}"]`;
+  match = part.match(/^(contains|starts-with|ends-with)\(\s*@([\w.-]+)\s*,\s*("([^"]*)"|'([^']*)')\s*\)$/);
+  if (match) {
+    const operator = match[1] === 'contains' ? '*=' : (match[1] === 'starts-with' ? '^=' : '$=');
+    const value = String(match[4] ?? match[5] ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return `[${match[2]}${operator}"${value}"]`;
+  }
+  return null;
+}
+function xpathPredicateToCss(predicate: string, tag: string): string | null {
+  let css = '';
+  for (const raw of splitXPathAnd(predicate.trim())) {
+    const converted = xpathSinglePredicateToCss(raw.trim(), tag);
+    if (converted === null) return null;
+    css += converted;
+  }
+  return css;
+}
+type XPathStep = { axis: 'child' | 'descendant'; tag: string; predicates: string[] };
+function xpathParseStep(raw: string): Omit<XPathStep, 'axis'> | null {
+  const bracket = raw.indexOf('[');
+  const tag = (bracket < 0 ? raw : raw.slice(0, bracket)).trim();
+  // `*`, plain tags. Axes (`a::b`), parent steps (`..`), attribute/text
+  // steps and function steps have no CSS equivalent and fail the conversion.
+  if (!/^(\*|[A-Za-z_][\w.-]*)$/.test(tag)) return null;
+  const predicates: string[] = [];
+  if (bracket >= 0) {
+    const rest = raw.slice(bracket); let cursor = 0;
+    while (cursor < rest.length) {
+      if (rest[cursor] !== '[') return null;
+      let depth = 0, quote = '', end = cursor;
+      for (; end < rest.length; end++) {
+        const ch = rest[end];
+        if (quote) { if (ch === quote) quote = ''; continue; }
+        if (ch === '"' || ch === "'") { quote = ch; continue; }
+        if (ch === '[') depth++;
+        else if (ch === ']') { depth--; if (depth === 0) break; }
+      }
+      if (depth !== 0) return null;
+      predicates.push(rest.slice(cursor + 1, end).trim());
+      cursor = end + 1;
+      while (rest[cursor] === ' ' || rest[cursor] === '\t') cursor++;
+    }
+  }
+  return { tag, predicates };
+}
+function xpathSingleToCss(input: string): string | null {
+  // `(//x)[N]` picks one node out of a node-set — positional over a union,
+  // which CSS cannot express. Any other parenthesised form is out too.
+  if (input.startsWith('(')) return null;
+  let cursor = 0, pendingAxis: 'child' | 'descendant' = 'descendant', scoped = false;
+  if (input.startsWith('.//')) cursor = 3;
+  else if (input.startsWith('./')) { cursor = 2; pendingAxis = 'child'; scoped = true; }
+  else if (input.startsWith('//')) cursor = 2;
+  else if (input.startsWith('/')) { cursor = 1; pendingAxis = 'child'; }
+  else return null;
+  const steps: XPathStep[] = [];
+  while (cursor < input.length) {
+    let end = cursor, depth = 0, quote = '';
+    for (; end < input.length; end++) {
+      const ch = input[end];
+      if (quote) { if (ch === quote) quote = ''; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === '[') depth++;
+      else if (ch === ']') { depth--; if (depth < 0) return null; }
+      else if (ch === '/' && depth === 0) break;
+    }
+    const step = xpathParseStep(input.slice(cursor, end).trim());
+    if (!step) return null;
+    steps.push({ ...step, axis: pendingAxis });
+    if (end >= input.length) break;
+    if (input[end + 1] === '/') { pendingAxis = 'descendant'; cursor = end + 2; }
+    else { pendingAxis = 'child'; cursor = end + 1; }
+  }
+  if (!steps.length) return null;
+  let css = scoped ? ':scope' : '';
+  for (let index = 0; index < steps.length; index++) {
+    const step = steps[index];
+    let chunk = step.tag === '*' ? '' : cssEscapeIdent(step.tag);
+    for (const predicate of step.predicates) {
+      const converted = xpathPredicateToCss(predicate, step.tag);
+      if (converted === null) return null;
+      chunk += converted;
+    }
+    if (!chunk) chunk = '*';
+    if (index > 0) css += step.axis === 'descendant' ? ' ' : ' > ';
+    else if (scoped) css += ' > ';
+    css += chunk;
+  }
+  return css || null;
+}
+/**
+ * Convert a Chrome-dialect XPath to CSS. Returns null for non-XPath input
+ * and for out-of-dialect XPath alike — callers keep the original selector
+ * (`xpathToCss(selector) ?? selector`) so neither case can silently match
+ * the wrong elements.
+ */
+export function xpathToCss(selector: string): string | null {
+  const input = String(selector || '').trim();
+  if (!isXPathSelector(input)) return null;
+  const arms = splitOutsideXPath(input, '|');
+  if (arms.length > 1) {
+    const converted: string[] = [];
+    for (const arm of arms) {
+      const css = xpathSingleToCss(arm.trim());
+      if (css === null) return null;
+      converted.push(css);
+    }
+    return converted.join(', ');
+  }
+  return xpathSingleToCss(input);
+}
 function invalidSelectorError(selector: string, cause: unknown): Error {
   // A saved selector that no longer compiles (older discovery, hand edits)
   // must fail LOUDLY carrying its own text — Python raises «سلکتور نامعتبر»
@@ -60,10 +234,13 @@ function invalidSelectorError(selector: string, cause: unknown): Error {
   return new Error(`سلکتور نامعتبر «${String(selector).slice(0, 160)}»: ${detail}`);
 }
 function scopedMatches($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector: string): cheerio.Cheerio<any> | null {
+  // Pasted copy-XPath evaluates as its CSS equivalent; the tagged error below
+  // still carries the ORIGINAL text so the user recognises their selector.
+  const css = xpathToCss(selector) ?? selector;
   const guarded = <T,>(fn: () => T): T => { try { return fn(); } catch (error) { throw invalidSelectorError(selector, error); } };
-  const inner = guarded(() => $root.find(selector));
+  const inner = guarded(() => $root.find(css));
   if (inner.length) return inner;
-  const own = guarded(() => $root.filter(selector));
+  const own = guarded(() => $root.filter(css));
   if (own.length) return own;
   const element = $root.get(0);
   if (!element) return null;
@@ -73,7 +250,7 @@ function scopedMatches($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selec
   };
   // Absolute path as saved: only ever inside the card it was picked from.
   let global: cheerio.Cheerio<any> | null = null;
-  try { global = $(selector); } catch { global = null; }
+  try { global = $(css); } catch { global = null; }
   if (global && global.length) {
     const hit = inThisCard(global);
     if (hit) return hit;
@@ -81,9 +258,9 @@ function scopedMatches($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selec
   // The picker pins each step with :nth-of-type(N), so the saved path resolves
   // only to the FIRST card. Drop the positional pins and the same path matches
   // the equivalent element in every card; scoping then picks this card's copy.
-  if (selector.includes(':nth-of-type(')) {
-    const loose = selector.replace(/:nth-of-type\(\d+\)/g, '').trim();
-    if (loose && loose !== selector) {
+  if (css.includes(':nth-of-type(')) {
+    const loose = css.replace(/:nth-of-type\(\d+\)/g, '').trim();
+    if (loose && loose !== css) {
       let widened: cheerio.Cheerio<any> | null = null;
       try { widened = $(loose); } catch { widened = null; }
       if (widened && widened.length) {
@@ -160,6 +337,30 @@ export function pageUrl(profile: Profile, page: number): string {
   return url.href;
 }
 
+/**
+ * 1.141.0 — benchmark probe URL: the 3-page benchmark tests CAPABILITY, so it
+ * always probes from page 1 even when the profile URL was pasted mid-catalog
+ * (`?page=336`, `/page/336/`). Only the page cursor is reset — every filter,
+ * sort and search param is kept, and the saved profile URL is never touched
+ * (callers probe a copy). `none` / `next_selector` / `full_pattern` already
+ * start at page 1 and pass through untouched. Twin: worker-src/scraper.ts.
+ */
+export function benchmarkProbeUrl(profile: Profile): string {
+  try {
+    const pagination = String((profile as any)?.pagination || 'query');
+    if (pagination === 'none' || pagination === 'next_selector' || pagination === 'full_pattern') return profile.url;
+    const url = new URL(profile.url);
+    url.hash = '';
+    if (pagination === 'path_page' || pagination === 'path_pattern') {
+      url.pathname = url.pathname.replace(/\/page\/\d+\/?$/i, '') || '/';
+      return url.href;
+    }
+    const custom = pagination === 'query_custom' ? String((profile as any)?.paginationValue || 'paged') : 'page';
+    for (const param of new Set([custom, 'page', 'paged'])) url.searchParams.delete(param);
+    return url.href;
+  } catch { return profile.url; }
+}
+
 
 /**
  * Resolve the container selector to every product card on the page.
@@ -171,11 +372,14 @@ export function pageUrl(profile: Profile, page: number): string {
  * widened form when it still matches the originally selected element(s).
  */
 function containerNodes($: cheerio.CheerioAPI, selector: string): cheerio.Cheerio<any> {
+  // Same XPath handling as scopedMatches: evaluate the CSS equivalent, but
+  // report the original text when nothing compiles.
+  const css = xpathToCss(selector) ?? selector;
   let exact: cheerio.Cheerio<any>;
-  try { exact = $(selector); } catch (error) { throw invalidSelectorError(selector, error); }
-  if (!selector.includes(':nth-of-type(')) return exact;
-  const loose = selector.replace(/:nth-of-type\(\d+\)/g, '').trim();
-  if (!loose || loose === selector) return exact;
+  try { exact = $(css); } catch (error) { throw invalidSelectorError(selector, error); }
+  if (!css.includes(':nth-of-type(')) return exact;
+  const loose = css.replace(/:nth-of-type\(\d+\)/g, '').trim();
+  if (!loose || loose === css) return exact;
   let widened: cheerio.Cheerio<any>;
   try { widened = $(loose); } catch { return exact; }
   if (widened.length <= exact.length) return exact;
@@ -293,7 +497,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       const {text,url:finalUrl}=await source();
       const $=cheerio.load(text);
       for(const part of nextSelector.split(',').map(x=>x.trim()).filter(Boolean)){
-        const href=$(part).first().attr('href');
+        const href=$(xpathToCss(part) ?? part).first().attr('href');
         if(href)return new URL(href,finalUrl).href;
       }
     }catch{/* a missing next link just ends pagination */}
@@ -572,15 +776,16 @@ export function heuristicProducts(html: string, baseUrl: string): Product[] {
 export async function scrapeDetails(product: Product, selectors: Selectors): Promise<Product> {
   if (!product.url) return product;
   const { text, url } = await safeText(product.url); const $ = cheerio.load(text); const body = $.root();
-  const textField = (selector?: string) => selector ? normalize(body.find(selector).first().text()) : '';
+  const css = (selector?: string) => selector ? (xpathToCss(selector) ?? selector) : '';
+  const textField = (selector?: string) => selector ? normalize(body.find(css(selector)).first().text()) : '';
   product.shortDesc = textField(selectors.shortDesc) || product.shortDesc;
-  product.longDesc = selectors.longDesc ? sanitizeHtml(body.find(selectors.longDesc).first().html() || '', url) : product.longDesc;
+  product.longDesc = selectors.longDesc ? sanitizeHtml(body.find(css(selectors.longDesc)).first().html() || '', url) : product.longDesc;
   // Specification table: shops render it as <tr><td>name</td><td>value</td></tr>,
   // as <dt>/<dd>, or as <li>name: value</li>. Accept all three shapes so one
   // selector pointing at the block is enough.
   if (selectors.specs) {
     const rows: Array<{ name: string; value: string }> = [];
-    const block = body.find(selectors.specs).first();
+    const block = body.find(css(selectors.specs)).first();
     block.find('tr').each((_i, el) => {
       const cells = $(el).find('th,td');
       if (cells.length >= 2) rows.push({ name: normalize($(cells[0]).text()), value: normalize($(cells[1]).text()) });
@@ -603,7 +808,7 @@ export async function scrapeDetails(product: Product, selectors: Selectors): Pro
   const weight = textField(selectors.weight); if (weight) product.weight = numberFromText(weight);
   if (selectors.gallery) {
     const images = new Set(product.images);
-    body.find(selectors.gallery).each((_i, el) => {
+    body.find(css(selectors.gallery)).each((_i, el) => {
       const node = $(el); const raw = node.attr('data-src') || node.attr('data-large_image') || node.attr('href') || node.attr('src') || '';
       const image = absolute(raw, url); if (image) images.add(image);
     });
@@ -680,7 +885,7 @@ export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='al
   }
   return{url:page.url,mode,selectors,evidence};
 }
-function extractSelectorValuesSync(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):string[]{const $=cheerio.load(html),values:string[]=[];let _nodes:cheerio.Cheerio<any>;try{_nodes=$(selector)}catch(error){throw invalidSelectorError(selector,error)}_nodes.slice(0,50).each((_i,el)=>{const node=$(el);const raw=type==='link'?(node.attr('href')||node.find('a[href]').first().attr('href')||''):type==='image'?(node.attr('src')||node.attr('data-src')||node.find('img').first().attr('src')||node.find('img').first().attr('data-src')||''):node.text();const value=type==='text'?normalize(raw):absolute(raw,baseUrl);if(value)values.push(value.slice(0,1000))});return values}
+function extractSelectorValuesSync(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):string[]{const $=cheerio.load(html),values:string[]=[];let _nodes:cheerio.Cheerio<any>;const css=xpathToCss(selector)??selector;try{_nodes=$(css)}catch(error){throw invalidSelectorError(selector,error)}_nodes.slice(0,50).each((_i,el)=>{const node=$(el);const raw=type==='link'?(node.attr('href')||node.find('a[href]').first().attr('href')||''):type==='image'?(node.attr('src')||node.attr('data-src')||node.find('img').first().attr('src')||node.find('img').first().attr('data-src')||''):node.text();const value=type==='text'?normalize(raw):absolute(raw,baseUrl);if(value)values.push(value.slice(0,1000))});return values}
 async function extractSelectorValues(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):Promise<string[]>{return extractSelectorValuesSync(html,baseUrl,selector,type)}
 
 // ---------------------------------------------------------------------------
@@ -1015,7 +1220,7 @@ function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[
 }
 export async function testSelector(url: string, selector: string, type = 'text'): Promise<{ count: number; values: string[] }> {
   const { text, url: final } = await safeText(url, 4_000_000); const $ = cheerio.load(text); const values: string[] = [];
-  let nodes: cheerio.Cheerio<any>; try { nodes = $(selector); } catch (error) { throw invalidSelectorError(selector, error); }
+  let nodes: cheerio.Cheerio<any>; try { nodes = $(xpathToCss(selector) ?? selector); } catch (error) { throw invalidSelectorError(selector, error); }
   nodes.slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
   return { count: nodes.length, values };
 }
@@ -1073,6 +1278,23 @@ function invalidSelectorMessage(error: unknown): string {
   if (/attribute selector|didn't terminate|not a valid selector|unknown pseudo/i.test(msg)) return `سلکتور نامعتبر: ${msg}`;
   return '';
 }
+/**
+ * 1.141.0 — fetch-aware diagnosis hints. When the run failed before (or
+ * without) parsing — a 429 throttle, a 403 ban, a dead connection — the
+ * content-based hint below would mislead ("this site has no structured
+ * data" blames the site for a transport problem). The fetch error is the
+ * story then, so it gets its own hint. Tagged selector errors are NOT fetch
+ * failures and return '' (the R5 selector hint keeps priority: a broken
+ * selector stays broken after any retry). Twin: worker-src/scraper.ts.
+ */
+export function fetchErrorHint(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message || /سلکتور نامعتبر/.test(message)) return '';
+  if (/HTTP 429/.test(message)) return 'سایت درخواست‌ها را محدود کرده (خطای 429)؛ یک دقیقه صبر کنید و بعد با صفحه‌های کمتر دوباره تلاش کنید.';
+  if (/HTTP 403/.test(message)) return 'سایت دسترسی را بست (خطای 403)؛ معمولاً IP دیتاسنتر یا VPN است. اتصال غیرمستقیم (Worker واسط) را امتحان کنید.';
+  if (/مهلت|timeout|timed out|abort|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|Failed to fetch|network|Network|ERR_|HTTP (502|503|504)/.test(message)) return 'دریافت صفحه از سایت ناموفق بود؛ آدرس، اتصال اینترنت و وضعیت سایت را بررسی کنید و دوباره تلاش کنید.';
+  return '';
+}
 export async function diagnoseBenchmarkEngine(
   engine: ExtractionEngine, html: string, baseUrl: string, selectors: Selectors,
   products: Product[], error = ''
@@ -1109,6 +1331,13 @@ export async function diagnoseBenchmarkEngine(
     hint = list.length
       ? `موتور ${list.length} محصول استخراج کرد (صفحهٔ اول برای بررسی عمیق در دسترس نبود).`
       : 'دسترسی شبکه به صفحهٔ اول ناموفق بود؛ آدرس و اتصال را بررسی کنید.';
+    if (!list.length) {
+      // The run error beats the generic network guess: a broken selector and
+      // a throttled fetch need different next steps from the user.
+      const bad = invalidSelectorMessage(error), fetch = fetchErrorHint(error);
+      if (bad) hint = 'یکی از سلکتورهای ذخیره‌شده خراب است؛ آن را اصلاح کنید یا «پیشنهاد خودکار سلکتورها» را بزنید تا سلکتورهای سالم ساخته شوند.';
+      else if (fetch) hint = fetch;
+    }
     return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
   }
   signals.pageFetched = true;
@@ -1203,9 +1432,19 @@ export async function diagnoseBenchmarkEngine(
     signals.note = 'engine-specific signals are not measured for this engine';
     if (error) dropReasons.push(error);
     else if (!list.length) dropReasons.push('موتور محصولی استخراج نکرد.');
-    hint = list.length ? `موتور ${list.length} محصول استخراج کرد${partialNote()}.` : (error || 'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
+    // A broken saved selector gets the same fix-it hint as the selector
+    // engines — echoing the raw error back taught the user nothing. Fetch
+    // failures are translated by the shared block before the final return.
+    const badSelectorError = invalidSelectorMessage(error);
+    hint = list.length ? `موتور ${list.length} محصول استخراج کرد${partialNote()}.` : badSelectorError ? 'یکی از سلکتورهای ذخیره‌شده خراب است؛ آن را اصلاح کنید یا «پیشنهاد خودکار سلکتورها» را بزنید تا سلکتورهای سالم ساخته شوند.' : (error || 'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
   }
   if (error && !dropReasons.includes(error) && !dropReasons.some(reason => reason.includes(error)) && !list.length) dropReasons.unshift(error);
+  // 1.141.0 — a fetch failure beats every content-based guess: the engine
+  // never saw a parseable page, so "this site has no X" would blame the site
+  // for a transport problem. A tagged selector error keeps its R5 hint — it
+  // is the one failure a retry cannot fix.
+  const fetchHint = !list.length ? fetchErrorHint(error) : '';
+  if (fetchHint && !dropReasons.some(reason => String(reason).includes('سلکتور نامعتبر'))) hint = fetchHint;
   return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
 };
 

@@ -29,8 +29,10 @@ function redirectedInit(init:RequestInit,from:URL,to:URL,status:number):RequestI
  */
 export type ApiRequestInit = RequestInit & { apiMode?: boolean };
 
+function sleepMs(ms:number):Promise<void>{return new Promise(resolve=>setTimeout(resolve,Math.max(0,ms)))}
+function retryAfterMs(response:Response):number{const raw=(response.headers.get('retry-after')||'').trim();if(/^\d+$/.test(raw))return Math.min(10_000,Number(raw)*1000);const when=raw?Date.parse(raw):NaN;if(Number.isFinite(when))return Math.min(10_000,Math.max(0,when-Date.now()));return 2_000}
 export async function safeFetch(raw:string,init:ApiRequestInit={},maxBytes?:number,timeoutMs?:number):Promise<Response>{
-  let url=assertPublicUrl(raw),requestInit={...init};const env=getEnv(),limit=Math.min(25_000_000,Math.max(1000,maxBytes||Number(env.MAX_RESPONSE_BYTES)||8_000_000));
+  let url=assertPublicUrl(raw),requestInit={...init},throttleRetries=0;const env=getEnv(),limit=Math.min(25_000_000,Math.max(1000,maxBytes||Number(env.MAX_RESPONSE_BYTES)||8_000_000));
   for(let redirects=0;redirects<5;redirects++){
     const wait=Number(timeoutMs)>0?Math.max(50,Number(timeoutMs)):Math.max(1000,Number(env.REQUEST_TIMEOUT_MS)||25_000),controller=new AbortController(),timeout=setTimeout(()=>controller.abort('timeout'),wait);
     try{
@@ -49,6 +51,10 @@ export async function safeFetch(raw:string,init:ApiRequestInit={},maxBytes?:numb
       if([301,302,303,307,308].includes(response.status)){
         const location=response.headers.get('location');await response.body?.cancel();if(!location)throw new Error('Redirect without location');const nextUrl=assertPublicUrl(new URL(location,url).href);requestInit=redirectedInit(requestInit,url,nextUrl,response.status);url=nextUrl;continue;
       }
+      // 1.141.0 — one bounded retry on 429 (rate-limit): honour Retry-After
+      // (capped at 10s) or wait 2s once. 403 bans and 5xx fail fast. Twin:
+      // render-src/network.ts.
+      if(response.status===429&&throttleRetries<1){throttleRetries++;try{await response.body?.cancel()}catch{}await sleepMs(retryAfterMs(response));continue}
       const body=await limitedBody(response,limit),headers=new Headers(response.headers);headers.set('x-scraper-final-url',url.href);return new Response(Uint8Array.from(body).buffer,{status:response.status,statusText:response.statusText,headers});
     }catch(error){if(controller.signal.aborted)throw new Error(`مهلت دریافت ${url.href} تمام شد.`);throw error}finally{clearTimeout(timeout)}
   }

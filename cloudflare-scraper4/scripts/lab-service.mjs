@@ -42,6 +42,7 @@ check('deployer detects stale serving builds', deployerSrc.includes('function pr
 check('scraper reports boot identity', src('render-src/server.ts').includes('const BOOT_HEAD') && src('render-src/server.ts').includes('head: BOOT_HEAD'));
 check('deployer sweeps blind ports and retries EADDRINUSE once', deployer.includes('function portScanSummary(') && deployer.includes('DEPLOYER_PORT_SCAN_BLIND') && deployer.includes('retrying once') && deployer.includes('pkill -f render-dist/server'));
 check('selector engines tag invalid selectors and read bare prices', src('render-src/scraper.ts').includes('function invalidSelectorError(') && src('render-src/scraper.ts').includes('function heuristicPriceText(') && src('worker-src/scraper.ts').includes('function heuristicPriceText(') && src('worker-src/scraper.ts').includes('function invalidSelectorMessage('));
+check('pasted XPath converts, 429s retry and benchmarks reset the page cursor', src('render-src/scraper.ts').includes('function xpathToCss(') && src('worker-src/scraper.ts').includes('function xpathToCss(') && src('render-src/network.ts').includes('function retryAfterMs(') && src('worker-src/network.ts').includes('function retryAfterMs(') && src('render-src/scraper.ts').includes('function benchmarkProbeUrl(') && src('worker-src/scraper.ts').includes('function benchmarkProbeUrl('));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');
