@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -672,9 +672,69 @@ function runJob(name, command, args = [], options = {}) {
   return job;
 }
 
+// A scraper the deployer did not spawn (manual `npm run render:start`, or an
+// orphan from a previous deployer) keeps holding the port after an update, so
+// the fresh build crashes with EADDRINUSE and the box silently keeps serving
+// the old release. Before starting, find whatever listens on the scraper port
+// (Linux/Android via /proc) and stop it — but ONLY when its command line
+// proves it is our own stale scraper; anything else is reported, never
+// touched. Fail-open: any error means "unknown", and start proceeds as before.
+function freeScraperPort() {
+  const outcome = { freed: [], foreign: [] };
+  try {
+    if (process.platform !== 'linux' && process.platform !== 'android') return outcome;
+    const want = Number(scraperPort).toString(16).toUpperCase().padStart(4, '0');
+    const inodes = new Set();
+    for (const table of ['/proc/net/tcp', '/proc/net/tcp6']) {
+      let text = '';
+      try { text = readFileSync(table, 'utf8'); } catch { continue; }
+      for (const line of text.split('\n').slice(1)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 10) continue;
+        const local = String(parts[1] || ''), state = String(parts[3] || '');
+        if (state !== '0A' || !local.toUpperCase().endsWith(':' + want)) continue;
+        inodes.add(String(parts[9] || ''));
+      }
+    }
+    if (!inodes.size) return outcome;
+    for (const pid of readdirSync('/proc').filter(name => /^\d+$/.test(name))) {
+      let fds = [];
+      try { fds = readdirSync(`/proc/${pid}/fd`); } catch { continue; }
+      let holds = false;
+      for (const fd of fds) {
+        let link = '';
+        try { link = readlinkSync(`/proc/${pid}/fd/${fd}`); } catch { continue; }
+        const m = /^socket:\[(\d+)\]$/.exec(link);
+        if (m && inodes.has(m[1])) { holds = true; break; }
+      }
+      if (!holds) continue;
+      let cmd = '';
+      try { cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim(); } catch { cmd = ''; }
+      if (/render-dist\/server/.test(cmd)) {
+        try {
+          process.kill(Number(pid), 'SIGTERM');
+          outcome.freed.push(Number(pid));
+          const timer = setTimeout(() => { try { process.kill(Number(pid), 0); process.kill(Number(pid), 'SIGKILL'); } catch { /* exited */ } }, 4000);
+          if (timer.unref) timer.unref();
+        } catch { /* already gone */ }
+      } else {
+        outcome.foreign.push({ pid: Number(pid), cmd: cmd.slice(0, 160) });
+      }
+    }
+  } catch { /* fail-open: start proceeds and reports whatever happens */ }
+  return outcome;
+}
+
 function startScraper() {
   if (scraper?.running && scraper.child && scraper.exitCode === null) return scraper;
   scraperLog = '';
+  const portState = freeScraperPort();
+  if (portState.foreign.length) {
+    const holder = portState.foreign[0];
+    scraperLog += `[local scraper] Port ${scraperPort} is held by another program (pid ${holder.pid}: ${holder.cmd || 'unknown'}), not by a stale scraper — refusing to kill it. Stop that program or change PORT, then press Build & start again.\n`;
+    scraper = { running: false, pid: null, startedAt: new Date().toISOString(), exitCode: null, child: null, blocked: 'port-held', port: scraperPort };
+    return scraper;
+  }
   const baseEnv = localEnv();
   const env = {
     ...baseEnv,
@@ -690,7 +750,17 @@ function startScraper() {
   // Do not hold the deployer's event loop open waiting on the scraper.
   child.unref();
   scraper = { running: true, pid: child.pid, startedAt: new Date().toISOString(), exitCode: null, child, command: scraperCommand, port: scraperPort };
-  const add = d => { scraperLog += d.toString(); if (scraperLog.length > maxLog) scraperLog = scraperLog.slice(-maxLog); };
+  let eaddrHinted = false;
+  const add = d => {
+    const text = d.toString();
+    scraperLog += text;
+    if (scraperLog.length > maxLog) scraperLog = scraperLog.slice(-maxLog);
+    if (!eaddrHinted && text.includes('EADDRINUSE')) {
+      eaddrHinted = true;
+      scraperLog += `\n[local scraper] Port ${scraperPort} is already in use by another process. Stop the old scraper holding it, then press Build & start again — two scrapers cannot share one port.\n`;
+    }
+  };
+  for (const pid of portState.freed) add(`[local scraper] stopped stale scraper process ${pid} that was holding port ${scraperPort}\n`);
   add(`[local scraper] ${scraperCommand}\n[local scraper] PORT=${scraperPort} DATABASE_URL=${env.DATABASE_URL.replace(/:[^:@/]+@/, ':***@')}\n\n`);
   child.stdout.on('data', add); child.stderr.on('data', add);
   child.on('exit', code => { scraper.running = false; scraper.exitCode = code ?? 0; add(`\n[scraper exited with code ${scraper.exitCode}]\n`); if (scraper.exitCode === 75) { add('[local scraper] Auto-update finished; restarting scraper process...\n'); setTimeout(() => startScraper(), 1500); } });

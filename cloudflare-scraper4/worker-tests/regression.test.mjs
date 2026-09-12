@@ -1817,3 +1817,16 @@ test('automated npm installs skip install scripts on Termux', async () => {
   const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
   assert.ok(server.includes('--ignore-scripts'), 'scraper self-update must skip install scripts on Termux');
 });
+
+test('scraper start frees a stale port holder instead of crashing with EADDRINUSE', async () => {
+  // A scraper the deployer did not spawn keeps holding the port after an
+  // update, so the fresh build crashed with EADDRINUSE and the box silently
+  // kept serving the old release. Start must first stop a PROVEN stale
+  // scraper, refuse (with a clear state) when a foreign program holds the
+  // port, and explain any address-in-use crash in the log.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('function freeScraperPort()'), 'deployer must map the scraper port to its holder before starting');
+  assert.ok(deployer.includes('render-dist\\/server'), 'only a proven stale scraper may be stopped, never a foreign program');
+  assert.ok(deployer.includes("blocked: 'port-held'"), 'a foreign port holder must refuse to start with a clear state, not crash the build');
+  assert.ok(deployer.includes('EADDRINUSE'), 'the scraper log must explain an address-in-use crash with a next step');
+});
