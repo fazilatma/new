@@ -93,9 +93,9 @@ test('structural: the engine is wired into the chain, benchmark and UI', async (
   const server = await readFile(join(ROOT, 'render-src', 'server.ts'), 'utf8');
   assert.ok(server.includes("'heuristic','structural','metadata'"), 'the Node benchmark must probe structural');
   const app = await readFile(join(ROOT, 'worker-src/app.ts'), 'utf8');
-  assert.ok(app.includes("'crawlee_playwright','structural']"), 'the Worker must list structural as unavailable, not crash on it');
+  assert.ok(app.includes("'crawlee_playwright','structural'"), 'the Worker must list structural as unavailable, not crash on it');
   const wScraper = await readFile(join(ROOT, 'worker-src/scraper.ts'), 'utf8');
-  assert.ok(wScraper.includes("'crawlee_playwright','structural']"), 'the Worker must refuse structural loudly like the other Node-only engines');
+  assert.ok(wScraper.includes("'crawlee_playwright','structural'"), 'the Worker must refuse structural loudly like the other Node-only engines');
 });
 
 test('structural: Node matches Python product-for-product (discount cards excepted)', async (t) => {

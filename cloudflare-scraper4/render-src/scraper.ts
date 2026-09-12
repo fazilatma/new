@@ -429,7 +429,7 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
   engineError?:string;
   /** Which browser second layer won ('selectors'|'structural'|'heuristic'|'none') — set only when a browser engine produced the products. */
   browserLayer?:string};
-const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','network_api']);
 /** Last browser-engine failure, so callers can explain a skipped engine. */
 let lastBrowserError='';
 export function lastBrowserEngineError():string{return lastBrowserError}
@@ -442,7 +442,7 @@ const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
 // after the selector engine, not in RENDER_DISCOVERY_ENGINES: the Node auto
 // chain must mirror the Worker chain first (see the auto-order test), and the
 // Worker cannot run cheerio at all.
-const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','structural','cheerio','playwright','puppeteer','crawlee_playwright'];
+const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','structural','cheerio','playwright','puppeteer','crawlee_playwright','network_api'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
   if(!autoFirst&&requested!=='auto'){add(requested);return out}
@@ -524,6 +524,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     if (name === 'playwright') return scrapeListWithPlaywright(url, activeSelectors);
     if (name === 'puppeteer') return scrapeListWithPuppeteer(url, activeSelectors);
     if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, activeSelectors);
+    if (name === 'network_api') return scrapeListWithNetworkApi(url);
     const { text, url: finalUrl } = await source();
     if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
     if (name === 'jsonld') return jsonLdProducts(text, finalUrl);
@@ -656,6 +657,83 @@ export function rescueRenderedProducts(html: string, baseUrl: string, firstLayer
   const heuristic = heuristicProducts(html, baseUrl);
   return heuristic.length ? { products: heuristic, layer: 'heuristic' } : { products: [], layer: 'none' };
 }
+// ---------------------------------------------------------------------------
+// 1.147.0 — network_api engine: products from the page's own API traffic.
+//
+// JavaScript shops like Snappshop render an empty shell and then fetch the
+// catalogue as JSON (XHR/fetch). Instead of reading the DOM, this engine
+// sniffs those responses with Playwright's DevTools-grade network events,
+// parses every JSON-shaped API body, and walks each for product-like objects
+// with the same walker the script_json/next_data engines use. Bounds keep one
+// chatty page from exploding memory: 50 responses max, 2MB per body, 8MB
+// total, plus the walker's own 1000-product cap. Pure parsing lives in
+// networkApiProducts so tests pin it without a browser.
+// ---------------------------------------------------------------------------
+const NETWORK_API_MAX_RESPONSES = 50;
+const NETWORK_API_MAX_BODY_BYTES = 2_000_000;
+const NETWORK_API_MAX_TOTAL_BYTES = 8_000_000;
+const NETWORK_API_SETTLE_MS = 3000;
+
+export function networkApiProducts(apiBodies: string[], baseUrl: string): Product[] {
+  const out: Product[] = [];
+  for (const text of (Array.isArray(apiBodies) ? apiBodies : []).slice(0, NETWORK_API_MAX_RESPONSES)) {
+    const raw = String(text || '').trim();
+    if (!raw) continue;
+    try {
+      walkObjects(JSON.parse(raw), baseUrl, out);
+    } catch { /* not JSON: skip */ }
+    if (out.length > 1000) break;
+  }
+  return dedupe(out);
+}
+
+async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
+  try {
+    const page = await browser.newPage({ locale: 'fa-IR' });
+    const bodies: string[] = [];
+    const endpoints: string[] = [];
+    let totalBytes = 0, done = false;
+    // A radar on the Network tab: every XHR/fetch response is buffered,
+    // bounded, and kept when it looks like JSON.
+    page.on('response', (response) => {
+      if (done) return;
+      try {
+        const req = response.request();
+        const type = req.resourceType();
+        if ((type !== 'xhr' && type !== 'fetch') || !response.ok()) return;
+        if (endpoints.length < 20) endpoints.push(String(req.url() || '').slice(0, 160));
+        void (async () => {
+          try {
+            const buf = await response.body();
+            if (done || bodies.length >= NETWORK_API_MAX_RESPONSES || totalBytes + buf.length > NETWORK_API_MAX_TOTAL_BYTES) return;
+            if (buf.length < 50 || buf.length > NETWORK_API_MAX_BODY_BYTES) return;
+            const text = buf.toString('utf8');
+            if (!/^[\s]*[{[]/.test(text)) return;
+            totalBytes += buf.length;
+            bodies.push(text);
+          } catch { /* non-bufferable response: skip */ }
+        })();
+      } catch { /* the listener must never break the page */ }
+    });
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    } catch (navigationError: unknown) {
+      if (!isAbortedNavigation(navigationError)) throw navigationError;
+      await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+    }
+    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+    // Settle window: lets in-flight API calls finish and flush their bodies.
+    await new Promise(resolve => setTimeout(resolve, NETWORK_API_SETTLE_MS));
+    done = true;
+    const products = networkApiProducts(bodies, page.url());
+    console.log(`[scraper4] network_api: ${bodies.length} API responses captured, ${products.length} products parsed (${url})`);
+    if (endpoints.length) console.log(`[scraper4] network_api endpoints (${endpoints.length}): ${endpoints.join(' | ')}`);
+    return products;
+  } finally { await browser.close(); }
+}
+
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {

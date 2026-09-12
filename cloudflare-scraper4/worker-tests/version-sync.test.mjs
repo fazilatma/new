@@ -1292,7 +1292,7 @@ test('every engine the benchmark can select is offered in the dropdowns', async 
   const wDispatch = wScraper.slice(wScraper.indexOf('const tryOne=async'), wScraper.indexOf('for(const name of engineOrder', wScraper.indexOf('const tryOne=async')));
   // structural joins the browser engines here: it needs the cheerio package,
   // which only the Node runtime has, so the Worker must not dispatch it.
-  const nodeOnly = ['playwright', 'puppeteer', 'crawlee_playwright', 'structural'];
+  const nodeOnly = ['playwright', 'puppeteer', 'crawlee_playwright', 'structural', 'network_api'];
   for (const id of ids.filter(e => e !== 'auto' && !nodeOnly.includes(e))) {
     assert.ok(wDispatch.includes(`name==='${id}'`), `Worker engine "${id}" must be dispatched, not silently return []`);
   }

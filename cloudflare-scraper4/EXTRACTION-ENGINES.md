@@ -48,6 +48,17 @@ in the log (visible in the deployer Logs tab on Termux), and the `browserLayer` 
 (`selectors` | `structural` | `heuristic` | `none`). Pinned by `worker-tests/browser-layer.test.mjs` against the pure
 rescue function — no browser exists in CI, so the live Snappshop proof is a device run with Termux Chromium.
 
+## `network_api`: products from the page's own API traffic
+
+`network_api` is a fourth browser engine (Node-only, last in the `auto` chain and the benchmark). Instead of reading
+the DOM, it opens the page in Playwright with a `response` listener — a programmed DevTools Network tab — and keeps
+every JSON-shaped XHR/fetch body (50 responses, 2MB per body, 8MB total, plus a settle window for in-flight calls).
+Each body is walked for product-like objects with the same walker the `script_json`/`next_data` engines use, so API
+envelopes, `offers`/`finalPrice`/`salePrice` price shapes, and relative/slug links all read the same way. Captured
+endpoint URLs are printed to the log (`[scraper4] network_api endpoints ...`), which doubles as an API-discovery
+tool for shops like Snappshop. The Worker refuses it loudly like the other browser engines. Pure parsing lives in
+`networkApiProducts` and is pinned by `worker-tests/network-api.test.mjs` against a Snappshop-shaped fixture.
+
 ## Benchmark and the saved engine
 
 The 3-page speed test (profile → speed test) runs the engines above and saves the winner to the profile's
