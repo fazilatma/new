@@ -1,6 +1,6 @@
 {
   "name": "scraper4-cloudflare",
-  "version": "1.137.0",
+  "version": "1.138.0",
   "private": true,
   "description": "Cloudflare Workers-native Scraper 4 with D1, Queues, Cron, and downloadable backups",
   "type": "module",
@@ -22,6 +22,7 @@
     "worker:dev": "wrangler dev --ip 0.0.0.0",
     "worker:test": "npm run version:check && npm run worker:typecheck && npm run worker:build && npm run render:build && node --test worker-tests/*.test.mjs",
     "lab:probe": "node scripts/lab-probe.mjs",
+    "lab:service": "node scripts/lab-service.mjs",
     "esbuild:check": "node scripts/esbuild-check.mjs",
     "worker:deploy": "node scripts/deploy-cloudflare.mjs",
     "worker:db:local": "wrangler d1 migrations apply DB --local",

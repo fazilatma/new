@@ -19,10 +19,13 @@ node scripts/lab-probe.mjs patris-cards.html
 node scripts/lab-probe.mjs tw-cards.html
 node scripts/lab-probe.mjs --file /tmp/shop-page.html --base https://shop.example/
 
-# ۲. تست‌های موتور (سریع، فقط همین فایل)
+# ۲. آزمایشگاه سرویس: دیپلویر + بیلدها + سیم‌کشی نسخه (زیر ۵ ثانیه)
+node scripts/lab-service.mjs
+
+# ۳. تست‌های موتور (سریع، فقط همین فایل)
 node --test worker-tests/engine-diagnosis.test.mjs
 
-# ۳. گیت کامل (نسخه + تایپ‌چک + بیلدها + همهٔ تست‌ها) — باید سبز باشد
+# ۴. گیت کامل (نسخه + تایپ‌چک + بیلدها + همهٔ تست‌ها) — باید سبز باشد
 npm test
 ```
 
@@ -30,7 +33,8 @@ npm test
 
 | جزء | مسیر | نقش |
 |---|---|---|
-| پروب تعاملی | `scripts/lab-probe.mjs` | باندل هر دو twin، اجرای discovery/heuristic/selector/diagnosis و چاپ یک گزارش فشرده |
+| پروب تعاملی | `scripts/lab-probe.mjs` | باندل هر دو twin، اجرای discovery/heuristic/next_data/script_json/selector/diagnosis و چاپ یک گزارش فشرده |
+| آزمایشگاه سرویس | `scripts/lab-service.mjs` | راستی‌آزمایی آفلاین دیپلویر، تازگی بیلدها، نسخه و گیت مرورگر |
 | فیکسچرها | `worker-tests/fixtures/*.html` | صفحه‌های نمونهٔ فروشگاه‌ها (جدول زیر) |
 | تست موتورها | `worker-tests/engine-diagnosis.test.mjs` | قفل رفتار discovery، استخراج و diagnosis روی هر دو twin |
 | تست استخراج | `worker-tests/extraction.test.mjs` | جزئیات استخراج Worker (قیمت فارسی، لینک‌ها، گالری، …) |
@@ -49,6 +53,17 @@ npm test
 | `detail-fa.html` | صفحهٔ جزئیات (برند، موجودی، توضیحات، گالری) |
 | `jsonld-list.html` | کاتالوگ `ItemList` در JSON-LD |
 | `next-data.html` | کاتالوگ داخل `__NEXT_DATA__` |
+
+## آزمایشگاه سرویس (دیپلویر + اسکریپر)
+
+فایل‌های سرویسی هم در آزمایشگاه‌اند و `scripts/lab-service.mjs` (یا
+`npm run lab:service`) آن‌ها را آفلاین راستی‌آزمایی می‌کند:
+
+- سلامت نحوی `scripts/local-deployer-ui.mjs` و نگهبان‌هایش (آزادسازی پورت
+  stale، نصب‌های Termux-aware)،
+- تازگی بیلد رندر (`render-dist/server.js` نسبت به `render-src/`)،
+- هم‌خوانی باندل کامیت‌شدهٔ `scraper4.worker.js` با نسخهٔ `package.json`،
+- سبز بودن `version:check` و حضور دارا بودن گیت مرورگر در بنچمارک.
 
 ## افزودن فروشگاه جدید به آزمایشگاه (وقتی گزارش میدانی می‌رسد)
 

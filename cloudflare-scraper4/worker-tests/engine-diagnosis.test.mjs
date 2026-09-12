@@ -185,6 +185,10 @@ test('both twins export the diagnosis surface', async () => {
   }
   assert.ok(renderSrc.includes('export function heuristicProducts'), 'render heuristic export');
   assert.ok(workerSrc.includes('export async function extractHeuristicProducts'), 'worker heuristic export');
+  assert.ok(renderSrc.includes('export function nextDataProducts'), 'render next_data export');
+  assert.ok(workerSrc.includes('export async function extractNextDataProducts'), 'worker next_data export');
+  assert.ok(renderSrc.includes('export function scriptJsonProducts'), 'render script_json export');
+  assert.ok(workerSrc.includes('export async function extractScriptJsonProducts'), 'worker script_json export');
 });
 
 test('both twins extract tatweel-styled prices and skip in-card category links', async () => {
@@ -251,4 +255,59 @@ test('render benchmark gates browser engines on availability, not platform', asy
   assert.ok(server.includes('BROWSER_EXECUTABLE_PATH را تنظیم کنید'));
   assert.ok(!server.includes('BROWSER_ENGINES_UNAVAILABLE'));
   assert.ok(!server.includes('نصب‌شدنی نیستند'));
+});
+
+test('both twins extract plain server-rendered shop cards', async () => {
+  const html = await fixture('simple-cards.html');
+  const byPrice = list => list.map(p => p.price).sort((a, b) => a - b);
+  assert.deepEqual(byPrice(await scraper.extractHeuristicProducts(html, BASE)), [950000, 2100000, 4750000]);
+  assert.deepEqual(byPrice(rscraper.heuristicProducts(html, BASE)), [950000, 2100000, 4750000]);
+  const found = await scraper.discoverListSelectorsFromHtml(html, BASE);
+  assert.notEqual(found.method, 'none');
+  assert.match(found.selectors.container || '', /item/);
+  assert.deepEqual(byPrice(await scraper.parseCards(html, BASE, found.selectors)), [950000, 2100000, 4750000]);
+  const rfound = rscraper.discoverListSelectorsFromHtml(html, BASE);
+  const verified = rscraper.verifyListSelectors(html, BASE, { ...DEFAULTS, ...rfound.selectors });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.price.count, 3);
+});
+
+test('both twins extract WooCommerce cards and prefer the sale price', async () => {
+  const html = await fixture('woocommerce-cards.html');
+  const byPrice = list => list.map(p => p.price).sort((a, b) => a - b);
+  assert.deepEqual(byPrice(await scraper.extractHeuristicProducts(html, BASE)), [950000, 2100000, 4750000]);
+  assert.deepEqual(byPrice(rscraper.heuristicProducts(html, BASE)), [950000, 2100000, 4750000]);
+  const found = await scraper.discoverListSelectorsFromHtml(html, BASE);
+  assert.match(found.selectors.container || '', /li\.product/);
+  assert.match(found.selectors.title || '', /woocommerce-loop-product__title/);
+  assert.deepEqual(byPrice(await scraper.parseCards(html, BASE, found.selectors)), [950000, 2100000, 4750000]);
+  const rfound = rscraper.discoverListSelectorsFromHtml(html, BASE);
+  assert.match(rfound.selectors.container || '', /li\.product/);
+  const verified = rscraper.verifyListSelectors(html, BASE, { ...DEFAULTS, ...rfound.selectors });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.containerCount, 3);
+});
+
+test('both twins extract Next.js catalogs and stay silent on the shell', async () => {
+  const html = await fixture('jsnext-cards.html');
+  const byPrice = list => list.map(p => p.price).sort((a, b) => a - b);
+  const wnext = await scraper.extractNextDataProducts(html, BASE);
+  assert.deepEqual(byPrice(wnext), [3200000, 21500000, 48000000]);
+  assert.deepEqual(byPrice(rscraper.nextDataProducts(html, BASE)), [3200000, 21500000, 48000000]);
+  assert.equal((await scraper.extractHeuristicProducts(html, BASE)).length, 0);
+  assert.equal(rscraper.heuristicProducts(html, BASE).length, 0);
+  for (const twin of [scraper, rscraper]) {
+    const d = await twin.diagnoseBenchmarkEngine('next_data', html, BASE, DEFAULTS, wnext);
+    assert.equal(d.signals.hasNextData, true);
+    assert.match(d.hint, /سالم/);
+  }
+});
+
+test('both twins extract embedded-state catalogs and stay silent on the shell', async () => {
+  const html = await fixture('jsstate-cards.html');
+  const byPrice = list => list.map(p => p.price).sort((a, b) => a - b);
+  assert.deepEqual(byPrice(await scraper.extractScriptJsonProducts(html, BASE)), [38000, 45000, 92000]);
+  assert.deepEqual(byPrice(rscraper.scriptJsonProducts(html, BASE)), [38000, 45000, 92000]);
+  assert.equal((await scraper.extractHeuristicProducts(html, BASE)).length, 0);
+  assert.equal(rscraper.heuristicProducts(html, BASE).length, 0);
 });

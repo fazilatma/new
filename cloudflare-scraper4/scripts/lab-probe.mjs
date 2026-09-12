@@ -3,8 +3,9 @@
 // ---------------------------------------------------------------------------
 // Interactive lab probe: runs BOTH extraction twins (worker-src + render-src)
 // against a fixture (or any saved HTML page) and prints one compact report:
-// selector discovery, heuristic extraction, selector-engine extraction and the
-// benchmark diagnosis. This is the fastest way to reproduce a report from the
+// selector discovery, heuristic extraction, data-engine extraction
+// (next_data/script_json), selector-engine extraction and the benchmark
+// diagnosis. This is the fastest way to reproduce a report from the
 // field ("0 products on shop X") without network access: save the page HTML,
 // add it as a fixture, probe it, fix the code, probe again.
 //
@@ -84,13 +85,22 @@ const render = require(join(rtmp, 'scraper.cjs'));
 const short = (p, i) => `  #${i} [${p.price}] ${(p.title || '').slice(0, 44)} | ${(p.url || '').slice(0, 60)} | img:${p.image ? 'yes' : 'NO'}`;
 
 console.log(`lab-probe: ${htmlPath} (${html.length} bytes, base ${BASE})`);
-for (const [name, twin, heuristic] of [['worker', worker, 'extractHeuristicProducts'], ['render', render, 'heuristicProducts']]) {
+for (const [name, twin, heuristic, nextData, scriptJson] of [
+  ['worker', worker, 'extractHeuristicProducts', 'extractNextDataProducts', 'extractScriptJsonProducts'],
+  ['render', render, 'heuristicProducts', 'nextDataProducts', 'scriptJsonProducts'],
+]) {
   console.log(`=== ${name} ===`);
   const found = await twin.discoverListSelectorsFromHtml(html, BASE);
   console.log('discovery:', found.method, JSON.stringify(found.selectors));
   const heu = await twin[heuristic](html, BASE);
   console.log(`heuristic: ${heu.length} products`);
   heu.slice(0, 8).forEach((p, i) => console.log(short(p, i)));
+  for (const [label, fn] of [['next_data', nextData], ['script_json', scriptJson]]) {
+    if (typeof twin[fn] !== 'function') { console.log(`${label}: n/a`); continue; }
+    const items = await twin[fn](html, BASE);
+    console.log(`${label}: ${items.length} products`);
+    items.slice(0, 8).forEach((p, i) => console.log(short(p, i)));
+  }
   if (found.method !== 'none') {
     if (name === 'worker') {
       const cards = await twin.parseCards(html, BASE, found.selectors);
