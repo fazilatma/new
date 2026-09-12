@@ -640,3 +640,24 @@ though they were never used.
 For a JavaScript-only shop, run `npm run browsers:install` once (or `pkg install chromium` on
 Termux). Cloudflare Workers and shared cPanel cannot run a browser at all — use the HTML engines
 there.
+
+## 1.131.0 — the browser engines all run on a phone (Termux) now
+
+Playwright and Puppeteer already drove Termux's `chromium` package through the
+auto-detected path, but Crawlee ignored it and looked only for Playwright's
+bundled downloads — which `.npmrc` skips, and which could never execute on
+Android anyway (desktop-Linux glibc binaries vs Android's Bionic libc). Worse,
+`npm run browsers:install` downloaded those same unusable binaries on a phone.
+
+- **Crawlee launches the detected browser too.** All three engines now share one
+  resolution: `BROWSER_EXECUTABLE_PATH`, then the Termux/desktop paths, then the
+  Playwright/Puppeteer caches — always with the sandbox-free flags Android needs.
+- **`npm run browsers:install` is Termux-aware.** On a phone it installs and
+  verifies the system `chromium` via `pkg` instead of downloading ~170 MB of
+  desktop binaries that can never run; everywhere else it downloads as before.
+  It still never fails hard, so chained install commands keep working.
+
+On the phone itself the whole setup is: `pkg install -y nodejs-lts git chromium`,
+clone, `npm install`, `npm run browsers:install`, then start the scraper and pick
+the playwright/puppeteer/crawlee_playwright engine (the Termux guide prints the
+exact lines).

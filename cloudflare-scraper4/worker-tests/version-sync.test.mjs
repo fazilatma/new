@@ -1696,3 +1696,32 @@ test('a missing origin remote gets an explanation and a one-click repair, not a 
   assert.match(deployer, /missingOriginMessage\('install branches'\)/, 'branch install must not report "branch not found" when origin is missing');
   assert.match(deployer, /missingOriginMessage\('update from GitHub'\)/, 'the manual update must point at the repair too');
 });
+
+// On Termux/Android, `playwright install` downloads desktop-Linux (glibc)
+// binaries that can never execute (Bionic libc) — the only runnable browser
+// is Termux's own chromium package, which all three browser engines must use.
+test('browser engines run on Termux via the system Chromium, never desktop downloads', async () => {
+  const scraper = await readProjectFile('render-src/scraper.ts');
+  // Detection + flags (shared by all three engines).
+  assert.match(scraper, /\/data\/data\/com\.termux\/files\/usr\/bin\/chromium/, 'the Termux Chromium path must be auto-detected');
+  assert.match(scraper, /'--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'/, 'rootless/Android-safe launch flags must be shared');
+  // Playwright + Puppeteer already launch the detected executable...
+  assert.ok(scraper.includes('async function scrapeRenderedHtml('), 'guard: the shared launcher was located');
+  const rendered = scraper.slice(scraper.indexOf('async function scrapeRenderedHtml('), scraper.indexOf('async function scrapeListWithPlaywright('));
+  assert.match(rendered, /executablePath, args: browserLaunchArgs\(\)/, 'both drivers must launch the detected executable with the shared flags');
+  // ...and Crawlee must do the same through its launchContext (it used to
+  // ignore the detected browser and look for bundled downloads only).
+  assert.ok(scraper.includes('async function scrapeListWithCrawleePlaywright('), 'guard: the crawlee body was located');
+  const crawlee = scraper.slice(scraper.indexOf('async function scrapeListWithCrawleePlaywright('), scraper.indexOf('function parseProductsFromHtml('));
+  assert.match(crawlee, /launchContext: \{ launchOptions: \{ headless: true, executablePath, args: browserLaunchArgs\(\) \} \}/, 'crawlee must launch the detected executable with the shared flags');
+  // The installer must not download desktop browsers on Termux.
+  const installer = await import('../scripts/browsers-install.mjs');
+  assert.equal(installer.isTermux({ PREFIX: '/data/data/com.termux/files/usr' }), true, 'Termux must be detected from $PREFIX');
+  assert.equal(installer.isTermux({ PREFIX: '/usr' }), false, 'a desktop must not be mistaken for Termux');
+  assert.deepEqual(installer.installPlan(true).map(([, command, args]) => [command, ...args].join(' ')), ['pkg install -y chromium'], 'Termux installs the system browser via pkg');
+  const desktop = installer.installPlan(false).map(([, command, args]) => [command, ...args].join(' ')).join('\n');
+  assert.match(desktop, /playwright install chromium/, 'desktops keep the bundled Playwright download');
+  assert.match(desktop, /puppeteer browsers install chrome/, 'desktops keep the bundled Puppeteer download');
+  const pkg = JSON.parse(await readProjectFile('package.json'));
+  assert.equal(pkg.scripts['browsers:install'], 'node scripts/browsers-install.mjs', 'npm run browsers:install must route through the environment-aware installer');
+});

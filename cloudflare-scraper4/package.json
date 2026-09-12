@@ -1,6 +1,6 @@
 {
   "name": "scraper4-cloudflare",
-  "version": "1.130.0",
+  "version": "1.131.0",
   "private": true,
   "description": "Cloudflare Workers-native Scraper 4 with D1, Queues, Cron, and downloadable backups",
   "type": "module",
@@ -29,7 +29,7 @@
     "deployer:ui": "node scripts/local-deployer-ui.mjs",
     "local": "npm run deployer:ui",
     "scraper:local": "npm run render:build && npm run render:start",
-    "browsers:install": "playwright install chromium || true; puppeteer browsers install chrome || true",
+    "browsers:install": "node scripts/browsers-install.mjs",
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check"
   },

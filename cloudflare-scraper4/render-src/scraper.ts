@@ -373,7 +373,13 @@ async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promi
 async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors): Promise<Product[]> {
   const { PlaywrightCrawler, Dataset } = await import('crawlee');
   const dataset = await Dataset.open(`scraper4-${Date.now()}`);
-  const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, requestHandler: async ({ page }) => {
+  // Same browser resolution as the Playwright/Puppeteer engines: drive the
+  // detected system Chromium (Termux/VPS/desktop) with sandbox-free flags.
+  // Crawlee's default launch looks for Playwright's bundled browsers, which
+  // .npmrc deliberately skips — and which could never execute on Android
+  // (desktop-Linux glibc binaries vs Android's Bionic libc) anyway.
+  const executablePath = browserExecutable('playwright');
+  const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();
     const products = parseProductsFromHtml(html, page.url(), selectors);
