@@ -19,7 +19,7 @@
 const DEPLOY_VERSION = "1.0.0";
 const DEFAULTS = {
   repo: "fazilatma/new",
-  branch: "arena/01a0803e-new",
+  branch: "arena/01a09468-new",
   path: "cloudflare-scraper4/scraper4.worker.js",
   worker: "scraper4-cloudflare",
   compatibilityDate: "2026-08-19"

@@ -48,6 +48,8 @@ const localScraperAutoUpdateMs = Math.max(60_000, Number(process.env.LOCAL_SCRAP
 let localScraperUpdateRunning = false;
 let localScraperDirtySkipLogged = -1;
 let localScraperUnpushedSkipLogged = -1;
+let localScraperBootHead = '';
+let localScraperMovedWarnedHead = '';
 function runLocal(command: string, args: string[] = []) { return spawnSync(command, args, { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env }); }
 function maybeAutoUpdateLocalScraper(reason = 'timer') {
   if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
@@ -79,11 +81,21 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
       return;
     }
     localScraperUnpushedSkipLogged = -1;
-    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0803e-new').trim() || 'arena/01a0803e-new';
+    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a09468-new').trim() || 'arena/01a09468-new';
     const before = (runLocal('git', ['rev-parse', 'HEAD']).stdout || '').trim();
     const fetched = runLocal('git', ['fetch', 'origin', branch]);
     if (fetched.status !== 0) return console.warn(`[auto-update:${reason}] git fetch failed: ${fetched.stderr || fetched.stdout}`);
     const remote = (runLocal('git', ['rev-parse', `origin/${branch}`]).stdout || '').trim();
+    // The deployer can move the checkout under a running scraper (branch
+    // install) while this process keeps serving its old build: before then
+    // equals remote, so the updater below would stay silent forever. Never
+    // exit here (a manually started scraper has nothing to restart it) — warn
+    // loudly instead so the operator restarts it.
+    if (!localScraperBootHead) localScraperBootHead = before;
+    if (before && before !== localScraperBootHead && before === remote && localScraperMovedWarnedHead !== before) {
+      localScraperMovedWarnedHead = before;
+      console.warn(`[auto-update:${reason}] the git checkout moved under this running scraper (${localScraperBootHead.slice(0, 7)} -> ${before.slice(0, 7)}) but it still serves the old build. Restart the scraper (deployer: Stop, then Build & start) to apply the new code.`);
+    }
     if (!before || !remote || before === remote) return;
     console.log(`[auto-update:${reason}] New scraper code found ${before.slice(0,7)} -> ${remote.slice(0,7)}. Updating and restarting local scraper...`);
     runLocal('git', ['config', '--local', '--replace-all', 'credential.helper', '!gh auth git-credential']);

@@ -24,15 +24,15 @@
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper '!gh auth git-credential'
  *   gh auth setup-git || true
- *   git fetch origin arena/01a0803e-new
- *   git reset --hard origin/arena/01a0803e-new
+ *   git fetch origin arena/01a09468-new
+ *   git reset --hard origin/arena/01a09468-new
  *   cd cloudflare-scraper4
  *   npm install --no-audit --prefer-online
  *   grep version package.json | head -1
  *   # Expected: 1.137.0
  *
  * Cloudflare Worker update from Dashboard:
- *   1) Push/pull this branch: arena/01a0803e-new.
+ *   1) Push/pull this branch: arena/01a09468-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
  *   4) Open /health and verify version is 1.137.0.
@@ -67,14 +67,14 @@
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
  *   gh auth setup-git
- *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0803e-new --depth 1
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a09468-new --depth 1
  *   cd "$HOME/new"
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper '!gh auth git-credential'
  *   git config --local --get-all credential.helper
  *   # Correct output must be exactly: !gh auth git-credential
  *   # Do NOT set: "gh auth setup-git auth git-credential"
- *   git pull --ff-only origin arena/01a0803e-new
+ *   git pull --ff-only origin arena/01a09468-new
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm config set fetch-retries 5
  *   npm config set fetch-retry-mintimeout 20000
