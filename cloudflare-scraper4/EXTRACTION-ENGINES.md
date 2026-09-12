@@ -77,6 +77,50 @@ npx puppeteer browsers install chrome
 
 For Codespaces/VPS Linux, browser packages may require additional system dependencies. Use browser engines only for sites you are authorized to access and do not use them to bypass access controls.
 
+## Proactive auto-discovery when selectors were never configured (1.128.0, Render/Node)
+
+Until 1.128.0 the engines only repaired selectors as a *last resort* (see below):
+a run that extracted zero products retried once with suggested selectors. That
+still left a gap for every fresh profile, because "not configured" never looked
+empty — `normalizeProfile()` fills new profiles with WooCommerce
+`DEFAULT_SELECTORS` and rejects empty list selectors. The engines ran blind
+(discovery engines guessing cards while the selector engines matched nothing),
+and any shop the discovery engines could not read ended with 0 products.
+
+Since 1.128.0 the Render/Node engines repair **unconfigured** selectors
+themselves, *before* the engine loop, reusing the already-fetched page HTML (no
+extra fetch):
+
+- **Trigger.** `listSelectorsStatus()` classifies the profile's list selectors
+  as `empty` (none set), `partial` (some set), `default` (all five still the
+  WooCommerce defaults) or `custom`. Anything but `custom` is repaired when the
+  current selectors do not verify against the real page. Fully custom selectors
+  keep the exact old behavior — their breakage is still covered by the
+  last-resort rescue in `processor.ts`.
+- **Pass 1 — curated candidates.** The known e-commerce selector list (now
+  extended with generic grid selectors) is tested first: fast and precise on
+  known platforms.
+- **Pass 2 — structural inference** (`inferStructuralListSelectors`). For
+  unknown markup (Tailwind/React shops with arbitrary classes) every link+image
+  subtree is clustered by its tag+class signature, the largest repeating
+  cluster is treated as the product grid, and title/price/link/image selectors
+  are derived from inside the cards. Unlike the `heuristic` engine — which
+  extracts products directly — this produces reusable CSS selectors, so the
+  selector engines (and every later page and run) work with them.
+- **Verification gate.** Proposals are checked with `verifyListSelectors()`
+  (container repeats ≥2, titles resolve *inside* most cards) before adoption.
+  A page with no product pattern yields `method: 'none'` and nothing is saved.
+- **Persistence.** `scrapeListWithMeta()` reports `discoveredSelectors` /
+  `discoveryMethod`; the job processor, the inline API (`runProfileApi`) and
+  the 3-page benchmark persist them to the profile once, so later pages reuse
+  the selector engine instead of re-discovering. The extraction diagnostic
+  shows the proposals read-only when a run finds nothing.
+- **Opt-out.** Pass `autoDiscover=false` to `scrapeListWithMeta()` /
+  `scrapeList()` for the exact pre-1.128.0 behavior.
+
+The Cloudflare Worker runtime is unchanged in this release; it keeps the
+last-resort rescue only.
+
 ## Last-resort selector rediscovery (1.97.0)
 
 Engine selection answers "how do we parse this page". It does not help when the

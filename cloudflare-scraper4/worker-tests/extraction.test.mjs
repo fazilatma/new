@@ -511,10 +511,19 @@ test('node: the rescue reruns the same page instead of skipping it', () => {
   assert.match(branch, /page--;\s*continue/, 'a rescued page must be re-scraped, not skipped');
 });
 
-test('node: empty list selectors are filled before the first fetch', () => {
+test('node: unconfigured list selectors are repaired by the engines and persisted', () => {
   const source = stripComments(nodeProcessor);
-  assert.match(source, /LIST_KEYS\.some\(key => String\(\(profile\.selectors as any\)\?\.\[key\] \|\| ''\)\.trim\(\)\)/,
-    'a profile with no list selectors must run discovery first');
+  // Since 1.128.0 "not configured" is empty, partial OR still-default
+  // (normalizeProfile fills WooCommerce defaults), the engines repair such
+  // selectors from page 1 reusing the same fetch, and the run persists them.
+  assert.match(source, /listSelectorsStatus\(profile\.selectors\)/,
+    'a profile with unconfigured list selectors must run engine-side discovery first');
+  assert.match(source, /selectorStatus !== 'custom'/,
+    'only non-custom (empty, partial, still-default) selectors trigger the repair');
+  assert.match(source, /scraped\.discoveredSelectors/,
+    'engine-discovered selectors must be persisted to the profile');
+  assert.match(source, /engineSelectorsSaved/,
+    'the repair must be saved once per run, not on every page');
 });
 
 test('node: the detail stage falls back when no detail field is populated', () => {

@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { safeText } from './network.js';
-import type { ExtractionEngine, Product, Profile, Selectors } from './types.js';
+import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile, type Selectors } from './types.js';
 
 const normalize = (value: string) => value.replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
 const absolute = (value: string, base: string) => { if (!String(value || '').trim()) return ''; try { const url = new URL(value, base); return ['http:','https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };
@@ -181,7 +181,21 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
 
 export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number;
   /** Absolute URL of the 'next page' link, when a next-selector is configured. */
-  nextUrl?:string};
+  nextUrl?:string;
+  /**
+   * Selectors the selector engines actually ran with (1.128.0). Equals the
+   * input selectors unless auto-discovery repaired them first.
+   */
+  selectorsUsed?:Selectors;
+  /**
+   * List selectors auto-discovery found on this page (1.128.0). Set only when
+   * the input selectors were never configured AND the proposals verified
+   * against the real page. Callers that own the profile persist these so the
+   * next page/run reuses them instead of re-discovering.
+   */
+  discoveredSelectors?:Partial<Selectors>;
+  /** How the selectors were found: 'curated' | 'structural' | 'mixed'. */
+  discoveryMethod?:string};
 const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 /** Last browser-engine failure, so callers can explain a skipped engine. */
 let lastBrowserError='';
@@ -213,10 +227,38 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = ''): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true): Promise<ScrapeListResult> {
   const started=Date.now();
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url);
+  // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
+  // carry the WooCommerce DEFAULT_SELECTORS (empty list selectors are rejected),
+  // so "selectors not configured" never looked empty and the engines ran blind:
+  // the discovery engines guessed cards while the selector engines silently
+  // matched nothing, and any shop the discovery engines could not read ended
+  // the run with 0 products. When the selectors were never configured for this
+  // shop (empty, partial, or still the defaults), repair them from the fetched
+  // page BEFORE the engine loop — reusing the same HTML, so no extra fetch —
+  // and report what was found so the caller can persist it. Fully custom
+  // selectors keep the exact old behavior (the job-level last-resort rescue in
+  // processor.ts still covers custom selectors that break later).
+  let activeSelectors = selectors;
+  let discoveredSelectors: Partial<Selectors> | undefined;
+  let discoveryMethod = '';
+  if (autoDiscover && listSelectorsStatus(selectors) !== 'custom') {
+    try {
+      const { text, url: finalUrl } = await source();
+      if (!verifyListSelectors(text, finalUrl, selectors).ok) {
+        const found = discoverListSelectorsFromHtml(text, finalUrl);
+        const merged = { ...selectors, ...found.selectors } as Selectors;
+        if (found.method !== 'none' && found.selectors.container && found.selectors.title && verifyListSelectors(text, finalUrl, merged).ok) {
+          activeSelectors = merged;
+          discoveredSelectors = found.selectors;
+          discoveryMethod = found.method;
+        }
+      }
+    } catch { /* discovery is best-effort; the engine loop below still runs */ }
+  }
   // A 'next page' link is read from the same HTML, so it costs no extra fetch.
   const nextLink=async():Promise<string>=>{
     if(!nextSelector)return '';
@@ -231,11 +273,11 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     return '';
   };
   const pick = async (name: ExtractionEngine) => {
-    if (name === 'playwright') return scrapeListWithPlaywright(url, selectors);
-    if (name === 'puppeteer') return scrapeListWithPuppeteer(url, selectors);
-    if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, selectors);
+    if (name === 'playwright') return scrapeListWithPlaywright(url, activeSelectors);
+    if (name === 'puppeteer') return scrapeListWithPuppeteer(url, activeSelectors);
+    if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, activeSelectors);
     const { text, url: finalUrl } = await source();
-    if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, selectors);
+    if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
     if (name === 'jsonld') return jsonLdProducts(text, finalUrl);
     if (name === 'next_data') return nextDataProducts(text, finalUrl);
     if (name === 'metadata') return metadataProduct(text, finalUrl);
@@ -246,7 +288,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
-      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink()};
+      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod};
       // The explicit engine ran and found nothing: fall through to the
       // remaining engines instead of returning an empty result, but remember
       // the requested engine so an all-empty run still reports what was asked.
@@ -255,9 +297,9 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if(BROWSER_ENGINES.has(name))lastBrowserError=`${name}: ${error instanceof Error?error.message.split('\n')[0]:String(error)}`;
     }
   }
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink()};
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod};
 }
-export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto'): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine)).products; }
+export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
 
 /**
  * Finds a Chromium to drive. `.npmrc` deliberately skips the bundled browser
@@ -440,14 +482,329 @@ export async function mapLimit<T>(items: T[], limit: number, fn: (item: T, index
 }
 
 const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors:string[]}>= {
-  container:{selectors:['li.product','article.product','.products .product','.product-card','.product-item','[data-product-id]']},title:{selectors:['.woocommerce-loop-product__title','.product-title','.card-title','h2','h3','[itemprop="name"]']},price:{selectors:['.price ins','.sale-price','.price','[itemprop="price"]','.amount']},link:{type:'link',selectors:['a.woocommerce-LoopProduct-link','a.product-link','a[href*="/product/"]','a[href]']},image:{type:'image',selectors:['img.wp-post-image','img.product-image','picture img','img']},shortDesc:{selectors:['.woocommerce-product-details__short-description','.short-description','[itemprop="description"]']},longDesc:{selectors:['#tab-description','.woocommerce-Tabs-panel--description','.product-description','.description']},sku:{selectors:['.sku','[itemprop="sku"]','[data-sku]']},brand:{selectors:['.brand','[itemprop="brand"]','.product-brand']},stock:{selectors:['.stock','[itemprop="availability"]','.inventory']},weight:{selectors:['.product_weight','.weight','[data-weight]']},category:{selectors:['.posted_in','.product_meta .category','.breadcrumb']},tags:{selectors:['.tagged_as','.product_meta .tags','[rel="tag"]']},detailImage:{type:'image',selectors:['.woocommerce-product-gallery__image img','.product-main-image img','img.wp-post-image','[itemprop="image"]']},gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img']},variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
+  container:{selectors:['li.product','article.product','.products .product','.product-card','.product-item','[data-product-id]',
+    // Generic / non-WooCommerce grids (1.128.0). Platform-specific guesses stay
+    // first; these only win when nothing above matched. Structural inference
+    // below is the real fallback when none of these exist either.
+    'article','[class*="product-card"]','[class*="product-item"]','[class*="product-box"]','[data-product]','.grid-item','.product','.product-box','.item-card']},
+  title:{selectors:['.woocommerce-loop-product__title','.product-title','.card-title','h2','h3','[itemprop="name"]',
+    '.product-name','[class*="product-title"]','[class*="product-name"]','.name','h4']},
+  price:{selectors:['.price ins','.sale-price','.price','[itemprop="price"]','.amount',
+    '[class*="price"]','.money','[data-price]','.product-price']},
+  link:{type:'link',selectors:['a.woocommerce-LoopProduct-link','a.product-link','a[href*="/product/"]','a[href]','h2 a','h3 a','article a[href]']},
+  image:{type:'image',selectors:['img.wp-post-image','img.product-image','picture img','img','.product-media img','article img']},
+  shortDesc:{selectors:['.woocommerce-product-details__short-description','.short-description','[itemprop="description"]','.product-info','.short-desc','[class*="short-description"]']},
+  longDesc:{selectors:['#tab-description','.woocommerce-Tabs-panel--description','.product-description','.description','.product-tabs','[class*="description"]']},
+  sku:{selectors:['.sku','[itemprop="sku"]','[data-sku]','[class*="sku"]']},
+  brand:{selectors:['.brand','[itemprop="brand"]','.product-brand','[class*="brand"]']},
+  stock:{selectors:['.stock','[itemprop="availability"]','.inventory']},
+  weight:{selectors:['.product_weight','.weight','[data-weight]']},
+  category:{selectors:['.posted_in','.product_meta .category','.breadcrumb']},
+  tags:{selectors:['.tagged_as','.product_meta .tags','[rel="tag"]']},
+  detailImage:{type:'image',selectors:['.woocommerce-product-gallery__image img','.product-main-image img','img.wp-post-image','[itemprop="image"]']},
+  gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img','.product-images img','[class*="gallery"] img']},
+  variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
 };
 export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all'){
-  const page=await safeText(url,4_000_000),wanted=mode==='list'?['container','title','price','link','image']:mode==='detail'?['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations']:Object.keys(SUGGESTION_CANDIDATES),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
-  for(const field of wanted){const config=SUGGESTION_CANDIDATES[field];for(const candidate of config.selectors)try{const values=await extractSelectorValues(page.text,page.url,candidate,config.type||'text');const count=values.length,minimum=field==='container'?2:1;if(count>=minimum){selectors[field]=candidate;evidence[field]={count,sample:values[0]||''};break}}catch{}}
+  const page=await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+  // List fields go through the same discovery the engines use (1.128.0), so the
+  // dashboard button proposes structural selectors for unknown shops too.
+  if(mode==='list'||mode==='all'){
+    const found=discoverListSelectorsFromHtml(page.text,page.url);
+    for(const [key,value] of Object.entries(found.selectors))if(value)selectors[key]=value as string;
+    for(const [key,value] of Object.entries(found.evidence))evidence[key]=value;
+    evidence.discoveryMethod=found.method;evidence.containerCount=found.containerCount;
+  }
+  if(mode==='detail'||mode==='all'){
+    const wanted=['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'];
+    for(const field of wanted){const config=SUGGESTION_CANDIDATES[field];if(!config)continue;for(const candidate of config.selectors)try{const values=extractSelectorValuesSync(page.text,page.url,candidate,config.type||'text');const count=values.length,minimum=1;if(count>=minimum){selectors[field]=candidate;evidence[field]={count,sample:values[0]||''};break}}catch{}}
+  }
   return{url:page.url,mode,selectors,evidence};
 }
-async function extractSelectorValues(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):Promise<string[]>{const $=cheerio.load(html),values:string[]=[];$(selector).slice(0,50).each((_i,el)=>{const node=$(el);const raw=type==='link'?(node.attr('href')||node.find('a[href]').first().attr('href')||''):type==='image'?(node.attr('src')||node.attr('data-src')||node.find('img').first().attr('src')||node.find('img').first().attr('data-src')||''):node.text();const value=type==='text'?normalize(raw):absolute(raw,baseUrl);if(value)values.push(value.slice(0,1000))});return values}
+function extractSelectorValuesSync(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):string[]{const $=cheerio.load(html),values:string[]=[];$(selector).slice(0,50).each((_i,el)=>{const node=$(el);const raw=type==='link'?(node.attr('href')||node.find('a[href]').first().attr('href')||''):type==='image'?(node.attr('src')||node.attr('data-src')||node.find('img').first().attr('src')||node.find('img').first().attr('data-src')||''):node.text();const value=type==='text'?normalize(raw):absolute(raw,baseUrl);if(value)values.push(value.slice(0,1000))});return values}
+async function extractSelectorValues(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):Promise<string[]>{return extractSelectorValuesSync(html,baseUrl,selector,type)}
+
+// ---------------------------------------------------------------------------
+// Proactive list-selector auto-discovery (1.128.0, Render/Node runtime).
+//
+// "Selectors not configured" is NOT "all empty": normalizeProfile() fills every
+// new profile with WooCommerce DEFAULT_SELECTORS and rejects empties, so an
+// unconfigured profile looks exactly like a WooCommerce one. Auto-discovery
+// therefore triggers on empty, partial AND still-default selectors, verifies
+// proposals against the real page, and only then lets the engines run with
+// them. Fully custom selectors are left untouched.
+// ---------------------------------------------------------------------------
+const LIST_SELECTOR_KEYS = ['container','title','price','link','image'] as const;
+export type SelectorConfigStatus = 'empty' | 'partial' | 'default' | 'custom';
+export function listSelectorsStatus(selectors: Selectors | undefined | null): SelectorConfigStatus {
+  const values = LIST_SELECTOR_KEYS.map(key => String((selectors as any)?.[key] || '').trim());
+  if (values.every(value => !value)) return 'empty';
+  if (values.some(value => !value)) return 'partial';
+  const isDefault = LIST_SELECTOR_KEYS.every(key => String((selectors as any)?.[key]).trim() === String((DEFAULT_SELECTORS as any)[key]));
+  return isDefault ? 'default' : 'custom';
+}
+
+export type SelectorFieldEvidence = { count: number; sample: string };
+export type ListSelectorVerification = {
+  containerCount: number;
+  cardsSampled: number;
+  title: SelectorFieldEvidence;
+  price: SelectorFieldEvidence;
+  link: SelectorFieldEvidence;
+  image: SelectorFieldEvidence;
+  /** Container repeats and titles resolve inside most cards. */
+  ok: boolean;
+};
+const emptyVerification = (containerCount = 0): ListSelectorVerification => ({
+  containerCount, cardsSampled: 0,
+  title: { count: 0, sample: '' }, price: { count: 0, sample: '' },
+  link: { count: 0, sample: '' }, image: { count: 0, sample: '' }, ok: false
+});
+/**
+ * Check list selectors against REAL page HTML the same way extraction reads it:
+ * container matches are counted page-wide, but title/price/link/image must
+ * resolve INSIDE each card (scopedMatches), otherwise the evidence is the
+ * classic contradiction — green page-wide, zero products.
+ */
+export function verifyListSelectors(html: string, baseUrl: string, selectors: Selectors): ListSelectorVerification {
+  const container = String(selectors?.container || '').trim();
+  if (!container || !html) return emptyVerification();
+  let $: cheerio.CheerioAPI;
+  try { $ = cheerio.load(html); } catch { return emptyVerification(); }
+  let containerCount = 0, nodes: any[] = [];
+  try { const all = containerNodes($, container); containerCount = all.length; nodes = all.slice(0, 12).toArray(); } catch { return emptyVerification(); }
+  if (!nodes.length) return emptyVerification(containerCount);
+  const hits = { title: { count: 0, sample: '' }, price: { count: 0, sample: '' }, link: { count: 0, sample: '' }, image: { count: 0, sample: '' } };
+  for (const element of nodes) {
+    const root = $(element);
+    const title = firstText($, root, String(selectors.title || ''));
+    if (title) { hits.title.count++; hits.title.sample ||= title.slice(0, 200); }
+    const priceText = firstText($, root, String(selectors.price || ''));
+    if (priceText && numberFromText(priceText) > 0) { hits.price.count++; hits.price.sample ||= priceText.slice(0, 200); }
+    const link = absolute(productLink($, root, String(selectors.link || '')), baseUrl);
+    if (link) { hits.link.count++; hits.link.sample ||= link.slice(0, 200); }
+    let imageValue = firstAttr($, root, String(selectors.image || ''), ['data-src', 'data-lazy-src', 'data-original', 'src']);
+    if (!imageValue) imageValue = (firstAttr($, root, String(selectors.image || ''), ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
+    if (absolute(imageValue, baseUrl)) { hits.image.count++; hits.image.sample ||= absolute(imageValue, baseUrl).slice(0, 200); }
+  }
+  // Title is mandatory (extraction skips title-less cards); price/link/image
+  // are reported but do not fail verification — "without price" products are
+  // filtered later with their own warning, not here.
+  const needed = Math.max(1, Math.ceil(nodes.length / 2));
+  return { containerCount, cardsSampled: nodes.length, ...hits, ok: containerCount >= 2 && hits.title.count >= needed };
+}
+
+const PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم)/i;
+const THOUSANDS_RE = /\d{1,3}([,٬.]\d{3})+/;
+function looksLikePrice(text: string): boolean {
+  const value = normalize(text);
+  if (!value || value.length > 80) return false;
+  if (PRICE_HINT_RE.test(value)) return numberFromText(value) > 0;
+  return THOUSANDS_RE.test(value) && numberFromText(value) > 0;
+}
+function cssEscapeIdent(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, char => '\\' + char).replace(/^(\d)/, '\\3$1 ');
+}
+const VOLATILE_CLASS_RE = /^(active|selected|current|open|opened|hover|focus|disabled|loading|ng-|v-|is-|has-|js-)/i;
+const HASH_CLASS_RE = /^[a-f0-9]{6,}$/i;
+function stableClasses(classAttr: string | undefined): string[] {
+  const all = String(classAttr || '').split(/\s+/).filter(Boolean);
+  const stable = all.filter(name => name.length <= 40 && !VOLATILE_CLASS_RE.test(name) && !HASH_CLASS_RE.test(name));
+  // Prefer plain readable classes over escaped Tailwind utilities.
+  const rank = (name: string) => (/[^a-zA-Z0-9_-]/.test(name) ? 100 : 0) + name.length;
+  return [...new Set(stable)].sort((a, b) => rank(a) - rank(b));
+}
+/** Minimal `tag.class` selector for an element (relative-safe inside a card). */
+function selectorForElement($: cheerio.CheerioAPI, element: any): string {
+  const tag = String(element?.tagName || element?.name || '').toLowerCase() || '*';
+  const classes = stableClasses($(element).attr('class'));
+  if (classes.length >= 2) return `${tag}.${cssEscapeIdent(classes[0])}.${cssEscapeIdent(classes[1])}`;
+  if (classes.length === 1) return `${tag}.${cssEscapeIdent(classes[0])}`;
+  const id = String($(element).attr('id') || '').trim();
+  if (id && /^[a-zA-Z][\w:.-]*$/.test(id)) return `${tag}#${id}`;
+  return tag;
+}
+
+export type ListDiscoveryMethod = 'curated' | 'structural' | 'mixed' | 'none';
+export type ListDiscovery = {
+  selectors: Partial<Selectors>;
+  evidence: Record<string, unknown>;
+  method: ListDiscoveryMethod;
+  containerCount: number;
+};
+/**
+ * Find list selectors for a page whose profile never configured them.
+ *
+ * Pass 1 tests the curated e-commerce selector list (fast, precise on known
+ * platforms). Pass 2 — structural inference — handles everything else: it
+ * clusters link+image subtrees by their tag+class signature, picks the
+ * repeating product-card pattern, and derives title/price/link/image selectors
+ * from inside the cards. Every proposal is verified against the same HTML
+ * before it is returned, so callers can persist it without a second check.
+ */
+export function discoverListSelectorsFromHtml(html: string, baseUrl: string): ListDiscovery {
+  const selectors: Partial<Selectors> = {};
+  const evidence: Record<string, unknown> = {};
+  for (const field of LIST_SELECTOR_KEYS) {
+    const config = SUGGESTION_CANDIDATES[field];
+    for (const candidate of config.selectors) {
+      try {
+        const values = extractSelectorValuesSync(html, baseUrl, candidate, config.type || 'text');
+        const minimum = field === 'container' ? 2 : 1;
+        if (values.length >= minimum) {
+          (selectors as any)[field] = candidate;
+          evidence[field] = { count: values.length, sample: (values[0] || '').slice(0, 200), via: 'curated' };
+          break;
+        }
+      } catch { /* next candidate */ }
+    }
+  }
+  let method: ListDiscoveryMethod = selectors.container && selectors.title ? 'curated' : 'none';
+  if (!selectors.container || !selectors.title) {
+    try {
+      const structural = inferStructuralListSelectors(html, baseUrl);
+      if (structural) {
+        for (const [key, value] of Object.entries(structural.selectors)) {
+          if (value && !(selectors as any)[key]) {
+            (selectors as any)[key] = value;
+            (evidence as any)[key] = { ...((structural.evidence as any)[key] || {}), via: 'structural' };
+          }
+        }
+        method = method === 'curated' ? 'mixed' : 'structural';
+      }
+    } catch { /* structural pass is best-effort */ }
+  }
+  // Final gate: a container that does not repeat, or titles that do not resolve
+  // INSIDE the cards, would be saved as fact — reject such proposals outright.
+  let containerCount = 0;
+  if (selectors.container && selectors.title) {
+    const verified = verifyListSelectors(html, baseUrl, { ...DEFAULT_SELECTORS, ...selectors } as Selectors);
+    containerCount = verified.containerCount;
+    if (!verified.ok) return { selectors: {}, evidence: {}, method: 'none', containerCount };
+  }
+  return { selectors, evidence, method, containerCount };
+}
+
+/**
+ * Structural card inference: cluster every link+image subtree by its
+ * tag+class signature and treat the largest repeating cluster as the product
+ * grid. Unlike the `heuristic` engine (which extracts products directly from
+ * price-shaped text), this produces reusable CSS selectors, so the selector
+ * engines — and every later page and run — work with them.
+ */
+function inferStructuralListSelectors(html: string, baseUrl: string): { selectors: Partial<Selectors>; evidence: Record<string, unknown> } | null {
+  let $: cheerio.CheerioAPI;
+  try { $ = cheerio.load(html); } catch { return null; }
+  const groups = new Map<string, { nodes: any[]; seen: Set<object>; priceHits: number }>();
+  let anchors: any[];
+  try { anchors = $('a[href]').slice(0, 800).toArray(); } catch { return null; }
+  if (anchors.length < 2) return null;
+  for (const anchor of anchors) {
+    const href = String($(anchor).attr('href') || '').trim();
+    if (!href || href === '#' || /^javascript:/i.test(href)) continue;
+    let current: any = anchor;
+    for (let depth = 0; depth < 3 && current; depth++) {
+      const element = current;
+      current = element.parent;
+      const tag = String(element.tagName || '').toLowerCase();
+      if (!tag || tag === 'html' || tag === 'body') continue;
+      // Page-level wrappers have many children; cards do not. This guard runs
+      // before any subtree walk, so huge pages stay fast.
+      if (depth > 0 && (element.children?.length || 0) > 40) continue;
+      const $el = $(element);
+      const linkCount = $el.find('a[href]').length + ($el.is('a[href]') ? 1 : 0);
+      if (linkCount > 4) continue;
+      const text = $el.text();
+      if (!text || text.length < 12 || text.length > 1500) continue;
+      const imgCount = $el.is('img') ? 1 : $el.find('img').length;
+      if (!imgCount) continue;
+      const signature = selectorForElement($, element);
+      if (!signature.includes('.') && tag !== 'li' && tag !== 'article') continue;
+      let group = groups.get(signature);
+      if (!group) { group = { nodes: [], seen: new Set(), priceHits: 0 }; groups.set(signature, group); }
+      if (group.seen.has(element)) continue;
+      group.seen.add(element);
+      group.nodes.push(element);
+      if (PRICE_HINT_RE.test(text) || THOUSANDS_RE.test(text)) group.priceHits++;
+    }
+  }
+  const clusters = [...groups.entries()]
+    .map(([selector, group]) => ({ selector, nodes: group.nodes, priceHits: group.priceHits }))
+    .filter(cluster => cluster.nodes.length >= 2)
+    .sort((a, b) => (b.nodes.length * (1 + b.priceHits)) - (a.nodes.length * (1 + a.priceHits)));
+  for (const cluster of clusters.slice(0, 5)) {
+    const derived = deriveStructuralFieldSelectors($, cluster.nodes.slice(0, 8));
+    if (!derived || !derived.title) continue;
+    const linkSelector = derived.cardIsLink ? cluster.selector : 'a[href]';
+    const merged = { ...DEFAULT_SELECTORS, container: cluster.selector, title: derived.title, price: derived.price || '', link: linkSelector, image: 'img' } as Selectors;
+    const verified = verifyListSelectors(html, baseUrl, merged);
+    if (!verified.ok) continue;
+    return {
+      selectors: { container: cluster.selector, title: derived.title, ...(derived.price ? { price: derived.price } : {}), link: linkSelector, image: 'img' },
+      evidence: {
+        container: { count: verified.containerCount, sample: cluster.selector },
+        title: verified.title, price: verified.price, link: verified.link, image: verified.image
+      }
+    };
+  }
+  return null;
+}
+
+/** Derive title/price selectors from inside sampled cards of one cluster. */
+function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[]): { title: string; price: string; cardIsLink: boolean } | null {
+  const titleVotes = new Map<string, { count: number; bonus: number }>();
+  const priceVotes = new Map<string, { count: number; length: number }>();
+  let cardIsLink = 0;
+  for (const node of sampleNodes) {
+    const root = $(node);
+    if (root.is('a[href]')) cardIsLink++;
+    // Title: headings/itemprop first, else the longest mid-length text node.
+    let titleSig = '';
+    const heading = root.find('h1,h2,h3,h4,[itemprop="name"]').filter((_i, el) => {
+      const text = normalize($(el).text());
+      return text.length >= 8 && text.length <= 200 && !looksLikePrice(text);
+    }).first();
+    if (heading.length) titleSig = selectorForElement($, heading.get(0));
+    else {
+      let bestLen = 0;
+      root.find('span,div,p,a,li,td,strong,b').slice(0, 120).each((_i, el) => {
+        const text = normalize($(el).text());
+        if (text.length >= 15 && text.length <= 160 && text.length > bestLen && !looksLikePrice(text)) {
+          bestLen = text.length;
+          titleSig = selectorForElement($, el);
+        }
+      });
+    }
+    if (titleSig) {
+      const vote = titleVotes.get(titleSig) || { count: 0, bonus: /^h[1-4][.]/.test(titleSig) ? 2 : 0 };
+      vote.count++;
+      titleVotes.set(titleSig, vote);
+    }
+    // Price: the SHORTEST price-shaped text — wrappers that also contain the
+    // title lose to the leaf element that holds just the price. On a length
+    // tie the deeper element wins (document order puts parents first, so the
+    // later index is the leaf): a wrapper that also matches today may also
+    // match an old-price/discount sibling tomorrow.
+    const priceCandidates: Array<{ sig: string; length: number; index: number }> = [];
+    root.find('*').slice(0, 150).each((index, el) => {
+      const text = $(el).text();
+      if (text && text.length <= 80 && looksLikePrice(text)) {
+        priceCandidates.push({ sig: selectorForElement($, el), length: normalize(text).length, index });
+      }
+    });
+    priceCandidates.sort((a, b) => a.length - b.length || b.index - a.index);
+    if (priceCandidates.length) {
+      const winner = priceCandidates[0].sig;
+      const vote = priceVotes.get(winner) || { count: 0, length: priceCandidates[0].length };
+      vote.count++;
+      priceVotes.set(winner, vote);
+    }
+  }
+  const titleWinner = [...titleVotes.entries()].sort((a, b) => (b[1].count * 10 + b[1].bonus) - (a[1].count * 10 + a[1].bonus))[0];
+  if (!titleWinner) return null;
+  const priceWinner = [...priceVotes.entries()].sort((a, b) => b[1].count - a[1].count || a[1].length - b[1].length)[0];
+  return { title: titleWinner[0], price: priceWinner ? priceWinner[0] : '', cardIsLink: cardIsLink * 2 >= sampleNodes.length };
+}
 export async function testSelector(url: string, selector: string, type = 'text'): Promise<{ count: number; values: string[] }> {
   const { text, url: final } = await safeText(url, 4_000_000); const $ = cheerio.load(text); const values: string[] = [];
   $(selector).slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
@@ -499,6 +856,22 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
       { count: products.length, usedEngine, complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
+  }
+  // 1.128.0 — when nothing extracted, show what proactive auto-discovery sees
+  // on the same page (read-only: the diagnostic never rewrites the profile).
+  if (!products.length) {
+    try {
+      const discovery = discoverListSelectorsFromHtml(page.text, page.url);
+      const proposed = Object.entries(discovery.selectors).filter(([, value]) => String(value || '').trim());
+      if (discovery.method !== 'none' && proposed.length >= 2 && discovery.selectors.container && discovery.selectors.title) {
+        add('selector-discovery', true,
+          `موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method === 'structural' ? 'تحلیل ساختاری صفحه' : discovery.method === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ این سلکتورها راستی‌آزمایی شدند و با ذخیرهٔ آن‌ها استخراج شروع می‌شود.`,
+          { method: discovery.method, selectors: discovery.selectors, evidence: discovery.evidence, containerCount: discovery.containerCount });
+        recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
+      } else {
+        add('selector-discovery', false, 'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.', { method: discovery.method });
+      }
+    } catch { /* informational only */ }
   }
   const evidence: Record<string, unknown> = {};
   for (const field of ['container', 'title', 'price', 'link', 'image'] as const) {

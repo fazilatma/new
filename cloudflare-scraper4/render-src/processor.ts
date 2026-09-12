@@ -1,5 +1,5 @@
 import { allProducts, claimJob, getJob, getProfile, getState, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
-import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError } from './scraper.js';
+import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError, listSelectorsStatus } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { generateProductDescription, productNeedsEnrichment } from './ai.js';
@@ -23,7 +23,6 @@ const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
 function isManualListEngine(engine?: string): boolean { return !!engine && MANUAL_LIST_ENGINES.has(engine); }
 async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job, onlyMissing = true): Promise<number> { try { const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim())); if(!entries.length)return 0; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveProfile({...profile,updatedAt:new Date().toISOString()}); append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`); return entries.length; } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); return 0; } }
 
-const LIST_KEYS = ['container','title','price','link','image'] as const;
 const DETAIL_KEYS = ['shortDesc','longDesc','sku','brand','category','stock','weight','gallery','detailImage','variations'] as const;
 /** True when the profile actually configures detail extraction. */
 function hasDetailSelectors(selectors: any): boolean {
@@ -50,13 +49,21 @@ export async function processOneJob(): Promise<boolean> {
       // to profile.pages directly made a 0-page profile scan nothing at all and
       // report a successful run with zero products.
       const pageLimit = profile.pages > 0 ? profile.pages : 100;
-      // TRIGGER 1 (selectors empty): the Worker already fills blank list
-      // selectors before the first fetch; Node did not, so a fresh profile with
-      // no selectors relied purely on the discovery engines.
-      if (!LIST_KEYS.some(key => String((profile.selectors as any)?.[key] || '').trim())) {
-        append(job, 'سلکتورهای فهرست خالی است؛ پیشنهاد خودکار اجرا می‌شود…');
-        await applySelectorSuggestions(profile, pageUrl(profile, 1), 'list', job, true);
+      // TRIGGER 1 (selectors not configured): profiles created through the API
+      // always carry the WooCommerce DEFAULT_SELECTORS (empty list selectors
+      // are rejected), so the old "all empty" check almost never fired and a
+      // shop the discovery engines could not read ended with 0 products. Since
+      // 1.128.0 the engines repair unconfigured (empty, partial, or still
+      // default) selectors themselves from page 1 — reusing the same fetch —
+      // and the run persists what the page verified (see below). No separate
+      // suggestion fetch is needed before the loop anymore.
+      {
+        const selectorStatus = listSelectorsStatus(profile.selectors);
+        if (selectorStatus !== 'custom') {
+          append(job, `سلکتورهای فهرست هنوز برای این فروشگاه تنظیم نشده (${selectorStatus === 'empty' ? 'خالی' : selectorStatus === 'partial' ? 'ناقص' : 'پیش‌فرض'})؛ موتور استخراج ابتدا آن‌ها را از صفحهٔ اول پیدا می‌کند…`);
+        }
       }
+      let engineSelectorsSaved = false;
       let repeatedPages = 0;
       const nextSelector = profile.pagination === 'next_selector' ? (profile.paginationValue || '') : '';
       let followUrl = '';
@@ -69,6 +76,18 @@ export async function processOneJob(): Promise<boolean> {
           if (!followUrl && page < pageLimit) append(job, `لینک «صفحهٔ بعد» با سلکتور «${nextSelector}» پیدا نشد؛ صفحه‌بندی همین‌جا تمام شد.`, 'warning');
         }
         const list = scraped.products;
+        // 1.128.0 — persist engine-discovered selectors once: later pages of
+        // this run (and every later run) then extract with the selector engine
+        // instead of re-discovering.
+        if (scraped.discoveredSelectors && !engineSelectorsSaved) {
+          const entries = Object.entries(scraped.discoveredSelectors).filter(([, value]) => String(value || '').trim());
+          if (entries.length) {
+            engineSelectorsSaved = true;
+            profile.selectors = { ...profile.selectors, ...Object.fromEntries(entries) } as any;
+            await saveProfile({ ...profile, updatedAt: new Date().toISOString() });
+            append(job, `سلکتورهای فهرست به‌صورت خودکار پیدا و ذخیره شد (${entries.map(([key]) => key).join('، ')}؛ روش: ${scraped.discoveryMethod === 'structural' ? 'تحلیل ساختاری صفحه' : scraped.discoveryMethod === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ استخراج با آن‌ها ادامه می‌یابد.`);
+          }
+        }
         if (scraped.usedEngine && list.length && (profile.extractionEngine === 'auto' || profile.extractionEngineMaster !== scraped.usedEngine)) {
           profile.extractionEngineMaster = scraped.usedEngine;
           profile.extractionEngineHost = new URL(url).hostname;
