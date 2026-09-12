@@ -1658,9 +1658,15 @@ test('the build toolchain survives a production install', async () => {
 
 // --- The Render blueprint had three deploy-blocking settings.
 test('the Render blueprint is deployable as written', async () => {
-  const yaml = await readFile(new URL('../render.yaml', import.meta.url), 'utf8');
+  // Render looks for render.yaml at the repository root by default.
+  const yaml = await readFile(new URL('../../render.yaml', import.meta.url), 'utf8');
   // rootDir is required: package.json lives in cloudflare-scraper4/.
   assert.match(yaml, /rootDir:\s*cloudflare-scraper4/, 'the blueprint must point at the project folder');
+  const { existsSync } = await import('node:fs');
+  assert.ok(existsSync(new URL('../../render.yaml', import.meta.url)),
+    'render.yaml must sit at the repo root, where Render looks for it by default');
+  assert.ok(!existsSync(new URL('../render.yaml', import.meta.url)),
+    'a second copy inside the project would be ambiguous');
   // Running the whole suite in the build blocks deploys of working code.
   assert.ok(!/buildCommand:.*npm test/.test(yaml), 'the build must not run the full test suite');
   // ADMIN_TOKEN without a login field locks the dashboard out of its own API.
