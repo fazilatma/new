@@ -35,6 +35,19 @@ Two intentional divergences from the Python source, both pinned by `worker-tests
 old prices (`<del>`/`<s>`) are stripped before parsing, so WooCommerce `<del>`/`<ins>` sales keep the sale price that
 Python misreads; and URLs keep Node's percent-encoding while Python keeps raw UTF-8 paths.
 
+## Browser engines and the second layer
+
+The browser engines (`playwright`, `puppeteer`, `crawlee_playwright`) exist for JavaScript-only shops such as
+Snappshop, where the list HTML only appears after rendering. Each driver renders the page, runs the configured
+selectors on the rendered DOM (layer 1), and — when that finds nothing — re-reads the SAME rendered HTML
+selector-free through `rescueRenderedProducts`: `structural` first, `heuristic` as the final net. So a Snappshop
+category page needs no manual selectors: the browser renders the `snp-` cards and the second layer reads them.
+
+The winning layer is reported two ways: a `[scraper4] <driver> extraction layer: <layer> (<n> products, <url>)` line
+in the log (visible in the deployer Logs tab on Termux), and the `browserLayer` field on the scrape result
+(`selectors` | `structural` | `heuristic` | `none`). Pinned by `worker-tests/browser-layer.test.mjs` against the pure
+rescue function — no browser exists in CI, so the live Snappshop proof is a device run with Termux Chromium.
+
 ## Benchmark and the saved engine
 
 The 3-page speed test (profile → speed test) runs the engines above and saves the winner to the profile's

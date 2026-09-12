@@ -426,11 +426,16 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
   /** How the selectors were found: 'curated' | 'structural' | 'mixed'. */
   discoveryMethod?:string;
   /** The explicitly requested engine's error, when it threw and no engine produced products (real runs don't throw; the benchmark still does). */
-  engineError?:string};
+  engineError?:string;
+  /** Which browser second layer won ('selectors'|'structural'|'heuristic'|'none') — set only when a browser engine produced the products. */
+  browserLayer?:string};
 const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 /** Last browser-engine failure, so callers can explain a skipped engine. */
 let lastBrowserError='';
 export function lastBrowserEngineError():string{return lastBrowserError}
+/** Last browser second-layer outcome; reset per scrapeListWithMeta call so a skipped browser never reports the previous run's layer. */
+let lastBrowserLayer:''|BrowserExtractionLayer='';
+export function lastBrowserLayerUsed():''|BrowserExtractionLayer{return lastBrowserLayer}
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
 // 1.144.0 — 'structural' (the cheerio twin of py-auto-extract.py) sits right
@@ -464,6 +469,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
 
 export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true): Promise<ScrapeListResult> {
   const started=Date.now();
+  lastBrowserLayer='';
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url);
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
@@ -538,7 +544,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
-      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod};
+      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,...(BROWSER_ENGINES.has(name)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{})};
       // The explicit engine ran and found nothing: fall through to the
       // remaining engines instead of returning an empty result, but remember
       // the requested engine so an all-empty run still reports what was asked.
@@ -550,7 +556,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   }
   if(!autoFirst&&firstError)throw firstError;
   const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError};
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{})};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
 
@@ -635,6 +641,21 @@ export function dumpRenderedHtml(html: string, url: string, driver: string): str
     return '';
   }
 }
+export type BrowserExtractionLayer='selectors'|'structural'|'heuristic'|'none';
+/**
+ * 1.145.0 — second layer for the browser engines. Layer 1 (configured
+ * selectors on the rendered DOM) already ran; when it found nothing, read the
+ * SAME rendered HTML selector-free: structural first (lenient, card-aware),
+ * heuristic as the final net. Pure and exported so tests pin it without a
+ * browser; all three browser drivers call it.
+ */
+export function rescueRenderedProducts(html: string, baseUrl: string, firstLayer: Product[]): { products: Product[]; layer: BrowserExtractionLayer } {
+  if (firstLayer.length) return { products: firstLayer, layer: 'selectors' };
+  const structural = structuralProducts(html, baseUrl);
+  if (structural.length) return { products: structural, layer: 'structural' };
+  const heuristic = heuristicProducts(html, baseUrl);
+  return heuristic.length ? { products: heuristic, layer: 'heuristic' } : { products: [], layer: 'none' };
+}
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
@@ -659,8 +680,10 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
       const finalUrl = page.url();
       const html = await page.content();
       dumpRenderedHtml(html, page.url(), 'playwright');
-      const products = parseProductsFromHtml(html, finalUrl, selectors);
-      return products.length ? products : heuristicProducts(html, finalUrl);
+      const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+      lastBrowserLayer = rescued.layer;
+      console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+      return rescued.products;
     } finally { await browser.close(); }
   }
   const puppeteer = await import('puppeteer');
@@ -679,8 +702,10 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     const finalUrl = page.url();
     const html = await page.content();
     dumpRenderedHtml(html, page.url(), 'puppeteer');
-    const products = parseProductsFromHtml(html, finalUrl, selectors);
-    return products.length ? products : heuristicProducts(html, finalUrl);
+    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+    lastBrowserLayer = rescued.layer;
+    console.log(`[scraper4] puppeteer extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+    return rescued.products;
   } finally { await browser.close(); }
 }
 async function scrapeListWithPlaywright(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright'); }
@@ -698,8 +723,10 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();
     dumpRenderedHtml(html, page.url(), 'crawlee');
-    const products = parseProductsFromHtml(html, page.url(), selectors);
-    await dataset.pushData(products.length ? products : heuristicProducts(html, page.url()));
+    const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
+    lastBrowserLayer = rescued.layer;
+    console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
+    await dataset.pushData(rescued.products);
   }});
   await crawler.run([url]);
   const data = await dataset.getData();
