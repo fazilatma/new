@@ -77,7 +77,7 @@ npx puppeteer browsers install chrome
 
 For Codespaces/VPS Linux, browser packages may require additional system dependencies. Use browser engines only for sites you are authorized to access and do not use them to bypass access controls.
 
-## Proactive auto-discovery when selectors were never configured (1.128.0, Render/Node)
+## Proactive auto-discovery when selectors were never configured (1.128.0, all runtimes since 1.129.0)
 
 Until 1.128.0 the engines only repaired selectors as a *last resort* (see below):
 a run that extracted zero products retried once with suggested selectors. That
@@ -116,10 +116,35 @@ extra fetch):
   the selector engine instead of re-discovering. The extraction diagnostic
   shows the proposals read-only when a run finds nothing.
 - **Opt-out.** Pass `autoDiscover=false` to `scrapeListWithMeta()` /
-  `scrapeList()` for the exact pre-1.128.0 behavior.
+  `scrapeList()` (Render/Node) or `scrapeListPage()` / `scrapeList()` (Worker)
+  for the exact pre-1.128.0 behavior.
 
-The Cloudflare Worker runtime is unchanged in this release; it keeps the
-last-resort rescue only.
+### Worker parity (1.129.0)
+
+1.128.0 shipped this on Render/Node only; the Cloudflare Worker kept the
+last-resort rescue. Since 1.129.0 the Worker runs the same discovery with the
+same gates and method names (`curated` / `structural` / `mixed` / `none`),
+adapted to its primitives:
+
+- **Verification** (`verifyListSelectors`) counts matches with HTMLRewriter —
+  the container page-wide, title/price/link/image scoped to *descendants* of
+  the container — instead of cheerio card sampling. The gate is the same:
+  container repeats ≥2 and titles resolve inside most cards.
+- **Structural inference** (`inferStructuralListSelectors`) clusters
+  anchor-context HTML chunks (the link itself plus up to two enclosing
+  elements) by tag+class signature and derives title/price by per-card vote,
+  with the same leaf-preference rule for prices as Render/Node.
+- **Wiring.** `scrapeListPage()` repairs before the engine loop and reports
+  `discoveredSelectors` / `discoveryMethod`; the job processor, the inline API
+  and the 3-page benchmark persist them once; the diagnostic shows them
+  read-only. Fully custom selectors are never touched at the engine layer —
+  their breakage is still covered by the last-resort rescue.
+
+Known limitation (both runtimes): the curated pass trusts its platform
+patterns, so a profile pointed at a non-shop page whose markup happens to
+match a generic container (e.g. bare `article` cards with headings) can adopt
+selectors for it. The structural pass requires link+image+price signals and
+does not have this hole.
 
 ## Last-resort selector rediscovery (1.97.0)
 

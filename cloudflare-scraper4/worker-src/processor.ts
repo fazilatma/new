@@ -1,14 +1,14 @@
 import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
 import { generateProductDescription, productNeedsEnrichment } from './ai.js';
-import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
+import { listSelectorsStatus, mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean};
+type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean;engineSelectorsSaved?:boolean};
 type SyncCheckpoint={offset:number};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
@@ -91,9 +91,33 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   if(await stopRequested(job.id)){job.status='stopped';return false}
   if(!checkpoint.products){
     job.phase='list';
-    if(!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,checkpoint.url,'list',job);checkpoint.listSelectorsFilled=true}
+    // TRIGGER 1 (selectors not configured): profiles created through the API
+    // always carry the WooCommerce DEFAULT_SELECTORS (empty list selectors
+    // are rejected), so the old pre-fill only ever completed detail selectors
+    // and a shop the discovery engines could not read ended with 0 products.
+    // Since 1.129.0 the engines repair unconfigured (empty, partial, or still
+    // default) selectors themselves from page 1 — reusing the same fetch —
+    // and the run persists what the page verified (see below). No separate
+    // suggestion fetch is needed before the loop anymore.
+    if(!checkpoint.listSelectorsFilled){
+      const selectorStatus=listSelectorsStatus(profile.selectors);
+      if(selectorStatus!=='custom')append(job,`سلکتورهای فهرست هنوز برای این فروشگاه تنظیم نشده (${selectorStatus==='empty'?'خالی':selectorStatus==='partial'?'ناقص':'پیش‌فرض'})؛ موتور استخراج ابتدا آن‌ها را از صفحهٔ اول پیدا می‌کند…`);
+      checkpoint.listSelectorsFilled=true;
+    }
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
     let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+    // 1.129.0 — persist engine-discovered selectors once: later pages of
+    // this run (and every later run) then extract with the selector engine
+    // instead of re-discovering.
+    if(page.discoveredSelectors&&!checkpoint.engineSelectorsSaved){
+      const entries=Object.entries(page.discoveredSelectors).filter(([,value])=>String(value||'').trim());
+      if(entries.length){
+        checkpoint.engineSelectorsSaved=true;
+        profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];
+        await saveProfile({...profile,updatedAt:new Date().toISOString()});
+        append(job,`سلکتورهای فهرست به‌صورت خودکار پیدا و ذخیره شد (${entries.map(([key])=>key).join('، ')}؛ روش: ${page.discoveryMethod==='structural'?'تحلیل ساختاری صفحه':page.discoveryMethod==='mixed'?'ترکیبی':'الگوهای آماده'})؛ استخراج با آن‌ها ادامه می‌یابد.`);
+      }
+    }
     if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
       profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;
       await saveProfile({...profile,updatedAt:new Date().toISOString()});

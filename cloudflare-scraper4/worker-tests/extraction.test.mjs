@@ -526,6 +526,22 @@ test('node: unconfigured list selectors are repaired by the engines and persiste
     'the repair must be saved once per run, not on every page');
 });
 
+test('worker: unconfigured list selectors are repaired by the engines and persisted', () => {
+  const source = stripComments(workerProcessor);
+  // Since 1.129.0 the Worker matches the Render/Node 1.128.0 behavior: "not
+  // configured" is empty, partial OR still-default (normalizeProfile fills
+  // WooCommerce defaults), the engines repair such selectors from page 1
+  // reusing the same fetch, and the run persists them.
+  assert.match(source, /listSelectorsStatus\(profile\.selectors\)/,
+    'a profile with unconfigured list selectors must run engine-side discovery first');
+  assert.match(source, /selectorStatus\s*!==\s*'custom'/,
+    'only non-custom (empty, partial, still-default) selectors trigger the repair');
+  assert.match(source, /page\.discoveredSelectors/,
+    'engine-discovered selectors must be persisted to the profile');
+  assert.match(source, /engineSelectorsSaved/,
+    'the repair must be saved once per run, not on every page');
+});
+
 test('node: the detail stage falls back when no detail field is populated', () => {
   const source = stripComments(nodeProcessor);
   assert.match(source, /if \(!probe && !detailRescued\)/, 'an unproductive detail probe must trigger the rescue');
@@ -598,6 +614,47 @@ test('end to end: auto-suggest rescues a page that extracted zero products', asy
     assert.equal(after.products.length, 3, 'the repaired selectors must recover every card');
     assert.equal(after.products[0].title, 'کالای شمارهٔ 1');
     assert.match(after.products[0].url, /\/p\/item-1\/?$/, 'links must survive the rescue');
+  } finally { globalThis.fetch = previousFetch }
+});
+
+test('worker: structural discovery finds selectors for an unknown shop layout', async () => {
+  // Tailwind-style shop: no curated selector matches, no JSON-LD, Persian
+  // prices, and plain /item-N/ URLs the heuristic engine ignores. With
+  // never-configured (WooCommerce default) selectors the engines must still
+  // find the cards structurally — the Worker twin of the 1.128.0 Node proof.
+  const cards = [1, 2, 3, 4, 5].map(i => `
+    <div class="x7f2a shop-card">
+      <a href="/item-${i}/"><img src="https://cdn.example.test/${i}.jpg"><span class="x7f2a card-name">کالای فروشگاه شمارهٔ ${i}</span></a>
+      <b class="x7f2a cost">${(i * 1250000).toLocaleString('en-US')} تومان</b>
+    </div>`).join('');
+  const html = `<html><body><div class="x7f2a shop-grid">${cards}</div></body></html>`;
+  const base = 'https://shop.example.test/';
+  const defaults = { container: 'li.product', title: 'h2, h3, .woocommerce-loop-product__title', price: '.price, .amount', link: 'a[href]', image: 'img' };
+  assert.equal(scraper.listSelectorsStatus(defaults), 'default');
+  assert.equal(scraper.listSelectorsStatus({ container: '', title: '', price: '', link: '', image: '' }), 'empty');
+  assert.equal(scraper.listSelectorsStatus({ ...defaults, container: '.mine' }), 'custom');
+
+  const found = await scraper.discoverListSelectorsFromHtml(html, base);
+  assert.equal(found.method, 'structural', 'no curated selector fits this markup');
+  assert.ok(found.selectors.container && found.selectors.container.includes('shop-card'), `container must name the card cluster, got ${found.selectors.container}`);
+  assert.ok(found.selectors.title, 'a title selector must be derived from inside the cards');
+  const verified = await scraper.verifyListSelectors(html, base, { ...defaults, ...found.selectors });
+  assert.equal(verified.ok, true, 'the discovered selectors must verify against the same page');
+  assert.equal(verified.containerCount, 5);
+
+  // The real scrape path adopts them (reusing the same fetch) and reports
+  // them for persistence; autoDiscover=false keeps the old blind behavior.
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(html, { headers: { 'content-type': 'text/html' } });
+  try {
+    const discovered = await scraper.scrapeListPage('https://shop.example.test/', defaults, '', false, 'auto');
+    assert.equal(discovered.products.length, 5, 'all five structural cards must extract');
+    assert.equal(discovered.products[0].title, 'کالای فروشگاه شمارهٔ 1');
+    assert.equal(discovered.products[0].price, 1250000);
+    assert.ok(discovered.discoveredSelectors && discovered.discoveredSelectors.container, 'the run must report selectors to persist');
+    const blind = await scraper.scrapeListPage('https://shop.example.test/', defaults, '', false, 'auto', undefined, true, false);
+    assert.equal(blind.products.length, 0, 'without discovery the default selectors must stay blind');
+    assert.equal(blind.discoveredSelectors, undefined);
   } finally { globalThis.fetch = previousFetch }
 });
 

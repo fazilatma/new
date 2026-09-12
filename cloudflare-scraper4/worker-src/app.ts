@@ -30,7 +30,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.128.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.129.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -51,7 +51,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.128.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.129.0')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -85,7 +85,7 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.128.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.129.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 // Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
 // the exact rows it read/wrote, so we meter our own consumption against the
 // documented free-plan limits (5M reads / 100k writes per UTC day).
@@ -234,7 +234,7 @@ const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','
 const MIN_BENCHMARK_PRODUCTS=2;
 const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 async function benchmarkProfileEngines(profile:Profile){
-  const pages=3,results:any[]=[],startedAt=new Date().toISOString();
+  const pages=3,results:any[]=[],startedAt=new Date().toISOString(),benchmarkDiscovered:Record<string,string>={};
   for(const engine of BENCHMARK_ENGINES){
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
     if(WORKER_UNAVAILABLE_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'این موتور فقط روی اجراگر Node کار می‌کند (Termux، ویندوز، VPS یا Render).'});continue}
@@ -242,6 +242,7 @@ async function benchmarkProfileEngines(profile:Profile){
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const page=await scrapeListPage(pageUrl(profile,pageNo),profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),engine,undefined,false);
         pagesScanned++;
+        if(page.discoveredSelectors&&Object.keys(page.discoveredSelectors).length){profile.selectors={...profile.selectors,...page.discoveredSelectors};Object.assign(benchmarkDiscovered,page.discoveredSelectors)}
         for(const product of page.products){const key=product.sourceKey||product.url||product.title;if(key&&!seen.has(key)){seen.add(key);products++}}
         if(profile.pagination==='next_selector'&&!page.nextUrl)break;
       }
@@ -257,7 +258,7 @@ async function benchmarkProfileEngines(profile:Profile){
   (profile as any).extractionEngineBenchmarks=results;
   if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
   await saveProfile({...profile,updatedAt:new Date().toISOString()});
-  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(best&&best.products>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${best.products}). موتور پیش‌فرض پروفایل تغییر نکرد.`]:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,discoveredSelectors:benchmarkDiscovered,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(best&&best.products>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${best.products}). موتور پیش‌فرض پروفایل تغییر نکرد.`]:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
 app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await jsonBody(c);return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
 app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);return c.json(await benchmarkProfileEngines(profile))});
@@ -385,13 +386,13 @@ async function runProfileApi(c:any,id:string){
   const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);
   const body=await jsonBody(c),target=validTarget(body.target||(body.sync?'both':'none')),persist=body.persist!==false,withDetails=body.details!==false,extract=body.extract!==false&&!profile.noExtract;
   const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(1000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||500));
-  const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0,listSelectorUpdate:any=null,detailSelectorUpdate:any=null,autoSelectorsAllowed=false;
+  const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0,listSelectorUpdate:any=null,detailSelectorUpdate:any=null,autoSelectorsAllowed=false;const engineDiscovered:Record<string,string>={};
   if(extract){
     for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{
       const url=pageUrl(profile,pageNo),page=await scrapeListPage(url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
       pagesScanned++;usedEngine=page.usedEngine||usedEngine;engineMs+=page.elapsedMs||0;
       if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}
-      if(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine)){autoSelectorsAllowed=true;listSelectorUpdate=await applyInlineSelectorSuggestions(profile,page.url,'list',errors,true)}
+      if(page.discoveredSelectors&&Object.keys(page.discoveredSelectors).length){profile.selectors={...profile.selectors,...page.discoveredSelectors};await saveProfile({...profile,updatedAt:new Date().toISOString()});Object.assign(engineDiscovered,page.discoveredSelectors)}if(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine)){autoSelectorsAllowed=true;listSelectorUpdate=await applyInlineSelectorSuggestions(profile,page.url,'list',errors,true)}
       const before=products.length;
       for(const raw of page.products){const product=transformProduct(raw,profile);if((profile.minPrice&&product.price<profile.minPrice)||seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}
       if(products.length===before){if(pageNo===1)throw new Error('در صفحهٔ اول هیچ محصول تازه‌ای استخراج نشد؛ این اجرا موفقِ صفرمحصول محسوب نمی‌شود. سلکتورها، موتور استخراج و محدودیت دسترسی/ضدربات سایت را بررسی کنید.');break}
@@ -403,7 +404,7 @@ async function runProfileApi(c:any,id:string){
     if(persist)await markProfileRun(profile.id);
   }else products.push(...(await listProducts(profile.id,limit,0,String(body.q||''))).products);
   if(target!=='none')for(const product of products)try{if(target==='woo'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'woo',action:await syncWoo(product,profile)});if(target==='basalam'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'basalam',results:await syncBasalam(product,profile)})}catch(error){errors.push(`${product.title}: sync: ${message(error)}`)}
-  const result:InlineApiResult={ok:errors.length===0,mode:'inline-api',profileId:profile.id,target,engine:{requested:profile.extractionEngine,master:profile.extractionEngineMaster,used:usedEngine||profile.extractionEngineMaster||profile.extractionEngine,elapsedMs:engineMs,pagesScanned},summary:{total:products.length,added,updated,synced:syncResults.length,failed:errors.length,persisted:persist,details:withDetails},products,syncResults,errors,selectors:{list:listSelectorUpdate?.selectors||{},detail:detailSelectorUpdate?.selectors||{}}};
+  const result:InlineApiResult={ok:errors.length===0,mode:'inline-api',profileId:profile.id,target,engine:{requested:profile.extractionEngine,master:profile.extractionEngineMaster,used:usedEngine||profile.extractionEngineMaster||profile.extractionEngine,elapsedMs:engineMs,pagesScanned},summary:{total:products.length,added,updated,synced:syncResults.length,failed:errors.length,persisted:persist,details:withDetails},products,syncResults,errors,selectors:{list:{...engineDiscovered,...(listSelectorUpdate?.selectors||{})},detail:detailSelectorUpdate?.selectors||{}}};
   return c.json(result,errors.length?207:200);
 }
 async function createProfileJob(c:any,id:string,kind:'scrape'|'sync'){const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);const b=await c.req.json().catch(()=>({})),target=validTarget(b.target||(kind==='sync'?'both':'none')),job=await createJob(profile.id,kind,target);if(job.status==='queued')await enqueueJob(job,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise));return c.json({ok:true,job,processor:job.kind===kind&&job.status==='queued'?'triggered':'existing-active',dedupProfile:true},202)}

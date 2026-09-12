@@ -2,6 +2,7 @@ import { loadConnections } from './connections.js';
 import { safeText, safeTextViaWorker } from './network.js';
 import { escapeHtml, sha256 } from './utils.js';
 import type { ExtractionEngine, Product, Profile, Selectors, VariationGroup } from './types.js';
+import { DEFAULT_SELECTORS } from './types.js';
 
 type SelectorMap=Partial<Selectors>;
 
@@ -514,13 +515,25 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string}>{
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
-  const started=Date.now(),result=await parseByEngine(page.text,page.url,selectors,engine,master,autoFirst);
-  return {products:result.products,nextUrl:next.url,url:page.url,usedEngine:result.usedEngine,elapsedMs:Date.now()-started};
+  // 1.129.0 — PROACTIVE AUTO-DISCOVERY (Worker parity with 1.128.0 on
+  // Render/Node). Profiles created through the API always carry the
+  // WooCommerce DEFAULT_SELECTORS (empty list selectors are rejected), so
+  // "selectors not configured" never looked empty and the engines ran blind.
+  // When the selectors were never configured for this shop (empty, partial, or
+  // still the defaults), repair them from the fetched page BEFORE the engine
+  // loop — reusing the same HTML, so no extra fetch — and report what was
+  // found so the caller can persist it. Fully custom selectors keep the exact
+  // old behavior (the job-level last-resort rescue in processor.ts still
+  // covers custom selectors that break later).
+  let ensured:EnsuredListSelectors={selectors,method:''};
+  if(autoDiscover){try{ensured=await ensureListSelectors(page.text,page.url,selectors)}catch{/* discovery is best-effort; the engine loop below still runs */}}
+  const started=Date.now(),result=await parseByEngine(page.text,page.url,ensured.selectors,engine,master,autoFirst);
+  return {products:result.products,nextUrl:next.url,url:page.url,usedEngine:result.usedEngine,elapsedMs:Date.now()-started,selectorsUsed:ensured.selectors,discoveredSelectors:ensured.discovered,discoveryMethod:ensured.method};
 }
-export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
+export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto',autoDiscover=true):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine,undefined,true,autoDiscover)).products}
 
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
   if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.`);
@@ -567,11 +580,27 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,recommendations}}
   let products:Product[]=[];
   try{
-    const engineResult=await parseByEngine(page.text,page.url,profile.selectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
+    let listSelectors=profile.selectors;
+    try{listSelectors=(await ensureListSelectors(page.text,page.url,profile.selectors)).selectors}catch{/* best-effort; extraction below uses the profile selectors */}
+    const engineResult=await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
     add('list-extraction',products.length>0,products.length?`${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`:'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',{count:products.length,usedEngine:engineResult.usedEngine,complete,selectors:profile.selectors,samples:products.slice(0,5).map(x=>({title:x.title,price:x.price,priceText:x.priceText,url:x.url,image:x.image,sku:x.sku}))});
   }catch(error){add('list-extraction',false,error instanceof Error?error.message:String(error),{selectors:profile.selectors})}
+  // 1.129.0 — when nothing extracted, show what proactive auto-discovery sees
+  // on the same page (read-only: the diagnostic never rewrites the profile).
+  if(!products.length){
+    try{
+      const discovery=await discoverListSelectorsFromHtml(page.text,page.url);
+      const proposed=Object.entries(discovery.selectors).filter(([,value])=>String(value||'').trim());
+      if(discovery.method!=='none'&&proposed.length>=2&&discovery.selectors.container&&discovery.selectors.title){
+        add('selector-discovery',true,`موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method==='structural'?'تحلیل ساختاری صفحه':discovery.method==='mixed'?'ترکیبی':'الگوهای آماده'})؛ این سلکتورها راستی‌آزمایی شدند و با ذخیرهٔ آن‌ها استخراج شروع می‌شود.`,{method:discovery.method,selectors:discovery.selectors,evidence:discovery.evidence,containerCount:discovery.containerCount});
+        recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
+      }else{
+        add('selector-discovery',false,'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.',{method:discovery.method});
+      }
+    }catch{/* informational only */}
+  }
   const evidence:Record<string,unknown>={};
   for(const field of ['container','title','price','link','image'] as const){const selector=String(profile.selectors[field]||'').trim();if(!selector){evidence[field]={ok:false,count:0,error:'سلکتور خالی است'};continue}try{const type=field==='link'?'link':field==='image'?'image':'text',values=await extractSelectorValues(page.text,page.url,selector,type);evidence[field]={ok:values.length>0,count:values.length,sample:values.slice(0,3)}}catch(error){evidence[field]={ok:false,count:0,error:error instanceof Error?error.message:String(error)}}}
   const evidenceOk=['container','title'].every(key=>(evidence[key] as any)?.ok);
@@ -611,11 +640,390 @@ export async function testSelector(url:string,selector:string,type='text'):Promi
 export async function testVariations(url:string,selector:string){const page=await safeText(url,4_000_000);return {url:page.url,...await extractVariations(page.text,page.url,selector)}}
 export async function testGallery(url:string,selector:string,max=30,skipFirst=false){const page=await safeText(url,4_000_000),detail=await parseDetailPage(page.text,page.url,{gallery:selector,galleryMax:max,gallerySkipFirst:skipFirst});return{url:page.url,count:detail.images.length,values:detail.images}}
 const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors:string[]}>= {
-  container:{selectors:['li.product','article.product','.products .product','.product-card','.product-item','[data-product-id]']},title:{selectors:['.woocommerce-loop-product__title','.product-title','.card-title','h2','h3','[itemprop="name"]']},price:{selectors:['.price ins','.sale-price','.price','[itemprop="price"]','.amount']},link:{type:'link',selectors:['a.woocommerce-LoopProduct-link','a.product-link','a[href*="/product/"]','a[href]']},image:{type:'image',selectors:['img.wp-post-image','img.product-image','picture img','img']},shortDesc:{selectors:['.woocommerce-product-details__short-description','.short-description','[itemprop="description"]']},longDesc:{selectors:['#tab-description','.woocommerce-Tabs-panel--description','.product-description','.description']},sku:{selectors:['.sku','[itemprop="sku"]','[data-sku]']},brand:{selectors:['.brand','[itemprop="brand"]','.product-brand']},stock:{selectors:['.stock','[itemprop="availability"]','.inventory']},weight:{selectors:['.product_weight','.weight','[data-weight]']},category:{selectors:['.posted_in','.product_meta .category','.breadcrumb']},tags:{selectors:['.tagged_as','.product_meta .tags','[rel="tag"]']},detailImage:{type:'image',selectors:['.woocommerce-product-gallery__image img','.product-main-image img','img.wp-post-image','[itemprop="image"]']},gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img']},variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
+  container:{selectors:['li.product','article.product','.products .product','.product-card','.product-item','[data-product-id]',
+    // Generic / non-WooCommerce grids (1.128.0 on Render/Node, 1.129.0 on the
+    // Worker). Platform-specific guesses stay first; these only win when
+    // nothing above matched. Structural inference below is the real fallback
+    // when none of these exist either.
+    'article','[class*="product-card"]','[class*="product-item"]','[class*="product-box"]','[data-product]','.grid-item','.product','.product-box','.item-card']},
+  title:{selectors:['.woocommerce-loop-product__title','.product-title','.card-title','h2','h3','[itemprop="name"]',
+    '.product-name','[class*="product-title"]','[class*="product-name"]','.name','h4']},
+  price:{selectors:['.price ins','.sale-price','.price','[itemprop="price"]','.amount',
+    '[class*="price"]','.money','[data-price]','.product-price']},
+  link:{type:'link',selectors:['a.woocommerce-LoopProduct-link','a.product-link','a[href*="/product/"]','a[href]','h2 a','h3 a','article a[href]']},
+  image:{type:'image',selectors:['img.wp-post-image','img.product-image','picture img','img','.product-media img','article img']},
+  shortDesc:{selectors:['.woocommerce-product-details__short-description','.short-description','[itemprop="description"]','.product-info','.short-desc','[class*="short-description"]']},
+  longDesc:{selectors:['#tab-description','.woocommerce-Tabs-panel--description','.product-description','.description','.product-tabs','[class*="description"]']},
+  sku:{selectors:['.sku','[itemprop="sku"]','[data-sku]','[class*="sku"]']},
+  brand:{selectors:['.brand','[itemprop="brand"]','.product-brand','[class*="brand"]']},
+  stock:{selectors:['.stock','[itemprop="availability"]','.inventory']},
+  weight:{selectors:['.product_weight','.weight','[data-weight]']},
+  category:{selectors:['.posted_in','.product_meta .category','.breadcrumb']},
+  tags:{selectors:['.tagged_as','.product_meta .tags','[rel="tag"]']},
+  detailImage:{type:'image',selectors:['.woocommerce-product-gallery__image img','.product-main-image img','img.wp-post-image','[itemprop="image"]']},
+  gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img','.product-images img','[class*="gallery"] img']},
+  variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
 };
 export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all'){
-  const page=await safeText(url,4_000_000),wanted=mode==='list'?['container','title','price','link','image']:mode==='detail'?['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations']:Object.keys(SUGGESTION_CANDIDATES),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
-  for(const field of wanted){const config=SUGGESTION_CANDIDATES[field];for(const candidate of config.selectors)try{const values=await extractSelectorValues(page.text,page.url,candidate,config.type||'text');const count=values.length,minimum=field==='container'?2:1;if(count>=minimum){selectors[field]=candidate;evidence[field]={count,sample:values[0]||''};break}}catch{/* try the next known selector */}}
-  return {url:page.url,mode,selectors,evidence};
+  const page=await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+  // List fields go through the same discovery the engines use (1.128.0 on
+  // Render/Node, 1.129.0 on the Worker), so the dashboard button proposes
+  // structural selectors for unknown shops too.
+  if(mode==='list'||mode==='all'){
+    const found=await discoverListSelectorsFromHtml(page.text,page.url);
+    for(const [key,value] of Object.entries(found.selectors))if(value)selectors[key]=value as string;
+    for(const [key,value] of Object.entries(found.evidence))evidence[key]=value;
+    evidence.discoveryMethod=found.method;evidence.containerCount=found.containerCount;
+  }
+  if(mode==='detail'||mode==='all'){
+    const wanted=['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'];
+    for(const field of wanted){const config=SUGGESTION_CANDIDATES[field];if(!config)continue;for(const candidate of config.selectors)try{const values=await extractSelectorValues(page.text,page.url,candidate,config.type||'text');const count=values.length,minimum=1;if(count>=minimum){selectors[field]=candidate;evidence[field]={count,sample:values[0]||''};break}}catch{}}
+  }
+  return{url:page.url,mode,selectors,evidence};
+}
+
+// ---------------------------------------------------------------------------
+// Proactive list-selector auto-discovery (1.128.0 on Render/Node, 1.129.0 on
+// the Cloudflare Worker).
+//
+// "Selectors not configured" is NOT "all empty": normalizeProfile() fills every
+// new profile with WooCommerce DEFAULT_SELECTORS and rejects empties, so an
+// unconfigured profile looks exactly like a WooCommerce one. Auto-discovery
+// therefore triggers on empty, partial AND still-default selectors, verifies
+// proposals against the real page, and only then lets the engines run with
+// them. Fully custom selectors are left untouched.
+//
+// The Worker has no DOM: verification counts matches with HTMLRewriter (the
+// container page-wide; title/price/link/image scoped to descendants of the
+// container) and structural inference clusters anchor-context HTML chunks by
+// their tag+class signature. Same gates and method names as Render/Node.
+// ---------------------------------------------------------------------------
+const LIST_SELECTOR_KEYS=['container','title','price','link','image'] as const;
+export type SelectorConfigStatus='empty'|'partial'|'default'|'custom';
+export function listSelectorsStatus(selectors:Selectors|undefined|null):SelectorConfigStatus{
+  const values=LIST_SELECTOR_KEYS.map(key=>String((selectors as any)?.[key]||'').trim());
+  if(values.every(value=>!value))return 'empty';
+  if(values.some(value=>!value))return 'partial';
+  const isDefault=LIST_SELECTOR_KEYS.every(key=>String((selectors as any)?.[key]).trim()===String((DEFAULT_SELECTORS as any)[key]));
+  return isDefault?'default':'custom';
+}
+
+export type SelectorFieldEvidence={count:number;sample:string};
+export type ListSelectorVerification={
+  containerCount:number;
+  cardsSampled:number;
+  title:SelectorFieldEvidence;
+  price:SelectorFieldEvidence;
+  link:SelectorFieldEvidence;
+  image:SelectorFieldEvidence;
+  /** Container repeats and titles resolve inside most cards. */
+  ok:boolean;
+};
+const emptyVerification=(containerCount=0):ListSelectorVerification=>({
+  containerCount,cardsSampled:0,
+  title:{count:0,sample:''},price:{count:0,sample:''},
+  link:{count:0,sample:''},image:{count:0,sample:''},ok:false
+});
+async function countSelectorMatches(html:string,selector:string):Promise<number>{
+  let count=0;const rewriter=new HTMLRewriter(),handler={element(){count++}};let valid=false;
+  for(const part of selectorParts(selector))valid=safeOn(rewriter,part,handler)||valid;
+  if(!valid)return 0;
+  try{await rewriter.transform(new Response(html)).text()}catch{return 0}
+  return count;
+}
+/** `container descendant` pairs so field evidence is card-scoped, not page-wide. */
+function descendantSelector(container:string,field:string):string{
+  const combos:string[]=[];
+  for(const outer of selectorParts(container).slice(0,4))for(const inner of selectorParts(field).slice(0,4))combos.push(`${outer} ${inner}`);
+  return combos.join(', ');
+}
+/**
+ * Check list selectors against REAL page HTML the same way extraction reads it:
+ * container matches are counted page-wide, but title/price/link/image must
+ * resolve INSIDE the containers (descendant selectors), otherwise the evidence
+ * is the classic contradiction — green page-wide, zero products.
+ */
+export async function verifyListSelectors(html:string,baseUrl:string,selectors:Selectors):Promise<ListSelectorVerification>{
+  const container=String(selectors?.container||'').trim();
+  if(!container||!html)return emptyVerification();
+  const containerCount=await countSelectorMatches(html,container);
+  if(containerCount<1)return emptyVerification(containerCount);
+  const [titleHits,priceHits,linkHits,imageHits]=await Promise.all([
+    extractSelectorValues(html,baseUrl,descendantSelector(container,selectors.title||''),'text').catch(()=>[] as string[]),
+    extractSelectorValues(html,baseUrl,descendantSelector(container,selectors.price||''),'text').catch(()=>[] as string[]),
+    extractSelectorValues(html,baseUrl,descendantSelector(container,selectors.link||''),'link').catch(()=>[] as string[]),
+    extractSelectorValues(html,baseUrl,descendantSelector(container,selectors.image||''),'image').catch(()=>[] as string[]),
+  ]);
+  const moneyHits=priceHits.filter(value=>numberFromText(value)>0);
+  const evidence=(hits:string[]):SelectorFieldEvidence=>({count:hits.length,sample:(hits[0]||'').slice(0,200)});
+  // Title is mandatory (extraction skips title-less cards); price/link/image
+  // are reported but do not fail verification — "without price" products are
+  // filtered later with their own warning, not here.
+  const needed=Math.max(1,Math.ceil(Math.min(containerCount,12)/2));
+  return{containerCount,cardsSampled:Math.min(containerCount,12),title:evidence(titleHits),price:evidence(moneyHits),link:evidence(linkHits),image:evidence(imageHits),ok:containerCount>=2&&titleHits.length>=needed};
+}
+
+const PRICE_HINT_RE=/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم)/i;
+const THOUSANDS_RE=/\d{1,3}([,٬.]\d{3})+/;
+function looksLikePrice(text:string):boolean{
+  const value=cleanText(text);
+  if(!value||value.length>80)return false;
+  if(PRICE_HINT_RE.test(value))return numberFromText(value)>0;
+  return THOUSANDS_RE.test(value)&&numberFromText(value)>0;
+}
+function cssEscapeIdent(value:string):string{
+  return value.replace(/[^a-zA-Z0-9_-]/g,char=>'\\'+char).replace(/^(\d)/,'\\3$1 ');
+}
+const VOLATILE_CLASS_RE=/^(active|selected|current|open|opened|hover|focus|disabled|loading|ng-|v-|is-|has-|js-)/i;
+const HASH_CLASS_RE=/^[a-f0-9]{6,}$/i;
+function stableClasses(classAttr:string|undefined):string[]{
+  const all=String(classAttr||'').split(/\s+/).filter(Boolean);
+  const stable=all.filter(name=>name.length<=40&&!VOLATILE_CLASS_RE.test(name)&&!HASH_CLASS_RE.test(name));
+  // Prefer plain readable classes over escaped Tailwind utilities.
+  const rank=(name:string)=>(/[^a-zA-Z0-9_-]/.test(name)?100:0)+name.length;
+  return [...new Set(stable)].sort((a,b)=>rank(a)-rank(b));
+}
+/** Minimal `tag.class` selector for a chunk root (relative-safe inside a card). */
+function selectorForTagClasses(tag:string,classAttr:string|undefined):string{
+  const base=/^[a-z][a-z0-9]*$/i.test(tag)?tag.toLowerCase():'div';
+  const classes=stableClasses(classAttr);
+  if(classes.length>=2)return `${base}.${cssEscapeIdent(classes[0])}.${cssEscapeIdent(classes[1])}`;
+  if(classes.length===1)return `${base}.${cssEscapeIdent(classes[0])}`;
+  return base;
+}
+
+export type ListDiscoveryMethod='curated'|'structural'|'mixed'|'none';
+export type ListDiscovery={
+  selectors:Partial<Selectors>;
+  evidence:Record<string,unknown>;
+  method:ListDiscoveryMethod;
+  containerCount:number;
+};
+/**
+ * Find list selectors for a page whose profile never configured them.
+ *
+ * Pass 1 tests the curated e-commerce selector list (fast, precise on known
+ * platforms). Pass 2 — structural inference — handles everything else: it
+ * clusters link+image HTML chunks by their tag+class signature, picks the
+ * repeating product-card pattern, and derives title/price/link/image selectors
+ * from inside the cards. Every proposal is verified against the same HTML
+ * before it is returned, so callers can persist it without a second check.
+ */
+export async function discoverListSelectorsFromHtml(html:string,baseUrl:string):Promise<ListDiscovery>{
+  const selectors:Partial<Selectors>={};
+  const evidence:Record<string,unknown>={};
+  for(const field of LIST_SELECTOR_KEYS){
+    const config=SUGGESTION_CANDIDATES[field];
+    for(const candidate of config.selectors){
+      try{
+        const values=await extractSelectorValues(html,baseUrl,candidate,config.type||'text');
+        const minimum=field==='container'?2:1;
+        if(values.length>=minimum){
+          (selectors as any)[field]=candidate;
+          evidence[field]={count:values.length,sample:(values[0]||'').slice(0,200),via:'curated'};
+          break;
+        }
+      }catch{/* next candidate */}
+    }
+  }
+  let method:ListDiscoveryMethod=selectors.container&&selectors.title?'curated':'none';
+  if(!selectors.container||!selectors.title){
+    try{
+      const structural=await inferStructuralListSelectors(html,baseUrl);
+      if(structural){
+        for(const [key,value] of Object.entries(structural.selectors)){
+          if(value&&!(selectors as any)[key]){
+            (selectors as any)[key]=value;
+            (evidence as any)[key]={...((structural.evidence as any)[key]||{}),via:'structural'};
+          }
+        }
+        method=method==='curated'?'mixed':'structural';
+      }
+    }catch{/* structural pass is best-effort */}
+  }
+  // Final gate: a container that does not repeat, or titles that do not resolve
+  // INSIDE the cards, would be saved as fact — reject such proposals outright.
+  let containerCount=0;
+  if(selectors.container&&selectors.title){
+    const verified=await verifyListSelectors(html,baseUrl,{...DEFAULT_SELECTORS,...selectors}as Selectors);
+    containerCount=verified.containerCount;
+    if(!verified.ok)return{selectors:{},evidence:{},method:'none',containerCount};
+  }
+  return{selectors,evidence,method,containerCount};
+}
+
+/** The anchor itself plus up to two enclosing card-like elements, as HTML. */
+function contextChunks(html:string,index:number,anchorOpen:string):string[]{
+  void anchorOpen;
+  const chunks:string[]=[];
+  const close=html.indexOf('</a>',index);
+  if(close>index&&close-index<6000)chunks.push(html.slice(index,close+4));
+  let cursor=index;
+  for(let depth=0;depth<2;depth++){
+    let best='',bestOpen=-1;
+    for(const [tag,endTag] of [['article','</article>'],['li','</li>'],['tr','</tr>'],['div','</div>']] as const){
+      const open=html.lastIndexOf('<'+tag,cursor-1);
+      if(open<0||cursor-open>1800)continue;
+      const end=html.indexOf(endTag,cursor);
+      if(end<0||end-open>5000)continue;
+      const chunk=html.slice(open,end+endTag.length);
+      if(!best||chunk.length<best.length){best=chunk;bestOpen=open}
+    }
+    if(!best||bestOpen<0)break;
+    chunks.push(best);cursor=bestOpen;
+  }
+  return chunks;
+}
+
+/**
+ * Structural card inference: cluster every link+image HTML chunk by its
+ * tag+class signature and treat the largest repeating cluster as the product
+ * grid. Unlike the `heuristic` engine (which extracts products directly from
+ * price-shaped text), this produces reusable CSS selectors, so the selector
+ * engines — and every later page and run — work with them.
+ */
+async function inferStructuralListSelectors(html:string,baseUrl:string):Promise<{selectors:Partial<Selectors>;evidence:Record<string,unknown>}|null>{
+  const groups=new Map<string,{chunks:string[];seen:Set<string>;priceHits:number}>();
+  const anchors:RegExpExecArray[]=[];
+  try{
+    const anchorRe=/<a\b[^>]*href=["']([^"']*)["'][^>]*>/gi;
+    let match:RegExpExecArray|null;
+    while((match=anchorRe.exec(html))&&anchors.length<800)anchors.push(match);
+  }catch{return null}
+  if(anchors.length<2)return null;
+  for(const anchor of anchors){
+    const href=String(anchor[1]||'').trim();
+    if(!href||href==='#'||/^javascript:/i.test(href))continue;
+    for(const chunk of contextChunks(html,anchor.index,anchor[0])){
+      const open=chunk.match(/^<(\w+)\b([^>]*)>/);
+      if(!open)continue;
+      const tag=open[1].toLowerCase();
+      if(!tag||tag==='html'||tag==='body')continue;
+      const text=stripHtml(chunk);
+      if(!text||text.length<12||text.length>1500)continue;
+      if(!/<img\b/i.test(chunk))continue;
+      if((chunk.match(/<a\b[^>]*href\s*=/gi)||[]).length>4)continue;
+      const classAttr=open[2].match(/\bclass=["']([^"']*)["']/)?.[1]||'';
+      const signature=selectorForTagClasses(tag,classAttr);
+      if(!signature.includes('.')&&tag!=='li'&&tag!=='article')continue;
+      let group=groups.get(signature);
+      if(!group){group={chunks:[],seen:new Set(),priceHits:0};groups.set(signature,group)}
+      if(group.seen.has(chunk))continue;
+      group.seen.add(chunk);group.chunks.push(chunk);
+      if(PRICE_HINT_RE.test(text)||THOUSANDS_RE.test(text))group.priceHits++;
+    }
+  }
+  const clusters=[...groups.entries()]
+    .map(([selector,group])=>({selector,chunks:group.chunks,priceHits:group.priceHits}))
+    .filter(cluster=>cluster.chunks.length>=2)
+    .sort((a,b)=>(b.chunks.length*(1+b.priceHits))-(a.chunks.length*(1+a.priceHits)));
+  for(const cluster of clusters.slice(0,5)){
+    const derived=deriveStructuralFieldSelectors(cluster.chunks.slice(0,8));
+    if(!derived||!derived.title)continue;
+    const linkSelector=derived.cardIsLink?cluster.selector:'a[href]';
+    const merged={...DEFAULT_SELECTORS,container:cluster.selector,title:derived.title,price:derived.price||'',link:linkSelector,image:'img'}as Selectors;
+    const verified=await verifyListSelectors(html,baseUrl,merged);
+    if(!verified.ok)continue;
+    return{
+      selectors:{container:cluster.selector,title:derived.title,...(derived.price?{price:derived.price}:{}),link:linkSelector,image:'img'},
+      evidence:{
+        container:{count:verified.containerCount,sample:cluster.selector},
+        title:verified.title,price:verified.price,link:verified.link,image:verified.image
+      }
+    };
+  }
+  return null;
+}
+
+const BLOCK_TAG_RE=/<(div|ul|ol|li|table|section|article|header|footer|main|form|p|h[1-6])\b/i;
+/** Derive title/price selectors from inside sampled chunks of one cluster. */
+function deriveStructuralFieldSelectors(sampleChunks:string[]):{title:string;price:string;cardIsLink:boolean}|null{
+  const titleVotes=new Map<string,{count:number;bonus:number}>();
+  const priceVotes=new Map<string,{count:number;length:number}>();
+  let cardIsLink=0;
+  const classOf=(attrs:string)=>attrs.match(/\bclass=["']([^"']*)["']/)?.[1]||'';
+  for(const chunk of sampleChunks){
+    if(/^<a\b/i.test(chunk))cardIsLink++;
+    // Title: headings/itemprop first, else the longest mid-length text node.
+    let titleSig='';
+    const headingH=chunk.match(/<h([1-4])\b([^>]*)>([\s\S]{0,600}?)<\/h[1-4]>/i);
+    const headingProp:RegExpMatchArray|null=!headingH?chunk.match(/<([a-z][a-z0-9]*)\b([^>]*itemprop=["']name["'][^>]*)>([\s\S]{0,600}?)<\/\1>/i):null;
+    const heading=headingH||headingProp;
+    if(heading){
+      const text=stripHtml(heading[3]||'');
+      if(text.length>=8&&text.length<=200&&!looksLikePrice(text)){
+        const tag=headingH?`h${headingH[1]}`:(headingProp?.[1]||'div');
+        titleSig=selectorForTagClasses(tag,classOf(heading[2]||''));
+      }
+    }else{
+      let bestLen=0;
+      const considerTitle=(tag:string,attrs:string,rawInner:string)=>{
+        const text=stripHtml(rawInner);
+        if(text.length>=15&&text.length<=160&&text.length>bestLen&&!looksLikePrice(text)){bestLen=text.length;titleSig=selectorForTagClasses(tag,classOf(attrs))}
+      };
+      for(const m of chunk.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([^<>]{15,160})<\/\1>/gi))considerTitle(m[1],m[2]||'',m[3]||'');
+      // Inline-wrapped titles (`<p class="name"><a>…</a></p>`): the tolerant
+      // pass sees through inline markup but skips block wrappers. The chunk
+      // root itself is excluded — its text is the whole card.
+      const body=chunk.replace(/^<[a-z][a-z0-9]*\b[^>]*>/i,'');
+      for(const m of body.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([\s\S]{15,220}?)<\/\1>/gi)){
+        const inner=m[3]||'';
+        if(!/[<>]/.test(inner))continue;
+        if(BLOCK_TAG_RE.test(inner))continue;
+        considerTitle(m[1],m[2]||'',inner);
+      }
+    }
+    if(titleSig){
+      const vote=titleVotes.get(titleSig)||{count:0,bonus:/^h[1-4][.]/.test(titleSig)?2:0};
+      vote.count++;
+      titleVotes.set(titleSig,vote);
+    }
+    // Price: the SHORTEST price-shaped text — wrappers that also contain the
+    // title lose to the leaf element that holds just the price. On a length
+    // tie the deeper element wins (open tags come before their children in
+    // document order, so the later index is the leaf).
+    const priceCandidates:Array<{sig:string;length:number;index:number}>=[];
+    const considerPrice=(tag:string,attrs:string,rawInner:string,index:number)=>{
+      const text=stripHtml(rawInner);
+      if(!text||text.length>80||!looksLikePrice(text))return;
+      priceCandidates.push({sig:selectorForTagClasses(tag,classOf(attrs)),length:text.length,index});
+    };
+    for(const m of chunk.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>([^<>]{1,80})<\/\1>/gi))considerPrice(m[1],m[2]||'',m[3]||'',m.index??0);
+    const priceBody=chunk.replace(/^<[a-z][a-z0-9]*\b[^>]*>/i,'');
+    for(const m of priceBody.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>([\s\S]{1,160}?)<\/\1>/gi)){
+      const inner=m[3]||'';
+      if(!/[<>]/.test(inner))continue;
+      if(BLOCK_TAG_RE.test(inner))continue;
+      considerPrice(m[1],m[2]||'',inner,m.index??0);
+    }
+    priceCandidates.sort((a,b)=>a.length-b.length||b.index-a.index);
+    if(priceCandidates.length){
+      const winner=priceCandidates[0].sig;
+      const vote=priceVotes.get(winner)||{count:0,length:priceCandidates[0].length};
+      vote.count++;
+      priceVotes.set(winner,vote);
+    }
+  }
+  const titleWinner=[...titleVotes.entries()].sort((a,b)=>(b[1].count*10+b[1].bonus)-(a[1].count*10+a[1].bonus))[0];
+  if(!titleWinner)return null;
+  const priceWinner=[...priceVotes.entries()].sort((a,b)=>b[1].count-a[1].count||a[1].length-b[1].length)[0];
+  return{title:titleWinner[0],price:priceWinner?priceWinner[0]:'',cardIsLink:cardIsLink*2>=sampleChunks.length};
+}
+
+export type EnsuredListSelectors={selectors:Selectors;discovered?:Partial<Selectors>;method:string};
+/**
+ * Repair unconfigured list selectors from already-fetched page HTML (no extra
+ * fetch): when the profile's selectors were never configured for this shop and
+ * do not verify, discover replacements and adopt them only if the merged set
+ * verifies. Fully custom selectors pass through untouched.
+ */
+export async function ensureListSelectors(html:string,baseUrl:string,selectors:Selectors):Promise<EnsuredListSelectors>{
+  if(listSelectorsStatus(selectors)==='custom')return{selectors,method:''};
+  if((await verifyListSelectors(html,baseUrl,selectors)).ok)return{selectors,method:''};
+  const found=await discoverListSelectorsFromHtml(html,baseUrl);
+  const merged={...selectors,...found.selectors}as Selectors;
+  if(found.method!=='none'&&found.selectors.container&&found.selectors.title&&(await verifyListSelectors(html,baseUrl,merged)).ok)
+    return{selectors:merged,discovered:found.selectors,method:found.method};
+  return{selectors,method:''};
 }
 export function safeLongDescription(value:string):string{return value||`<p>${escapeHtml(value)}</p>`}
