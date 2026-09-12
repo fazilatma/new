@@ -60,7 +60,8 @@ npm test
 `npm run lab:service`) آن‌ها را آفلاین راستی‌آزمایی می‌کند:
 
 - سلامت نحوی `scripts/local-deployer-ui.mjs` و نگهبان‌هایش (آزادسازی پورت
-  stale، نصب‌های Termux-aware)،
+  stale، نصب‌های Termux-aware، تشخیص بیلد stale روی پورت + دکمهٔ Rebuild
+  & restart)،
 - تازگی بیلد رندر (`render-dist/server.js` نسبت به `render-src/`)،
 - هم‌خوانی باندل کامیت‌شدهٔ `scraper4.worker.js` با نسخهٔ `package.json`،
 - سبز بودن `version:check` و حضور دارا بودن گیت مرورگر در بنچمارک.

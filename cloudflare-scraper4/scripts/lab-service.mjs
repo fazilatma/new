@@ -37,6 +37,9 @@ check('deployer frees a stale scraper port', deployer.includes('freeScraperPort'
 check('deployer installs are Termux-aware', deployer.includes('npmInstallArgs'));
 check('scraper self-update is Termux-aware', src('render-src/server.ts').includes('--ignore-scripts'));
 check('benchmark gates browsers on availability', src('render-src/server.ts').includes('!browserEngineAvailable()&&BROWSER_ENGINES.has(engine)') && !src('render-src/server.ts').includes('BROWSER_ENGINES_UNAVAILABLE'));
+const deployerSrc = src('scripts/local-deployer-ui.mjs');
+check('deployer detects stale serving builds', deployerSrc.includes('function probeServingVersion(') && deployerSrc.includes('serving: servingState()') && deployerSrc.includes('/api/scraper/restart'));
+check('scraper reports boot identity', src('render-src/server.ts').includes('const BOOT_HEAD') && src('render-src/server.ts').includes('head: BOOT_HEAD'));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

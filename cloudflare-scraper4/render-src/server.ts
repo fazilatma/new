@@ -52,6 +52,10 @@ let localScraperBootHead = '';
 let localScraperMovedWarnedHead = '';
 const isTermuxInstall = process.platform === 'android' || Boolean(process.env.TERMUX_VERSION) || /com\.termux/i.test(String(process.env.PREFIX || ''));
 function runLocal(command: string, args: string[] = []) { return spawnSync(command, args, { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env }); }
+// Boot-baked identity for the deployer's stale-serving check: the git head is
+// read ONCE here, so a stale build keeps reporting what it booted even after
+// the checkout moves on. Never read this per-request.
+const BOOT_HEAD = (() => { try { return String(runLocal('git', ['rev-parse', 'HEAD']).stdout || '').trim(); } catch { return ''; } })();
 function maybeAutoUpdateLocalScraper(reason = 'timer') {
   if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
   localScraperUpdateRunning = true;
@@ -95,6 +99,15 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
     if (!localScraperBootHead) localScraperBootHead = before;
     if (before && before !== localScraperBootHead && before === remote && localScraperMovedWarnedHead !== before) {
       localScraperMovedWarnedHead = before;
+      // A deployer-managed scraper HAS something to restart it (exit 75), so
+      // converge instead of warning forever; a manual start keeps warn-only.
+      if (process.env.DEPLOYER_MANAGED === 'true') {
+        console.log(`[auto-update:${reason}] the checkout moved under this deployer-managed scraper (${localScraperBootHead.slice(0, 7)} -> ${before.slice(0, 7)}); rebuilding and exiting so the deployer restarts the new build...`);
+        runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', isTermuxInstall ? ['install', '--ignore-scripts', '--no-audit', '--prefer-online'] : ['install', '--no-audit', '--prefer-online']);
+        runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'render:build']);
+        setTimeout(() => process.exit(75), 500);
+        return;
+      }
       console.warn(`[auto-update:${reason}] the git checkout moved under this running scraper (${localScraperBootHead.slice(0, 7)} -> ${before.slice(0, 7)}) but it still serves the old build. Restart the scraper (deployer: Stop, then Build & start) to apply the new code.`);
     }
     if (!before || !remote || before === remote) return;
@@ -230,7 +243,7 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
+app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {

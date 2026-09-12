@@ -1830,3 +1830,38 @@ test('scraper start frees a stale port holder instead of crashing with EADDRINUS
   assert.ok(deployer.includes("blocked: 'port-held'"), 'a foreign port holder must refuse to start with a clear state, not crash the build');
   assert.ok(deployer.includes('EADDRINUSE'), 'the scraper log must explain an address-in-use crash with a next step');
 });
+
+test('the deployer detects a stale serving build instead of adopting it forever', async () => {
+  // The branches panel reads git (new), but localhost kept serving the old
+  // build: after an update the previous deployer's scraper often survived
+  // (Termux group-kill misses the node grandchild), and the successor
+  // "adopted" whatever answered the port without ever checking its version.
+  // The deployer must probe the RUNNING build, expose serving-vs-checkout in
+  // /api/status, take over a stale OURS occupant, and offer Rebuild & restart.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('function probeServingVersion('), 'deployer must ask the port for its running build (/api/version)');
+  assert.ok(deployer.includes('function servingState()'), 'deployer must compare serving-vs-checkout (version and git head)');
+  assert.ok(deployer.includes('serving: servingState()'), 'the scraper status block must carry the serving state');
+  assert.ok(deployer.includes('await refreshServingCache()'), '/api/status must refresh the serving probe before answering');
+  assert.ok(deployer.includes('stopping it and rebuilding'), 'boot must stop a stale OURS occupant and rebuild instead of adopting it');
+  assert.ok(deployer.includes('is not our process'), 'a stale foreign occupant must be reported and left alone, never killed');
+  assert.ok(deployer.includes('/api/scraper/restart'), 'a restart endpoint must stop, verify the port is free, then rebuild and start');
+  assert.ok(deployer.includes('still holding port'), 'stop must reap stragglers the group signal missed (Termux grandchild case)');
+  assert.ok(deployer.includes('scraperStale'), 'the Scraper tab must show a stale banner');
+  assert.ok(deployer.includes('scraperRestart'), 'the stale banner must offer one-click Rebuild & restart');
+  assert.ok(deployer.includes('servingLabel(scraper)'), 'the status bar must label what localhost actually serves');
+  assert.ok(deployer.includes("DEPLOYER_MANAGED: 'true'"), 'deployer-started scrapers must be marked so they converge on updates');
+});
+
+test('a deployer-managed scraper converges when the checkout moves under it', async () => {
+  // When the deployer updates git under a running scraper, the process keeps
+  // serving its old build. A manually started scraper can only warn (nothing
+  // would restart it), but a deployer-managed one must rebuild and exit 75 so
+  // the deployer restarts the new build. The boot git head is also exposed
+  // for same-version staleness checks.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('const BOOT_HEAD'), 'the scraper must bake its boot git head once, never read it per request');
+  assert.ok(server.includes('head: BOOT_HEAD'), '/api/version must expose the boot head alongside the boot version');
+  assert.ok(server.includes("process.env.DEPLOYER_MANAGED === 'true'"), 'the moved-under branch must converge when a deployer will restart it');
+  assert.ok(server.split('process.exit(75)').length - 1 >= 2, 'both the new-code path and the managed moved-under path must exit 75 for a deployer restart');
+});

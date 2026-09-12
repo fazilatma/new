@@ -736,9 +736,13 @@ function startScraper() {
     return scraper;
   }
   const baseEnv = localEnv();
+  // DEPLOYER_MANAGED tells the scraper a deployer will restart it (exit 75),
+  // so when the checkout moves under it, it rebuilds and exits instead of
+  // warning forever. A manually started scraper keeps warn-only behavior.
   const env = {
     ...baseEnv,
     PORT: String(scraperPort),
+    DEPLOYER_MANAGED: 'true',
     RUN_WORKER_IN_WEB: baseEnv.RUN_WORKER_IN_WEB || 'true',
     LOCAL_SCRAPER_AUTO_UPDATE: baseEnv.LOCAL_SCRAPER_AUTO_UPDATE || 'true',
     DATABASE_URL: normalizeDatabaseUrl(baseEnv.DATABASE_URL)
@@ -779,6 +783,12 @@ function stopScraper() {
       else process.kill(-scraper.child.pid, 'SIGTERM');
     } catch { scraper.child.kill('SIGTERM'); }
   }
+  // The group signal can miss the real server (Termux: killing the shell
+  // leaves the node grandchild holding the port). Reap by command line so a
+  // stop is actually a stop; foreign holders are reported, never touched.
+  const reaped = freeScraperPort();
+  for (const pid of reaped.freed) scraperLog += `[local scraper] stopped stale scraper process ${pid} still holding port ${scraperPort}\n`;
+  for (const holder of reaped.foreign) scraperLog += `[local scraper] port ${scraperPort} is also held by another program (pid ${holder.pid}), left running\n`;
   return scraper || { running: false };
 }
 
@@ -808,6 +818,50 @@ function scraperIsListening(timeoutMs = 1500) {
   });
 }
 
+// The process on the scraper port is often NOT this deployer's child (a manual
+// start, or an orphan the previous deployer failed to stop), so the tracked
+// `running` flag cannot say what localhost actually serves. Ask the port
+// itself: /api/version reports the RUNNING build (version and git head are
+// baked at boot), diskVersion()/gitSha() the checkout. Cached briefly so the
+// 5s status poll stays cheap; force=true at boot and after (re)start decisions.
+let servingCache = { at: 0, reachable: false, version: '', head: '' };
+const SERVING_CACHE_MS = 10000;
+function probeServingVersion(timeoutMs = 1500) {
+  return new Promise(resolve => {
+    const done = outcome => resolve(outcome);
+    let req;
+    try {
+      req = http.request({ hostname: '127.0.0.1', port: scraperPort, path: '/api/version', method: 'GET', timeout: timeoutMs }, res => {
+        let body = '';
+        res.on('data', d => { body += d; if (body.length > 4000) req.destroy(); });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body || '{}');
+            done({ reachable: true, version: String(parsed.version || ''), head: String(parsed.head || '') });
+          } catch { done({ reachable: true, version: '', head: '' }); }
+        });
+      });
+    } catch { return done({ reachable: false, version: '', head: '' }); }
+    req.on('timeout', () => { req.destroy(); done({ reachable: false, version: '', head: '' }); });
+    req.on('error', () => done({ reachable: false, version: '', head: '' }));
+    req.end();
+  });
+}
+async function refreshServingCache(force = false) {
+  if (!force && Date.now() - servingCache.at < SERVING_CACHE_MS) return servingCache;
+  const probed = await probeServingVersion();
+  servingCache = { at: Date.now(), ...probed };
+  return servingCache;
+}
+// Stale when the running build provably differs from the checkout: a version
+// mismatch, or (for same-version rebuilds) a git-sha mismatch. A reachable
+// port with neither is someone else's program, never our stale scraper.
+function servingState() {
+  const onDisk = diskVersion(), diskHead = gitSha('HEAD');
+  const { reachable, version, head } = servingCache;
+  const stale = Boolean(reachable && ((version && onDisk && version !== onDisk) || (head && diskHead && head !== diskHead)));
+  return { reachable, version, head, onDisk, diskHead, stale, identified: Boolean(reachable && (version || head)) };
+}
 async function waitForScraperPort(deadlineMs) {
   while (Date.now() < deadlineMs) {
     if (await scraperIsListening()) return true;
@@ -937,7 +991,7 @@ function status() {
       staticHtmlDeployer: existsSync(join(projectDir, 'deploy-setup/static-universal-deployer.html'))
     },
     jobs: [...jobs.values()].map(({ child, ...j }) => j),
-    scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort, command: scraper.command || scraperCommand } : { running: false, port: scraperPort, command: scraperCommand }
+    scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort, command: scraper.command || scraperCommand, serving: servingState() } : { running: false, port: scraperPort, command: scraperCommand, serving: servingState() }
   };
 }
 
@@ -953,7 +1007,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/scraper') || (fromScraperProxy && (url.pathname === '/dashboard.js' || url.pathname === '/health' || url.pathname.startsWith('/api/') || url.pathname.startsWith('/assets/') || url.pathname === '/visual'))) return await proxyScraper(req, res, url);
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, page(token), 'text/html; charset=utf-8');
     if (!requireAuth(req, res)) return;
-    if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, status());
+    if (req.method === 'GET' && url.pathname === '/api/status') { await refreshServingCache(); return send(res, 200, status()); }
     if (req.method === 'GET' && url.pathname === '/api/branches') {
       // Refreshing the deployer page must be enough to pick up a new version:
       // the background timer can be disabled, throttled, or simply not have
@@ -1038,6 +1092,18 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/scraper/start') return send(res, 200, { ok: true, scraper: (({ child, ...s }) => ({ ...s, port: scraperPort }))(startScraper()) });
     if (req.method === 'POST' && url.pathname === '/api/scraper/stop') return send(res, 200, { ok: true, scraper: stopScraper() });
+    if (req.method === 'POST' && url.pathname === '/api/scraper/restart') {
+      stopScraper();
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && await scraperIsListening(500)) {
+        freeScraperPort();
+        await new Promise(r => setTimeout(r, 700));
+      }
+      const started = startScraper();
+      await refreshServingCache(true);
+      const { child, ...s } = started || {};
+      return send(res, 200, { ok: true, scraper: { ...s, port: scraperPort }, serving: servingState() });
+    }
     send(res, 404, { ok: false, error: 'Not found' });
   } catch (error) {
     send(res, 500, { ok: false, error: error?.message || String(error) });
@@ -1084,9 +1150,29 @@ function autoStartScraper() {
   // The scraper outlives the deployer, so a restarted deployer may find one
   // already serving the port. Adopt it instead of starting a second copy that
   // would fail with EADDRINUSE.
-  const probe = http.request({ hostname: '127.0.0.1', port: scraperPort, path: '/', method: 'HEAD', timeout: 1500 }, response => {
+  const probe = http.request({ hostname: '127.0.0.1', port: scraperPort, path: '/', method: 'HEAD', timeout: 1500 }, async response => {
     response.resume();
-    console.log(`[deployer] a scraper is already serving http://localhost:${scraperPort}/ (HTTP ${response.statusCode}); leaving it running.`);
+    // Adopting blindly is how a stale build survives updates forever: the
+    // checkout moves on while localhost keeps serving the orphan. Only adopt
+    // what provably matches the checkout; a stale OURS occupant is stopped
+    // and rebuilt, anything else is reported and left alone.
+    const serving = await refreshServingCache(true);
+    const state = servingState();
+    if (!state.stale && state.identified) {
+      console.log(`[deployer] a scraper is already serving http://localhost:${scraperPort}/ (HTTP ${response.statusCode}, v${serving.version || '?'}); leaving it running.`);
+      return;
+    }
+    if (!state.identified) {
+      console.log(`[deployer] WARNING: something answers on port ${scraperPort} (HTTP ${response.statusCode}) but it is not our scraper (no /api/version). Leaving it running — stop that program or change PORT, then press Build & start.`);
+      return;
+    }
+    console.log(`[deployer] localhost:${scraperPort} serves stale v${serving.version || '?'} (${(serving.head || '?').slice(0, 7)}) but the checkout is v${state.onDisk} (${(state.diskHead || '?').slice(0, 7)}); stopping it and rebuilding...`);
+    const portState = freeScraperPort();
+    if (portState.foreign.length && !portState.freed.length) {
+      console.log(`[deployer] WARNING: the stale occupant reports our version scheme but is not our process (pid ${portState.foreign[0].pid}) — refusing to kill it. Stop it, then press Build & start.`);
+      return;
+    }
+    startFresh();
   });
   const startFresh = () => {
     probe.destroy();
@@ -1150,7 +1236,7 @@ function page(token) {
 <section><div class="tabs"><button class="active" onclick="tab('dash',this)">Overview</button><button onclick="tab('database',this)">Database</button><button onclick="tab('scraper',this)">Local scraper</button><button onclick="tab('guide',this)">Copy commands</button><button onclick="tab('branches',this)">Branches</button><button onclick="tab('jobs',this)">Logs</button></div>
 <div id="dash" class="panel active"><div class="card"><h2>Project status</h2><p class="muted">If you see <span class="kbd">getaddrinfo ENOTFOUND HOST</span>, your DATABASE_URL still contains the placeholder HOST. On Windows (and on machines without Docker) the database button now configures the <b>SQLite database built into Node.js</b> automatically - no PostgreSQL install/service is needed.</p><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">Install / retry npm</button><button class="success" onclick="run('databaseInstall')">Install / connect database</button><button onclick="run('localBuild')">Build local scraper</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
 <div id="database" class="panel"><div class="card"><h2>Database setup</h2><p class="muted">The deployer auto-detects Termux, Codespaces, desktop, Render, Vercel and Windows. On Windows / machines without Docker it configures the <b>built-in SQLite database</b> (nothing to install). On Docker/Codespaces it starts PostgreSQL automatically; on Render/Cloudflare/Vercel it shows panel instructions.</p><div class="row"><button class="success" onclick="run('databaseInstall')">Install database now</button><button class="secondary" onclick="showDbHelp()">Show panel instructions</button></div><pre id="dbHelp"></pre></div></div>
-<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">The scraper starts automatically with the deployer and keeps its own address: <a href="http://localhost:${scraperPort}/" target="_blank" rel="noreferrer">http://localhost:${scraperPort}/</a> (no token needed). It is a separate process, so it stays up after you close the deployer, and the terminal prints its URL under the deployer URL. Use the database button first if DATABASE_URL is missing or contains HOST. Set <span class="kbd">LOCAL_SCRAPER_AUTOSTART=false</span> to stop it starting on its own, or <span class="kbd">LOCAL_SCRAPER_STOP_WITH_UI=true</span> to shut it down together with the deployer. The first start runs <span class="kbd">render:build</span>, which takes tens of seconds on Termux/ARM; Open scraper now waits for that build instead of failing with ECONNREFUSED. The dashboard works the same whether you open it here under /scraper/ or directly on its own port, because it resolves its API calls relative to the address you opened it at. Raise <span class="kbd">LOCAL_SCRAPER_PROXY_WAIT_MS</span> (default 180000) on a very slow device.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><pre id="scraperLog"></pre></div></div>
+<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">The scraper starts automatically with the deployer and keeps its own address: <a href="http://localhost:${scraperPort}/" target="_blank" rel="noreferrer">http://localhost:${scraperPort}/</a> (no token needed). It is a separate process, so it stays up after you close the deployer, and the terminal prints its URL under the deployer URL. Use the database button first if DATABASE_URL is missing or contains HOST. Set <span class="kbd">LOCAL_SCRAPER_AUTOSTART=false</span> to stop it starting on its own, or <span class="kbd">LOCAL_SCRAPER_STOP_WITH_UI=true</span> to shut it down together with the deployer. The first start runs <span class="kbd">render:build</span>, which takes tens of seconds on Termux/ARM; Open scraper now waits for that build instead of failing with ECONNREFUSED. The dashboard works the same whether you open it here under /scraper/ or directly on its own port, because it resolves its API calls relative to the address you opened it at. Raise <span class="kbd">LOCAL_SCRAPER_PROXY_WAIT_MS</span> (default 180000) on a very slow device.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><div id="scraperStale"></div><pre id="scraperLog"></pre></div></div>
 <div id="guide" class="panel"><div class="card"><h2>Installed libraries by type</h2><p class="muted">This inventory is generated from package.json plus required runtime/platform packages, so you can see what is already installed before copying commands.</p><div id="libraryGroups" class="lib-grid"></div></div><div class="card"><h2>One-click copy commands</h2><p class="muted">Each environment has its own copy button. Paste only plain text into Termux; never paste Markdown links.</p><div id="guideCards" class="guide-grid"></div></div></div>
 <div id="branches" class="panel"><div class="card"><h2>Repo branches - newest version tracking</h2><p class="muted">Every <b id="branchIntervalLabel">1 minute</b> the deployer fetches all branches of <span class="kbd">fazilatma/new</span>, reads the Scraper4 version from each branch (<span class="kbd">cloudflare-scraper4/package.json</span>) and - when enabled - automatically installs the branch carrying the <b>newest version</b>. Use the row button to install a specific branch.</p><div class="row" style="margin:10px 0"><label style="margin:0 10px 0 0;width:auto;font-weight:600"><input type="checkbox" id="autoInstallLatest" style="width:auto" checked> Auto-install newest version</label><select id="branchInterval" style="width:auto"><option value="1">every 1 minute</option><option value="5">every 5 minutes</option><option value="10">every 10 minutes</option><option value="30">every 30 minutes</option><option value="0">never (manual only)</option></select><button class="secondary" onclick="scanNow()">Scan now</button><button class="secondary" onclick="renderBranches(true)">Refresh table</button></div><div id="branchSummary" class="banner"></div><div style="overflow:auto"><table class="tbl"><thead><tr><th>Branch</th><th>Version on branch</th><th>Installed version</th><th>Last commit</th><th>Status</th><th>Action</th></tr></thead><tbody id="branchRows"><tr><td colspan="6" class="muted">Loading branches…</td></tr></tbody></table></div></div></div>
 <div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div></section></section></main>
@@ -1216,12 +1302,21 @@ async function pollJobs() {
     refresh();
   } catch (err) { logError(err); }
 }
+function servingLabel(scraper) {
+  const serving = scraper.serving || {};
+  if (serving.stale && serving.version !== serving.onDisk) return 'STALE v' + (serving.version || '?') + '->v' + (serving.onDisk || '?');
+  if (serving.stale) return 'STALE v' + (serving.version || '?') + ' (old commit)';
+  if (serving.reachable && serving.version) return 'Running v' + serving.version;
+  if (serving.reachable) return 'Occupied (not our scraper)';
+  return scraper.running ? 'Starting...' : 'Stopped';
+}
 async function scraperStart() { try { await api('/api/scraper/start', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
 function scraperUrl(path = '/') {
   const clean = path.startsWith('/') ? path : '/' + path;
   return '/scraper' + (clean === '/' ? '/' : clean);
 }
 function openScraper(path = '/') { window.open(scraperUrl(path), '_blank', 'noopener,noreferrer'); }
+async function scraperRestart() { try { await api('/api/scraper/restart', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
 async function scraperStop() { try { await api('/api/scraper/stop', { method: 'POST', body: '{}' }); scraperLogs(); } catch (err) { logError(err); } }
 async function scraperLogs() {
   try {
@@ -1469,8 +1564,19 @@ async function refresh() {
     const dbLabel = db.methodLabel || (db.configured ? (/HOST/i.test(db.maskedUrl || '') ? 'Placeholder HOST' : 'Configured') : 'Missing');
     const autoPill = $('autoPill');
     if (autoPill) autoPill.textContent = 'Auto-update: ' + (d.autoUpdate && d.autoUpdate.enabled ? (d.autoUpdate.intervalMs > 0 ? 'every ' + Math.max(1, Math.round(d.autoUpdate.intervalMs / 60000)) + ' min' : 'off') : 'off');
+    const staleEl = $('scraperStale');
+    if (staleEl) {
+      const serving = scraper.serving || {};
+      const sameVersion = serving.version && serving.version === serving.onDisk;
+      const staleText = sameVersion
+        ? 'serves <b>v' + serving.version + '</b> from an older commit (' + String(serving.head || '?').slice(0, 7) + ' vs ' + String(serving.diskHead || '?').slice(0, 7) + ')'
+        : 'serves <b>v' + (serving.version || '?') + '</b> but the checkout is <b>v' + (serving.onDisk || '?') + '</b>';
+      staleEl.innerHTML = serving.stale
+        ? '<div class="banner">localhost:' + scraper.port + ' ' + staleText + '. <button class="success" onclick="scraperRestart()">Rebuild & restart</button></div>'
+        : '';
+    }
     const statusEl = $('status');
-    if (statusEl) statusEl.innerHTML = '<div class="metric"><small>Package</small><b>' + d.package.name + '</b></div><div class="metric"><small>Version</small><b>' + (d.package.version || '-') + '</b></div><div class="metric"><small>Database</small><b>' + dbLabel + '</b><small>' + (db.maskedUrl || db.methodLabel || 'Use Database tab') + '</small></div><div class="metric"><small>Scraper</small><b>' + (scraper.running ? 'Running:' + scraper.port : 'Stopped') + '</b></div><div class="metric"><small>Git</small><b class="small">' + (d.git?.commit || '-') + '</b></div><div class="metric"><small>Project</small><b class="small">' + d.projectDir + '</b></div>';
+    if (statusEl) statusEl.innerHTML = '<div class="metric"><small>Package</small><b>' + d.package.name + '</b></div><div class="metric"><small>Version</small><b>' + (d.package.version || '-') + '</b></div><div class="metric"><small>Database</small><b>' + dbLabel + '</b><small>' + (db.maskedUrl || db.methodLabel || 'Use Database tab') + '</small></div><div class="metric"><small>Scraper</small><b>' + servingLabel(scraper) + '</b></div><div class="metric"><small>Git</small><b class="small">' + (d.git?.commit || '-') + '</b></div><div class="metric"><small>Project</small><b class="small">' + d.projectDir + '</b></div>';
   } catch (err) { logError(err); }
 }
 window.tab = tab;
@@ -1478,6 +1584,7 @@ window.run = run;
 window.scraperStart = scraperStart;
 window.openScraper = openScraper;
 window.scraperStop = scraperStop;
+window.scraperRestart = scraperRestart;
 window.scraperLogs = scraperLogs;
 window.updateCode = updateCode;
 window.copyCommand = copyCommand;
