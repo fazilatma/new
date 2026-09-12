@@ -330,3 +330,40 @@ test('snapp: the Python pipeline eats the same XPaths natively (cross-check)', a
   const out = JSON.parse(py.stdout);
   assert.equal(out.products.length, 12, `Python must extract all 12 cards via XPath, got ${out.products.length}`);
 });
+
+test('snapp: browser renders dump to SCRAPER4_DUMP_RENDERED_DIR, bounded and capped', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'scraper4-dump-'));
+  const prev = process.env.SCRAPER4_DUMP_RENDERED_DIR;
+  process.env.SCRAPER4_DUMP_RENDERED_DIR = dir;
+  try {
+    const file = render.dumpRenderedHtml(html, BASE, 'playwright');
+    assert.equal(file, join(dir, 'rendered-playwright-1.html'), 'dump must report its path');
+    assert.equal(await readFile(file, 'utf8'), html, 'dump must preserve the full render');
+    const big = '<div>' + 'x'.repeat(2_100_000) + '</div>';
+    const bigFile = render.dumpRenderedHtml(big, BASE, 'puppeteer');
+    assert.equal(bigFile, join(dir, 'rendered-puppeteer-2.html'));
+    const saved = await readFile(bigFile, 'utf8');
+    assert.ok(saved.endsWith('<!-- SCRAPER4 TRUNCATED -->'), 'oversize dumps must carry the truncation marker');
+    assert.ok(saved.length < big.length, 'oversize dumps must be bounded');
+    render.dumpRenderedHtml('<p>a</p>', BASE, 'playwright');
+    render.dumpRenderedHtml('<p>b</p>', BASE, 'playwright');
+    render.dumpRenderedHtml('<p>c</p>', BASE, 'playwright');
+    assert.equal(render.dumpRenderedHtml('<p>d</p>', BASE, 'playwright'), '', 'dumps past the cap must be skipped');
+  } finally {
+    if (prev === undefined) delete process.env.SCRAPER4_DUMP_RENDERED_DIR;
+    else process.env.SCRAPER4_DUMP_RENDERED_DIR = prev;
+  }
+});
+
+test('snapp: the dump is a silent no-op without the env var and never throws', async () => {
+  const prev = process.env.SCRAPER4_DUMP_RENDERED_DIR;
+  delete process.env.SCRAPER4_DUMP_RENDERED_DIR;
+  try {
+    assert.equal(render.dumpRenderedHtml(html, BASE, 'playwright'), '', 'unset env must disable the dump');
+    process.env.SCRAPER4_DUMP_RENDERED_DIR = 'nope-\0-invalid';
+    assert.equal(render.dumpRenderedHtml(html, BASE, 'playwright'), '', 'an unwritable dir must degrade to no-op');
+  } finally {
+    if (prev === undefined) delete process.env.SCRAPER4_DUMP_RENDERED_DIR;
+    else process.env.SCRAPER4_DUMP_RENDERED_DIR = prev;
+  }
+});

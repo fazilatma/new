@@ -71,7 +71,10 @@ npm test
 
 1. HTML همان صفحهٔ فهرست را ذخیره کن (view-source در مرورگر کافی است) و یک
    نسخهٔ خلاصه‌شده (چند کارت + اسکریپت‌ها + متاها) در
-   `worker-tests/fixtures/<shop>-cards.html` بگذار.
+   `worker-tests/fixtures/<shop>-cards.html` بگذار. برای فروشگاه
+   جاوااسکریپتی که view-source پوستهٔ خالی است، با
+   `SCRAPER4_DUMP_RENDERED_DIR` رندر مرورگری را روی دستگاه کاربر ذخیره کن
+   (لاگ همان‌جا سلکتورهای پیشنهادی روی رندر را هم چاپ می‌کند).
 2. `node scripts/lab-probe.mjs <shop>-cards.html` را اجرا کن و خرابی گزارش‌شده
    را بازتولید کن (مثلاً `heuristic: 0 products` یا `priceHints: 0`)؛ با
    `--selectors '{...}'` سلکتورهای پروفایل گزارش‌شده را هم تزریق کن و با

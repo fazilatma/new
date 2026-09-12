@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -596,6 +596,40 @@ function isAbortedNavigation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('ERR_ABORTED');
 }
+/**
+ * 1.142.0 — rendered-HTML dump for JS shops. The benchmark diagnoses the
+ * FETCHED shell, but browser engines see the RENDERED page — when they find
+ * nothing, nobody can tell whether the render was empty, bot-blocked, or just
+ * needs different selectors. With SCRAPER4_DUMP_RENDERED_DIR set to a
+ * directory, every browser render is saved there (first 5 per process, 2MB
+ * each) together with what auto-discovery makes of it, so the operator can
+ * attach the file and get working selectors back. Never throws: a dump
+ * failure must not break extraction. Exported for tests.
+ */
+let renderedDumpCount = 0;
+const RENDERED_DUMP_CAP = 5, RENDERED_DUMP_MAX_BYTES = 2_000_000;
+export function dumpRenderedHtml(html: string, url: string, driver: string): string {
+  const dir = String(process.env.SCRAPER4_DUMP_RENDERED_DIR || '').trim();
+  if (!dir) return '';
+  renderedDumpCount++;
+  if (renderedDumpCount > RENDERED_DUMP_CAP) return '';
+  try {
+    mkdirSync(dir, { recursive: true });
+    const body = String(html || '');
+    const file = join(dir, `rendered-${String(driver || 'browser').replace(/[^a-z0-9_-]+/gi, '_')}-${renderedDumpCount}.html`);
+    writeFileSync(file, body.length > RENDERED_DUMP_MAX_BYTES ? body.slice(0, RENDERED_DUMP_MAX_BYTES) + '\n<!-- SCRAPER4 TRUNCATED -->' : body);
+    let discovered = 'auto-discovery: none';
+    try {
+      const found = discoverListSelectorsFromHtml(body, url);
+      discovered = found.method === 'none' ? 'auto-discovery: none' : `auto-discovery: ${found.method} ${JSON.stringify(found.selectors)}`;
+    } catch { /* discovery is best-effort; the file is the point */ }
+    console.log(`[scraper4] rendered HTML dumped: ${file} (${body.length} bytes, ${url}) — ${discovered}`);
+    return file;
+  } catch (error) {
+    console.error(`[scraper4] rendered dump failed: ${error instanceof Error ? error.message : String(error)}`);
+    return '';
+  }
+}
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
@@ -619,6 +653,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
       await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
       const finalUrl = page.url();
       const html = await page.content();
+      dumpRenderedHtml(html, page.url(), 'playwright');
       const products = parseProductsFromHtml(html, finalUrl, selectors);
       return products.length ? products : heuristicProducts(html, finalUrl);
     } finally { await browser.close(); }
@@ -638,6 +673,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     await page.waitForNetworkIdle({ timeout: 15_000 }).catch(() => undefined);
     const finalUrl = page.url();
     const html = await page.content();
+    dumpRenderedHtml(html, page.url(), 'puppeteer');
     const products = parseProductsFromHtml(html, finalUrl, selectors);
     return products.length ? products : heuristicProducts(html, finalUrl);
   } finally { await browser.close(); }
@@ -656,6 +692,7 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
   const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();
+    dumpRenderedHtml(html, page.url(), 'crawlee');
     const products = parseProductsFromHtml(html, page.url(), selectors);
     await dataset.pushData(products.length ? products : heuristicProducts(html, page.url()));
   }});
