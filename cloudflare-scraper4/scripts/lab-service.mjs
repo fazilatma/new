@@ -44,6 +44,7 @@ check('deployer sweeps blind ports and retries EADDRINUSE once', deployer.includ
 check('selector engines tag invalid selectors and read bare prices', src('render-src/scraper.ts').includes('function invalidSelectorError(') && src('render-src/scraper.ts').includes('function heuristicPriceText(') && src('worker-src/scraper.ts').includes('function heuristicPriceText(') && src('worker-src/scraper.ts').includes('function invalidSelectorMessage('));
 check('pasted XPath converts, 429s retry and benchmarks reset the page cursor', src('render-src/scraper.ts').includes('function xpathToCss(') && src('worker-src/scraper.ts').includes('function xpathToCss(') && src('render-src/network.ts').includes('function retryAfterMs(') && src('worker-src/network.ts').includes('function retryAfterMs(') && src('render-src/scraper.ts').includes('function benchmarkProbeUrl(') && src('worker-src/scraper.ts').includes('function benchmarkProbeUrl('));
 check('browser renders can be dumped for selector forensics', src('render-src/scraper.ts').includes('SCRAPER4_DUMP_RENDERED_DIR') && src('render-src/scraper.ts').includes('function dumpRenderedHtml('));
+check('deployer runs Python auto-extraction', src('scripts/local-deployer-ui.mjs').includes('/api/py/extract') && src('scripts/py-extract-run.mjs').includes('export function pyExtract('));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');
