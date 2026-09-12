@@ -428,7 +428,9 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
   /** The explicitly requested engine's error, when it threw and no engine produced products (real runs don't throw; the benchmark still does). */
   engineError?:string;
   /** Which browser second layer won ('selectors'|'structural'|'heuristic'|'none') — set only when a browser engine produced the products. */
-  browserLayer?:string};
+  browserLayer?:string;
+  /** API-traffic capture stats — set only when the network_api engine ran. */
+  networkApiStats?:NetworkApiStats};
 const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','network_api']);
 /** Last browser-engine failure, so callers can explain a skipped engine. */
 let lastBrowserError='';
@@ -470,6 +472,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
 export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
+  lastNetworkApiStats=null;
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url);
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
@@ -545,7 +548,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
-      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,...(BROWSER_ENGINES.has(name)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{})};
+      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,...(BROWSER_ENGINES.has(name)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(name==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{})};
       // The explicit engine ran and found nothing: fall through to the
       // remaining engines instead of returning an empty result, but remember
       // the requested engine so an all-empty run still reports what was asked.
@@ -557,7 +560,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   }
   if(!autoFirst&&firstError)throw firstError;
   const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{})};
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(engine==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{})};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
 
@@ -658,6 +661,24 @@ export function rescueRenderedProducts(html: string, baseUrl: string, firstLayer
   return heuristic.length ? { products: heuristic, layer: 'heuristic' } : { products: [], layer: 'none' };
 }
 // ---------------------------------------------------------------------------
+export type NetworkApiStats={responsesSeen:number;jsonBodies:number;bytes:number;parsed:number;endpoints:string[]};
+/** Last network_api capture outcome; reset per scrapeListWithMeta call. */
+let lastNetworkApiStats:NetworkApiStats|null=null;
+export function lastNetworkApiStatsUsed():NetworkApiStats|null{return lastNetworkApiStats}
+/**
+ * Walk API JSON with FULL recursion: unlike giant Next.js blobs (where the
+ * key filter skips noise), API bodies are dense and nest products under
+ * unpredictable keys (`hits`, `docs`, `entries`...). Precision stays guarded
+ * by productFromObject's title+image+price gate.
+ */
+function walkApiObjects(value: any, baseUrl: string, out: Product[], depth = 0): void {
+  if (!value || depth > 14 || out.length > 1000) return;
+  if (Array.isArray(value)) { for (const item of value) { walkApiObjects(item, baseUrl, out, depth + 1); if (out.length > 1000) return; } return; }
+  if (typeof value !== 'object') return;
+  const p = productFromObject(value, baseUrl);
+  if (p) out.push(p);
+  for (const child of Object.values(value)) { walkApiObjects(child, baseUrl, out, depth + 1); if (out.length > 1000) return; }
+}
 // 1.147.0 — network_api engine: products from the page's own API traffic.
 //
 // JavaScript shops like Snappshop render an empty shell and then fetch the
@@ -680,19 +701,39 @@ export function networkApiProducts(apiBodies: string[], baseUrl: string): Produc
     const raw = String(text || '').trim();
     if (!raw) continue;
     try {
-      walkObjects(JSON.parse(raw), baseUrl, out);
+      walkApiObjects(JSON.parse(raw), baseUrl, out);
     } catch { /* not JSON: skip */ }
     if (out.length > 1000) break;
   }
   return dedupe(out);
 }
 
+/**
+ * 1.148.0 — dump captured API bodies for schema forensics (opt-in, like the
+ * rendered-HTML dump): set SCRAPER4_DUMP_API_DIR and re-run, then send the
+ * files so the walker can be taught the shop's schema.
+ */
+function dumpApiBodies(bodies: string[], endpoints: string[], url: string): string {
+  const dir = String(process.env.SCRAPER4_DUMP_API_DIR || '').trim();
+  if (!dir || !bodies.length) return '';
+  try {
+    mkdirSync(dir, { recursive: true });
+    bodies.slice(0, 10).forEach((body, i) => writeFileSync(join(dir, `api-${i}.json`), String(body || '').slice(0, NETWORK_API_MAX_BODY_BYTES)));
+    writeFileSync(join(dir, 'api-endpoints.txt'), `url: ${url}\n` + endpoints.map((e, i) => `${i}: ${e}`).join('\n') + '\n');
+    console.log(`[scraper4] API bodies dumped: ${dir} (${bodies.length} bodies, ${url})`);
+    return dir;
+  } catch (error) {
+    console.error(`[scraper4] API dump failed: ${error instanceof Error ? error.message : String(error)}`);
+    return '';
+  }
+}
 async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
   try {
     const page = await browser.newPage({ locale: 'fa-IR' });
     const bodies: string[] = [];
+    let seenResponses = 0;
     const endpoints: string[] = [];
     let totalBytes = 0, done = false;
     // A radar on the Network tab: every XHR/fetch response is buffered,
@@ -703,6 +744,7 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
         const req = response.request();
         const type = req.resourceType();
         if ((type !== 'xhr' && type !== 'fetch') || !response.ok()) return;
+        seenResponses++;
         if (endpoints.length < 20) endpoints.push(String(req.url() || '').slice(0, 160));
         void (async () => {
           try {
@@ -728,7 +770,9 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
     await new Promise(resolve => setTimeout(resolve, NETWORK_API_SETTLE_MS));
     done = true;
     const products = networkApiProducts(bodies, page.url());
-    console.log(`[scraper4] network_api: ${bodies.length} API responses captured, ${products.length} products parsed (${url})`);
+    lastNetworkApiStats = { responsesSeen: seenResponses, jsonBodies: bodies.length, bytes: totalBytes, parsed: products.length, endpoints: endpoints.slice(0, 20) };
+    dumpApiBodies(bodies, endpoints, url);
+    console.log(`[scraper4] network_api: ${seenResponses} API responses seen, ${bodies.length} JSON bodies (${totalBytes} bytes), ${products.length} products parsed (${url})`);
     if (endpoints.length) console.log(`[scraper4] network_api endpoints (${endpoints.length}): ${endpoints.join(' | ')}`);
     return products;
   } finally { await browser.close(); }
@@ -2057,8 +2101,10 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
       products.length ? `${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`
         : !browserAvailable ? 'موتور مرورگری انتخاب شده ولی مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود.'
         : browserProfile && result.browserLayer === 'none' ? 'مرورگر رندر کرد ولی هیچ لایه‌ای محصولی پیدا نکرد (نه سلکتور، نه structural، نه heuristic).'
+        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 ? 'مرورگر رندر کرد ولی هیچ درخواست API (XHR/fetch) دیده نشد.'
+        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
-      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
   }

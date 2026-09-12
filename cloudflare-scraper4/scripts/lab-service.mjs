@@ -49,6 +49,7 @@ check('Node structural engine mirrors the Python extractor', src('render-src/scr
 check('browser engines rescue rendered HTML structural-then-heuristic', src('render-src/scraper.ts').includes('export function rescueRenderedProducts(') && src('render-src/scraper.ts').includes('rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors))') && src('render-src/scraper.ts').includes('browserLayer?:string'));
 check('diagnostic names the browser cause and flags deep pages', src('render-src/scraper.ts').includes('browserAvailable') && src('render-src/scraper.ts').includes('مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود') && src('render-src/scraper.ts').includes('بدون پارامتر صفحه') && src('worker-src/scraper.ts').includes('بدون پارامتر صفحه'));
 check('network_api engine sniffs XHR/fetch JSON via Playwright', src('render-src/scraper.ts').includes('export function networkApiProducts(') && src('render-src/scraper.ts').includes("page.on('response'") && src('render-src/scraper.ts').includes("name === 'network_api'") && src('render-src/server.ts').includes("'crawlee_playwright','network_api']"));
+check('network_api reports capture stats and dumps bodies', src('render-src/scraper.ts').includes('export type NetworkApiStats=') && src('render-src/scraper.ts').includes('SCRAPER4_DUMP_API_DIR') && src('render-src/scraper.ts').includes('walkApiObjects(JSON.parse(raw), baseUrl, out)'));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

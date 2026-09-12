@@ -73,3 +73,26 @@ test('network_api: both runtimes agree it is Node-only', async () => {
     assert.ok(src.includes("'crawlee_playwright' | 'network_api'"), `${file} union must carry network_api`);
   }
 });
+
+test('network_api: the API walker recurses fully, not by key allow-list', () => {
+  const row = i => ({ title: 'T' + i, price: 1000, url: '/p/' + i, image: 'https://x.test/i.jpg' });
+  // Keys the DOM walker never descends into must still yield their products.
+  assert.equal(render.networkApiProducts([JSON.stringify({ data: { search: { hits: [row(1), row(2)] } } })], 'https://x.test/').length, 2);
+  assert.equal(render.networkApiProducts([JSON.stringify({ docs: [row(3)] })], 'https://x.test/').length, 1);
+  let deep = row(4);
+  for (let i = 0; i < 6; i++) deep = { wrap: deep };
+  assert.equal(render.networkApiProducts([JSON.stringify(deep)], 'https://x.test/').length, 1, 'deep envelopes must resolve');
+  assert.deepEqual(render.networkApiProducts([JSON.stringify({ meta: { a: 1 }, tags: ['x', { label: 'y' }] })], 'https://x.test/'), [], 'junk must stay junk');
+});
+
+test('network_api: capture stats and the API dump are plumbed to the report', async () => {
+  const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
+  assert.ok(scraper.includes('export type NetworkApiStats='), 'the stats shape must be exported');
+  assert.ok(scraper.includes('lastNetworkApiStats=null;'), 'each run must reset the stats');
+  assert.equal(scraper.split('networkApiStats:lastNetworkApiStats').length - 1, 2, 'both result returns must report the stats');
+  assert.ok(scraper.includes('{ networkApi: result.networkApiStats }'), 'the diagnostic must surface the capture stats');
+  assert.ok(scraper.includes('هیچ درخواست API (XHR/fetch) دیده نشد'), 'zero traffic must get its own summary');
+  assert.ok(scraper.includes('پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد'), 'unparsed traffic must get its own summary');
+  assert.ok(scraper.includes('SCRAPER4_DUMP_API_DIR'), 'captured bodies must be dumpable for schema forensics');
+  assert.ok(scraper.includes('api-endpoints.txt'), 'the dump must manifest its endpoint URLs');
+});

@@ -53,11 +53,19 @@ rescue function — no browser exists in CI, so the live Snappshop proof is a de
 `network_api` is a fourth browser engine (Node-only, last in the `auto` chain and the benchmark). Instead of reading
 the DOM, it opens the page in Playwright with a `response` listener — a programmed DevTools Network tab — and keeps
 every JSON-shaped XHR/fetch body (50 responses, 2MB per body, 8MB total, plus a settle window for in-flight calls).
-Each body is walked for product-like objects with the same walker the `script_json`/`next_data` engines use, so API
-envelopes, `offers`/`finalPrice`/`salePrice` price shapes, and relative/slug links all read the same way. Captured
-endpoint URLs are printed to the log (`[scraper4] network_api endpoints ...`), which doubles as an API-discovery
-tool for shops like Snappshop. The Worker refuses it loudly like the other browser engines. Pure parsing lives in
-`networkApiProducts` and is pinned by `worker-tests/network-api.test.mjs` against a Snappshop-shaped fixture.
+Each body is walked for product-like objects with a dedicated full-recursion walker (`walkApiObjects`: depth 14,
+1000 products, all keys descended — API schemas hide products under unpredictable keys like `hits`/`docs` that the
+DOM walker never enters), while `productFromObject` still demands title+image+price so junk objects never become
+products. Captured endpoint URLs are printed to the log (`[scraper4] network_api endpoints ...`), which doubles as
+an API-discovery tool for shops like Snappshop. The Worker refuses it loudly like the other browser engines. Pure
+parsing lives in `networkApiProducts` and is pinned by `worker-tests/network-api.test.mjs` against a
+Snappshop-shaped fixture.
+
+Since 1.148.0 every run reports capture stats (`networkApiStats`: responses seen, JSON bodies, bytes, parsed
+products, endpoint list) on the result and in the diagnostic details; a zero-product run therefore says whether the
+page made no API calls at all or made calls whose schema yielded nothing. Setting `SCRAPER4_DUMP_API_DIR` keeps the
+first captured bodies plus an endpoint manifest, the same forensics workflow the 1.145.0 rendered-HTML dump added
+for silent DOM engines.
 
 ## Benchmark and the saved engine
 
