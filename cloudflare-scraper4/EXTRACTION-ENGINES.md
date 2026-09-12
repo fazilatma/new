@@ -67,7 +67,9 @@ products, endpoint list) on the result and in the diagnostic details; since 1.14
 the page made no API calls at all, its calls all failed (bot-wall/403 shows up here), or its calls answered but
 their schema yielded nothing. Setting `SCRAPER4_DUMP_API_DIR` keeps the first captured bodies plus an endpoint
 manifest (failed URLs included), the same forensics workflow the 1.145.0 rendered-HTML dump added for silent DOM
-engines.
+engines. Since 1.151.0 capture is reliable under pressure: in-flight body reads are drained after the settle window
+instead of dropped at the bell, JSON content-types are kept even when the shape sniff disagrees, and once the
+response cap fills, product-like URLs evict the weakest kept body so analytics noise cannot crowd products out.
 
 ## Benchmark and the saved engine
 

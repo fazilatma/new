@@ -46,6 +46,15 @@ test('network_api: runaway catalogues are capped, not exploded', () => {
   assert.ok(products.every(p => p.title && p.url), 'capped output stays complete');
 });
 
+test('network_api: product URLs outrank noise when capture slots run out', () => {
+  const { scoreUrl } = render;
+  assert.equal(typeof scoreUrl, 'function', 'the URL ranker must be exported for testing');
+  assert.ok(scoreUrl('https://shop.test/api/products?page=1') > scoreUrl('https://shop.test/api/telemetry/collect'), 'a product API must beat a telemetry call');
+  assert.ok(scoreUrl('https://shop.test/search?q=pan') > scoreUrl('https://shop.test/static/app.js'), 'a search API must beat a plain asset');
+  assert.ok(scoreUrl('https://shop.test/x') > scoreUrl('https://analytics.test/beacon'), 'a neutral URL must beat pure noise');
+  assert.equal(scoreUrl(''), 0, 'an empty URL scores nothing');
+});
+
 test('network_api: the engine is wired into chains, benchmark, UI and gates', async () => {
   const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
   assert.ok(scraper.includes("if (name === 'network_api') return scrapeListWithNetworkApi(url);"), 'pick() must dispatch network_api');
