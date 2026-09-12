@@ -34,7 +34,7 @@ export type GalleryConfig = {
   skip_first: boolean;
 };
 
-export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
+export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'structural' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
 
 export type Profile = {
   id: string;

@@ -600,7 +600,7 @@ class NextLinkHandler {
   element(element:HtmlElement):void{if(!this.url)this.url=canonicalUrl(firstAttribute(element,LINK_ATTRS),this.baseUrl)}
 }
 type EngineResult={products:Product[];usedEngine:ExtractionEngine;engineError?:string};
-const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','structural']);
 const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter','cheerio']);
 const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];
@@ -646,7 +646,7 @@ export async function scrapeListPage(url:string,selectors:Selectors,nextSelector
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto',autoDiscover=true):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine,undefined,true,autoDiscover)).products}
 
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
-  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.`);
+  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). ${engine==='structural'?'Cloudflare Worker موتور DOM (cheerio) ندارد؛ از heuristic استفاده کنید.':'Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.'}`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
     if(name==='htmlrewriter'||name==='cheerio')return parseCards(html,baseUrl,selectors);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);

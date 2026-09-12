@@ -30,7 +30,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.143.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.144.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -51,7 +51,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.143.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.144.0')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -85,7 +85,7 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.143.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.144.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 // Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
 // the exact rows it read/wrote, so we meter our own consumption against the
 // documented free-plan limits (5M reads / 100k writes per UTC day).
@@ -230,9 +230,9 @@ app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const prof
 app.post('/api/queue-watchdog',async c=>{const b=await jsonBody(c);const settings=await getState<any>('settings',{}),stallMin=Number(b.minutes)>0?Number(b.minutes):Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));await recoverBackgroundRuns(promise=>c.executionCtx.waitUntil(promise));const autoContinue=b.autoContinue??settings.watchdog?.autoContinue!==false,recovered=autoContinue?await recoverFailedAndStalledJobs(stallMin):0,reaped=autoContinue?0:await reapStalledJobs(stallMin);if(recovered){const queued=await listQueuedJobs(200);for(const job of queued)await enqueueJob(job,promise=>c.executionCtx.waitUntil(promise))}return c.json({ok:true,reaped,recovered,autoContinue,backgroundRecovered:true,stallMinutes:stallMin})});
 app.post('/api/source-test',async c=>{const b=await jsonBody(c),result=await safeText(String(b.url||''),1_000_000);return c.json({ok:true,bytes:byteLength(result.text),url:result.url,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()})});
 
-const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
+const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','structural','metadata','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
 const MIN_BENCHMARK_PRODUCTS=2;
-const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','structural']);
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString(),benchmarkDiscovered:Record<string,string>={};
   // 1.137.0 — one shared first-page fetch for every engine's diagnosis.
@@ -241,7 +241,7 @@ async function benchmarkProfileEngines(profile:Profile){
   try{const first=await sourceText(pageUrl(probe,1),Boolean(profile.networkIndirect),1_000_000);diagHtml=first.text;diagUrl=first.url||pageUrl(probe,1)}catch{/* diagnosis degrades to product-only signals */}
   for(const engine of BENCHMARK_ENGINES){
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();const engineProducts:any[]=[];let engineSelectors:any=null;
-    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){const unavailable='این موتور فقط روی اجراگر Node کار می‌کند (Termux، ویندوز، VPS یا Render).';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:'برای موتور مرورگری، همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از htmlrewriter استفاده کنید.',signals:{available:false}}});continue}
+    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){const unavailable='این موتور فقط روی اجراگر Node کار می‌کند (Termux، ویندوز، VPS یا Render).';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:engine==='structural'?'برای موتور structural همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از heuristic استفاده کنید.':'برای موتور مرورگری، همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از htmlrewriter استفاده کنید.',signals:{available:false}}});continue}
     try{
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const page=await scrapeListPage(pageUrl(probe,pageNo),profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),engine,undefined,false);
@@ -575,7 +575,7 @@ export function normalizeProfile(raw:any):Profile {
   const pagination=String(raw.pagination||raw.pagType||'query_page') as Profile['pagination'];
   const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine;
   const rawMaster=String(raw.extractionEngineMaster||raw.fetch_engine_master||raw.engineMaster||'') as ExtractionEngine;
-  const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined);
+  const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','structural','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined);
   const target=String(sync.target||'');
   const indirect=on(raw.networkIndirect??raw.net_indirect);
   const fallbackIds=raw.basalamFallbackCategoryIds??raw.bslFallbackCatIds;
@@ -583,7 +583,7 @@ export function normalizeProfile(raw:any):Profile {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(0,Number(raw.pages)||0)),
     pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
-    extractionEngine:['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
+    extractionEngine:['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','structural','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
     priceMode:['none','add','percent','multiply'].includes(raw.priceMode)?raw.priceMode:'none',priceValue:Number(raw.priceValue??raw.priceVal)||0,

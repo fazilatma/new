@@ -17,6 +17,24 @@ These engines run inside Cloudflare Workers and the single-file `scraper4.ts` bu
 - `script_json` — product-like JSON blobs inside inline scripts.
 - `heuristic` — product-like anchors/cards without stable CSS classes.
 
+## Node-only engine
+
+- `structural` — the cheerio twin of `scripts/py-auto-extract.py` (the deployer's Python tab): the same DOM
+  algorithm, so the Node runtime extracts ordinary shops with no manual selectors. Known card containers first
+  (WooCommerce `li.product`), then an outer-container repair, then a product-link climb for unknown class names,
+  then embedded JSON catalogs. Acceptance matches Python too: a card is kept when it has a title OR a link, so a
+  missing price or image never discards it — unlike `heuristic`, which needs title+image+parseable price together.
+
+`structural` runs only where the `cheerio` package exists (Termux, desktop, VPS, Render). In the Node `auto` chain
+it sits right after the `htmlrewriter` selector engine: the auto chain must mirror the Worker chain first (pinned by
+the auto-order test), and the Worker cannot run cheerio at all. On the Worker an explicit `structural` choice fails
+with the same loud Node-runtime error as the browser engines, and the Worker benchmark marks it unavailable instead
+of probing it. It is benchmarked on Node and offered in both profile dropdowns.
+
+Two intentional divergences from the Python source, both pinned by `worker-tests/structural.test.mjs`: struck-through
+old prices (`<del>`/`<s>`) are stripped before parsing, so WooCommerce `<del>`/`<ins>` sales keep the sale price that
+Python misreads; and URLs keep Node's percent-encoding while Python keeps raw UTF-8 paths.
+
 ## Benchmark and the saved engine
 
 The 3-page speed test (profile → speed test) runs the engines above and saves the winner to the profile's

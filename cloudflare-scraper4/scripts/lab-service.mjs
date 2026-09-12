@@ -45,6 +45,7 @@ check('selector engines tag invalid selectors and read bare prices', src('render
 check('pasted XPath converts, 429s retry and benchmarks reset the page cursor', src('render-src/scraper.ts').includes('function xpathToCss(') && src('worker-src/scraper.ts').includes('function xpathToCss(') && src('render-src/network.ts').includes('function retryAfterMs(') && src('worker-src/network.ts').includes('function retryAfterMs(') && src('render-src/scraper.ts').includes('function benchmarkProbeUrl(') && src('worker-src/scraper.ts').includes('function benchmarkProbeUrl('));
 check('browser renders can be dumped for selector forensics', src('render-src/scraper.ts').includes('SCRAPER4_DUMP_RENDERED_DIR') && src('render-src/scraper.ts').includes('function dumpRenderedHtml('));
 check('deployer runs Python auto-extraction', src('scripts/local-deployer-ui.mjs').includes('/api/py/extract') && src('scripts/py-extract-run.mjs').includes('export function pyExtract('));
+check('Node structural engine mirrors the Python extractor', src('render-src/scraper.ts').includes('export function structuralProducts(') && src('render-src/scraper.ts').includes("li.product,article[class*='product']") && src('render-src/scraper.ts').includes("name === 'structural'") && src('render-src/server.ts').includes("'heuristic','structural','metadata'"));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

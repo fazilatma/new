@@ -433,7 +433,11 @@ let lastBrowserError='';
 export function lastBrowserEngineError():string{return lastBrowserError}
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
-const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','cheerio','playwright','puppeteer','crawlee_playwright'];
+// 1.144.0 — 'structural' (the cheerio twin of py-auto-extract.py) sits right
+// after the selector engine, not in RENDER_DISCOVERY_ENGINES: the Node auto
+// chain must mirror the Worker chain first (see the auto-order test), and the
+// Worker cannot run cheerio at all.
+const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','structural','cheerio','playwright','puppeteer','crawlee_playwright'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
   if(!autoFirst&&requested!=='auto'){add(requested);return out}
@@ -449,7 +453,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
     // Discovery engines AND the selector engines are fallbacks; the browser
     // engines stay opt-in so an explicit choice never silently launches one.
     for(const engine of RENDER_DISCOVERY_ENGINES)add(engine);
-    add('htmlrewriter');add('cheerio');
+    add('htmlrewriter');add('structural');add('cheerio');
     return out;
   }
   if(master&&!RENDER_MANUAL_ENGINES.has(master))add(master);
@@ -520,6 +524,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     if (name === 'next_data') return nextDataProducts(text, finalUrl);
     if (name === 'metadata') return metadataProduct(text, finalUrl);
     if (name === 'script_json') return scriptJsonProducts(text, finalUrl);
+    if (name === 'structural') return structuralProducts(text, finalUrl);
     if (name === 'heuristic') return heuristicProducts(text, finalUrl);
     return [] as Product[];
   };
@@ -804,6 +809,401 @@ function heuristicImage(chunk: string, baseUrl: string): string {
 // The word must end at a path boundary so slugs like «category-theory-book»
 // still pass.
 const NON_PRODUCT_URL_RE = /[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
+// ---------------------------------------------------------------------------
+// 1.144.0 — structural engine: the Node twin of scripts/py-auto-extract.py.
+//
+// The same DOM algorithm, ported 1:1 from BeautifulSoup to cheerio so the
+// Node runtime (Termux/VPS/Render/desktop) extracts ordinary shops with NO
+// manual selectors, exactly like the deployer's Python tab: known card
+// containers first (WooCommerce `li.product`), an outer-container repair,
+// then a product-link climb for unknown class names, then embedded JSON
+// catalogs. Acceptance matches Python too: a card is kept when it has a
+// title OR a link — a missing price or image never discards it (unlike the
+// strict `heuristic` gate, which needs title+image+parseable price together).
+//
+// Deliberate divergences from the Python source:
+// - No explicit-selector overrides: this engine runs selector-free by design
+//   (explicit selectors already have the cheerio/htmlrewriter engines, and
+//   scrapeListWithMeta repairs unconfigured selectors before the engine loop).
+// - Identity hashes reuse the existing sha256 sourceKey(url || title); Python
+//   uses md5 over url:/sku:/title: — same url → title fallback semantics.
+// - Struck-through old prices are stripped before parsing (see below); Python
+//   keeps them and misreads discount cards, so prices there differ by design.
+// The Cloudflare Worker cannot run this engine (no cheerio package there), so
+// it is Node-only: the Worker throws the same loud error as for the browser
+// engines, and its benchmark marks it unavailable.
+// ---------------------------------------------------------------------------
+type StructuralRow = { title: string; price: string; link: string; image: string; sku: string };
+const STRUCTURAL_CONTAINERS = "li.product,article[class*='product'],div.product-card,div.product-item,div[class*='product-card'],div[class*='product-item'],[data-product-id],[itemtype*='Product']";
+const STRUCTURAL_REPAIR = "li,article,div[class*='product'],[data-product-id]";
+const STRUCTURAL_CLIMB_LINK = "a[href*='/product/'],a[href*='/products/'],a[href*='/shop/'],a[href*='/snp-']";
+const STRUCTURAL_CLIMB_RE = /\/product\/|\/products\/|\/shop\/|\/snp-/i;
+const STRUCTURAL_MAX_PRODUCTS = 2000; // Python's MAX_PRODUCTS_HARD.
+const STRUCTURAL_JSON_BLOBS = [
+  /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  /<script[^>]+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/gi,
+  /<script[^>]+id=["']__NUXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/gi,
+  /window\.__NUXT__\s*=\s*(\{[\s\S]*?\})\s*;\s*<\/script>/gi,
+];
+const STRUCTURAL_VOLATILE_CLASS = /^(active|selected|current|open|opened|hover|focus|disabled|loading|ng-|v-|is-|has-|js-)/i;
+const STRUCTURAL_HASH_CLASS = /^[a-f0-9]{6,}$/i;
+
+function structuralClean(value: unknown): string {
+  if (value == null || typeof value === 'object') return '';
+  return String(value)
+    .replace(/[۰-۹]/g, d => '0123456789'['۰۱۲۳۴۵۶۷۸۹'.indexOf(d)])
+    .replace(/[٠-٩]/g, d => '0123456789'['٠١٢٣٤٥٦٧٨٩'.indexOf(d)])
+    .replace(/\s+/g, ' ').trim();
+}
+
+function structuralAbsolute(value: unknown, base: string): string {
+  const clean = structuralClean(value);
+  if (!clean || clean.startsWith('data:') || clean.toLowerCase().startsWith('javascript:') || clean.startsWith('#')) return '';
+  return absolute(clean, base);
+}
+
+function structuralPriceText(value: unknown): string {
+  const text = structuralClean(value);
+  if (!text) return '';
+  const currency = 'تومان|تومن|ریال|ر\\.ی|USD|EUR|GBP|AED|TRY|CAD|AUD|CHF|JPY|CNY|£|\\$|€|¥|₽|₺|₹|﷼';
+  const number = '\\d(?:[\\d,،٬.٫\\s]*\\d)?';
+  const matches = [...text.matchAll(new RegExp(`(?:(${number})\\s*(${currency})|(${currency})\\s*(${number}))`, 'gi'))];
+  if (matches.length) {
+    const choices: Array<[number, string]> = [];
+    for (const m of matches) {
+      const left = m[1] || '', rightCur = m[2] || '', leftCur = m[3] || '', right = m[4] || '';
+      const raw = left || right, cur = left ? rightCur : leftCur;
+      const digits = raw.replace(/\D/g, '');
+      if (digits) choices.push([digits.length, structuralClean(leftCur ? `${cur} ${raw}` : `${raw} ${cur}`)]);
+    }
+    if (choices.length) return choices.sort((a, b) => b[0] - a[0])[0][1];
+  }
+  const grouped = text.match(/\d{1,3}(?:[,،٬\s]\d{3})+/g) || [];
+  if (grouped.length) return grouped.sort((a, b) => b.replace(/\D/g, '').length - a.replace(/\D/g, '').length)[0] + ' تومان';
+  const nums = (text.match(/\d{4,}/g) || []).filter(x => Number(x) >= 1000);
+  return nums.length ? nums.sort((a, b) => Number(b) - Number(a))[0] + ' تومان' : '';
+}
+
+// BeautifulSoup's get_text(" ", strip=True): every text node stripped, joined
+// with spaces (script/style included, exactly like Python — cards with inline
+// scripts inherit the same longest-text quirk on both sides).
+function structuralTextBits($: any, el: any, out: string[]): void {
+  el.contents().each((_: number, node: any) => {
+    if (node.type === 'text') { const t = structuralClean(node.data); if (t) out.push(t); }
+    else if (node.type === 'tag') structuralTextBits($, $(node), out);
+  });
+}
+function structuralText($: any, el: any): string {
+  const out: string[] = [];
+  structuralTextBits($, el, out);
+  return out.join(' ');
+}
+
+function structuralProductFromCard($: any, card: any, base: string): StructuralRow | null {
+  let title = '';
+  const head = card.find("h1,h2,h3,h4,[class*='title'],[class*='name'],a[title]").first();
+  if (head.length) title = structuralClean(head.attr('title') || structuralText($, head));
+  if (!title) {
+    const img = card.find('img').first();
+    if (img.length) title = structuralClean(img.attr('alt') || img.attr('title') || '');
+  }
+  if (!title) {
+    const bits: string[] = [];
+    structuralTextBits($, card, bits);
+    const pieces = bits.filter(x => x.length > 3 && !/^[%0-9,،٬.٫ تومانریال]+$/.test(x));
+    title = pieces.sort((a, b) => b.length - a.length)[0] || '';
+  }
+  let price = '';
+  // Intentional divergence from Python: struck-through old prices (<del>) are
+  // removed before parsing (the heuristic engine's rule). Python keeps them,
+  // so on a discount card its digit-span swallows old+sale together
+  // ("203٬000 189٬000 تومان" → 203000189000) or the longer old price wins —
+  // both wrong for WooCommerce <del>/<ins> sales, where the sale price must win.
+  const priceScope = card.clone();
+  priceScope.find('del,s,strike').remove();
+  const pc = priceScope.find("[class*='price'],[class*='amount'],ins,[itemprop='price']").first();
+  if (pc.length) price = structuralPriceText(pc.attr('content') || structuralText($, pc));
+  if (!price) price = structuralPriceText(structuralText($, priceScope));
+  const selfHref = card.is('a') && card.attr('href') ? String(card.attr('href')) : '';
+  const anchor = selfHref ? null : card.find('a[href]').first();
+  const link = structuralAbsolute(selfHref || (anchor && anchor.length ? anchor.attr('href') : ''), base);
+  let image = '';
+  const im = card.find('img').first();
+  if (im.length) {
+    for (const attr of ['data-zoom-image', 'data-large_image', 'data-src', 'data-lazy-src', 'src']) {
+      const v = im.attr(attr);
+      if (v) { image = structuralAbsolute(v, base); break; }
+    }
+  }
+  const sku = structuralClean(card.attr('data-product-id') || '');
+  if (!title && !link) return null;
+  return { title: title.slice(0, 300), price, link, image, sku };
+}
+
+function structuralJsonPrice(value: any): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const key of ['final', 'selling', 'sale', 'amount', 'value', 'min', 'current', 'discounted', 'rrp', 'price']) {
+      if (key in value) { const got = structuralJsonPrice(value[key]); if (got) return got; }
+    }
+    return '';
+  }
+  if (typeof value === 'number' && value > 0) {
+    let number = Math.trunc(value);
+    if (number >= 10 ** 7) number = Math.floor(number / 10); // rial → toman-ish display; the price parser still runs
+    return structuralPriceText(`${number} تومان`) || String(number);
+  }
+  return structuralPriceText(value);
+}
+
+function structuralJsonText(...values: unknown[]): string {
+  for (const value of values) { const text = structuralClean(value); if (text) return text; }
+  return '';
+}
+
+function structuralJsonRow(obj: any, base: string): StructuralRow | null {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const title = structuralJsonText(obj.title, obj.name, obj.productTitle, obj.fa_title, obj.displayName);
+  if (!title || title.length < 3) return null;
+  const price = structuralJsonPrice(obj.price || obj.offers || obj.finalPrice || obj.sellingPrice || obj.discountedPrice || obj.minPrice);
+  let href = structuralJsonText(obj.url, obj.link, obj.href, obj.slug, obj.productUrl);
+  const ident = structuralJsonText(obj.sku, obj.id, obj.productId, obj.code);
+  if (href) {
+    if (/^snp-\d+$/i.test(href)) href = '/product/' + href;
+    href = structuralAbsolute(href, base);
+  } else if (ident && /^snp-\d+$/i.test(ident)) href = structuralAbsolute('/product/' + ident, base);
+  let image: any = obj.image || obj.thumbnail || obj.cover || obj.mainImage;
+  if (Array.isArray(image) && image.length) image = image[0];
+  if (image && typeof image === 'object' && !Array.isArray(image)) image = image.url || image.src;
+  const imageUrl = image ? structuralAbsolute(structuralClean(image), base) : '';
+  if (!href && !price) return null;
+  return { title: title.slice(0, 300), price, link: href, image: imageUrl, sku: ident.slice(0, 80) };
+}
+
+function structuralWalkCatalog(obj: any, out: StructuralRow[], base: string, depth = 0): void {
+  if (depth > 14) return;
+  if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+    const row = structuralJsonRow(obj, base);
+    if (row) out.push(row);
+    const items = obj.itemListElement;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          const inner = item.item;
+          const row2 = structuralJsonRow(inner && typeof inner === 'object' && !Array.isArray(inner) ? inner : item, base);
+          if (row2) out.push(row2);
+        }
+      }
+    }
+    for (const value of Object.values(obj)) structuralWalkCatalog(value, out, base, depth + 1);
+  } else if (Array.isArray(obj) && obj.length < 4000) {
+    for (const item of obj) structuralWalkCatalog(item, out, base, depth + 1);
+  }
+}
+
+function structuralEmbeddedCatalog(html: string, base: string): StructuralRow[] {
+  const found: StructuralRow[] = [];
+  for (const pattern of STRUCTURAL_JSON_BLOBS) {
+    pattern.lastIndex = 0;
+    for (const m of (html || '').matchAll(pattern)) {
+      const raw = (m[1] || '').trim();
+      if (!raw) continue;
+      try { structuralWalkCatalog(JSON.parse(raw), found, base); } catch { /* invalid JSON blob: skip */ }
+    }
+  }
+  return found;
+}
+
+export function structuralProducts(html: string, baseUrl: string): Product[] {
+  const $ = cheerio.load(html || '');
+  const store = new Map<string, Product>();
+  const add = (row: StructuralRow | null): void => {
+    if (!row || (!row.title && !row.link)) return;
+    const key = sourceKey(row.link || row.title, row.title);
+    const old = store.get(key);
+    if (old) {
+      // Python's add_product merge: a later path only fills fields the first
+      // path left empty (e.g. the link climb adds the image the JSON row had).
+      if (!old.title && row.title) old.title = row.title;
+      if (!old.priceText && row.price) { old.priceText = row.price; old.price = numberFromText(row.price); }
+      if (!old.url && row.link) old.url = row.link;
+      if (!old.image && row.image) { old.image = row.image; old.images = [row.image]; }
+      if (!old.sku && row.sku) old.sku = row.sku;
+      return;
+    }
+    if (store.size >= STRUCTURAL_MAX_PRODUCTS) return;
+    store.set(key, {
+      sourceKey: key, title: row.title, price: numberFromText(row.price), priceText: row.price,
+      url: row.link, image: row.image, images: row.image ? [row.image] : [], sku: row.sku,
+      sourcePage: baseUrl, scrapedAt: new Date().toISOString(),
+    });
+  };
+  let cards = $(STRUCTURAL_CONTAINERS);
+  if (cards.length === 1) {
+    // Like Python's outer-container repair: one wrapper matched, so descend
+    // to the repeated cards inside it.
+    const nested = cards.first().find(STRUCTURAL_REPAIR);
+    if (nested.length > 1) cards = nested;
+  }
+  cards.each((_: number, el: any) => add(structuralProductFromCard($, $(el), baseUrl)));
+  if (!store.size) {
+    // Last fallback, same as Python: product links with images are reliable
+    // even when a shop uses unknown generated class names.
+    $(STRUCTURAL_CLIMB_LINK).each((_: number, el: any) => {
+      const link = $(el);
+      if (!link.find('img').length && !link.find("[class*='price']").length) return;
+      let node: any = link;
+      for (let i = 0; i < 5; i++) {
+        const parent = node.parent();
+        const raw = parent.get(0);
+        if (!raw || raw.type !== 'tag') break;
+        node = parent;
+        if (node.find('img').length && structuralPriceText(structuralText($, node))) break;
+      }
+      add(structuralProductFromCard($, node, baseUrl));
+    });
+  }
+  for (const row of structuralEmbeddedCatalog(html, baseUrl)) add(row);
+  return [...store.values()];
+}
+
+function structuralCssEscape(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, m => '\\' + m).replace(/^(\d)/, '\\3$1 ');
+}
+
+function structuralStableClasses(el: any): string[] {
+  const classes = String(el.attr('class') || '').split(/\s+/).filter(Boolean);
+  const stable = classes.filter(c => c.length <= 40 && !STRUCTURAL_VOLATILE_CLASS.test(c) && !STRUCTURAL_HASH_CLASS.test(c));
+  const seen = new Set<string>();
+  return stable
+    .filter(c => !seen.has(c) && (seen.add(c), true))
+    .sort((a, b) => (((/[^a-zA-Z0-9_-]/.test(a) ? 100 : 0) + a.length) - ((/[^a-zA-Z0-9_-]/.test(b) ? 100 : 0) + b.length)));
+}
+
+function structuralSig(el: any): string {
+  const raw = el.get(0);
+  const name = String((raw && raw.name) || '').toLowerCase();
+  const tag = /^[a-z][a-z0-9]*$/.test(name) ? name : 'div';
+  const classes = structuralStableClasses(el);
+  if (classes.length >= 2) return `${tag}.${structuralCssEscape(classes[0])}.${structuralCssEscape(classes[1])}`;
+  if (classes.length === 1) return `${tag}.${structuralCssEscape(classes[0])}`;
+  return tag;
+}
+
+function structuralLooksPrice(text: string): boolean {
+  const value = structuralClean(text);
+  return Boolean(value) && value.length <= 80 && Boolean(structuralPriceText(value));
+}
+
+function structuralVoteTitle($: any, nodes: any[]): string {
+  const votes = new Map<string, { count: number; bonus: number }>();
+  for (const node of nodes) {
+    let sig = '';
+    const heads = node.find('h1,h2,h3,h4,[itemprop="name"]');
+    for (let i = 0; i < heads.length; i++) {
+      const text = structuralClean(structuralText($, heads.eq(i)));
+      if (text.length >= 8 && text.length <= 200 && !structuralLooksPrice(text)) { sig = structuralSig(heads.eq(i)); break; }
+    }
+    if (!sig) {
+      let bestLen = 0, bestIdx = -1;
+      const cands = node.find('span,div,p,a,li,td,strong,b').slice(0, 120);
+      for (let idx = 0; idx < cands.length; idx++) {
+        const text = structuralClean(structuralText($, cands.eq(idx)));
+        if (text.length >= 15 && text.length <= 160 && !structuralLooksPrice(text) && (text.length > bestLen || (text.length === bestLen && idx > bestIdx))) {
+          bestLen = text.length; bestIdx = idx; sig = structuralSig(cands.eq(idx));
+        }
+      }
+    }
+    if (sig) { const v = votes.get(sig) || { count: 0, bonus: /^h[1-4]\./.test(sig) ? 2 : 0 }; v.count++; votes.set(sig, v); }
+  }
+  if (!votes.size) return '';
+  return [...votes.entries()].sort((a, b) => (b[1].count * 10 + b[1].bonus) - (a[1].count * 10 + a[1].bonus))[0][0];
+}
+
+function structuralVotePrice($: any, nodes: any[]): string {
+  const votes = new Map<string, { count: number; length: number }>();
+  for (const node of nodes) {
+    const cands: Array<{ sig: string; length: number; index: number }> = [];
+    const all = node.find('*').slice(0, 150);
+    for (let idx = 0; idx < all.length; idx++) {
+      const rawText = structuralText($, all.eq(idx));
+      if (rawText && rawText.length <= 80 && structuralLooksPrice(rawText)) {
+        cands.push({ sig: structuralSig(all.eq(idx)), length: structuralClean(rawText).length, index: idx });
+      }
+    }
+    cands.sort((a, b) => (a.length - b.length) || (b.index - a.index));
+    if (cands.length) { const w = cands[0]; const v = votes.get(w.sig) || { count: 0, length: w.length }; v.count++; votes.set(w.sig, v); }
+  }
+  if (!votes.size) return '';
+  return [...votes.entries()].sort((a, b) => (b[1].count - a[1].count) || (a[1].length - b[1].length))[0][0];
+}
+
+export type StructuralDiscovery = {
+  selectors: { container?: string; title?: string; price?: string; link?: string; image?: string };
+  method: string;
+  containerCount: number;
+  ok: boolean;
+  error?: string;
+};
+
+// Python's discover_selectors, ported for tests and the suggestion tooling:
+// climb product links exactly like structuralProducts, group the climbed
+// cards by tag+class signature, vote title/price selectors, and verify the
+// winner against the same HTML before returning it.
+export function discoverStructuralSelectors(html: string, baseUrl: string): StructuralDiscovery {
+  void baseUrl;
+  try {
+    const $ = cheerio.load(html || '');
+    const climbed: any[] = [];
+    $('a[href]').slice(0, 800).each((_: number, el: any) => {
+      const link = $(el);
+      const href = structuralClean(link.attr('href'));
+      if (!href || href === '#' || href.toLowerCase().startsWith('javascript:')) return;
+      if (!STRUCTURAL_CLIMB_RE.test(href)) return;
+      if (!link.find('img').length && !link.find("[class*='price']").length) return;
+      let node: any = link;
+      for (let i = 0; i < 5; i++) {
+        const parent = node.parent();
+        const raw = parent.get(0);
+        if (!raw || raw.type !== 'tag') break;
+        node = parent;
+        if (node.find('img').length && structuralPriceText(structuralText($, node))) break;
+      }
+      climbed.push(node);
+    });
+    if (climbed.length < 2) return { selectors: {}, method: 'none', containerCount: 0, ok: false };
+    const groups = new Map<string, any[]>();
+    for (const node of climbed) {
+      const sig = structuralSig(node);
+      const g = groups.get(sig) || [];
+      g.push(node);
+      groups.set(sig, g);
+    }
+    const ranked = [...groups.entries()].sort((a, b) => (b[1].length - a[1].length) || (a[0].length - b[0].length)).slice(0, 5);
+    for (const [sig, members] of ranked) {
+      if (members.length < 2) continue;
+      const sample = members.slice(0, 8);
+      const title = structuralVoteTitle($, sample);
+      if (!title) continue;
+      const price = structuralVotePrice($, sample);
+      const links = sample.filter((n: any) => { const r = n.get(0); return r && r.name === 'a' && n.attr('href'); }).length;
+      const linkSel = links * 2 >= sample.length ? sig : 'a[href]';
+      let cards: any;
+      try { cards = $(sig).slice(0, 12); } catch { continue; }
+      const titleHits = sample.filter((n: any) => { const t = n.find(title).first(); return t.length > 0 && structuralClean(structuralText($, t)); }).length;
+      const needed = Math.max(1, Math.floor((Math.min(cards.length, 12) + 1) / 2));
+      if (cards.length >= 2 && titleHits >= needed) {
+        return {
+          selectors: { container: sig, title, ...(price ? { price } : {}), link: linkSel, image: 'img' },
+          method: 'structural', containerCount: cards.length, ok: true,
+        };
+      }
+    }
+    return { selectors: {}, method: 'none', containerCount: 0, ok: false };
+  } catch (error) {
+    return { selectors: {}, method: 'none', containerCount: 0, ok: false, error: String((error as Error)?.message || error).slice(0, 200) };
+  }
+}
+
 export function heuristicProducts(html: string, baseUrl: string): Product[] {
   const out: Product[] = []; const seenUrls = new Set<string>();
   // 1.136.0 — first anchor per URL wins: cards with a media link AND a title
@@ -1462,6 +1862,28 @@ export async function diagnoseBenchmarkEngine(
       hint = !priceHints ? 'قیمت‌ها احتمالاً با جاوااسکریپت بارگذاری می‌شوند؛ موتور مرورگری (نمایشی) را امتحان کنید.' : 'کارت‌ها تصویر یا قیمت کامل ندارند؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.';
     } else {
       if (anchors > list.length) dropReasons.push(`از ${anchors} لینک محصول، ${list.length} محصول کامل نگه داشته شد؛ بقیه تصویر/قیمت/عنوان کامل نداشتند.`);
+      hint = `موتور سالم است: ${list.length} محصول بدون نیاز به سلکتور پیدا شد${partialNote()}.`;
+    }
+  } else if (engine === 'structural') {
+    let containers = 0;
+    try { containers = cheerio.load(text)(STRUCTURAL_CONTAINERS).length; } catch { containers = 0; }
+    let anchors = 0;
+    for (const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
+      if (STRUCTURAL_CLIMB_RE.test(m[1] || '')) anchors++;
+      if (anchors > 5000) break;
+    }
+    const priceHints = countMatches(stripPriceFormatChars(stripHtml(text)), PRICE_HINT_RE);
+    candidates = Math.max(containers, anchors);
+    signals.structuralContainers = containers; signals.productAnchors = anchors; signals.priceHints = priceHints;
+    if (!containers && !anchors) {
+      dropReasons.push('نه کارت محصول شناخته‌شده‌ای (li.product و…) پیدا شد نه لینک محصول (/product/ ،/shop/ و…).');
+      hint = 'صفحه احتمالاً پوستهٔ جاوااسکریپتی است یا فهرست محصول ندارد؛ موتور مرورگری (نمایشی) یا آدرس صفحه را بررسی کنید.';
+    } else if (!list.length) {
+      if (error) dropReasons.push(error);
+      dropReasons.push(`${Math.max(containers, anchors)} کارت/لینک محصول دیده شد ولی هیچ‌کدام عنوان یا لینک سالم نداشتند (حذف شدند).`);
+      if (!priceHints) dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');
+      hint = 'کارت‌های این صفحه با الگوهای ساختاری خوانده نشدند؛ موتور مرورگری (نمایشی) یا سلکتور دستی را امتحان کنید.';
+    } else {
       hint = `موتور سالم است: ${list.length} محصول بدون نیاز به سلکتور پیدا شد${partialNote()}.`;
     }
   } else {
