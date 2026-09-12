@@ -730,3 +730,25 @@ connections (ads, analytics) may never idle anyway.
   without hanging on never-idle pages.
 
 Same update path: pull, restart the deployer process, re-run the diagnostic.
+
+## 1.135.0 — the extraction diagnostic copies with one click and heals empty selectors
+
+Two requests from the same debugging session. First, the diagnostic report
+now has a "copy full report" button: one tap copies every stage, the
+evidence, the extracted data and the recommendations as plain text, with a
+fallback for browsers where the clipboard API is unavailable. The same
+shared dashboard code serves both runtimes, so the button works on Termux
+and on Cloudflare.
+
+Second, the diagnostic stops being read-only about discoveries. When a
+profile's selectors were never configured (empty, partial or still the
+WooCommerce defaults) and auto-discovery finds verified selectors on the
+real page, the diagnostic saves them into the profile immediately — the
+report gains a `selectors-auto-saved` stage listing what was stored, and
+the selectors tab fills itself in. Fully custom selectors are never
+overwritten, and testing an overridden URL never rewrites the profile.
+Missing detail selectors are suggested from a real product page the same
+way. Re-run the diagnostic after a save and the list/detail stages should
+go green.
+
+Same update path: pull, restart the deployer process, re-run the diagnostic.

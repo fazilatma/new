@@ -875,7 +875,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const add = (name: string, ok: boolean, summary: string, details: any = {}) => stages.push({ name, ok, summary, ...details });
   if (!url) {
     add('configuration', false, 'آدرس مبدأ خالی است.');
-    return { ok: false, profileId: profile.id, url, stages, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
+    return { ok: false, profileId: profile.id, url, stages, selectorsToSave: {}, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
   }
   let page: { text: string; url: string };
   try {
@@ -889,12 +889,19 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     recommendations.push(/ضدربات|چالش|challenge|403/i.test(text)
       ? 'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی این دستگاه را در مبدأ مجاز کنید یا از روش اتصال غیرمستقیم استفاده کنید.'
       : 'آدرس، دسترسی اینترنت دستگاه و تنظیمات روش اتصال مبدأ را بررسی کنید.');
-    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, recommendations };
+    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, selectorsToSave: {}, recommendations };
   }
   let products: Product[] = [], usedEngine: ExtractionEngine | '' = '';
+  // 1.135.0 — verified discoveries the route persists when the profile's
+  // selectors were never configured (empty/partial/default). Fully custom
+  // selectors are never touched (the pipeline only reports discoveries for
+  // non-custom sets), and an overridden test URL never rewrites the profile.
+  const selectorsToSave: Record<string, string> = {};
+  const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
     const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster);
     products = result.products; usedEngine = result.usedEngine;
+    if (!overriddenTestUrl && result.discoveredSelectors) for (const [key, value] of Object.entries(result.discoveredSelectors)) if (String(value || '').trim()) selectorsToSave[key] = String(value);
     const complete = {
       title: products.filter(x => x.title).length, price: products.filter(x => x.price > 0).length,
       link: products.filter(x => x.url).length, image: products.filter(x => x.image).length, sku: products.filter(x => x.sku).length
@@ -906,7 +913,9 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
   }
   // 1.128.0 — when nothing extracted, show what proactive auto-discovery sees
-  // on the same page (read-only: the diagnostic never rewrites the profile).
+  // on the same page. Verified discoveries above are handed to the route for
+  // auto-save (1.135.0); this block still shows raw, unverified findings for
+  // the manual suggest button when auto-save had nothing to persist.
   if (!products.length) {
     try {
       const discovery = discoverListSelectorsFromHtml(page.text, page.url);
@@ -915,7 +924,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
         add('selector-discovery', true,
           `موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method === 'structural' ? 'تحلیل ساختاری صفحه' : discovery.method === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ این سلکتورها راستی‌آزمایی شدند و با ذخیرهٔ آن‌ها استخراج شروع می‌شود.`,
           { method: discovery.method, selectors: discovery.selectors, evidence: discovery.evidence, containerCount: discovery.containerCount });
-        recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
+        if (!Object.keys(selectorsToSave).length) recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
       } else {
         add('selector-discovery', false, 'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.', { method: discovery.method });
       }
@@ -968,6 +977,21 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
       add('detail-extraction', true, 'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.', { sample: detail });
     } catch (error) { add('detail-extraction', false, error instanceof Error ? error.message : String(error), { url: candidate.url }); }
   } else add('detail-extraction', true, candidate ? 'برای این پروفایل سلکتور جزئیات تنظیم نشده است.' : 'محصول دارای لینک برای تست جزئیات پیدا نشد.', { skipped: true });
+  // Detail selectors are suggested from a real product page only when some
+  // are missing; already-configured keys are never overwritten.
+  const detailSample = candidate && candidate.url ? candidate.url : '';
+  if (!overriddenTestUrl && detailSample) {
+    const missingDetail = detailKeys.filter(key => !String((profile.selectors as any)?.[key] || '').trim().length);
+    if (missingDetail.length) {
+      try {
+        const suggested = await suggestSelectors(detailSample, 'detail');
+        for (const [key, value] of Object.entries(suggested.selectors || {})) {
+          if (String(value || '').trim() && (missingDetail as string[]).includes(key)) selectorsToSave[key] = String(value);
+        }
+      } catch { /* discovery is best-effort; the report below still stands */ }
+    }
+  }
+  if (Object.keys(selectorsToSave).length) recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   if (!products.length) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
   else {
     if (!products.some(x => x.price > 0)) recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');
@@ -975,5 +999,5 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     if (!products.some(x => x.image)) recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.');
   }
   const failed = stages.filter(stage => !stage.ok);
-  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail };
+  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail, selectorsToSave };
 }

@@ -396,6 +396,22 @@ test('DASHBOARD_JS parses as a single valid script (no broken template literal)'
   assert.ok(js.length>100000,'dashboard script has real content');
 });
 
+test('extraction diagnostic modal keeps a copy-all button with clipboard fallback',async()=>{
+  // 1.135.0: one click copies stages, evidence, data and recommendations.
+  const dash=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8');
+  assert.match(dash,/data-modal-action="copy-diagnostic"/,'copy-all button in the modal');
+  assert.match(dash,/lastDiagnosticReport=null/,'module-level slot keeps the last report');
+  assert.match(dash,/lastDiagnosticReport=\{profile:/,'runExtractionDiagnostic stores the fetched report');
+  assert.match(dash,/'selector-discovery':'کشف خودکار سلکتورها'/,'discovery stage has a Persian label');
+  assert.match(dash,/'selectors-auto-saved':'ذخیرهٔ خودکار سلکتورها'/,'auto-saved stage has a Persian label');
+  const at=dash.indexOf('async function copyDiagnosticReport');
+  assert.ok(at>0,'copy function exists');
+  const fn=dash.slice(at,dash.indexOf('\nfunction initMenu',at));
+  assert.match(fn,/lastDiagnosticReport/,'copies the stored report');
+  assert.match(fn,/navigator\.clipboard\.writeText/,'modern clipboard path');
+  assert.match(fn,/execCommand\('copy'\)/,'textarea fallback for non-secure contexts');
+});
+
 test('remaining dashboard content follows a topic-first novice workflow without dropping advanced tools',async()=>{
   const source=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8');
   const home=source.slice(source.indexOf('<section id="pane-home"'),source.indexOf('<section id="pane-selector"'));

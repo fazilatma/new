@@ -889,6 +889,32 @@ test('the Node extraction diagnostic runs the real scrape pipeline', async () =>
   assert.match(body, /catch\s*\(error\)\s*\{[\s\S]{0,400}add\('network', false/, 'a failed fetch must be reported as a failed stage, not an exception');
 });
 
+test('both extraction-diagnostic twins auto-save discoveries for unconfigured profiles only', async () => {
+  // 1.135.0: the diagnostic persists verified discoveries when the profile's
+  // selectors were never configured (empty/partial/default), so failing
+  // profiles self-heal. Custom selectors and overridden test URLs are never
+  // rewritten. Both runtimes must implement the same contract.
+  for (const file of ['render-src/scraper.ts', 'worker-src/scraper.ts']) {
+    const scraper = await readProjectFile(file);
+    const at = scraper.indexOf('diagnoseExtraction');
+    assert.ok(at > 0, `${file} must implement diagnoseExtraction`);
+    const body = scraper.slice(at);
+    assert.match(body, /selectorsToSave/, `${file}: diagnose must collect the selectors to persist`);
+    assert.match(body, /overriddenTestUrl/, `${file}: an overridden test URL must never rewrite the profile`);
+    assert.match(body, /suggestSelectors\(detailSample/, `${file}: missing detail selectors come from a real product page`);
+  }
+  for (const [file, runtime] of [['render-src/server.ts', 'Node'], ['worker-src/app.ts', 'Worker']]) {
+    const source = await readProjectFile(file);
+    const at = source.indexOf("'/api/profiles/:id/extraction-diagnostic'");
+    assert.ok(at > 0, `${runtime} must expose the extraction-diagnostic route`);
+    const end = source.indexOf('\napp.', at + 1);
+    const handler = source.slice(at, end > 0 ? end : at + 2000);
+    assert.match(handler, /selectorsToSave/, `${runtime}: the route must read what diagnose decided to save`);
+    assert.match(handler, /saveProfile/, `${runtime}: the route must persist discoveries to the profile`);
+    assert.match(handler, /selectors-auto-saved/, `${runtime}: the report must show the auto-save stage`);
+  }
+});
+
 test('Node diagnostics report the real local runtime, not Cloudflare bindings', async () => {
   // The Worker's /api/debug checks D1 and queue bindings, which are meaningless
   // on a phone. Reporting those on Termux would be noise at best.

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {strToU8,zipSync} from 'fflate';
+import {load} from 'cheerio';
 import worker from '../scraper4.worker.js';
 
 const ctx={waitUntil(){},passThroughOnException(){}};
@@ -682,6 +683,69 @@ test('profile extraction diagnostic runs real network, list parser, selector evi
   globalThis.HTMLRewriter=TestHTMLRewriter;const originalFetch=globalThis.fetch,db=new MemoryD1();globalThis.fetch=async request=>{const url=String(request instanceof Request?request.url:request);if(url==='https://source.example/list')return new Response('<main><article class="item"><a class="link" href="/p/one"><h2>محصول واقعی</h2></a><span class="price">۱۲۵۰۰۰ تومان</span><img src="/one.jpg"></article><script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"محصول واقعی","url":"https://source.example/p/one","image":"https://source.example/one.jpg","offers":{"price":"125000"}}</script></main>',{headers:{'content-type':'text/html; charset=utf-8'}});if(url==='https://source.example/p/one')return new Response('<main><div class="description">توضیح کامل نمونه</div><span class="sku">S-1</span></main>',{headers:{'content-type':'text/html'}});throw new Error(`unexpected ${url}`)};
   try{const saved=await call(db,'/api/profiles',jsonInit({id:'diag',name:'عیب‌یابی واقعی',url:'https://source.example/list',pages:1,pagination:'none',selectors:{container:'.item',title:'h2',price:'.price',link:'.link',image:'img',longDesc:'.description',sku:'.sku'},enabled:true}));assert.equal(saved.status,200);const response=await call(db,'/api/profiles/diag/extraction-diagnostic',jsonInit({})),report=await response.json();assert.equal(response.status,200);assert.equal(report.productCount,1);assert.equal(report.ok,true);assert.deepEqual(report.stages.map(x=>x.name),['network','list-extraction','selector-evidence','detail-extraction']);assert.equal(report.stages.find(x=>x.name==='network').bytes>0,true);assert.equal(report.stages.find(x=>x.name==='list-extraction').samples[0].title,'محصول واقعی');assert.equal(report.detail.sku,'S-1');assert.equal(db.products.size,0)
   }finally{globalThis.fetch=originalFetch}
+});
+
+// Cheerio-backed HTMLRewriter for tests that exercise real selector discovery:
+// the regex TestHTMLRewriter mock below cannot run the verification passes
+// discovery needs, so structural inference reports method 'none' under it.
+const DISCOVERY_VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+class CheerioHTMLRewriter {
+  constructor(){this.registrations=[]}
+  on(selector,handler){load('<i></i>')(selector);this.registrations.push({selector,handler});return this}
+  transform(response){return new Response(new ReadableStream({start:async controller=>{try{const source=await response.text(),$=load(source,{decodeEntities:true}),roots=$.root().contents().toArray();for(const root of roots)this.#walk($,root,[]);controller.enqueue(new TextEncoder().encode($.html()));controller.close()}catch(error){controller.error(error)}}}))}
+  #walk($,node,active){
+    if(node.type==='text'){for(const handler of active)handler.text?.({text:node.data||'',lastInTextNode:true});return}
+    if(node.type==='comment')return;
+    const matching=[];
+    if(node.type==='tag')for(const registration of this.registrations)if($(node).is(registration.selector))matching.push(registration.handler);
+    const callbacks=[],wrapper={
+      tagName:node.name,getAttribute:name=>node.attribs?.[name]??null,setAttribute:(name,value)=>$(node).attr(name,value),removeAttribute:name=>$(node).removeAttr(name),
+      before:(value)=>$(node).before(value),after:(value)=>$(node).after(value),remove:()=>$(node).remove(),onEndTag:callback=>{if(DISCOVERY_VOID_TAGS.has(String(node.name).toLowerCase()))throw Error('Parser error: No end tag.');callbacks.push(callback)},
+      get attributes(){return Object.entries(node.attribs||{})}
+    };
+    for(const handler of matching)handler.element?.(wrapper);
+    const scoped=[...active,...matching];for(const child of [...(node.children||[])])this.#walk($,child,scoped);
+    for(const callback of callbacks.reverse())callback();
+  }
+}
+
+test('extraction diagnostic saves discovered selectors when the profile never configured any',async()=>{
+  // 1.135.0: the diagnostic no longer just reports discoveries — when the
+  // profile still has never-configured (default) selectors, the verified
+  // discovery is persisted to the profile so the selectors tab fills itself
+  // in. Fully custom selectors are never touched.
+  const cards=[1,2,3,4,5].map(i=>`
+    <div class="x7f2a shop-card">
+      <a href="/item-${i}/"><img src="https://cdn.example.test/${i}.jpg"><span class="x7f2a card-name">کالای فروشگاه شمارهٔ ${i}</span></a>
+      <b class="x7f2a cost">${(i*1250000).toLocaleString('en-US')} تومان</b>
+    </div>`).join('');
+  const listHtml=`<html><body><div class="x7f2a shop-grid">${cards}</div></body></html>`;
+  const detailHtml='<html><body><div class="short-description">A short blurb</div><span class="sku">S-9</span></body></html>';
+  const defaults={container:'li.product',title:'h2, h3, .woocommerce-loop-product__title',price:'.price, .amount',link:'a[href]',image:'img'};
+  const originalFetch=globalThis.fetch,originalRewriter=globalThis.HTMLRewriter,db=new MemoryD1();globalThis.HTMLRewriter=CheerioHTMLRewriter;
+  globalThis.fetch=async request=>{const raw=String(request instanceof Request?request.url:request),url=raw.replace(/\/$/,'');if(url==='https://shop.example.test/item-1')return new Response(detailHtml,{headers:{'content-type':'text/html'}});if(url==='https://shop.example.test')return new Response(listHtml,{headers:{'content-type':'text/html'}});throw new Error(`unexpected ${raw}`)};
+  try{
+    const saved=await call(db,'/api/profiles',jsonInit({id:'diag-auto',name:'auto',url:'https://shop.example.test/',pages:1,pagination:'none',selectors:{...defaults},enabled:true}));assert.equal(saved.status,200);
+    const response=await call(db,'/api/profiles/diag-auto/extraction-diagnostic',jsonInit({})),report=await response.json();
+    assert.equal(response.status,200);
+    assert.equal(report.productCount,5,'the verified discovery must extract every card');
+    assert.ok(report.selectorsSaved&&report.selectorsSaved.container.includes('shop-card'),`container discovery must be reported, got ${JSON.stringify(report.selectorsSaved)}`);
+    assert.equal(report.selectorsSaved.shortDesc,'.short-description','missing detail selectors come from the real product page');
+    assert.equal(report.selectorsSaved.sku,'.sku');
+    const savedStage=report.stages.find(x=>x.name==='selectors-auto-saved');
+    assert.ok(savedStage&&savedStage.ok,'the report must show the auto-save stage');
+    const stored=JSON.parse(db.profiles.get('diag-auto').data).selectors;
+    assert.ok(stored.container.includes('shop-card'),'the discovery must be persisted to the profile');
+    assert.equal(stored.shortDesc,'.short-description');
+    assert.equal(stored.sku,'.sku');
+    // A fully custom profile is diagnosed but never rewritten.
+    const savedCustom=await call(db,'/api/profiles',jsonInit({id:'diag-custom',name:'custom',url:'https://shop.example.test/',pages:1,pagination:'none',selectors:{container:'.mine',title:'.mine-t',price:'.mine-p',link:'a.mine',image:'img.mine',shortDesc:'.mine-short',sku:'.mine-sku'},enabled:true}));assert.equal(savedCustom.status,200);
+    const customResponse=await call(db,'/api/profiles/diag-custom/extraction-diagnostic',jsonInit({})),custom=await customResponse.json();
+    assert.equal(customResponse.status,200);
+    assert.equal(custom.selectorsSaved,undefined,'custom selectors must not be overwritten');
+    assert.ok(!custom.stages.some(x=>x.name==='selectors-auto-saved'),'no auto-save stage for a custom profile');
+    assert.equal(JSON.parse(db.profiles.get('diag-custom').data).selectors.container,'.mine','the custom profile must be byte-identical');
+  }finally{globalThis.fetch=originalFetch;globalThis.HTMLRewriter=originalRewriter}
 });
 
 test('standalone spreadsheet import understands Persian CSV headers, keeps Woo status, and targeted sync jobs stay targeted',async()=>{

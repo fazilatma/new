@@ -571,31 +571,38 @@ export async function extractHeuristicProducts(html:string,baseUrl:string):Promi
 export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
   const add=(name:string,ok:boolean,summary:string,details:any={})=>stages.push({name,ok,summary,...details});
-  if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
+  if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,selectorsToSave:{},recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
   let page:{text:string;url:string;contentType:string};
   try{
     page=await sourceText(url,Boolean(profile.networkIndirect));
     const bytes=new TextEncoder().encode(page.text).byteLength,title=cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g,' ')||'');
     add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,indirect:Boolean(profile.networkIndirect)});
-  }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,recommendations}}
+  }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,selectorsToSave:{},recommendations}}
   let products:Product[]=[];
+  // 1.135.0 — verified discoveries the route persists when the profile's
+  // selectors were never configured (empty/partial/default). Fully custom
+  // selectors are never touched (ensure only reports discoveries for
+  // non-custom sets), and an overridden test URL never rewrites the profile.
+  const selectorsToSave:Record<string,string>={},overriddenTestUrl=String(urlOverride||'').trim().length>0&&url!==String(profile.url||'').trim();
   try{
     let listSelectors=profile.selectors;
-    try{listSelectors=(await ensureListSelectors(page.text,page.url,profile.selectors)).selectors}catch{/* best-effort; extraction below uses the profile selectors */}
+    try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{/* best-effort; extraction below uses the profile selectors */}
     const engineResult=await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
     add('list-extraction',products.length>0,products.length?`${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`:'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',{count:products.length,usedEngine:engineResult.usedEngine,complete,selectors:profile.selectors,samples:products.slice(0,5).map(x=>({title:x.title,price:x.price,priceText:x.priceText,url:x.url,image:x.image,sku:x.sku}))});
   }catch(error){add('list-extraction',false,error instanceof Error?error.message:String(error),{selectors:profile.selectors})}
   // 1.129.0 — when nothing extracted, show what proactive auto-discovery sees
-  // on the same page (read-only: the diagnostic never rewrites the profile).
+  // on the same page. Verified discoveries above are handed to the route for
+  // auto-save (1.135.0); this block still shows raw, unverified findings for
+  // the manual suggest button when auto-save had nothing to persist.
   if(!products.length){
     try{
       const discovery=await discoverListSelectorsFromHtml(page.text,page.url);
       const proposed=Object.entries(discovery.selectors).filter(([,value])=>String(value||'').trim());
       if(discovery.method!=='none'&&proposed.length>=2&&discovery.selectors.container&&discovery.selectors.title){
         add('selector-discovery',true,`موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method==='structural'?'تحلیل ساختاری صفحه':discovery.method==='mixed'?'ترکیبی':'الگوهای آماده'})؛ این سلکتورها راستی‌آزمایی شدند و با ذخیرهٔ آن‌ها استخراج شروع می‌شود.`,{method:discovery.method,selectors:discovery.selectors,evidence:discovery.evidence,containerCount:discovery.containerCount});
-        recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
+        if(!Object.keys(selectorsToSave).length)recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
       }else{
         add('selector-discovery',false,'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.',{method:discovery.method});
       }
@@ -609,9 +616,14 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   const candidate=products.find(product=>product.url);
   if(candidate&&hasDetailSelectors(profile.selectors))try{const extracted=await scrapeDetails(candidate,profile.selectors,Boolean(profile.networkIndirect));detail={url:candidate.url,title:extracted.title,shortDesc:extracted.shortDesc,descriptionCharacters:String(extracted.longDesc||'').length,sku:extracted.sku,brand:extracted.brand,stock:extracted.stock,weight:extracted.weight,category:extracted.category,tags:extracted.tags,image:extracted.image,galleryCount:extracted.images.length,variations:extracted.variations?.slice(0,20)};add('detail-extraction',true,'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.',{sample:detail})}catch(error){add('detail-extraction',false,error instanceof Error?error.message:String(error),{url:candidate.url})}
   else add('detail-extraction',true,candidate?'برای این پروفایل سلکتور جزئیات تنظیم نشده است.':'محصول دارای لینک برای تست جزئیات پیدا نشد.',{skipped:true});
+  // Detail selectors are suggested from a real product page only when some
+  // are missing; already-configured keys are never overwritten.
+  const detailSample=candidate&&candidate.url?candidate.url:'';
+  if(!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value)}catch{/* discovery is best-effort; the report below still stands */}}
+  if(Object.keys(selectorsToSave).length)recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   if(!products.length)recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
   else{if(!products.some(x=>x.price>0))recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');if(!products.some(x=>x.url))recommendations.push('لینک محصول پیدا نشده است؛ سلکتور لینک باید به عنصر a یا ویژگی href/data-url برسد.');if(!products.some(x=>x.image))recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.')}
-  const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail};
+  const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail,selectorsToSave};
 }
 
 export function transformProduct(product:Product,profile:Profile):Product{
