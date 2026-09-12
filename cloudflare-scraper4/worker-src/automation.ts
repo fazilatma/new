@@ -1,3 +1,4 @@
+import { normalizePersianText } from './utils.js';
 import { aiCall, preferredAiChatModel } from './ai.js';
 import { loadConnections } from './connections.js';
 import { addAutoreplyLog, getState, listAutoreplyLog, maintenanceRows, setState } from './db.js';
@@ -5,7 +6,7 @@ import { safeFetch } from './network.js';
 import { sendNotification } from './notifications.js';
 
 type Rule={id?:string;on?:boolean;match?:'contains'|'exact'|'starts'|'regex'|'always';triggers?:string;reply?:string;priority?:number;daily_max?:number};
-const norm=(v:string)=>String(v||'').toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/\s+/g,' ').trim();
+const norm=(v:string)=>normalizePersianText(v);
 const DEFAULT_RULES:Rule[]=[{id:'hello',on:true,match:'contains',triggers:'سلام|درود|وقت بخیر',reply:'سلام و وقت بخیر 🌹 در خدمتم.',priority:10,daily_max:100},{id:'thanks',on:true,match:'contains',triggers:'ممنون|متشکر|سپاس',reply:'خواهش می‌کنم 🌷',priority:20,daily_max:100},{id:'bye',on:true,match:'contains',triggers:'خداحافظ|خدانگهدار',reply:'خدانگهدار 🌹 هر زمان سؤالی داشتید در خدمتم.',priority:30,daily_max:100}];
 export function matchRule(rules:Rule[],text:string):Rule|null{const sorted=rules.filter(r=>r.on!==false&&r.reply).sort((a,b)=>(a.priority||50)-(b.priority||50));for(const rule of sorted)if(ruleMatch(rule,text))return rule;return null}
 function ruleMatch(rule:Rule,text:string){if(rule.match==='always')return true;const value=norm(text);for(const raw of String(rule.triggers||'').split(/[\r\n|]+/)){const trigger=norm(raw);if(!trigger)continue;if(rule.match==='exact'&&value===trigger)return true;if(rule.match==='starts'&&value.startsWith(trigger))return true;if((!rule.match||rule.match==='contains')&&value.includes(trigger))return true;if(rule.match==='regex')try{if(new RegExp(raw,'iu').test(text))return true}catch{}}return false}

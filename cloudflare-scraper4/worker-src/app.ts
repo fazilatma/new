@@ -1,14 +1,14 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import readXlsxFile from 'read-excel-file/web-worker';
-import { aiCall, aiChat, aiProviders, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
+import { aiCall, aiChat, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
 import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, agentModelSetupHint, controlAgentRun, createOrUpdateAgentPrompt, currentAgentRun, getAgentRunPublic, listAgentRunsPublic, publicAgentRun, removeAgentPrompt, resetAgentRun, startAgentRun } from './agent.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS } from './dashboard.js';
-import { allProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { flushD1Usage, getD1Usage, allProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { configureEnv, type Env } from './env.js';
-import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, photoFix, rebuildMap, recon, retire } from './maintenance.js';
+import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { safeFetch, safeText, safeWooFetch } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
@@ -16,9 +16,9 @@ import { runDiagnostics } from './diagnostics.js';
 import { enqueueJob } from './processor.js';
 import { diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, testGallery, testSelector, testVariations, transformProduct } from './scraper.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
-import { syncBasalam, syncWoo } from './sync.js';
+import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
-import { basicAuth, byteLength, escapeHtml, message } from './utils.js';
+import { basicAuth, byteLength, escapeHtml, message, normalizePersianText } from './utils.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, resetBackgroundRun, retryAiTestPart, startAiTestRun, startAllUnapprovedCategoryRun, startDedupRun } from './background.js';
 import { fontFile, fontStylesheet } from './fonts.js';
@@ -30,7 +30,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.69.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.127.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -51,7 +51,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.0.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.127.0')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -74,7 +74,7 @@ app.get('/api/activity',async c=>{
   const quotaState=getWriteQuotaState();
   const quotaRun=(runs as any[]).some((x:any)=>x.phase==='quota'||/quota|write operations/i.test(String(x.error||'')))||(active as any[]).some((j:any)=>/quota|write operations/i.test(String(j.error||'')));
   return c.json({ok:true,ts:new Date().toISOString(),queue:Boolean(c.env.JOBS),version,
-    quota:{writeExceeded:quotaState.writeExceeded||quotaRun,at:quotaState.at},
+    quota:{writeExceeded:quotaState.writeExceeded||quotaRun,at:quotaState.at,d1:await getD1Usage()},
     counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},
     activeJobs:active.slice(0,15).map(j=>{const p=profileById.get(j.profileId),started=Date.parse(j.startedAt||j.createdAt),ended=j.status==='running'?Date.now():Date.parse(j.finishedAt||j.updatedAt),minutes=Math.max(1/60,(ended-started)/60000),speed=Number((Number(j.processed||0)/minutes).toFixed(2)),engine=(p?.extractionEngineMaster||p?.extractionEngine||'auto');return{id:j.id,shortId:j.id.slice(0,8),profileId:j.profileId.slice(0,12),kind:j.kind,target:j.target,status:j.status,phase:j.phase,priority:Number(priorities[j.id])||0,progress:j.total?Math.round(j.processed/j.total*100):0,detail:`${j.processed}/${j.total}`,speedPerMinute:speed,engine,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}}),
     runs,
@@ -85,7 +85,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.69.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.127.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+// Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
+// the exact rows it read/wrote, so we meter our own consumption against the
+// documented free-plan limits (5M reads / 100k writes per UTC day).
+app.get('/api/quota',async c=>{const usage=await getD1Usage();flushD1Usage(c.executionCtx?.waitUntil.bind(c.executionCtx));return c.json({ok:true,d1:usage,note:'Measured from the D1 queries this Worker itself ran. Dashboard, wrangler and other Workers on the same database are not counted.'})});
 app.get('/api/runtime/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 app.get('/api/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 
@@ -102,6 +106,34 @@ app.get('/api/ai/test-results',async c=>c.json({ok:true,...await getLastAiTestRe
 app.post('/api/ai/call',async c=>{const b=await jsonBody(c),provider=(await aiProviders()).find(p=>p.id===b.provider);if(!provider)return c.json({ok:false,error:'Provider not found'},404);const{model,keyIndex}=parseModelKeySuffix(String(b.model||''));return c.json(await aiCall(providerWithKey(provider,keyIndex),model,String(b.prompt||'Reply with exactly: SCRAPER4_OK')))});
 app.post('/api/ai/vote',async c=>{const b=await jsonBody(c);return c.json({ok:true,leaderboard:await recordVote(String(b.task||'manual'),String(b.winner||''),Array.isArray(b.candidates)?b.candidates.map(String):[])})});
 app.get('/api/ai/leaderboard',async c=>c.json({ok:true,leaderboard:await getLeaderboard()}));
+// ─── AI description generator (same contract as the Node runtime) ────────────
+// Always-on by default; fills content the source page did not provide, using
+// the pinned master model. Without these routes the new AI sub-tab would 404.
+app.get('/api/ai/description-settings',async c=>{
+  const settings=await getState<any>('ai_description_settings',{enabled:true}),picked=await preferredAiChatModel();
+  return c.json({ok:true,settings:{enabled:settings?.enabled!==false},master:picked?{provider:picked.provider.id,model:picked.model}:null});
+});
+app.post('/api/ai/description-settings',async c=>{
+  const b=await jsonBody(c),enabled=b.enabled!==false&&b.enabled!=='false';
+  await setState('ai_description_settings',{enabled});
+  return c.json({ok:true,settings:{enabled}});
+});
+app.post('/api/profiles/:id/ai-descriptions',async c=>{
+  const profile=await getProfile(c.req.param('id'));
+  if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);
+  const b=await jsonBody(c),force=b.force===true||b.force==='true',limit=Math.max(1,Math.min(200,Number(b.limit)||25));
+  const picked=await preferredAiChatModel();
+  if(!picked)return c.json({ok:false,error:'هیچ مدل هوش مصنوعی فعالی پیدا نشد. ابتدا یک ارائه‌دهنده و مدل مستر تنظیم کنید.'},400);
+  const stored=(await listProducts(profile.id,1000,0,'')).products||[];
+  const targets=stored.filter((row:any)=>force||productNeedsEnrichment(row).any).slice(0,limit);
+  let filled=0;const failures:any[]=[];
+  for(const product of targets as any[]){
+    const result=await generateProductDescription(product,{force});
+    if(result.changed){await upsertProduct(profile.id,product);filled++}
+    else if(!result.ok)failures.push({title:product.title,error:result.error});
+  }
+  return c.json({ok:true,profileId:profile.id,model:picked.model,provider:picked.provider.id,candidates:targets.length,filled,failed:failures.length,failures:failures.slice(0,5)});
+});
 // ─── AI chat with capability-filtered model picker ───────────────────────────
 app.get('/api/ai/chat-models',async c=>{
   const providers=(await aiProviders()).filter(p=>p.enabled!==false);
@@ -161,6 +193,13 @@ app.post('/api/import-php',async c=>{const body=await jsonBody(c),source=typeof 
 
 app.get('/api/profile-stats',async c=>c.json({ok:true,items:await profileStats()}));
 app.post('/api/maintenance/recon/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json({ok:true,report:await recon(target,String(b.profileId||''))})});
+app.get('/api/maintenance/recon-accounts',async c=>c.json({ok:true,accounts:await reconAccounts()}));
+app.post('/api/maintenance/recon-unified',async c=>{const b=await jsonBody(c);return c.json(await unifiedRecon(String(b.profileId||'')))});
+app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await jsonBody(c);return c.json(await unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
+// Request 36b: preview (no confirm) or delete duplicates in every destination,
+// keeping the most expensive copy by default.
+app.post('/api/maintenance/duplicates',async c=>{const b=await jsonBody(c);return c.json(await destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
+app.post('/api/maintenance/recon-table/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await reconTable(target,String(b.profileId||'')))});
 app.post('/api/maintenance/rebuild/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await rebuildMap(target,String(b.profileId||'')))});
 app.post('/api/maintenance/retire/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await retire(target,String(b.profileId||''),String(b.action||'report'),b.confirm==='APPLY'))});
 app.post('/api/maintenance/bulk/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await bulkEdit(target,b,b.confirm==='APPLY'))});
@@ -192,12 +231,13 @@ app.post('/api/queue-watchdog',async c=>{const b=await jsonBody(c);const setting
 app.post('/api/source-test',async c=>{const b=await jsonBody(c),result=await safeText(String(b.url||''),1_000_000);return c.json({ok:true,bytes:byteLength(result.text),url:result.url,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()})});
 
 const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
+const MIN_BENCHMARK_PRODUCTS=2;
 const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString();
   for(const engine of BENCHMARK_ENGINES){
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
-    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'This engine requires the Node.js/Render/VPS runtime.'});continue}
+    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'این موتور فقط روی اجراگر Node کار می‌کند (Termux، ویندوز، VPS یا Render).'});continue}
     try{
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const page=await scrapeListPage(pageUrl(profile,pageNo),profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),engine,undefined,false);
@@ -209,11 +249,15 @@ async function benchmarkProfileEngines(profile:Profile){
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
     results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
   }
-  const fastest=results.filter(r=>r.ok&&r.available).sort((a,b)=>b.productsPerMinute-a.productsPerMinute||a.elapsedMs-b.elapsedMs)[0]||null;
+  // Same coverage-first rule as the Node runtime so both runtimes agree on the
+  // engine, instead of one picking a shallow engine that finds a stray card.
+  const usable=results.filter(r=>r.ok&&r.available);
+  const best=usable.sort((a,b)=>b.products-a.products||a.elapsedMs-b.elapsedMs)[0]||null;
+  const fastest=best&&best.products>=MIN_BENCHMARK_PRODUCTS?best:null;
   (profile as any).extractionEngineBenchmarks=results;
   if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
   await saveProfile({...profile,updatedAt:new Date().toISOString()});
-  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`Fastest engine saved as profile default: ${fastest.engine}.`]:['No engine extracted products from the first three pages. Check network access, anti-bot responses, and selectors.']};
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(best&&best.products>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${best.products}). موتور پیش‌فرض پروفایل تغییر نکرد.`]:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
 app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await jsonBody(c);return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
 app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);return c.json(await benchmarkProfileEngines(profile))});
@@ -305,7 +349,16 @@ async function connectionDiagnostic(target:string,input:any){
       const base=connections.basalam,index=Number(input?.shopIndex),shop=Number.isInteger(index)&&index>=0?base.shops[index]:null,token=shop?.token||base.token,expectedVendorId=shop?.vendorId||base.vendorId,endpoint=base.api.replace(/\/$/,'')+'/users/me';
       if(!token)return diagnosticConfigError(target,startedAt,started,'توکن باسلام وارد نشده است.',['از پنل توسعه‌دهندگان باسلام یک توکن معتبر بسازید.','توکن را بدون Bearer و بدون فاصلهٔ ابتدا/انتها وارد کنید.']);
       const response=await safeFetch(endpoint,{headers:{authorization:`Bearer ${token}`,accept:'application/json'}},2_000_000),raw=await diagnosticBody(response),vendor=raw?.vendor||raw?.data?.vendor||{},user=raw?.data||raw||{},vendorId=String(vendor.id||user.vendor_id||'');
-      return{ok:response.ok,target,service:'Basalam OpenAPI',startedAt,durationMs:Date.now()-started,request:{method:'GET',endpoint,authentication:'Bearer Token (توکن در گزارش نمایش داده نمی‌شود)',shopIndex:shop?index:null},http:{status:response.status,statusText:response.statusText,contentType:response.headers.get('content-type')||'',finalUrl:response.headers.get('x-scraper-final-url')||endpoint},summary:{userId:user.id||null,userName:user.name||user.username||null,vendorId:vendorId||null,vendorTitle:vendor.title||user.vendor_title||shop?.name||null,vendorActive:vendor.is_active??null,verification:user.info_verification_status||null,configuredVendorId:expectedVendorId||null,vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId},recommendations:response.ok?['توکن معتبر است و مسیر users/me پاسخ داد.',...(!expectedVendorId&&vendorId?['شناسه غرفهٔ دریافت‌شده را در تنظیمات ذخیره کنید.']:[]),...(expectedVendorId&&vendorId&&String(expectedVendorId)!==vendorId?['شناسه غرفهٔ تنظیم‌شده با غرفهٔ توکن یکسان نیست؛ آن را اصلاح کنید.']:[])]:connectionAdvice(response.status,'basalam'),raw:redactDiagnostic(raw,[token])};
+      // Everything the settings form can auto-fill from a single token test.
+      const autofill:Record<string,any>={};
+      const tokenVerdict=describeBasalamToken(token);
+      if(vendorId)autofill.vendorId=vendorId;
+      const vendorTitle=vendor.title||user.vendor_title||'';if(vendorTitle)autofill.name=String(vendorTitle);
+      const prep=Number(vendor.preparation_days??vendor.default_preparation_days);if(Number.isFinite(prep)&&prep>0)autofill.preparationDays=prep;
+      const city=vendor.city?.id??vendor.city_id;if(Number(city))autofill.cityId=Number(city);
+      const identifier=vendor.identifier||vendor.slug||'';if(identifier)autofill.identifier=String(identifier);
+
+      return{ok:response.ok,target,service:'Basalam OpenAPI',startedAt,durationMs:Date.now()-started,request:{method:'GET',endpoint,authentication:'Bearer Token (توکن در گزارش نمایش داده نمی‌شود)',shopIndex:shop?index:null},http:{status:response.status,statusText:response.statusText,contentType:response.headers.get('content-type')||'',finalUrl:response.headers.get('x-scraper-final-url')||endpoint},summary:{userId:user.id||null,userName:user.name||user.username||null,vendorId:vendorId||null,vendorTitle:vendor.title||user.vendor_title||shop?.name||null,vendorActive:vendor.is_active??null,verification:user.info_verification_status||null,configuredVendorId:expectedVendorId||null,vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId,tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null,autofill},recommendations:response.ok?['توکن معتبر است و مسیر users/me پاسخ داد.',...(!expectedVendorId&&vendorId?['شناسه غرفهٔ دریافت‌شده را در تنظیمات ذخیره کنید.']:[]),...(expectedVendorId&&vendorId&&String(expectedVendorId)!==vendorId?['شناسه غرفهٔ تنظیم‌شده با غرفهٔ توکن یکسان نیست؛ آن را اصلاح کنید.']:[])]:connectionAdvice(response.status,'basalam'),raw:redactDiagnostic(raw,[token])};
     }
     if(target==='ai'){
       const providers=await aiProviders();
@@ -389,7 +442,7 @@ const IMPORT_FIELDS:Array<{field:string;labels:string[]}>=[
   {field:'variations',labels:['variations','تنوع','تنوعها']},
   {field:'attributes',labels:['attributes','attribute','attr','ویژگی','ویژگیها','خصوصیات','مشخصات','خصیصه','خصوصیت']}
 ];
-const normalizeImportHeader=(value:string)=>String(value||'').trim().toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\s_\-‌.]+/g,'').replace(/[«»"']/g,'');
+const normalizeImportHeader=(value:string)=>normalizePersianText(value).replace(/[\s_\-‌.]+/g,'').replace(/[«»"']/g,'');
 function detectImportMapping(headers:string[]):Array<{column:string;field:string;confidence:number}>{
   const used=new Set<string>(),out:Array<{column:string;field:string;confidence:number}>=[];
   for(const header of headers){
@@ -465,7 +518,7 @@ async function getImportHistory():Promise<any[]>{const items=await getState<any[
 async function pushImportHistory(entry:any):Promise<void>{const items=await getImportHistory();items.push(entry);await setState('import_history',items.slice(-60))}
 function validWooImportStatus(value:unknown):Product['destinationStatus']|''{const status=String(value||'');return status==='draft'||status==='publish'||status==='pending'||status==='private'?status:''}
 function recordsFromSheet(table:unknown[][]):Record<string,any>[]{const rows=table.filter(row=>row.some(cell=>cell!==null&&cell!==undefined&&String(cell).trim()!=='')),headers=(rows.shift()||[]).map(String);return rows.map(values=>Object.fromEntries(headers.map((header,index)=>[header,values[index]??''])))}
-function normalizeImportRecord(row:Record<string,any>):Record<string,any>{const aliases:Record<string,string>={title:'title',name:'title','نام':'title','ناممحصول':'title','عنوان':'title','عنوانمحصول':'title',price:'price','قیمت':'price','قیمتفروش':'price',url:'url',link:'url','لینک':'url','آدرس':'url','آدرسصفحه':'url',image:'image','تصویر':'image','عکس':'image',sku:'sku','کدمحصول':'sku','شناسهکالا':'sku',sourcekey:'sourceKey',key:'sourceKey','شناسه':'sourceKey',brand:'brand','برند':'brand',stock:'stock','موجودی':'stock',weight:'weight','وزن':'weight',category:'category','دستهبندی':'category',shortdesc:'shortDesc','توضیحکوتاه':'shortDesc',longdesc:'longDesc',description:'longDesc','توضیحات':'longDesc'};const out:Record<string,any>={};for(const[key,value]of Object.entries(row)){const normalized=key.trim().toLowerCase().replace(/[\s_\-‌]+/g,'').replace(/[يى]/g,'ی').replace(/ك/g,'ک'),target=aliases[normalized]||key;out[target]=value}return out}
+function normalizeImportRecord(row:Record<string,any>):Record<string,any>{const aliases:Record<string,string>={title:'title',name:'title','نام':'title','ناممحصول':'title','عنوان':'title','عنوانمحصول':'title',price:'price','قیمت':'price','قیمتفروش':'price',url:'url',link:'url','لینک':'url','آدرس':'url','آدرسصفحه':'url',image:'image','تصویر':'image','عکس':'image',sku:'sku','کدمحصول':'sku','شناسهکالا':'sku',sourcekey:'sourceKey',key:'sourceKey','شناسه':'sourceKey',brand:'brand','برند':'brand',stock:'stock','موجودی':'stock',weight:'weight','وزن':'weight',category:'category','دستهبندی':'category',shortdesc:'shortDesc','توضیحکوتاه':'shortDesc',longdesc:'longDesc',description:'longDesc','توضیحات':'longDesc'};const out:Record<string,any>={};for(const[key,value]of Object.entries(row)){const normalized=normalizePersianText(key).replace(/[\s_\-‌]+/g,''),target=aliases[normalized]||key;out[target]=value}return out}
 function jsonValue<T>(value:unknown,fallback:T):T{if(value&&typeof value==='object')return value as T;try{return JSON.parse(String(value||'')) as T}catch{return fallback}}
 function parseCsv(text:string):Record<string,string>[]{const rows:string[][]=[];let row:string[]=[],cell='',quoted=false;const input=text.replace(/^\uFEFF/,'');for(let i=0;i<input.length;i++){const ch=input[i];if(quoted){if(ch==='"'&&input[i+1]==='"'){cell+='"';i++}else if(ch==='"')quoted=false;else cell+=ch}else if(ch==='"')quoted=true;else if(ch===','){row.push(cell);cell=''}else if(ch==='\n'){row.push(cell);rows.push(row);row=[];cell=''}else if(ch!=='\r')cell+=ch}if(cell||row.length){row.push(cell);rows.push(row)}const headers=rows.shift()?.map(x=>x.trim())||[];return rows.filter(x=>x.some(Boolean)).map(values=>Object.fromEntries(headers.map((key,i)=>[key,values[i]||''])))}
 function idFromUrl(raw:string):string{const url=new URL(raw),id=`${url.hostname}_${decodeURIComponent(url.pathname)}`.toLowerCase().replace(/[^\p{L}\p{N}_.-]+/gu,'_').replace(/^_+|_+$/g,'').slice(0,120);return id||crypto.randomUUID()}
@@ -514,7 +567,7 @@ export function normalizeProfile(raw:any):Profile {
   const pagination=String(raw.pagination||raw.pagType||'query_page') as Profile['pagination'];
   const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine;
   const rawMaster=String(raw.extractionEngineMaster||raw.fetch_engine_master||raw.engineMaster||'') as ExtractionEngine;
-  const master=(['htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined);
+  const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined);
   const target=String(sync.target||'');
   const indirect=on(raw.networkIndirect??raw.net_indirect);
   const fallbackIds=raw.basalamFallbackCategoryIds??raw.bslFallbackCatIds;
@@ -522,7 +575,7 @@ export function normalizeProfile(raw:any):Profile {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(0,Number(raw.pages)||0)),
     pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
-    extractionEngine:['auto','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
+    extractionEngine:['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
     priceMode:['none','add','percent','multiply'].includes(raw.priceMode)?raw.priceMode:'none',priceValue:Number(raw.priceValue??raw.priceVal)||0,

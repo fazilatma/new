@@ -1,6 +1,6 @@
 {
   "name": "scraper4-cloudflare",
-  "version": "1.69.0",
+  "version": "1.127.0",
   "private": true,
   "description": "Cloudflare Workers-native Scraper 4 with D1, Queues, Cron, and downloadable backups",
   "type": "module",
@@ -20,7 +20,8 @@
     "worker:build": "node build-worker.mjs",
     "worker:typecheck": "tsc -p tsconfig.worker.json --noEmit",
     "worker:dev": "wrangler dev --ip 0.0.0.0",
-    "worker:test": "npm run worker:typecheck && npm run worker:build && node --test worker-tests/*.test.mjs",
+    "worker:test": "npm run version:check && npm run worker:typecheck && npm run worker:build && npm run render:build && node --test worker-tests/*.test.mjs",
+    "esbuild:check": "node scripts/esbuild-check.mjs",
     "worker:deploy": "node scripts/deploy-cloudflare.mjs",
     "worker:db:local": "wrangler d1 migrations apply DB --local",
     "worker:db:remote": "wrangler d1 migrations apply DB --remote",
@@ -28,12 +29,16 @@
     "deployer:ui": "node scripts/local-deployer-ui.mjs",
     "local": "npm run deployer:ui",
     "scraper:local": "npm run render:build && npm run render:start",
-    "browsers:install": "playwright install chromium || true; puppeteer browsers install chrome || true"
+    "browsers:install": "playwright install chromium || true; puppeteer browsers install chrome || true",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.1",
     "cheerio": "^1.1.2",
     "crawlee": "^3.18.1",
+    "esbuild": "^0.25.9",
+    "esbuild-wasm": "^0.25.9",
     "hono": "^4.13.3",
     "pg": "^8.16.3",
     "playwright": "^1.63.0",
@@ -44,7 +49,6 @@
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/pg": "^8.15.5",
-    "esbuild": "^0.25.9",
     "fflate": "^0.7.4",
     "linkedom": "^0.18.12",
     "typescript": "^5.9.2",

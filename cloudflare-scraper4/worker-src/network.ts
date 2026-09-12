@@ -1,3 +1,4 @@
+import { meterSubrequest } from './db.js';
 import { getEnv } from './env.js';
 import { loadConnections } from './connections.js';
 
@@ -22,13 +23,29 @@ function redirectedInit(init:RequestInit,from:URL,to:URL,status:number):RequestI
   if(status===303||((status===301||status===302)&&String(next.method||'GET').toUpperCase()==='POST'))next={...next,method:'GET',body:undefined};
   return next;
 }
-export async function safeFetch(raw:string,init:RequestInit={},maxBytes?:number,timeoutMs?:number):Promise<Response>{
+/**
+ * Extra flag understood by safeFetch: send ONLY the caller's headers, with no
+ * browser-shaped defaults. Required for JSON APIs (Basalam, WooCommerce REST).
+ */
+export type ApiRequestInit = RequestInit & { apiMode?: boolean };
+
+export async function safeFetch(raw:string,init:ApiRequestInit={},maxBytes?:number,timeoutMs?:number):Promise<Response>{
   let url=assertPublicUrl(raw),requestInit={...init};const env=getEnv(),limit=Math.min(25_000_000,Math.max(1000,maxBytes||Number(env.MAX_RESPONSE_BYTES)||8_000_000));
   for(let redirects=0;redirects<5;redirects++){
     const wait=Number(timeoutMs)>0?Math.max(50,Number(timeoutMs)):Math.max(1000,Number(env.REQUEST_TIMEOUT_MS)||25_000),controller=new AbortController(),timeout=setTimeout(()=>controller.abort('timeout'),wait);
     try{
-      const requestHeaders=new Headers({'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',accept:'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5','accept-language':'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6','cache-control':'no-cache'});new Headers(requestInit.headers).forEach((value,name)=>requestHeaders.set(name,value));
-      const response=await fetch(url.href,{...requestInit,redirect:'manual',signal:controller.signal,headers:requestHeaders});
+      // Browser-shaped defaults exist for SCRAPING shop pages. They must never
+      // reach a JSON API: a desktop-Chrome user-agent with no matching browser
+      // fingerprint is a classic WAF signature, and Basalam/Cloudflare answer it
+      // with 401 "invalid authorization header" / 522 before the token is read.
+      // The reference implementation (scraper4.php) sends only Accept,
+      // Authorization and Content-Type. `apiMode` reproduces exactly that.
+      const apiMode=init.apiMode===true;
+      const requestHeaders=apiMode?new Headers():new Headers({'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',accept:'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5','accept-language':'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6','cache-control':'no-cache'});
+      new Headers(requestInit.headers).forEach((value,name)=>requestHeaders.set(name,value));
+      const {apiMode:_apiMode,...fetchInit}=requestInit as any;
+      meterSubrequest();
+      const response=await fetch(url.href,{...fetchInit,redirect:'manual',signal:controller.signal,headers:requestHeaders});
       if([301,302,303,307,308].includes(response.status)){
         const location=response.headers.get('location');await response.body?.cancel();if(!location)throw new Error('Redirect without location');const nextUrl=assertPublicUrl(new URL(location,url).href);requestInit=redirectedInit(requestInit,url,nextUrl,response.status);url=nextUrl;continue;
       }
@@ -54,24 +71,63 @@ async function responseText(response:Response,url:string):Promise<{text:string;u
   if(!response.ok)throw new Error(`HTTP ${response.status} from ${url}`);const contentType=response.headers.get('content-type')||'',bytes=new Uint8Array(await response.arrayBuffer()),text=decodeResponseBody(bytes,contentType),finalUrl=response.headers.get('x-scraper-final-url')||url;ensureTextResponse(text,contentType,finalUrl);return{text,url:finalUrl,contentType};
 }
 export async function safeText(raw:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{return responseText(await safeFetch(raw,{},maxBytes),raw)}
+/**
+ * Normalises a user-entered proxy/Worker address.
+ *
+ * People paste the bare hostname they see in the Cloudflare dashboard, e.g.
+ * "proxy.example.workers.dev". Without a scheme that string is a RELATIVE URL,
+ * so it used to resolve against the scraper's own origin and every request came
+ * back 404. Adding https:// turns it back into the absolute address the user meant.
+ * Returns '' for an empty value so callers keep their own "not configured" errors.
+ */
+export function normalizeProxyUrl(raw:string):string{
+  const value=String(raw||'').trim();
+  if(!value)return '';
+  if(/^https?:\/\//i.test(value))return value;
+  // Reject anything that is clearly not a host (a path, or a bare word).
+  if(value.startsWith('/'))throw new Error(`آدرس پراکسی «${value}» نسبی است؛ باید با https:// شروع شود.`);
+  return 'https://'+value.replace(/^\/+/,'');
+}
 export async function safeTextViaWorker(raw:string,workerUrl:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{
-  const target=assertPublicUrl(raw).href,base=workerUrl.trim();if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'');const response=await safeFetch(gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},maxBytes),result=await responseText(response,target);return {...result,url:target};
+  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'');const response=await safeFetch(gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},maxBytes),result=await responseText(response,target);return {...result,url:target};
 }
 
 const WOO_EDGE_ERRORS=new Set([520,521,522,523,524,525,526]);
-function wooGatewayUrl(target:string,workerUrl:string):string{const base=workerUrl.trim();if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'')}
+function wooGatewayUrl(target:string,workerUrl:string):string{const base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'')}
 async function tagNetwork(response:Response,mode:'direct'|'worker',fallbackStatus=0):Promise<Response>{const headers=new Headers(response.headers);headers.set('x-scraper-network-mode',mode);if(fallbackStatus)headers.set('x-scraper-direct-status',String(fallbackStatus));return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers})}
-async function workerFetch(target:string,workerUrl:string,init:RequestInit,maxBytes:number|undefined,fallbackStatus=0):Promise<Response>{const headers=new Headers(init.headers);headers.set('x-target-url',target);headers.set('x-scraper-target-url',target);return tagNetwork(await safeFetch(wooGatewayUrl(target,workerUrl),{...init,headers},maxBytes),'worker',fallbackStatus)}
+async function workerFetch(target:string,workerUrl:string,init:ApiRequestInit,maxBytes:number|undefined,fallbackStatus=0):Promise<Response>{const headers=new Headers(init.headers);headers.set('x-target-url',target);headers.set('x-scraper-target-url',target);return tagNetwork(await safeFetch(wooGatewayUrl(target,workerUrl),{...init,headers},maxBytes),'worker',fallbackStatus)}
 /**
  * WooCommerce-aware request path. In automatic mode a Cloudflare 52x origin
  * failure is retried once through the configured reverse Worker. The original
  * method/body/authentication are preserved and all normal safeFetch limits still apply.
  */
+/**
+ * Basalam-aware request path.
+ *
+ * The «اتصال غیرمستقیم» checkbox in the Basalam settings was stored but never
+ * read by any request, so turning it on did nothing. Basalam (like many Iranian
+ * services) rejects or blackholes traffic from datacenter ranges, which surfaces
+ * as a 401 "invalid authorization header" for a token that is provably valid —
+ * the edge answers before the token is ever checked.
+ *
+ * When indirect mode is on, Basalam calls are routed through the same reverse
+ * Worker used for WooCommerce, so they leave from that Worker instead. The
+ * Authorization header is preserved end-to-end.
+ */
+export async function safeBasalamFetch(raw:string,init:RequestInit={},maxBytes?:number):Promise<Response>{
+  const target=assertPublicUrl(raw).href,connections=await loadConnections();
+  const indirect=Boolean((connections.basalam as any)?.netIndirect);
+  const workerUrl=connections.woo.network?.workerUrl||'';
+  if(indirect&&workerUrl)return workerFetch(target,workerUrl,{...init,apiMode:true},maxBytes);
+  if(indirect&&!workerUrl)
+    throw new Error('«اتصال غیرمستقیم» برای باسلام روشن است اما آدرس Worker واسط وارد نشده؛ آن را در «🛒 ووکامرس ← روش اتصال» تنظیم کنید.');
+  return safeFetch(target,{...init,apiMode:true},maxBytes);
+}
 export async function safeWooFetch(raw:string,init:RequestInit={},maxBytes?:number):Promise<Response>{
   const target=assertPublicUrl(raw).href,connections=await loadConnections(),config=connections.woo.network||{mode:'auto',workerUrl:''},workerUrl=config.workerUrl||'';
   if(config.mode==='worker')return workerFetch(target,workerUrl,init,maxBytes);
   try{
-    const direct=await safeFetch(target,init,maxBytes);
+    const direct=await safeFetch(target,{...init,apiMode:true},maxBytes);
     if(config.mode==='auto'&&workerUrl&&WOO_EDGE_ERRORS.has(direct.status)){const status=direct.status;await direct.body?.cancel();return workerFetch(target,workerUrl,init,maxBytes,status)}
     return tagNetwork(direct,'direct');
   }catch(error){if(config.mode==='auto'&&workerUrl)return workerFetch(target,workerUrl,init,maxBytes);throw error}

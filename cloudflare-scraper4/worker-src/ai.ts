@@ -1,15 +1,29 @@
+import { normalizePersianText } from './utils.js';
 import { MISTRAL_MODEL_ENDPOINTS, OPENROUTER_NON_CHAT_MODELS } from './ai-catalog.js';
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
-import { assertPublicUrl, safeFetch } from './network.js';
+import { assertPublicUrl, normalizeProxyUrl, safeFetch } from './network.js';
 
 export type CfAccountKey={accountId:string;token:string};
-export type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels:string[];enabled:boolean};
+export type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels:string[];nonChatModels?:string[];vendor?:string;enabled:boolean};
 type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string};
 type AiAttempt={endpoint:string;body:string|string[];model:string;httpStatus?:number;phase:'network'|'http'|'success';error?:string};
 type RequestResult={response?:Response;body?:any;rawText?:string;networkError?:string};
 
-function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';const apiKey=typeof first==='string'?first:first?.token||'';return{...provider,apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
+/**
+ * The hamburger menu still exposes a single shared Base URL/API key, and many
+ * saved vaults only have that one filled in. A provider row that carries no key
+ * of its own may therefore still be usable: borrow the shared key when it points
+ * at the same service, otherwise every model reports a missing key even though
+ * the user did enter one.
+ */
+function sharedKeyFitsProvider(ai:any,provider:any):boolean{
+  const host=(value:string)=>{try{return new URL(String(value)).host.toLowerCase()}catch{return ''}};
+  const shared=host(ai?.baseUrl||'');const own=host(provider?.baseUrl||'');
+  if(!String(ai?.apiKey||'').trim())return false;
+  return !own||!shared||own===shared;
+}
+function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';let apiKey=typeof first==='string'?first:first?.token||'';if(!String(apiKey).trim()&&String(ai.apiKey||'').trim()&&sharedKeyFitsProvider(ai,provider))apiKey=String(ai.apiKey);return{...provider,baseUrl:String(provider.baseUrl||'').trim()||(sharedKeyFitsProvider(ai,provider)?String(ai.baseUrl||''):''),apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[],nonChatModels:Array.isArray(provider.nonChatModels)?provider.nonChatModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
 
 /** Active API keys of a provider (fallback to the single apiKey). */
 export function providerKeys(provider:Provider):string[]{
@@ -46,14 +60,34 @@ export async function preferredAiChatModel():Promise<{provider:Provider;model:st
 }
 
 export type AiModelEndpoint='chat-completions'|'ocr'|'embeddings';
-type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'>>;
+type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'|'nonChatModels'>>;
 function isMistralProvider(provider:AiEndpointProvider):boolean{return provider.id==='mistral'||/api\.mistral\.ai/i.test(String(provider.baseUrl||''))}
 export function aiModelEndpoint(provider:AiEndpointProvider,model:string):AiModelEndpoint{return isMistralProvider(provider)?MISTRAL_MODEL_ENDPOINTS[model]||'chat-completions':'chat-completions'}
-export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
+export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(provider.nonChatModels?.includes(model))return false;if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
+
+/**
+ * A provider is only testable when it has a base URL, at least one API key and a
+ * model. The old code threw one generic "provider/model config is incomplete"
+ * error from deep inside aiCall, so a user testing every model saw the same
+ * opaque message on every row with no hint which field was missing. Local
+ * runtimes (Ollama) need no key, so they are exempt from the key requirement.
+ */
+function isKeylessAiProvider(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'>>):boolean{
+  const base=String(provider.baseUrl||'');
+  return provider.id==='ollama'||/(^|\/\/)(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)([:/]|$)/i.test(base)||/(^|\.)ollama\b/i.test(base);
+}
+/** Returns a precise Persian reason why this provider/model cannot be called, or '' when it is usable. */
+export function aiConfigProblem(provider:Provider,model:string):string{
+  const name=String(provider.name||provider.id||'ارائه‌دهنده');
+  if(!String(provider.baseUrl||'').trim())return `آدرس سرویس (Base URL) برای «${name}» تنظیم نشده است.`;
+  if(!String(model||'').trim())return `برای «${name}» هیچ مدلی انتخاب نشده است.`;
+  if(!String(provider.apiKey||'').trim()&&!isKeylessAiProvider(provider))return `کلید API برای «${name}» وارد نشده است؛ در بخش ارائه‌دهنده‌ها کلید را ثبت کنید.`;
+  return '';
+}
 
 export async function aiCall(provider:Provider,model:string,prompt:string,networkOverride?:Network,timeoutMs?:number,batchId?:string){
   const network=networkOverride||(await loadConnections()).ai.network;
-  if(!provider.baseUrl||!provider.apiKey||!model)throw new Error('تنظیمات ارائه‌دهنده/مدل کامل نیست');
+  {const problem=aiConfigProblem(provider,model);if(problem)throw new Error(problem);}
   const started=Date.now();
   if(isCloudflareNative(provider.baseUrl))return cloudflareCall(provider,model,prompt,network,started,timeoutMs);
   const endpointType=aiModelEndpoint(provider,model);
@@ -80,7 +114,7 @@ export async function aiCall(provider:Provider,model:string,prompt:string,networ
 /** Chat with full conversation history (aiCall only sends a single prompt). */
 export async function aiChat(provider:Provider,model:string,messages:Array<{role:string;content:string}>,networkOverride?:Network,timeoutMs?:number,maxTokens=1200,keyIndex=0){const providerUsed=providerWithKey(provider,keyIndex);provider=providerUsed;
   const network=networkOverride||(await loadConnections()).ai.network;
-  if(!provider.baseUrl||!provider.apiKey||!model)throw new Error('تنظیمات ارائه‌دهنده/مدل کامل نیست');
+  {const problem=aiConfigProblem(provider,model);if(problem)throw new Error(problem);}
   const started=Date.now(),chatMessages=messages.slice(-40).map(m=>({role:String(m.role||'user'),content:String(m.content||'')}));
   if(!chatMessages.length||chatMessages[chatMessages.length-1].role!=='user')throw new Error('آخرین پیام باید از سمت کاربر باشد.');
   const lastPrompt=chatMessages[chatMessages.length-1].content;
@@ -146,7 +180,7 @@ export function parseAgentTurn(body:any):{text:string;toolCalls:AiToolCall[]}{
  */
 export async function aiAgentCall(provider:Provider,model:string,messages:Array<{role:string;content:string|null;tool_call_id?:string;tool_calls?:Array<{id:string;type:string;function:{name:string;arguments:string}}>}>,tools:AiTool[],networkOverride?:Network,timeoutMs?:number,maxTokens=2000):Promise<AiAgentTurn>{
   const network=networkOverride||(await loadConnections()).ai.network,started=Date.now();
-  if(!provider.baseUrl||!provider.apiKey||!model)throw new Error('تنظیمات ارائه‌دهنده/مدل کامل نیست');
+  {const problem=aiConfigProblem(provider,model);if(problem)throw new Error(problem);}
   const canonical=canonicalAiModel(model);
   if(isCloudflareNative(provider.baseUrl)){
     const accountId=cloudflareAccountId(provider.baseUrl);
@@ -250,7 +284,7 @@ function cloudflareModelIds(raw:string):string[]{
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.69.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.127.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -336,7 +370,7 @@ function categoryRows(title:string,categories:AiCategoryOption[]){
   const words=normalizeCategoryText(title).split(' ').filter(word=>word.length>1),rows=categories.filter(row=>Number.isInteger(Number(row.id))&&Number(row.id)>0&&(row.leaf!==false||!categories.some(other=>Number(other.parentId)===Number(row.id))));
   return rows.map((row,index)=>{const name=String(row.path||row.name),normalized=normalizeCategoryText(name),score=words.reduce((sum,word)=>sum+(normalized.includes(word)?word.length+2:0),0);return{row,index,name,score}}).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,500);
 }
-function normalizeCategoryText(value:string){return String(value||'').toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim()}
+function normalizeCategoryText(value:string){return normalizePersianText(value).replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim()}
 function categoryPrompt(title:string,categories:AiCategoryOption[]){const ranked=categoryRows(title,categories),allowed:AiCategoryOption[]=[],lines:string[]=[];let length=0;for(const item of ranked){const line=`${item.row.id} | ${item.name}`;if(length+line.length+1>18_000)break;lines.push(line);allowed.push(item.row);length+=line.length+1}if(!lines.length)throw new Error('فهرست معتبر دسته‌بندی باسلام در دسترس نیست.');return{allowed,prompt:`برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}`}}
 function parseCategoryId(text:string,categories:AiCategoryOption[]){const source=String(text||''),valid=new Set(categories.map(row=>Number(row.id)));for(const candidate of [source,...[...source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map(match=>match[1])])try{const parsed=JSON.parse(candidate.trim());const id=Number(parsed?.category_id??parsed?.categoryId??parsed?.id);if(valid.has(id))return id}catch{/* response can contain prose */}for(const match of source.matchAll(/["']?category_(?:id)?["']?\s*[:=]\s*["']?(\d+)/gi)){const id=Number(match[1]);if(valid.has(id))return id}const numbers=[...source.matchAll(/\d+/g)].map(match=>Number(match[0])).filter(id=>valid.has(id));return numbers.length?numbers.at(-1)!:0}
 async function categoryWithTask(task:AiTestTask,title:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number){
@@ -408,8 +442,14 @@ function skippedAiTestResult(task:AiTestTask,prompt:string,categoryTitle:string,
   const error=String(reason||'پس از چند تلاش، پاسخ این نوبت از Worker دریافت نشد.');
   return{ok:false,skipped:true,retryable:true,phase:'transport-skip',key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model,prompt,latencyMs:0,error,raw:{error},categoryTitle,categoryResult:categoryTitle?{ok:false,skipped:true,phase:'transport-skip',key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model,prompt:categoryTitle,latencyMs:0,error,raw:{error}}:null,catResponse:categoryTitle?error:''};
 }
+function unconfiguredAiTestResult(task:AiTestTask,prompt:string,categoryTitle:string,problem:string){
+  // Reported as a skip (not a failure) so an unconfigured provider cannot make the whole run look broken.
+  return{ok:false,skipped:true,retryable:false,phase:'configuration',key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model,prompt,latencyMs:0,error:problem,raw:{error:problem},categoryTitle,categoryResult:categoryTitle?{ok:false,skipped:true,phase:'configuration',key:task.key,provider:task.p.id,providerName:task.p.name,model:task.model,prompt:categoryTitle,latencyMs:0,error:problem,raw:{error:problem}}:null,catResponse:categoryTitle?problem:''};
+}
 async function executeAiTestTask(task:AiTestTask,prompt:string,categoryTitle:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number,skipCurrent=false,skipReason='',batchId=''){
   if(skipCurrent)return skippedAiTestResult(task,prompt,categoryTitle,skipReason);
+  const configProblem=aiConfigProblem(task.p,task.model);
+  if(configProblem)return unconfiguredAiTestResult(task,prompt,categoryTitle,configProblem);
   let message:any;try{message={...await aiCall(task.p,task.model,prompt,network,timeoutMs,batchId),key:task.key}}catch(error){message=aiTestFailure(error,task,prompt)}
   let categoryResult:any=null;
   if(categoryTitle&&!message.ok)categoryResult={ok:false,skipped:true,phase:'message-failed',key:task.key,provider:task.p.id,providerName:task.p.name,model:task.model,prompt:categoryTitle,latencyMs:0,error:'چون پاسخ پیام ناموفق بود، تست دسته‌بندی این مدل رد شد تا صف گیر نکند.',raw:{reason:'message-failed'}};
@@ -420,6 +460,8 @@ async function executeAiTestTask(task:AiTestTask,prompt:string,categoryTitle:str
 }
 function categoryResponseText(categoryResult:any,categories:AiCategoryOption[]){return categoryResult?.ok?`${categoryResult.categoryName} (#${categoryResult.categoryId})`:categoryResult?.error||(!categories.length?'فهرست دسته‌بندی در دسترس نیست':'')}
 async function executeAiTestPart(task:AiTestTask,prompt:string,categoryTitle:string,categories:AiCategoryOption[],network:Network,timeoutMs:number|undefined,part:'message'|'category',previousRow:any){
+  const configProblem=aiConfigProblem(task.p,task.model);
+  if(configProblem)return unconfiguredAiTestResult(task,prompt,categoryTitle,configProblem);
   if(part==='message'){
     let message:any;try{message={...await aiCall(task.p,task.model,prompt,network,timeoutMs,String(previousRow?.batchId||'')),key:task.key}}catch(error){message=aiTestFailure(error,task,prompt)}
     const row:any={...previousRow,...message,key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,categoryTitle,categoryResult:previousRow?.categoryResult??null,catResponse:previousRow?.catResponse||'',messageRetryCount:Number(previousRow?.messageRetryCount||0)+1,retryCount:Number(previousRow?.retryCount||0)+1};
@@ -482,6 +524,68 @@ function redactRaw(value:any):any{if(Array.isArray(value))return value.map(redac
 function safeEndpoint(raw:string){try{const url=new URL(raw);url.username='';url.password='';for(const key of [...url.searchParams.keys()])if(/(?:key|token|secret|password|auth)/i.test(key))url.searchParams.set(key,'[پنهان]');return url.toString()}catch{return raw.replace(/([?&](?:key|token|secret|password|auth)[^=]*=)[^&]+/gi,'$1[پنهان]')}}
 function safeError(raw:string,endpoint:string,apiKey:string):string{let value=String(raw||'').replaceAll(endpoint,safeEndpoint(endpoint));if(apiKey)value=value.replaceAll(apiKey,'[پنهان]');return value}
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}
+// ─── AI description generator ────────────────────────────────────────────────
+// Mirrors render-src/ai.ts so the Cloudflare Worker and the Node runtime fill
+// missing product content identically. Only EMPTY fields are written: text that
+// was really scraped from the source site is never overwritten.
+export function productNeedsEnrichment(product:any):{longDesc:boolean;shortDesc:boolean;images:boolean;variations:boolean;any:boolean}{
+  const text=(value:unknown)=>String(value??'').trim();
+  const longDesc=text(product?.longDesc).length<40;
+  const shortDesc=text(product?.shortDesc).length<10;
+  const images=!Array.isArray(product?.images)||product.images.filter((x:unknown)=>text(x)).length<2;
+  const variations=!Array.isArray(product?.variations)||product.variations.length===0;
+  return{longDesc,shortDesc,images,variations,any:longDesc||shortDesc||variations};
+}
+function firstJsonObject(text:string):any{
+  const raw=String(text||'').replace(/```json/gi,'```').replace(/```/g,'');
+  const start=raw.indexOf('{');
+  if(start<0)return null;
+  for(let end=raw.lastIndexOf('}');end>start;end=raw.lastIndexOf('}',end-1)){
+    try{return JSON.parse(raw.slice(start,end+1))}catch{/* keep shrinking */}
+  }
+  return null;
+}
+export type DescriptionResult={ok:boolean;changed:boolean;fields:string[];model?:string;provider?:string;error?:string};
+export async function generateProductDescription(product:any,options:{force?:boolean}={}):Promise<DescriptionResult>{
+  const need=productNeedsEnrichment(product);
+  if(!options.force&&!need.any)return{ok:true,changed:false,fields:[]};
+  const picked=await preferredAiChatModel();
+  if(!picked)return{ok:false,changed:false,fields:[],error:'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.'};
+  const context=[
+    `نام محصول: ${String(product?.title||'').trim()}`,
+    product?.brand?`برند: ${product.brand}`:'',
+    product?.category?`دسته‌بندی: ${product.category}`:'',
+    product?.priceText?`قیمت: ${product.priceText}`:'',
+    product?.sku?`کد کالا: ${product.sku}`:'',
+    String(product?.shortDesc||'').trim()?`توضیح کوتاه موجود: ${product.shortDesc}`:''
+  ].filter(Boolean).join('\n');
+  const prompt=`تو یک کارشناس تولید محتوای فروشگاهی فارسی هستی. بر اساس اطلاعات زیر، محتوای فروشگاهی بنویس.
+${context}
+
+فقط و فقط یک شیء JSON معتبر برگردان، بدون هیچ متن اضافه و بدون بلوک کد، دقیقاً با این کلیدها:
+{"shortDesc":"یک جملهٔ کوتاه جذاب","longDesc":"<p>توضیح کامل در دو تا سه پاراگراف HTML ساده</p>","variations":["تنوع ۱","تنوع ۲"]}
+
+قوانین: همه‌چیز فارسی و روان باشد. اگر تنوع مشخصی از نام محصول قابل استنباط نیست، آرایهٔ variations را خالی بگذار. هیچ ادعای نادرست یا مشخصات فنی ساختگی ننویس.`;
+  try{
+    const answer=await aiChat(picked.provider,picked.model,[{role:'user',content:prompt}],undefined,undefined,900);
+    const parsed=firstJsonObject(answer.text);
+    if(!parsed)return{ok:false,changed:false,fields:[],provider:picked.provider.id,model:picked.model,error:'پاسخ مدل قابل تبدیل به JSON نبود.'};
+    const fields:string[]=[],clean=(value:unknown)=>String(value??'').trim();
+    if((options.force||need.shortDesc)&&clean(parsed.shortDesc)){product.shortDesc=clean(parsed.shortDesc);fields.push('shortDesc')}
+    if((options.force||need.longDesc)&&clean(parsed.longDesc)){product.longDesc=clean(parsed.longDesc);fields.push('longDesc')}
+    if((options.force||need.variations)&&Array.isArray(parsed.variations)){
+      const list=parsed.variations.map(clean).filter(Boolean).slice(0,20);
+      if(list.length){product.variations=list;fields.push('variations')}
+    }
+    // The gallery is never invented: images must come from the source site.
+    if(need.images&&Array.isArray(product?.images)&&product.image&&!product.images.includes(product.image))product.images=[product.image,...product.images];
+    product.aiEnrichedAt=new Date().toISOString();
+    return{ok:true,changed:fields.length>0,fields,provider:picked.provider.id,model:picked.model};
+  }catch(error){
+    return{ok:false,changed:false,fields:[],provider:picked.provider.id,model:picked.model,error:error instanceof Error?error.message:String(error)};
+  }
+}
+
 export async function getLeaderboard(){return leaderboard(await getState<any>('ai_votes',{scores:{},history:[]}))}
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
-async function networkFetch(url:string,init:RequestInit,net:Network,timeoutMs?:number):Promise<Response>{assertPublicUrl(url);if(net.mode==='direct'||!net.mode)return safeFetch(url,init,3_000_000,timeoutMs);if(net.workerUrl){const target=net.workerUrl.includes('{url}')?net.workerUrl.replace('{url}',encodeURIComponent(url)):net.workerUrl+(net.workerUrl.includes('?')?'&':'?')+'url='+encodeURIComponent(url);return safeFetch(target,{...init,headers:{...init.headers,'x-scraper-target':url}},3_000_000,timeoutMs)}throw new Error(`حالت شبکه «${net.mode}» در Workers به Worker/Gateway واسط نیاز دارد؛ workerUrl را تنظیم کنید.`)}
+async function networkFetch(url:string,init:RequestInit,net:Network,timeoutMs?:number):Promise<Response>{assertPublicUrl(url);if(net.mode==='direct'||!net.mode)return safeFetch(url,init,3_000_000,timeoutMs);if(net.workerUrl){const base=normalizeProxyUrl(net.workerUrl);const target=base.includes('{url}')?base.replace('{url}',encodeURIComponent(url)):base+(base.includes('?')?'&':'?')+'url='+encodeURIComponent(url);return safeFetch(target,{...init,headers:{...init.headers,'x-scraper-target':url}},3_000_000,timeoutMs)}throw new Error(`حالت شبکه «${net.mode}» در Workers به Worker/Gateway واسط نیاز دارد؛ workerUrl را تنظیم کنید.`)}

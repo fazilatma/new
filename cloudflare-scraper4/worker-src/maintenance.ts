@@ -1,11 +1,13 @@
 import { loadConnections } from './connections.js';
-import { getState, learnCategory, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
-import { buildDedupGroups, normalizeDedupKeep, parseSuffixFormats } from './dedup.js';
-import { safeFetch, safeWooFetch } from './network.js';
-import { basicAuth } from './utils.js';
+import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
+import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, unreachableAccountRows, summarize } from './recon-core.js';
+import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
+import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, suffixPatterns } from './dedup.js';
+import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
+import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
 
-const norm=(v:string)=>String(v||'').toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/\s+/g,' ').replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
+const norm=(v:string)=>normalizePersianText(v).replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
 type Target='woo'|'basalam';
 type Shop={name:string;token:string;vendorId:string;pricePercent:number;primary:boolean};
 export type Remote={id:number;name:string;title:string;sku:string;images:string[];image:string;status:string;statusLabel:string;price:number;priceRaw:number;stock:number|null;category:string;categoryId:number|null;shopId:string;shopName:string;rejectionReason:string;shortDescription:string;description:string;raw:any};
@@ -13,11 +15,219 @@ type CatalogQuery={page?:number;perPage?:number;q?:string;status?:string;shopId?
 type ProductRef={id:number;shopId:string};
 export type DestinationCategory={id:number;name:string;path:string;parentId:number|null;depth:number;leaf:boolean};
 
+/**
+ * PHP scraper4 v10.170 parity: reconciliation ("مغایرت‌گیری") table.
+ *
+ * `recon()` only answered "is this local row mapped to a remote id?". The PHP
+ * edition answers the question shop owners actually ask: for every product,
+ * does the destination agree with the source, and if not, why? Every remote and
+ * every local product is bucketed exactly once:
+ *
+ *   matched    - found in both, price agrees
+ *   priceDiff  - found in both, destination price differs (from -> to)
+ *   extra      - exists in the destination but in no profile/source
+ *   missing    - exists in the source but not in the destination
+ *   noPrice    - matched, but the source has no price so it cannot be compared
+ *
+ * Title matching uses reconNormTitle (shared Persian normalizer + product-code
+ * suffix stripping); when titles were edited at the destination we still match
+ * through the stored remote id, exactly like PHP's `$idMap` fallback.
+ */
+export type ReconRow={
+  bucket:'matched'|'priceDiff'|'extra'|'missing'|'noPrice';
+  title:string;remoteTitle:string;remoteId:number|null;
+  profileId:string;sourceKey:string;
+  sourcePrice:number|null;remotePrice:number|null;delta:number|null;
+  matchedBy:'id'|'sku'|'title'|'none';
+  shopId:string;shopName:string;status:string;why:string;
+};
+/* Title key for reconciliation lives in the shared core so the Worker, the Node
+   runtime and the unified table all group titles identically. */
+export { reconNormTitle } from './recon-core.js';
+import { reconNormTitle } from './recon-core.js';
+const reconPrice=(value:unknown):number|null=>{const n=Math.round(Number(value)||0);return n>0?n:null};
+
+export type ReconTable=Awaited<ReturnType<typeof reconTable>>;
+export async function reconTable(target:Target,profileId=''){
+  const local=await maintenanceRows(profileId),remote=await remoteProducts(target);
+  const rows:ReconRow[]=[];
+  // Index the source side by normalized title, by sku and by stored remote id.
+  const byTitle=new Map<string,any[]>(),bySku=new Map<string,any>(),byRemoteId=new Map<number,any>();
+  for(const row of local){
+    const key=reconNormTitle(row.title);
+    if(key){const list=byTitle.get(key)||[];list.push(row);byTitle.set(key,list)}
+    const sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);
+    if(sku&&!bySku.has(sku))bySku.set(sku,row);
+    const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0);
+    if(mapped>0&&!byRemoteId.has(mapped))byRemoteId.set(mapped,row);
+  }
+  const consumed=new Set<any>();
+  for(const item of remote){
+    const key=reconNormTitle(item.name||item.title||'');
+    // PHP order: title first, then the stored id (destination titles get edited).
+    let source=(byTitle.get(key)||[]).find(row=>!consumed.has(row))||null,matchedBy:ReconRow['matchedBy']=source?'title':'none';
+    if(!source&&item.sku&&bySku.has(item.sku)){const candidate=bySku.get(item.sku);if(!consumed.has(candidate)){source=candidate;matchedBy='sku'}}
+    if(!source&&byRemoteId.has(item.id)){const candidate=byRemoteId.get(item.id);if(!consumed.has(candidate)){source=candidate;matchedBy='id'}}
+    const remotePrice=reconPrice(item.price);
+    if(!source){
+      rows.push({bucket:'extra',title:item.name||item.title||'',remoteTitle:item.name||item.title||'',remoteId:item.id||null,profileId:'',sourceKey:'',sourcePrice:null,remotePrice,delta:null,matchedBy:'none',shopId:String(item.shopId||''),shopName:String(item.shopName||''),status:String(item.status||''),why:'در هیچ پروفایل/مبدأ نیست'});
+      continue;
+    }
+    consumed.add(source);
+    const sourcePrice=reconPrice(source.price);
+    const base={title:source.title||'',remoteTitle:item.name||item.title||'',remoteId:item.id||null,profileId:String(source.profile_id||''),sourceKey:String(source.source_key||''),sourcePrice,remotePrice,matchedBy,shopId:String(item.shopId||''),shopName:String(item.shopName||''),status:String(item.status||'')};
+    if(sourcePrice===null)rows.push({...base,bucket:'noPrice',delta:null,why:'قیمت مبدأ ثبت نشده — مقایسه نشد'});
+    else if(remotePrice!==sourcePrice)rows.push({...base,bucket:'priceDiff',delta:(remotePrice||0)-sourcePrice,why:'قیمت مقصد با مبدأ یکی نیست'});
+    else rows.push({...base,bucket:'matched',delta:0,why:''});
+  }
+  for(const row of local){
+    if(consumed.has(row))continue;
+    if(!row.active)continue; // retired products are not "missing"
+    rows.push({bucket:'missing',title:row.title||'',remoteTitle:'',remoteId:null,profileId:String(row.profile_id||''),sourceKey:String(row.source_key||''),sourcePrice:reconPrice(row.price),remotePrice:null,delta:null,matchedBy:'none',shopId:'',shopName:'',status:'',why:'در مبدأ هست ولی در مقصد نیست'});
+  }
+  const count=(bucket:ReconRow['bucket'])=>rows.filter(row=>row.bucket===bucket).length;
+  const summary={matched:count('matched'),priceDiff:count('priceDiff'),extra:count('extra'),missing:count('missing'),noPrice:count('noPrice')};
+  const matchedByTitle=rows.filter(row=>row.matchedBy==='title').length,matchedBySku=rows.filter(row=>row.matchedBy==='sku').length,matchedById=rows.filter(row=>row.matchedBy==='id').length;
+  const inSync=summary.priceDiff===0&&summary.extra===0&&summary.missing===0;
+  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
+  await setState(`recon_table_${target}`,report);
+  return report;
+}
+
 export async function recon(target:Target,profileId=''){
   const local=await maintenanceRows(profileId),remote=await remoteProducts(target),byId=new Map(remote.map(x=>[x.id,x])),bySku=new Map(remote.filter(x=>x.sku).map(x=>[x.sku,x])),byName=new Map(remote.map(x=>[norm(x.name),x])),used=new Set<number>(),items:any[]=[];
   for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''})}
   const result={target,at:new Date().toISOString(),local:local.length,remote:remote.length,matched:items.filter(x=>x.remoteId).length,missingRemote:items.filter(x=>!x.remoteId&&x.active).length,retired:items.filter(x=>!x.active).length,extraRemote:remote.filter(x=>!used.has(x.id)).map(x=>({id:x.id,title:x.name,status:x.status})),items};await setState(`recon_${target}`,result);return result;
 }
+/**
+ * Unified reconciliation across profiles, WooCommerce and every Basalam stall.
+ * Same shared algorithm the Node runtime uses; only the data access differs.
+ */
+export async function reconAccounts():Promise<ReconAccount[]>{
+  const c=await loadConnections(),accounts:ReconAccount[]=[];
+  if(c.woo?.url&&c.woo?.key&&c.woo?.secret)accounts.push({target:'woo',accountKey:'default',name:'ووکامرس',pricePercent:Number(c.woo.pricePercent)||0});
+  if(c.basalam?.token&&c.basalam?.vendorId){
+    accounts.push({target:'basalam',accountKey:String(c.basalam.vendorId),name:'باسلام — غرفهٔ پیش‌فرض',pricePercent:Number(c.basalam.pricePercent)||0,toRial:true});
+    for(const shop of (c.basalam.shops||[])){
+      if(!shop.token||!shop.vendorId||String(shop.vendorId)===String(c.basalam.vendorId))continue;
+      accounts.push({target:'basalam',accountKey:String(shop.vendorId),name:`باسلام — ${shop.name||shop.vendorId}`,pricePercent:Number(shop.pricePercent)||0,toRial:true});
+    }
+  }
+  return accounts;
+}
+async function remoteForAccount(account:ReconAccount):Promise<ReconRemote[]>{
+  if(account.target==='woo')return (await wooProducts()).map(x=>({id:x.id,name:x.name,sku:x.sku,price:x.price,status:x.status}));
+  const out:ReconRemote[]=[];
+  for(let page=1;page<=100;page++){
+    const data=await basalamCatalog({page,perPage:100,q:'',status:'all',shopId:account.accountKey});
+    for(const x of data.products)out.push({id:x.id,name:x.name,sku:x.sku,price:x.price,status:x.status,shopId:String(account.accountKey),shopName:account.name});
+    if(page>=data.totalPages)break;
+  }
+  return out;
+}
+export async function unifiedRecon(profileId=''){
+  const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
+  for(const profile of await listProfiles())profileNames[profile.id]=profile.name||profile.id;
+  // Reconciliation is limited to products whose title carries a «(کد ایکس)»
+  // suffix, using the same formats the duplicate-remover already uses.
+  const settings=await getState<any>('settings',{});
+  const suffixFormats=settings?.dedup?.suffixFormats||'';
+  const patterns=suffixPatterns(parseSuffixFormats(suffixFormats));
+  const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
+  const skippedNoCode=local.length-eligible.length;
+  const accounts=await reconAccounts(),rows:UnifiedReconRow[]=[],failures:Array<{account:string;error:string}>=[];
+  for(const account of accounts){
+    try{rows.push(...reconcileAccount(local,await remoteForAccount(account),account,profileNames,suffixFormats))}
+    // A destination that cannot be read still contributes one cell per product,
+    // so the comparison table keeps its shape instead of vanishing entirely.
+    catch(error){const message=error instanceof Error?error.message:String(error);failures.push({account:account.name,error:message});rows.push(...unreachableAccountRows(local,account,profileNames,suffixFormats,message))}
+  }
+  const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
+    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows).length,failures,rows};
+  await setState('recon_unified',report);
+  return report;
+}
+export async function unifiedReconApply(profileId='',apply=false,limit=200){
+  const report=await unifiedRecon(profileId);
+  const actions=planActions(report.rows as UnifiedReconRow[],report.suffixFormats).slice(0,Math.max(1,Math.min(1000,limit)));
+  if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),
+    matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
+    noPrice:report.noPrice,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
+    accountsBreakdown:report.accountsBreakdown,profiles:report.profiles,failures:report.failures,
+    rows:report.rows};
+  let changed=0;const failed:any[]=[];
+  for(const action of actions){
+    try{
+      if(action.kind==='updatePrice'&&action.remoteId&&action.toPrice){
+        if(action.target==='woo')await wooUpdate(action.remoteId,{regular_price:String(action.toPrice)});
+        else await basalamUpdateShop(action.accountKey,action.remoteId,{price:action.toPrice});
+        changed++;
+      }else if(action.kind==='create'){
+        // Re-publishing goes through the queue so category/photo/stock rules and
+        // the Worker's CPU budget are respected.
+        await createJob(action.profileId,'sync',action.target==='woo'?'woo':'basalam');
+        changed++;
+      }else if(action.kind==='remove'&&action.remoteId){
+        // Present at the destination but gone from the source: WooCommerce is a
+        // real delete, Basalam has no permanent delete so it is archived (4184).
+        await destinationDelete(action.target,action.remoteId,true,action.target==='basalam'?action.accountKey:'');
+        changed++;
+      }
+    }catch(error){failed.push({title:action.title,account:action.accountName,error:error instanceof Error?error.message:String(error)})}
+  }
+  const after=changed?await unifiedRecon(profileId):report;
+  return{ok:failed.length===0,dryRun:false,planned:actions.length,changed,failed:failed.slice(0,20),
+    matched:after.matched,priceDiff:after.priceDiff,missing:after.missing,extra:after.extra,
+    noPrice:after.noPrice,inSync:after.inSync,local:after.local,localAll:after.localAll,skippedNoCode:after.skippedNoCode,accounts:after.accounts,
+    accountsBreakdown:after.accountsBreakdown,profiles:after.profiles,failures:after.failures,
+    rows:after.rows};
+}
+/**
+ * Request 36b — duplicate cleanup across EVERY destination.
+ *
+ * Scans WooCommerce and each Basalam stall, groups listings whose titles are
+ * identical once the «(کد ایکس)» suffix is removed, and plans the deletion of
+ * all but the most expensive copy (the default, configurable to cheapest).
+ *
+ * `apply=false` returns a preview so the operator can review before anything is
+ * removed; `apply=true` performs the deletions. Nothing in the local scraped
+ * catalogue is ever touched — only destination listings.
+ */
+export async function destinationDuplicates(apply=false,limit=200,keep:'expensive'|'cheapest'='expensive',accountKey=''){
+  const accounts=(await reconAccounts()).filter(a=>!accountKey||String(a.accountKey)===String(accountKey));
+  const settings=await getState<any>('settings',{}),suffixFormats=settings?.dedup?.suffixFormats||'';
+  const actions:any[]=[],failures:any[]=[];
+  for(const account of accounts){
+    try{
+      const remotes=await remoteForAccount(account);
+      actions.push(...planDuplicateDeletions(remotes,account,suffixFormats,keep));
+    }catch(error){failures.push({account:account.name,error:error instanceof Error?error.message:String(error)})}
+  }
+  const byDestination=accounts.map(account=>({
+    account:account.name,accountKey:account.accountKey,target:account.target,
+    duplicates:actions.filter(a=>String(a.accountKey)===String(account.accountKey)&&a.target===account.target).length,
+  }));
+  const capped=actions.slice(0,Math.max(1,Math.min(1000,Number(limit)||200)));
+  if(!apply)return{ok:failures.length===0,dryRun:true,keep,planned:actions.length,willDelete:capped.length,
+    accounts:accounts.length,byDestination,failures,actions:capped.slice(0,200)};
+  let deleted=0,archived=0;const failed:any[]=[];
+  for(const action of capped){
+    try{
+      const result=await destinationDelete(action.target,action.remoteId,true,action.target==='basalam'?action.accountKey:'');
+      if((result as any)?.archived)archived++;else deleted++;
+    }catch(error){failed.push({title:action.title,account:action.accountName,id:action.remoteId,error:error instanceof Error?error.message:String(error)})}
+  }
+  return{ok:failed.length===0&&failures.length===0,dryRun:false,keep,planned:actions.length,processed:capped.length,
+    deleted,archived,accounts:accounts.length,byDestination,failures,failed:failed.slice(0,20),actions:capped.slice(0,200)};
+}
+async function basalamUpdateShop(accountKey:string,id:number,payload:any){
+  const c=(await loadConnections()).basalam;
+  const shop=String(accountKey)===String(c.vendorId)?{token:c.token,vendorId:String(c.vendorId)}:(c.shops||[]).find(s=>String(s.vendorId)===String(accountKey));
+  if(!shop?.token)throw Error('توکن این غرفه در دسترس نیست');
+  const r=await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);
+  if(!r.ok)throw Error(`Basalam update ${id}: HTTP ${r.status}`);
+}
+
 export async function rebuildMap(target:Target,profileId=''){const report=await recon(target,profileId);let mapped=0;for(const item of report.items)if(item.remoteId){await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);mapped++}return{ok:true,target,mapped,unmatched:report.items.length-mapped}}
 export async function retire(target:Target,profileId:string,action:string,apply=false){const rows=(await maintenanceRows(profileId)).filter(x=>!x.active),preview=rows.map(x=>({profileId:x.profile_id,sourceKey:x.source_key,title:x.title,remoteId:target==='woo'?x.remote_woo_id:x.remote_basalam_id,missingSince:x.missing_since,action}));if(!apply||action==='report')return{ok:true,dryRun:true,count:preview.length,items:preview};let changed=0,failed:any[]=[];for(const item of preview){if(!item.remoteId)continue;try{if(target==='woo')await wooUpdate(item.remoteId,action==='trash'?{status:'trash'}:{status:action==='draft'?'draft':'private'});else await basalamUpdate(item.remoteId,{status:action==='trash'?4184:3790});changed++}catch(error){failed.push({title:item.title,error:msg(error)})}}return{ok:failed.length===0,dryRun:false,changed,failed}}
 
@@ -161,7 +371,7 @@ async function basalamStatusCounts(shopId:string){const statuses=['all','2976','
 async function basalamGet(id:number,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{const result=await basalamFetch(shop,endpoint),raw=unwrapProduct(result.body);if(Number(raw?.id||0)>0)return normalizeRemote('basalam',raw,shop.vendorId,shop.name)}catch(error){last=error}}throw last instanceof Error?last:Error(`محصول باسلام #${id} پیدا نشد.`)}
 async function basalamUpdate(id:number,payload:any,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');if(!shops.length)throw Error('غرفهٔ باسلام پیدا نشد.');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{return(await basalamFetch(shop,endpoint,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})).body}catch(error){last=error;if(!(error instanceof DestinationHttpError&&error.status===404))throw error}}throw last instanceof Error?last:Error(`ویرایش محصول باسلام #${id} ناموفق بود.`)}
 async function basalamBatchUpdate(shopId:string,items:any[]){const shop=(await basalamShops()).find(item=>item.vendorId===shopId);if(!shop)throw Error('غرفهٔ باسلام پیدا نشد.');return(await basalamFetch(shop,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/batch-updates`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({data:items})})).body}
-async function basalamFetch(shop:Shop,url:string,init:RequestInit={}){return fetchJson(url,{...init,headers:{authorization:`Bearer ${shop.token}`,accept:'application/json',...init.headers}})}
+async function basalamFetch(shop:Shop,url:string,init:RequestInit={}){return fetchJson(url,{...init,headers:{authorization:`Bearer ${shop.token}`,accept:'application/json',...init.headers}},'basalam')}
 async function basalamShops():Promise<Shop[]>{const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const rows:Shop[]=[{name:'غرفه پیش‌فرض',token:c.token,vendorId:String(c.vendorId),pricePercent:0,primary:true},...c.shops.filter(shop=>shop.token&&shop.vendorId).map(shop=>({...shop,vendorId:String(shop.vendorId),primary:false}))],seen=new Set<string>();return rows.filter(row=>row.vendorId&&!seen.has(row.vendorId)&&(seen.add(row.vendorId),true))}
 function selectShops(shops:Shop[],shopId:string){return !shopId||shopId==='all'||shopId==='0'?shops:shops.filter(shop=>shop.vendorId===String(shopId))}
 function basalamStatuses(status:string){const map:Record<string,string[]>={all:['2976','3790','3567','3568','4184','2977','2978','3248','4221'],active:['2976'],inactive:['3790'],not_approved:['3567'],pending:['3568'],archived:['4184']};return map[status]||([2976,3790,3567,3568,4184].includes(Number(status))?[String(status)]:map.all)}
@@ -184,5 +394,5 @@ function normalizeCategoryAssignments(value:any){const rows=Array.isArray(value)
 function clamp(value:any,min:number,max:number,fallback:number){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.round(n))):fallback}
 
 class DestinationHttpError extends Error{constructor(public status:number,public body:any,url:string){super(`HTTP ${status} از ${new URL(url).hostname}: ${String(body?.message||body?.error||JSON.stringify(body)).slice(0,300)}`)}}
-async function fetchJson(url:string,init:RequestInit={},woo=false){const response=await (woo?safeWooFetch(url,init,10_000_000):safeFetch(url,init,10_000_000)),text=await response.text();let body:any;try{body=text?JSON.parse(text):{}}catch{body={message:text.slice(0,500)}}if(!response.ok)throw new DestinationHttpError(response.status,body,url);return{response,body}}
+async function fetchJson(url:string,init:RequestInit={},woo:boolean|'basalam'=false){const response=await (woo==='basalam'?safeBasalamFetch(url,init,10_000_000):woo?safeWooFetch(url,init,10_000_000):safeFetch(url,init,10_000_000)),text=await response.text();let body:any;try{body=text?JSON.parse(text):{}}catch{body={message:text.slice(0,500)}}if(!response.ok)throw new DestinationHttpError(response.status,body,url);return{response,body}}
 const msg=(e:unknown)=>e instanceof Error?e.message:String(e);

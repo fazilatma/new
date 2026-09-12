@@ -30,6 +30,8 @@ type Card={values:Partial<Record<FieldName,RankedValue>>};
 type DetailResult={
   shortDesc:string;longDesc:string;price:string;sku:string;brand:string;stock:string;weight:string;category:string;tags:string;mainImage:string;
   images:string[];variations:string[];variationGroups:VariationGroup[];variationPrices:Record<string,number>;
+  /** Specification rows parsed from the marked specs block. */
+  specs?:Array<{name:string;value:string}>;
 };
 
 const DEFAULT_CONTAINER='.product, li.product, article.product, .product-item, .product-card, [data-product-id], [itemtype*="Product"]';
@@ -55,14 +57,21 @@ const VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','li
 function hasEndTag(element:HtmlElement):boolean{return !VOID_TAGS.has(String(element.tagName||'').toLowerCase())}
 async function sourceKey(value:string):Promise<string>{return (await sha256(value)).slice(0,32)}
 async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
-  if(!indirect)return safeText(url,maxBytes);
   const network=(await loadConnections()).ai.network;
-  if(network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود.');
-  return safeTextViaWorker(url,network.workerUrl,maxBytes);
+  // A Worker URL saved in «روش اتصال» now applies to source pages too, not only
+  // to AI calls. Previously it was used only when a profile had ticked the
+  // per-profile «اتصال غیرمستقیم» box, so users who configured the gateway to
+  // bypass a sanction block still hit the block on every extraction.
+  const useWorker=Boolean(network.workerUrl)&&(indirect||network.mode==='worker');
+  if(useWorker)return safeTextViaWorker(url,network.workerUrl,maxBytes);
+  if(indirect&&network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود. (در محیط Cloudflare پروکسی HTTP در دسترس نیست؛ آدرس Worker واسط را وارد کنید.)');
+  return safeText(url,maxBytes);
 }
 function toAbsoluteUrl(value:string,base:string):string{try{return new URL(value,base).href}catch{return ''}}
 
 const TRACKING_PARAMS=/^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
+/** Pagination/sorting noise: never part of a product's identity. */
+const PAGING_PARAMS=/^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
 
 function selectorParts(selector?:string):string[]{
   const out:string[]=[],value=String(selector||'');let part='',round=0,square=0,quote='';
@@ -77,7 +86,26 @@ function safeOn(rewriter:HTMLRewriter,selector:string,handler:any):boolean{
   try{rewriter.on(selector,handler);return true}catch{return false}
 }
 function cleanText(value:string):string{
-  return normalizeDigits(String(value||'')).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g,' ').replace(/\s+/g,' ').trim();
+  // HTMLRewriter hands text chunks and attributes over with entities still encoded,
+  // so "iPhone 17 Pro &amp; iPhone 17 Pro Max" would otherwise be stored verbatim
+  // and then never match the same product on the destination store.
+  return normalizeDigits(decodeEntities(String(value||''))).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g,' ').replace(/\s+/g,' ').trim();
+}
+function decodeEntities(value:string):string{
+  if(!value.includes('&'))return value;
+  return value
+    .replace(/&(?:nbsp|#160|#xa0);/gi,' ')
+    .replace(/&(?:quot|#34|#x22);/gi,'"')
+    .replace(/&(?:apos|#39|#x27);/gi,"'")
+    .replace(/&(?:lt|#60|#x3c);/gi,'<')
+    .replace(/&(?:gt|#62|#x3e);/gi,'>')
+    .replace(/&#(\d{1,7});/g,(_,code)=>safeCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]{1,6});/gi,(_,code)=>safeCodePoint(parseInt(code,16)))
+    .replace(/&(?:amp|#38|#x26);/gi,'&');
+}
+function safeCodePoint(code:number):string{
+  if(!Number.isFinite(code)||code<=0||code>0x10ffff)return '';
+  try{return String.fromCodePoint(code)}catch{return ''}
 }
 function normalizeDigits(value:string):string{
   return String(value||'').replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
@@ -107,7 +135,13 @@ function canonicalUrl(value:string,baseUrl:string,stripAllQuery=false):string{
   if(!absolute||!/^(https?):/i.test(absolute))return '';
   try{
     const url=new URL(absolute);url.hash='';
-    if(stripAllQuery)url.search='';
+    if(stripAllQuery){
+      for(const key of [...url.searchParams.keys()]){
+        // Keep identifying parameters (?id=, ?p=, ?product=...); drop only noise.
+        if(TRACKING_PARAMS.test(key)||PAGING_PARAMS.test(key))url.searchParams.delete(key);
+      }
+      url.searchParams.sort();
+    }
     else for(const key of [...url.searchParams.keys()])if(TRACKING_PARAMS.test(key))url.searchParams.delete(key);
     url.pathname=url.pathname.replace(/\/{2,}/g,'/');
     return url.toString().replace(/\/$/,'');
@@ -176,6 +210,10 @@ export function numberFromText(value:string):number{
   const numbers=matches.map(raw=>{
     let token=raw.trim().replace(/\s/g,'');
     if(/^\d+[.,]\d{1,2}$/.test(token)&&!/[٬،]/.test(raw))return Number(token.replace(',','.'));
+    // Thousands separators plus decimal cents, e.g. "1,099.00" or "1.099,00":
+    // stripping every non-digit would turn $1,099.00 into 109900.
+    if(/^\d{1,3}(?:,\d{3})+\.\d{1,2}$/.test(token))return Number(token.replace(/,/g,''));
+    if(/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(token))return Number(token.replace(/\./g,'').replace(',','.'));
     token=token.replace(/[^\d]/g,'');return Number(token||0);
   }).filter(n=>Number.isFinite(n)&&n>=0);
   return numbers.length?Math.max(...numbers):0;
@@ -205,7 +243,12 @@ async function parseJsonLdProducts(html:string,baseUrl:string):Promise<Product[]
 
 export async function parseCards(html:string,baseUrl:string,selectors:SelectorMap):Promise<Product[]>{
   const cards:Card[]=[];const cardHandler=new CardHandler(cards,baseUrl);const rewriter=new HTMLRewriter();
-  const containers=selectorParts(selectors.container||DEFAULT_CONTAINER);
+  // The visual picker pins the clicked card with :nth-of-type(N), which makes the
+  // container match exactly ONE card instead of repeating over the whole grid.
+  // A container is meant to repeat, so drop the positional pins (the Node runtime
+  // does the same in containerNodes(), keeping both runtimes in parity).
+  const containers=selectorParts(selectors.container||DEFAULT_CONTAINER)
+    .map(selector=>selector.includes(':nth-of-type(')?(selector.replace(/:nth-of-type\(\d+\)/g,'').trim()||selector):selector);
   let validContainer=false;for(const selector of containers)validContainer=safeOn(rewriter,selector,cardHandler)||validContainer;
   if(!validContainer)throw new Error('سلکتور ظرف محصول نامعتبر است.');
   for(const field of ['title','price','link','image','sku'] as FieldName[]){
@@ -319,6 +362,29 @@ class VariationHandler {
   }
   text(chunk:TextChunk):void{for(const capture of this.captures)capture.text+=chunk.text}
 }
+/**
+ * Turns a captured specification block into name/value rows. Shops write it as a
+ * table, a definition list, or "name: value" bullets, so all three are accepted.
+ */
+function parseSpecFragment(html:string):Array<{name:string;value:string}>{
+  if(!html)return [];
+  const rows:Array<{name:string;value:string}>=[];
+  const cell=(value:string)=>cleanText(value.replace(/<[^>]*>/g,' '));
+  for(const match of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)){
+    const cells=[...match[1].matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)\s*>/gi)].map(m=>cell(m[1]));
+    if(cells.length>=2&&cells[0]&&cells[1])rows.push({name:cells[0],value:cells.slice(1).filter(Boolean).join(' ')});
+  }
+  if(!rows.length){
+    const terms=[...html.matchAll(/<dt\b[^>]*>([\s\S]*?)<\/dt\s*>/gi)].map(m=>cell(m[1]));
+    const values=[...html.matchAll(/<dd\b[^>]*>([\s\S]*?)<\/dd\s*>/gi)].map(m=>cell(m[1]));
+    terms.forEach((name,index)=>{const value=values[index]||'';if(name&&value)rows.push({name,value})});
+  }
+  if(!rows.length)for(const match of html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)){
+    const parts=cell(match[1]).split(/\s*[:：]\s*/);
+    if(parts.length>=2&&parts[0]&&parts[1])rows.push({name:parts[0],value:parts.slice(1).join(': ')});
+  }
+  return rows.filter(row=>row.name&&row.value).slice(0,60);
+}
 function extractMarkedFragment(html:string,marker:string):string{
   const start=`<!--${marker}:START-->`,end=`<!--${marker}:END-->`,from=html.indexOf(start);if(from<0)return '';
   const to=html.indexOf(end,from+start.length);return to<0?'':html.slice(from+start.length,to).trim();
@@ -332,6 +398,10 @@ export async function parseDetailPage(html:string,baseUrl:string,selectors:Selec
   const marker=`SCRAPER4_${Math.random().toString(36).slice(2)}`;
   for(const selector of selectorParts(selectors.longDesc)){
     safeOn(rewriter,selector,new LongDescriptionHandler(marker));
+  }
+  const specsMarker=`SCRAPER4S_${Math.random().toString(36).slice(2)}`;
+  for(const selector of multilineSelectorParts(selectors.specs)){
+    safeOn(rewriter,selector,new LongDescriptionHandler(specsMarker));
     for(const suffix of ['script','style','iframe','object','embed','form'])safeOn(rewriter,`${selector} ${suffix}`,new RemoveHandler());
     safeOn(rewriter,`${selector} *`,new SanitizeHandler());
   }
@@ -354,7 +424,8 @@ export async function parseDetailPage(html:string,baseUrl:string,selectors:Selec
   }
   let transformed='';try{transformed=await rewriter.transform(new Response(html,{headers:{'content-type':'text/html; charset=UTF-8'}})).text()}catch(error){throw new Error(`پردازش HTML جزئیات شکست خورد: ${error instanceof Error?error.message:String(error)}`)}
   for(const key of DETAIL_KEYS)result[key]=values.get(key)||'';
-  result.longDesc=stripUnsafeHtml(extractMarkedFragment(transformed,marker));if(includeGallery)for(const image of result.images)addGalleryImage(galleryImages,image,baseUrl,galleryMax);result.images=galleryImages;
+  result.longDesc=stripUnsafeHtml(extractMarkedFragment(transformed,marker));
+  const specRows=parseSpecFragment(extractMarkedFragment(transformed,specsMarker));if(specRows.length)result.specs=specRows;if(includeGallery)for(const image of result.images)addGalleryImage(galleryImages,image,baseUrl,galleryMax);result.images=galleryImages;
   applyJsonLdDetail(html,baseUrl,result,galleryMax,includeGallery);
   if(selectors.gallerySkipFirst&&result.images.length)result.images=result.images.slice(1);
   result.variations=[...new Set(result.variations.map(cleanText).filter(Boolean))];
@@ -420,14 +491,26 @@ class NextLinkHandler {
 type EngineResult={products:Product[];usedEngine:ExtractionEngine};
 const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
-const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter']);
+const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter','cheerio']);
 const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
   if(!autoFirst&&requested!=='auto'){add(requested);return out}
+  // An EXPLICIT engine choice must be tried first (see the Node twin): putting
+  // the discovery engines ahead of it meant a chosen engine was silently
+  // replaced whenever the page carried any inline JSON.
+  if(requested!=='auto'){
+    add(requested);
+    if(master&&!NODE_ONLY_ENGINES.has(master)&&!WORKER_MANUAL_ENGINES.has(master))add(master);
+    // Fall back through the discovery engines AND the selector engine. Leaving
+    // htmlrewriter out meant a page that only the configured selectors can read
+    // returned zero products whenever the chosen engine came up empty.
+    for(const engine of WORKER_AUTO_ENGINES)add(engine);
+    return out;
+  }
   if(master&&!NODE_ONLY_ENGINES.has(master)&&!WORKER_MANUAL_ENGINES.has(master))add(master);
   for(const engine of WORKER_DISCOVERY_ENGINES)add(engine);
-  if(requested!=='auto')add(requested);else for(const engine of WORKER_AUTO_ENGINES)add(engine);
+  for(const engine of WORKER_AUTO_ENGINES)add(engine);
   return out;
 }
 
@@ -440,9 +523,9 @@ export async function scrapeListPage(url:string,selectors:Selectors,nextSelector
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto'):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine)).products}
 
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
-  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`${engine} requires the Node.js/Render/VPS runtime. Cloudflare Workers cannot launch a browser.`);
+  if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
-    if(name==='htmlrewriter')return parseCards(html,baseUrl,selectors);
+    if(name==='htmlrewriter'||name==='cheerio')return parseCards(html,baseUrl,selectors);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);
     if(name==='next_data')return extractNextDataProducts(html,baseUrl);
     if(name==='metadata')return extractMetadataProduct(html,baseUrl);
@@ -453,7 +536,7 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
   for(const name of engineOrder(engine,master,autoFirst)){
     const products=dedupeProducts(await tryOne(name));
     if(products.length)return{products,usedEngine:name};
-    if(engine!=='auto'&&name===engine)return{products,usedEngine:name};
+    // Empty result from the explicit engine: keep trying the fallbacks.
   }
   return{products:[],usedEngine:engine};
 }

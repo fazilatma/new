@@ -790,3 +790,923 @@ class TestHTMLRewriter {
 }
 function selectNodes(html,selector){const last=selector.trim().split(/\s+/).at(-1),nodes=[];for(const match of html.matchAll(/<([a-z0-9-]+)([^>]*)>/gi)){const tag=match[1].toLowerCase(),attrs={};for(const attr of match[2].matchAll(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g))attrs[attr[1]]=attr[2]??attr[3]??attr[4]??'';if(!matches(tag,attrs,last))continue;const tail=html.slice(match.index+match[0].length),end=tail.search(new RegExp(`<\\/${tag}\\s*>`,'i')),inner=end>=0?tail.slice(0,end):'';nodes.push({attrs,text:inner.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()})}return nodes}
 function matches(tag,attrs,selector){const tagName=selector.match(/^[a-z][\w-]*/i)?.[0]?.toLowerCase();if(tagName&&tagName!==tag)return false;const id=selector.match(/#([\w-]+)/)?.[1];if(id&&attrs.id!==id)return false;for(const cls of [...selector.matchAll(/\.([\w-]+)/g)].map(x=>x[1]))if(!String(attrs.class||'').split(/\s+/).includes(cls))return false;for(const part of selector.matchAll(/\[([:\w-]+)(?:([*^$]?=)["']?([^\]"']*)["']?)?\]/g)){const [,name,op,value]=part;if(!(name in attrs))return false;if(op==='='&&attrs[name]!==value)return false;if(op==='*='&&!attrs[name].includes(value))return false}return true}
+
+// --- Request 34b: a Cloudflare proxy/Worker URL entered in «روش اتصال» must be
+// used for SOURCE-PAGE traffic, not only for AI model calls. Node's safeFetch()
+// previously called the global fetch() directly, so a user who configured a
+// proxy to get around a sanction block still hit the block on every extraction.
+test('node source fetching honours the configured proxy and worker route', async () => {
+  const { build } = await import('esbuild');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const http = await import('node:http');
+  const nodeNet = await import('node:net');
+
+  const directory = await mkdtemp(join(new URL('..', import.meta.url).pathname, '.tmp-proxy-'));
+  const outfile = join(directory, 'network.mjs');
+  await build({ entryPoints: [new URL('../render-src/network.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile, logLevel: 'error' });
+  const network = await import(pathToFileURL(outfile));
+
+  const BODY = '<html><body><h1>through the proxy</h1></body></html>';
+  const origin = http.createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(BODY); });
+  await new Promise(resolve => origin.listen(0, '127.0.0.1', resolve));
+  const originPort = origin.address().port;
+
+  const tunnels = [];
+  const proxy = http.createServer((request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(BODY); });
+  proxy.on('connect', (request, socket, head) => {
+    tunnels.push(request.url);
+    const upstream = nodeNet.connect(originPort, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length) upstream.write(head);
+      upstream.pipe(socket); socket.pipe(upstream);
+    });
+    upstream.on('error', () => socket.destroy());
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+
+  try {
+    network.configureSourceNetwork({ mode: 'proxy', proxyUrl: 'http://127.0.0.1:' + proxy.address().port });
+    const result = await network.safeText('http://example.com/shop/');
+    assert.ok(result.text.includes('through the proxy'), 'source page must be fetched through the proxy');
+    assert.deepEqual(tunnels, ['example.com:80'], 'the proxy must receive the source request');
+
+    // The Worker route wraps the target URL instead of tunnelling it.
+    assert.equal(network.viaWorkerUrl('https://gw.example.com/fetch', 'https://shop.ir/a?b=1'), 'https://gw.example.com/fetch?url=https%3A%2F%2Fshop.ir%2Fa%3Fb%3D1');
+    assert.equal(network.viaWorkerUrl('https://gw.example.com/{url}', 'https://shop.ir/a'), 'https://gw.example.com/https%3A%2F%2Fshop.ir%2Fa');
+
+    // An anti-bot challenge page must raise a clear error instead of being
+    // parsed as a product listing (zero-product "success").
+    assert.throws(() => network.ensureTextResponse('<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>', 'text/html', 'https://shop.ir/'), /چالش|ضدربات/);
+  } finally {
+    network.configureSourceNetwork({ mode: 'direct' });
+    origin.close(); proxy.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+// --- Request 36a: one failing Basalam stall must not cancel the others.
+// The whole multi-stall loop used to sit inside a single try/catch, so a single
+// bad stall aborted the send and hid the stalls that had already succeeded.
+test('a failing Basalam stall does not abort the remaining stalls', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const start = source.indexOf('for(const account of accounts)');
+    assert.ok(start > 0, `${file}: multi-stall loop must exist`);
+    const body = source.slice(start, source.indexOf('return results', start));
+    assert.ok(/results\.push\(\{[^}]*error:/.test(body.replace(/\n/g, '')),
+      `${file}: a stall failure must be recorded as a result instead of thrown`);
+    assert.ok(body.includes('continue;'),
+      `${file}: after a stall fails the loop must continue with the next stall`);
+  }
+});
+
+// --- Request 36a: clicking a counter must show the product name, its price and
+// the error text. The Node runtime recorded no per-product detail at all, so
+// that popup was always empty outside Cloudflare.
+test('both runtimes record product details on job log entries', async () => {
+  for (const file of ['../worker-src/processor.ts', '../render-src/processor.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('function reportItem('), `${file}: must build a report item`);
+    assert.ok(/price:\s*Number\(product\.price\)/.test(source), `${file}: the item must carry the price`);
+    assert.ok(source.includes("'failed'"), `${file}: failures must be tagged for the error counter`);
+    assert.ok(/error:\s*errorText/.test(source), `${file}: the error text must reach the item`);
+  }
+});
+
+// --- Runtime parity: the server-side duplicate remover was Cloudflare-only, so
+// every duplicate button was dead on Termux / VPS / Render.
+test('the Node runtime exposes the dedup-run and duplicate routes', async () => {
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  for (const route of [
+    "'/api/destination/:target/dedup-runs'",
+    "'/api/destination/:target/dedup-runs/current'",
+    "'/api/destination/:target/dedup-runs/control'",
+    "'/api/destination/:target/dedup-runs/reset'",
+    "'/api/maintenance/duplicates'",
+  ]) assert.ok(server.includes(route), `Node server must serve ${route}`);
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  assert.ok(app.includes("'/api/maintenance/duplicates'"), 'Worker must serve the duplicates route too');
+});
+
+// --- Request 36a: Basalam publishes an SDK for Python only, so "SDK first" is
+// implemented through a python3 bridge that must degrade to REST cleanly.
+test('the Basalam Python SDK bridge exists and is wired in', async () => {
+  const bridge = await readFile(new URL('../scripts/basalam-sdk-bridge.py', import.meta.url), 'utf8');
+  for (const token of ['basalam_sdk', 'ProductRequestSchema', 'create_product_sync', 'update_product_sync', 'sdk-missing'])
+    assert.ok(bridge.includes(token), `bridge must reference ${token}`);
+  const sync = await readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8');
+  assert.ok(sync.includes('runBasalamSdkBridge'), 'the Node sync must call the python bridge');
+  assert.ok(sync.indexOf('runBasalamSdkBridge') < sync.indexOf('sendBasalamWithNpmSdk'),
+    'the SDK bridge must be tried before falling back');
+});
+
+// --- The Basalam payload made every real send fail with HTTP 400:
+//   {"fields":["photo"],"message":"Input should be a valid integer..."}
+//   {"fields":["status"],"message":"Field required"}
+// `photo` is the integer id of a file uploaded to /v1/files, `status` is
+// required (2976 = PUBLISHED) and the price field is `primary_price`.
+test('the Basalam payload uses primary_price, an integer photo id and a status', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const start = source.indexOf('function basalamPayload(');
+    assert.ok(start > 0, `${file}: basalamPayload must exist`);
+    const body = source.slice(start, start + 1400);
+    assert.ok(body.includes('primary_price:'), `${file}: must send primary_price`);
+    assert.ok(!/[^_]\bprice:/.test(body), `${file}: must not send the rejected "price" field`);
+    assert.ok(/status:(?:creating\?BASALAM_STATUS_DRAFT:)?BASALAM_STATUS_PUBLISHED/.test(body), `${file}: status is required`);
+    assert.ok(!/photo:product\.image/.test(source), `${file}: photo must never be an image URL`);
+    assert.ok(source.includes('const BASALAM_STATUS_PUBLISHED=2976'), `${file}: PUBLISHED is 2976`);
+    assert.ok(source.includes('uploadBasalamPhotos'), `${file}: must upload photos to get ids`);
+    assert.ok(/Number\.isFinite\(id\)&&id>0/.test(source), `${file}: only valid integer ids are sent`);
+    assert.ok(source.includes("form.append('file_type','product.photo')"), `${file}: correct upload file_type`);
+  }
+});
+
+// --- Request: testing a Basalam token must fill the remaining fields.
+test('the Basalam connection test returns autofill data in both runtimes', async () => {
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  for (const [name, source] of [['worker', app], ['node', server]]) {
+    assert.ok(source.includes('autofill'), `${name}: the diagnostic must return an autofill block`);
+    assert.ok(source.includes('/users/me'), `${name}: must query users/me to identify the vendor`);
+    assert.ok(/autofill\.vendorId=vendorId/.test(source), `${name}: vendor id must be offered for autofill`);
+  }
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function applyBasalamAutofill('), 'the dashboard must apply the autofill');
+  assert.ok(dashboard.includes("set('bsVid',a.vendorId"), 'the vendor id field must be filled');
+});
+
+// --- Results section: one column, code suffix on the name, base price struck
+// through next to the final price, and a product modal with gallery/details.
+test('the results list is single column with suffix, prices and a modal', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('.products{display:grid;grid-template-columns:1fr;'),
+    'the results grid must be a single column');
+  assert.ok(!/\.products\{grid-template-columns:repeat\(2/.test(dashboard),
+    'no breakpoint may put the results back into two columns');
+  for (const token of ['function productCodeSuffix(', 'function productRowHtml(', 'function openProductModal(',
+    'price-base', 'price-final', 'psuffix', 'pgallery', 'data-product-open'])
+    assert.ok(dashboard.includes(token), `results section must define ${token}`);
+  assert.ok(dashboard.includes('allDestinationsForPricing()'), 'the modal must price every destination');
+  assert.ok(dashboard.includes('قیمت نهایی در همهٔ مقصدها'), 'the modal must show the all-destination table');
+});
+
+// --- A bare hostname such as "proxy.example.workers.dev" is a RELATIVE url, so
+// it resolved against our own origin and every AI model answered HTTP 404.
+test('a proxy address without a scheme is normalised instead of 404ing', async () => {
+  const worker = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  for (const [name, source] of [['worker', worker], ['node', node]])
+    assert.ok(source.includes('export function normalizeProxyUrl('), `${name}: needs normalizeProxyUrl`);
+
+  // Behavioural check on the exact string the user reported.
+  const normalize = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('/')) throw new Error('relative');
+    return 'https://' + value.replace(/^\/+/, '');
+  };
+  const built = (base, target) => base.includes('{url}')
+    ? base.replace('{url}', encodeURIComponent(target))
+    : base + (base.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(target);
+  const target = 'https://api.openai.com/v1/chat/completions';
+  const url = new URL(built(normalize('proxy.fazilat-ma.workers.dev'), target));
+  assert.equal(url.origin, 'https://proxy.fazilat-ma.workers.dev');
+  assert.equal(url.searchParams.get('url'), target);
+  // An address that already has a scheme must be left alone.
+  assert.equal(normalize('https://p.dev'), 'https://p.dev');
+
+  // Both AI paths must go through the normaliser, not raw concatenation.
+  const workerAi = await readFile(new URL('../worker-src/ai.ts', import.meta.url), 'utf8');
+  const nodeAi = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(workerAi.includes('normalizeProxyUrl(net.workerUrl)'), 'worker ai must normalise');
+  assert.ok(nodeAi.includes('viaWorkerUrl(net.workerUrl'), 'node ai must use viaWorkerUrl');
+  assert.ok(!/net\.workerUrl\+\(net\.workerUrl\.includes/.test(workerAi + nodeAi),
+    'no raw concatenation of an unnormalised proxy url may remain');
+});
+
+// --- The reconciliation preview rendered chips only while apply rendered the
+// full matrix, so the same data looked completely different before and after.
+test('the reconciliation preview and apply both render the matrix table', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const preview = dashboard.indexOf("action==='recon-unified'){");
+  assert.ok(preview > 0, 'the preview action must exist');
+  const body = dashboard.slice(preview, preview + 1400);
+  assert.ok(body.includes('renderReconMatrix('), 'the preview must use the matrix renderer');
+  assert.ok(!body.includes('renderUnifiedRecon('), 'the preview must not use the chips-only renderer');
+  // All destinations failing is not "in sync".
+  assert.ok(dashboard.includes('const anyFailed=(d.failures||[]).length>0;'),
+    'a failed destination must suppress the green in-sync banner');
+  assert.ok(dashboard.includes(".rc-banner.rc-bad{"), 'the failure banner needs its own style');
+});
+
+// --- Ship a proxy Worker that implements the contract the client expects.
+test('the bundled AI proxy Worker answers the shapes the client sends', async () => {
+  const source = await readFile(new URL('../scripts/ai-proxy-worker.js', import.meta.url), 'utf8');
+  for (const token of ["searchParams.get('url')", "x-scraper-target", "x-target-url", 'ALLOWED_HOSTS'])
+    assert.ok(source.includes(token), `the proxy Worker must handle ${token}`);
+});
+
+// --- Basalam answered `401 {"message":"invalid authorization header"}` because a
+// token pasted as "Bearer eyJ..." was stored verbatim, so the request carried
+// `Authorization: Bearer Bearer eyJ...` (two schemes). Invisible characters from
+// a Persian keyboard are also not valid header bytes.
+test('pasted Basalam tokens are cleaned before they reach the header', async () => {
+  for (const file of ['../worker-src/vault.ts', '../render-src/vault.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export function sanitizeToken('), `${file}: needs sanitizeToken`);
+    // Both the default account and every extra stall must be sanitised.
+    assert.ok(/token:\s*sanitizeToken\(text\(shop\?\.token\)\)/.test(source), `${file}: stall tokens`);
+    assert.ok(/basalam:\{token:sanitizeToken\(/.test(source), `${file}: default token`);
+  }
+
+  // Behaviour, mirroring the shipped implementation.
+  const clean = (value) => {
+    let token = typeof value === 'string' ? value : '';
+    if (!token) return '';
+    token = token.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+                 .replace(/[\u00a0\u2000-\u200a\u3000]/g, ' ')
+                 .replace(/[\u2018\u2019\u201c\u201d]/g, '').trim();
+    token = token.replace(/^authorization\s*:\s*/i, '').trim();
+    token = token.replace(/^(?:bearer|token)\s+/i, '').trim();
+    if (token.length > 1 && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))))
+      token = token.slice(1, -1).trim();
+    return token.replace(/[^\x21-\x7e]/g, '');
+  };
+  for (const input of ['Bearer ABC123', 'bearer  ABC123', 'Authorization: Bearer ABC123',
+    '"ABC123"', '  ABC123  ', 'ABC\u200c123'.replace('\u200c', '\u200c')])
+    assert.equal(clean(input), 'ABC123', `failed to clean ${JSON.stringify(input)}`);
+  // A clean token must survive untouched.
+  assert.equal(clean('eyJhbGciOi.abc-_123'), 'eyJhbGciOi.abc-_123');
+  // The result must always be usable as a header value.
+  assert.doesNotThrow(() => new Headers().set('authorization', 'Bearer ' + clean('TOK\u200cEN\u00a01')));
+
+  // A 401 must explain what to do instead of only echoing Basalam's text.
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('function basalamAuthHint('), `${file}: needs the 401 hint`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0,account.token)'), `${file}: hint must be used`);
+  }
+});
+
+// --- `401 invalid authorization header` kept coming back after the header itself
+// was proven well formed, so the token has to be explained locally: Basalam PATs
+// are JWTs, so expiry and scopes can be read without any network call.
+test('a Basalam token is diagnosed locally instead of echoing the opaque 401', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export function describeBasalamToken('), `${file}: needs the checker`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0,account.token)'),
+      `${file}: the 401 message must include the token verdict`);
+  }
+  // The connection test must surface it too, in both runtimes.
+  for (const file of ['../worker-src/app.ts', '../render-src/server.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('describeBasalamToken(token)'), `${file}: diagnostic must check the token`);
+    assert.ok(source.includes('tokenCheck:tokenVerdict.reason'), `${file}: must report the verdict`);
+  }
+
+  // Behaviour: expiry and scope are decoded from the JWT payload.
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt = (o) => 'eyJhbGciOiJSUzI1NiJ9.' + b64(o) + '.sig';
+  const decode = (token) => {
+    const parts = String(token).split('.');
+    if (parts.length !== 3) return null;
+    const pad = (x) => x + '='.repeat((4 - x.length % 4) % 4);
+    return JSON.parse(Buffer.from(pad(parts[1].replace(/-/g, '+').replace(/_/g, '/')), 'base64').toString('utf8'));
+  };
+  const past = Math.floor(Date.now() / 1000) - 86400;
+  const future = Math.floor(Date.now() / 1000) + 86400;
+  assert.ok(decode(jwt({ exp: past })).exp * 1000 < Date.now(), 'an expired token must be detectable');
+  assert.ok(decode(jwt({ exp: future })).exp * 1000 > Date.now(), 'a live token must be detectable');
+  assert.deepEqual(decode(jwt({ scopes: ['vendor.product.write'] })).scopes, ['vendor.product.write']);
+});
+
+// --- The local verdict reported "structurally fine" while Basalam still sent
+// 401, which dead-ends the user. A JWT carrying no scope claim silently passed
+// the scope check, and no local inspection can tell a revoked token apart from
+// a valid token that simply may not write this vendor's products.
+test('a Basalam 401 is explained by probing the token, not just inspecting it', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('async function basalamTokenProbe('), `${file}: needs the probe`);
+    // The probe must run only for a 401 and must be awaited into the message.
+    assert.ok(source.includes("response?.status===401?(await basalamTokenProbe(c,account))"),
+      `${file}: the probe must enrich the 401 message`);
+    // It must use the read-only endpoint, never a second write attempt.
+    const probe = source.slice(source.indexOf('async function basalamTokenProbe('));
+    assert.ok(probe.slice(0, 1600).includes('/users/me'), `${file}: probe must use users/me`);
+    // A token with no scope claim must not be called simply "fine".
+    assert.ok(source.includes('if(!scopes.length)'), `${file}: an absent scope claim must be reported`);
+  }
+});
+
+// --- The «اتصال غیرمستقیم» checkbox in the Basalam settings was stored in the
+// vault but never read by any request, so enabling it did nothing. Basalam's
+// edge rejects datacenter IPs, which surfaces as a 401 for a valid token.
+test('Basalam requests honour the indirect-connection setting', async () => {
+  for (const file of ['../worker-src/network.ts', '../render-src/network.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export async function safeBasalamFetch('), `${file}: needs safeBasalamFetch`);
+    assert.ok(source.includes('netIndirect'), `${file}: must read the netIndirect flag`);
+    // Turning it on without a proxy configured must explain itself, not fail silently.
+    assert.ok(/اتصال غیرمستقیم/.test(source), `${file}: needs the missing-proxy error`);
+  }
+  // Every Basalam API call must go through it, in both runtimes.
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts',
+                      '../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('safeBasalamFetch'), `${file}: Basalam calls must be routed`);
+  }
+  // The product image is fetched from the SOURCE shop and must stay direct.
+  const workerSync = await readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8');
+  assert.ok(workerSync.includes("const image=await safeFetch(String(url)"),
+    'the source product image must not be routed through the Basalam proxy');
+  // The bundled proxy must allow the Basalam hosts, or it would answer 403.
+  const proxy = await readFile(new URL('../scripts/ai-proxy-worker.js', import.meta.url), 'utf8');
+  for (const host of ['openapi.basalam.com', 'auth.basalam.com'])
+    assert.ok(proxy.includes(`'${host}'`), `the proxy must allow ${host}`);
+});
+
+// --- The menu forced an endless scroll: 15 changelog cards always rendered
+// expanded, and every environment guide printed its full command block.
+test('the changelog and the install guides are collapsible', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('<div class="change-list">');
+  const older = dashboard.indexOf('<details class="change-older">', start);
+  const visible = dashboard.slice(start, older);
+  // Only the newest card may render outside a fold; the rest sit in change-recent.
+  assert.equal(visible.split('<div class="change-item">').length - 1 -
+    (visible.includes('<details class="change-recent">')
+      ? visible.slice(visible.indexOf('<details class="change-recent">')).split('<div class="change-item">').length - 1
+      : 0), 1, 'exactly one changelog card may be permanently expanded');
+  assert.ok(visible.includes('<details class="change-recent">'), 'recent entries need their own fold');
+  assert.ok(dashboard.includes('.change-recent{'), 'the recent fold needs styling');
+  // Each environment guide is its own <details>.
+  assert.ok(dashboard.includes('<details class="install-command-card"><summary>'),
+    'install guides must be collapsible');
+  const renderer = dashboard.slice(dashboard.indexOf('function renderInstallCommandCards('));
+  assert.ok(!renderer.slice(0, 900).includes('<article class="install-command-card">'),
+    'the install-guide renderer must not emit permanently expanded cards');
+  // cPanel instructions must exist and download as a shell script.
+  assert.ok(dashboard.includes('"key": "cpanel"') || dashboard.includes('"key":"cpanel"'),
+    'a cPanel guide must be present');
+  assert.ok(dashboard.includes("scraper4-install-cpanel.sh"), 'cPanel downloads as .sh');
+});
+
+// --- Regression: the full reconciliation matrix disappeared. A destination that
+// threw contributed NO rows, so with every destination failing the table had
+// nothing to draw, and v1.103.0's guard then replaced it with a bare banner.
+// The comparison must survive a broken destination.
+test('the reconciliation table still renders when destinations fail', async () => {
+  const core = await readFile(new URL('../worker-src/recon-core.ts', import.meta.url), 'utf8');
+  assert.ok(core.includes('export function unreachableAccountRows('),
+    'a failing destination must still produce rows');
+  assert.ok(core.includes("'unreachable'"), 'the unreachable bucket must exist');
+
+  // Both runtimes must use it in their unifiedRecon loop.
+  for (const file of ['../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('unreachableAccountRows(local'),
+      `${file}: the catch branch must keep the rows`);
+  }
+
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  // The early return that hid the whole table must be gone.
+  assert.ok(!dashboard.includes('failList.length>=(d.accounts||0)&&!d.rows.length'),
+    'a failed destination must no longer suppress the table');
+  // The bucket needs a colour, a legend entry and the highest sort priority.
+  assert.ok(dashboard.includes("unreachable:['مقصد پاسخ نداد'"), 'legend entry missing');
+  assert.ok(dashboard.includes("unreachable:['#fb7185'"), 'cell colour missing');
+  assert.ok(dashboard.includes('{unreachable:0,priceDiff:1,missing:2,extra:3,noPrice:4,matched:5}'),
+    'unreachable rows must sort to the top');
+  assert.ok(dashboard.includes('cells:{},worst:5}'),
+    'the worst-rank sentinel must match the new ranking');
+});
+
+// --- Parity with the PHP reference (scraper4.php v10.91, fazilatma/code).
+// v1.110.0 read the extra-shop helper and wrongly concluded that `photo` must be
+// omitted on create. The MAIN send path does send it, and Basalam enforces it:
+//   422 {"fields":["photo"],"message":"شناسه تصویر الزامی است"}
+// The real rule: send the uploaded photo ids, and publish (2976) only when a
+// photo exists AND both texts are >= 3 chars; otherwise create a draft (3790).
+test('Basalam creates carry the photo ids and follow the PHP status rule', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);'),
+      `${file}: photo ids must reach the create payload`);
+    assert.ok(!source.includes('creating?[]:photoIds'),
+      `${file}: photos must NOT be stripped on create`);
+    assert.ok(/briefText\.length>=3&&descText\.length>=3/.test(source),
+      `${file}: the >=3 character rule must be applied`);
+    assert.ok(source.includes('BASALAM_STATUS_PUBLISHED:BASALAM_STATUS_DRAFT'),
+      `${file}: draft is the fallback, not the default`);
+    // A 422 about the photo must explain why the upload failed.
+    assert.ok(source.includes('function basalamPhotoHint('), `${file}: needs the 422 photo hint`);
+    assert.ok(source.includes('lastPhotoFailure'), `${file}: upload failures must be recorded`);
+    assert.ok(!/\}catch\{\/\* one bad image must not abort the product \*\/\}/.test(source),
+      `${file}: upload failures must no longer be swallowed silently`);
+  }
+});
+
+// --- The fake desktop-Chrome user-agent was being sent to JSON APIs. A browser
+// UA with no matching browser fingerprint is a WAF signature: Basalam answered
+// 401 "invalid authorization header" (even on the read-only users/me endpoint,
+// and for two different valid tokens) and the WooCommerce edge answered 522 in
+// the same run. scraper4.php sends only Accept/Authorization/Content-Type.
+test('JSON API calls are not disguised as a browser', async () => {
+  for (const file of ['../worker-src/network.ts', '../render-src/network.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('apiMode'), `${file}: needs the apiMode switch`);
+    assert.ok(/ApiRequestInit/.test(source), `${file}: apiMode must be typed, not cast away`);
+  }
+  // Basalam always uses it, in both runtimes.
+  const worker = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\}/.test(worker),
+    'worker: safeBasalamFetch must send API-shaped headers');
+  assert.ok(/apiMode: true(?:, directRoute: true)? \}, maxBytes\)/.test(node), 'node: safeBasalamFetch must send API-shaped headers');
+  // WooCommerce REST too -- it is what produced the 522.
+  assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\},maxBytes\)/.test(worker),
+    'worker: the Woo REST path must use apiMode');
+  const nodeMaint = await readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8');
+  assert.ok(nodeMaint.includes('apiMode:true'), 'node: Woo REST calls must use apiMode');
+
+  // Scraping must KEEP the browser shape, or shops serve a stripped page.
+  assert.ok(worker.includes('Mozilla/5.0'), 'worker: the scraping user-agent must survive');
+  assert.ok(node.includes('config.userAgent'), 'node: the scraping user-agent must survive');
+  for (const [name, source] of [['worker', worker], ['node', node]])
+    assert.ok(/accept-language/.test(source), `${name}: scraping keeps accept-language`);
+  // The caller's own headers must still be merged in, or auth would be dropped.
+  assert.ok(worker.includes('new Headers(requestInit.headers).forEach'),
+    'worker: caller headers must always be applied');
+});
+
+// --- The 401 could not be reproduced from the sandbox (no egress to Basalam),
+// so ship a diagnostic the user can run ON the failing machine.
+test('the Basalam doctor probes every header shape without leaking the token', async () => {
+  const doctor = await readFile(new URL('../scripts/basalam-doctor.mjs', import.meta.url), 'utf8');
+  // It must compare the PHP-style minimal headers against the browser-shaped ones.
+  assert.ok(doctor.includes('minimal (PHP-style) headers'), 'probe A missing');
+  assert.ok(doctor.includes('with a browser user-agent'), 'probe B missing');
+  assert.ok(doctor.includes('Authorization only'), 'probe C missing');
+  assert.ok(doctor.includes('vendor products (read)'), 'probe D missing');
+  // The token must never be printed, only described.
+  assert.ok(doctor.includes('function fingerprint('), 'the token must be fingerprinted, not shown');
+  // The token may only reach console.log through describe(), never raw.
+  for (const call of doctor.match(/console\.log\([^\n]*\)/g) || []) {
+    const stripped = call.replace(/describe\(token\)/g, 'DESCRIBED');
+    assert.ok(!/\btoken\b(?!\s*(?:source|:))/.test(stripped.replace(/'[^']*'/g, "''")),
+      `the raw token must never be logged: ${call.slice(0, 60)}`);
+  }
+  // It must not boot a second copy of the server to read the token.
+  assert.ok(!doctor.includes("import('../render-dist/server.js')"),
+    'the doctor must not import the server entrypoint');
+  assert.ok(doctor.includes('/api/connections'), 'it should read from a running instance');
+});
+
+// --- Diagnosed from a doctor run on the failing Termux device: all four probes
+// returned HTTP 200 (token valid to 2027, every scope present, vendor readable),
+// yet the app still got 401. Cause: render-src/safeFetch unconditionally applied
+// `sourceNetwork` -- the SCRAPING proxy, configured from ai.network -- to every
+// request. With the AI proxy set to 'worker', authenticated Basalam and Woo
+// calls were rewritten through that Worker, which does not forward the
+// Authorization header, so the destination saw no token at all.
+test('destination APIs are never rerouted through the scraping proxy', async () => {
+  const network = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(network.includes('directRoute?: boolean'), 'needs an opt-out of source-network routing');
+  // The reroute must be conditional, not unconditional.
+  assert.ok(network.includes('const routed = init.directRoute !== true;'), 'routing must be skippable');
+  assert.ok(/useWorker = routed &&/.test(network), 'worker routing must honour directRoute');
+  assert.ok(/useProxy = routed &&/.test(network), 'proxy routing must honour directRoute');
+  // Basalam picks its own route via its own switch, never the scraping one.
+  assert.ok(network.includes('apiMode: true, directRoute: true }, maxBytes)'),
+    'safeBasalamFetch must opt out of the scraping route');
+  // WooCommerce REST too -- it produced the 522 in the same run.
+  for (const file of ['../render-src/maintenance.ts', '../render-src/server.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const flags = (source.match(/apiMode/g) || []).length;
+    const direct = (source.match(/directRoute/g) || []).length;
+    assert.equal(direct, flags, `${file}: every API call must also set directRoute`);
+  }
+});
+
+// --- The reconciliation preview failed silently: unlike the apply path it had no
+// try/catch and no progress row, so a failed request left the panel blank with
+// no message anywhere.
+test('the reconciliation preview reports its own failures', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf("action==='recon-unified'){");
+  assert.ok(start > 0, 'the preview action must exist');
+  const body = dashboard.slice(start, start + 1200);
+  assert.ok(body.includes('catch(error)'), 'the preview must catch request failures');
+  assert.ok(body.includes('ساخت جدول ناموفق بود'), 'a failure must be shown in the panel');
+  assert.ok(body.includes("localTaskStart('recon-unified-preview'"), 'it must register a live task');
+  assert.ok(body.includes('در حال خواندن مقصدها'), 'it must show progress while running');
+});
+
+// --- Each Basalam stall must be priced with its OWN percentage.
+test('every Basalam stall is priced with its own percentage', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    // The price must be derived per account inside the loop, never hoisted.
+    assert.ok(source.includes('basalamPrice(product,account.pricePercent||0)'),
+      `${file}: the payload price must use the account percentage`);
+    assert.ok(source.includes('basalamPrice(product,Number(account.pricePercent)||0)'),
+      `${file}: the reported price must use the account percentage`);
+    // The stall list must carry each shop's own percent, not the default.
+    assert.ok(/\.\.\.c\.shops\.filter\(s=>s\.token&&s\.vendorId\)/.test(source),
+      `${file}: extra stalls must keep their own fields`);
+  }
+  // The vault must persist a per-shop percentage.
+  const vault = await readFile(new URL('../worker-src/vault.ts', import.meta.url), 'utf8');
+  assert.ok(vault.includes('pricePercent:num(shop?.pricePercent)'), 'shop percentages must persist');
+});
+
+// --- The send queue showed the same price for every stall: the Basalam log line
+// never passed result.price, so reportItem fell back to the product's base price.
+test('the send queue reports each stall its own adjusted price', async () => {
+  for (const file of ['../worker-src/processor.ts', '../render-src/processor.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const lines = source.split('\n').filter(l => l.includes("shop: result.shop") || l.includes("shop:result.shop"));
+    assert.ok(lines.length >= 2, `${file}: both Basalam log lines must exist`);
+    for (const line of lines)
+      assert.ok(/price:\s*result\.price/.test(line),
+        `${file}: the per-stall price must be logged, not the base price`);
+  }
+});
+
+// --- Apply must also remove destination-only products, and the reconciliation
+// table needs a readable full-screen view.
+test('reconciliation apply removes destination-only products safely', async () => {
+  const core = await readFile(new URL('../worker-src/recon-core.ts', import.meta.url), 'utf8');
+  assert.ok(core.includes("kind: 'updatePrice' | 'create' | 'remove'"), 'the remove action must exist');
+  // It must only ever target products carrying the «(کد ایکس)» suffix.
+  assert.ok(core.includes('hasCodeSuffix(String(row.remoteTitle || row.title'),
+    'removal must be limited to code-suffixed products');
+  for (const file of ['../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(/kind\s*===\s*'remove'/.test(source), `${file}: apply must handle removal`);
+    assert.ok(source.includes('destinationDelete('), `${file}: Woo deletes, Basalam archives`);
+    assert.ok(/planActions\(.*suffixFormats\)/s.test(source), `${file}: the suffix rule must be passed in`);
+  }
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes("'recon-fullscreen'"), 'a full-screen button must exist');
+  assert.ok(dashboard.includes('.recon-full .rc-table{font-size:14px}'), 'full screen must enlarge the table');
+});
+
+// --- D1 free tier is a hard daily ceiling; show it where the work is visible.
+test('the task manager shows the D1 daily quota', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function renderQuotaBar('), 'the quota bar must exist');
+  assert.ok(dashboard.includes('body.innerHTML=quota+'), 'it must render inside the activity panel');
+  // Polling the quota costs reads, so it must be throttled.
+  assert.ok(dashboard.includes('quotaLoadedAt'), 'the quota poll must be throttled');
+  // Both runtimes must answer the route or the bar 404s outside Cloudflare.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes("'/api/quota'"), 'the Node runtime must answer /api/quota');
+});
+
+// --- Cloudflare error 1042: a Worker may not fetch another Worker on the same
+// account. Routing AI traffic through a user-deployed proxy Worker hits it, and
+// the edge answers 404 before the proxy ever runs.
+test('the same-account proxy restriction is handled and explained', async () => {
+  const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  assert.match(wrangler, /compatibility_flags\s*=\s*\[[^\]]*global_fetch_strictly_public/,
+    'the flag that permits same-account Worker fetches must be set');
+  const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(/error code:\\s\*1042/.test(ai) || ai.includes('1042'), 'the diagnostic must detect 1042');
+  assert.ok(ai.includes('global_fetch_strictly_public'), 'it must name the exact fix');
+});
+
+// --- AI work never touches D1, so the quota panel understated the real ceiling.
+test('Workers invocations and subrequests are metered', async () => {
+  const db = await readFile(new URL('../worker-src/db.ts', import.meta.url), 'utf8');
+  for (const token of ['export function meterInvocation(', 'export function meterSubrequest(',
+    'WORKERS_FREE_DAILY_REQUESTS', 'WORKERS_FREE_SUBREQUESTS_PER_INVOCATION', 'peakSubrequests'])
+    assert.ok(db.includes(token), `db.ts must define ${token}`);
+
+  // Counted at every entry point, and on every outbound call.
+  const main = await readFile(new URL('../worker-src/main.ts', import.meta.url), 'utf8');
+  assert.equal((main.match(/meterInvocation\(\)/g) || []).length, 3,
+    'fetch, queue and scheduled must each count one invocation');
+  const network = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(network.includes('meterSubrequest();'), 'every outbound fetch must be counted');
+  // db.ts must not import network.ts back, or the metering would be circular.
+  assert.ok(!db.includes("from './network.js'"), 'db.ts must not import network.ts');
+
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('اجرای Worker'), 'the bar must show the Workers group');
+  assert.ok(dashboard.includes("d.peakSubrequests"), 'the bar must show peak subrequests');
+});
+
+// --- THE model-test 404: the AI proxy URL was wrapped TWICE. networkFetch()
+// built proxy?url=<target> and then handed it to safeFetch(), which applied
+// sourceNetwork (populated from the same ai.network) and wrapped it again, so
+// the proxy was told to fetch ITSELF. That is a genuine same-zone Worker call,
+// which Cloudflare rejects with "error code: 1042" -> 404 for every model.
+test('the AI proxy URL is wrapped exactly once', async () => {
+  const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  // Every place that pre-wraps a URL must opt out of the second wrap.
+  for (const line of ai.split('\n')) {
+    if (!line.includes('viaWorkerUrl(')) continue;
+    if (line.includes('export function')) continue;
+    const idx = ai.indexOf(line);
+    const following = ai.slice(idx, idx + 600);
+    assert.ok(following.includes('directRoute'),
+      `a pre-wrapped URL must set directRoute, otherwise it is proxied twice: ${line.trim().slice(0, 80)}`);
+  }
+  // The real model call path, not just the diagnostic.
+  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true},3_000_000)"),
+    'networkFetch must not let safeFetch re-proxy an already-proxied URL');
+
+  // Behavioural proof of the double-wrap that caused 1042.
+  const via = (w, t) => w.includes('{url}') ? w.replace('{url}', encodeURIComponent(t))
+    : w + (w.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(t);
+  const proxy = 'https://proxy.example.workers.dev/';
+  const once = via(proxy, 'https://api.openai.com/v1/models');
+  const twice = via(proxy, once);
+  assert.equal((once.match(/proxy\.example/g) || []).length, 1, 'one wrap is correct');
+  assert.equal((twice.match(/proxy\.example/g) || []).length, 2, 'two wraps make the proxy fetch itself');
+});
+
+// --- Detail extraction fetched every product page even with no detail selector
+// configured, so it downloaded hundreds of pages and filled nothing.
+test('detail extraction is skipped or bootstrapped when no selector is set', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  // Discovery runs first when nothing is configured.
+  assert.ok(node.includes('هیچ سلکتور جزئیاتی تنظیم نشده'),
+    'it must try to discover detail selectors before fetching every product');
+  // The main loop is guarded.
+  const guarded = node.slice(node.indexOf('if (hasDetailSelectors(profile.selectors)) {'));
+  assert.ok(guarded.slice(0, 900).includes('await mapLimit(products'),
+    'the per-product detail loop must be guarded');
+  assert.ok(node.includes('استخراج جزئیات'), 'the job log must report the detail stage');
+
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('if(!hasDetailSelectors(profile.selectors))return;'),
+    'the Worker runtime must skip the page fetch too');
+});
+
+// --- 1,200 products scraped but only ~20 stored. sourceKey is a hash of the
+// canonical URL, and canonicalUrl(stripAllQuery=true) deleted the WHOLE query
+// string, so every product of a shop whose links are /product?id=N collapsed to
+// the same identity and upserted over each other.
+test('product identity keeps identifying query parameters', async () => {
+  const scraper = await readFile(new URL('../worker-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(!scraper.includes("if(stripAllQuery)url.search='';"),
+    'the whole query string must not be discarded: it carries the product id');
+  assert.ok(scraper.includes('const PAGING_PARAMS='), 'paging noise needs its own list');
+  assert.ok(/stripAllQuery\)\{[\s\S]{0,400}PAGING_PARAMS\.test\(key\)/.test(scraper),
+    'only tracking and paging parameters may be stripped');
+
+  // Behavioural proof of the collapse and the fix.
+  const TRACKING = /^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
+  const PAGING = /^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
+  const canon = (raw, stripAll) => {
+    const url = new URL(raw); url.hash = '';
+    if (stripAll) { for (const k of [...url.searchParams.keys()]) if (TRACKING.test(k) || PAGING.test(k)) url.searchParams.delete(k); url.searchParams.sort(); }
+    return url.toString().replace(/\/$/, '');
+  };
+  const urls = ['https://s.ir/p?id=1', 'https://s.ir/p?id=2', 'https://s.ir/p?id=3'];
+  assert.equal(new Set(urls.map(u => canon(u, true))).size, 3, 'distinct products must stay distinct');
+  assert.equal(canon('https://s.ir/p/x?utm_source=a', true), canon('https://s.ir/p/x?utm_source=b', true),
+    'tracking parameters must still collapse');
+  assert.equal(canon('https://s.ir/l?page=2&id=9', true), canon('https://s.ir/l?id=9', true),
+    'paging parameters must still be ignored');
+});
+
+// --- Products without a price cannot be published to any destination, so they
+// must not be stored, counted as results, or reconciled.
+test('products with no price are skipped everywhere', async () => {
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('job.skippedNoPrice=(job.skippedNoPrice||0)+1;'), 'worker must count the skip');
+  assert.ok(/rawPrice<=0\)\{[\s\S]{0,300}continue;/.test(worker), 'worker must skip before saving');
+
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('if (!(Number(product.price) > 0))'), 'node must skip before saving');
+  assert.ok(node.includes('محصول بدون قیمت نادیده گرفته شد'), 'node must report the count');
+
+  // The import path stores products too and must obey the same rule.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('if(!(importedPrice>0)){skippedNoPrice++;'), 'import must skip priceless rows');
+  assert.ok(server.includes('imported,failed,skippedNoPrice,errors'), 'import must report the count');
+
+  for (const file of ['../worker-src/types.ts', '../render-src/types.ts']) {
+    const types = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(types.includes('skippedNoPrice?: number;'), `${file}: Job must declare the counter`);
+  }
+});
+
+// --- The product modal showed the scraped description escaped inside a log box,
+// so a real shop page arrived as unreadable markup. It must render like the page
+// a visitor sees -- but the string reaches innerHTML, so it needs scrubbing.
+test('the product modal renders description HTML safely', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function safeProductHtml('), 'a client-side scrubber must exist');
+  assert.ok(dashboard.includes("'<h4>توضیحات</h4><div class=\"pdesc\">'+safeProductHtml(desc)"),
+    'the description must be rendered, not escaped into a text box');
+  assert.ok(!/توضیحات<\/h4><div class="logs"/.test(dashboard), 'the raw-text log box must be gone');
+  // Security: the scrub must remove executables and neutralise links.
+  for (const token of ['script,style,iframe,object,embed,form,input,button,link,meta',
+    "startsWith('on')", 'javascript|data', 'noopener noreferrer'])
+    assert.ok(dashboard.includes(token), `safeProductHtml must handle ${token}`);
+  assert.ok(dashboard.includes('.pdesc{'), 'rendered HTML needs product-page styling');
+});
+
+// --- New "specification table" detail selector, end to end.
+test('the specs selector is wired through both runtimes', async () => {
+  for (const file of ['../worker-src/types.ts', '../render-src/types.ts']) {
+    const types = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(types.includes('specs?: string;'), `${file}: Selectors needs specs`);
+    assert.ok(/specs\?: Array<\{ name: string; value: string \}>/.test(types), `${file}: Product needs specs`);
+  }
+  const worker = await readFile(new URL('../worker-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('function parseSpecFragment('), 'the worker must parse the specs block');
+  const node = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('if (selectors.specs)'), 'the node scraper must read the specs block');
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes("['specs','جدول مشخصات']"), 'the field must appear in the selector form');
+  assert.ok(dashboard.includes('<h4>جدول مشخصات</h4>'), 'the modal must show the specs table');
+});
+
+// --- The visual picker swallowed every click, so tabs and accordions on the
+// product page could not be opened to reach the fields inside them.
+test('the visual picker can pause selection', async () => {
+  for (const file of ['../worker-src/visual.ts', '../render-src/visual.ts']) {
+    const visual = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(visual.includes('__s4pause'), `${file}: needs a pause button`);
+    assert.ok(visual.includes('if(!picking)return;'), `${file}: clicks must pass through while paused`);
+    assert.ok(visual.includes('function setPicking('), `${file}: the toggle must update its own label`);
+  }
+});
+
+// --- "finished · 1,200 of 20": job.processed counted every RAW item scanned
+// while job.total was the DEDUPLICATED map size. A shop that serves the same
+// page for every page number therefore reported 1,200 processed but stored 20,
+// and the duplicate-page guard only ran when pages===0 (auto), so an explicit
+// page count re-scanned the identical page to the very end.
+test('pagination stops on repeated pages and the counter is consistent', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('job.total = found.size; job.processed = found.size;'),
+    'processed and total must both describe unique products');
+  assert.ok(!node.includes('job.processed += list.length'),
+    'processed must not count raw scanned items against a deduplicated total');
+  // The guard must no longer be limited to auto paging.
+  assert.ok(node.includes('if (found.size === before) repeatedPages++; else repeatedPages = 0;'),
+    'repeated pages must be counted for every paging mode');
+  assert.ok(/repeatedPages >= 2/.test(node), 'two barren pages in a row must end pagination');
+
+  // Behaviour: a site repeating one page stops early; a healthy site does not.
+  const run = (uniquePerPage) => {
+    const found = new Set(); let repeated = 0, pages = 0;
+    for (let page = 1; page <= 60; page++) {
+      const before = found.size;
+      for (let i = 0; i < 20; i++) found.add(uniquePerPage ? `p${page}-${i}` : `k${i}`);
+      if (found.size === before) repeated++; else repeated = 0;
+      pages = page;
+      if (repeated >= 2) break;
+    }
+    return { pages, size: found.size };
+  };
+  assert.equal(run(false).pages, 3, 'a repeating site must stop after two barren pages');
+  assert.equal(run(false).size, 20, 'and keep the 20 real products');
+  assert.equal(run(true).pages, 60, 'a healthy site must still paginate fully');
+  assert.equal(run(true).size, 1200, 'and collect every product');
+});
+
+// --- The pagination dropdown jumped back to the first option and only page 1
+// was scraped. The Node runtime whitelisted THREE of the seven modes the
+// dashboard offers, so the other four were silently rewritten to query_page.
+test('every pagination mode the UI offers is accepted and implemented', async () => {
+  const MODES = ['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'];
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  for (const mode of MODES)
+    assert.ok(dashboard.includes(`<option value="${mode}"`), `the UI must offer ${mode}`);
+
+  // Both runtimes must accept all of them, or saving silently downgrades.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  for (const mode of MODES) {
+    assert.ok(server.includes(`'${mode}'`), `the node runtime must accept ${mode}`);
+    assert.ok(app.includes(`'${mode}'`), `the worker runtime must accept ${mode}`);
+  }
+  const types = await readFile(new URL('../render-src/types.ts', import.meta.url), 'utf8');
+  for (const mode of MODES)
+    assert.ok(types.includes(`'${mode}'`), `the node Profile type must allow ${mode}`);
+
+  // And pageUrl must actually implement them, not fall through to ?page=N.
+  const scraper = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  for (const token of ["=== 'full_pattern'", "=== 'path_pattern'", "=== 'query_custom'", "=== 'next_selector'"])
+    assert.ok(scraper.includes(token), `pageUrl must handle ${token}`);
+
+  // next_selector has no computable URL: the processor must follow the link.
+  const processor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(processor.includes("profile.pagination === 'next_selector'"), 'the loop must detect the mode');
+  assert.ok(processor.includes('followUrl'), 'the next link must carry between pages');
+  assert.ok(processor.includes('scraped.nextUrl'), 'the scraper must return the next link');
+  assert.ok(scraper.includes('nextUrl?:string'), 'ScrapeListResult must expose nextUrl');
+});
+
+// --- The detail stage ran silently: it never updated job.processed/total and
+// never saved, so the queue card froze on the list-phase numbers for the whole
+// stage and there was no way to tell it was working.
+test('the detail stage reports progress live', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('job.total = products.length; job.processed = 0;'),
+    'the detail stage must own the progress counter');
+  assert.ok(/done\+\+; job\.processed = done;/.test(node), 'progress must advance per product');
+  // Saving every product would cost one DB write each; every fifth is enough.
+  assert.ok(node.includes('done % 5 === 0 || done === products.length'),
+    'progress must be persisted periodically, not per product');
+  assert.ok(node.includes('جزئیات خوانده شد'), 'each product must appear in the live log');
+  assert.ok(node.includes('محصول تکمیل شد'), 'the stage must report how many were enriched');
+
+  // The Worker is checkpointed and already counts per product; it only needed
+  // the same per-product log line.
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('جزئیات خوانده شد'), 'the worker must log each product too');
+
+  // Phases must be shown by name, not as raw keys like "details-save-sync".
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function phaseLabel('), 'phases need readable labels');
+  assert.ok(dashboard.includes("esc(phaseLabel(job.phase))"), 'the job card must use them');
+  for (const phase of ['list', 'details', 'details-save-sync', 'sync'])
+    assert.ok(dashboard.includes(`'${phase}'`) || dashboard.includes(`${phase}:`),
+      `phaseLabel must cover ${phase}`);
+});
+
+// --- Render (and any NODE_ENV=production host) installs without
+// devDependencies, so a build-time bundler kept there can never run:
+//   "esbuild still cannot be loaded after repair: Cannot find package 'esbuild'"
+// render:build is part of deploying, so its bundler is a runtime dependency.
+test('the build toolchain survives a production install', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  for (const name of ['esbuild', 'esbuild-wasm']) {
+    assert.ok(pkg.dependencies?.[name], `${name} must be a normal dependency`);
+    assert.ok(!pkg.devDependencies?.[name], `${name} must not be dev-only`);
+  }
+  // The loader must name this cause instead of blaming the OS.
+  const loader = await readFile(new URL('../scripts/esbuild-loader.mjs', import.meta.url), 'utf8');
+  assert.ok(loader.includes("process.env.NODE_ENV === 'production'"), 'the loader must detect a production install');
+  assert.ok(loader.includes('skipped devDependencies'), 'and explain it');
+  assert.ok(loader.includes('${desiredEsbuildVersion()}'), 'the suggested command must print a version, not a function');
+});
+
+// --- The Render blueprint had three deploy-blocking settings.
+test('the Render blueprint is deployable as written', async () => {
+  // Render looks for render.yaml at the repository root by default.
+  const yaml = await readFile(new URL('../../render.yaml', import.meta.url), 'utf8');
+  // rootDir is required: package.json lives in cloudflare-scraper4/.
+  assert.match(yaml, /rootDir:\s*cloudflare-scraper4/, 'the blueprint must point at the project folder');
+  const { existsSync } = await import('node:fs');
+  assert.ok(existsSync(new URL('../../render.yaml', import.meta.url)),
+    'render.yaml must sit at the repo root, where Render looks for it by default');
+  assert.ok(!existsSync(new URL('../render.yaml', import.meta.url)),
+    'a second copy inside the project would be ambiguous');
+  // Running the whole suite in the build blocks deploys of working code.
+  assert.ok(!/buildCommand:.*npm test/.test(yaml), 'the build must not run the full test suite');
+  // ADMIN_TOKEN without a login field locks the dashboard out of its own API.
+  assert.ok(!yaml.includes('key: ADMIN_TOKEN'), 'the blueprint must not set ADMIN_TOKEN');
+  // node:sqlite needs 22.5+.
+  assert.match(yaml, /NODE_VERSION[\s\S]{0,40}value:\s*22\./, 'Node 22 must be pinned');
+});
+
+// --- "make it use playwright/puppeteer". They were in the engine chain all
+// along, but .npmrc skips the bundled browser download, so every launch threw
+// "Executable doesn't exist" and auto mode swallowed it -- the engines looked
+// like they were never tried.
+test('browser engines find a system browser and explain themselves', async () => {
+  const scraper = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  // Auto-detect an already-installed Chromium instead of only trusting env vars.
+  assert.ok(scraper.includes('const SYSTEM_BROWSERS'), 'a system-browser search list must exist');
+  for (const path of ['/usr/bin/chromium', 'com.termux', 'Google Chrome'])
+    assert.ok(scraper.includes(path), `the search must cover ${path}`);
+  // An explicit override must still win.
+  const order = scraper.slice(scraper.indexOf('function browserExecutable'));
+  assert.ok(order.indexOf('BROWSER_EXECUTABLE_PATH') < order.indexOf('systemBrowser()'),
+    'the env override must be checked before auto-detection');
+
+  // A swallowed browser failure must at least be recorded.
+  assert.ok(scraper.includes('lastBrowserError'), 'browser failures must be remembered');
+  assert.ok(scraper.includes('export function browserEngineAvailable('), 'availability must be reportable');
+  assert.ok(/if\(BROWSER_ENGINES\.has\(name\)\)lastBrowserError=/.test(scraper),
+    'only browser engines should set the browser error');
+
+  // And surfaced where the user actually looks.
+  const processor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(processor.includes('lastBrowserEngineError()'), 'the job log must read the reason');
+  assert.ok(processor.includes('browsers:install'), 'and tell the user how to fix it');
+
+  // The environments that CAN run a browser must install one.
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const groups = JSON.parse(dashboard.match(/const INSTALL_COMMAND_GROUPS=(\[[\s\S]*?\]);\n/)[1]);
+  for (const key of ['desktop', 'vps', 'termux', 'windows-powershell']) {
+    const group = groups.find(g => g.key === key);
+    assert.ok(group, `install guide ${key} must exist`);
+    assert.ok(group.body.includes('browsers:install'), `${key} must install the browser engines`);
+  }
+});

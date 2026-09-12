@@ -17,6 +17,8 @@ export type Selectors = {
   galleryMax?: number;
   gallerySkipFirst?: boolean;
   variations?: string;
+  /** Specification table/list: rows become name/value pairs. */
+  specs?: string;
 };
 
 export type GalleryConfig = {
@@ -32,7 +34,7 @@ export type GalleryConfig = {
   skip_first: boolean;
 };
 
-export type ExtractionEngine = 'auto' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
+export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
 
 export type Profile = {
   id: string;
@@ -86,6 +88,8 @@ export type Product = {
   category?: string;
   tags?: string;
   variations?: string[];
+  /** Specification rows scraped from the product page. */
+  specs?: Array<{ name: string; value: string }>;
   variationGroups?: VariationGroup[];
   variationPrices?: Record<string,number>;
   /** WooCommerce publication status selected during spreadsheet import. */
@@ -106,9 +110,11 @@ export type Job = {
   added: number;
   updated: number;
   failed: number;
+  /** Products skipped because the source had no usable price. */
+  skippedNoPrice?: number;
   stopRequested: boolean;
   error: string | null;
-  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'; item?: {sourceKey:string;title:string;url?:string;target?:string;shop?:string;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string} }>;
+  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'; item?: {sourceKey:string;title:string;url?:string;target?:string;shop?:string;price?:number;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string;transport?:string} }>;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

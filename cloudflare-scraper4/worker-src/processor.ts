@@ -1,12 +1,14 @@
 import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
+import { generateProductDescription, productNeedsEnrichment } from './ai.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
+import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean};
+type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean};
 type SyncCheckpoint={offset:number};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
@@ -24,6 +26,17 @@ function preserveExisting(fresh:Product,previous:Product|null):Product{
 }
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
 function isManualListEngine(engine?:string):boolean{return !!engine&&MANUAL_LIST_ENGINES.has(engine)}
+const DETAIL_KEYS=['shortDesc','longDesc','sku','brand','category','stock','weight','gallery','detailImage','variations'] as const;
+/** True when the profile actually configures detail extraction. */
+function hasDetailSelectors(selectors:any):boolean{return DETAIL_KEYS.some(key=>String(selectors?.[key]||'').trim())}
+/** Scrapes one product and reports whether ANY detail field was populated. */
+async function detailProbe(sample:Product,selectors:any,indirect:boolean):Promise<boolean>{
+  try{
+    const before=JSON.stringify(DETAIL_KEYS.map(key=>(sample as any)[key]??null));
+    const probe=await scrapeDetails({...sample},selectors,indirect);
+    return JSON.stringify(DETAIL_KEYS.map(key=>(probe as any)[key]??null))!==before;
+  }catch{return false}
+}
 async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job,onlyMissing=true):Promise<number>{
   try{
     const suggested=await suggestSelectors(url,mode),selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));
@@ -35,7 +48,7 @@ async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'
   }catch(error){if(job)append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning');return 0}
 }
 type JobLog=Job['log'][number];
-function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,...extra}}
+function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,price:Number(product.price)||undefined,...extra}}
 function append(job:Job,text:string,level='info',event?:JobLog['event'],item?:JobLog['item']){job.log.push({at:new Date().toISOString(),level,message:text,event,item});if(job.log.length>1500)job.log=job.log.slice(-1500)}
 async function save(job:Job){const current=await getJob(job.id);if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return;if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')}await updateJob(job.id,{status:job.status,phase:job.phase,total:job.total,processed:job.processed,added:job.added,updated:job.updated,failed:job.failed,error:job.error,log:job.log,finishedAt:job.finishedAt})}
 
@@ -65,7 +78,7 @@ export async function processJob(id:string):Promise<ProcessResult>{
       job.finishedAt=new Date().toISOString();job.phase='finished';append(job,'عملیات متوقف شد','warning');await save(job);return'complete';
     }
     if(more){job.status='queued';append(job,'نقطهٔ بازیابی ذخیره شد؛ ادامه در پیام بعدی صف');await save(job);return'continue'}
-    job.status='done';job.finishedAt=new Date().toISOString();job.phase='finished';append(job,'عملیات با موفقیت تمام شد');await deleteState(stateKey(job.id));await save(job);return'complete';
+    job.status='done';job.finishedAt=new Date().toISOString();job.phase='finished';if(job.skippedNoPrice)append(job,`${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`,'warning');append(job,'عملیات با موفقیت تمام شد');await deleteState(stateKey(job.id));await save(job);return'complete';
   }catch(error){
     job.status='failed';job.error=message(error);job.finishedAt=new Date().toISOString();job.phase='finished';append(job,job.error,'error');await save(job);return'complete';
   }
@@ -80,11 +93,25 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     job.phase='list';
     if(!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,checkpoint.url,'list',job);checkpoint.listSelectorsFilled=true}
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
-    const page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+    let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
     if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
       profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;
       await saveProfile({...profile,updatedAt:new Date().toISOString()});
       append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
+    }
+    // LAST-RESORT FALLBACK: the page was fetched but produced nothing. Before
+    // failing the run, rediscover the selectors exactly like the "auto suggest"
+    // button and retry this page once. onlyMissing=false because selectors that
+    // exist but no longer match are precisely the failure being recovered from.
+    if(!page.products.length&&!checkpoint.listRescued){
+      checkpoint.listRescued=true;
+      append(job,'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…','warning');
+      const filled=await applySelectorSuggestions(profile,page.url,'list',job,false);
+      if(filled){
+        const retry=await scrapeListPage(page.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+        if(retry.products.length){append(job,`پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);page=retry}
+        else append(job,'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.','warning');
+      }
     }
     checkpoint.autoSelectorsAllowed=!!(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine));
     if(checkpoint.autoSelectorsAllowed&&!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,page.url,'list',job,true);checkpoint.listSelectorsFilled=true}
@@ -102,15 +129,78 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   }
   job.phase='details-save-sync';
   if(!checkpoint.detailSelectorsFilled){const sample=checkpoint.products.find(p=>p.url);if(sample?.url&&checkpoint.autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true);checkpoint.detailSelectorsFilled=true;await setState(key,checkpoint)}
+  // LAST-RESORT FALLBACK for the detail stage: if the configured detail
+  // selectors enrich nothing on a real product, every product would be saved
+  // with empty descriptions. Rediscover them once and re-probe.
+  if(!checkpoint.detailRescued&&hasDetailSelectors(profile.selectors)){
+    const sample=checkpoint.products.find(p=>p.url);
+    if(sample?.url&&!await detailProbe(sample,profile.selectors,Boolean(profile.networkIndirect))){
+      checkpoint.detailRescued=true;
+      append(job,'سلکتورهای جزئیات هیچ فیلدی را پر نکردند؛ پیشنهاد خودکار به‌عنوان آخرین راه اجرا می‌شود…','warning');
+      const filled=await applySelectorSuggestions(profile,sample.url,'detail',job,false);
+      if(filled&&await detailProbe(sample,profile.selectors,Boolean(profile.networkIndirect)))append(job,'پیشنهاد خودکار جواب داد: سلکتورهای جزئیات بازتنظیم شدند.');
+      else if(filled)append(job,'پیشنهاد خودکار هم فیلدی پیدا نکرد؛ سلکتورهای جزئیات را دستی بررسی کنید.','warning');
+      await setState(key,checkpoint);
+    }
+  }
   const start=checkpoint.index,end=Math.min(checkpoint.products.length,start+chunkSize()),batch=checkpoint.products.slice(start,end),previousByKey=new Map<string,Product|null>(),rawPriceByKey=new Map<string,number>();
   await mapLimit(batch,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));
-    try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title}: جزئیات: ${errorText}؛ اطلاعات معتبر قبلی حفظ شد.`,'error','failed',reportItem(product,{error:errorText}))}
+    if(!hasDetailSelectors(profile.selectors))return;
+    try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)));append(job,`${product.title}: جزئیات خوانده شد.`,'info','updated',reportItem(product,{price:Number(product.price)||undefined}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title}: جزئیات: ${errorText}؛ اطلاعات معتبر قبلی حفظ شد.`,'error','failed',reportItem(product,{error:errorText}))}
   });
+  // SCRAPER-FIRST RESCUE (before any AI): an empty description usually means
+  // the detail selectors do not match THIS product's template, not that the
+  // page has no text. Rediscover the detail selectors from a product that is
+  // actually missing data and re-scrape those products; the AI generator below
+  // is the fallback, because real page content beats generated text.
+  const needsDetail=batch.filter(product=>product.url&&productNeedsEnrichment(product).any);
+  if(needsDetail.length&&!checkpoint.detailRescued){
+    checkpoint.detailRescued=true;
+    append(job,`${needsDetail.length} محصول بدون توضیحات ماند؛ ابتدا موتور استخراج دوباره سلکتورهای جزئیات را پیدا می‌کند…`);
+    const filled=await applySelectorSuggestions(profile,needsDetail[0].url,'detail',job,false);
+    if(filled){
+      let recovered=0;
+      await mapLimit(needsDetail,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
+        if(await stopRequested(job.id))return;
+        const before=productNeedsEnrichment(product).any;
+        try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch{return}
+        if(before&&!productNeedsEnrichment(product).any)recovered++;
+      });
+      append(job,recovered
+        ?`${recovered} محصول با سلکتورهای بازتنظیم‌شده از خود صفحه تکمیل شد (بدون نیاز به هوش مصنوعی).`
+        :'سلکتورهای بازتنظیم‌شده هم چیزی اضافه نکردند؛ توضیح‌ساز هوشمند به‌عنوان فال‌بک اجرا می‌شود.',
+        recovered?'info':'warning');
+    }
+    await setState(key,checkpoint);
+  }
+  // AI enrichment FALLBACK: fill only what the page itself could not provide,
+  // using the pinned master model. Runs after the scraper-first rescue above
+  // and before save/sync, and can never fail the scrape.
+  const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
+  if(aiSettings?.enabled!==false){
+    const pending=batch.filter(product=>productNeedsEnrichment(product).any);
+    if(pending.length){
+      const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
+      let filled=0,failed=0,reported='';
+      await mapLimit(pending,Math.max(1,Number(getEnv().AI_DESCRIPTION_CONCURRENCY)||2),async product=>{
+        if(await stopRequested(job.id))return;
+        try{const result=await generateProductDescription(product);if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
+        catch(error){failed++;if(!reported)reported=message(error)}
+      });
+      if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
+      if(failed)append(job,`تکمیل توضیحات برای ${failed} محصول انجام نشد${reported?': '+reported:''}`,'warning');
+      job.phase=previousPhase;await save(job);
+    }
+  }
   for(const product of batch){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
     const previous=previousByKey.get(product.sourceKey)||null,rawPrice=rawPriceByKey.get(product.sourceKey)??product.price;
-    if(rawPrice<=0)append(job,`${product.title}: قیمت صفر یا نامعتبر از مبدأ دریافت شد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
+    if(rawPrice<=0){
+      job.skippedNoPrice=(job.skippedNoPrice||0)+1;
+      append(job,`${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
+      continue;
+    }
     if(product.stock===0)append(job,`${product.title}: موجودی مبدأ به صفر رسیده است.`,'warning','out-of-stock',reportItem(product));
     if(previous&&previous.price>0&&product.price>0&&previous.price!==product.price){const delta=product.price-previous.price,percent=Number((delta/previous.price*100).toFixed(2));append(job,`${product.title}: قیمت ${delta>0?'افزایش':'کاهش'} یافت (${percent}٪).`,delta>0?'warning':'info',delta>0?'price-increased':'price-decreased',reportItem(product,{oldPrice:previous.price,newPrice:product.price,delta,percent}))}
     let saved=false;
@@ -141,8 +231,13 @@ async function runSyncChunk(job:Job,profile:Profile):Promise<boolean>{
   if(await stopRequested(job.id)){job.status='stopped';return false}
   job.phase='sync';
   const result=await listProducts(profile.id,chunkSize(),checkpoint.offset,'');job.total=result.total;
+  const patterns=await codeSuffixPatterns();
   for(const product of result.products){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
+    if(!hasCodeSuffix(String(product.title||''),patterns)){
+      append(job,`${product.title}: بدون پسوند «(کد ایکس)» — هماهنگ‌سازی نشد.`,'info');
+      checkpoint.offset++;job.processed++;continue;
+    }
     await syncProduct(job,profile,product);
     checkpoint.offset++;job.processed++;
   }
@@ -150,9 +245,33 @@ async function runSyncChunk(job:Job,profile:Profile):Promise<boolean>{
   return checkpoint.offset<result.total;
 }
 
+/**
+ * Only products whose title carries a «(کد ایکس)» suffix are published. Titles
+ * without one are base/draft entries that must never reach a destination shop.
+ */
+async function codeSuffixPatterns():Promise<RegExp[]>{
+  const settings=await getState<any>('settings',{});
+  return suffixPatterns(parseSuffixFormats(settings?.dedup?.suffixFormats||''));
+}
 async function syncProduct(job:Job,profile:Profile,product:Product):Promise<void>{
   if(job.target==='woo'||job.target==='both')try{const action=await syncWoo(product,profile);append(job,`${product.title} [WooCommerce]: ${action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'woo',shop:'فروشگاه ووکامرس'}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [WooCommerce]: ${errorText}`,'error','failed',reportItem(product,{target:'woo',error:errorText}))}
-  if(job.target==='basalam'||job.target==='both')try{const results=await syncBasalam(product,profile);for(const result of results)append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [Basalam]: ${errorText}`,'error','failed',reportItem(product,{target:'basalam',error:errorText}))}
+  // Basalam publishes to EVERY stall. Each stall is reported on its own line and
+  // a failure in one must not abandon the others: the whole loop used to sit in
+  // a single try/catch, so one bad stall silently cancelled the rest and hid the
+  // successes that had already happened.
+  if(job.target==='basalam'||job.target==='both'){
+    let results:Awaited<ReturnType<typeof syncBasalam>>=[];
+    try{results=await syncBasalam(product,profile)}
+    catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [Basalam]: ${errorText}`,'error','failed',reportItem(product,{target:'basalam',error:errorText}))}
+    for(const result of results){
+      if(result.error){
+        job.failed++;
+        append(job,`${product.title} [Basalam · ${result.shop}]: ${result.error}`,'error','failed',reportItem(product,{target:'basalam',shop:result.shop,price:result.price,error:result.error,transport:result.transport}));
+        continue;
+      }
+      append(job,`${product.title} [Basalam · ${result.shop}]: ${result.action==='created'?'ایجاد':'به‌روزرسانی'} شد.${result.transport?` (${result.transport==='sdk'?'SDK':'API'})`:''}`,'info',result.action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'basalam',shop:result.shop,price:result.price,transport:result.transport}));
+    }
+  }
 }
 
 export async function retryAndEnqueue(id:string,waitUntil?:(promise:Promise<unknown>)=>void):Promise<Job|null>{

@@ -8,7 +8,7 @@ import {build} from 'esbuild';
 import {load} from 'cheerio';
 
 const temporary=await mkdtemp(join(tmpdir(),'scraper4-extraction-'));
-await build({entryPoints:{scraper:new URL('../worker-src/scraper.ts',import.meta.url).pathname,network:new URL('../worker-src/network.ts',import.meta.url).pathname,env:new URL('../worker-src/env.ts',import.meta.url).pathname,app:new URL('../worker-src/app.ts',import.meta.url).pathname,catalog:new URL('../worker-src/ai-catalog.ts',import.meta.url).pathname},bundle:true,splitting:true,format:'esm',platform:'browser',target:'es2022',outdir:temporary,entryNames:'[name]',outExtension:{'.js':'.mjs'}});
+await build({entryPoints:{scraper:new URL('../worker-src/scraper.ts',import.meta.url).pathname,network:new URL('../worker-src/network.ts',import.meta.url).pathname,env:new URL('../worker-src/env.ts',import.meta.url).pathname,app:new URL('../worker-src/app.ts',import.meta.url).pathname,catalog:new URL('../worker-src/ai-catalog.ts',import.meta.url).pathname,schema:new URL('../worker-src/schema.ts',import.meta.url).pathname},bundle:true,splitting:true,format:'esm',platform:'browser',target:'es2022',outdir:temporary,entryNames:'[name]',outExtension:{'.js':'.mjs'}});
 const scraper=await import(pathToFileURL(join(temporary,'scraper.mjs'))),network=await import(pathToFileURL(join(temporary,'network.mjs'))),env=await import(pathToFileURL(join(temporary,'env.mjs'))),app=await import(pathToFileURL(join(temporary,'app.mjs'))),catalog=await import(pathToFileURL(join(temporary,'catalog.mjs')));
 const HTML_VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
 
@@ -415,4 +415,457 @@ test('remaining dashboard content follows a topic-first novice workflow without 
 
 test('processor refuses unsafe retirement after empty, duplicate or failed extraction and preserves detail tags',async()=>{
   const source=await readFile(new URL('../worker-src/processor.ts',import.meta.url),'utf8');assert.match(source,/checkpoint\.retireSafe=false;[\s\S]*صفحه.*خالی/);assert.match(source,/فقط محصولات تکراری/);assert.match(source,/if\(checkpoint\.retireSafe&&checkpoint\.seen\.length\)/);assert.match(source,/هیچ محصولی بازنشسته نشد/);assert.match(source,/tags:fresh\.tags\|\|previous\.tags/);
+});
+
+test('runtime SCHEMA keeps seeded profile JSON intact and the Apple profile targets real cards',async()=>{
+  // Regression: SCHEMA used to be a plain template literal, so every \" inside the
+  // seeded profile payloads collapsed to a bare " and the JSON became unparseable.
+  // db.ts's json() helper swallows that failure, so every seeded profile silently
+  // loaded with no selectors and extracted nothing.
+  const source=await readFile(new URL('../worker-src/schema.ts',import.meta.url),'utf8');
+  assert.match(source,/export const SCHEMA = String\.raw`/,'SCHEMA must be a raw template literal');
+
+  const {SCHEMA}=await import(pathToFileURL(join(temporary,'schema.mjs')));
+  const payloads=[...SCHEMA.matchAll(/'(\{"id":"[^']*?\})'/g)].map(match=>match[1].replace(/''/g,"'"));
+  assert.ok(payloads.length>=6,`expected the seeded profiles, found ${payloads.length}`);
+  const profiles=payloads.map(payload=>JSON.parse(payload));
+  for(const profile of profiles)assert.ok(profile.selectors&&profile.selectors.container,`${profile.id} lost its selectors`);
+
+  const apple=profiles.filter(profile=>profile.id==='us-apple-buy-iphone').pop();
+  assert.ok(apple,'the US Apple Store profile must stay seeded');
+  // "section li" also matched apple.com's global navigation and the Shopping
+  // guides / Ways to save lists, which produced priceless junk rows.
+  assert.doesNotMatch(apple.selectors.container,/section li/);
+  assert.match(apple.selectors.link,/\/shop\/buy-iphone\//,'the link selector needs a product path segment');
+  assert.equal(apple.extractionEngine,'htmlrewriter','hand-tuned CSS selectors must not be bypassed by engine autodetection');
+});
+
+test('Apple-style cards extract cleanly while navigation lists are ignored',async()=>{
+  const {SCHEMA}=await import(pathToFileURL(join(temporary,'schema.mjs')));
+  const payloads=[...SCHEMA.matchAll(/'(\{"id":"us-apple-buy-iphone"[^']*?\})'/g)].map(match=>match[1].replace(/''/g,"'"));
+  const {selectors}=JSON.parse(payloads[payloads.length-1]);
+  const card=(title,slug,price)=>`<li class="rf-hcard rc-card"><h3 class="rf-hcard-title">${title}</h3>`+
+    `<img src="https://store.storeimages.cdn-apple.com/${slug}.jpg" alt="${title}">`+
+    `<div class="rc-prices"><span class="rc-prices-fullprice">Buy from $${price} or $45.79/mo. per month for 24 mo.</span></div>`+
+    `<a href="/shop/buy-iphone/${slug}">Buy - ${title}</a></li>`;
+  const html='<!DOCTYPE html><html><head><title>Buy iPhone - Apple</title></head><body>'+
+    '<nav id="globalnav"><section class="globalnav-submenu"><ul>'+
+    '<li><a href="https://www.apple.com/shop/buy-mac">Mac</a></li>'+
+    '<li><a href="https://www.apple.com/shop/buy-iphone">iPhone</a></li></ul></section></nav>'+
+    '<section class="all-models"><ul>'+
+    card('iPhone 17 Pro &amp; iPhone 17 Pro Max','iphone-17-pro','1099')+
+    card('iPhone Air','iphone-air','999')+'</ul></section>'+
+    '<section class="rf-shopping-guides"><ul>'+
+    '<li><a href="https://www.apple.com/shop/buy-iphone/carrier-offers">Carrier Deals</a></li>'+
+    '<li><a href="https://www.apple.com/shop/refurbished">Certified Refurbished</a></li></ul></section>'+
+    '</body></html>';
+  const products=await scraper.parseCards(html,'https://www.apple.com/shop/buy-iphone',selectors);
+  assert.deepEqual(products.map(product=>product.title),['iPhone 17 Pro & iPhone 17 Pro Max','iPhone Air'],
+    'navigation and shopping-guide links must not become products, and entities must be decoded');
+  assert.deepEqual(products.map(product=>product.price),[1099,999]);
+  assert.ok(products.every(product=>product.url.startsWith('https://www.apple.com/shop/buy-iphone/')));
+});
+
+test('prices keep thousands separators and cents apart',async()=>{
+  const cases=[['Buy from $1099 or $45.79/mo.',1099],['$1,099.00',1099],['$1,299.99',1299.99],
+    ['1.099,00',1099],['1,200,000 تومان',1200000],['۱٬۲۰۰٬۰۰۰ تومان',1200000],['$599',599],['',0]];
+  for(const [text,expected] of cases)assert.equal(scraper.numberFromText(text),expected,`numberFromText(${JSON.stringify(text)})`);
+});
+
+test('HTML entities in card text are decoded',async()=>{
+  // The test harness swaps in a cheerio-backed HTMLRewriter that already decodes
+  // entities, but the real Workers runtime hands text chunks over encoded, so
+  // "iPhone 17 Pro &amp; iPhone 17 Pro Max" would be stored verbatim and would
+  // never match the same product on the destination store.
+  const source=await readFile(new URL('../worker-src/scraper.ts',import.meta.url),'utf8');
+  assert.match(source,/normalizeDigits\(decodeEntities\(String\(value\|\|''\)\)\)/,'cleanText must decode entities');
+  assert.match(source,/&\(\?:amp\|#38\|#x26\);/,'&amp; must be decoded last so &amp;lt; does not become <');
+});
+
+// ---------------------------------------------------------------------------
+// Last-resort auto-suggest fallback (request 32b).
+//
+// Three triggers must recover a run instead of failing it: empty selectors, a
+// successful connection that yields zero products, and an engine that finds
+// nothing. These tests assert the WIRING in both processors (the behaviour of
+// suggestSelectors itself is covered separately below).
+// ---------------------------------------------------------------------------
+const nodeProcessor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+const workerProcessor = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+const stripComments = source => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+test('node: zero extracted products triggers the auto-suggest fallback', () => {
+  const source = stripComments(nodeProcessor);
+  const bail = source.indexOf("'محصولی پیدا نشد'");
+  assert.ok(bail > 0, 'the zero-product branch must still exist');
+  const branch = source.slice(source.indexOf('if (!list.length)'), bail);
+  assert.match(branch, /applySelectorSuggestions\(profile, url, 'list', job, false\)/,
+    'the empty-list branch must rediscover list selectors before giving up');
+  assert.match(branch, /scrapeListWithMeta/, 'it must retry the page after repairing the selectors');
+  assert.match(branch, /listRescued/, 'the retry must be guarded so it cannot loop forever');
+});
+
+test('node: the rescue reruns the same page instead of skipping it', () => {
+  const source = stripComments(nodeProcessor);
+  const branch = source.slice(source.indexOf('if (!list.length)'), source.indexOf("'محصولی پیدا نشد'"));
+  assert.match(branch, /page--;\s*continue/, 'a rescued page must be re-scraped, not skipped');
+});
+
+test('node: empty list selectors are filled before the first fetch', () => {
+  const source = stripComments(nodeProcessor);
+  assert.match(source, /LIST_KEYS\.some\(key => String\(\(profile\.selectors as any\)\?\.\[key\] \|\| ''\)\.trim\(\)\)/,
+    'a profile with no list selectors must run discovery first');
+});
+
+test('node: the detail stage falls back when no detail field is populated', () => {
+  const source = stripComments(nodeProcessor);
+  assert.match(source, /if \(!probe && !detailRescued\)/, 'an unproductive detail probe must trigger the rescue');
+  assert.match(source, /applySelectorSuggestions\(profile, sample\.url, 'detail', job, false\)/,
+    'the detail rescue must re-run discovery with onlyMissing=false');
+});
+
+test('node: applySelectorSuggestions reports how many selectors it filled', () => {
+  const source = stripComments(nodeProcessor);
+  assert.match(source, /mode: 'list'\|'detail', job: Job, onlyMissing = true\): Promise<number>/,
+    'callers branch on the count, so void would always be falsy');
+  assert.match(source, /return entries\.length;/, 'the success path must return the number of filled entries');
+});
+
+test('worker: zero extracted products triggers the auto-suggest fallback', () => {
+  const source = stripComments(workerProcessor);
+  assert.match(source, /if\(!page\.products\.length&&!checkpoint\.listRescued\)/,
+    'the worker must rescue an empty page before throwing');
+  const branch = source.slice(source.indexOf('if(!page.products.length&&!checkpoint.listRescued)'));
+  assert.match(branch.slice(0, 900), /applySelectorSuggestions\(profile,page\.url,'list',job,false\)/);
+  assert.match(branch.slice(0, 900), /scrapeListPage\(/, 'the worker must retry the page after repairing selectors');
+});
+
+test('worker: the rescue flags live on the checkpoint so resumes do not loop', () => {
+  const source = stripComments(workerProcessor);
+  assert.match(source, /listRescued\?:boolean;detailRescued\?:boolean/,
+    'both flags must be persisted on ScrapeCheckpoint');
+});
+
+test('worker: the detail stage falls back when no detail field is populated', () => {
+  const source = stripComments(workerProcessor);
+  assert.match(source, /if\(!checkpoint\.detailRescued&&hasDetailSelectors\(profile\.selectors\)\)/);
+  assert.match(source, /applySelectorSuggestions\(profile,sample\.url,'detail',job,false\)/);
+});
+
+test('both runtimes probe the same detail fields', () => {
+  const extract = source => {
+    const match = source.match(/const DETAIL_KEYS\s*=\s*\[([^\]]+)\]/);
+    assert.ok(match, 'DETAIL_KEYS must exist');
+    return match[1].split(',').map(part => part.trim().replace(/^'|'$/g, '')).filter(Boolean).sort();
+  };
+  assert.deepEqual(extract(nodeProcessor), extract(workerProcessor),
+    'node and worker must agree on what counts as a populated detail');
+});
+
+test('end to end: auto-suggest rescues a page that extracted zero products', async () => {
+  // A real catalogue whose saved selectors are stale AND whose cards carry no
+  // price text, so the discovery engines find nothing either. This is exactly
+  // the "connection succeeds but zero products" report.
+  const html = `<html><body><div class="products">${[1, 2, 3].map(i => `
+    <li class="product">
+      <a href="/p/item-${i}/" class="woocommerce-LoopProduct-link">
+        <img src="https://cdn.example.test/${i}.jpg">
+        <h2 class="woocommerce-loop-product__title">کالای شمارهٔ ${i}</h2>
+      </a>
+    </li>`).join('')}</div></body></html>`;
+  const stale = { container: '.legacy-grid .card', title: '.legacy-title', price: '.legacy-price', link: 'a.legacy', image: 'img.legacy' };
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(html, { headers: { 'content-type': 'text/html' } });
+  try {
+    const before = await scraper.scrapeListPage('https://shop.example.test/c/', stale, '', false, 'auto');
+    assert.equal(before.products.length, 0, 'the stale selectors must genuinely extract nothing');
+
+    // What the fallback does: ask for suggestions and merge the non-empty ones.
+    const suggestion = await scraper.suggestSelectors('https://shop.example.test/c/', 'list');
+    const repaired = { ...stale, ...Object.fromEntries(Object.entries(suggestion.selectors || {}).filter(([, value]) => String(value || '').trim())) };
+    assert.ok(repaired.container !== stale.container, 'discovery must propose a new container');
+
+    const after = await scraper.scrapeListPage('https://shop.example.test/c/', repaired, '', false, 'auto');
+    assert.equal(after.products.length, 3, 'the repaired selectors must recover every card');
+    assert.equal(after.products[0].title, 'کالای شمارهٔ 1');
+    assert.match(after.products[0].url, /\/p\/item-1\/?$/, 'links must survive the rescue');
+  } finally { globalThis.fetch = previousFetch }
+});
+
+test('dashboard: the selector test buttons run auto-suggest as a last resort', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const slice = name => {
+    const start = dashboard.indexOf(`async function ${name}(`);
+    assert.ok(start > 0, `${name} must exist`);
+    return dashboard.slice(start, dashboard.indexOf('\nasync function ', start + 10));
+  };
+  const list = slice('testSelectors');
+  assert.match(list, /results\.every\(x=>!x\.ok\)\)\{[^}]*await suggestSelectorFields\(\)/,
+    'a list test where nothing matched must invoke the auto-suggest button handler');
+  const detail = slice('testDetailSelectors');
+  assert.match(detail, /results\.every\(x=>!x\.ok\)\)\{[^}]*await suggestDetailFields\(\)/,
+    'a detail test where nothing matched must invoke the detail auto-suggest handler');
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard usability fixes (request 33).
+// ---------------------------------------------------------------------------
+test('dashboard: the sync preview reports progress and registers a task', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf("if(action==='recon-unified-preview'||action==='recon-unified-apply')");
+  assert.ok(start > 0, 'the unified preview handler must exist');
+  const branch = dashboard.slice(start, start + 2200);
+  assert.match(branch, /localTaskStart\(taskKey,taskName/, 'it must register a task before the request');
+  assert.match(branch, /localTaskEnd\(taskKey,d\.ok!==false/, 'it must close the task on success');
+  assert.match(branch, /catch\(error\)\{localTaskEnd\(taskKey,false/, 'it must close the task on failure');
+  assert.match(branch, /در حال خواندن مقصدها/, 'it must show immediate in-place feedback');
+});
+
+test('dashboard: local tasks are merged into the activity list', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.match(dashboard, /const runs2=\[\.\.\.Array\.from\(localTasks\.values\(\)\),\.\.\.runs\]/,
+    'renderActivity must include client-side tasks');
+  assert.match(dashboard, /const runsHtml=runs2\.length\?\(/, 'the empty check must consider local tasks too');
+  assert.match(dashboard, /const del=r\.local\?''/, 'a local task has no server run to delete');
+});
+
+test('dashboard: an empty sync preview explains which precondition is missing', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('if(!d.rows.length)');
+  const branch = dashboard.slice(start, start + 900);
+  assert.match(branch, /if\(!d\.accounts\)/, 'no destination configured must be its own message');
+  assert.match(branch, /if\(!d\.local\)/, 'no extracted products must be its own message');
+  assert.match(branch, /همه‌چیز هماهنگ است/, 'genuinely in-sync must not look like a failure');
+});
+
+test('dashboard: only recent changelog entries render expanded', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('<div class="change-list">');
+  const end = dashboard.indexOf('<div id="changesResult"', start);
+  const section = dashboard.slice(start, end);
+  const older = section.indexOf('<details class="change-older">');
+  assert.ok(older > 0, 'older entries must live in a collapsed <details>');
+  const expanded = section.slice(0, older).split('<div class="change-item">').length - 1;
+  const collapsed = section.slice(older).split('<div class="change-item">').length - 1;
+  assert.ok(expanded > 0 && expanded <= 15, `expected a short expanded list, got ${expanded}`);
+  assert.ok(collapsed > 50, `the bulk of the history must be collapsed, got ${collapsed}`);
+  const total = section.split('<div class="change-item">').length - 1;
+  assert.equal(expanded + collapsed, total, 'no changelog entry may be lost by the split');
+  assert.ok(total > 100, `the full history must still be present, got ${total}`);
+});
+
+test('dashboard: the newest changelog entry stays visible without expanding', async () => {
+  const [dashboard, pkg] = await Promise.all([
+    readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ]);
+  const version = JSON.parse(pkg).version;
+  const digits = version.replace(/[0-9]/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+  const start = dashboard.indexOf('<div class="change-list">');
+  const visible = dashboard.slice(start, dashboard.indexOf('<details class="change-older">', start));
+  assert.ok(visible.includes(`نسخهٔ ${digits}`), 'the current version must be in the expanded part');
+});
+
+test('woocommerce has a real price adjustment percentage end to end', async () => {
+  const [dashboard, workerVault, nodeVault, workerMaint, nodeMaint, workerSync, nodeSync] = await Promise.all([
+    readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/vault.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/vault.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/maintenance.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8')
+  ]);
+  // 1. It can be entered and is persisted.
+  assert.match(dashboard, /BCON\('woo\.pricePercent'\)/, 'the woo settings need a price percent input');
+  for (const [name, vault] of [['worker', workerVault], ['node', nodeVault]]) {
+    assert.match(vault, /pricePercent:\s*num\(input\?\.woo\?\.pricePercent/, `${name} vault must persist woo.pricePercent`);
+  }
+  // 2. Reconciliation treats the adjusted price as the correct one.
+  assert.match(workerMaint, /name:'ووکامرس',pricePercent:Number\(c\.woo\.pricePercent\)\|\|0/);
+  assert.match(nodeMaint, /pricePercent:\s*Number\(c\.woo\.pricePercent\)\s*\|\|\s*0/);
+  // 3. Sync actually pushes the adjusted price.
+  assert.match(workerSync, /const wooPercent=Number\(c\.pricePercent\)\|\|0/);
+  assert.match(workerSync, /regular_price:wooPrice\(product\.price\)/, 'the simple product price must be adjusted');
+  assert.match(workerSync, /regular_price:wooPrice\(keyedPrices\[0\]\|\|product\.price\)/, 'variations must be adjusted too');
+  assert.match(nodeSync, /regular_price: String\(Math\.round\(product\.price \* \(1 \+ wooPercent \/ 100\)\)\)/);
+});
+
+test('the default basalam shop has its own price percentage', async () => {
+  const [dashboard, workerSync, nodeSync, workerMaint, nodeMaint] = await Promise.all([
+    readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../worker-src/maintenance.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8')
+  ]);
+  assert.match(dashboard, /BCON\('basalam\.pricePercent'\)/, 'the default shop needs its own field');
+  for (const [name, sync] of [['worker', workerSync], ['node', nodeSync]]) {
+    assert.match(sync, /name:'پیش‌فرض',token:c\.token,vendorId:c\.vendorId,pricePercent:Number\(c\.pricePercent\)\|\|0/,
+      `${name} sync must stop hardcoding the default shop to 0%`);
+  }
+  assert.match(workerMaint, /غرفهٔ پیش‌فرض',pricePercent:Number\(c\.basalam\.pricePercent\)\|\|0/);
+  assert.match(nodeMaint, /pricePercent:\s*Number\(c\.basalam\.pricePercent\)\s*\|\|\s*0/);
+});
+
+// --- Request 36b: duplicates at the DESTINATIONS must be planned for deletion,
+// keeping the more expensive listing by default.
+test('planDuplicateDeletions keeps the most expensive listing per group', async () => {
+  const out = join(temporary, 'recon-core-dupe.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+  const account = { target: 'basalam', accountKey: '55', name: 'غرفه یک', pricePercent: 0 };
+  const remotes = [
+    { id: 1, name: 'کیف چرم (کد 11)', price: 100000 },
+    { id: 2, name: 'کیف چرم (کد 12)', price: 250000 },
+    { id: 3, name: 'کیف چرم (کد 13)', price: 180000 },
+    { id: 4, name: 'کفش راحتی (کد 21)', price: 90000 },
+    { id: 5, name: 'محصول بدون کد', price: 500000 },
+    { id: 6, name: 'محصول بدون کد', price: 400000 },
+  ];
+  const actions = core.planDuplicateDeletions(remotes, account);
+  // The 250000 listing survives; the two cheaper copies are removed.
+  assert.equal(actions.length, 2);
+  assert.deepEqual(actions.map(a => a.remoteId).sort((x, y) => x - y), [1, 3]);
+  for (const action of actions) {
+    assert.equal(action.kind, 'deleteDuplicate');
+    assert.equal(action.keepId, 2);
+    assert.equal(action.keepPrice, 250000);
+    assert.equal(action.groupSize, 3);
+    assert.equal(action.accountKey, '55');
+    assert.equal(action.accountName, 'غرفه یک');
+    assert.ok(action.price < action.keepPrice, 'only cheaper copies are deleted');
+  }
+  // A single listing is never a duplicate, and titles without «(کد ایکس)» are
+  // ignored entirely even when they repeat.
+  assert.equal(actions.some(a => [4, 5, 6].includes(a.remoteId)), false);
+  // The cheapest-keeping variant inverts the survivor.
+  const cheap = core.planDuplicateDeletions(remotes, account, '', 'cheapest');
+  assert.deepEqual(cheap.map(a => a.keepId), [1, 1]);
+});
+
+test('planDuplicateDeletions is deterministic when prices tie', async () => {
+  const out = join(temporary, 'recon-core-dupe2.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+  const account = { target: 'woo', accountKey: 'default', name: 'ووکامرس', pricePercent: 0 };
+  const remotes = [
+    { id: 30, name: 'ساعت مچی (کد 3)', price: 200000 },
+    { id: 12, name: 'ساعت مچی (کد 4)', price: 200000 },
+  ];
+  const first = core.planDuplicateDeletions(remotes, account);
+  const second = core.planDuplicateDeletions([...remotes].reverse(), account);
+  // Equal prices -> lowest remote id survives, regardless of input order, so a
+  // preview and the following apply never disagree.
+  assert.deepEqual(first.map(a => a.remoteId), [30]);
+  assert.deepEqual(second.map(a => a.remoteId), [30]);
+  assert.equal(first[0].keepId, 12);
+});
+
+test('expectedPriceFor applies the configured percentage', async () => {
+  const out = join(temporary, 'recon-core-test.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+  assert.equal(core.expectedPriceFor(100000, { pricePercent: 10 }), 110000);
+  assert.equal(core.expectedPriceFor(100000, { pricePercent: 0 }), 100000);
+  assert.equal(core.expectedPriceFor(100000, { pricePercent: 10, toRial: true }), 1100000);
+});
+
+// --- Request 34d: an explicitly chosen engine must actually be the engine that
+// runs, in the real scrape path (autoFirst=true) exactly as in the 3-page
+// benchmark (autoFirst=false). Discovery engines used to be prepended before
+// the explicit choice, so picking "cheerio" silently ran "heuristic" during a
+// real run while the diagnostic reported the chosen engine.
+test('explicitly chosen engine wins in the real scrape path, not just the 3-page benchmark',async()=>{
+  // Head blobs that let the discovery engines produce a bogus early win.
+  const html=`<html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"LD Decoy","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}</script></head>`
+    +`<body><ul><li class="product"><h2 class="woocommerce-loop-product__title">Real Card A</h2><span class="price">120,000</span><a class="woocommerce-LoopProduct-link" href="/p/a"></a><img src="/a.jpg"></li>`
+    +`<li class="product"><h2 class="woocommerce-loop-product__title">Real Card B</h2><span class="price">130,000</span><a class="woocommerce-LoopProduct-link" href="/p/b"></a><img src="/b.jpg"></li></ul></body></html>`;
+  const previousFetch=globalThis.fetch;
+  env.configureEnv({DB:{prepare(){return {bind(){return this},first:async()=>null,all:async()=>({success:true,results:[]}),run:async()=>({success:true,meta:{}})}},batch:async()=>[],exec:async()=>({count:0,duration:0})}});
+  globalThis.fetch=async()=>new Response(html,{headers:{'content-type':'text/html'}});
+  try{
+    const selectors={container:'li.product',title:'.woocommerce-loop-product__title',price:'.price',link:'a.woocommerce-LoopProduct-link',image:'img'};
+    for(const engine of ['htmlrewriter','jsonld']){
+      const real=await scraper.scrapeListPage('https://shop.test/list',selectors,'',false,engine,undefined,true);
+      const bench=await scraper.scrapeListPage('https://shop.test/list',selectors,'',false,engine,undefined,false);
+      // When the chosen engine can read the page at all, the real scrape and the
+      // 3-page benchmark must report the SAME engine. (If it reads nothing the
+      // real run legitimately continues to a fallback, which the benchmark -- by
+      // design a single-engine probe -- never does.)
+      if(bench.products.length)assert.equal(real.usedEngine,bench.usedEngine,`engine ${engine}: real run and 3-page test must agree`);
+      assert.equal(bench.usedEngine,engine,`3-page test must probe exactly the chosen engine (${engine})`);
+    }
+    // The chosen engine runs first rather than losing to a discovery engine.
+    const chosen=await scraper.scrapeListPage('https://shop.test/list',selectors,'',false,'htmlrewriter',undefined,true);
+    assert.equal(chosen.usedEngine,'htmlrewriter');
+    assert.equal(chosen.products.length,2);
+  }finally{globalThis.fetch=previousFetch}
+});
+
+test('an explicit engine that finds nothing still falls back instead of returning zero products',async()=>{
+  // No JSON-LD at all, so "jsonld" must yield nothing and hand off to a fallback.
+  const html=`<html><body><ul><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 1</h2><span class="price">91,000</span><a class="woocommerce-LoopProduct-link" href="/p/f1"></a><img src="/f1.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 2</h2><span class="price">92,000</span><a class="woocommerce-LoopProduct-link" href="/p/f2"></a><img src="/f2.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 3</h2><span class="price">93,000</span><a class="woocommerce-LoopProduct-link" href="/p/f3"></a><img src="/f3.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">Fallback Card 4</h2><span class="price">94,000</span><a class="woocommerce-LoopProduct-link" href="/p/f4"></a><img src="/f4.jpg"></li></ul></body></html>`;
+  const previousFetch=globalThis.fetch;
+  env.configureEnv({DB:{prepare(){return {bind(){return this},first:async()=>null,all:async()=>({success:true,results:[]}),run:async()=>({success:true,meta:{}})}},batch:async()=>[],exec:async()=>({count:0,duration:0})}});
+  globalThis.fetch=async()=>new Response(html,{headers:{'content-type':'text/html'}});
+  try{
+    const result=await scraper.scrapeListPage('https://shop.test/list',{container:'li.product',title:'.woocommerce-loop-product__title',price:'.price',link:'a.woocommerce-LoopProduct-link',image:'img'},'',false,'jsonld',undefined,true);
+    assert.ok(result.products.length>0,'empty explicit engine must fall back, not return 0 products');
+    assert.notEqual(result.usedEngine,'jsonld');
+  }finally{globalThis.fetch=previousFetch}
+});
+
+
+// --- Request 35c: reconciliation and sync only cover products whose title ends
+// with a «(کد ایکس)» code suffix, where x is any letter or digit. Products
+// without one are base/draft titles and must be ignored at both ends.
+test('reconciliation only covers products carrying a (کد ایکس) suffix', async () => {
+  const out = join(temporary, 'recon-suffix-test.mjs');
+  await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const core = await import(pathToFileURL(out).href);
+
+  const account = { target: 'woo', accountKey: 'default', name: 'Woo', pricePercent: 0 };
+  const local = [
+    { profile_id: 'p1', source_key: 'a', title: 'تیشرت مردانه (کد 1)', price: 100000, active: 1, data: {}, maps: [] },
+    { profile_id: 'p1', source_key: 'b', title: 'تیشرت مردانه (کد A2)', price: 100000, active: 1, data: {}, maps: [] },
+    { profile_id: 'p1', source_key: 'c', title: 'تیشرت مردانه', price: 100000, active: 1, data: {}, maps: [] },
+    { profile_id: 'p1', source_key: 'd', title: 'کفش تکی (کد ۹)', price: 50000, active: 1, data: {}, maps: [] },
+  ];
+  const rows = core.reconcileAccount(local, [], account, {});
+  const titles = rows.map(r => r.title);
+  assert.ok(!titles.includes('تیشرت مردانه'), 'a title with no code suffix must be excluded');
+  assert.equal(rows.length, 3, 'only the three suffixed products take part');
+
+  // Duplicate count = size of the group sharing a title once the code is removed.
+  const byTitle = Object.fromEntries(rows.map(r => [r.title, r.duplicateCount]));
+  assert.equal(byTitle['تیشرت مردانه (کد 1)'], 2, 'both تیشرت variants count as one group of 2');
+  assert.equal(byTitle['تیشرت مردانه (کد A2)'], 2, 'a letter code groups with a digit code');
+  assert.equal(byTitle['کفش تکی (کد ۹)'], 1, 'a product with no sibling reports 1');
+
+  // A destination product outside the convention is not reported as "extra".
+  const remoteRows = core.reconcileAccount([], [{ id: 7, name: 'محصول دستی بدون کد', price: 1000 }], account, {});
+  assert.equal(remoteRows.length, 0, 'destination products without a code suffix are out of scope');
+});
+
+test('code suffix accepts any letter or digit and strips repeated codes', async () => {
+  const out = join(temporary, 'dedup-suffix-test.mjs');
+  await build({ entryPoints: [new URL('../worker-src/dedup.ts', import.meta.url).pathname],
+    bundle: true, platform: 'neutral', format: 'esm', outfile: out, logLevel: 'error' });
+  const dedup = await import(pathToFileURL(out).href);
+  const patterns = dedup.suffixPatterns(dedup.parseSuffixFormats(''));
+
+  for (const title of ['کالا (کد 12)', 'کالا (کد A5)', 'کالا (کد:ب۳)', 'کالا (code B2)', 'کالا #77'])
+    assert.equal(dedup.hasCodeSuffix(title, patterns), true, `${title} must be recognised`);
+  for (const title of ['کالای بدون کد', 'لپ تاپ (رنگ مشکی)', ''])
+    assert.equal(dedup.hasCodeSuffix(title, patterns), false, `${title} must NOT be recognised`);
+
+  // The grouping key ignores the code, so variants collapse together.
+  assert.equal(dedup.stripCodeSuffix('کالا (کد 12)', patterns), 'کالا');
+  assert.equal(dedup.stripCodeSuffix('کالا (کد A5)', patterns), 'کالا');
+  assert.equal(dedup.stripCodeSuffix('کالا (کد:2) (کد A5)', patterns), 'کالا');
 });

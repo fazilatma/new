@@ -1,5 +1,7 @@
-import { build } from 'esbuild';
+import { loadEsbuild } from './scripts/esbuild-loader.mjs';
 import { rm, mkdir } from 'node:fs/promises';
+
+const { build } = await loadEsbuild();
 
 await rm('render-dist', { recursive: true, force: true });
 await mkdir('render-dist', { recursive: true });

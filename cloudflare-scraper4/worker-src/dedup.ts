@@ -1,3 +1,4 @@
+import { normalizePersianText } from './utils.js';
 /**
  * Pure helpers for server-side duplicate detection on destination shops (WooCommerce / Basalam).
  * The heavy work (paged listing + chunked removal) lives in background.ts; everything here is
@@ -35,14 +36,47 @@ export function parseSuffixFormats(input: unknown): string[] {
   return formats.length ? formats : [...DEFAULT_SUFFIX_FORMATS];
 }
 
+const CODE_CHAR = '[\\p{L}\\p{N}]';
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Compiles each format into an end-of-title matcher; `x` accepts a 1–10 digit number. */
 export function suffixPatterns(formats: string[]): RegExp[] {
   return parseSuffixFormats(formats).map(format => {
-    const body = escapeRegex(format).replace(/[xX]+/g, '\\d{1,10}').replace(/\s+/g, '\\s*');
-    return new RegExp('(?:\\s|[-–—_·.])*' + body + '\\s*$', 'i');
+    const body = escapeRegex(format).replace(/[xX]+/g, CODE_CHAR + '{1,20}').replace(/\s+/g, '\\s*');
+    return new RegExp('(?:\\s|[-–—_·.])*' + body + '\\s*$', 'iu');
   });
+}
+
+/**
+ * A product code is "any letter or number", not just digits: real catalogues use
+ * «(کد A12)», «(کد ب۳)» and «(کد 7)» interchangeably. \p{L}\p{N} keeps Persian,
+ * Arabic and Latin characters all valid.
+ */
+export const GENERIC_CODE_SUFFIX = /(?:\s|[-–—_·.])*[\[(]\s*(?:کد|كد|code|sku)\s*[:：#-]?\s*[\p{L}\p{N}][\p{L}\p{N}\s._/-]{0,40}?\s*[\])]\s*$/iu;
+
+/**
+ * True when a title ends with a product-code suffix: either one of the
+ * user-configured formats, or the generic «(کد …)» group.
+ */
+export function hasCodeSuffix(name: string, patterns: RegExp[]): boolean {
+  const value = normalizeDigits(String(name || ''));
+  if (!value.trim()) return false;
+  if (GENERIC_CODE_SUFFIX.test(value)) return true;
+  return patterns.some(pattern => pattern.test(value));
+}
+
+/**
+ * Title with every code suffix removed, used as the duplicate-grouping key.
+ * Strips repeatedly so «نام (کد:2) (کد A5)» collapses to «نام».
+ */
+export function stripCodeSuffix(name: string, patterns: RegExp[]): string {
+  let out = normalizeDigits(String(name || ''));
+  for (let guard = 0; guard < 5; guard++) {
+    const before = out;
+    out = stripDedupSuffix(out, patterns).replace(GENERIC_CODE_SUFFIX, '');
+    if (out === before) break;
+  }
+  return out.trim();
 }
 
 /** Strips every configured code suffix (repeatedly, so "نام (کد:2) (کد:15)" also collapses). */
@@ -58,9 +92,7 @@ export function stripDedupSuffix(name: string, patterns: RegExp[]): string {
 
 /** Canonical duplicate key: suffix-free, Persian-normalized, whitespace-collapsed, per shop. */
 export function dedupKey(name: string, shopId: string, patterns: RegExp[]): string {
-  const base = stripDedupSuffix(name, patterns).toLowerCase()
-    .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
-    .replace(/[\u200c\u200f\u200e]/g, ' ').replace(/\s+/g, ' ').trim();
+  const base = normalizePersianText(stripCodeSuffix(name, patterns));
   return base ? `${shopId || 'default'}::${base}` : '';
 }
 

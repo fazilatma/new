@@ -3,6 +3,9 @@
 name = "scraper4-cloudflare"
 main = "worker-src/main.ts"
 compatibility_date = "2026-08-19"
+# Required so this Worker can fetch a proxy Worker on the same account.
+# Without it Cloudflare answers "error code: 1042" (404) before the proxy runs.
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
 
 # Declarative bindings use deterministic names but no immutable account IDs.
@@ -37,10 +40,13 @@ max_concurrency = 2
 crons = ["* * * * *"]
 
 [vars]
-WORKER_VERSION = "1.69.0"
+WORKER_VERSION = "1.127.0"
 REQUEST_TIMEOUT_MS = "25000"
 MAX_RESPONSE_BYTES = "8000000"
 DETAIL_CONCURRENCY = "2"
+# Products enriched in parallel by the AI description generator. Keep it low on
+# the Free plan: each product costs one AI call inside the same invocation.
+AI_DESCRIPTION_CONCURRENCY = "2"
 JOB_CHUNK_SIZE = "10"
 
 [observability.logs]

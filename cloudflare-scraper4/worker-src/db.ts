@@ -1,6 +1,6 @@
 import { getEnv, type D1Database, type D1PreparedStatement } from './env.js';
 import { SCHEMA } from './schema.js';
-import { isWriteQuotaError } from './utils.js';
+import { isWriteQuotaError, normalizePersianText } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 const ready = new WeakMap<object, Promise<void>>();
@@ -18,13 +18,169 @@ function statement(sql: string, values: unknown[] = []): D1PreparedStatement { r
 // tell the user "write quota exhausted — background activity is paused until 00:00 UTC".
 let writeQuotaAt: string | null = null;
 export function getWriteQuotaState(): { writeExceeded: boolean; at: string | null } { return { writeExceeded: Boolean(writeQuotaAt), at: writeQuotaAt }; }
+
+/**
+ * Daily D1 usage meter.
+ *
+ * Cloudflare does not expose "remaining quota" to a Worker, but every query
+ * returns meta.rows_read / meta.rows_written -- the exact units the free plan
+ * limits (5,000,000 reads and 100,000 writes per UTC day). So we measure our
+ * own consumption instead of waiting to be cut off.
+ *
+ * The counter itself must not become part of the problem: persisting it on
+ * every query would roughly double our write cost. So it accumulates in memory
+ * (free) and is flushed to app_state at most once per FLUSH_MS, or when the
+ * pending delta gets large. The reported figure is persisted total + unflushed
+ * delta, so it stays correct across isolates.
+ */
+export const D1_FREE_DAILY_ROWS_READ = 5_000_000;
+export const D1_FREE_DAILY_ROWS_WRITTEN = 100_000;
+const USAGE_KEY = 'd1_usage_daily';
+const USAGE_FLUSH_MS = 60_000;
+const USAGE_FLUSH_ROWS = 500;
+
+export const WORKERS_FREE_DAILY_REQUESTS = 100_000;
+/** Cloudflare caps outbound fetch() calls per invocation: 50 on Free, 1000 on Paid. */
+export const WORKERS_FREE_SUBREQUESTS_PER_INVOCATION = 50;
+
+export type D1Usage = { day: string; rowsRead: number; rowsWritten: number; queries: number;
+  /** Worker invocations counted today (requests + cron). */
+  requests: number;
+  /** Outbound fetch() calls today: AI, Basalam, WooCommerce and scraping. */
+  subrequests: number;
+  /** Highest number of subrequests seen in a single invocation today. */
+  peakSubrequests: number };
+const utcDay = (at: Date = new Date()) => at.toISOString().slice(0, 10);
+const emptyUsage = (): D1Usage => ({ day: utcDay(), rowsRead: 0, rowsWritten: 0, queries: 0, requests: 0, subrequests: 0, peakSubrequests: 0 });
+
+let usageBase: D1Usage = emptyUsage();      // last value read from / written to D1
+let usagePending: D1Usage = emptyUsage();   // measured in this isolate, not yet flushed
+let usageLoaded = false;
+let usageFlushedAt = 0;
+let usageFlushing: Promise<void> | null = null;
+
+/**
+ * Workers-plan counters. AI model testing never touches D1, so it was invisible
+ * in the quota panel while still consuming the limits that actually bite:
+ * 100,000 invocations/day and 50 subrequests per invocation on the Free plan.
+ */
+let invocationSubrequests = 0;
+/** Call once per Worker invocation (fetch handler and cron). */
+export function meterInvocation(): void {
+  try {
+    if (usagePending.day !== utcDay()) usagePending = emptyUsage();
+    usagePending.requests += 1;
+    invocationSubrequests = 0;
+  } catch { /* metering must never break a request */ }
+}
+/** Call for every outbound fetch(): AI, Basalam, WooCommerce, scraping. */
+export function meterSubrequest(): void {
+  try {
+    if (usagePending.day !== utcDay()) usagePending = emptyUsage();
+    usagePending.subrequests += 1;
+    invocationSubrequests += 1;
+    if (invocationSubrequests > usagePending.peakSubrequests) usagePending.peakSubrequests = invocationSubrequests;
+  } catch { /* metering must never break a request */ }
+}
+/** Subrequests used so far in THIS invocation, for pre-flight checks. */
+export function subrequestsUsed(): number { return invocationSubrequests; }
+
+/** Fold one query's meta into the in-memory counters. Never throws: metering must not break queries. */
+function meter(meta: { rows_read?: number; rows_written?: number } | undefined): void {
+  try {
+    const today = utcDay();
+    // Free limits reset at 00:00 UTC; drop yesterday's numbers rather than carry them.
+    if (usagePending.day !== today) usagePending = emptyUsage();
+    if (usageBase.day !== today) usageBase = emptyUsage();
+    usagePending.rowsRead += Number(meta?.rows_read || 0);
+    usagePending.rowsWritten += Number(meta?.rows_written || 0);
+    usagePending.queries += 1;
+  } catch { /* metering is best-effort */ }
+}
+
+function usageTotal(): D1Usage {
+  const today = utcDay();
+  const base = usageBase.day === today ? usageBase : emptyUsage();
+  const pending = usagePending.day === today ? usagePending : emptyUsage();
+  return { day: today, rowsRead: base.rowsRead + pending.rowsRead, rowsWritten: base.rowsWritten + pending.rowsWritten, queries: base.queries + pending.queries,
+    requests: base.requests + pending.requests, subrequests: base.subrequests + pending.subrequests,
+    peakSubrequests: Math.max(base.peakSubrequests, pending.peakSubrequests) };
+}
+
+/** Persist the pending delta. Costs one write, so it is rate-limited by the caller. */
+async function flushUsage(): Promise<void> {
+  if (usagePending.rowsRead === 0 && usagePending.rowsWritten === 0 && usagePending.queries === 0
+    && usagePending.requests === 0 && usagePending.subrequests === 0) return;
+  const delta = usagePending;
+  usagePending = emptyUsage();
+  try {
+    const stored = await getState<D1Usage>(USAGE_KEY, emptyUsage());
+    const today = utcDay();
+    const base = stored && stored.day === today ? stored : emptyUsage();
+    const merged: D1Usage = { day: today, rowsRead: base.rowsRead + delta.rowsRead, rowsWritten: base.rowsWritten + delta.rowsWritten, queries: base.queries + delta.queries,
+      requests: base.requests + delta.requests, subrequests: base.subrequests + delta.subrequests,
+      peakSubrequests: Math.max(base.peakSubrequests || 0, delta.peakSubrequests || 0) };
+    await setState(USAGE_KEY, merged);
+    usageBase = merged; usageLoaded = true; usageFlushedAt = Date.now();
+  } catch {
+    // Put the delta back so nothing is lost (for example when the write quota is already gone).
+    usagePending.rowsRead += delta.rowsRead; usagePending.rowsWritten += delta.rowsWritten; usagePending.queries += delta.queries;
+    // Do not retry instantly; the usual cause is an exhausted write quota.
+    usageFlushedAt = Date.now();
+  }
+}
+
+function maybeFlushUsage(waitUntil?: (promise: Promise<unknown>) => void): void {
+  const due = Date.now() - usageFlushedAt >= USAGE_FLUSH_MS || usagePending.rowsWritten >= USAGE_FLUSH_ROWS || usagePending.rowsRead >= USAGE_FLUSH_ROWS * 20;
+  if (!due || usageFlushing) return;
+  usageFlushing = flushUsage().finally(() => { usageFlushing = null; });
+  if (waitUntil) waitUntil(usageFlushing);
+}
+
+/** Current-day D1 consumption measured by this Worker, with the free-plan limits applied. */
+export async function getD1Usage(): Promise<{
+  day: string; rowsRead: number; rowsWritten: number; queries: number;
+  limits: { rowsRead: number; rowsWritten: number; requests: number; subrequestsPerInvocation: number };
+  remaining: { rowsRead: number; rowsWritten: number };
+  percent: { rowsRead: number; rowsWritten: number; requests: number; peakSubrequests: number };
+  resetsAt: string; measured: 'this-worker-only';
+}> {
+  if (!usageLoaded) {
+    try {
+      const stored = await getState<D1Usage>(USAGE_KEY, emptyUsage());
+      if (stored && stored.day === utcDay()) usageBase = stored;
+      usageLoaded = true;
+    } catch { /* fall back to whatever this isolate measured */ }
+  }
+  const total = usageTotal();
+  const reset = new Date(); reset.setUTCHours(24, 0, 0, 0);
+  const pct = (used: number, limit: number) => Math.min(100, Math.round((used / limit) * 1000) / 10);
+  return {
+    ...total,
+    limits: { rowsRead: D1_FREE_DAILY_ROWS_READ, rowsWritten: D1_FREE_DAILY_ROWS_WRITTEN, requests: WORKERS_FREE_DAILY_REQUESTS, subrequestsPerInvocation: WORKERS_FREE_SUBREQUESTS_PER_INVOCATION },
+    remaining: { rowsRead: Math.max(0, D1_FREE_DAILY_ROWS_READ - total.rowsRead), rowsWritten: Math.max(0, D1_FREE_DAILY_ROWS_WRITTEN - total.rowsWritten) },
+    percent: { rowsRead: pct(total.rowsRead, D1_FREE_DAILY_ROWS_READ), rowsWritten: pct(total.rowsWritten, D1_FREE_DAILY_ROWS_WRITTEN),
+      requests: pct(total.requests, WORKERS_FREE_DAILY_REQUESTS),
+      peakSubrequests: pct(total.peakSubrequests, WORKERS_FREE_SUBREQUESTS_PER_INVOCATION) },
+    resetsAt: reset.toISOString(),
+    // Honest scope: this counts only what this Worker ran. Dashboard, wrangler
+    // and other Workers on the same database are not visible from here.
+    measured: 'this-worker-only'
+  };
+}
+
+/** Flush pending usage at the end of a request/cron so the number survives isolate recycling. */
+export function flushD1Usage(waitUntil?: (promise: Promise<unknown>) => void): void { maybeFlushUsage(waitUntil); }
+
 async function rows<T = any>(sql: string, values: unknown[] = []): Promise<T[]> {
   const result = await statement(sql, values).all<T>();
+  meter(result.meta);
   if (!result.success) throw new Error(result.error || 'D1 query failed');
   return result.results || [];
 }
 async function run(sql: string, values: unknown[] = []): Promise<number> {
   const result = await statement(sql, values).run();
+  meter(result.meta);
   const errorText = String(result.error || '');
   if (errorText && isWriteQuotaError(errorText)) { writeQuotaAt = writeQuotaAt || now(); throw new Error(errorText); }
   if (!result.success) throw new Error(errorText || 'D1 query failed');
@@ -188,7 +344,7 @@ export async function getDestinationId(profileId:string,sourceKey:string,target:
 export async function setDestinationId(profileId:string,sourceKey:string,target:string,accountKey:string,remoteId:number):Promise<void>{await run(`INSERT INTO destination_map(profile_id,source_key,target,account_key,remote_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,source_key,target,account_key) DO UPDATE SET remote_id=excluded.remote_id,updated_at=excluded.updated_at`,[profileId,sourceKey,target,accountKey,remoteId,now()]);}
 export async function markProfileRun(id:string):Promise<void>{await run('UPDATE profiles SET last_run_at=?,updated_at=? WHERE id=?',[now(),now(),id]);}
 
-const normalizeLearning=(value:string)=>value.toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim();
+const normalizeLearning=(value:string)=>normalizePersianText(value).replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim();
 export async function learnCategory(title:string,categoryId:number,categoryName='',maxWords=5):Promise<number>{const words=normalizeLearning(title).split(' ').filter(Boolean).slice(0,Math.max(1,Math.min(5,maxWords)));let saved=0;for(let n=1;n<=words.length;n++){const phrase=words.slice(0,n).join(' ');await run(`INSERT INTO category_learning(phrase,category_id,category_name,hits,updated_at) VALUES(?,?,?,1,?) ON CONFLICT(phrase,category_id) DO UPDATE SET hits=category_learning.hits+1,category_name=excluded.category_name,updated_at=excluded.updated_at`,[phrase,categoryId,categoryName,now()]);saved++}return saved;}
 export async function findLearnedCategory(title:string,maxWords=5):Promise<{categoryId:number;categoryName:string;phrase:string;hits:number}|null>{const words=normalizeLearning(title).split(' ').filter(Boolean).slice(0,Math.max(1,Math.min(5,maxWords)));for(let n=words.length;n>=1;n--){const phrase=words.slice(0,n).join(' '),row=await statement('SELECT * FROM category_learning WHERE phrase=? ORDER BY hits DESC,updated_at DESC LIMIT 1',[phrase]).first<any>();if(row)return{categoryId:Number(row.category_id),categoryName:String(row.category_name),phrase:String(row.phrase),hits:Number(row.hits)}}return null;}
 export async function importCategoryLearning(raw:any):Promise<number>{const items=Array.isArray(raw)?raw:Object.entries(raw||{}).map(([phrase,value]:any)=>({phrase,...(typeof value==='object'?value:{category_id:value})}));let count=0;for(const item of items){const phrase=normalizeLearning(String(item.phrase||item.key||'')),categoryId=Number(item.category_id||item.categoryId||item.cat_id||item.id);if(!phrase||!categoryId)continue;await run(`INSERT INTO category_learning(phrase,category_id,category_name,hits,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(phrase,category_id) DO UPDATE SET category_name=excluded.category_name,hits=MAX(category_learning.hits,excluded.hits),updated_at=excluded.updated_at`,[phrase,categoryId,String(item.category_name||item.categoryName||item.cat_name||item.name||''),Math.max(1,Number(item.hits||item.count||1)),now()]);count++}return count;}
@@ -238,7 +394,7 @@ export async function deleteAgentRunsForPrompt(promptId:string):Promise<void>{aw
 
 export async function createBackup():Promise<Record<string,unknown>>{const [profiles,products,jobs,states,destinationMap,categoryLearning,autoreplyLog]=await Promise.all([rows('SELECT * FROM profiles ORDER BY created_at'),rows('SELECT * FROM products ORDER BY profile_id,created_at'),rows('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 1000'),rows('SELECT * FROM app_state ORDER BY key'),rows('SELECT * FROM destination_map ORDER BY profile_id,target,account_key'),rows('SELECT * FROM category_learning ORDER BY hits DESC'),rows('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT 5000')]);return{app:'scraper4-cloudflare',version:1,createdAt:now(),profiles,products,jobs,states,destinationMap,categoryLearning,autoreplyLog};}
 export async function restoreBackup(bundle:any):Promise<{profiles:number;products:number;states:number}>{
-  if(!bundle||!['scraper4-cloudflare','scraper4-render'].includes(bundle.app)||bundle.version!==1)throw new Error('Invalid Scraper 4 backup');let profiles=0,products=0,states=0;
+  if(!bundle||!['scraper4-cloudflare','scraper4-backup','scraper4-render'].includes(bundle.app)||bundle.version!==1)throw new Error('Invalid Scraper 4 backup');let profiles=0,products=0,states=0;
   for(const row of bundle.profiles||[]){const data=json<any>(row.data,row.data||{});await saveProfile({...data,id:row.id,enabled:Boolean(row.enabled),intervalMinutes:Number(row.interval_minutes||0),lastRunAt:row.last_run_at||null,createdAt:row.created_at||now(),updatedAt:now()});profiles++;}
   for(const row of bundle.products||[]){const product=json<Product>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id)await setRemoteId(row.profile_id,row.source_key,'woo',Number(row.remote_woo_id));if(row.remote_basalam_id)await setRemoteId(row.profile_id,row.source_key,'basalam',Number(row.remote_basalam_id));products++;}
   for(const row of bundle.destinationMap||[])await setDestinationId(row.profile_id,row.source_key,row.target,row.account_key,Number(row.remote_id));

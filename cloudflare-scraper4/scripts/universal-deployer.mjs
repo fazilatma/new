@@ -29,17 +29,18 @@
  *   cd "$HOME"
  *   pkg update -y && pkg upgrade -y
  *   pkg install -y git gh openssh nodejs-lts python make clang tar gzip chromium
+ *   pip install basalam-sdk
  *   rm -rf "$HOME/new"
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
  *   gh auth setup-git
- *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0765b-new --depth 1
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0803e-new --depth 1
  *   cd "$HOME/new"
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper "!gh auth git-credential"
- *   git pull --ff-only origin arena/01a0765b-new
+ *   git pull --ff-only origin arena/01a0803e-new
  *   cd "$HOME/new/cloudflare-scraper4"
- *   npm install --ignore-scripts
+ *   npm install
  *   npm run browsers:install || true
  *   CHROME_BIN="$(command -v chromium-browser || command -v chromium || true)"
  *   if [ -n "$CHROME_BIN" ]; then printf "BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n" >> .env.local; fi
@@ -432,7 +433,7 @@ async function termuxOffline(args, meta) {
 set -euo pipefail
 APP_NAME="${meta.name}"
 ARCHIVE="${meta.name}-termux-offline.tar.gz"
-pkg install -y nodejs-lts tar chromium || true
+pkg install -y nodejs-lts tar chromium || true\npip install basalam-sdk || true
 mkdir -p "$HOME/apps"
 tar -xzf "$ARCHIVE" -C "$HOME/apps"
 cd "$HOME/apps/$APP_NAME"

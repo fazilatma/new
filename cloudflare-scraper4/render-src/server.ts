@@ -5,25 +5,27 @@ import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiProviders, getLeaderboard, recordVote, testAllModels } from './ai.js';
+import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, preferredAiChatModel, productNeedsEnrichment, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
-import { config, assertConfig } from './config.js';
+import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
-import { clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getJob, getProduct, getProfile, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, deleteJob, clearFinishedJobs, saveProfile, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
-import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, retire } from './maintenance.js';
-import { mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
-import { syncBasalam, syncWoo } from './sync.js';
+import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
+import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
+import { diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
+import { runDiagnostics } from './diagnostics.js';
+import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.69.0'; } catch { return process.env.npm_package_version || '1.69.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.127.0'; } catch { return process.env.npm_package_version || '1.127.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -44,12 +46,40 @@ function nodeLibraryProbe(){
 const localScraperAutoUpdate = process.env.LOCAL_SCRAPER_AUTO_UPDATE !== 'false' && process.env.RENDER !== 'true';
 const localScraperAutoUpdateMs = Math.max(60_000, Number(process.env.LOCAL_SCRAPER_AUTO_UPDATE_MS || 600_000));
 let localScraperUpdateRunning = false;
+let localScraperDirtySkipLogged = -1;
+let localScraperUnpushedSkipLogged = -1;
 function runLocal(command: string, args: string[] = []) { return spawnSync(command, args, { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env }); }
 function maybeAutoUpdateLocalScraper(reason = 'timer') {
   if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
   localScraperUpdateRunning = true;
   try {
-    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0765b-new').trim() || 'arena/01a0765b-new';
+    // Never `git reset --hard` over uncommitted work: the auto-updater would
+    // silently delete edits that only exist in the working tree.
+    const dirty = runLocal('git', ['status', '--porcelain']);
+    if (dirty.status === 0 && String(dirty.stdout || '').trim()) {
+      const files = String(dirty.stdout).trim().split('\n').length;
+      if (localScraperDirtySkipLogged !== files) {
+        localScraperDirtySkipLogged = files;
+        console.warn(`[auto-update:${reason}] paused: ${files} uncommitted change(s) would be lost by git reset --hard. Commit or stash to resume.`);
+      }
+      return;
+    }
+    localScraperDirtySkipLogged = -1;
+    // A clean tree still hides local commits that were never pushed; resetting
+    // to origin would erase them too.
+    const headBranch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim();
+    runLocal('git', ['fetch', 'origin', headBranch]);
+    const ahead = headBranch ? runLocal('git', ['rev-list', '--count', `origin/${headBranch}..HEAD`]) : { status: 1, stdout: '' };
+    const unpushed = ahead.status === 0 ? Number(String(ahead.stdout || '').trim()) || 0 : 0;
+    if (unpushed > 0) {
+      if (localScraperUnpushedSkipLogged !== unpushed) {
+        localScraperUnpushedSkipLogged = unpushed;
+        console.warn(`[auto-update:${reason}] paused: ${unpushed} unpushed commit(s) would be lost by git reset --hard. Push them to resume.`);
+      }
+      return;
+    }
+    localScraperUnpushedSkipLogged = -1;
+    const branch = (runLocal('git', ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'arena/01a0803e-new').trim() || 'arena/01a0803e-new';
     const before = (runLocal('git', ['rev-parse', 'HEAD']).stdout || '').trim();
     const fetched = runLocal('git', ['fetch', 'origin', branch]);
     if (fetched.status !== 0) return console.warn(`[auto-update:${reason}] git fetch failed: ${fetched.stderr || fetched.stdout}`);
@@ -59,13 +89,32 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
     runLocal('git', ['config', '--local', '--replace-all', 'credential.helper', '!gh auth git-credential']);
     const reset = runLocal('git', ['reset', '--hard', `origin/${branch}`]);
     if (reset.status !== 0) return console.warn(`[auto-update:${reason}] git reset failed: ${reset.stderr || reset.stdout}`);
-    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--ignore-scripts', '--no-audit', '--prefer-online']);
+    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--no-audit', '--prefer-online']);
     runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'render:build']);
     setTimeout(() => process.exit(75), 500);
   } finally { localScraperUpdateRunning = false; }
 }
 let databaseReady = false;
 let databaseError = '';
+function describeDatabaseError(error: unknown): string {
+  const parts: string[] = [];
+  const collect = (value: any) => {
+    if (!value) return;
+    if (typeof value.message === 'string' && value.message.trim()) parts.push(value.message.trim());
+    // AggregateError (node-postgres retries IPv6 then IPv4) has an empty own
+    // message; every real reason is inside .errors.
+    if (Array.isArray(value.errors)) for (const inner of value.errors) collect(inner);
+    else if (value.cause) collect(value.cause);
+  };
+  collect(error);
+  const anyError = error as any;
+  if (!parts.length && anyError?.code) parts.push(String(anyError.code));
+  let detail = [...new Set(parts)].join('; ') || 'Unknown database error';
+  if (/ECONNREFUSED/i.test(detail) && databaseDriver === 'postgres') {
+    detail += ' — PostgreSQL is not running at this address. On Termux/Android, PostgreSQL is optional: remove DATABASE_URL from .env.local (or set DATABASE_URL=sqlite:data/scraper4.sqlite) to use the built-in SQLite database, which needs no server.';
+  }
+  return detail;
+}
 async function initializeDatabase(): Promise<boolean> {
   try {
     assertConfig();
@@ -75,8 +124,29 @@ async function initializeDatabase(): Promise<boolean> {
     console.log(`${databaseLabel} connected and schema is ready`);
     return true;
   } catch (error) {
+    const detail = describeDatabaseError(error);
+    // A refused connection to a PostgreSQL on THIS device means no server is
+    // installed (the default situation on Termux/Android). Rather than looping
+    // on ECONNREFUSED forever with a red status light, fall back to the
+    // built-in SQLite database and carry on.
+    if (/ECONNREFUSED|ENOENT|EAI_AGAIN/i.test(detail) && fallbackToSqlite(detail)) {
+      console.warn(`Local PostgreSQL is unreachable; switching to the built-in SQLite database. Reason: ${detail}`);
+      try {
+        await migrate();
+        await pool.query('SELECT 1');
+        databaseReady = true;
+        databaseError = '';
+        console.log(`${databaseLabel} connected and schema is ready (automatic fallback)`);
+        return true;
+      } catch (fallbackError) {
+        databaseReady = false;
+        databaseError = describeDatabaseError(fallbackError);
+        console.error(`DATABASE NOT READY: ${databaseError}`);
+        return false;
+      }
+    }
     databaseReady = false;
-    databaseError = error instanceof Error ? error.message : String(error);
+    databaseError = detail;
     console.error(`DATABASE NOT READY: ${databaseError}`);
     return false;
   }
@@ -95,7 +165,8 @@ app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization
 app.onError((error, c) => { console.error(error); return c.json({ ok: false, error: error.message }, 500); });
 app.get('/health', c => c.json({
   ok: true,
-  app: 'scraper4-render',
+  app: 'scraper4',
+  environment: runtimeEnvironment.label,
   runtime: process.version,
   version: runtimeVersion(),
   packageVersion: PACKAGE_VERSION,
@@ -132,7 +203,7 @@ app.get('/visual', async c => {
 });
 
 app.use('/api/*', async (c, next) => {
-  if (!databaseReady) return c.json({ ok: false, error: 'Database is not configured', detail: databaseError, setup: 'Create Render PostgreSQL and set DATABASE_URL to its Internal Database URL.' }, 503);
+  if (!databaseReady) return c.json({ ok: false, error: 'Database is not configured', detail: databaseError, setup: runtimeEnvironment.dbHint, environment: runtimeEnvironment.label }, 503);
   if (!config.adminToken) return next();
   const auth = c.req.header('authorization') || '';
   if (!safeEqual(auth.replace(/^Bearer\s+/i, ''), config.adminToken)) return c.json({ ok: false, error: 'Unauthorized' }, 401);
@@ -146,7 +217,7 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: 'local-node-render', ui: 'cloudflare-compatible' }));
+app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {
@@ -156,14 +227,16 @@ app.get('/api/activity', async c => {
 });
 app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: [] }));
 app.get('/api/ai/test-results', async c => c.json({ ok: true, results: [], leaderboard: await getLeaderboard() }));
-app.get('/api/ai/test-runs/current', c => c.json({ ok: true, run: null }));
-app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; return c.json({ ok: true, results: await testAllModels(String(body.prompt || 'Reply with exactly: SCRAPER4_OK'), Boolean(body.onlyCandidates)) }); });
-app.post('/api/ai/test-runs/control', c => c.json({ ok: true, status: 'noop' }));
-app.post('/api/ai/test-runs/reset', c => c.json({ ok: true }));
+app.get('/api/ai/test-runs/current', async c => c.json({ ok: true, run: await getCurrentAiRun() }));
+app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; const { run, existing } = await startAiTestRun(body); return c.json({ ok: true, run, existing, results: run.result.results }); });
+app.post('/api/ai/test-runs/control', async c => { const body = await c.req.json().catch(() => ({})) as any; const run = await controlAiTestRun(String(body.action || '')); return c.json({ ok: true, status: run?.status || 'idle', run }); });
+app.post('/api/ai/test-runs/reset', async c => { await resetAiTestRun(); return c.json({ ok: true }); });
 app.post('/api/ai/test-runs/retry', c => c.json({ ok: false, error: 'Retry individual AI test parts is only available on Cloudflare Worker runtime.' }, 501));
 app.post('/api/ai/chat', async c => { const body = await c.req.json().catch(() => ({})) as any, providers = await aiProviders(); const key = String(body.providerId || body.provider || '').split('::')[0]; const provider = providers.find((p: any) => p.id === key) || providers[0]; if (!provider) return c.json({ ok: false, error: 'No AI provider configured' }, 400); const messages = Array.isArray(body.messages) ? body.messages : []; const prompt = messages.map((m: any) => `${m.role || 'user'}: ${m.content || ''}`).join('\n') || String(body.prompt || 'Reply with exactly: SCRAPER4_OK'); return c.json(await aiCall(provider, String(body.model || provider.models?.[0] || ''), prompt)); });
 app.get('/api/agent/templates', c => c.json({ ok: true, templates: [] }));
-app.get('/api/agent/tools', c => c.json({ ok: true, tools: [] }));
+app.get('/api/agent/tools', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
+app.get('/api/agent/tasks', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
+app.get('/api/ai/workers-catalog', async c => { const catalog = await import('../worker-src/workers-ai-catalog.js'); return c.json({ ok: true, groups: catalog.workersAiTaskGroups(), total: catalog.WORKERS_AI_MODELS.length }); });
 app.get('/api/agent/models', c => c.json({ ok: true, models: [] }));
 app.get('/api/agent/prompts', c => c.json({ ok: true, prompts: [] }));
 app.post('/api/agent/prompts', c => c.json({ ok: false, error: 'Agent prompts are only available on Cloudflare Worker runtime.' }, 501));
@@ -175,9 +248,69 @@ app.post('/api/agent/runs/control', c => c.json({ ok: true, status: 'noop' }));
 app.post('/api/agent/runs/reset', c => c.json({ ok: true }));
 
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
+app.get('/api/debug',async c=>c.json(await runDiagnostics()));
+app.get('/api/ai/diagnose',async c=>c.json(await aiConnectionDiagnostic()));
+const nodeUnsupported = (feature: string) => ({ ok: false, unsupported: true, runtime: 'node',
+  error: feature + ' روی این محیط (اجرای محلی/نود) پیاده‌سازی نشده و فقط روی Cloudflare Worker کار می‌کند.',
+  recommendations: ['برای این قابلیت از نسخهٔ Cloudflare استفاده کنید.', 'بقیهٔ بخش‌های مدیریت مقصد در همین محیط کار می‌کنند.'] });
+app.get('/api/destination/basalam/category-runs/current', c => c.json({ ok: true, run: null, unsupported: true, runtime: 'node' }));
+app.post('/api/destination/basalam/category-runs', c => c.json(nodeUnsupported('اجرای گروهی دسته‌بندی باسلام'), 501));
+app.post('/api/destination/basalam/category-runs/control', c => c.json(nodeUnsupported('کنترل اجرای دسته‌بندی باسلام'), 501));
+app.post('/api/destination/basalam/category-runs/reset', c => c.json({ ok: true, unsupported: true, runtime: 'node' }));
+app.post('/api/destination/basalam/category/suggest', c => c.json(nodeUnsupported('پیشنهاد خودکار دستهٔ باسلام'), 501));
+app.post('/api/import/analyze', c => c.json(nodeUnsupported('تحلیل فایل ورودی'), 501));
+app.post('/api/ai/diagnose',async c=>c.json(await aiConnectionDiagnostic()));
+// --- AI description generator -------------------------------------------
+// Always-on by default: it fills descriptions/variations that the source page
+// did not provide, using the pinned master model.
+app.get('/api/ai/description-settings',async c=>{
+  const settings=await getState<any>('ai_description_settings',{enabled:true});
+  const picked=await preferredAiChatModel();
+  return c.json({ok:true,settings:{enabled:settings?.enabled!==false},master:picked?{provider:picked.provider.id,model:picked.model}:null});
+});
+app.post('/api/ai/description-settings',async c=>{
+  const body=await c.req.json().catch(()=>({}))as any;
+  const enabled=body.enabled!==false&&body.enabled!=='false';
+  await setState('ai_description_settings',{enabled});
+  return c.json({ok:true,settings:{enabled}});
+});
+app.post('/api/profiles/:id/ai-descriptions',async c=>{
+  const profile=await getProfile(c.req.param('id'));
+  if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);
+  const body=await c.req.json().catch(()=>({}))as any;
+  const force=body.force===true||body.force==='true';
+  const limit=Math.max(1,Math.min(200,Number(body.limit)||25));
+  const picked=await preferredAiChatModel();
+  if(!picked)return c.json({ok:false,error:'هیچ مدل هوش مصنوعی فعالی پیدا نشد. ابتدا یک ارائه‌دهنده و مدل مستر تنظیم کنید.'},400);
+  const stored=(await listProducts(profile.id,1000,0,'')).products||[];
+  const targets=stored.filter((row:any)=>force||productNeedsEnrichment(row.data||row).any).slice(0,limit);
+  let filled=0;const failures:any[]=[];
+  for(const row of targets){
+    const product=(row as any).data||row;
+    const result=await generateProductDescription(product,{force});
+    if(result.changed){await upsertProduct(profile.id,product);filled++}
+    else if(!result.ok)failures.push({title:product.title,error:result.error});
+  }
+  return c.json({ok:true,profileId:profile.id,model:picked.model,provider:picked.provider.id,
+    candidates:targets.length,filled,failed:failures.length,failures:failures.slice(0,5)});
+});
+app.get('/api/import/history',async c=>c.json({ok:true,items:await getImportHistory()}));
+app.post('/api/import/history/clear',async c=>{await clearImportHistory();return c.json({ok:true})});
+app.post('/api/jobs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,ids=Array.isArray(b.ids)?b.ids.map(String):[];if(!ids.length)return c.json({ok:false,error:'هیچ کاری برای اولویت‌بندی ارسال نشد.'},400);const valid:string[]=[];for(const id of ids){const job=await getJob(id);if(job&&job.status==='queued')valid.push(id)}
+  // An empty result (every dragged job already started) must never wipe the saved order.
+  if(!valid.length)return c.json({ok:true,count:0,priorities:await getJobPriorities()});return c.json({ok:true,count:valid.length,priorities:await setJobPriorities(valid)})});
+app.post('/api/runs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,kinds=Array.isArray(b.kinds)?b.kinds.map(String):[];if(!kinds.length)return c.json({ok:false,error:'هیچ اجرایی برای اولویت‌بندی ارسال نشد.'},400);const known=new Set(['ai-test','category-all','dedup','agent']),valid=kinds.filter((kind:string)=>known.has(kind));if(!valid.length)return c.json({ok:true,count:0,priorities:await getRunPriorities()});return c.json({ok:true,count:valid.length,priorities:await setRunPriorities(valid)})});
+app.post('/api/category-learning/import',async c=>c.json({ok:true,imported:await importCategoryLearning(await c.req.json())}));
+app.post('/api/suggest-selectors',async c=>{const b=await c.req.json().catch(()=>({}))as any,mode=['list','detail'].includes(b.mode)?b.mode:'all';return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode)})});
+app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await c.req.json().catch(()=>({}))as any;return c.json(await diagnoseExtraction(profile,String(b.url||'')))});
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES}));
 app.get('/api/connections', async c => c.json({ok:true,connections:await loadConnections(true)}));
-app.post('/api/connections', async c => c.json({ok:true,connections:await saveConnections(await c.req.json())}));
+app.get('/api/quota', async c => c.json({ok:true,d1:null,unlimited:true,note:'این محیط از پایگاه‌دادهٔ محلی استفاده می‌کند و سقف روزانهٔ D1 روی آن اعمال نمی‌شود.'}));
+app.post('/api/connections', async c => {
+  const body=await c.req.json().catch(()=>null);
+  if(!body||typeof body!=='object')return c.json({ok:false,error:'بدنهٔ درخواست باید JSON معتبر باشد.'},400);
+  return c.json({ok:true,connections:await saveConnections(body)});
+});
 app.get('/api/ai/providers',async c=>c.json({ok:true,providers:await aiProviders(),leaderboard:await getLeaderboard()}));
 app.post('/api/ai/test-all',async c=>{const body=await c.req.json().catch(()=>({})) as any;return c.json({ok:true,results:await testAllModels(String(body.prompt||'Reply with exactly: SCRAPER4_OK'),Boolean(body.onlyCandidates))})});
 app.post('/api/ai/call',async c=>{const body=await c.req.json() as any,providers=await aiProviders(),provider=providers.find(p=>p.id===body.provider);if(!provider)return c.json({ok:false,error:'Provider not found'},404);return c.json(await aiCall(provider,String(body.model||''),String(body.prompt||'Reply with exactly: SCRAPER4_OK')))});
@@ -195,7 +328,7 @@ app.get('/api/basalam/chats',async c=>c.json({ok:true,items:await basalamChats(N
 app.get('/api/basalam/orders',async c=>c.json({ok:true,items:await basalamOrders(Number(c.req.query('limit'))||20)}));
 app.get('/api/settings', async c => c.json({ ok:true, settings: await getState('settings', {}) }));
 app.post('/api/settings', async c => { const settings=await c.req.json(); await setState('settings',settings); return c.json({ok:true}); });
-app.get('/api/backup', async c => c.json(await createBackup(), 200, { 'content-disposition': `attachment; filename="scraper4-render-${Date.now()}.json"` }));
+app.get('/api/backup', async c => c.json(await createBackup(), 200, { 'content-disposition': `attachment; filename="scraper4-backup-${Date.now()}.json"` }));
 app.post('/api/restore', async c => c.json({ok:true,result:await restoreBackup(await c.req.json())}));
 app.get('/api/settings-export', async c => {
   const bundle=await createPhpSettingsBundle(new URL(c.req.url).host),stamp=new Date().toISOString().replace(/[-:T]/g,'').slice(0,15);
@@ -217,6 +350,15 @@ app.post('/api/settings-import', async c => {
 });
 app.get('/api/profile-stats', async c => c.json({ok:true,items:await profileStats()}));
 app.post('/api/maintenance/recon/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({})) as any;return c.json({ok:true,report:await recon(target as any,String(body.profileId||''))})});
+// Unified reconciliation: every profile against WooCommerce and every Basalam
+// stall at once, with prices compared after each destination's own adjustment.
+app.get('/api/maintenance/recon-accounts',async c=>c.json({ok:true,accounts:await reconAccounts()}));
+app.post('/api/maintenance/recon-unified',async c=>{const b=await c.req.json().catch(()=>({}))as any;return c.json(await unifiedRecon(String(b.profileId||'')))});
+app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await c.req.json().catch(()=>({}))as any;return c.json(await unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
+// Request 36b: preview (no confirm) or delete duplicates in every destination,
+// keeping the most expensive copy by default.
+app.post('/api/maintenance/duplicates',async c=>{const b=await c.req.json().catch(()=>({}))as any;return c.json(await destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
+app.post('/api/maintenance/recon-table/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));return c.json(await reconTable(target as 'woo'|'basalam',String(body.profileId||'')))});
 app.post('/api/maintenance/rebuild/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({})) as any;return c.json(await rebuildMap(target as any,String(body.profileId||'')))});
 app.post('/api/maintenance/retire/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any,apply=body.confirm==='APPLY';return c.json(await retire(target as any,String(body.profileId||''),String(body.action||'report'),apply))});
 app.post('/api/maintenance/bulk/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any;return c.json(await bulkEdit(target as any,body,body.confirm==='APPLY'))});
@@ -224,6 +366,29 @@ app.post('/api/maintenance/photo-fix',async c=>{const body=await c.req.json() as
 app.get('/api/destination/:target/products',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const all=await listDestinationProducts(target as any),q=String(c.req.query('q')||'').toLowerCase(),filtered=q?all.filter(x=>x.name.toLowerCase().includes(q)||String(x.id)===q):all,limit=Math.min(200,Number(c.req.query('limit'))||50),offset=Math.max(0,Number(c.req.query('offset'))||0);return c.json({ok:true,total:filtered.length,items:filtered.slice(offset,offset+limit)})});
 app.get('/api/destination/:target/overview',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);return c.json({ok:true,...await destinationOverview(target as any)})});
 app.get('/api/destination/:target/duplicates',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);return c.json({ok:true,groups:await findDestinationDuplicates(target as any)})});
+// Request 36 / runtime parity: server-side duplicate-removal runs. These four
+// routes existed only in the Cloudflare Worker, so the dashboard's duplicate
+// buttons were dead on Termux / VPS / Render installs.
+const dedupTarget=(value:string)=>{if(!['woo','basalam'].includes(value))throw Error('Invalid target');return value as 'woo'|'basalam'};
+app.post('/api/destination/:target/dedup-runs',async c=>{
+  try{const target=dedupTarget(c.req.param('target')),b=await c.req.json().catch(()=>({}))as any;
+    const started=await startDedupRun(target,b);
+    return c.json({ok:true,...started},started.existing?200:202);
+  }catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.get('/api/destination/:target/dedup-runs/current',async c=>{
+  try{dedupTarget(c.req.param('target'));await recoverDedupRun();return c.json({ok:true,run:await getPublicDedupRun()})}
+  catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.post('/api/destination/:target/dedup-runs/control',async c=>{
+  try{dedupTarget(c.req.param('target'));const b=await c.req.json().catch(()=>({}))as any;
+    return c.json({ok:true,run:await controlDedupRun(String(b.action)==='resume'?'resume':'stop')});
+  }catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.post('/api/destination/:target/dedup-runs/reset',async c=>{
+  try{dedupTarget(c.req.param('target'));await resetDedupRun();return c.json({ok:true,run:await getPublicDedupRun()})}
+  catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
 app.post('/api/destination/:target/:id/status',async c=>{const target=c.req.param('target'),body=await c.req.json() as any;if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(body.confirm!=='APPLY')return c.json({ok:false,error:'confirm APPLY is required'},400);return c.json(await destinationChangeStatus(target as any,Number(c.req.param('id')),String(body.status||'')))});
 app.delete('/api/destination/:target/:id',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm DELETE is required'},400);return c.json(await destinationDelete(target as any,Number(c.req.param('id')),c.req.query('force')==='true'))});
 app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const profile=await getProfile(c.req.param('profileId')),product=await getProduct(c.req.param('profileId'),c.req.param('sourceKey')),target=c.req.param('target');if(!profile||!product)return c.json({ok:false,error:'Product/profile not found'},404);if(target==='woo')return c.json({ok:true,result:await syncWoo(product,profile)});if(target==='basalam')return c.json({ok:true,result:await syncBasalam(product,profile)});return c.json({ok:false,error:'Invalid target'},400)});
@@ -232,11 +397,40 @@ app.post('/api/source-test', async c => { const body=await c.req.json() as any; 
 app.post('/api/test-connection/:target', async c => {
   const target=c.req.param('target'),connections=await loadConnections(true);
   if(target==='woo') { const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'تنظیمات ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,r=await safeFetch(x.url+'/wp-json/wc/v3/system_status',{headers:{authorization:auth,accept:'application/json'}},2_000_000);return c.json({ok:r.ok,code:r.status}); }
-  if(target==='basalam') { const x=connections.basalam;if(!x.token)return c.json({ok:false,error:'توکن باسلام خالی است'},400);const r=await safeFetch(x.api+'/categories',{headers:{authorization:`Bearer ${x.token}`,accept:'application/json'}},2_000_000);return c.json({ok:r.ok,code:r.status}); }
+  if(target==='basalam'){
+    // Mirror the Worker: query users/me so a single token test can also fill in
+    // the vendor id, stall name and preparation days for the settings form.
+    const x=connections.basalam,body=await c.req.json().catch(()=>({}))as any;
+    const index=Number(body?.shopIndex),shop=Number.isInteger(index)&&index>=0?(x.shops||[])[index]:null;
+    const token=shop?.token||x.token,expectedVendorId=shop?.vendorId||x.vendorId;
+    if(!token)return c.json({ok:false,error:'توکن باسلام خالی است'},400);
+    const endpoint=String(x.api||'').replace(/\/$/,'')+'/users/me';
+    const tokenVerdict=describeBasalamToken(token);
+    let r:Response;
+    try{r=await safeFetch(endpoint,{headers:{authorization:`Bearer ${token}`,accept:'application/json'}},2_000_000)}
+    catch(error){return c.json({ok:false,target,service:'Basalam OpenAPI',
+      error:`${tokenVerdict.reason} — ${error instanceof Error?error.message:String(error)}`,
+      summary:{tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null}},200)}
+    const raw=await r.json().catch(()=>({}))as any;
+    const vendor=raw?.vendor||raw?.data?.vendor||{},user=raw?.data||raw||{},vendorId=String(vendor.id||user.vendor_id||'');
+    const autofill:Record<string,any>={};
+    if(vendorId)autofill.vendorId=vendorId;
+    const vendorTitle=vendor.title||user.vendor_title||'';if(vendorTitle)autofill.name=String(vendorTitle);
+    const prep=Number(vendor.preparation_days??vendor.default_preparation_days);if(Number.isFinite(prep)&&prep>0)autofill.preparationDays=prep;
+    const city=vendor.city?.id??vendor.city_id;if(Number(city))autofill.cityId=Number(city);
+    const identifier=vendor.identifier||vendor.slug||'';if(identifier)autofill.identifier=String(identifier);
+    return c.json({ok:r.ok,code:r.status,target,service:'Basalam OpenAPI',
+      http:{status:r.status,statusText:r.statusText},
+      summary:{userId:user.id||null,userName:user.name||user.username||null,vendorId:vendorId||null,
+        vendorTitle:vendorTitle||shop?.name||null,vendorActive:vendor.is_active??null,
+        configuredVendorId:expectedVendorId||null,
+        vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId,
+        tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null,autofill}});
+  }
   if(target==='ai') { const ai=connections.ai;if(!ai.baseUrl||!ai.apiKey||!ai.model)return c.json({ok:false,error:'تنظیمات هوش مصنوعی کامل نیست'},400);const endpoint=ai.baseUrl+(ai.baseUrl.includes('/chat/completions')?'':'/chat/completions'),r=await safeFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${ai.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:ai.model,messages:[{role:'user',content:'Reply with exactly: SCRAPER4_OK'}],max_tokens:20})},2_000_000);return c.json({ok:r.ok,code:r.status,body:await r.json().catch(()=>null)}); }
   return c.json({ok:false,error:'Unknown connection'},404);
 });
-app.get('/api/categories/:target',async c=>{const target=c.req.param('target'),connections=await loadConnections();if(target==='woo'){const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'اتصال ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,items:any[]=[];for(let page=1;page<=20;page++){const r=await safeFetch(`${x.url}/wp-json/wc/v3/products/categories?per_page=100&page=${page}`,{headers:{authorization:auth,accept:'application/json'}},3_000_000),rows=await r.json() as any[];if(!r.ok)return c.json({ok:false,error:`Woo HTTP ${r.status}`},502);items.push(...rows);if(rows.length<100)break}return c.json({ok:true,items})}if(target==='basalam'){const x=connections.basalam;if(!x.token)return c.json({ok:false,error:'توکن باسلام خالی است'},400);const r=await safeFetch(`${x.api}/categories`,{headers:{authorization:`Bearer ${x.token}`,accept:'application/json'}},5_000_000),body=await r.json() as any;return c.json({ok:r.ok,items:body?.data||body?.categories||body})}return c.json({ok:false,error:'Invalid target'},400)});
+app.get('/api/categories/:target',async c=>{const target=c.req.param('target'),connections=await loadConnections();if(target==='woo'){const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'اتصال ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,items:any[]=[];for(let page=1;page<=20;page++){const r=await safeFetch(`${x.url}/wp-json/wc/v3/products/categories?per_page=100&page=${page}`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},3_000_000),rows=await r.json() as any[];if(!r.ok)return c.json({ok:false,error:`Woo HTTP ${r.status}`},502);items.push(...rows);if(rows.length<100)break}return c.json({ok:true,items})}if(target==='basalam'){const x=connections.basalam;if(!x.token)return c.json({ok:false,error:'توکن باسلام خالی است'},400);const r=await safeFetch(`${x.api}/categories`,{headers:{authorization:`Bearer ${x.token}`,accept:'application/json'}},5_000_000),body=await r.json() as any;return c.json({ok:r.ok,items:body?.data||body?.categories||body})}return c.json({ok:false,error:'Invalid target'},400)});
 app.get('/api/profiles', async c => c.json({ ok: true, profiles: await listProfiles() }));
 app.post('/api/profiles', async c => {
   const profile = normalizeProfile(await c.req.json()); return c.json({ ok: true, profile: await saveProfile(profile) });
@@ -257,11 +451,20 @@ app.post('/api/profiles/:id/sync', async c => {
   return c.json({ ok: true, job, processor:job.kind==='sync'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 
-const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','playwright','puppeteer','crawlee_playwright'];
+// A 3-page scan that yields a single product means the engine matched a stray
+// card, not the product grid; saving it as the default breaks every later run.
+const MIN_BENCHMARK_PRODUCTS=2;
+// Playwright/Puppeteer/Crawlee have no Android build, so on Termux they are
+// unavailable rather than broken -- report them the way the Worker reports its
+// own unavailable engines instead of showing a scary download error.
+const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+const BROWSER_ENGINES_UNAVAILABLE=process.platform==='android';
+const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString();
   for(const engine of BENCHMARK_ENGINES){
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();
+    if(BROWSER_ENGINES_UNAVAILABLE&&BROWSER_ENGINES.has(engine)){results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:'موتورهای مرورگر روی اندروید/ترموکس نصب‌شدنی نیستند؛ از htmlrewriter یا cheerio استفاده کنید.'});continue}
     try{
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,engine,undefined,false);
@@ -272,11 +475,19 @@ async function benchmarkProfileEngines(profile:Profile){
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
     results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{})});
   }
-  const fastest=results.filter(r=>r.ok&&r.available).sort((a,b)=>b.productsPerMinute-a.productsPerMinute||a.elapsedMs-b.elapsedMs)[0]||null;
+  const usable=results.filter(r=>r.ok&&r.available);
+  // Rank by coverage first. Ranking purely by products/minute let a shallow
+  // engine that found a single stray card beat the selector engine that found
+  // hundreds, and the winner was then saved as the profile default -- so every
+  // later run extracted almost nothing.
+  const best=usable.sort((a,b)=>b.products-a.products||a.elapsedMs-b.elapsedMs)[0]||null;
+  const bestCount=best?best.products:0;
+  // A single product from a 3-page scan is noise, not a working engine.
+  const fastest=best&&bestCount>=MIN_BENCHMARK_PRODUCTS?best:null;
   (profile as any).extractionEngineBenchmarks=results;
   if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
   await saveProfile({...profile,updatedAt:new Date().toISOString()});
-  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`Fastest engine saved as profile default: ${fastest.engine}.`]:['No engine extracted products from the first three pages. Check network access, anti-bot responses, and selectors.']};
+  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(bestCount>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${bestCount}). موتور پیش‌فرض پروفایل تغییر نکرد تا یک نتیجهٔ نادرست جایگزین تنظیم درست شما نشود.`,'سلکتور ظرف محصول را بررسی کنید؛ اگر روی Cloudflare درست کار می‌کند، همان htmlrewriter را دستی انتخاب کنید.']:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
 app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);return c.json(await benchmarkProfileEngines(profile))});
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
@@ -295,7 +506,7 @@ app.get('/api/profiles/:id/products', async c => {
 app.delete('/api/profiles/:id/products/:sourceKey',async c=>c.json({ok:await deleteProduct(c.req.param('id'),decodeURIComponent(c.req.param('sourceKey')))}));
 app.delete('/api/profiles/:id/products',async c=>{if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm=DELETE is required'},400);return c.json({ok:true,deleted:await clearProducts(c.req.param('id'))})});
 app.get('/api/profiles/:id/export.csv',async c=>{const result=await listProducts(c.req.param('id'),100000,0,''),fields=['sourceKey','title','price','url','image','sku','brand','stock','weight','category','shortDesc','longDesc'],csv='\uFEFF'+fields.join(',')+'\n'+result.products.map(p=>fields.map(field=>csvCell((p as any)[field])).join(',')).join('\n');return c.body(csv,200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="${c.req.param('id').replace(/[^a-z0-9_.-]/gi,'_')}.csv"`})});
-app.post('/api/profiles/:id/import',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const body=await c.req.json() as any,rows=Array.isArray(body.rows)?body.rows:typeof body.csv==='string'?parseCsv(body.csv):[];let imported=0,failed=0;const errors:string[]=[];for(const [index,row] of rows.entries())try{const title=String(row.title||row.name||'').trim();if(!title)throw Error('title is empty');const key=String(row.sourceKey||row.key||crypto.randomUUID()),image=String(row.image||'');await upsertProduct(profile.id,{sourceKey:key,title,price:numberFromText(String(row.price||0)),priceText:String(row.price||''),url:String(row.url||row.link||''),image,images:image?[image]:[],sku:String(row.sku||''),brand:String(row.brand||''),stock:row.stock==null?undefined:Number(row.stock),weight:row.weight==null?undefined:Number(row.weight),category:String(row.category||''),shortDesc:String(row.shortDesc||''),longDesc:String(row.longDesc||''),sourcePage:'import',scrapedAt:new Date().toISOString()});imported++}catch(error){failed++;if(errors.length<50)errors.push(`row ${index+1}: ${error instanceof Error?error.message:String(error)}`)}return c.json({ok:failed===0,imported,failed,errors})});
+app.post('/api/profiles/:id/import',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const body=await c.req.json().catch(()=>null) as any;if(!body||typeof body!=='object')return c.json({ok:false,error:'بدنهٔ درخواست باید JSON با فیلد rows یا csv باشد.'},400);const rows=Array.isArray(body.rows)?body.rows:typeof body.csv==='string'?parseCsv(body.csv):[];let imported=0,failed=0,skippedNoPrice=0;const errors:string[]=[];for(const [index,row] of rows.entries())try{const title=String(row.title||row.name||'').trim();if(!title)throw Error('title is empty');const key=String(row.sourceKey||row.key||crypto.randomUUID()),image=String(row.image||'');const importedPrice=numberFromText(String(row.price||0));if(!(importedPrice>0)){skippedNoPrice++;errors.push(`${title}: قیمت ندارد؛ نادیده گرفته شد.`);continue}await upsertProduct(profile.id,{sourceKey:key,title,price:numberFromText(String(row.price||0)),priceText:String(row.price||''),url:String(row.url||row.link||''),image,images:image?[image]:[],sku:String(row.sku||''),brand:String(row.brand||''),stock:row.stock==null?undefined:Number(row.stock),weight:row.weight==null?undefined:Number(row.weight),category:String(row.category||''),specs:Array.isArray(row.specs)?row.specs.filter((x:any)=>x&&x.name&&x.value).map((x:any)=>({name:String(x.name),value:String(x.value)})).slice(0,60):undefined,shortDesc:String(row.shortDesc||''),longDesc:String(row.longDesc||''),sourcePage:'import',scrapedAt:new Date().toISOString()});imported++}catch(error){failed++;if(errors.length<50)errors.push(`row ${index+1}: ${error instanceof Error?error.message:String(error)}`)}return c.json({ok:failed===0,imported,failed,skippedNoPrice,errors})});
 app.post('/api/test-selector', async c => {
   const body = await c.req.json() as any; return c.json({ ok: true, ...await testSelector(String(body.url || ''), String(body.selector || ''), String(body.type || 'text')) });
 });
@@ -306,7 +517,7 @@ app.post('/api/import-php', async c => {
   return c.json({ ok: true, imported: imported.length, profiles: imported });
 });
 
-const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, info => console.log(`Scraper4 Render listening on http://${info.address}:${info.port}`));
+const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, info => console.log(`Scraper4 (${runtimeEnvironment.label}) listening on http://${info.address}:${info.port}`));
 let scheduler: NodeJS.Timeout | undefined;
 let backgroundStarted = false;
 let localDrainRunning = false;
@@ -371,7 +582,7 @@ function normalizeProfile(raw: any): Profile {
   const now = new Date().toISOString(); const engine=String(raw.extractionEngine||raw.scrapingEngine||raw.engine||'auto') as ExtractionEngine; const rawMaster=String(raw.extractionEngineMaster||raw.fetch_engine_master||raw.engineMaster||'') as ExtractionEngine; const master=(['cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(rawMaster)?rawMaster:undefined); const selectors = { ...DEFAULT_SELECTORS, ...(typeof raw.selectors === 'string' ? JSON.parse(raw.selectors) : raw.selectors || {}) };
   for (const key of ['container','title','price','link','image']) if (!selectors[key]) throw new Error(`selectors.${key} is required`);
   return { id: String(raw.id || idFromUrl(url.href)), name: String(raw.name || url.hostname), url: url.href, enabled: raw.enabled !== false,
-    pages: Math.min(100,Math.max(0,Number(raw.pages)||0)), pagination: ['query_page','path_page','none'].includes(raw.pagination || raw.pagType) ? raw.pagination || raw.pagType : 'query_page',
+    pages: Math.min(100,Math.max(0,Number(raw.pages)||0)), pagination: ['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(raw.pagination || raw.pagType) ? raw.pagination || raw.pagType : 'query_page',
     extractionEngine: ['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','playwright','puppeteer','crawlee_playwright'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue: String(raw.paginationValue || raw.pagVal || 'page'), selectors, titleSuffix: String(raw.titleSuffix || ''),

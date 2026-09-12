@@ -1,3 +1,4 @@
+import { normalizePersianText } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -5,25 +6,75 @@ import { config } from './config.js';
 import type { Job, Product, Profile } from './types.js';
 
 const { Pool } = pg;
-const useSqlite = !config.databaseUrl || config.databaseUrl.startsWith('sqlite:') || config.databaseUrl.startsWith('file:');
-const pgPool = useSqlite ? null : new Pool({
+// Mutable: a loopback PostgreSQL that refuses connections (no server installed,
+// the usual case on Termux/Android) self-heals to the built-in SQLite file
+// instead of leaving the app permanently unusable. See fallbackToSqlite below.
+let useSqlite = !config.databaseUrl || config.databaseUrl.startsWith('sqlite:') || config.databaseUrl.startsWith('file:');
+let pgPool = useSqlite ? null : new Pool({
   connectionString: config.databaseUrl,
   ssl: config.databaseUrl.includes('localhost') ? false : { rejectUnauthorized: false },
   max: Math.max(2, Number(process.env.DB_POOL_SIZE || 10)),
   idleTimeoutMillis: 30_000
 });
 let sqliteDb: any = null;
-export const databaseDriver = useSqlite ? 'sqlite' : 'postgres';
-export const databaseLabel = useSqlite ? 'local SQLite' : 'PostgreSQL';
+export let databaseDriver = useSqlite ? 'sqlite' : 'postgres';
+export let databaseLabel = useSqlite ? 'local SQLite' : 'PostgreSQL';
+export let sqliteFallbackReason = '';
+
+/** True when the configured PostgreSQL server lives on this device. */
+export function isLoopbackPostgres(): boolean {
+  if (useSqlite) return false;
+  try {
+    const host = new URL(config.databaseUrl.replace(/^postgres(ql)?:/i, 'http:')).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  } catch { return false; }
+}
+
+/**
+ * Switch to the built-in SQLite database at runtime. Only ever called for a
+ * loopback PostgreSQL: a REMOTE database that is merely down must keep failing
+ * loudly, because silently serving an empty local file would hide real data.
+ */
+export function fallbackToSqlite(reason: string): boolean {
+  if (useSqlite || !isLoopbackPostgres()) return false;
+  const dying = pgPool;
+  useSqlite = true;
+  pgPool = null;
+  databaseDriver = 'sqlite';
+  databaseLabel = 'local SQLite';
+  sqliteFallbackReason = reason;
+  void dying?.end().catch(() => {});
+  return true;
+}
 function sqlitePath(): string {
-  const raw = process.env.SCRAPER4_SQLITE_PATH || config.databaseUrl.replace(/^sqlite:/, '').replace(/^file:/, '') || 'data/scraper4.sqlite';
+  // Accept sqlite:path, file:path, sqlite:///abs/path and bare paths. Windows
+  // drive letters (sqlite:C:\dir\db.sqlite) must survive the prefix stripping.
+  const fromConfig = /^(postgres|postgresql|mysql|mariadb):/i.test(config.databaseUrl) ? '' : config.databaseUrl;
+  const configured = String(process.env.SCRAPER4_SQLITE_PATH || fromConfig || '').trim();
+  const raw = configured.replace(/^sqlite:(\/\/)?/i, '').replace(/^file:(\/\/)?/i, '').trim();
   return resolve(raw || 'data/scraper4.sqlite');
 }
 async function getSqliteDb(): Promise<any> {
   if (sqliteDb) return sqliteDb;
   const file = sqlitePath();
   mkdirSync(dirname(file), { recursive: true });
-  const mod: any = await import('node:sqlite');
+  let mod: any;
+  try {
+    mod = await import('node:sqlite');
+  } catch (error) {
+    // node:sqlite ships with Node.js >= 22.5. Older Node (e.g. v20) cannot run
+    // the local SQLite mode; explain the fix instead of failing cryptically.
+    const [nodeMajor, nodeMinor] = String(process.versions.node || '').split('.').map(Number);
+    if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 5)) {
+      throw new Error(
+        `SQLite mode needs Node.js 22.5+ (you are running Node ${process.versions.node}). ` +
+        'On Windows install the current Node.js LTS (winget install OpenJS.NodeJS.LTS) and restart, ' +
+        'or set DATABASE_URL to a PostgreSQL connection string in .env.local. ' +
+        `(node:sqlite import failed: ${error instanceof Error ? error.message : String(error)})`
+      );
+    }
+    throw new Error(`node:sqlite could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
+  }
   sqliteDb = new mod.DatabaseSync(file);
   sqliteDb.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   return sqliteDb;
@@ -321,7 +372,7 @@ export async function listCategoryLearning(limit=1000):Promise<any[]>{const {row
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES($1,$2,$3,$4,$5)',[row.chatId,row.customer,row.input,row.output,row.source])}
 export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[Number(row.chat_id||0)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
 export async function listAutoreplyLog(limit=100):Promise<any[]>{const {rows}=await pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT $1',[limit]);return rows}
-function normalizeLearning(value:string){return value.toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f\u200e]/g,' ').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()}
+function normalizeLearning(value:string){return normalizePersianText(value).replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()}
 
 export async function getState<T>(key: string, fallback: T): Promise<T> {
   const { rows } = await pool.query('SELECT value FROM app_state WHERE key=$1', [key]);
@@ -337,11 +388,12 @@ export async function createBackup(): Promise<Record<string, unknown>> {
   const [profiles,products,jobs,states,maps,learning,autoreply] = await Promise.all([
     pool.query('SELECT * FROM profiles ORDER BY created_at'),pool.query('SELECT * FROM products ORDER BY profile_id,created_at'),pool.query('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 1000'),pool.query('SELECT * FROM app_state ORDER BY key'),pool.query('SELECT * FROM destination_map ORDER BY profile_id,target,account_key'),pool.query('SELECT * FROM category_learning ORDER BY hits DESC'),pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT 5000')
   ]);
-  return {app:'scraper4-render',version:1,createdAt:new Date().toISOString(),profiles:profiles.rows,products:products.rows,jobs:jobs.rows,states:states.rows,destinationMap:maps.rows,categoryLearning:learning.rows,autoreplyLog:autoreply.rows};
+  return {app:'scraper4-backup',version:1,createdAt:new Date().toISOString(),profiles:profiles.rows,products:products.rows,jobs:jobs.rows,states:states.rows,destinationMap:maps.rows,categoryLearning:learning.rows,autoreplyLog:autoreply.rows};
 }
 
 export async function restoreBackup(bundle: any): Promise<{ profiles: number; products: number; states: number }> {
-  if (!bundle || bundle.app !== 'scraper4-render' || bundle.version !== 1) throw new Error('Invalid Scraper 4 Render backup');
+  const ACCEPTED_BACKUP_IDS = ['scraper4-backup', 'scraper4-render'];
+  if (!bundle || !ACCEPTED_BACKUP_IDS.includes(bundle.app) || bundle.version !== 1) throw new Error('فایل بکاپ معتبر Scraper 4 نیست.');
   const client = await pool.connect(); let pCount=0, productCount=0, stateCount=0;
   try {
     await client.query('BEGIN');
@@ -390,3 +442,30 @@ function jobFromRow(row: any): Job {
     stopRequested: Boolean(row.stop_requested), error: row.error, log: parseJson(row.log, row.log || []), createdAt: dateValue(row.created_at),
     startedAt: row.started_at?.toISOString?.() || row.started_at || null, finishedAt: row.finished_at?.toISOString?.() || row.finished_at || null, updatedAt: dateValue(row.updated_at) };
 }
+
+// Queue/run ordering, ported from the Worker so the dashboard's drag-to-reorder
+// and priority controls stop returning 404 on the Node runtime.
+const JOB_PRIORITY_KEY = 'job_priorities_v1';
+const RUN_PRIORITY_KEY = 'run_priorities_v1';
+
+export async function getJobPriorities(): Promise<Record<string, number>> { return getState<Record<string, number>>(JOB_PRIORITY_KEY, {}); }
+export async function setJobPriorities(ids: string[]): Promise<Record<string, number>> {
+  const valid = [...new Set(ids.map(String).filter(Boolean))], map: Record<string, number> = {};
+  valid.forEach((id, index) => { map[id] = valid.length - index; });
+  await setState(JOB_PRIORITY_KEY, map);
+  return map;
+}
+export async function getRunPriorities(): Promise<Record<string, number>> { return getState<Record<string, number>>(RUN_PRIORITY_KEY, {}); }
+export async function setRunPriorities(kinds: string[]): Promise<Record<string, number>> {
+  const valid = [...new Set(kinds.map(String).filter(Boolean))], map: Record<string, number> = {};
+  valid.forEach((kind, index) => { map[kind] = valid.length - index; });
+  await setState(RUN_PRIORITY_KEY, map);
+  return map;
+}
+
+/** Import history, capped like the Worker so the log cannot grow without bound. */
+export async function getImportHistory(): Promise<any[]> {
+  const items = await getState<any[]>('import_history', []);
+  return Array.isArray(items) ? items.slice(-60) : [];
+}
+export async function clearImportHistory(): Promise<void> { await setState('import_history', []); }

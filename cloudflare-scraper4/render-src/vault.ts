@@ -1,10 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { config } from './config.js';
 
 export type ConnectionVault = {
-  woo: { url: string; key: string; secret: string; categoryId: number };
-  basalam: { token: string; vendorId: string; api: string; preparationDays:number; weight:number; packageWeight:number; stock:number; categoryId:number; autoCategory:boolean; netIndirect:boolean; shops:Array<{name:string;token:string;vendorId:string;pricePercent:number}> };
-  ai: { baseUrl: string; apiKey: string; model: string; providers:Array<{id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean}>; candidates:string[]; master:string; network:{mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string} };
+  woo: { url: string; key: string; secret: string; categoryId: number; pricePercent: number };
+  basalam: { token: string; vendorId: string; api: string; pricePercent:number; preparationDays:number; weight:number; packageWeight:number; stock:number; categoryId:number; autoCategory:boolean; netIndirect:boolean; shops:Array<{name:string;token:string;vendorId:string;pricePercent:number}> };
+  ai: { baseUrl: string; apiKey: string; model: string; providers:Array<{id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|{accountId?:string;token?:string;label?:string;enabled?:boolean}>;accountId?:string;cfToken?:string;models:string[];reasoningModels?:string[];nonChatModels?:string[];vendor?:string;enabled:boolean}>; candidates:string[]; master:string; network:{mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string} };
   notifications: { url: string; token: string; chatId: string; baleToken:string; baleChatId:string; rubikaToken:string; rubikaChatId:string };
 };
 
@@ -13,15 +15,43 @@ const DEFAULT_OPENROUTER_MODELS=['bytedance-seed/seed-2-1-turbo','qwen/qwen3.8-2
 function seedAiProviders(ai:ConnectionVault['ai']){if(!ai.providers.some(p=>p.id==='ollama'))ai.providers.push({id:'ollama',name:'Ollama',baseUrl:process.env.OLLAMA_URL||'http://127.0.0.1:11434',apiKey:'',models:[],enabled:false});let openrouter=ai.providers.find(p=>p.id==='openrouter');if(!openrouter){openrouter={id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',apiKey:process.env.OPENROUTER_API_KEY||process.env.AI_OPENROUTER_API_KEY||'',models:[],enabled:Boolean(process.env.OPENROUTER_API_KEY||process.env.AI_OPENROUTER_API_KEY)};ai.providers.push(openrouter)}openrouter.models=[...new Set([...(openrouter.models||[]),...DEFAULT_OPENROUTER_MODELS])];}
 
 export const emptyConnections = (): ConnectionVault => ({
-  woo: { url: '', key: '', secret: '', categoryId:0 },
-  basalam: { token: '', vendorId: '', api: 'https://openapi.basalam.com/v1', preparationDays:3, weight:500, packageWeight:600, stock:10, categoryId:0, autoCategory:false, netIndirect:false, shops:[] },
+  woo: { url: '', key: '', secret: '', categoryId:0, pricePercent:0 },
+  basalam: { token: '', vendorId: '', api: 'https://openapi.basalam.com/v1', pricePercent:0, preparationDays:3, weight:500, packageWeight:600, stock:10, categoryId:0, autoCategory:false, netIndirect:false, shops:[] },
   ai: { baseUrl: '', apiKey: '', model: '', providers:[], candidates:[], master:'', network:{mode:'direct',proxyUrl:'',workerUrl:'',dohUrl:'https://cloudflare-dns.com/dns-query',resolveIp:''} },
   notifications: { url: '', token: '', chatId: '', baleToken:'', baleChatId:'', rubikaToken:'', rubikaChatId:'' }
 });
 
+/**
+ * The vault needs an encryption password, and ADMIN_TOKEN was doing double duty
+ * as both that password and the API auth token. On a local runtime (Termux,
+ * Windows, a VPS) ADMIN_TOKEN is usually unset -- which the API layer treats as
+ * "no auth required" -- so reads worked but every save threw, and importing
+ * providers failed with a message telling the user to go define a variable.
+ *
+ * Auto-generating an ADMIN_TOKEN would be wrong: that would silently turn on
+ * API authentication and lock the user out of their own dashboard. So we
+ * generate a *vault key only*, persist it under the git-ignored data/
+ * directory with owner-only permissions, and leave API auth exactly as it was.
+ * If ADMIN_TOKEN is set it still wins, so existing installs decrypt unchanged.
+ */
+const VAULT_KEY_FILE = resolve(process.env.VAULT_KEY_FILE || 'data/vault.key');
+
+function localVaultKey(): string {
+  try {
+    const existing = readFileSync(VAULT_KEY_FILE, 'utf8').trim();
+    if (existing) return existing;
+  } catch { /* not created yet */ }
+  const generated = randomBytes(32).toString('hex');
+  mkdirSync(dirname(VAULT_KEY_FILE), { recursive: true });
+  // Owner-only: this key decrypts every stored API credential.
+  writeFileSync(VAULT_KEY_FILE, generated + '\n', { mode: 0o600 });
+  try { chmodSync(VAULT_KEY_FILE, 0o600); } catch { /* filesystem may not support it */ }
+  console.warn(`Generated a local vault key at ${VAULT_KEY_FILE} (no ADMIN_TOKEN set). Keep this file; deleting it makes saved credentials unreadable.`);
+  return generated;
+}
+
 function password(): string {
-  if (!config.adminToken) throw new Error('برای ذخیره امن اطلاعات اتصال، ابتدا ADMIN_TOKEN را در Render تعریف کنید.');
-  return config.adminToken;
+  return config.adminToken || localVaultKey();
 }
 
 export function encryptVault(value: ConnectionVault): Envelope {
@@ -40,7 +70,7 @@ export function decryptVault(raw: unknown): ConnectionVault {
     const decipher=createDecipheriv('aes-256-gcm',key,iv);decipher.setAuthTag(Buffer.from(envelope.tag,'base64'));
     const value=JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext,'base64')),decipher.final()]).toString('utf8'));
     return mergeConnections(emptyConnections(),value);
-  } catch { throw new Error('بازکردن اطلاعات اتصال ممکن نشد؛ آیا ADMIN_TOKEN تغییر کرده است؟'); }
+  } catch { throw new Error(`بازکردن اطلاعات اتصال ممکن نشد. اگر ADMIN_TOKEN را تغییر داده‌اید یا فایل ${VAULT_KEY_FILE} پاک شده است، اطلاعات ذخیره‌شده با کلید قبلی رمزگشایی نمی‌شوند و باید دوباره وارد شوند.`); }
 }
 
 export function environmentFallback(): ConnectionVault {
@@ -51,17 +81,37 @@ export function environmentFallback(): ConnectionVault {
   return result;
 }
 
+/**
+ * Cleans a pasted API token for use in an Authorization header.
+ * Copying the whole header value ("Bearer eyJ...") produced
+ * `401 invalid authorization header` because we then sent two schemes; invisible
+ * characters from a Persian keyboard are not valid header bytes.
+ */
+export function sanitizeToken(value: unknown): string {
+  let token = typeof value === 'string' ? value : '';
+  if (!token) return '';
+  token = token.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+               .replace(/[\u00a0\u2000-\u200a\u3000]/g, ' ')
+               .replace(/[\u2018\u2019\u201c\u201d]/g, '')
+               .trim();
+  token = token.replace(/^authorization\s*:\s*/i, '').trim();
+  token = token.replace(/^(?:bearer|token)\s+/i, '').trim();
+  if (token.length > 1 && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))))
+    token = token.slice(1, -1).trim();
+  return token.replace(/[^\x21-\x7e]/g, '');
+}
+
 export function mergeConnections(base: ConnectionVault, input: any): ConnectionVault {
   const text=(value:unknown,fallback='')=>typeof value==='string'?value.trim():fallback;
   const num=(value:unknown,fallback=0)=>Number.isFinite(Number(value))?Number(value):fallback;
   const bool=(value:unknown,fallback=false)=>typeof value==='boolean'?value:fallback;
-  const shops=Array.isArray(input?.basalam?.shops)?input.basalam.shops.map((shop:any)=>({name:text(shop?.name),token:text(shop?.token),vendorId:text(shop?.vendorId),pricePercent:num(shop?.pricePercent)})):base.basalam.shops;
+  const shops=Array.isArray(input?.basalam?.shops)?input.basalam.shops.map((shop:any)=>({name:text(shop?.name),token:sanitizeToken(text(shop?.token)),vendorId:text(shop?.vendorId),pricePercent:num(shop?.pricePercent)})):base.basalam.shops;
   const providerInput=Array.isArray(input?.ai?.providers)?input.ai.providers:(input?.ai&&typeof input.ai==='object'?Object.values(input.ai).filter((value:any)=>value&&typeof value==='object'&&(value.id||value.vendor||value.url||value.baseUrl||Array.isArray(value.models))):null);
-  const providers=Array.isArray(providerInput)?providerInput.map((p:any,i:number)=>({id:text(p?.id)||`provider-${i+1}`,name:text(p?.name)||text(p?.id)||`Provider ${i+1}`,baseUrl:text(p?.baseUrl||p?.base_url||p?.url).replace(/\/$/,''),apiKey:text(p?.apiKey||p?.api_key),models:Array.isArray(p?.models)?p.models.map((model:any)=>typeof model==='string'?model:String(model?.id||model?.name||'')).filter(Boolean):[],enabled:p?.enabled!==false})):base.ai.providers;
+  const providers=Array.isArray(providerInput)?providerInput.map((p:any,i:number)=>({id:text(p?.id)||`provider-${i+1}`,name:text(p?.name)||text(p?.id)||`Provider ${i+1}`,baseUrl:text(p?.baseUrl||p?.base_url||p?.url).replace(/\/$/,''),apiKey:text(p?.apiKey||p?.api_key),...(p?.accountId||p?.cfToken?{accountId:text(p?.accountId),cfToken:text(p?.cfToken)}:{}),models:Array.isArray(p?.models)?p.models.map((model:any)=>typeof model==='string'?model:String(model?.id||model?.name||'')).filter(Boolean):[],apiKeys:Array.isArray(p?.apiKeys)?p.apiKeys.map((k:any)=>typeof k==='string'?k:(k&&(k.accountId||k.label||k.enabled!==undefined)&&String(k.token||k.key||'').trim()?{...(k.accountId?{accountId:text(k.accountId)}:{}),token:text(k.token||k.key),...(k.label?{label:text(k.label)}:{}),...(k.enabled===false?{enabled:false}:{})}:text(k?.key||k?.token))).filter((k:any)=>typeof k==='string'?k:Boolean(k&&k.token)):[],reasoningModels:Array.isArray(p?.reasoningModels)?p.reasoningModels.map(String):[],nonChatModels:Array.isArray(p?.nonChatModels)?p.nonChatModels.map(String):[],...(p?.vendor?{vendor:text(p.vendor)}:{}),enabled:p?.enabled!==false})):base.ai.providers;
   const network={...base.ai.network,...(input?.ai?.network||{})}; if(!Array.isArray(providerInput))seedAiProviders(base.ai);
   return {
-    woo:{url:text(input?.woo?.url,base.woo.url).replace(/\/$/,''),key:text(input?.woo?.key,base.woo.key),secret:text(input?.woo?.secret,base.woo.secret),categoryId:num(input?.woo?.categoryId,base.woo.categoryId)},
-    basalam:{token:text(input?.basalam?.token,base.basalam.token),vendorId:text(input?.basalam?.vendorId,base.basalam.vendorId),api:text(input?.basalam?.api,base.basalam.api).replace(/\/$/,'')||'https://openapi.basalam.com/v1',preparationDays:num(input?.basalam?.preparationDays,base.basalam.preparationDays),weight:num(input?.basalam?.weight,base.basalam.weight),packageWeight:num(input?.basalam?.packageWeight,base.basalam.packageWeight),stock:num(input?.basalam?.stock,base.basalam.stock),categoryId:num(input?.basalam?.categoryId,base.basalam.categoryId),autoCategory:bool(input?.basalam?.autoCategory,base.basalam.autoCategory),netIndirect:bool(input?.basalam?.netIndirect,base.basalam.netIndirect),shops},
+    woo:{url:text(input?.woo?.url,base.woo.url).replace(/\/$/,''),key:text(input?.woo?.key,base.woo.key),secret:text(input?.woo?.secret,base.woo.secret),categoryId:num(input?.woo?.categoryId,base.woo.categoryId),pricePercent:num(input?.woo?.pricePercent,base.woo.pricePercent)},
+    basalam:{token:sanitizeToken(text(input?.basalam?.token,base.basalam.token)),vendorId:text(input?.basalam?.vendorId,base.basalam.vendorId),api:text(input?.basalam?.api,base.basalam.api).replace(/\/$/,'')||'https://openapi.basalam.com/v1',pricePercent:num(input?.basalam?.pricePercent,base.basalam.pricePercent),preparationDays:num(input?.basalam?.preparationDays,base.basalam.preparationDays),weight:num(input?.basalam?.weight,base.basalam.weight),packageWeight:num(input?.basalam?.packageWeight,base.basalam.packageWeight),stock:num(input?.basalam?.stock,base.basalam.stock),categoryId:num(input?.basalam?.categoryId,base.basalam.categoryId),autoCategory:bool(input?.basalam?.autoCategory,base.basalam.autoCategory),netIndirect:bool(input?.basalam?.netIndirect,base.basalam.netIndirect),shops},
     ai:{baseUrl:text(input?.ai?.baseUrl,base.ai.baseUrl).replace(/\/$/,''),apiKey:text(input?.ai?.apiKey,base.ai.apiKey),model:text(input?.ai?.model,base.ai.model),providers,candidates:Array.isArray(input?.ai?.candidates)?input.ai.candidates.map(String):base.ai.candidates,master:text(input?.ai?.master,base.ai.master),network:{mode:text(network.mode,'direct'),proxyUrl:text(network.proxyUrl),workerUrl:text(network.workerUrl),dohUrl:text(network.dohUrl,'https://cloudflare-dns.com/dns-query'),resolveIp:text(network.resolveIp)}},
     notifications:{url:text(input?.notifications?.url,base.notifications.url),token:text(input?.notifications?.token,base.notifications.token),chatId:text(input?.notifications?.chatId,base.notifications.chatId),baleToken:text(input?.notifications?.baleToken,base.notifications.baleToken),baleChatId:text(input?.notifications?.baleChatId,base.notifications.baleChatId),rubikaToken:text(input?.notifications?.rubikaToken,base.notifications.rubikaToken),rubikaChatId:text(input?.notifications?.rubikaChatId,base.notifications.rubikaChatId)}
   };

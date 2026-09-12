@@ -1,10 +1,13 @@
 import type { JobMessage } from './types.js';
 
+/** The per-query accounting D1 returns; rows_read/rows_written are the exact units Cloudflare bills and rate-limits on. */
+export interface D1Meta { changes?: number; last_row_id?: number; rows_read?: number; rows_written?: number; duration?: number; size_after?: number; }
+
 export interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
   first<T = Record<string, unknown>>(column?: string): Promise<T | null>;
-  all<T = Record<string, unknown>>(): Promise<{ success: boolean; results: T[]; error?: string }>;
-  run<T = Record<string, unknown>>(): Promise<{ success: boolean; results?: T[]; meta: { changes?: number; last_row_id?: number }; error?: string }>;
+  all<T = Record<string, unknown>>(): Promise<{ success: boolean; results: T[]; meta?: D1Meta; error?: string }>;
+  run<T = Record<string, unknown>>(): Promise<{ success: boolean; results?: T[]; meta: D1Meta; error?: string }>;
 }
 export interface D1Database {
   prepare(sql: string): D1PreparedStatement;
@@ -30,6 +33,7 @@ export type Env = {
   ALLOW_INSECURE?: string;
   REQUEST_TIMEOUT_MS?: string;
   DETAIL_CONCURRENCY?: string;
+  AI_DESCRIPTION_CONCURRENCY?: string;
   JOB_CHUNK_SIZE?: string;
   MAX_RESPONSE_BYTES?: string;
   WOO_URL?: string;

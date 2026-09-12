@@ -12,6 +12,8 @@ export type Selectors = {
   weight?: string;
   category?: string;
   gallery?: string;
+  /** Specification table/list: rows become name/value pairs. */
+  specs?: string;
 };
 
 export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'playwright' | 'puppeteer' | 'crawlee_playwright';
@@ -22,7 +24,7 @@ export type Profile = {
   url: string;
   enabled: boolean;
   pages: number;
-  pagination: 'query_page' | 'path_page' | 'none';
+  pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none';
   extractionEngine: ExtractionEngine;
   extractionEngineMaster?: ExtractionEngine;
   extractionEngineHost?: string;
@@ -60,6 +62,8 @@ export type Product = {
   stock?: number;
   weight?: number;
   category?: string;
+  /** Specification rows scraped from the product page. */
+  specs?: Array<{ name: string; value: string }>;
   sourcePage: string;
   scrapedAt: string;
 };
@@ -76,9 +80,11 @@ export type Job = {
   added: number;
   updated: number;
   failed: number;
+  /** Products skipped because the source had no usable price. */
+  skippedNoPrice?: number;
   stopRequested: boolean;
   error: string | null;
-  log: Array<{ at: string; level: string; message: string }>;
+  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'; item?: {sourceKey:string;title:string;url?:string;target?:string;shop?:string;price?:number;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string;transport?:string} }>;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
