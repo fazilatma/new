@@ -359,6 +359,11 @@ export function browserEngineAvailable(): boolean {
   } catch { return false; }
 }
 function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
+/** A goto interrupted by the page's own redirect/reload rejects with net::ERR_ABORTED even though the follow-up page loads fine — survivable. */
+function isAbortedNavigation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('ERR_ABORTED');
+}
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
@@ -366,7 +371,20 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     const browser = await chromium.launch({ headless: true, executablePath, args: browserLaunchArgs() });
     try {
       const page = await browser.newPage({ locale: 'fa-IR' });
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 60_000 });
+      // goto waits only for parsed DOM: shops routinely redirect/reload
+      // mid-load (cookie checks, bot screens, framework routers), which
+      // aborts a networkidle goto with net::ERR_ABORTED even though the
+      // follow-up page loads fine. On abort, settle and read whatever
+      // actually landed instead of failing the whole run.
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      } catch (navigationError: unknown) {
+        if (!isAbortedNavigation(navigationError)) throw navigationError;
+        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+      }
+      // Best-effort idle window for JavaScript rendering; pages with
+      // ever-open connections (ads, analytics) may never idle.
+      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
       const finalUrl = page.url();
       const html = await page.content();
       const products = parseProductsFromHtml(html, finalUrl, selectors);
@@ -377,7 +395,15 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
   const browser = await puppeteer.default.launch({ headless: true, executablePath, args: browserLaunchArgs() });
   try {
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });
+    // Same resilience as the Playwright branch above: domcontentloaded goto,
+    // survive ERR_ABORTED, best-effort idle window for rendering.
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    } catch (navigationError: unknown) {
+      if (!isAbortedNavigation(navigationError)) throw navigationError;
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+    }
+    await page.waitForNetworkIdle({ timeout: 15_000 }).catch(() => undefined);
     const finalUrl = page.url();
     const html = await page.content();
     const products = parseProductsFromHtml(html, finalUrl, selectors);

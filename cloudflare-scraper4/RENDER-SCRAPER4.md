@@ -710,3 +710,23 @@ fine without help).
 Updating the checkout is enough — no reinstall needed. Restart the deployer
 process after pulling so it runs the new code, then re-run the extraction
 diagnostic with the Playwright engine.
+
+## 1.134.0 — browser navigation survives shops that redirect mid-load
+
+On a real phone the Playwright engine got one step further and failed with
+`page.goto: net::ERR_ABORTED ... waiting until "networkidle"`. That error
+means the page itself interrupted the navigation — shops routinely redirect
+or reload mid-load (cookie checks, bot screens, framework routers) — while
+the follow-up page loads fine. Waiting for network idle inside goto turns
+that routine redirect into a total failure, and pages with ever-open
+connections (ads, analytics) may never idle anyway.
+
+- **goto waits only for parsed DOM now** (`domcontentloaded`, both drivers).
+- **An aborted goto no longer fails the run.** When the error is
+  `ERR_ABORTED`, the launcher lets the follow-up navigation settle and reads
+  whatever actually landed instead of throwing.
+- **Rendering still gets a best-effort idle window** (15 s, failures
+  ignored) before the HTML is read, so JavaScript-rendered products appear
+  without hanging on never-idle pages.
+
+Same update path: pull, restart the deployer process, re-run the diagnostic.

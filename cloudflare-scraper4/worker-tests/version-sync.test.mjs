@@ -1742,3 +1742,20 @@ test('playwright can be imported on Android via a default browsers path', async 
     assert.ok(scraper.indexOf(lazy) > envDefault, `the default must be set before the lazy ${lazy}`);
   }
 });
+
+// Shops routinely redirect/reload mid-load, which aborts a networkidle goto
+// with net::ERR_ABORTED even though the follow-up page loads fine — and pages
+// with ever-open connections may never idle at all. The shared launcher must
+// wait only for parsed DOM, survive the abort, and still give scripts a
+// best-effort idle window before reading the HTML.
+test('browser navigation survives aborted navigations and never-idle pages', async () => {
+  const scraper = await readProjectFile('render-src/scraper.ts');
+  assert.match(scraper, /function isAbortedNavigation\(error: unknown\)[\s\S]{0,200}ERR_ABORTED/, 'an aborted goto must be recognized as survivable');
+  assert.ok(scraper.includes('async function scrapeRenderedHtml('), 'guard: the shared launcher was located');
+  const rendered = scraper.slice(scraper.indexOf('async function scrapeRenderedHtml('), scraper.indexOf('async function scrapeListWithPlaywright('));
+  assert.match(rendered, /waitUntil: 'domcontentloaded'/, 'goto must resolve on parsed DOM, not network idle');
+  assert.ok(!rendered.includes("waitUntil: 'networkidle'") && !rendered.includes("waitUntil: 'networkidle2'"), 'goto must not wait for idle (redirects abort it)');
+  assert.equal((rendered.match(/if \(!isAbortedNavigation\(navigationError\)\) throw navigationError;/g) || []).length, 2, 'both drivers must survive ERR_ABORTED and read what landed');
+  assert.match(rendered, /waitForLoadState\('networkidle', \{ timeout: 15_000 \}\)\.catch\(\(\) => undefined\)/, 'playwright must still get a best-effort idle window');
+  assert.match(rendered, /waitForNetworkIdle\(\{ timeout: 15_000 \}\)\.catch\(\(\) => undefined\)/, 'puppeteer must still get a best-effort idle window');
+});
