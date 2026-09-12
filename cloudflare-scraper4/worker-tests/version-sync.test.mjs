@@ -1668,3 +1668,31 @@ test('both runtimes apply the (کد ایکس) rule to reconciliation and sync', 
     assert.match(src, /hasCodeSuffix/, `${path} must skip publishing products without a code suffix`);
   }
 });
+
+// A checkout without an 'origin' remote made every branch scan fail with the
+// raw git text "fatal: 'origin' does not appear to be a git repository" and
+// offered no way forward. The scanner must name the real problem and the
+// Branches panel must offer a one-click repair.
+test('a missing origin remote gets an explanation and a one-click repair, not a raw git fatal', async () => {
+  const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
+  // The scanner checks for the remote before fetching.
+  assert.match(deployer, /function originRemoteUrl\(\)/, 'origin detection must live in one helper');
+  const scan = deployer.slice(deployer.indexOf('function scanAllBranches('), deployer.indexOf('function maybeAutoInstallNewest('));
+  assert.ok(scan.includes('originRemoteUrl()'), 'guard: the scan body was located');
+  assert.match(scan, /branchState\.origin = \{ present: Boolean\(originUrl\), url: originUrl \}/, 'each scan must record the origin state for the UI');
+  assert.match(scan, /missingOriginMessage\('scan branches'\)/, 'a missing remote must explain itself instead of running git fetch');
+  assert.match(scan, /git fetch origin \(all branches\) failed/, 'the generic fetch failure keeps its established message');
+  // The repair adds the upstream remote (config-only, worktree untouched) and rescans.
+  assert.match(deployer, /const UPSTREAM_REPO_URL = 'https:\/\/github\.com\/fazilatma\/new\.git';/, 'the repair must target the tracked repo');
+  assert.match(deployer, /url\.pathname === '\/api\/branches\/repair-origin'/, 'the repair needs an endpoint');
+  const repair = deployer.slice(deployer.indexOf('function repairOriginRemote('), deployer.indexOf('function scheduleBranchScanner('));
+  assert.ok(repair.includes("['remote', 'add', 'origin'"), 'guard: the repair body was located');
+  assert.match(repair, /scanAllBranches\('repair'\)/, 'repairing must rescan immediately');
+  // The panel offers the repair exactly while origin is missing.
+  assert.match(deployer, /d\.origin && d\.origin\.present === false/, 'the repair button must show only when origin is missing');
+  assert.match(deployer, /onclick="repairOrigin\(\)"/, 'the summary must carry the repair button');
+  assert.match(deployer, /window\.repairOrigin = repairOrigin;/, 'the button handler must be reachable from inline onclick');
+  // The sibling git paths fail the same way without origin, so they share the message.
+  assert.match(deployer, /missingOriginMessage\('install branches'\)/, 'branch install must not report "branch not found" when origin is missing');
+  assert.match(deployer, /missingOriginMessage\('update from GitHub'\)/, 'the manual update must point at the repair too');
+});
