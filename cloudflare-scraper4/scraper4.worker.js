@@ -16020,7 +16020,7 @@ function productContextChunk(html, index, anchor) {
   void anchor;
   const candidates = enclosingChunks(html, index);
   if (!candidates.length) return "";
-  return candidates.find((chunk) => /<img\b/i.test(chunk) && PRICE_HINT_RE.test(chunk)) || candidates[0];
+  return candidates.find((chunk) => /<img\b/i.test(chunk) && PRICE_HINT_RE.test(stripPriceFormatChars(chunk))) || candidates[0];
 }
 async function extractMetadataProduct(html, baseUrl) {
   const title = metaContent(html, "og:title") || metaContent(html, "twitter:title") || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
@@ -16057,17 +16057,18 @@ function heuristicImage(chunk, baseUrl) {
   const srcAttr = (tag.match(/\ssrc(?:set)?\s*=\s*["']([^"']+)["']/i)?.[1] || "").split(",")[0].trim().split(/\s+/)[0];
   return imageUrl(decodeHtml(dataSrc || srcAttr), baseUrl);
 }
+var NON_PRODUCT_URL_RE = /[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
 async function extractHeuristicProducts(html, baseUrl) {
   const out = [];
   const seenUrls = /* @__PURE__ */ new Set();
   for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) {
     const url = canonicalUrl(decodeHtml(m[1]), baseUrl);
-    if (!url || seenUrls.has(url) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url)) continue;
+    if (!url || seenUrls.has(url) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url) || NON_PRODUCT_URL_RE.test(url)) continue;
     const chunk = productContextChunk(html, m.index || 0, m[0]);
     if (!chunk) continue;
     const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || "") || cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || "")) || stripHtml(m[2]) || chunkTitle(chunk);
     const image = heuristicImage(chunk, baseUrl);
-    const priceText = cleanText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0] || "");
+    const priceText = cleanText(stripPriceFormatChars(chunk).match(PRICE_HINT_RE)?.[0] || "");
     if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue;
     seenUrls.add(url);
     out.push({ sourceKey: "", title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku: "", shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
@@ -16205,13 +16206,14 @@ async function diagnoseBenchmarkEngine(engine, html, baseUrl, selectors, product
   } else if (engine === "heuristic") {
     let anchors = 0;
     for (const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
-      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || "")) anchors++;
+      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || "") && !NON_PRODUCT_URL_RE.test(m[1] || "")) anchors++;
       if (anchors > 5e3) break;
     }
-    const priceHints = countMatches(text, PRICE_HINT_RE), images = countMatches(text, /<img\b/i);
+    const priceHints = countMatches(stripPriceFormatChars(text), PRICE_HINT_RE), barePrices = countMatches(text, THOUSANDS_RE), images = countMatches(text, /<img\b/i);
     candidates = anchors;
     signals.productAnchors = anchors;
     signals.priceHints = priceHints;
+    signals.barePrices = barePrices;
     signals.images = images;
     if (!anchors) {
       dropReasons.push("\u0647\u06CC\u0686 \u0644\u06CC\u0646\u06A9\u06CC \u0628\u0627 \u0627\u0644\u06AF\u0648\u06CC \u0622\u062F\u0631\u0633 \u0645\u062D\u0635\u0648\u0644 (/product/ \u060C/shop/ \u060Csnp- \u0648\u2026) \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
@@ -16219,7 +16221,8 @@ async function diagnoseBenchmarkEngine(engine, html, baseUrl, selectors, product
     } else if (!list.length) {
       if (error) dropReasons.push(error);
       dropReasons.push(`${anchors} \u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u0647\u0633\u062A \u0648\u0644\u06CC \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u06CC \u0628\u0627 \u062A\u0635\u0648\u06CC\u0631+\u0642\u06CC\u0645\u062A \u06A9\u0627\u0645\u0644 \u0646\u0628\u0648\u062F\u0646\u062F (\u062D\u0630\u0641 \u0634\u062F\u0646\u062F).`);
-      if (!priceHints) dropReasons.push("\u062F\u0631 \u06A9\u0644 \u0635\u0641\u062D\u0647 \u0647\u06CC\u0686 \u0645\u062A\u0646 \u0642\u06CC\u0645\u062A\u200C\u062F\u0627\u0631\u06CC (\u062A\u0648\u0645\u0627\u0646/\u0631\u06CC\u0627\u0644/\u2026) \u062F\u06CC\u062F\u0647 \u0646\u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0645\u06CC\u200C\u0622\u06CC\u0646\u062F.");
+      if (!priceHints && !barePrices) dropReasons.push("\u062F\u0631 \u06A9\u0644 \u0635\u0641\u062D\u0647 \u0647\u06CC\u0686 \u0645\u062A\u0646 \u0642\u06CC\u0645\u062A\u200C\u062F\u0627\u0631\u06CC (\u062A\u0648\u0645\u0627\u0646/\u0631\u06CC\u0627\u0644/\u2026) \u062F\u06CC\u062F\u0647 \u0646\u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0645\u06CC\u200C\u0622\u06CC\u0646\u062F.");
+      else if (!priceHints) dropReasons.push(`${barePrices} \u0639\u062F\u062F \u0647\u0632\u0627\u0631\u06AF\u0627\u0646\u200C\u0628\u0646\u062F\u06CC\u200C\u0634\u062F\u0647 \u0628\u062F\u0648\u0646 \u0648\u0627\u062D\u062F \u067E\u0648\u0644\u06CC \u062F\u06CC\u062F\u0647 \u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0648\u0627\u062D\u062F \u067E\u0648\u0644 \u0628\u0627 \u0627\u0633\u062A\u0627\u06CC\u0644/\u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0627\u0636\u0627\u0641\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F \u06CC\u0627 \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u062F\u0627\u06CC\u0646\u0627\u0645\u06CC\u06A9\u200C\u0627\u0646\u062F.`);
       hint = !priceHints ? "\u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0645\u06CC\u200C\u0634\u0648\u0646\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u06CC (\u0646\u0645\u0627\u06CC\u0634\u06CC) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F." : "\u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u062A\u0635\u0648\u06CC\u0631 \u06CC\u0627 \u0642\u06CC\u0645\u062A \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0631\u0646\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC (htmlrewriter) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
     } else {
       if (anchors > list.length) dropReasons.push(`\u0627\u0632 ${anchors} \u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644\u060C ${list.length} \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644 \u0646\u06AF\u0647 \u062F\u0627\u0634\u062A\u0647 \u0634\u062F\u061B \u0628\u0642\u06CC\u0647 \u062A\u0635\u0648\u06CC\u0631/\u0642\u06CC\u0645\u062A/\u0639\u0646\u0648\u0627\u0646 \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0634\u062A\u0646\u062F.`);
@@ -16519,10 +16522,14 @@ async function verifyListSelectors(html, baseUrl, selectors) {
   const needed = Math.max(1, Math.ceil(Math.min(containerCount, 12) / 2));
   return { containerCount, cardsSampled: Math.min(containerCount, 12), title: evidence(titleHits), price: evidence(moneyHits), link: evidence(linkHits), image: evidence(imageHits), ok: containerCount >= 2 && titleHits.length >= needed };
 }
-var PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم)/i;
-var THOUSANDS_RE = /\d{1,3}([,٬.]\d{3})+/;
+var PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
+var THOUSANDS_RE = /[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
+var PRICE_FORMAT_CHARS_RE = /[ـ‌‍﻿]/g;
+function stripPriceFormatChars(value) {
+  return value.replace(PRICE_FORMAT_CHARS_RE, "");
+}
 function looksLikePrice(text) {
-  const value = cleanText(text);
+  const value = stripPriceFormatChars(cleanText(text));
   if (!value || value.length > 80) return false;
   if (PRICE_HINT_RE.test(value)) return numberFromText(value) > 0;
   return THOUSANDS_RE.test(value) && numberFromText(value) > 0;
@@ -16646,7 +16653,7 @@ async function inferStructuralListSelectors(html, baseUrl) {
       if (group.seen.has(chunk)) continue;
       group.seen.add(chunk);
       group.chunks.push(chunk);
-      if (PRICE_HINT_RE.test(text) || THOUSANDS_RE.test(text)) group.priceHits++;
+      if (PRICE_HINT_RE.test(stripPriceFormatChars(text)) || THOUSANDS_RE.test(text)) group.priceHits++;
     }
   }
   const clusters = [...groups.entries()].map(([selector, group]) => ({ selector, chunks: group.chunks, priceHits: group.priceHits })).filter((cluster) => cluster.chunks.length >= 2).sort((a, b) => b.chunks.length * (1 + b.priceHits) - a.chunks.length * (1 + a.priceHits));

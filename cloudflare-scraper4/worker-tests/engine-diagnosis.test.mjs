@@ -179,5 +179,76 @@ test('both twins export the diagnosis surface', async () => {
   for (const source of [workerSrc, renderSrc]) {
     assert.ok(source.includes('diagnoseBenchmarkEngine'), 'diagnoseBenchmarkEngine export');
     assert.ok(source.includes('EngineDiagnosis'), 'EngineDiagnosis type');
+    assert.ok(source.includes('stripPriceFormatChars'), 'tatweel strip helper');
+    assert.ok(source.includes('NON_PRODUCT_URL_RE'), 'category-link guard');
+    assert.ok(source.includes('barePrices'), 'bare-thousands signal');
   }
+  assert.ok(renderSrc.includes('export function heuristicProducts'), 'render heuristic export');
+  assert.ok(workerSrc.includes('export async function extractHeuristicProducts'), 'worker heuristic export');
+});
+
+test('both twins extract tatweel-styled prices and skip in-card category links', async () => {
+  const html = await fixture('patris-cards.html');
+  const landed = await scraper.extractHeuristicProducts(html, BASE);
+  assert.equal(landed.length, 4);
+  assert.deepEqual(landed.map(p => p.price).sort((a, b) => a - b), [298000, 598000, 998000, 1700000]);
+  for (const p of landed) {
+    assert.ok(p.title.length >= 3);
+    assert.ok(p.price > 0 && p.priceText);
+    assert.match(p.url, /\/product\//);
+    assert.doesNotMatch(p.url, /product-category/);
+    assert.match(p.image, /\/upload\/thumb3\//);
+  }
+  const rlanded = rscraper.heuristicProducts(html, BASE);
+  assert.equal(rlanded.length, 4);
+  assert.deepEqual(rlanded.map(p => p.price).sort((a, b) => a - b), [298000, 598000, 998000, 1700000]);
+  for (const p of rlanded) assert.doesNotMatch(p.url, /product-category/);
+});
+
+test('both twins keep slugs that merely contain guarded words', async () => {
+  const html = '<!doctype html><html><body><div><a href="/product/category-theory-book/"><img src="/i.jpg" alt="کتاب نظریه"></a><b>۱۰۰,۰۰۰ تومان</b></div></body></html>';
+  assert.equal((await scraper.extractHeuristicProducts(html, BASE)).length, 1);
+  assert.equal(rscraper.heuristicProducts(html, BASE).length, 1);
+});
+
+test('both twins report tatweel price hints and bare thousands in heuristic diagnosis', async () => {
+  const html = await fixture('patris-cards.html');
+  for (const twin of [scraper, rscraper]) {
+    const d = await twin.diagnoseBenchmarkEngine('heuristic', html, BASE, DEFAULTS, []);
+    assert.equal(d.signals.priceHints, 4);
+    assert.equal(d.signals.barePrices, 4);
+  }
+  const bare = '<!doctype html><html><body><a href="/product/x">x</a><div>۱,۷۰۰,۰۰۰</div></body></html>';
+  for (const twin of [scraper, rscraper]) {
+    const d = await twin.diagnoseBenchmarkEngine('heuristic', bare, BASE, DEFAULTS, []);
+    assert.equal(d.signals.priceHints, 0);
+    assert.ok(d.signals.barePrices >= 1);
+    assert.match(d.dropReasons.join(' '), /هزارگان‌بندی‌شده/);
+  }
+});
+
+test('both twins discover full card selectors on tatweel-priced cards', async () => {
+  const html = await fixture('patris-cards.html');
+  const found = await scraper.discoverListSelectorsFromHtml(html, BASE);
+  assert.notEqual(found.method, 'none');
+  assert.match(found.selectors.container || '', /product-card/);
+  assert.match(found.selectors.price || '', /price/);
+  const cards = await scraper.parseCards(html, BASE, found.selectors);
+  assert.equal(cards.length, 4);
+  for (const c of cards) assert.ok(c.price > 0 && c.image && c.title);
+  const rfound = rscraper.discoverListSelectorsFromHtml(html, BASE);
+  assert.match(rfound.selectors.container || '', /product-card/);
+  const verified = rscraper.verifyListSelectors(html, BASE, { ...DEFAULTS, ...rfound.selectors });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.price.count, 4);
+  assert.equal(verified.image.count, 4);
+});
+
+test('render benchmark gates browser engines on availability, not platform', async () => {
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('!browserEngineAvailable()&&BROWSER_ENGINES.has(engine)'));
+  assert.ok(server.includes('browserEngineAvailable, diagnoseBenchmarkEngine'));
+  assert.ok(server.includes('BROWSER_EXECUTABLE_PATH را تنظیم کنید'));
+  assert.ok(!server.includes('BROWSER_ENGINES_UNAVAILABLE'));
+  assert.ok(!server.includes('نصب‌شدنی نیستند'));
 });

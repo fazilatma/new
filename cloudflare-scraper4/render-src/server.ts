@@ -18,7 +18,7 @@ import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
 import { bulkEdit, destinationChangeStatus, destinationDelete, destinationOverview, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
-import { diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
+import { browserEngineAvailable, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
 import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
@@ -467,11 +467,11 @@ app.post('/api/profiles/:id/sync', async c => {
 // A 3-page scan that yields a single product means the engine matched a stray
 // card, not the product grid; saving it as the default breaks every later run.
 const MIN_BENCHMARK_PRODUCTS=2;
-// Playwright/Puppeteer/Crawlee have no Android build, so on Termux they are
-// unavailable rather than broken -- report them the way the Worker reports its
-// own unavailable engines instead of showing a scary download error.
+// Browser engines need a real Chromium. On Termux there is no Playwright
+// browser download, but a system Chromium (pkg install chromium, or
+// BROWSER_EXECUTABLE_PATH) runs fine -- so gate on actual availability, the
+// same check pick() uses, instead of blocking the whole platform.
 const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
-const BROWSER_ENGINES_UNAVAILABLE=process.platform==='android';
 const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata','cheerio','htmlrewriter','playwright','puppeteer','crawlee_playwright'];
 async function benchmarkProfileEngines(profile:Profile){
   const pages=3,results:any[]=[],startedAt=new Date().toISOString(),benchmarkDiscovered:Record<string,string>={};
@@ -481,7 +481,7 @@ async function benchmarkProfileEngines(profile:Profile){
   try{const first=await safeText(pageUrl(profile,1),1_000_000);diagHtml=first.text;diagUrl=first.url||pageUrl(profile,1)}catch{/* diagnosis degrades to product-only signals */}
   for(const engine of BENCHMARK_ENGINES){
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();const engineProducts:any[]=[];let engineSelectors:any=null;
-    if(BROWSER_ENGINES_UNAVAILABLE&&BROWSER_ENGINES.has(engine)){const unavailable='موتورهای مرورگر روی اندروید/ترموکس نصب‌شدنی نیستند؛ از htmlrewriter یا cheerio استفاده کنید.';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:'روی Termux از موتورهای htmlrewriter، cheerio یا heuristic استفاده کنید.',signals:{available:false}}});continue}
+    if(!browserEngineAvailable()&&BROWSER_ENGINES.has(engine)){const unavailable='مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:'کرومیوم نصب کنید (pkg install chromium) یا BROWSER_EXECUTABLE_PATH را تنظیم کنید؛ تا آن زمان از htmlrewriter، cheerio یا heuristic استفاده کنید.',signals:{available:false}}});continue}
     try{
       for(let pageNo=1;pageNo<=pages;pageNo++){
         const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,engine,undefined,false);

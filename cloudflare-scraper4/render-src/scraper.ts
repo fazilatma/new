@@ -513,7 +513,7 @@ function productContextChunk(html: string, index: number, anchor: string): strin
   if (!candidates.length) return '';
   // Prefer the smallest ancestor that actually holds the card fields; nested
   // cards (media link here, price two divs up) otherwise lose half their data.
-  return candidates.find(chunk => /<img\b/i.test(chunk) && PRICE_HINT_RE.test(chunk)) || candidates[0];
+  return candidates.find(chunk => /<img\b/i.test(chunk) && PRICE_HINT_RE.test(stripPriceFormatChars(chunk))) || candidates[0];
 }
 function metadataProduct(html: string, baseUrl: string): Product[] { const title = meta(html, 'og:title') || meta(html, 'twitter:title') || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ''); if (!title) return []; const ogType = (meta(html, 'og:type') || '').toLowerCase(), productUrl = absolute(meta(html, 'og:url') || baseUrl, baseUrl), priceText = meta(html, 'product:price:amount') || meta(html, 'og:price:amount') || '', image = absolute(meta(html, 'og:image') || meta(html, 'twitter:image'), baseUrl), price = numberFromText(priceText); if (!/(?:product|product.item)/i.test(ogType) || !priceText || price <= 0 || !image) return []; return [{ sourceKey: sourceKey(productUrl, title), title, price, priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }]; }
 function scriptJsonProducts(html: string, baseUrl: string): Product[] { const out: Product[] = []; for (const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)) { const body = decodeHtml(m[1]); if (!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body)) continue; for (const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)) { try { walkObjects(JSON.parse(j[1]), baseUrl, out); } catch {} } } return dedupe(out); }
@@ -537,11 +537,16 @@ function heuristicImage(chunk: string, baseUrl: string): string {
   if (!raw || /^(data:|blob:|javascript:|#)/i.test(raw) || /(?:placeholder|spacer|transparent|loading)(?:[-_.]|$)/i.test(raw)) return '';
   return absolute(raw, baseUrl);
 }
-function heuristicProducts(html: string, baseUrl: string): Product[] {
+// Category/collection/tag links live inside product cards and inherit their
+// image+price context, so without this guard they become phantom products.
+// The word must end at a path boundary so slugs like «category-theory-book»
+// still pass.
+const NON_PRODUCT_URL_RE = /[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
+export function heuristicProducts(html: string, baseUrl: string): Product[] {
   const out: Product[] = []; const seenUrls = new Set<string>();
   // 1.136.0 — first anchor per URL wins: cards with a media link AND a title
   // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
-  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = normalize(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0] || ''); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = normalize(stripPriceFormatChars(chunk).match(PRICE_HINT_RE)?.[0] || ''); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
 export async function scrapeDetails(product: Product, selectors: Selectors): Promise<Product> {
   if (!product.url) return product;
@@ -727,10 +732,15 @@ export function verifyListSelectors(html: string, baseUrl: string, selectors: Se
   return { containerCount, cardsSampled: nodes.length, ...hits, ok: containerCount >= 2 && hits.title.count >= needed };
 }
 
-const PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم)/i;
-const THOUSANDS_RE = /\d{1,3}([,٬.]\d{3})+/;
+const PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
+const THOUSANDS_RE = /[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
+// Tatweel/kashida-styled prices (e.g. «تومــانـ») and zero-width
+// joiners defeat plain currency matching; strip ornamental format chars
+// before every price test/extraction.
+const PRICE_FORMAT_CHARS_RE = /[ـ‌‍﻿]/g;
+function stripPriceFormatChars(value: string): string { return value.replace(PRICE_FORMAT_CHARS_RE, ''); }
 function looksLikePrice(text: string): boolean {
-  const value = normalize(text);
+  const value = stripPriceFormatChars(normalize(text));
   if (!value || value.length > 80) return false;
   if (PRICE_HINT_RE.test(value)) return numberFromText(value) > 0;
   return THOUSANDS_RE.test(value) && numberFromText(value) > 0;
@@ -858,7 +868,7 @@ function inferStructuralListSelectors(html: string, baseUrl: string): { selector
       if (group.seen.has(element)) continue;
       group.seen.add(element);
       group.nodes.push(element);
-      if (PRICE_HINT_RE.test(text) || THOUSANDS_RE.test(text)) group.priceHits++;
+      if (PRICE_HINT_RE.test(stripPriceFormatChars(text)) || THOUSANDS_RE.test(text)) group.priceHits++;
     }
   }
   const clusters = [...groups.entries()]
@@ -1091,18 +1101,20 @@ export async function diagnoseBenchmarkEngine(
   } else if (engine === 'heuristic') {
     let anchors = 0;
     for (const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
-      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || '')) anchors++;
+      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || '') && !NON_PRODUCT_URL_RE.test(m[1] || '')) anchors++;
       if (anchors > 5000) break;
     }
-    const priceHints = countMatches(text, PRICE_HINT_RE);
+    const priceHints = countMatches(stripPriceFormatChars(text), PRICE_HINT_RE);
+    const barePrices = countMatches(text, THOUSANDS_RE);
     const images = countMatches(text, /<img\b/i);
     candidates = anchors;
-    signals.productAnchors = anchors; signals.priceHints = priceHints; signals.images = images;
+    signals.productAnchors = anchors; signals.priceHints = priceHints; signals.barePrices = barePrices; signals.images = images;
     if (!anchors) { dropReasons.push('هیچ لینکی با الگوی آدرس محصول (/product/ ،/shop/ ،snp- و…) پیدا نشد.'); hint = 'آدرس محصولات این سایت الگوی شناخته‌شده ندارد؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.'; }
     else if (!list.length) {
       if (error) dropReasons.push(error);
       dropReasons.push(`${anchors} لینک محصول هست ولی هیچ‌کدام داخل کارتی با تصویر+قیمت کامل نبودند (حذف شدند).`);
-      if (!priceHints) dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');
+      if (!priceHints && !barePrices) dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');
+      else if (!priceHints) dropReasons.push(`${barePrices} عدد هزارگان‌بندی‌شده بدون واحد پولی دیده شد؛ احتمالاً واحد پول با استایل/جاوااسکریپت اضافه می‌شود یا قیمت‌ها داینامیک‌اند.`);
       hint = !priceHints ? 'قیمت‌ها احتمالاً با جاوااسکریپت بارگذاری می‌شوند؛ موتور مرورگری (نمایشی) را امتحان کنید.' : 'کارت‌ها تصویر یا قیمت کامل ندارند؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.';
     } else {
       if (anchors > list.length) dropReasons.push(`از ${anchors} لینک محصول، ${list.length} محصول کامل نگه داشته شد؛ بقیه تصویر/قیمت/عنوان کامل نداشتند.`);

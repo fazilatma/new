@@ -457,10 +457,13 @@ test('the selector engine is benchmarked on Node, not only on Cloudflare', async
   const scraper = await readProjectFile('render-src/scraper.ts');
   assert.match(scraper, /name === 'cheerio' \|\| name === 'htmlrewriter'/, 'Node must implement htmlrewriter');
 
-  // Browser engines have no Android build; report them as unavailable rather
-  // than as a scary download failure.
-  assert.match(server, /BROWSER_ENGINES_UNAVAILABLE\s*=\s*process\.platform\s*===\s*'android'/, 'Termux must mark browser engines unavailable');
+  // Browser engines gate on a reachable Chromium (the same check pick() uses),
+  // not on the platform: Termux with `pkg install chromium` runs them, while a
+  // box without any browser reports them as unavailable rather than as a scary
+  // download failure.
+  assert.match(server, /!browserEngineAvailable\(\)&&BROWSER_ENGINES\.has\(engine\)/, 'browser engines must gate on availability');
   assert.match(server, /available:\s*false/, 'unavailable engines must not look like failures');
+  assert.doesNotMatch(server, /BROWSER_ENGINES_UNAVAILABLE/, 'no platform hard-block may remain');
 });
 
 test('the Node runtime fetches pages the same way the Worker does', async () => {

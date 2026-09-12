@@ -591,7 +591,7 @@ function matchingClose(html:string,openPos:number,tag:string,endTag:string):numb
   return -1;
 }
 function enclosingChunks(html:string,index:number):string[]{const out:string[]=[];let cursor=index;for(let level=0;level<6&&cursor>0;level++){let best='',bestOpen=-1;for(const [tag,endTag] of [['article','</article>'],['li','</li>'],['tr','</tr>'],['div','</div>']] as const){const open=enclosingOpen(html,cursor,tag,endTag);if(open<0||index-open>1800)continue;const end=matchingClose(html,open,tag,endTag);if(end<0||end-open>5000)continue;const chunk=html.slice(open,end+endTag.length);if(!best||chunk.length<best.length){best=chunk;bestOpen=open}}if(!best||bestOpen<0)break;out.push(best);cursor=bestOpen}return out}
-function productContextChunk(html:string,index:number,anchor:string):string{void anchor;const candidates=enclosingChunks(html,index);if(!candidates.length)return'';return candidates.find(chunk=>/<img\b/i.test(chunk)&&PRICE_HINT_RE.test(chunk))||candidates[0]}
+function productContextChunk(html:string,index:number,anchor:string):string{void anchor;const candidates=enclosingChunks(html,index);if(!candidates.length)return'';return candidates.find(chunk=>/<img\b/i.test(chunk)&&PRICE_HINT_RE.test(stripPriceFormatChars(chunk)))||candidates[0]}
 export async function extractMetadataProduct(html:string,baseUrl:string):Promise<Product[]>{const title=metaContent(html,'og:title')||metaContent(html,'twitter:title')||stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'');if(!title)return[];const ogType=(metaContent(html,'og:type')||'').toLowerCase(),priceText=metaContent(html,'product:price:amount')||metaContent(html,'og:price:amount')||'',url=canonicalUrl(metaContent(html,'og:url')||baseUrl,baseUrl),image=imageUrl(metaContent(html,'og:image')||metaContent(html,'twitter:image'),baseUrl),price=numberFromText(priceText);if(!/(?:product|product.item)/i.test(ogType)||!priceText||price<=0||!image)return[];return finalizeFound([{sourceKey:'',title,price,priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}],baseUrl)}
 async function extractScriptJsonProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)){const body=decodeHtml(m[1].trim());if(!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body))continue;for(const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)){try{walkObjects(JSON.parse(j[1]),baseUrl,out)}catch{}}}return finalizeFound(out,baseUrl)}
 function chunkTitle(chunk:string):string{let best='';for(const m of chunk.matchAll(/<(span|div|p|h5|h6|strong|b|em|li|td)\b[^>]*>([^<>]{6,160})<\/\1>/gi)){const text=cleanText(decodeHtml(m[2]||''));if(text.length>=6&&text.length>best.length&&!looksLikePrice(text))best=text}return best}
@@ -601,7 +601,8 @@ function heuristicImage(chunk:string,baseUrl:string):string{
   const srcAttr=(tag.match(/\ssrc(?:set)?\s*=\s*["']([^"']+)["']/i)?.[1]||'').split(',')[0].trim().split(/\s+/)[0];
   return imageUrl(decodeHtml(dataSrc||srcAttr),baseUrl);
 }
-export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];const seenUrls=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||seenUrls.has(url)||!/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2])||chunkTitle(chunk);const image=heuristicImage(chunk,baseUrl);const priceText=cleanText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0]||'');if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;seenUrls.add(url);out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
+const NON_PRODUCT_URL_RE=/[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
+export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];const seenUrls=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||seenUrls.has(url)||!/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url)||NON_PRODUCT_URL_RE.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2])||chunkTitle(chunk);const image=heuristicImage(chunk,baseUrl);const priceText=cleanText(stripPriceFormatChars(chunk).match(PRICE_HINT_RE)?.[0]||'');if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;seenUrls.add(url);out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
 
 /** Runs the same network, list parser and detail parser used by real jobs, but never writes or syncs products. */
 export type EngineDiagnosis={engine:ExtractionEngine;candidates:number;extracted:number;complete:{title:number;price:number;link:number;image:number};sample:{title:string;priceText:string;url:string;image:string}|null;dropReasons:string[];hint:string;signals:Record<string,number|string|boolean>};
@@ -677,14 +678,14 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
     else hint=`موتور سالم است: ${list.length} محصول از متاتگ‌ها استخراج شد${partialNote()}.`;
   }else if(engine==='heuristic'){
     let anchors=0;
-    for(const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)){if(/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1]||''))anchors++;if(anchors>5000)break}
-    const priceHints=countMatches(text,PRICE_HINT_RE),images=countMatches(text,/<img\b/i);
-    candidates=anchors;signals.productAnchors=anchors;signals.priceHints=priceHints;signals.images=images;
+    for(const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)){if(/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1]||'')&&!NON_PRODUCT_URL_RE.test(m[1]||''))anchors++;if(anchors>5000)break}
+    const priceHints=countMatches(stripPriceFormatChars(text),PRICE_HINT_RE),barePrices=countMatches(text,THOUSANDS_RE),images=countMatches(text,/<img\b/i);
+    candidates=anchors;signals.productAnchors=anchors;signals.priceHints=priceHints;signals.barePrices=barePrices;signals.images=images;
     if(!anchors){dropReasons.push('هیچ لینکی با الگوی آدرس محصول (/product/ ،/shop/ ،snp- و…) پیدا نشد.');hint='آدرس محصولات این سایت الگوی شناخته‌شده ندارد؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.'}
     else if(!list.length){
       if(error)dropReasons.push(error);
       dropReasons.push(`${anchors} لینک محصول هست ولی هیچ‌کدام داخل کارتی با تصویر+قیمت کامل نبودند (حذف شدند).`);
-      if(!priceHints)dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');
+      if(!priceHints&&!barePrices)dropReasons.push('در کل صفحه هیچ متن قیمت‌داری (تومان/ریال/…) دیده نشد؛ احتمالاً قیمت‌ها با جاوااسکریپت می‌آیند.');else if(!priceHints)dropReasons.push(`${barePrices} عدد هزارگان‌بندی‌شده بدون واحد پولی دیده شد؛ احتمالاً واحد پول با استایل/جاوااسکریپت اضافه می‌شود یا قیمت‌ها داینامیک‌اند.`);
       hint=!priceHints?'قیمت‌ها احتمالاً با جاوااسکریپت بارگذاری می‌شوند؛ موتور مرورگری (نمایشی) را امتحان کنید.':'کارت‌ها تصویر یا قیمت کامل ندارند؛ موتور سلکتوری (htmlrewriter) را امتحان کنید.';
     }else{
       if(anchors>list.length)dropReasons.push(`از ${anchors} لینک محصول، ${list.length} محصول کامل نگه داشته شد؛ بقیه تصویر/قیمت/عنوان کامل نداشتند.`);
@@ -906,10 +907,12 @@ export async function verifyListSelectors(html:string,baseUrl:string,selectors:S
   return{containerCount,cardsSampled:Math.min(containerCount,12),title:evidence(titleHits),price:evidence(moneyHits),link:evidence(linkHits),image:evidence(imageHits),ok:containerCount>=2&&titleHits.length>=needed};
 }
 
-const PRICE_HINT_RE=/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم)/i;
-const THOUSANDS_RE=/\d{1,3}([,٬.]\d{3})+/;
+const PRICE_HINT_RE=/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
+const THOUSANDS_RE=/[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
+const PRICE_FORMAT_CHARS_RE=/[ـ‌‍﻿]/g;
+function stripPriceFormatChars(value:string):string{return value.replace(PRICE_FORMAT_CHARS_RE,'')}
 function looksLikePrice(text:string):boolean{
-  const value=cleanText(text);
+  const value=stripPriceFormatChars(cleanText(text));
   if(!value||value.length>80)return false;
   if(PRICE_HINT_RE.test(value))return numberFromText(value)>0;
   return THOUSANDS_RE.test(value)&&numberFromText(value)>0;
@@ -1053,7 +1056,7 @@ async function inferStructuralListSelectors(html:string,baseUrl:string):Promise<
       if(!group){group={chunks:[],seen:new Set(),priceHits:0};groups.set(signature,group)}
       if(group.seen.has(chunk))continue;
       group.seen.add(chunk);group.chunks.push(chunk);
-      if(PRICE_HINT_RE.test(text)||THOUSANDS_RE.test(text))group.priceHits++;
+      if(PRICE_HINT_RE.test(stripPriceFormatChars(text))||THOUSANDS_RE.test(text))group.priceHits++;
     }
   }
   const clusters=[...groups.entries()]
