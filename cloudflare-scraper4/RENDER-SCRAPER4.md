@@ -684,3 +684,29 @@ whole install — leaving node_modules half-written so even
 If an older guide left you with a broken install, update the checkout,
 delete `node_modules` once, and reinstall with
 `npm install --ignore-scripts --no-audit --prefer-online`.
+
+## 1.133.0 — Playwright actually imports on Termux (`Unsupported platform: android` fixed)
+
+With the install fixed, the extraction diagnostic on a real phone failed one
+step later: choosing the Playwright engine reported `Unsupported platform:
+android`. The cause is inside Playwright itself — it resolves its browser
+registry directory at IMPORT time and only knows linux/darwin/win32, so the
+bare `import('playwright')` throws on Android before any launch is attempted
+(reproduced here by faking `process.platform`; Puppeteer and Crawlee import
+fine without help).
+
+- **The scraper defaults `PLAYWRIGHT_BROWSERS_PATH` on Android.** Playwright
+  checks that variable before computing its default, so pointing it at the
+  normal cache path (`~/.cache/ms-playwright`) bypasses the throw. We always
+  launch an explicit system executable, so the directory is never actually
+  used; an explicitly configured value still wins. One module-level default
+  covers all three engines, because every browser import in the codebase is
+  a lazy import inside `render-src/scraper.ts` (Crawlee pulls Playwright in
+  internally, so it is covered too). Desktop behavior is unchanged.
+- **Verified past the gate, not just past the import.** With the variable
+  set, `chromium.launch({ executablePath })` reaches normal executable
+  validation instead of dying on the platform check.
+
+Updating the checkout is enough — no reinstall needed. Restart the deployer
+process after pulling so it runs the new code, then re-run the extraction
+diagnostic with the Playwright engine.

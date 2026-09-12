@@ -1,8 +1,24 @@
 import * as cheerio from 'cheerio';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { safeText } from './network.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile, type Selectors } from './types.js';
+
+// Playwright resolves its browser-registry directory at IMPORT time and only
+// knows linux/darwin/win32 — on Termux (process.platform === 'android') the
+// bare import throws `Unsupported platform: android` before any launch is
+// attempted. We always launch an explicit system executable, so the registry
+// directory is never actually used — but it must still RESOLVE. Playwright
+// checks PLAYWRIGHT_BROWSERS_PATH first, so default it (Android only, an
+// explicitly configured value still wins) to the same cache path Linux would
+// compute. Module-level on purpose: every browser import in the codebase is
+// a lazy import below in this file (Crawlee pulls Playwright in internally),
+// so this always runs first, for all three engines.
+if (process.platform === 'android' && !process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = join(homedir(), '.cache', 'ms-playwright');
+}
 
 const normalize = (value: string) => value.replace(/[\u200c\u200d\u200e\u200f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
 const absolute = (value: string, base: string) => { if (!String(value || '').trim()) return ''; try { const url = new URL(value, base); return ['http:','https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };

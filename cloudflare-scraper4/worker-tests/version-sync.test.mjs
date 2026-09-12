@@ -1725,3 +1725,20 @@ test('browser engines run on Termux via the system Chromium, never desktop downl
   const pkg = JSON.parse(await readProjectFile('package.json'));
   assert.equal(pkg.scripts['browsers:install'], 'node scripts/browsers-install.mjs', 'npm run browsers:install must route through the environment-aware installer');
 });
+
+// On Termux, `import('playwright')` alone throws `Unsupported platform:
+// android` — Playwright resolves its registry directory at import time and
+// only knows linux/darwin/win32. We always launch an explicit system
+// executable, so the registry dir is never used, but it must still resolve:
+// the scraper must default PLAYWRIGHT_BROWSERS_PATH on Android before any
+// browser library is (lazily) imported.
+test('playwright can be imported on Android via a default browsers path', async () => {
+  const scraper = await readProjectFile('render-src/scraper.ts');
+  assert.ok(scraper.includes("process.platform === 'android'"), 'guard: the android branch was located');
+  assert.match(scraper, /if \(process\.platform === 'android' && !process\.env\.PLAYWRIGHT_BROWSERS_PATH\) \{\s*process\.env\.PLAYWRIGHT_BROWSERS_PATH = join\(homedir\(\), '\.cache', 'ms-playwright'\);/, 'android must default the browsers path without overriding explicit values');
+  const envDefault = scraper.indexOf('process.env.PLAYWRIGHT_BROWSERS_PATH =');
+  assert.ok(envDefault !== -1, 'guard: the default assignment was located');
+  for (const lazy of ["import('playwright')", "import('puppeteer')", "import('crawlee')"]) {
+    assert.ok(scraper.indexOf(lazy) > envDefault, `the default must be set before the lazy ${lazy}`);
+  }
+});
