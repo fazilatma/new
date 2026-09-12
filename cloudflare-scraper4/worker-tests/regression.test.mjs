@@ -1865,3 +1865,22 @@ test('a deployer-managed scraper converges when the checkout moves under it', as
   assert.ok(server.includes("process.env.DEPLOYER_MANAGED === 'true'"), 'the moved-under branch must converge when a deployer will restart it');
   assert.ok(server.split('process.exit(75)').length - 1 >= 2, 'both the new-code path and the managed moved-under path must exit 75 for a deployer restart');
 });
+
+test('the deployer survives a blind port scan and a lost bind race', async () => {
+  // On Termux the start crashed with EADDRINUSE while the port scan found
+  // nothing: /proc/net can be unreadable on some Android builds, or a second
+  // binder wins between the scan and listen(). The deployer must sweep its
+  // own server processes by command line AND the PORT they were started with
+  // (never a sibling on another port, never a foreign program), retry a
+  // failed bind exactly once, keep the whole story in one log, and end with
+  // a manual escape hatch when the port stays held.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('function portScanSummary('), 'every start must log what the port scan saw and did');
+  assert.ok(deployer.includes('no holders found'), 'an empty scan must say so instead of staying silent');
+  assert.ok(deployer.includes('DEPLOYER_PORT_SCAN_BLIND'), 'the blind-tables path must be provable with a lab hook');
+  assert.ok(deployer.includes('PORT=${scraperPort}'), 'the cmdline sweep must only match our server on OUR port');
+  assert.ok(deployer.includes('function startScraper(retryDepth = 0)'), 'a bind lost to a race must be retried');
+  assert.ok(deployer.includes('retryDepth < 1'), 'the bind retry must happen exactly once, never in a loop');
+  assert.ok(deployer.includes('if (retryDepth === 0) scraperLog'), 'the retry must continue the same log story, not wipe attempt #1');
+  assert.ok(deployer.includes('pkill -f render-dist/server'), 'a port that stays held must end with a manual escape hatch');
+});

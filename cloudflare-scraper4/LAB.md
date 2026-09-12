@@ -61,7 +61,8 @@ npm test
 
 - سلامت نحوی `scripts/local-deployer-ui.mjs` و نگهبان‌هایش (آزادسازی پورت
   stale، نصب‌های Termux-aware، تشخیص بیلد stale روی پورت + دکمهٔ Rebuild
-  & restart)،
+  & restart، جست‌وجوی cmdline هنگام نابینایی جدول سوکت + یک retry روی
+  EADDRINUSE؛ هوک آزمایشگاه: `DEPLOYER_PORT_SCAN_BLIND=1`)،
 - تازگی بیلد رندر (`render-dist/server.js` نسبت به `render-src/`)،
 - هم‌خوانی باندل کامیت‌شدهٔ `scraper4.worker.js` با نسخهٔ `package.json`،
 - سبز بودن `version:check` و حضور دارا بودن گیت مرورگر در بنچمارک.
