@@ -27,7 +27,9 @@
  *   git fetch origin arena/01a09468-new
  *   git reset --hard origin/arena/01a09468-new
  *   cd cloudflare-scraper4
+ *   # On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)
  *   npm install --no-audit --prefer-online
+ *   node scripts/esbuild-check.mjs
  *   grep version package.json | head -1
  *   # Expected: 1.137.0
  *
@@ -79,7 +81,9 @@
  *   npm config set fetch-retries 5
  *   npm config set fetch-retry-mintimeout 20000
  *   npm config set fetch-retry-maxtimeout 90000
- *   npm install --no-audit --prefer-online
+ *   # --ignore-scripts: install scripts (puppeteer, workerd) have no Android build and fail the whole install
+ *   npm install --ignore-scripts --no-audit --prefer-online
+ *   node scripts/esbuild-check.mjs
  *
  *   # Termux PostgreSQL (optional) database setup.
  *   # If the dashboard says: role "postgres" does not exist, you are using

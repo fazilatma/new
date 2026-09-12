@@ -50,6 +50,7 @@ let localScraperDirtySkipLogged = -1;
 let localScraperUnpushedSkipLogged = -1;
 let localScraperBootHead = '';
 let localScraperMovedWarnedHead = '';
+const isTermuxInstall = process.platform === 'android' || Boolean(process.env.TERMUX_VERSION) || /com\.termux/i.test(String(process.env.PREFIX || ''));
 function runLocal(command: string, args: string[] = []) { return spawnSync(command, args, { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env }); }
 function maybeAutoUpdateLocalScraper(reason = 'timer') {
   if (!localScraperAutoUpdate || localScraperUpdateRunning) return;
@@ -101,7 +102,7 @@ function maybeAutoUpdateLocalScraper(reason = 'timer') {
     runLocal('git', ['config', '--local', '--replace-all', 'credential.helper', '!gh auth git-credential']);
     const reset = runLocal('git', ['reset', '--hard', `origin/${branch}`]);
     if (reset.status !== 0) return console.warn(`[auto-update:${reason}] git reset failed: ${reset.stderr || reset.stdout}`);
-    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--no-audit', '--prefer-online']);
+    runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', isTermuxInstall ? ['install', '--ignore-scripts', '--no-audit', '--prefer-online'] : ['install', '--no-audit', '--prefer-online']);
     runLocal(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'render:build']);
     setTimeout(() => process.exit(75), 500);
   } finally { localScraperUpdateRunning = false; }

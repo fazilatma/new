@@ -1801,3 +1801,19 @@ test('termux install guides skip install scripts that Android cannot run', async
   assert.ok(installs > 0, 'guard: the deployer Termux block installs npm packages');
   assert.equal(safeInstalls, installs, 'every npm install in the deployer Termux block must skip install scripts');
 });
+
+test('automated npm installs skip install scripts on Termux', async () => {
+  // The guides above were already Termux-safe, but the AUTOMATED paths ran a
+  // plain npm install: on Termux that aborts the whole install (puppeteer /
+  // workerd postinstalls have no Android build), every update then reports
+  // failure, nothing rebuilds or restarts, and the box silently keeps serving
+  // the old release. All automated installs must route through one
+  // Termux-aware args list instead.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('npmInstallArgs'), 'deployer must route automated installs through one Termux-aware args list');
+  assert.ok(deployer.includes("'--ignore-scripts'"), 'that list must skip install scripts on Termux');
+  assert.ok(deployer.includes('runSync(npmCommand, npmInstallArgs)'), 'branch updates (updateFromGit) must use it');
+  assert.ok(deployer.includes("install: ['npm', npmInstallArgs]"), 'the Install / retry npm job must use it');
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('--ignore-scripts'), 'scraper self-update must skip install scripts on Termux');
+});
