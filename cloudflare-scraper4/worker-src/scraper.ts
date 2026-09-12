@@ -489,7 +489,7 @@ class NextLinkHandler {
   constructor(private baseUrl:string){}
   element(element:HtmlElement):void{if(!this.url)this.url=canonicalUrl(firstAttribute(element,LINK_ATTRS),this.baseUrl)}
 }
-type EngineResult={products:Product[];usedEngine:ExtractionEngine};
+type EngineResult={products:Product[];usedEngine:ExtractionEngine;engineError?:string};
 const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter','cheerio']);
@@ -515,7 +515,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
   // 1.129.0 — PROACTIVE AUTO-DISCOVERY (Worker parity with 1.128.0 on
@@ -531,7 +531,7 @@ export async function scrapeListPage(url:string,selectors:Selectors,nextSelector
   let ensured:EnsuredListSelectors={selectors,method:''};
   if(autoDiscover){try{ensured=await ensureListSelectors(page.text,page.url,selectors)}catch{/* discovery is best-effort; the engine loop below still runs */}}
   const started=Date.now(),result=await parseByEngine(page.text,page.url,ensured.selectors,engine,master,autoFirst);
-  return {products:result.products,nextUrl:next.url,url:page.url,usedEngine:result.usedEngine,elapsedMs:Date.now()-started,selectorsUsed:ensured.selectors,discoveredSelectors:ensured.discovered,discoveryMethod:ensured.method};
+  return {products:result.products,nextUrl:next.url,url:page.url,usedEngine:result.usedEngine,elapsedMs:Date.now()-started,selectorsUsed:ensured.selectors,discoveredSelectors:ensured.discovered,discoveryMethod:ensured.method,engineError:result.engineError};
 }
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto',autoDiscover=true):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine,undefined,true,autoDiscover)).products}
 
@@ -546,12 +546,26 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
     if(name==='heuristic')return extractHeuristicProducts(html,baseUrl);
     return [];
   };
+  // Python parity (scraper4.py parse_html): a throwing engine must not kill
+  // the run — the remaining engines still get their chance (an explicit
+  // choice is tried FIRST, as before, just no longer fatally). Probing
+  // callers (benchmark: autoFirst=false, single-engine list) still get the
+  // loud original error; real runs report it as engineError so the
+  // processor's last-resort rescue and the diagnostic can show it.
+  let firstError:unknown=null,explicitError:unknown=null;
   for(const name of engineOrder(engine,master,autoFirst)){
-    const products=dedupeProducts(await tryOne(name));
-    if(products.length)return{products,usedEngine:name};
-    // Empty result from the explicit engine: keep trying the fallbacks.
+    try{
+      const products=dedupeProducts(await tryOne(name));
+      if(products.length)return{products,usedEngine:name};
+      // Empty result from the explicit engine: keep trying the fallbacks.
+    }catch(error){
+      if(!firstError)firstError=error;
+      if(engine!=='auto'&&name===engine&&!explicitError)explicitError=error;
+    }
   }
-  return{products:[],usedEngine:engine};
+  if(!autoFirst&&firstError)throw firstError;
+  const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
+  return{products:[],usedEngine:engine,engineError};
 }
 function dedupeProducts(products:Product[]):Product[]{const seen=new Set<string>(),out:Product[]=[];for(const p of products){const key=p.sourceKey||p.url||p.title;if(!key||seen.has(key))continue;seen.add(key);out.push(p)}return out}
 function productFromObject(obj:any,baseUrl:string):Product|null{if(!obj||typeof obj!=='object')return null;const title=cleanText(String(obj.name||obj.title||obj.productName||obj.label||''));const offer=Array.isArray(obj.offers)?obj.offers[0]:obj.offers||obj.offer||{};const priceText=cleanText(String(obj.price||obj.finalPrice||obj.salePrice||obj.sellingPrice||obj.priceText||offer.price||offer.lowPrice||offer.highPrice||''));const rawUrl=String(obj.url||obj.href||obj.link||obj.webUrl||obj.canonicalUrl||(typeof obj.slug==='string'?(obj.slug.startsWith('/')?obj.slug:`/product/${obj.slug}`):'')||'');const url=canonicalUrl(rawUrl,baseUrl);const image=imageUrl(firstImageValue(obj.image||obj.images||obj.thumbnail||obj.cover||obj.imageUrl||obj.picture),baseUrl);if(!title||!image||!priceText||numberFromText(priceText)<=0)return null;return{sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:cleanText(String(obj.sku||obj.id||'')),shortDesc:cleanText(String(obj.description||'')),longDesc:'',brand:cleanText(String(typeof obj.brand==='object'?obj.brand?.name:obj.brand||'')),stock:undefined,weight:undefined,category:cleanText(String(obj.category||'')),tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}}
@@ -591,7 +605,7 @@ function matchingClose(html:string,openPos:number,tag:string,endTag:string):numb
   return -1;
 }
 function enclosingChunks(html:string,index:number):string[]{const out:string[]=[];let cursor=index;for(let level=0;level<6&&cursor>0;level++){let best='',bestOpen=-1;for(const [tag,endTag] of [['article','</article>'],['li','</li>'],['tr','</tr>'],['div','</div>']] as const){const open=enclosingOpen(html,cursor,tag,endTag);if(open<0||index-open>1800)continue;const end=matchingClose(html,open,tag,endTag);if(end<0||end-open>5000)continue;const chunk=html.slice(open,end+endTag.length);if(!best||chunk.length<best.length){best=chunk;bestOpen=open}}if(!best||bestOpen<0)break;out.push(best);cursor=bestOpen}return out}
-function productContextChunk(html:string,index:number,anchor:string):string{void anchor;const candidates=enclosingChunks(html,index);if(!candidates.length)return'';return candidates.find(chunk=>/<img\b/i.test(chunk)&&PRICE_HINT_RE.test(stripPriceFormatChars(stripHtml(chunk))))||candidates[0]}
+function productContextChunk(html:string,index:number,anchor:string):string{void anchor;const candidates=enclosingChunks(html,index);if(!candidates.length)return'';return candidates.find(chunk=>/<img\b/i.test(chunk)&&chunkHasPriceText(stripPriceFormatChars(stripHtml(chunk))))||candidates[0]}
 export async function extractMetadataProduct(html:string,baseUrl:string):Promise<Product[]>{const title=metaContent(html,'og:title')||metaContent(html,'twitter:title')||stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'');if(!title)return[];const ogType=(metaContent(html,'og:type')||'').toLowerCase(),priceText=metaContent(html,'product:price:amount')||metaContent(html,'og:price:amount')||'',url=canonicalUrl(metaContent(html,'og:url')||baseUrl,baseUrl),image=imageUrl(metaContent(html,'og:image')||metaContent(html,'twitter:image'),baseUrl),price=numberFromText(priceText);if(!/(?:product|product.item)/i.test(ogType)||!priceText||price<=0||!image)return[];return finalizeFound([{sourceKey:'',title,price,priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}],baseUrl)}
 export async function extractScriptJsonProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)){const body=decodeHtml(m[1].trim());if(!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body))continue;for(const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)){try{walkObjects(JSON.parse(j[1]),baseUrl,out)}catch{}}}return finalizeFound(out,baseUrl)}
 function chunkTitle(chunk:string):string{let best='';for(const m of chunk.matchAll(/<(span|div|p|h5|h6|strong|b|em|li|td)\b[^>]*>([^<>]{6,160})<\/\1>/gi)){const text=cleanText(decodeHtml(m[2]||''));if(text.length>=6&&text.length>best.length&&!looksLikePrice(text))best=text}return best}
@@ -602,11 +616,22 @@ function heuristicImage(chunk:string,baseUrl:string):string{
   return imageUrl(decodeHtml(dataSrc||srcAttr),baseUrl);
 }
 const NON_PRODUCT_URL_RE=/[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
-export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];const seenUrls=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||seenUrls.has(url)||!/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url)||NON_PRODUCT_URL_RE.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2])||chunkTitle(chunk);const image=heuristicImage(chunk,baseUrl);const priceText=cleanText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' '))).match(PRICE_HINT_RE)?.[0]||'');if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;seenUrls.add(url);out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
+export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];const seenUrls=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||seenUrls.has(url)||!/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url)||NON_PRODUCT_URL_RE.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2])||chunkTitle(chunk);const image=heuristicImage(chunk,baseUrl);const priceText=heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' '))));if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;seenUrls.add(url);out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
 
 /** Runs the same network, list parser and detail parser used by real jobs, but never writes or syncs products. */
 export type EngineDiagnosis={engine:ExtractionEngine;candidates:number;extracted:number;complete:{title:number;price:number;link:number;image:number};sample:{title:string;priceText:string;url:string;image:string}|null;dropReasons:string[];hint:string;signals:Record<string,number|string|boolean>};
 const countMatches=(html:string,re:RegExp):number=>{const global=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');let n=0;global.lastIndex=0;while(global.exec(html)){n++;if(n>5000)break}return n};
+/**
+ * Normalize any invalid-selector failure into the one diagnosis reason, so the
+ * report names the breakage instead of blaming the container. Twin: render.
+ */
+function invalidSelectorMessage(error:unknown):string{
+  const msg=error instanceof Error?error.message:String(error||'');
+  if(!msg)return'';
+  if(msg.startsWith('سلکتور نامعتبر'))return msg;
+  if(/attribute selector|didn't terminate|not a valid selector|unknown pseudo/i.test(msg))return`سلکتور نامعتبر: ${msg}`;
+  return'';
+}
 /** Per-engine diagnosis for the 3-page speed test (1.137.0). Twin: render-src/scraper.ts diagnoseBenchmarkEngine — same shape, same Persian copy. */
 export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:string,baseUrl:string,selectors:Selectors,products:Product[],error=''):Promise<EngineDiagnosis>{
   const list=Array.isArray(products)?products:[];
@@ -633,7 +658,9 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
     const containers=verified?.containerCount||0,titles=verified?.title.count||0,prices=verified?.price.count||0,links=verified?.link.count||0,images=verified?.image.count||0;
     candidates=containers;signals.containers=containers;signals.titles=titles;signals.prices=prices;signals.links=links;signals.images=images;
     const containerSel=String((selectors as any)?.container||'').trim();
-    if(!containerSel){dropReasons.push('سلکتور ظرف خالی است؛ موتور سلکتوری بدون ظرف نمی‌تواند کارتی پیدا کند.');hint='سلکتور ظرف را وارد کنید یا «پیشنهاد خودکار سلکتورها» را بزنید.'}
+    const badSelector=invalidSelectorMessage(error)||verified?.error||'';
+    if(badSelector){dropReasons.push(badSelector);hint='یکی از سلکتورهای ذخیره‌شده خراب است؛ آن را اصلاح کنید یا «پیشنهاد خودکار سلکتورها» را بزنید تا سلکتورهای سالم ساخته شوند.'}
+    else if(!containerSel){dropReasons.push('سلکتور ظرف خالی است؛ موتور سلکتوری بدون ظرف نمی‌تواند کارتی پیدا کند.');hint='سلکتور ظرف را وارد کنید یا «پیشنهاد خودکار سلکتورها» را بزنید.'}
     else if(!containers){dropReasons.push(`سلکتور ظرف «${containerSel}» هیچ کارتی در صفحه پیدا نکرد.`);hint='سلکتور ظرف اشتباه است یا صفحه جاوااسکریپتی است؛ «پیشنهاد خودکار سلکتورها» را بزنید.'}
     else if(!titles){dropReasons.push(`${containers} کارت پیدا شد ولی داخل هیچ‌کدام عنوانی نیست؛ یعنی سلکتور عنوان بیرون از ظرف را می‌بیند یا ظرف کل فهرست را گرفته است.`);hint='سلکتور عنوان باید نسبت به ظرف داخلی باشد، یا ظرف باید هر کارت باشد نه کل فهرست.'}
     else if(!list.length){
@@ -697,7 +724,7 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
     else if(!list.length)dropReasons.push('موتور محصولی استخراج نکرد.');
     hint=list.length?`موتور ${list.length} محصول استخراج کرد${partialNote()}.`:(error||'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
   }
-  if(error&&!dropReasons.includes(error)&&!list.length)dropReasons.unshift(error);
+  if(error&&!dropReasons.includes(error)&&!dropReasons.some(reason=>reason.includes(error))&&!list.length)dropReasons.unshift(error);
   return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
 }
 export async function diagnoseExtraction(profile:Profile,urlOverride=''){
@@ -862,6 +889,8 @@ export type ListSelectorVerification={
   image:SelectorFieldEvidence;
   /** Container repeats and titles resolve inside most cards. */
   ok:boolean;
+  /** A selector that failed to compile (tagged message); counts are partial. */
+  error?:string;
 };
 const emptyVerification=(containerCount=0):ListSelectorVerification=>({
   containerCount,cardsSampled:0,
@@ -909,6 +938,25 @@ export async function verifyListSelectors(html:string,baseUrl:string,selectors:S
 
 const PRICE_HINT_RE=/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
 const THOUSANDS_RE=/[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
+const THOUSANDS_GLOBAL_RE=new RegExp(THOUSANDS_RE.source,'g');
+/** Card text holds a price when a currency hint OR a bare thousands-grouped
+ * number («۵۲۵٬۰۰۰» with no تومان, the barfbox.ir layout) is present. */
+function chunkHasPriceText(plainText:string):boolean{
+  return PRICE_HINT_RE.test(plainText)||THOUSANDS_RE.test(plainText);
+}
+/**
+ * Python parity (scraper4.py extract_price): a currency word wins, but a bare
+ * thousands-grouped number is still a price — the longest digit run wins.
+ */
+function heuristicPriceText(plainText:string):string{
+  const hint=plainText.match(PRICE_HINT_RE)?.[0];
+  if(hint)return cleanText(hint);
+  let best='';
+  for(const m of plainText.matchAll(THOUSANDS_GLOBAL_RE)){
+    if(m[0].replace(/[^\d۰-۹٠-٩]/g,'').length>best.replace(/[^\d۰-۹٠-٩]/g,'').length)best=m[0];
+  }
+  return cleanText(best);
+}
 const PRICE_FORMAT_CHARS_RE=/[ـ‌‍﻿]/g;
 function stripPriceFormatChars(value:string):string{return value.replace(PRICE_FORMAT_CHARS_RE,'')}
 function looksLikePrice(text:string):boolean{
@@ -972,30 +1020,46 @@ export async function discoverListSelectorsFromHtml(html:string,baseUrl:string):
       }catch{/* next candidate */}
     }
   }
-  let method:ListDiscoveryMethod=selectors.container&&selectors.title?'curated':'none';
+  const curatedSelectors={...selectors};
+  const curatedEvidence={...evidence};
+  let structuralSelectors:Partial<Selectors>|null=null;
+  let structuralEvidence:Record<string,unknown>={};
   if(!selectors.container||!selectors.title){
     try{
       const structural=await inferStructuralListSelectors(html,baseUrl);
       if(structural){
+        structuralSelectors={...structural.selectors};
+        structuralEvidence={...structural.evidence};
         for(const [key,value] of Object.entries(structural.selectors)){
           if(value&&!(selectors as any)[key]){
             (selectors as any)[key]=value;
             (evidence as any)[key]={...((structural.evidence as any)[key]||{}),via:'structural'};
           }
         }
-        method=method==='curated'?'mixed':'structural';
       }
     }catch{/* structural pass is best-effort */}
   }
-  // Final gate: a container that does not repeat, or titles that do not resolve
-  // INSIDE the cards, would be saved as fact — reject such proposals outright.
+  // Final gate, best-of ranking (twin of the Render fix): curated candidates
+  // match page-wide (an 'h2' page heading wins 'title'), while structural
+  // selectors are card-scoped — merging both can poison a good structural
+  // container with a bad curated title (barfbox.ir). Verify merged first,
+  // then each pass alone; the first set whose titles resolve INSIDE the
+  // cards wins, so a stale stowaway can never veto a working set.
+  const mergedMethod:ListDiscoveryMethod=!structuralSelectors?'curated'
+    :(curatedSelectors.container&&curatedSelectors.title?'mixed':'structural');
+  const candidates:Array<{sel:Partial<Selectors>;ev:Record<string,unknown>;method:ListDiscoveryMethod}>=[
+    {sel:selectors,ev:evidence,method:mergedMethod},
+    ...(structuralSelectors?[{sel:structuralSelectors,ev:structuralEvidence,method:'structural' as ListDiscoveryMethod}]:[]),
+    {sel:curatedSelectors,ev:curatedEvidence,method:'curated'},
+  ];
   let containerCount=0;
-  if(selectors.container&&selectors.title){
-    const verified=await verifyListSelectors(html,baseUrl,{...DEFAULT_SELECTORS,...selectors}as Selectors);
+  for(const candidate of candidates){
+    if(!candidate.sel.container||!candidate.sel.title)continue;
+    const verified=await verifyListSelectors(html,baseUrl,{...DEFAULT_SELECTORS,...candidate.sel}as Selectors);
     containerCount=verified.containerCount;
-    if(!verified.ok)return{selectors:{},evidence:{},method:'none',containerCount};
+    if(verified.ok)return{selectors:candidate.sel,evidence:candidate.ev,method:candidate.method,containerCount};
   }
-  return{selectors,evidence,method,containerCount};
+  return{selectors:{},evidence:{},method:'none',containerCount};
 }
 
 /** The anchor itself plus up to two enclosing card-like elements, as HTML. */

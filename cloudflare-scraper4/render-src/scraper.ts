@@ -52,10 +52,18 @@ function sourceKey(url: string, title: string): string { return createHash('sha2
  * evidence check stays green. Re-anchoring the same path inside the card keeps
  * those saved profiles working without asking the user to rewrite selectors.
  */
+function invalidSelectorError(selector: string, cause: unknown): Error {
+  // A saved selector that no longer compiles (older discovery, hand edits)
+  // must fail LOUDLY carrying its own text — Python raises «سلکتور نامعتبر»
+  // the same way — instead of dying later as a cryptic engine error.
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new Error(`سلکتور نامعتبر «${String(selector).slice(0, 160)}»: ${detail}`);
+}
 function scopedMatches($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selector: string): cheerio.Cheerio<any> | null {
-  const inner = $root.find(selector);
+  const guarded = <T,>(fn: () => T): T => { try { return fn(); } catch (error) { throw invalidSelectorError(selector, error); } };
+  const inner = guarded(() => $root.find(selector));
   if (inner.length) return inner;
-  const own = $root.filter(selector);
+  const own = guarded(() => $root.filter(selector));
   if (own.length) return own;
   const element = $root.get(0);
   if (!element) return null;
@@ -163,7 +171,8 @@ export function pageUrl(profile: Profile, page: number): string {
  * widened form when it still matches the originally selected element(s).
  */
 function containerNodes($: cheerio.CheerioAPI, selector: string): cheerio.Cheerio<any> {
-  const exact = $(selector);
+  let exact: cheerio.Cheerio<any>;
+  try { exact = $(selector); } catch (error) { throw invalidSelectorError(selector, error); }
   if (!selector.includes(':nth-of-type(')) return exact;
   const loose = selector.replace(/:nth-of-type\(\d+\)/g, '').trim();
   if (!loose || loose === selector) return exact;
@@ -176,7 +185,7 @@ function containerNodes($: cheerio.CheerioAPI, selector: string): cheerio.Cheeri
   if (kept.length && !kept.every(node => wide.includes(node))) return exact;
   return widened;
 }
-function scrapeListCheerioFromHtml(text: string, finalUrl: string, selectors: Selectors): Product[] {
+export function scrapeListCheerioFromHtml(text: string, finalUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(text); const products: Product[] = [];
   containerNodes($, selectors.container).each((_index, element) => {
     const root = $(element); const title = firstText($, root, selectors.title); if (!title) return;
@@ -211,7 +220,9 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
    */
   discoveredSelectors?:Partial<Selectors>;
   /** How the selectors were found: 'curated' | 'structural' | 'mixed'. */
-  discoveryMethod?:string};
+  discoveryMethod?:string;
+  /** The explicitly requested engine's error, when it threw and no engine produced products (real runs don't throw; the benchmark still does). */
+  engineError?:string};
 const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
 /** Last browser-engine failure, so callers can explain a skipped engine. */
 let lastBrowserError='';
@@ -308,6 +319,13 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     if (name === 'heuristic') return heuristicProducts(text, finalUrl);
     return [] as Product[];
   };
+  // Python parity (scraper4.py parse_html): a throwing engine must not kill
+  // the run — the remaining engines still get their chance (an explicit
+  // choice is tried FIRST, as before, just no longer fatally). Probing
+  // callers (benchmark: autoFirst=false, single-engine list) still get the
+  // loud original error; real runs report it as engineError so the
+  // processor's last-resort rescue and the diagnostic can show it.
+  let firstError:unknown=null,explicitError:unknown=null;
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
@@ -316,11 +334,14 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       // remaining engines instead of returning an empty result, but remember
       // the requested engine so an all-empty run still reports what was asked.
     }catch(error){
-      if(engine!=='auto'&&name===engine)throw error;
+      if(!firstError)firstError=error;
+      if(engine!=='auto'&&name===engine&&!explicitError)explicitError=error;
       if(BROWSER_ENGINES.has(name))lastBrowserError=`${name}: ${error instanceof Error?error.message.split('\n')[0]:String(error)}`;
     }
   }
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod};
+  if(!autoFirst&&firstError)throw firstError;
+  const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
 
@@ -513,7 +534,7 @@ function productContextChunk(html: string, index: number, anchor: string): strin
   if (!candidates.length) return '';
   // Prefer the smallest ancestor that actually holds the card fields; nested
   // cards (media link here, price two divs up) otherwise lose half their data.
-  return candidates.find(chunk => /<img\b/i.test(chunk) && PRICE_HINT_RE.test(stripPriceFormatChars(stripHtml(chunk)))) || candidates[0];
+  return candidates.find(chunk => /<img\b/i.test(chunk) && chunkHasPriceText(stripPriceFormatChars(stripHtml(chunk)))) || candidates[0];
 }
 function metadataProduct(html: string, baseUrl: string): Product[] { const title = meta(html, 'og:title') || meta(html, 'twitter:title') || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ''); if (!title) return []; const ogType = (meta(html, 'og:type') || '').toLowerCase(), productUrl = absolute(meta(html, 'og:url') || baseUrl, baseUrl), priceText = meta(html, 'product:price:amount') || meta(html, 'og:price:amount') || '', image = absolute(meta(html, 'og:image') || meta(html, 'twitter:image'), baseUrl), price = numberFromText(priceText); if (!/(?:product|product.item)/i.test(ogType) || !priceText || price <= 0 || !image) return []; return [{ sourceKey: sourceKey(productUrl, title), title, price, priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }]; }
 export function scriptJsonProducts(html: string, baseUrl: string): Product[] { const out: Product[] = []; for (const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)) { const body = decodeHtml(m[1]); if (!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body)) continue; for (const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)) { try { walkObjects(JSON.parse(j[1]), baseUrl, out); } catch {} } } return dedupe(out); }
@@ -546,7 +567,7 @@ export function heuristicProducts(html: string, baseUrl: string): Product[] {
   const out: Product[] = []; const seenUrls = new Set<string>();
   // 1.136.0 — first anchor per URL wins: cards with a media link AND a title
   // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
-  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = normalize(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' '))).match(PRICE_HINT_RE)?.[0] || ''); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' ')))); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
 export async function scrapeDetails(product: Product, selectors: Selectors): Promise<Product> {
   if (!product.url) return product;
@@ -659,7 +680,7 @@ export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='al
   }
   return{url:page.url,mode,selectors,evidence};
 }
-function extractSelectorValuesSync(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):string[]{const $=cheerio.load(html),values:string[]=[];$(selector).slice(0,50).each((_i,el)=>{const node=$(el);const raw=type==='link'?(node.attr('href')||node.find('a[href]').first().attr('href')||''):type==='image'?(node.attr('src')||node.attr('data-src')||node.find('img').first().attr('src')||node.find('img').first().attr('data-src')||''):node.text();const value=type==='text'?normalize(raw):absolute(raw,baseUrl);if(value)values.push(value.slice(0,1000))});return values}
+function extractSelectorValuesSync(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):string[]{const $=cheerio.load(html),values:string[]=[];let _nodes:cheerio.Cheerio<any>;try{_nodes=$(selector)}catch(error){throw invalidSelectorError(selector,error)}_nodes.slice(0,50).each((_i,el)=>{const node=$(el);const raw=type==='link'?(node.attr('href')||node.find('a[href]').first().attr('href')||''):type==='image'?(node.attr('src')||node.attr('data-src')||node.find('img').first().attr('src')||node.find('img').first().attr('data-src')||''):node.text();const value=type==='text'?normalize(raw):absolute(raw,baseUrl);if(value)values.push(value.slice(0,1000))});return values}
 async function extractSelectorValues(html:string,baseUrl:string,selector:string,type:'text'|'link'|'image'='text'):Promise<string[]>{return extractSelectorValuesSync(html,baseUrl,selector,type)}
 
 // ---------------------------------------------------------------------------
@@ -692,6 +713,8 @@ export type ListSelectorVerification = {
   image: SelectorFieldEvidence;
   /** Container repeats and titles resolve inside most cards. */
   ok: boolean;
+  /** A selector that failed to compile (tagged message); counts are partial. */
+  error?: string;
 };
 const emptyVerification = (containerCount = 0): ListSelectorVerification => ({
   containerCount, cardsSampled: 0,
@@ -710,11 +733,12 @@ export function verifyListSelectors(html: string, baseUrl: string, selectors: Se
   let $: cheerio.CheerioAPI;
   try { $ = cheerio.load(html); } catch { return emptyVerification(); }
   let containerCount = 0, nodes: any[] = [];
-  try { const all = containerNodes($, container); containerCount = all.length; nodes = all.slice(0, 12).toArray(); } catch { return emptyVerification(); }
+  try { const all = containerNodes($, container); containerCount = all.length; nodes = all.slice(0, 12).toArray(); } catch (error) { return { ...emptyVerification(), error: error instanceof Error ? error.message : String(error) }; }
   if (!nodes.length) return emptyVerification(containerCount);
   const hits = { title: { count: 0, sample: '' }, price: { count: 0, sample: '' }, link: { count: 0, sample: '' }, image: { count: 0, sample: '' } };
   for (const element of nodes) {
     const root = $(element);
+    try {
     const title = firstText($, root, String(selectors.title || ''));
     if (title) { hits.title.count++; hits.title.sample ||= title.slice(0, 200); }
     const priceText = firstText($, root, String(selectors.price || ''));
@@ -724,6 +748,7 @@ export function verifyListSelectors(html: string, baseUrl: string, selectors: Se
     let imageValue = firstAttr($, root, String(selectors.image || ''), ['data-src', 'data-lazy-src', 'data-original', 'src']);
     if (!imageValue) imageValue = (firstAttr($, root, String(selectors.image || ''), ['srcset']).split(',')[0] || '').trim().split(/\s+/)[0];
     if (absolute(imageValue, baseUrl)) { hits.image.count++; hits.image.sample ||= absolute(imageValue, baseUrl).slice(0, 200); }
+    } catch (error) { return { containerCount, cardsSampled: nodes.length, ...hits, ok: false, error: error instanceof Error ? error.message : String(error) }; }
   }
   // Title is mandatory (extraction skips title-less cards); price/link/image
   // are reported but do not fail verification — "without price" products are
@@ -734,6 +759,25 @@ export function verifyListSelectors(html: string, baseUrl: string, selectors: Se
 
 const PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
 const THOUSANDS_RE = /[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
+const THOUSANDS_GLOBAL_RE = new RegExp(THOUSANDS_RE.source, 'g');
+/** Card text holds a price when a currency hint OR a bare thousands-grouped
+ * number («۵۲۵٬۰۰۰» with no تومان, the barfbox.ir layout) is present. */
+function chunkHasPriceText(plainText: string): boolean {
+  return PRICE_HINT_RE.test(plainText) || THOUSANDS_RE.test(plainText);
+}
+/**
+ * Python parity (scraper4.py extract_price): a currency word wins, but a bare
+ * thousands-grouped number is still a price — the longest digit run wins.
+ */
+function heuristicPriceText(plainText: string): string {
+  const hint = plainText.match(PRICE_HINT_RE)?.[0];
+  if (hint) return normalize(hint);
+  let best = '';
+  for (const m of plainText.matchAll(THOUSANDS_GLOBAL_RE)) {
+    if (m[0].replace(/[^\d۰-۹٠-٩]/g, '').length > best.replace(/[^\d۰-۹٠-٩]/g, '').length) best = m[0];
+  }
+  return normalize(best);
+}
 // Tatweel/kashida-styled prices (e.g. «تومــانـ») and zero-width
 // joiners defeat plain currency matching; strip ornamental format chars
 // before every price test/extraction.
@@ -802,30 +846,47 @@ export function discoverListSelectorsFromHtml(html: string, baseUrl: string): Li
       } catch { /* next candidate */ }
     }
   }
-  let method: ListDiscoveryMethod = selectors.container && selectors.title ? 'curated' : 'none';
+  const curatedSelectors = { ...selectors };
+  const curatedEvidence = { ...evidence };
+  let structuralSelectors: Partial<Selectors> | null = null;
+  let structuralEvidence: Record<string, unknown> = {};
   if (!selectors.container || !selectors.title) {
     try {
       const structural = inferStructuralListSelectors(html, baseUrl);
       if (structural) {
+        structuralSelectors = { ...structural.selectors };
+        structuralEvidence = { ...structural.evidence };
         for (const [key, value] of Object.entries(structural.selectors)) {
           if (value && !(selectors as any)[key]) {
             (selectors as any)[key] = value;
             (evidence as any)[key] = { ...((structural.evidence as any)[key] || {}), via: 'structural' };
           }
         }
-        method = method === 'curated' ? 'mixed' : 'structural';
       }
     } catch { /* structural pass is best-effort */ }
   }
-  // Final gate: a container that does not repeat, or titles that do not resolve
-  // INSIDE the cards, would be saved as fact — reject such proposals outright.
+  // Final gate, best-of ranking: curated candidates match page-wide (an 'h2'
+  // page heading wins 'title'), while structural selectors are card-scoped —
+  // merging both can poison a good structural container with a bad curated
+  // title (barfbox.ir: 12 good cards vetoed by 2 page headings). Verify the
+  // merged set first, then each pass alone; the first set whose titles
+  // resolve INSIDE the cards wins, so a stale stowaway can never veto a
+  // working set.
+  const mergedMethod: ListDiscoveryMethod = !structuralSelectors ? 'curated'
+    : (curatedSelectors.container && curatedSelectors.title ? 'mixed' : 'structural');
+  const candidates: Array<{ sel: Partial<Selectors>; ev: Record<string, unknown>; method: ListDiscoveryMethod }> = [
+    { sel: selectors, ev: evidence, method: mergedMethod },
+    ...(structuralSelectors ? [{ sel: structuralSelectors, ev: structuralEvidence, method: 'structural' as ListDiscoveryMethod }] : []),
+    { sel: curatedSelectors, ev: curatedEvidence, method: 'curated' },
+  ];
   let containerCount = 0;
-  if (selectors.container && selectors.title) {
-    const verified = verifyListSelectors(html, baseUrl, { ...DEFAULT_SELECTORS, ...selectors } as Selectors);
+  for (const candidate of candidates) {
+    if (!candidate.sel.container || !candidate.sel.title) continue;
+    const verified = verifyListSelectors(html, baseUrl, { ...DEFAULT_SELECTORS, ...candidate.sel } as Selectors);
     containerCount = verified.containerCount;
-    if (!verified.ok) return { selectors: {}, evidence: {}, method: 'none', containerCount };
+    if (verified.ok) return { selectors: candidate.sel, evidence: candidate.ev, method: candidate.method, containerCount };
   }
-  return { selectors, evidence, method, containerCount };
+  return { selectors: {}, evidence: {}, method: 'none', containerCount };
 }
 
 /**
@@ -954,8 +1015,9 @@ function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[
 }
 export async function testSelector(url: string, selector: string, type = 'text'): Promise<{ count: number; values: string[] }> {
   const { text, url: final } = await safeText(url, 4_000_000); const $ = cheerio.load(text); const values: string[] = [];
-  $(selector).slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
-  return { count: $(selector).length, values };
+  let nodes: cheerio.Cheerio<any>; try { nodes = $(selector); } catch (error) { throw invalidSelectorError(selector, error); }
+  nodes.slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
+  return { count: nodes.length, values };
 }
 
 /**
@@ -999,6 +1061,18 @@ const countMatches = (html: string, re: RegExp): number => {
  * engine's own products, and turns both into Persian why/why-partial reasons
  * and a next-step hint. Twin: worker-src/scraper.ts diagnoseBenchmarkEngine.
  */
+/**
+ * Normalize any invalid-selector failure (tagged at the throw site, or a raw
+ * engine message that leaked through) into the one diagnosis reason, so the
+ * report names the breakage instead of blaming the container. Twin: worker.
+ */
+function invalidSelectorMessage(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  if (!msg) return '';
+  if (msg.startsWith('سلکتور نامعتبر')) return msg;
+  if (/attribute selector|didn't terminate|not a valid selector|unknown pseudo/i.test(msg)) return `سلکتور نامعتبر: ${msg}`;
+  return '';
+}
 export async function diagnoseBenchmarkEngine(
   engine: ExtractionEngine, html: string, baseUrl: string, selectors: Selectors,
   products: Product[], error = ''
@@ -1047,7 +1121,11 @@ export async function diagnoseBenchmarkEngine(
     candidates = containers;
     signals.containers = containers; signals.titles = titles; signals.prices = prices; signals.links = links; signals.images = images;
     const containerSel = String((selectors as any)?.container || '').trim();
-    if (!containerSel) {
+    const badSelector = invalidSelectorMessage(error) || verified?.error || '';
+    if (badSelector) {
+      dropReasons.push(badSelector);
+      hint = 'یکی از سلکتورهای ذخیره‌شده خراب است؛ آن را اصلاح کنید یا «پیشنهاد خودکار سلکتورها» را بزنید تا سلکتورهای سالم ساخته شوند.';
+    } else if (!containerSel) {
       dropReasons.push('سلکتور ظرف خالی است؛ موتور سلکتوری بدون ظرف نمی‌تواند کارتی پیدا کند.');
       hint = 'سلکتور ظرف را وارد کنید یا «پیشنهاد خودکار سلکتورها» را بزنید.';
     } else if (!containers) {
@@ -1127,7 +1205,7 @@ export async function diagnoseBenchmarkEngine(
     else if (!list.length) dropReasons.push('موتور محصولی استخراج نکرد.');
     hint = list.length ? `موتور ${list.length} محصول استخراج کرد${partialNote()}.` : (error || 'موتور محصولی استخراج نکرد؛ خطا را بررسی کنید.');
   }
-  if (error && !dropReasons.includes(error) && !list.length) dropReasons.unshift(error);
+  if (error && !dropReasons.includes(error) && !dropReasons.some(reason => reason.includes(error)) && !list.length) dropReasons.unshift(error);
   return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
 };
 

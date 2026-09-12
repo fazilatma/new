@@ -73,11 +73,15 @@ npm test
    نسخهٔ خلاصه‌شده (چند کارت + اسکریپت‌ها + متاها) در
    `worker-tests/fixtures/<shop>-cards.html` بگذار.
 2. `node scripts/lab-probe.mjs <shop>-cards.html` را اجرا کن و خرابی گزارش‌شده
-   را بازتولید کن (مثلاً `heuristic: 0 products` یا `priceHints: 0`).
+   را بازتولید کن (مثلاً `heuristic: 0 products` یا `priceHints: 0`)؛ با
+   `--selectors '{...}'` سلکتورهای پروفایل گزارش‌شده را هم تزریق کن و با
+   `--python` خروجی Node را با پایپ‌لاین پایتون (`py-auto-extract`) مقایسه کن.
 3. اصلاح را **روی هر دو twin** انجام بده (`worker-src/scraper.ts` و
    `render-src/scraper.ts`) و دوباره پروب بگیر تا خروجی کامل شود.
-4. رفتار درست را در `worker-tests/engine-diagnosis.test.mjs` قفل کن
-   (استخراج + سیگنال‌های diagnosis، روی هر دو twin).
+4. رفتار درست را در یک فایل تست تازه (`worker-tests/<shop>-report.test.mjs`)
+   قفل کن (استخراج + discovery + سیگنال‌های diagnosis، روی هر دو twin)؛
+   اگر پایتون+bs4 در دسترس بود، همان فایل کراس‌چک `py-auto-extract` را هم
+   اجرا می‌کند وگرنه skip می‌شود.
 5. `npm test` را سبز کن، بعد commit و push.
 
 ## قراردادهای twinها (خواندن اجباری)
@@ -94,10 +98,10 @@ npm test
 
 - سندباکس/CI اینترنت خروجی ندارد؛ هرگز برای تست به سایت زنده تکیه نکن —
   فیکسچر تنها ورودی معتبر است.
-- twin رندر گارد SSRF دارد و `localhost` را هم رد می‌کند؛ پس استخراج رندر در
-  آزمایشگاه فقط از مسیر رشته (`heuristicProducts`، ‏`verifyListSelectors`،
-  ‏`discoverListSelectorsFromHtml`، ‏`diagnoseBenchmarkEngine`) تست می‌شود، نه
-  `scrapeListWithMeta` شبکه‌ای.
+- twin رندر گارد SSRF دارد و `localhost` را هم رد می‌کند؛ حلقهٔ موتور
+  (`scrapeListWithMeta`) فقط با باندل رندر + پلاگین esbuild که `./network.js`
+  را با `safeText` استاب عوض می‌کند تست می‌شود (نمونه:
+  `barfbox-report.test.mjs`)، نه با سرور محلی.
 - گیت موتورهای مرورگر (`browserEngineAvailable`) بدون مرورگر واقعی هم قابل
   پروب است: با `BROWSER_EXECUTABLE_PATH` ساختگی، خطا باید «تلاش برای اجرا»
   باشد نه پیام «مرورگر پیدا نشد».

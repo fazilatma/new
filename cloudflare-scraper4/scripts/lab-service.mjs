@@ -41,6 +41,7 @@ const deployerSrc = src('scripts/local-deployer-ui.mjs');
 check('deployer detects stale serving builds', deployerSrc.includes('function probeServingVersion(') && deployerSrc.includes('serving: servingState()') && deployerSrc.includes('/api/scraper/restart'));
 check('scraper reports boot identity', src('render-src/server.ts').includes('const BOOT_HEAD') && src('render-src/server.ts').includes('head: BOOT_HEAD'));
 check('deployer sweeps blind ports and retries EADDRINUSE once', deployer.includes('function portScanSummary(') && deployer.includes('DEPLOYER_PORT_SCAN_BLIND') && deployer.includes('retrying once') && deployer.includes('pkill -f render-dist/server'));
+check('selector engines tag invalid selectors and read bare prices', src('render-src/scraper.ts').includes('function invalidSelectorError(') && src('render-src/scraper.ts').includes('function heuristicPriceText(') && src('worker-src/scraper.ts').includes('function heuristicPriceText(') && src('worker-src/scraper.ts').includes('function invalidSelectorMessage('));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

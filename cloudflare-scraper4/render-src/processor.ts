@@ -97,6 +97,10 @@ export async function processOneJob(): Promise<boolean> {
         }
         if (scraped.usedEngine && list.length && !isManualListEngine(scraped.usedEngine)) { autoSelectorsAllowed=true; await applySelectorSuggestions(profile,url,'list',job,true); }
         if (!list.length) {
+          // The requested engine threw and every fallback came up empty: say
+          // WHAT broke (usually one bad saved selector) before the rescue
+          // below tries to repair it.
+          if (scraped.engineError) append(job, scraped.engineError, 'warning');
           // LAST-RESORT FALLBACK: the page was fetched but nothing came out of
           // it -- empty selectors, selectors that no longer match the site, or
           // an engine that found no cards. Before giving up, run the same

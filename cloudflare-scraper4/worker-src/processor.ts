@@ -123,6 +123,10 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       await saveProfile({...profile,updatedAt:new Date().toISOString()});
       append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
     }
+    // The requested engine threw and every fallback came up empty: say WHAT
+    // broke (usually one bad saved selector) before the rescue below tries
+    // to repair it.
+    if(!page.products.length&&page.engineError)append(job,page.engineError,'warning');
     // LAST-RESORT FALLBACK: the page was fetched but produced nothing. Before
     // failing the run, rediscover the selectors exactly like the "auto suggest"
     // button and retry this page once. onlyMissing=false because selectors that

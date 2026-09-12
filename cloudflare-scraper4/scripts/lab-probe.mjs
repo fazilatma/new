@@ -11,8 +11,13 @@
 //
 // Usage (from cloudflare-scraper4/):
 //   node scripts/lab-probe.mjs [fixture] [--file path/to/page.html] [--base URL]
+//     [--selectors '{"container":"...","title":"...","price":"...","link":"...","image":"..."}']
 //   node scripts/lab-probe.mjs patris-cards.html
 //   node scripts/lab-probe.mjs --file /tmp/shop-page.html --base https://shop.example/
+//   node scripts/lab-probe.mjs barfbox-cards.html --base https://barfbox.ir/ --selectors '{"container":"div.flex","title":"div.broken[attr"}'
+//   node scripts/lab-probe.mjs barfbox-cards.html --base https://barfbox.ir/ --python
+//     (also runs the Python pipeline — scripts/py-auto-extract.py — on the same
+//     HTML for a Node-vs-Python cross-check; needs python3 + beautifulsoup4)
 // ---------------------------------------------------------------------------
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
@@ -60,6 +65,11 @@ const htmlPath = fileArg || join(ROOT, 'worker-tests', 'fixtures', positional.en
 const baseArg = flag('--base');
 const BASE = baseArg || (htmlPath.includes('patris') ? 'https://www.mantoopatris.com/' : 'https://shop.example/');
 const SEL = { container: 'li.product', title: 'h2', price: '.price', link: 'a[href]', image: 'img' };
+const selArg = flag('--selectors');
+if (selArg) {
+  try { Object.assign(SEL, JSON.parse(selArg)); } catch { console.error('lab-probe: --selectors must be JSON'); process.exit(1); }
+  console.log('custom selectors:', JSON.stringify(SEL));
+}
 
 let html;
 try {
@@ -101,19 +111,56 @@ for (const [name, twin, heuristic, nextData, scriptJson] of [
     console.log(`${label}: ${items.length} products`);
     items.slice(0, 8).forEach((p, i) => console.log(short(p, i)));
   }
-  if (found.method !== 'none') {
+  const effective = selArg ? { ...SEL } : (found.method !== 'none' ? { ...SEL, ...found.selectors } : null);
+  if (effective) {
     if (name === 'worker') {
-      const cards = await twin.parseCards(html, BASE, found.selectors);
-      const full = cards.filter(p => p.price > 0 && p.image && p.title).length;
-      console.log(`selector(parseCards): ${cards.length} products, ${full} complete`);
-      cards.slice(0, 8).forEach((p, i) => console.log(short(p, i)));
+      let cards = [], runError = '';
+      try {
+        cards = await twin.parseCards(html, BASE, effective);
+        const full = cards.filter(p => p.price > 0 && p.image && p.title).length;
+        console.log(`selector(parseCards): ${cards.length} products, ${full} complete`);
+        cards.slice(0, 8).forEach((p, i) => console.log(short(p, i)));
+      } catch (e) { runError = e.message; console.log(`selector(parseCards): THREW ${runError}`); }
+      const dSel = await twin.diagnoseBenchmarkEngine('htmlrewriter', html, BASE, effective, cards, runError);
+      console.log('diag selector:', JSON.stringify(dSel.signals));
+      if (dSel.dropReasons?.length) console.log('  drops:', dSel.dropReasons.join(' / ').slice(0, 400));
+      console.log('  hint:', dSel.hint);
     } else {
-      const v = await twin.verifyListSelectors(html, BASE, { ...SEL, ...found.selectors });
-      console.log(`selector(verify): ok=${v.ok} containers=${v.containerCount} titles=${v.title?.count} prices=${v.price?.count} links=${v.link?.count} images=${v.image?.count}`);
+      try {
+        const v = await twin.verifyListSelectors(html, BASE, effective);
+        console.log(`selector(verify): ok=${v.ok} containers=${v.containerCount} titles=${v.title?.count} prices=${v.price?.count} links=${v.link?.count} images=${v.image?.count}${v.error ? ` error=${v.error}` : ''}`);
+      } catch (e) { console.log(`selector(verify): THREW ${e.message}`); }
+      let cards = [], runError = '';
+      try {
+        cards = await twin.scrapeListCheerioFromHtml(html, BASE, effective);
+        console.log(`selector(cheerio): ${cards.length} products`);
+        cards.slice(0, 8).forEach((p, i) => console.log(short(p, i)));
+      } catch (e) { runError = e.message; console.log(`selector(cheerio): THREW ${runError}`); }
+      const dSel = await twin.diagnoseBenchmarkEngine('cheerio', html, BASE, effective, cards, runError);
+      console.log('diag selector:', JSON.stringify(dSel.signals));
+      if (dSel.dropReasons?.length) console.log('  drops:', dSel.dropReasons.join(' / ').slice(0, 400));
+      console.log('  hint:', dSel.hint);
     }
   }
   const dHeu = await twin.diagnoseBenchmarkEngine('heuristic', html, BASE, SEL, heu);
   console.log('diag heuristic:', JSON.stringify(dHeu.signals));
   console.log('  hint:', dHeu.hint);
   if (dHeu.dropReasons?.length) console.log('  drops:', dHeu.dropReasons.join(' / ').slice(0, 300));
+}
+if (args.includes('--python')) {
+  const { spawnSync } = await import('node:child_process');
+  const pyArgs = [join(ROOT, 'scripts', 'py-auto-extract.py'), '--html-file', htmlPath, '--base', BASE, '--json'];
+  if (selArg) pyArgs.push('--selectors', selArg);
+  const py = spawnSync('python3', pyArgs, { encoding: 'utf8', timeout: 120000 });
+  console.log('=== python ===');
+  if (py.error) { console.log(`python: unavailable (${py.error.message})`); }
+  else if (py.status !== 0) { console.log(`python: unavailable (${(py.stderr || '').trim().split('\n').pop() || `exit ${py.status}`})`); }
+  else {
+    try {
+      const out = JSON.parse(py.stdout);
+      console.log(`python: ${out.products.length} products (selector_matches=${out.diag?.selector_matches ?? 0} dom_products=${out.diag?.dom_products ?? 0} parser=${out.diag?.parser ?? '?'})`);
+      out.products.slice(0, 8).forEach((pr, i) => console.log(`  #${i} [${pr.price || ''}] ${(pr.title || '').slice(0, 44)} | ${(pr.link || '').slice(0, 60)} | img:${pr.image ? 'yes' : 'NO'}`));
+      console.log(`discovered: ${out.discovered?.method} ok=${out.discovered?.ok} containers=${out.discovered?.containerCount} ${JSON.stringify(out.discovered?.selectors || {})}`);
+    } catch { console.log(`python: unparsable output (${py.stdout.slice(0, 120)})`); }
+  }
 }
