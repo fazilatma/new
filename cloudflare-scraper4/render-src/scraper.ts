@@ -289,6 +289,13 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     return '';
   };
   const pick = async (name: ExtractionEngine) => {
+    // 1.136.0 — skip browser engines in ~1ms when no browser is reachable
+    // instead of paying a doomed launch (tens of seconds each) on every
+    // zero-result page. An explicit choice still fails loudly with the fix.
+    if (BROWSER_ENGINES.has(name) && !browserEngineAvailable()) {
+      if (engine !== 'auto' && name === engine) throw new Error('مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.');
+      return [] as Product[];
+    }
     if (name === 'playwright') return scrapeListWithPlaywright(url, activeSelectors);
     if (name === 'puppeteer') return scrapeListWithPuppeteer(url, activeSelectors);
     if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, activeSelectors);
@@ -453,10 +460,88 @@ function walkObjects(value: any, baseUrl: string, out: Product[], depth = 0): vo
 function jsonLdProducts(html: string, baseUrl: string): Product[] { const out: Product[] = []; for (const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) { try { const data = JSON.parse(decodeHtml(m[1])); walkObjects(data, baseUrl, out); } catch {} } return dedupe(out); }
 function nextDataProducts(html: string, baseUrl: string): Product[] { const m = html.match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i); if (!m) return []; try { const out: Product[] = []; walkObjects(JSON.parse(decodeHtml(m[1])), baseUrl, out); return dedupe(out); } catch { return []; } }
 function meta(html: string, key: string): string { const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); return decodeHtml(html.match(new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${escaped}["'])[^>]*content=["']([^"']+)["'][^>]*>`, 'i'))?.[1] || ''); }
-function productContextChunk(html: string, index: number, anchor: string): string { let best = ''; for (const [tag, endTag] of [['article', '</article>'], ['li', '</li>'], ['tr', '</tr>'], ['div', '</div>']] as const) { const open = html.lastIndexOf('<' + tag, index); if (open < 0 || index - open > 1800) continue; const close = html.indexOf(endTag, index); if (close < 0 || close - open > 5000) continue; const chunk = html.slice(open, close + endTag.length); if (!best || chunk.length < best.length) best = chunk; } return best; }
+// True-ancestor matching on raw HTML (1.136.0): the nearest PRECEDING open
+// tag is often a sibling subtree, and the first close after the anchor often
+// ends a nested child — both built frankenchunks that clustered under the
+// wrong signature and failed verification. Walk the tag depth instead.
+function enclosingOpen(html: string, pos: number, tag: string, endTag: string): number {
+  let extra = 0, cursor = pos;
+  while (cursor > 0) {
+    const closeAt = html.lastIndexOf(endTag, cursor - 1), openAt = html.lastIndexOf('<' + tag, cursor - 1);
+    if (openAt < 0) return -1;
+    if (closeAt > openAt) { extra++; cursor = closeAt; continue; }
+    if (extra === 0) return openAt;
+    extra--; cursor = openAt;
+  }
+  return -1;
+}
+function matchingClose(html: string, openPos: number, tag: string, endTag: string): number {
+  const openEnd = html.indexOf('>', openPos);
+  if (openEnd < 0) return -1;
+  let depth = 1, cursor = openEnd + 1;
+  while (depth > 0) {
+    if (cursor - openPos > 6000) return -1;
+    const nextOpen = html.indexOf('<' + tag, cursor), nextClose = html.indexOf(endTag, cursor);
+    if (nextClose < 0) return -1;
+    if (nextOpen >= 0 && nextOpen < nextClose) { depth++; cursor = nextOpen + 1; }
+    else { depth--; if (depth === 0) return nextClose; cursor = nextClose + endTag.length; }
+  }
+  return -1;
+}
+function enclosingChunks(html: string, index: number): string[] {
+  // Ancestor article/li/tr/div slices, nearest-first (Python parity: the old
+  // scraper4.py climbed until the node held an image AND a price).
+  const out: string[] = []; let cursor = index;
+  for (let level = 0; level < 6 && cursor > 0; level++) {
+    let best = '', bestOpen = -1;
+    for (const [tag, endTag] of [['article', '</article>'], ['li', '</li>'], ['tr', '</tr>'], ['div', '</div>']] as const) {
+      const open = enclosingOpen(html, cursor, tag, endTag);
+      if (open < 0 || index - open > 1800) continue;
+      const end = matchingClose(html, open, tag, endTag);
+      if (end < 0 || end - open > 5000) continue;
+      const chunk = html.slice(open, end + endTag.length);
+      if (!best || chunk.length < best.length) { best = chunk; bestOpen = open; }
+    }
+    if (!best || bestOpen < 0) break;
+    out.push(best); cursor = bestOpen;
+  }
+  return out;
+}
+function productContextChunk(html: string, index: number, anchor: string): string {
+  void anchor;
+  const candidates = enclosingChunks(html, index);
+  if (!candidates.length) return '';
+  // Prefer the smallest ancestor that actually holds the card fields; nested
+  // cards (media link here, price two divs up) otherwise lose half their data.
+  return candidates.find(chunk => /<img\b/i.test(chunk) && PRICE_HINT_RE.test(chunk)) || candidates[0];
+}
 function metadataProduct(html: string, baseUrl: string): Product[] { const title = meta(html, 'og:title') || meta(html, 'twitter:title') || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ''); if (!title) return []; const ogType = (meta(html, 'og:type') || '').toLowerCase(), productUrl = absolute(meta(html, 'og:url') || baseUrl, baseUrl), priceText = meta(html, 'product:price:amount') || meta(html, 'og:price:amount') || '', image = absolute(meta(html, 'og:image') || meta(html, 'twitter:image'), baseUrl), price = numberFromText(priceText); if (!/(?:product|product.item)/i.test(ogType) || !priceText || price <= 0 || !image) return []; return [{ sourceKey: sourceKey(productUrl, title), title, price, priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }]; }
 function scriptJsonProducts(html: string, baseUrl: string): Product[] { const out: Product[] = []; for (const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)) { const body = decodeHtml(m[1]); if (!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body)) continue; for (const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)) { try { walkObjects(JSON.parse(j[1]), baseUrl, out); } catch {} } } return dedupe(out); }
-function heuristicProducts(html: string, baseUrl: string): Product[] { const out: Product[] = []; for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || !/(product|products|\/p\/|\/pd\/|kala|sku)/i.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]); const image = absolute(decodeHtml(chunk.match(/<img\b[^>]*(?:data-src|data-lazy-src|data-original|src)=["']([^"']+)["']/i)?.[1] || ''), baseUrl); const priceText = normalize(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0] || ''); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
+function chunkTitle(chunk: string): string {
+  // Last-resort title: longest non-price leaf text (1.136.0; tw-deep parity —
+  // the title span sits outside the media link, so h1-h4/alt/inner all miss).
+  let best = '';
+  for (const m of chunk.matchAll(/<(span|div|p|h5|h6|strong|b|em|li|td)\b[^>]*>([^<>]{6,160})<\/\1>/gi)) {
+    const text = normalize(decodeHtml(m[2] || ''));
+    if (text.length >= 6 && text.length > best.length && !looksLikePrice(text)) best = text;
+  }
+  return best;
+}
+function heuristicImage(chunk: string, baseUrl: string): string {
+  // data-* before src: a greedy alternation used to match the LAST attribute
+  // (often a placeholder src) and ship 1px gifs as product images (1.136.0).
+  const tag = chunk.match(/<img\b[^>]*>/i)?.[0] || '';
+  const dataSrc = tag.match(/\sdata-(?:src|lazy-src|lazyload|original|image)\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+  const srcAttr = (tag.match(/\ssrc(?:set)?\s*=\s*["']([^"']+)["']/i)?.[1] || '').split(',')[0].trim().split(/\s+/)[0];
+  const raw = decodeHtml(dataSrc || srcAttr);
+  if (!raw || /^(data:|blob:|javascript:|#)/i.test(raw) || /(?:placeholder|spacer|transparent|loading)(?:[-_.]|$)/i.test(raw)) return '';
+  return absolute(raw, baseUrl);
+}
+function heuristicProducts(html: string, baseUrl: string): Product[] {
+  const out: Product[] = []; const seenUrls = new Set<string>();
+  // 1.136.0 — first anchor per URL wins: cards with a media link AND a title
+  // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = normalize(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0] || ''); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
 export async function scrapeDetails(product: Product, selectors: Selectors): Promise<Product> {
   if (!product.url) return product;
@@ -751,7 +836,7 @@ function inferStructuralListSelectors(html: string, baseUrl: string): { selector
     const href = String($(anchor).attr('href') || '').trim();
     if (!href || href === '#' || /^javascript:/i.test(href)) continue;
     let current: any = anchor;
-    for (let depth = 0; depth < 3 && current; depth++) {
+    for (let depth = 0; depth < 6 && current; depth++) {
       const element = current;
       current = element.parent;
       const tag = String(element.tagName || '').toLowerCase();
@@ -814,11 +899,15 @@ function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[
     }).first();
     if (heading.length) titleSig = selectorForElement($, heading.get(0));
     else {
-      let bestLen = 0;
-      root.find('span,div,p,a,li,td,strong,b').slice(0, 120).each((_i, el) => {
+      // Ties go to the LATER (deeper/leaf) element: document order puts a
+      // wrapping link before the inner span holding the same title, and the
+      // wrapper also matches image-only siblings whose empty text then fails
+      // verification (1.136.0; mirrors the price tie-break below).
+      let bestLen = 0, bestIndex = -1;
+      root.find('span,div,p,a,li,td,strong,b').slice(0, 120).each((index, el) => {
         const text = normalize($(el).text());
-        if (text.length >= 15 && text.length <= 160 && text.length > bestLen && !looksLikePrice(text)) {
-          bestLen = text.length;
+        if (text.length >= 15 && text.length <= 160 && (text.length > bestLen || (text.length === bestLen && index > bestIndex)) && !looksLikePrice(text)) {
+          bestLen = text.length; bestIndex = index;
           titleSig = selectorForElement($, el);
         }
       });

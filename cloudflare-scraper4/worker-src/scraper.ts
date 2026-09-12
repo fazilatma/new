@@ -562,10 +562,46 @@ async function extractNextDataProducts(html:string,baseUrl:string):Promise<Produ
 function decodeHtml(value:string):string{return value.replace(/&quot;/g,'"').replace(/&#34;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}
 function stripHtml(value:string):string{return cleanText(decodeHtml(value.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')))}
 function metaContent(html:string,key:string):string{const escaped=key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');const re=new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${escaped}["'])[^>]*content=["']([^"']+)["'][^>]*>`,'i');return decodeHtml(html.match(re)?.[1]||'')}
-function productContextChunk(html:string,index:number,anchor:string):string{let best='';for(const [tag,endTag] of [['article','</article>'],['li','</li>'],['tr','</tr>'],['div','</div>']] as const){const open=html.lastIndexOf('<'+tag,index);if(open<0||index-open>1800)continue;const close=html.indexOf(endTag,index);if(close<0||close-open>5000)continue;const chunk=html.slice(open,close+endTag.length);if(!best||chunk.length<best.length)best=chunk}return best}
+// True-ancestor matching on raw HTML (1.136.0): the nearest PRECEDING open
+// tag is often a sibling subtree, and the first close after the anchor often
+// ends a nested child — both built frankenchunks that clustered under the
+// wrong signature and failed verification. Walk the tag depth instead.
+function enclosingOpen(html:string,pos:number,tag:string,endTag:string):number{
+  let extra=0,cursor=pos;
+  while(cursor>0){
+    const closeAt=html.lastIndexOf(endTag,cursor-1),openAt=html.lastIndexOf('<'+tag,cursor-1);
+    if(openAt<0)return -1;
+    if(closeAt>openAt){extra++;cursor=closeAt;continue}
+    if(extra===0)return openAt;
+    extra--;cursor=openAt;
+  }
+  return -1;
+}
+function matchingClose(html:string,openPos:number,tag:string,endTag:string):number{
+  const openEnd=html.indexOf('>',openPos);
+  if(openEnd<0)return -1;
+  let depth=1,cursor=openEnd+1;
+  while(depth>0){
+    if(cursor-openPos>6000)return -1;
+    const nextOpen=html.indexOf('<'+tag,cursor),nextClose=html.indexOf(endTag,cursor);
+    if(nextClose<0)return -1;
+    if(nextOpen>=0&&nextOpen<nextClose){depth++;cursor=nextOpen+1}
+    else{depth--;if(depth===0)return nextClose;cursor=nextClose+endTag.length}
+  }
+  return -1;
+}
+function enclosingChunks(html:string,index:number):string[]{const out:string[]=[];let cursor=index;for(let level=0;level<6&&cursor>0;level++){let best='',bestOpen=-1;for(const [tag,endTag] of [['article','</article>'],['li','</li>'],['tr','</tr>'],['div','</div>']] as const){const open=enclosingOpen(html,cursor,tag,endTag);if(open<0||index-open>1800)continue;const end=matchingClose(html,open,tag,endTag);if(end<0||end-open>5000)continue;const chunk=html.slice(open,end+endTag.length);if(!best||chunk.length<best.length){best=chunk;bestOpen=open}}if(!best||bestOpen<0)break;out.push(best);cursor=bestOpen}return out}
+function productContextChunk(html:string,index:number,anchor:string):string{void anchor;const candidates=enclosingChunks(html,index);if(!candidates.length)return'';return candidates.find(chunk=>/<img\b/i.test(chunk)&&PRICE_HINT_RE.test(chunk))||candidates[0]}
 export async function extractMetadataProduct(html:string,baseUrl:string):Promise<Product[]>{const title=metaContent(html,'og:title')||metaContent(html,'twitter:title')||stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'');if(!title)return[];const ogType=(metaContent(html,'og:type')||'').toLowerCase(),priceText=metaContent(html,'product:price:amount')||metaContent(html,'og:price:amount')||'',url=canonicalUrl(metaContent(html,'og:url')||baseUrl,baseUrl),image=imageUrl(metaContent(html,'og:image')||metaContent(html,'twitter:image'),baseUrl),price=numberFromText(priceText);if(!/(?:product|product.item)/i.test(ogType)||!priceText||price<=0||!image)return[];return finalizeFound([{sourceKey:'',title,price,priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()}],baseUrl)}
 async function extractScriptJsonProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)){const body=decodeHtml(m[1].trim());if(!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body))continue;for(const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)){try{walkObjects(JSON.parse(j[1]),baseUrl,out)}catch{}}}return finalizeFound(out,baseUrl)}
-export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||!/(product|products|\/p\/|\/pd\/|kala|sku)/i.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2]);const image=imageUrl(decodeHtml(chunk.match(/<img\b[^>]*(?:data-src|data-lazy-src|data-original|src)=["']([^"']+)["']/i)?.[1]||''),baseUrl);const priceText=cleanText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0]||'');if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
+function chunkTitle(chunk:string):string{let best='';for(const m of chunk.matchAll(/<(span|div|p|h5|h6|strong|b|em|li|td)\b[^>]*>([^<>]{6,160})<\/\1>/gi)){const text=cleanText(decodeHtml(m[2]||''));if(text.length>=6&&text.length>best.length&&!looksLikePrice(text))best=text}return best}
+function heuristicImage(chunk:string,baseUrl:string):string{
+  const tag=chunk.match(/<img\b[^>]*>/i)?.[0]||'';
+  const dataSrc=tag.match(/\sdata-(?:src|lazy-src|lazyload|original|image)\s*=\s*["']([^"']+)["']/i)?.[1]||'';
+  const srcAttr=(tag.match(/\ssrc(?:set)?\s*=\s*["']([^"']+)["']/i)?.[1]||'').split(',')[0].trim().split(/\s+/)[0];
+  return imageUrl(decodeHtml(dataSrc||srcAttr),baseUrl);
+}
+export async function extractHeuristicProducts(html:string,baseUrl:string):Promise<Product[]>{const out:Product[]=[];const seenUrls=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)){const url=canonicalUrl(decodeHtml(m[1]),baseUrl);if(!url||seenUrls.has(url)||!/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url))continue;const chunk=productContextChunk(html,m.index||0,m[0]);if(!chunk)continue;const title=stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1]||'')||cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1]||''))||stripHtml(m[2])||chunkTitle(chunk);const image=heuristicImage(chunk,baseUrl);const priceText=cleanText(chunk.match(/[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{1,}\s*(?:تومان|ریال|IRR|USD|EUR|GBP|€|\$|£)/i)?.[0]||'');if(!title||title.length<3||!image||!priceText||numberFromText(priceText)<=0)continue;seenUrls.add(url);out.push({sourceKey:'',title,price:numberFromText(priceText),priceText,url,image,images:image?[image]:[],sku:'',shortDesc:'',longDesc:'',brand:'',stock:undefined,weight:undefined,category:'',tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:baseUrl,scrapedAt:new Date().toISOString()})}return finalizeFound(out,baseUrl)}
 
 /** Runs the same network, list parser and detail parser used by real jobs, but never writes or syncs products. */
 export async function diagnoseExtraction(profile:Profile,urlOverride=''){
@@ -871,12 +907,12 @@ function contextChunks(html:string,index:number,anchorOpen:string):string[]{
   const close=html.indexOf('</a>',index);
   if(close>index&&close-index<6000)chunks.push(html.slice(index,close+4));
   let cursor=index;
-  for(let depth=0;depth<2;depth++){
+  for(let depth=0;depth<4;depth++){
     let best='',bestOpen=-1;
     for(const [tag,endTag] of [['article','</article>'],['li','</li>'],['tr','</tr>'],['div','</div>']] as const){
-      const open=html.lastIndexOf('<'+tag,cursor-1);
+      const open=enclosingOpen(html,cursor,tag,endTag);
       if(open<0||cursor-open>1800)continue;
-      const end=html.indexOf(endTag,cursor);
+      const end=matchingClose(html,open,tag,endTag);
       if(end<0||end-open>5000)continue;
       const chunk=html.slice(open,end+endTag.length);
       if(!best||chunk.length<best.length){best=chunk;bestOpen=open}
@@ -968,12 +1004,12 @@ function deriveStructuralFieldSelectors(sampleChunks:string[]):{title:string;pri
         titleSig=selectorForTagClasses(tag,classOf(heading[2]||''));
       }
     }else{
-      let bestLen=0;
-      const considerTitle=(tag:string,attrs:string,rawInner:string)=>{
+      let bestLen=0,bestIndex=-1;
+      const considerTitle=(tag:string,attrs:string,rawInner:string,index:number)=>{
         const text=stripHtml(rawInner);
-        if(text.length>=15&&text.length<=160&&text.length>bestLen&&!looksLikePrice(text)){bestLen=text.length;titleSig=selectorForTagClasses(tag,classOf(attrs))}
+        if(text.length>=15&&text.length<=160&&(text.length>bestLen||(text.length===bestLen&&index>bestIndex))&&!looksLikePrice(text)){bestLen=text.length;bestIndex=index;titleSig=selectorForTagClasses(tag,classOf(attrs))}
       };
-      for(const m of chunk.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([^<>]{15,160})<\/\1>/gi))considerTitle(m[1],m[2]||'',m[3]||'');
+      for(const m of chunk.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([^<>]{15,160})<\/\1>/gi))considerTitle(m[1],m[2]||'',m[3]||'',m.index??0);
       // Inline-wrapped titles (`<p class="name"><a>…</a></p>`): the tolerant
       // pass sees through inline markup but skips block wrappers. The chunk
       // root itself is excluded — its text is the whole card.
@@ -982,7 +1018,7 @@ function deriveStructuralFieldSelectors(sampleChunks:string[]):{title:string;pri
         const inner=m[3]||'';
         if(!/[<>]/.test(inner))continue;
         if(BLOCK_TAG_RE.test(inner))continue;
-        considerTitle(m[1],m[2]||'',inner);
+        considerTitle(m[1],m[2]||'',inner,m.index??0);
       }
     }
     if(titleSig){
