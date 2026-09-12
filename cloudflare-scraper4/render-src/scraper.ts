@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { safeText } from './network.js';
 import type { ExtractionEngine, Product, Profile, Selectors } from './types.js';
@@ -181,6 +182,10 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
 export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number;
   /** Absolute URL of the 'next page' link, when a next-selector is configured. */
   nextUrl?:string};
+const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright']);
+/** Last browser-engine failure, so callers can explain a skipped engine. */
+let lastBrowserError='';
+export function lastBrowserEngineError():string{return lastBrowserError}
 const RENDER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
 const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','cheerio','playwright','puppeteer','crawlee_playwright'];
@@ -247,15 +252,53 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       // the requested engine so an all-empty run still reports what was asked.
     }catch(error){
       if(engine!=='auto'&&name===engine)throw error;
+      if(BROWSER_ENGINES.has(name))lastBrowserError=`${name}: ${error instanceof Error?error.message.split('\n')[0]:String(error)}`;
     }
   }
   return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink()};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto'): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine)).products; }
 
+/**
+ * Finds a Chromium to drive. `.npmrc` deliberately skips the bundled browser
+ * download (it is ~300 MB and breaks free hosting tiers), so without this the
+ * browser engines always threw "Executable doesn't exist" and — in auto mode —
+ * were silently skipped, which looks like they are simply never used.
+ * A system Chromium is the normal answer on Termux, a VPS and a desktop.
+ */
+const SYSTEM_BROWSERS = [
+  '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable', '/snap/bin/chromium',
+  '/data/data/com.termux/files/usr/bin/chromium',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+];
+let cachedSystemBrowser: string | null | undefined;
+function systemBrowser(): string | undefined {
+  if (cachedSystemBrowser !== undefined) return cachedSystemBrowser || undefined;
+  cachedSystemBrowser = null;
+  for (const candidate of SYSTEM_BROWSERS) {
+    try { if (existsSync(candidate)) { cachedSystemBrowser = candidate; break; } } catch { /* keep looking */ }
+  }
+  return cachedSystemBrowser || undefined;
+}
 function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined {
   const env = process.env;
-  return env.BROWSER_EXECUTABLE_PATH || (driver === 'playwright' ? env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH : env.PUPPETEER_EXECUTABLE_PATH) || env.CHROME_BIN || undefined;
+  return env.BROWSER_EXECUTABLE_PATH
+    || (driver === 'playwright' ? env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH : env.PUPPETEER_EXECUTABLE_PATH)
+    || env.CHROME_BIN
+    // Fall back to a browser already installed on the machine before giving up.
+    || systemBrowser();
+}
+/** True when some Chromium is reachable, so the engine list can say why not. */
+export function browserEngineAvailable(): boolean {
+  if (browserExecutable('playwright')) return true;
+  // Playwright downloads into a predictable cache; treat its presence as usable.
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    return Boolean(home) && existsSync(`${home}/.cache/ms-playwright`);
+  } catch { return false; }
 }
 function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {

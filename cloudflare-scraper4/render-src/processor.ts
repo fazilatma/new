@@ -1,5 +1,5 @@
 import { allProducts, claimJob, getJob, getProfile, getState, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
-import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct } from './scraper.js';
+import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { generateProductDescription, productNeedsEnrichment } from './ai.js';
@@ -97,6 +97,14 @@ export async function processOneJob(): Promise<boolean> {
               }
               append(job, 'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.', 'warning');
             }
+          }
+          const browserIssue = lastBrowserEngineError();
+          if (browserIssue && !browserEngineAvailable()) {
+            append(job, `موتورهای مرورگر اجرا نشدند چون هیچ مرورگری نصب نیست (${browserIssue}). `
+              + 'برای سایت‌های جاوااسکریپتی یکی را نصب کنید: npm run browsers:install '
+              + '(یا روی ترموکس pkg install chromium) و اگر مسیر غیرعادی است BROWSER_EXECUTABLE_PATH را تنظیم کنید.', 'warning');
+          } else if (browserIssue) {
+            append(job, `موتور مرورگر خطا داد: ${browserIssue}`, 'warning');
           }
           append(job, 'محصولی پیدا نشد', 'warning'); break;
         }

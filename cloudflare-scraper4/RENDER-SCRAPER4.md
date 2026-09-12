@@ -621,3 +621,22 @@ devDependencies.
   200 but the API is 401; without it both are 200.
 
 `NODE_VERSION` is also pinned to 22 so the built-in SQLite fallback stays usable.
+
+## 1.126.0 — the browser engines (Playwright / Puppeteer / Crawlee) actually run now
+
+They were in the extraction chain all along, but `.npmrc` deliberately skips the bundled browser
+download (~300 MB, which breaks free hosting tiers). Every launch therefore failed with
+`Executable doesn't exist`, and in `auto` mode that error was swallowed — so the engines looked as
+though they were never used.
+
+- **A browser already on the machine is found automatically.** Common Linux, Termux, macOS and
+  Windows paths are checked, so `pkg install chromium` or a normal Chrome install is enough.
+  `BROWSER_EXECUTABLE_PATH` still takes priority.
+- **When no browser exists the run says so.** Instead of a bare "no products found", the job log
+  reports that the browser engines could not start and prints the command that fixes it.
+- **The desktop and VPS install guides now install the browsers.** Previously only Termux and
+  Windows did, which is why those environments silently never used them.
+
+For a JavaScript-only shop, run `npm run browsers:install` once (or `pkg install chromium` on
+Termux). Cloudflare Workers and shared cPanel cannot run a browser at all — use the HTML engines
+there.

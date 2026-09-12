@@ -1668,3 +1668,39 @@ test('the Render blueprint is deployable as written', async () => {
   // node:sqlite needs 22.5+.
   assert.match(yaml, /NODE_VERSION[\s\S]{0,40}value:\s*22\./, 'Node 22 must be pinned');
 });
+
+// --- "make it use playwright/puppeteer". They were in the engine chain all
+// along, but .npmrc skips the bundled browser download, so every launch threw
+// "Executable doesn't exist" and auto mode swallowed it -- the engines looked
+// like they were never tried.
+test('browser engines find a system browser and explain themselves', async () => {
+  const scraper = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  // Auto-detect an already-installed Chromium instead of only trusting env vars.
+  assert.ok(scraper.includes('const SYSTEM_BROWSERS'), 'a system-browser search list must exist');
+  for (const path of ['/usr/bin/chromium', 'com.termux', 'Google Chrome'])
+    assert.ok(scraper.includes(path), `the search must cover ${path}`);
+  // An explicit override must still win.
+  const order = scraper.slice(scraper.indexOf('function browserExecutable'));
+  assert.ok(order.indexOf('BROWSER_EXECUTABLE_PATH') < order.indexOf('systemBrowser()'),
+    'the env override must be checked before auto-detection');
+
+  // A swallowed browser failure must at least be recorded.
+  assert.ok(scraper.includes('lastBrowserError'), 'browser failures must be remembered');
+  assert.ok(scraper.includes('export function browserEngineAvailable('), 'availability must be reportable');
+  assert.ok(/if\(BROWSER_ENGINES\.has\(name\)\)lastBrowserError=/.test(scraper),
+    'only browser engines should set the browser error');
+
+  // And surfaced where the user actually looks.
+  const processor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(processor.includes('lastBrowserEngineError()'), 'the job log must read the reason');
+  assert.ok(processor.includes('browsers:install'), 'and tell the user how to fix it');
+
+  // The environments that CAN run a browser must install one.
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const groups = JSON.parse(dashboard.match(/const INSTALL_COMMAND_GROUPS=(\[[\s\S]*?\]);\n/)[1]);
+  for (const key of ['desktop', 'vps', 'termux', 'windows-powershell']) {
+    const group = groups.find(g => g.key === key);
+    assert.ok(group, `install guide ${key} must exist`);
+    assert.ok(group.body.includes('browsers:install'), `${key} must install the browser engines`);
+  }
+});
