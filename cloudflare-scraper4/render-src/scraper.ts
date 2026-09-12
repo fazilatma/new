@@ -661,7 +661,7 @@ export function rescueRenderedProducts(html: string, baseUrl: string, firstLayer
   return heuristic.length ? { products: heuristic, layer: 'heuristic' } : { products: [], layer: 'none' };
 }
 // ---------------------------------------------------------------------------
-export type NetworkApiStats={responsesSeen:number;jsonBodies:number;bytes:number;parsed:number;endpoints:string[]};
+export type NetworkApiStats={responsesSeen:number;failedResponses:number;jsonBodies:number;bytes:number;parsed:number;endpoints:string[];failedEndpoints:string[]};
 /** Last network_api capture outcome; reset per scrapeListWithMeta call. */
 let lastNetworkApiStats:NetworkApiStats|null=null;
 export function lastNetworkApiStatsUsed():NetworkApiStats|null{return lastNetworkApiStats}
@@ -713,13 +713,15 @@ export function networkApiProducts(apiBodies: string[], baseUrl: string): Produc
  * rendered-HTML dump): set SCRAPER4_DUMP_API_DIR and re-run, then send the
  * files so the walker can be taught the shop's schema.
  */
-function dumpApiBodies(bodies: string[], endpoints: string[], url: string): string {
+function dumpApiBodies(bodies: string[], endpoints: string[], url: string, failedEndpoints: string[] = []): string {
   const dir = String(process.env.SCRAPER4_DUMP_API_DIR || '').trim();
-  if (!dir || !bodies.length) return '';
+  if (!dir || (!bodies.length && !failedEndpoints.length)) return '';
   try {
     mkdirSync(dir, { recursive: true });
     bodies.slice(0, 10).forEach((body, i) => writeFileSync(join(dir, `api-${i}.json`), String(body || '').slice(0, NETWORK_API_MAX_BODY_BYTES)));
-    writeFileSync(join(dir, 'api-endpoints.txt'), `url: ${url}\n` + endpoints.map((e, i) => `${i}: ${e}`).join('\n') + '\n');
+    const manifest = `url: ${url}\n` + endpoints.map((e, i) => `${i}: ${e}`).join('\n') + '\n'
+      + (failedEndpoints.length ? `failed:\n${failedEndpoints.map((e, i) => `${i}: ${e}`).join('\n')}\n` : '');
+    writeFileSync(join(dir, 'api-endpoints.txt'), manifest);
     console.log(`[scraper4] API bodies dumped: ${dir} (${bodies.length} bodies, ${url})`);
     return dir;
   } catch (error) {
@@ -733,8 +735,9 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
   try {
     const page = await browser.newPage({ locale: 'fa-IR' });
     const bodies: string[] = [];
-    let seenResponses = 0;
+    let seenResponses = 0, failedResponses = 0;
     const endpoints: string[] = [];
+    const failedEndpoints: string[] = [];
     let totalBytes = 0, done = false;
     // A radar on the Network tab: every XHR/fetch response is buffered,
     // bounded, and kept when it looks like JSON.
@@ -743,7 +746,12 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
       try {
         const req = response.request();
         const type = req.resourceType();
-        if ((type !== 'xhr' && type !== 'fetch') || !response.ok()) return;
+        if (type !== 'xhr' && type !== 'fetch') return;
+        if (!response.ok()) {
+          failedResponses++;
+          if (failedEndpoints.length < 20) failedEndpoints.push(`${response.status()} ${String(req.url() || '').slice(0, 140)}`);
+          return;
+        }
         seenResponses++;
         if (endpoints.length < 20) endpoints.push(String(req.url() || '').slice(0, 160));
         void (async () => {
@@ -770,10 +778,11 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
     await new Promise(resolve => setTimeout(resolve, NETWORK_API_SETTLE_MS));
     done = true;
     const products = networkApiProducts(bodies, page.url());
-    lastNetworkApiStats = { responsesSeen: seenResponses, jsonBodies: bodies.length, bytes: totalBytes, parsed: products.length, endpoints: endpoints.slice(0, 20) };
-    dumpApiBodies(bodies, endpoints, url);
-    console.log(`[scraper4] network_api: ${seenResponses} API responses seen, ${bodies.length} JSON bodies (${totalBytes} bytes), ${products.length} products parsed (${url})`);
+    lastNetworkApiStats = { responsesSeen: seenResponses, failedResponses, jsonBodies: bodies.length, bytes: totalBytes, parsed: products.length, endpoints: endpoints.slice(0, 20), failedEndpoints: failedEndpoints.slice(0, 20) };
+    dumpApiBodies(bodies, endpoints, url, failedEndpoints);
+    console.log(`[scraper4] network_api: ${seenResponses} API responses seen, ${failedResponses} failed, ${bodies.length} JSON bodies (${totalBytes} bytes), ${products.length} products parsed (${url})`);
     if (endpoints.length) console.log(`[scraper4] network_api endpoints (${endpoints.length}): ${endpoints.join(' | ')}`);
+    if (failedEndpoints.length) console.log(`[scraper4] network_api failed (${failedEndpoints.length}): ${failedEndpoints.join(' | ')}`);
     return products;
   } finally { await browser.close(); }
 }
@@ -2101,7 +2110,8 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
       products.length ? `${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`
         : !browserAvailable ? 'موتور مرورگری انتخاب شده ولی مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود.'
         : browserProfile && result.browserLayer === 'none' ? 'مرورگر رندر کرد ولی هیچ لایه‌ای محصولی پیدا نکرد (نه سلکتور، نه structural، نه heuristic).'
-        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 ? 'مرورگر رندر کرد ولی هیچ درخواست API (XHR/fetch) دیده نشد.'
+        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses === 0 ? 'مرورگر رندر کرد ولی هیچ درخواست API (XHR/fetch) دیده نشد.'
+        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
       { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });

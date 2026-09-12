@@ -50,6 +50,7 @@ check('browser engines rescue rendered HTML structural-then-heuristic', src('ren
 check('diagnostic names the browser cause and flags deep pages', src('render-src/scraper.ts').includes('browserAvailable') && src('render-src/scraper.ts').includes('مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود') && src('render-src/scraper.ts').includes('بدون پارامتر صفحه') && src('worker-src/scraper.ts').includes('بدون پارامتر صفحه'));
 check('network_api engine sniffs XHR/fetch JSON via Playwright', src('render-src/scraper.ts').includes('export function networkApiProducts(') && src('render-src/scraper.ts').includes("page.on('response'") && src('render-src/scraper.ts').includes("name === 'network_api'") && src('render-src/server.ts').includes("'crawlee_playwright','network_api']"));
 check('network_api reports capture stats and dumps bodies', src('render-src/scraper.ts').includes('export type NetworkApiStats=') && src('render-src/scraper.ts').includes('SCRAPER4_DUMP_API_DIR') && src('render-src/scraper.ts').includes('walkApiObjects(JSON.parse(raw), baseUrl, out)'));
+check('network_api counts failed responses with statuses', src('render-src/scraper.ts').includes('failedResponses++') && src('render-src/scraper.ts').includes('response.status()') && src('render-src/scraper.ts').includes('failedResponses === 0'));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

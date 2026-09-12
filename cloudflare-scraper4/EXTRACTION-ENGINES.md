@@ -62,10 +62,12 @@ parsing lives in `networkApiProducts` and is pinned by `worker-tests/network-api
 Snappshop-shaped fixture.
 
 Since 1.148.0 every run reports capture stats (`networkApiStats`: responses seen, JSON bodies, bytes, parsed
-products, endpoint list) on the result and in the diagnostic details; a zero-product run therefore says whether the
-page made no API calls at all or made calls whose schema yielded nothing. Setting `SCRAPER4_DUMP_API_DIR` keeps the
-first captured bodies plus an endpoint manifest, the same forensics workflow the 1.145.0 rendered-HTML dump added
-for silent DOM engines.
+products, endpoint list) on the result and in the diagnostic details; since 1.149.0 failed responses are counted too
+(`failedResponses`, `failedEndpoints` with HTTP statuses), so a zero-product run distinguishes all three outcomes —
+the page made no API calls at all, its calls all failed (bot-wall/403 shows up here), or its calls answered but
+their schema yielded nothing. Setting `SCRAPER4_DUMP_API_DIR` keeps the first captured bodies plus an endpoint
+manifest (failed URLs included), the same forensics workflow the 1.145.0 rendered-HTML dump added for silent DOM
+engines.
 
 ## Benchmark and the saved engine
 

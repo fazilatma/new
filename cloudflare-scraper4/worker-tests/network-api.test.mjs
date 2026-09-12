@@ -96,3 +96,14 @@ test('network_api: capture stats and the API dump are plumbed to the report', as
   assert.ok(scraper.includes('SCRAPER4_DUMP_API_DIR'), 'captured bodies must be dumpable for schema forensics');
   assert.ok(scraper.includes('api-endpoints.txt'), 'the dump must manifest its endpoint URLs');
 });
+
+test('network_api: failed API responses are counted, not silently skipped', async () => {
+  const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
+  assert.ok(scraper.includes('failedResponses:number'), 'the stats must count failed responses');
+  assert.ok(scraper.includes('failedEndpoints:string[]'), 'the stats must keep failed URLs with statuses');
+  assert.ok(scraper.includes('failedResponses++'), 'non-ok XHR/fetch must increment the failure counter');
+  assert.ok(scraper.includes('response.status()'), 'failed entries must record the HTTP status');
+  assert.ok(scraper.includes('failedResponses === 0'), 'the no-traffic summary must require zero failures too');
+  assert.ok(scraper.includes('درخواست API زد ولی همه ناموفق بودند'), 'all-failed runs must get their own summary');
+  assert.ok(scraper.includes('[scraper4] network_api failed ('), 'failed endpoints must be logged');
+});
