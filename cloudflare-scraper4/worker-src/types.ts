@@ -17,7 +17,6 @@ export type Selectors = {
   galleryMax?: number;
   gallerySkipFirst?: boolean;
   variations?: string;
-  /** Specification table/list: rows become name/value pairs. */
   specs?: string;
 };
 
@@ -25,7 +24,6 @@ export type GalleryConfig = {
   mode: 'off'|'auto'|'manual'|'number'|'variations';
   box: string;
   selectors: string;
-  /** For mode 'variations': the product-variations selector whose images become the gallery. */
   variations?: string;
   pattern: string;
   from: number;
@@ -34,7 +32,8 @@ export type GalleryConfig = {
   skip_first: boolean;
 };
 
-export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'structural' | 'playwright' | 'puppeteer' | 'crawlee_playwright' | 'network_api';
+/** Site-specific SnappShop Next.js catalogue engine is exposed separately from generic discovery. */
+export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'structural' | 'playwright' | 'puppeteer' | 'crawlee_playwright' | 'network_api' | 'snappshop';
 
 export type Profile = {
   id: string;
@@ -70,7 +69,6 @@ export type Profile = {
 };
 
 export type VariationGroup = { name: string; values: string[]; prices?: Record<string,number> };
-
 export type Product = {
   sourceKey: string;
   title: string;
@@ -88,16 +86,13 @@ export type Product = {
   category?: string;
   tags?: string;
   variations?: string[];
-  /** Specification rows scraped from the product page. */
   specs?: Array<{ name: string; value: string }>;
   variationGroups?: VariationGroup[];
   variationPrices?: Record<string,number>;
-  /** WooCommerce publication status selected during spreadsheet import. */
   destinationStatus?: 'draft' | 'publish' | 'pending' | 'private';
   sourcePage: string;
   scrapedAt: string;
 };
-
 export type Job = {
   id: string;
   profileId: string;
@@ -110,7 +105,6 @@ export type Job = {
   added: number;
   updated: number;
   failed: number;
-  /** Products skipped because the source had no usable price. */
   skippedNoPrice?: number;
   stopRequested: boolean;
   error: string | null;
@@ -120,14 +114,6 @@ export type Job = {
   finishedAt: string | null;
   updatedAt: string;
 };
-
 export type BackgroundMessage = { task: 'ai-test' | 'category-all' | 'dedup' | 'agent'; runId: string };
 export type JobMessage = { task?: 'job'; jobId: string } | BackgroundMessage;
-
-export const DEFAULT_SELECTORS: Selectors = {
-  container: 'li.product',
-  title: 'h2, h3, .woocommerce-loop-product__title',
-  price: '.price, .amount',
-  link: 'a[href]',
-  image: 'img'
-};
+export const DEFAULT_SELECTORS: Selectors = {container:'li.product',title:'h2, h3, .woocommerce-loop-product__title',price:'.price, .amount',link:'a[href]',image:'img'};
