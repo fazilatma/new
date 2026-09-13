@@ -131,6 +131,17 @@ returns the crossed-out OLD price on every discounted row; the sale price must b
 element selector (`[class*="productPrice__new"]`). Below-fold cards carry `image-fallback.svg` lazy
 placeholders instead of CDN URLs until scrolled into view.
 
+When fetch-based engines cannot see the shop at all (JS-only rendering, bot
+walls), derive the selectors where the page IS rendered: paste
+`tools/selector-injector.js` into the DevTools console (1.155.0). It finds the
+product grid on the live page, synthesises worker-safe CSS selectors with the
+same stability rules as the structural engine (volatile classes dropped,
+CSS-module hash tails stripped, no combinators or positional pseudo-classes),
+verifies every suggestion against the cards it found, and prints an importable
+profile JSON — failing loud in the console when a field has no trustworthy
+selector. Full usage (Persian): `SELECTOR-INJECTOR-FA.md`. A bookmarklet
+one-liner is built with `node scripts/make-bookmarklet.mjs`.
+
 ## Node.js-only browser engines
 
 These require the Node/Render/VPS runtime because Cloudflare Workers cannot launch Chromium:
