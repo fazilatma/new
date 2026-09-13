@@ -117,7 +117,10 @@ bypass the job processor and ignore the profile's page count):
 Since 1.152.0 a zero-product browser run also fingerprints what it rendered: the result carries a `renderedSnapshot`
 (page title, HTML/text lengths, a 500-character text prefix, script/link/image counts and the first script URLs),
 surfaced in the diagnostic as `snapshot`. A pasted report therefore shows whether Chromium met a bot-wall, an empty
-shell, or a real shop — no dump files or terminal steps needed.
+shell, or a real shop — no dump files or terminal steps needed. Since 1.153.0 the snapshot also records the landing
+(final URL, navigation HTTP status), and a navigation that never lands (`about:blank`) is retried once and then
+fails loud instead of parsing the empty document: a blank page previously masqueraded as a "silent shop" with zero
+API calls, which is exactly what Snappshop's 39-byte render turned out to be.
 
 ## Node.js-only browser engines
 

@@ -54,6 +54,7 @@ check('network_api counts failed responses with statuses', src('render-src/scrap
 check('poisoned product rows cannot blank the results page', src('worker-src/db.ts').includes('upsertProduct refused a non-object product') && src('render-src/db.ts').includes('upsertProduct refused a non-object product') && src('worker-src/dashboard.ts').includes("(data.products||[]).filter(p=>p&&typeof p==='object')"));
 check('network_api drains in-flight bodies and ranks product URLs', src('render-src/scraper.ts').includes('Promise.allSettled(pendingBodies)') && src('render-src/scraper.ts').includes('export function scoreUrl') && src('render-src/scraper.ts').includes('function isJsonish'));
 check('zero-product browser runs attach a rendered snapshot', src('render-src/scraper.ts').includes('export function renderedSnapshotFromHtml') && src('render-src/scraper.ts').includes('renderedSnapshot:lastRenderedSnapshot') && src('render-src/scraper.ts').includes('{ snapshot: result.renderedSnapshot }'));
+check('blank browser landings retry once, then fail loud', src('render-src/scraper.ts').includes('export function isBlankPageUrl') && src('render-src/scraper.ts').includes('retryResponse') && src('render-src/scraper.ts').includes('صفحهٔ خالی تحویل گرفت'));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

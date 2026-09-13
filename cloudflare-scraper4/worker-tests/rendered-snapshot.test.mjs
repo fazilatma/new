@@ -56,12 +56,37 @@ test('rendered snapshot: long pages are capped, not dumped whole', () => {
   assert.ok(snap.scriptSrcs.every(s => s.length <= 160), 'each src is truncated');
 });
 
+test('blank landings: an empty document is detected, never parsed as a shop', () => {
+  assert.equal(typeof render.isBlankPageUrl, 'function', 'the blank check must be exported for testing');
+  for (const blank of ['', '  ', 'about:blank', 'about:blank#blocked']) assert.equal(render.isBlankPageUrl(blank), true, JSON.stringify(blank) + ' must read as blank');
+  for (const landed of ['https://shop.test/x', 'chrome-error://chromewebdata/', 'data:text/html,x']) assert.equal(render.isBlankPageUrl(landed), false, landed + ' must read as landed');
+  assert.equal(render.BLANK_RENDER_HTML_MAX, 200, 'the empty-shell cutoff must stay small');
+});
+
+test('rendered snapshot: the landing (final URL, HTTP status) rides along', () => {
+  const snap = render.renderedSnapshotFromHtml(wallHtml, { finalUrl: 'https://shop.test/wall', httpStatus: 403 });
+  assert.equal(snap.finalUrl, 'https://shop.test/wall');
+  assert.equal(snap.httpStatus, 403);
+  const bare = render.renderedSnapshotFromHtml(wallHtml);
+  assert.equal(bare.finalUrl, '');
+  assert.equal(bare.httpStatus, 0);
+});
+
 test('rendered snapshot: every browser driver reports what it saw', async () => {
   const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
   assert.ok(scraper.includes('export function renderedSnapshotFromHtml'), 'the builder must be exported');
   assert.ok(scraper.includes('lastRenderedSnapshot=null;'), 'each run must reset the snapshot');
-  assert.equal(scraper.split('lastRenderedSnapshot=renderedSnapshotFromHtml(html);').length - 1, 3, 'all three DOM drivers must snapshot');
-  assert.ok(scraper.includes('renderedSnapshotFromHtml(await page.content())'), 'network_api must snapshot the rendered page too');
+  assert.equal(scraper.split('lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:').length - 1, 3, 'all three DOM drivers must snapshot with their landing');
+  assert.ok(scraper.includes('renderedSnapshotFromHtml(await page.content(), { finalUrl: page.url(), httpStatus: navStatus })'), 'network_api must snapshot the rendered page with its landing too');
   assert.ok(scraper.includes('renderedSnapshot:lastRenderedSnapshot'), 'the empty result must carry the snapshot');
   assert.ok(scraper.includes('{ snapshot: result.renderedSnapshot }'), 'the diagnostic must surface the snapshot');
+});
+
+test('blank landings: drivers retry once, then fail loud with a landing-aware summary', async () => {
+  const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
+  assert.equal(scraper.split('isBlankPageUrl(page.url())').length - 1, 7, 'all four drivers must detect blank landings');
+  assert.equal(scraper.split('retryResponse').length - 1, 6, 'the three goto drivers must retry once');
+  assert.ok(scraper.includes('به صفحه نرسید'), 'a blank landing after retry must fail loud, in Persian');
+  assert.ok(scraper.includes('navStatus'), 'the navigation HTTP status must be captured for forensics');
+  assert.ok(scraper.includes('صفحهٔ خالی تحویل گرفت'), 'a rendered-but-empty page must get its own summary');
 });

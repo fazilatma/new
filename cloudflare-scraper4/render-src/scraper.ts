@@ -612,6 +612,17 @@ function isAbortedNavigation(error: unknown): boolean {
   return message.includes('ERR_ABORTED');
 }
 /**
+ * 1.153.0 — a goto that never landed leaves the default blank document
+ * (`about:blank`, 39 bytes). Running parsers on it reports "silent shop"
+ * for what is really a failed navigation — detect it instead.
+ */
+export function isBlankPageUrl(u: string): boolean {
+  const s = String(u || '').trim().toLowerCase();
+  return !s || s === 'about:blank' || s.startsWith('about:blank#');
+}
+/** Rendered pages at or below this size are an empty shell, never a shop. */
+export const BLANK_RENDER_HTML_MAX = 200;
+/**
  * 1.142.0 — rendered-HTML dump for JS shops. The benchmark diagnoses the
  * FETCHED shell, but browser engines see the RENDERED page — when they find
  * nothing, nobody can tell whether the render was empty, bot-blocked, or just
@@ -665,23 +676,24 @@ export type NetworkApiStats={responsesSeen:number;failedResponses:number;jsonBod
 /** Last network_api capture outcome; reset per scrapeListWithMeta call. */
 let lastNetworkApiStats:NetworkApiStats|null=null;
 export function lastNetworkApiStatsUsed():NetworkApiStats|null{return lastNetworkApiStats}
-export type RenderedSnapshot={title:string;htmlLength:number;textLength:number;textPrefix:string;scripts:number;scriptSrcs:string[];links:number;images:number};
+export type RenderedSnapshot={title:string;htmlLength:number;textLength:number;textPrefix:string;scripts:number;scriptSrcs:string[];links:number;images:number;finalUrl:string;httpStatus:number};
 /**
  * 1.152.0 — a compact fingerprint of what a browser engine actually saw.
  * Zero-product browser runs attach it to the result, so a pasted diagnostic
  * carries the forensics (bot-wall? empty shell? real shop?) with no dump
  * files or terminal steps.
  */
-export function renderedSnapshotFromHtml(html:string):RenderedSnapshot{
+export function renderedSnapshotFromHtml(html:string,landing:{finalUrl?:string;httpStatus?:number}={}):RenderedSnapshot{
   const body=String(html||'');
-  const empty:RenderedSnapshot={title:'',htmlLength:body.length,textLength:0,textPrefix:'',scripts:0,scriptSrcs:[],links:0,images:0};
+  const finalUrl=String(landing.finalUrl||'').slice(0,200),httpStatus=Number(landing.httpStatus)||0;
+  const empty:RenderedSnapshot={title:'',htmlLength:body.length,textLength:0,textPrefix:'',scripts:0,scriptSrcs:[],links:0,images:0,finalUrl,httpStatus};
   if(!body)return empty;
   try{
     const $=cheerio.load(body);
     const scriptSrcs:string[]=[];
     $('script[src]').each((_,el)=>{ if(scriptSrcs.length<10)scriptSrcs.push(String($(el).attr('src')||'').slice(0,160)); });
     const snap:RenderedSnapshot={title:$('title').first().text().trim().slice(0,200),htmlLength:body.length,textLength:0,textPrefix:'',
-      scripts:$('script').length,scriptSrcs,links:$('a[href]').length,images:$('img').length};
+      scripts:$('script').length,scriptSrcs,links:$('a[href]').length,images:$('img').length,finalUrl,httpStatus};
     $('script,style,noscript,template').remove();
     const text=$('body').text().replace(/\s+/g,' ').trim();
     snap.textLength=text.length; snap.textPrefix=text.slice(0,500);
@@ -834,19 +846,33 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
         })());
       } catch { /* the listener must never break the page */ }
     });
+    let navStatus = 0;
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      navStatus = navResponse?.status() ?? 0;
     } catch (navigationError: unknown) {
       if (!isAbortedNavigation(navigationError)) throw navigationError;
       await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
     }
+    // An aborted navigation that never re-lands leaves a blank page; retry
+    // once so a redirect race cannot masquerade as a silent shop.
+    if (isBlankPageUrl(page.url())) {
+      try {
+        const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        navStatus = retryResponse?.status() ?? navStatus;
+      } catch (retryError: unknown) {
+        if (!isAbortedNavigation(retryError)) throw retryError;
+        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+      }
+    }
+    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
     // Settle window: lets in-flight API calls finish and flush their bodies.
     await new Promise(resolve => setTimeout(resolve, NETWORK_API_SETTLE_MS));
     // Drain: wait for every in-flight body read (bounded, so one stuck
     // response cannot hang the run) instead of dropping them at the bell.
     await Promise.race([Promise.allSettled(pendingBodies), new Promise(resolve => setTimeout(resolve, 5000))]);
-    try { lastRenderedSnapshot = renderedSnapshotFromHtml(await page.content()); } catch { /* content unreadable: the stats still stand */ }
+    try { lastRenderedSnapshot = renderedSnapshotFromHtml(await page.content(), { finalUrl: page.url(), httpStatus: navStatus }); } catch { /* content unreadable: the stats still stand */ }
     done = true;
     const products = networkApiProducts(bodies, page.url());
     lastNetworkApiStats = { responsesSeen: seenResponses, failedResponses, jsonBodies: bodies.length, bytes: totalBytes, parsed: products.length, endpoints: endpoints.slice(0, 20), failedEndpoints: failedEndpoints.slice(0, 20) };
@@ -870,18 +896,30 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
       // aborts a networkidle goto with net::ERR_ABORTED even though the
       // follow-up page loads fine. On abort, settle and read whatever
       // actually landed instead of failing the whole run.
+      let navStatus = 0;
       try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        navStatus = navResponse?.status() ?? 0;
       } catch (navigationError: unknown) {
         if (!isAbortedNavigation(navigationError)) throw navigationError;
         await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
       }
+      if (isBlankPageUrl(page.url())) {
+        try {
+          const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+          navStatus = retryResponse?.status() ?? navStatus;
+        } catch (retryError: unknown) {
+          if (!isAbortedNavigation(retryError)) throw retryError;
+          await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+        }
+      }
+      if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
       // Best-effort idle window for JavaScript rendering; pages with
       // ever-open connections (ads, analytics) may never idle.
       await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
       const finalUrl = page.url();
       const html = await page.content();
-      dumpRenderedHtml(html, page.url(), 'playwright');lastRenderedSnapshot=renderedSnapshotFromHtml(html);
+      dumpRenderedHtml(html, page.url(), 'playwright');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
       const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
       lastBrowserLayer = rescued.layer;
       console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
@@ -894,16 +932,28 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     const page = await browser.newPage();
     // Same resilience as the Playwright branch above: domcontentloaded goto,
     // survive ERR_ABORTED, best-effort idle window for rendering.
+    let navStatus = 0;
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      navStatus = navResponse?.status() ?? 0;
     } catch (navigationError: unknown) {
       if (!isAbortedNavigation(navigationError)) throw navigationError;
       await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
     }
+    if (isBlankPageUrl(page.url())) {
+      try {
+        const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        navStatus = retryResponse?.status() ?? navStatus;
+      } catch (retryError: unknown) {
+        if (!isAbortedNavigation(retryError)) throw retryError;
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+      }
+    }
+    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
     await page.waitForNetworkIdle({ timeout: 15_000 }).catch(() => undefined);
     const finalUrl = page.url();
     const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'puppeteer');lastRenderedSnapshot=renderedSnapshotFromHtml(html);
+    dumpRenderedHtml(html, page.url(), 'puppeteer');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
     const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] puppeteer extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
@@ -922,9 +972,10 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
   // (desktop-Linux glibc binaries vs Android's Bionic libc) anyway.
   const executablePath = browserExecutable('playwright');
   const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
+    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'crawlee');lastRenderedSnapshot=renderedSnapshotFromHtml(html);
+    dumpRenderedHtml(html, page.url(), 'crawlee');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:0});
     const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
@@ -2180,6 +2231,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     add('list-extraction', products.length > 0,
       products.length ? `${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`
         : !browserAvailable ? 'موتور مرورگری انتخاب شده ولی مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود.'
+        : result.renderedSnapshot && result.renderedSnapshot.htmlLength <= BLANK_RENDER_HTML_MAX ? `مرورگر به‌جای فروشگاه یک صفحهٔ خالی تحویل گرفت (فقط ${result.renderedSnapshot.htmlLength.toLocaleString('fa-IR')} بایت)؛ جزئیات در snapshot.`
         : browserProfile && result.browserLayer === 'none' ? 'مرورگر رندر کرد ولی هیچ لایه‌ای محصولی پیدا نکرد (نه سلکتور، نه structural، نه heuristic).'
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses === 0 ? 'مرورگر رندر کرد ولی هیچ درخواست API (XHR/fetch) دیده نشد.'
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
