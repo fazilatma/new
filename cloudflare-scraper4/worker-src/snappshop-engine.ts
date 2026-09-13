@@ -1,0 +1,76 @@
+import type { Product } from './types.js';
+
+/**
+ * SnappShop catalogue extractor.
+ *
+ * SnappShop is a Next.js application, so the catalogue can expose product data
+ * in the server-rendered payload as well as in JSON-LD. This engine deliberately
+ * does not depend on browser automation: it first walks structured Next.js
+ * payloads, then JSON-LD, then falls back to product-card HTML heuristics.
+ *
+ * The implementation is conservative: an object is accepted only when it has a
+ * plausible product title, positive price and product URL/image. This prevents
+ * category/navigation objects from becoming fake products.
+ */
+
+const PRODUCT_KEY_RE=/^(product|products|productList|items|results|catalog|catalogue|productsData|searchResults|hits|data|pageProps|props|initialState|__NEXT_DATA__)$/i;
+const URL_RE=/^https?:\/\/|^\//i;
+const NON_PRODUCT_PATH=/(?:^|\/)(category|categories|search|brand|brands|collection|collections|cart|checkout|login|account)(?:\/|$)/i;
+
+function decodeHtml(value:string):string{return String(value||'').replace(/&nbsp;|&#160;|&#xa0;/gi,' ').replace(/&quot;|&#34;|&#x22;/gi,'"').replace(/&#39;|&#x27;|&apos;/gi,"'").replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>')}
+function clean(value:string):string{return decodeHtml(value).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g,' ').replace(/\s+/g,' ').trim()}
+function number(value:unknown):number{const text=clean(String(value??'')).replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/[^0-9.,-]/g,'').replace(/,/g,'').replace(/٬/g,'');const n=Number(text.replace(/\.(?=.*\.)/g,''));return Number.isFinite(n)?n:0}
+function absolute(value:unknown,base:string):string{const raw=clean(String(value??''));if(!raw)return'';try{return new URL(raw,base).href}catch{return''}}
+function firstImage(value:unknown,base:string):string{if(typeof value==='string')return absolute(value,base);if(Array.isArray(value))for(const x of value){const v=firstImage(x,base);if(v)return v}if(value&&typeof value==='object'){const o=value as any;for(const k of ['url','src','href','original','large','medium','thumbnail']){const v=firstImage(o[k],base);if(v)return v}}return''}
+function productFromObject(obj:any,base:string):Product|null{
+  if(!obj||typeof obj!=='object'||Array.isArray(obj))return null;
+  const title=clean(String(obj.name??obj.title??obj.productName??obj.label??''));
+  const offer=Array.isArray(obj.offers)?obj.offers[0]:obj.offers??obj.offer??{};
+  const rawPrice=obj.finalPrice??obj.salePrice??obj.sellingPrice??obj.price??obj.priceText??offer.finalPrice??offer.price??offer.lowPrice??'';
+  const price=number(rawPrice);
+  const priceText=clean(String(rawPrice));
+  const rawUrl=obj.url??obj.href??obj.link??obj.webUrl??obj.canonicalUrl??obj.productUrl??obj.productLink??'';
+  const url=absolute(rawUrl,base);
+  const image=firstImage(obj.image??obj.images??obj.thumbnail??obj.cover??obj.imageUrl??obj.picture,base);
+  if(!title||title.length<3||price<=0||!url||!image||NON_PRODUCT_PATH.test(new URL(url).pathname))return null;
+  return {sourceKey:'',title,price,priceText,url,image,images:[image],sku:clean(String(obj.sku??obj.code??obj.id??'')),shortDesc:clean(String(obj.shortDescription??obj.summary??'')),longDesc:clean(String(obj.description??'')),brand:clean(String(typeof obj.brand==='object'?obj.brand?.name:obj.brand??'')),stock:typeof obj.stock==='number'?obj.stock:undefined,weight:typeof obj.weight==='number'?obj.weight:undefined,category:clean(String(typeof obj.category==='object'?obj.category?.name:obj.category??'')),tags:'',variations:[],variationGroups:[],variationPrices:{},sourcePage:base,scrapedAt:new Date().toISOString()};
+}
+
+function walk(value:any,base:string,out:Product[],seen:Set<string>,depth=0):void{
+  if(!value||depth>14||out.length>500)return;
+  if(Array.isArray(value)){for(const item of value)walk(item,base,out,seen,depth+1);return}
+  if(typeof value!=='object')return;
+  const product=productFromObject(value,base);
+  if(product){const key=product.url||`${product.title}|${product.price}`;if(!seen.has(key)){seen.add(key);out.push(product)}}
+  for(const [key,child] of Object.entries(value)){
+    if(PRODUCT_KEY_RE.test(key)||/product|catalog|result|item|hit|listing|search|shop|store/i.test(key))walk(child,base,out,seen,depth+1);
+  }
+}
+
+function finalize(products:Product[]):Product[]{const seen=new Set<string>();return products.filter(p=>{const key=p.url||`${p.title}|${p.price}`;if(seen.has(key))return false;seen.add(key);return true})}
+
+/** Extracts SnappShop products from a server-rendered Next.js catalogue page. */
+export function extractSnappShopProducts(html:string,baseUrl:string):Product[]{
+  const out:Product[]=[];const seen=new Set<string>();
+  const next=html.match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if(next){try{walk(JSON.parse(decodeHtml(next[1])),baseUrl,out,seen)}catch{/* malformed payload: continue with JSON-LD */}}
+  for(const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
+    try{const parsed=JSON.parse(decodeHtml(match[1]));const values=Array.isArray(parsed)?parsed:[parsed];for(const value of values)walk(value,baseUrl,out,seen)}catch{/* malformed JSON-LD is ignored */}
+  }
+  // Last-resort card extraction for pages where Next.js payload is minimized.
+  for(const match of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,3500}?)<\/a>/gi)){
+    const url=absolute(match[1],baseUrl);if(!url||NON_PRODUCT_PATH.test(new URL(url).pathname))continue;
+    const chunk=match[0];
+    const title=clean(chunk.replace(/<[^>]+>/g,' '));
+    const imageMatch=chunk.match(/<(?:img|source)\b[^>]*(?:src|data-src|data-lazy-src)=["']([^"']+)["']/i);
+    const image=firstImage(imageMatch?.[1]||'',baseUrl);
+    const priceMatch=chunk.match(/([0-9۰-۹][0-9۰-۹,٬.\s]{2,})\s*(?:تومان|تومن|ریال)/i);
+    const price=number(priceMatch?.[1]||'');
+    if(!image||!price||title.length<3)continue;
+    const p:Product={sourceKey:'',title:title.slice(0,300),price,priceText:clean(priceMatch?.[0]||String(price)),url,image,images:[image],sourcePage:baseUrl,scrapedAt:new Date().toISOString()};
+    if(!seen.has(url)){seen.add(url);out.push(p)}
+  }
+  return finalize(out);
+}
+
+export function isSnappShopUrl(value:string):boolean{try{return new URL(value).hostname.toLowerCase().endsWith('snappshop.ir')}catch{return false}}
