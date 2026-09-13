@@ -16,7 +16,7 @@ export type Selectors = {
   specs?: string;
 };
 
-export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'structural' | 'playwright' | 'puppeteer' | 'crawlee_playwright' | 'network_api';
+export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'structural' | 'playwright' | 'puppeteer' | 'crawlee_playwright' | 'network_api' | 'snappshop';
 
 export type Profile = {
   id: string;
