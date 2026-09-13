@@ -601,7 +601,7 @@ class NextLinkHandler {
 }
 type EngineResult={products:Product[];usedEngine:ExtractionEngine;engineError?:string};
 const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','structural','network_api']);
-const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
+const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['snappshop','jsonld','next_data','script_json','heuristic','metadata'];
 const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter','cheerio']);
 const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
@@ -649,6 +649,7 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
   if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). ${engine==='structural'?'Cloudflare Worker موتور DOM (cheerio) ندارد؛ از heuristic استفاده کنید.':'Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.'}`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
     if(name==='htmlrewriter'||name==='cheerio')return parseCards(html,baseUrl,selectors);
+    if(name==='snappshop')return extractSnappShopProducts(html,baseUrl);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);
     if(name==='next_data')return extractNextDataProducts(html,baseUrl);
     if(name==='metadata')return extractMetadataProduct(html,baseUrl);
