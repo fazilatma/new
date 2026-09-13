@@ -1,0 +1,53 @@
+name: Integrate SnappShop extraction engine
+
+on:
+  push:
+    branches:
+      - arena/01a09468-new-ui-redesign
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: contains(github.event.head_commit.message, 'Integrate SnappShop extraction engine') == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Patch Worker scraper and Start dropdown
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/','');
+            const getFile = async path => {
+              const r = await github.rest.repos.getContent({owner,repo,path,ref:branch});
+              if(Array.isArray(r.data)) throw new Error(`${path} is a directory`);
+              return {sha:r.data.sha,text:Buffer.from(r.data.content,'base64').toString('utf8')};
+            };
+            const putFile = async (path, text, sha, message) => {
+              await github.rest.repos.createOrUpdateFileContents({owner,repo,path,message,branch,sha,content:Buffer.from(text,'utf8').toString('base64')});
+            };
+
+            const scraperPath='cloudflare-scraper4/worker-src/scraper.ts';
+            const scraper=await getFile(scraperPath);
+            let s=scraper.text;
+            if(!s.includes("SNAPPSHOP_ENGINE_V1")){
+              s=s.replace("import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';", "import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';\nimport { extractSnappShopProducts } from './snappshop-engine.js';\n// SNAPPSHOP_ENGINE_V1");
+              s=s.replace("const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];", "const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['snappshop','jsonld','next_data','script_json','heuristic','metadata'];");
+              s=s.replace("if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);", "if(name==='snappshop')return extractSnappShopProducts(html,baseUrl);\n    if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);");
+              await putFile(scraperPath,s,scraper.sha,'Integrate SnappShop extraction engine');
+            }
+
+            const dashboardPath='cloudflare-scraper4/worker-src/dashboard.ts';
+            const dashboard=await getFile(dashboardPath);
+            let d=dashboard.text;
+            if(!d.includes("['snappshop','SnappShop")){
+              const needle="['network_api','Network API sniffing — Node only']";
+              if(!d.includes(needle)) throw new Error('Dashboard extraction engine option anchor not found');
+              d=d.replace(needle, needle+",['snappshop','SnappShop — Next.js اختصاصی']");
+              await putFile(dashboardPath,d,dashboard.sha,'Integrate SnappShop engine in Start dropdown');
+            }
+
+            core.setOutput('done','true');
