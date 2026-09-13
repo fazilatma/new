@@ -431,7 +431,7 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
   browserLayer?:string;
   /** API-traffic capture stats — set only when the network_api engine ran. */
   networkApiStats?:NetworkApiStats};
-const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','network_api']);
+const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','network_api','snappshop_network']);
 /** Last browser-engine failure, so callers can explain a skipped engine. */
 let lastBrowserError='';
 export function lastBrowserEngineError():string{return lastBrowserError}
@@ -528,6 +528,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     if (name === 'puppeteer') return scrapeListWithPuppeteer(url, activeSelectors);
     if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, activeSelectors);
     if (name === 'network_api') return scrapeListWithNetworkApi(url);
+    if (name === 'snappshop_network') return scrapeListWithSnappshopNetwork(url);
     const { text, url: finalUrl } = await source();
     if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
     if (name === 'jsonld') return jsonLdProducts(text, finalUrl);
@@ -548,7 +549,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   for(const name of engineOrder(engine,master,autoFirst)){
     try{
       const products=dedupe(await pick(name));
-      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,...(BROWSER_ENGINES.has(name)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(name==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{})};
+      if(products.length)return{products,usedEngine:name,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,...(BROWSER_ENGINES.has(name)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...((name==='network_api'||name==='snappshop_network')&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{})};
       // The explicit engine ran and found nothing: fall through to the
       // remaining engines instead of returning an empty result, but remember
       // the requested engine so an all-empty run still reports what was asked.
@@ -560,7 +561,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   }
   if(!autoFirst&&firstError)throw firstError;
   const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(engine==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{}),...(BROWSER_ENGINES.has(engine)&&lastRenderedSnapshot?{renderedSnapshot:lastRenderedSnapshot}:{})};
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...((engine==='network_api'||engine==='snappshop_network')&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{}),...(BROWSER_ENGINES.has(engine)&&lastRenderedSnapshot?{renderedSnapshot:lastRenderedSnapshot}:{})};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
 
@@ -880,6 +881,102 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
     console.log(`[scraper4] network_api: ${seenResponses} API responses seen, ${failedResponses} failed, ${bodies.length} JSON bodies (${totalBytes} bytes), ${products.length} products parsed (${url})`);
     if (endpoints.length) console.log(`[scraper4] network_api endpoints (${endpoints.length}): ${endpoints.join(' | ')}`);
     if (failedEndpoints.length) console.log(`[scraper4] network_api failed (${failedEndpoints.length}): ${failedEndpoints.join(' | ')}`);
+    return products;
+  } finally { await browser.close(); }
+}
+
+// ---------------------------------------------------------------------------
+// Snappshop-specific network engine: intercepts API calls from snappshop.ir
+// and parses the product data from their Next.js API responses.
+// Uses the same network interception approach as network_api but filters
+// specifically for Snappshop API endpoints.
+// ---------------------------------------------------------------------------
+async function scrapeListWithSnappshopNetwork(url: string): Promise<Product[]> {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
+  try {
+    const page = await browser.newPage({ locale: 'fa-IR' });
+    const bodies: string[] = [];
+    const bodyScores: number[] = [];
+    const bodyBytes: number[] = [];
+    const pendingBodies: Promise<void>[] = [];
+    const weakestKeptIndex = () => { let w = -1; for (let i = 0; i < bodyScores.length; i++) if (w < 0 || bodyScores[i] < bodyScores[w]) w = i; return w; };
+    const minKeptScore = () => { const w = weakestKeptIndex(); return w < 0 ? Infinity : bodyScores[w]; };
+    let seenResponses = 0, failedResponses = 0;
+    const endpoints: string[] = [];
+    const failedEndpoints: string[] = [];
+    let totalBytes = 0, done = false;
+    // Snappshop-specific: filter for snappshop.ir API endpoints
+    const snappshopApiRe = /\/api\/v\d+\/|\/graphql|snappshop\.ir\/api/i;
+    
+    page.on('response', (response) => {
+      if (done) return;
+      try {
+        const req = response.request();
+        const type = req.resourceType();
+        if (type !== 'xhr' && type !== 'fetch') return;
+        if (!response.ok()) {
+          failedResponses++;
+          if (failedEndpoints.length < 20) failedEndpoints.push(`${response.status()} ${String(req.url() || '').slice(0, 140)}`);
+          return;
+        }
+        seenResponses++;
+        const apiUrl = String(req.url() || '');
+        // Only capture snappshop.ir API endpoints
+        if (!snappshopApiRe.test(apiUrl) && !apiUrl.includes('snappshop.ir')) return;
+        if (endpoints.length < 20) endpoints.push(apiUrl.slice(0, 160));
+        const apiScore = scoreUrl(apiUrl);
+        if (bodies.length >= NETWORK_API_MAX_RESPONSES && apiScore <= minKeptScore()) return;
+        pendingBodies.push((async () => {
+          try {
+            const buf = await response.body();
+            if (done) return;
+            if (buf.length < 50 || buf.length > NETWORK_API_MAX_BODY_BYTES) return;
+            const text = buf.toString('utf8');
+            if (!isJsonish(String(response.headers()?.['content-type'] || ''), text)) return;
+            if (totalBytes + buf.length > NETWORK_API_MAX_TOTAL_BYTES) return;
+            if (bodies.length < NETWORK_API_MAX_RESPONSES) {
+              bodies.push(text); bodyScores.push(apiScore); bodyBytes.push(buf.length); totalBytes += buf.length;
+            } else {
+              const weakest = weakestKeptIndex();
+              if (weakest >= 0 && apiScore > bodyScores[weakest]) {
+                totalBytes += buf.length - bodyBytes[weakest];
+                bodies[weakest] = text; bodyScores[weakest] = apiScore; bodyBytes[weakest] = buf.length;
+              }
+            }
+          } catch { /* non-bufferable response: skip */ }
+        })());
+      } catch { /* the listener must never break the page */ }
+    });
+    let navStatus = 0;
+    try {
+      const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      navStatus = navResponse?.status() ?? 0;
+    } catch (navigationError: unknown) {
+      if (!isAbortedNavigation(navigationError)) throw navigationError;
+      await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+    }
+    if (isBlankPageUrl(page.url())) {
+      try {
+        const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        navStatus = retryResponse?.status() ?? navStatus;
+      } catch (retryError: unknown) {
+        if (!isAbortedNavigation(retryError)) throw retryError;
+        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
+      }
+    }
+    if (isBlankPageUrl(page.url())) throw new Error(`\u0645\u0631\u0648\u0631\u06af\u0631 \u0628\u0647 \u0635\u0641\u062d\u0647 \u0646\u0631\u0633\u06cc\u062f\u061b \u067e\u0633 \u0627\u0632 \u0631\u0641\u062a\u0646 \u0628\u0647 \u0622\u062f\u0631\u0633\u060c \u0635\u0641\u062d\u0647 \u062e\u0627\u0646\u062f (${String(url).slice(0, 120)}).`);
+    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, NETWORK_API_SETTLE_MS));
+    await Promise.race([Promise.allSettled(pendingBodies), new Promise(resolve => setTimeout(resolve, 5000))]);
+    try { lastRenderedSnapshot = renderedSnapshotFromHtml(await page.content(), { finalUrl: page.url(), httpStatus: navStatus }); } catch { /* content unreadable: the stats still stand */ }
+    done = true;
+    const products = networkApiProducts(bodies, page.url());
+    lastNetworkApiStats = { responsesSeen: seenResponses, failedResponses, jsonBodies: bodies.length, bytes: totalBytes, parsed: products.length, endpoints: endpoints.slice(0, 20), failedEndpoints: failedEndpoints.slice(0, 20) };
+    dumpApiBodies(bodies, endpoints, url, failedEndpoints);
+    console.log(`[scraper4] snappshop_network: ${seenResponses} API responses seen, ${failedResponses} failed, ${bodies.length} JSON bodies (${totalBytes} bytes), ${products.length} products parsed (${url})`);
+    if (endpoints.length) console.log(`[scraper4] snappshop_network endpoints (${endpoints.length}): ${endpoints.join(' | ')}`);
+    if (failedEndpoints.length) console.log(`[scraper4] snappshop_network failed (${failedEndpoints.length}): ${failedEndpoints.join(' | ')}`);
     return products;
   } finally { await browser.close(); }
 }
@@ -2233,9 +2330,9 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
         : !browserAvailable ? 'موتور مرورگری انتخاب شده ولی مرورگری روی این دستگاه پیدا نشد؛ بدون آن هیچ رندری انجام نمی‌شود.'
         : result.renderedSnapshot && result.renderedSnapshot.htmlLength <= BLANK_RENDER_HTML_MAX ? `مرورگر به‌جای فروشگاه یک صفحهٔ خالی تحویل گرفت (فقط ${result.renderedSnapshot.htmlLength.toLocaleString('fa-IR')} بایت)؛ جزئیات در snapshot.`
         : browserProfile && result.browserLayer === 'none' ? 'مرورگر رندر کرد ولی هیچ لایه‌ای محصولی پیدا نکرد (نه سلکتور، نه structural، نه heuristic).'
-        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses === 0 ? 'مرورگر رندر کرد ولی هیچ درخواست API (XHR/fetch) دیده نشد.'
-        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
-        : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
+        : (profile.extractionEngine === 'network_api' || profile.extractionEngine === 'snappshop_network') && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses === 0 ? 'مرورگر رندر کرد ولی هیچ درخواست API (XHR/fetch) دیده نشد.'
+        : (profile.extractionEngine === 'network_api' || profile.extractionEngine === 'snappshop_network') && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
+        : (profile.extractionEngine === 'network_api' || profile.extractionEngine === 'snappshop_network') && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
       { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
