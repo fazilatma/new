@@ -1,0 +1,54 @@
+# Keep this name stable: the draft Queue bindings below are provisioned as
+# scraper4-cloudflare-jobs and scraper4-cloudflare-jobs-dlq.
+name = "scraper4-cloudflare"
+main = "worker-src/main.ts"
+compatibility_date = "2026-08-19"
+# Required so this Worker can fetch a proxy Worker on the same account.
+# Without it Cloudflare answers "error code: 1042" (404) before the proxy runs.
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = true
+
+# Declarative bindings use deterministic names but no immutable account IDs.
+# Wrangler creates missing resources and re-attaches existing resources by name,
+# which also makes retries safe after a partially completed deployment.
+[[d1_databases]]
+binding = "DB"
+database_name = "scraper4-cloudflare-db"
+migrations_dir = "migrations"
+
+# JOBS_DLQ is intentionally also a producer binding. This makes Wrangler
+# provision the DLQ before it installs the JOBS consumer configuration.
+[[queues.producers]]
+binding = "JOBS"
+queue = "scraper4-cloudflare-jobs"
+
+[[queues.producers]]
+binding = "JOBS_DLQ"
+queue = "scraper4-cloudflare-jobs-dlq"
+
+[[queues.consumers]]
+queue = "scraper4-cloudflare-jobs"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "scraper4-cloudflare-jobs-dlq"
+max_concurrency = 2
+
+# BACKUPS is intentionally omitted: enabling R2 requires a billing subscription.
+# /api/backup remains available as a downloadable JSON export without R2.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+WORKER_VERSION = "1.153.0"
+REQUEST_TIMEOUT_MS = "25000"
+MAX_RESPONSE_BYTES = "8000000"
+DETAIL_CONCURRENCY = "2"
+# Products enriched in parallel by the AI description generator. Keep it low on
+# the Free plan: each product costs one AI call inside the same invocation.
+AI_DESCRIPTION_CONCURRENCY = "2"
+JOB_CHUNK_SIZE = "10"
+
+[observability.logs]
+enabled = true
+invocation_logs = true
