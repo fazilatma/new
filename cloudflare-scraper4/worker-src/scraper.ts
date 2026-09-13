@@ -650,6 +650,7 @@ async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engi
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
     if(name==='htmlrewriter'||name==='cheerio')return parseCards(html,baseUrl,selectors);
     if(name==='snappshop')return extractSnappShopProducts(html,baseUrl);
+    if(name==='snappshop')return extractSnappShopProducts(html,baseUrl);
     if(name==='jsonld')return parseJsonLdProducts(html,baseUrl);
     if(name==='next_data')return extractNextDataProducts(html,baseUrl);
     if(name==='metadata')return extractMetadataProduct(html,baseUrl);
