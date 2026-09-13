@@ -600,7 +600,7 @@ class NextLinkHandler {
   element(element:HtmlElement):void{if(!this.url)this.url=canonicalUrl(firstAttribute(element,LINK_ATTRS),this.baseUrl)}
 }
 type EngineResult={products:Product[];usedEngine:ExtractionEngine;engineError?:string};
-const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','structural','network_api']);
+const NODE_ONLY_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','structural','network_api','snappshop_network']);
 const WORKER_DISCOVERY_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','metadata'];
 const WORKER_MANUAL_ENGINES=new Set<ExtractionEngine>(['htmlrewriter','cheerio']);
 const WORKER_AUTO_ENGINES:ExtractionEngine[]=[...WORKER_DISCOVERY_ENGINES,'htmlrewriter'];

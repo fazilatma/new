@@ -621,7 +621,7 @@ function normalizeProfile(raw: any): Profile {
   for (const key of ['container','title','price','link','image']) if (!selectors[key]) throw new Error(`selectors.${key} is required`);
   return { id: String(raw.id || idFromUrl(url.href)), name: String(raw.name || url.hostname), url: url.href, enabled: raw.enabled !== false,
     pages: Math.min(100,Math.max(0,Number(raw.pages)||0)), pagination: ['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(raw.pagination || raw.pagType) ? raw.pagination || raw.pagType : 'query_page',
-    extractionEngine: ['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','structural','playwright','puppeteer','crawlee_playwright','network_api'].includes(engine)?engine:'auto',
+    extractionEngine: ['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','structural','playwright','puppeteer','crawlee_playwright','network_api','snappshop_network'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue: String(raw.paginationValue || raw.pagVal || 'page'), selectors, titleSuffix: String(raw.titleSuffix || ''),
     priceMode: ['none','add','percent','multiply'].includes(raw.priceMode) ? raw.priceMode : 'none', priceValue: Number(raw.priceValue ?? raw.priceVal) || 0,

@@ -444,7 +444,7 @@ const RENDER_MANUAL_ENGINES=new Set<ExtractionEngine>(['cheerio']);
 // after the selector engine, not in RENDER_DISCOVERY_ENGINES: the Node auto
 // chain must mirror the Worker chain first (see the auto-order test), and the
 // Worker cannot run cheerio at all.
-const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','structural','cheerio','playwright','puppeteer','crawlee_playwright','network_api'];
+const RENDER_AUTO_ENGINES:ExtractionEngine[]=[...RENDER_DISCOVERY_ENGINES,'htmlrewriter','structural','cheerio','playwright','puppeteer','crawlee_playwright','network_api','snappshop_network'];
 function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):ExtractionEngine[]{
   const out:ExtractionEngine[]=[],add=(engine?:ExtractionEngine)=>{if(engine&&!out.includes(engine))out.push(engine)};
   if(!autoFirst&&requested!=='auto'){add(requested);return out}
