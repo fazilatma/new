@@ -1,138 +1,116 @@
 <!doctype html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Static Universal Deployer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <title>Universal Deployer — Scraper4</title>
   <style>
-    :root{color-scheme:dark;--bg:#0b1120;--panel:#111827;--muted:#94a3b8;--text:#e5e7eb;--accent:#38bdf8;--line:#334155}
-    body{margin:0;background:linear-gradient(160deg,#020617,#111827);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;line-height:1.45}
-    main{max-width:1100px;margin:auto;padding:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-    section,.card{background:rgba(17,24,39,.88);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 12px 30px #0005}
-    h1,h2{margin:.2rem 0 1rem}label{display:block;margin:.6rem 0 .2rem;color:#cbd5e1}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;background:#020617;color:var(--text);padding:10px;font:inherit}
-    textarea{min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}button{border:0;border-radius:10px;background:var(--accent);color:#00111a;padding:10px 14px;font-weight:700;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#334155;color:#e2e8f0}.muted{color:var(--muted);font-size:14px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:3px;color:#bae6fd}.warn{border-left:4px solid #f59e0b;padding-left:12px}.ok{border-left:4px solid #22c55e;padding-left:12px}code{background:#020617;border:1px solid var(--line);border-radius:6px;padding:1px 5px}.lib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px}.lib-card{border:1px solid var(--line);border-radius:14px;background:#07111f;padding:12px}.lib-card h3{margin:0 0 6px;color:#bae6fd}.lib-card small{color:var(--muted);display:block;margin-bottom:7px}.lib-card code{display:inline-block;margin:2px}
+    :root{color-scheme:dark;--bg:#050914;--panel:#0b1220;--panel2:#101a2d;--line:#1d2a40;--line2:#2b3b56;--text:#edf4ff;--muted:#8ea0ba;--accent:#62e6b5;--accent2:#5ca9ff;--danger:#ff7185;--warning:#ffca68;--shadow:0 24px 70px rgba(0,0,0,.38);--radius:20px}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0%,#12304a55 0,transparent 34%),radial-gradient(circle at 90% 10%,#164c4650 0,transparent 30%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;line-height:1.6}
+    button,input,select,textarea{font:inherit}button{cursor:pointer}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;padding:24px 18px;border-left:1px solid var(--line);background:#07101ce8;backdrop-filter:blur(20px);display:flex;flex-direction:column}.brand{display:flex;align-items:center;gap:12px;padding:4px 8px 28px}.logo{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#041017;font-weight:950;box-shadow:0 10px 28px #52dca744}.brand strong{font-size:16px}.brand small{display:block;color:var(--muted);font-size:11px}.nav{display:grid;gap:7px}.nav button{width:100%;text-align:right;border:1px solid transparent;background:transparent;color:#aebdd2;padding:11px 13px;border-radius:13px}.nav button:hover,.nav button.active{background:#112139;border-color:var(--line2);color:#fff}.side-note{margin-top:auto;padding:14px;border:1px solid var(--line);background:#0b1727;border-radius:16px;color:var(--muted);font-size:12px}.side-note b{color:var(--accent)}
+    main{width:min(1320px,100%);margin:auto;padding:28px 32px 56px}.topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:22px}.eyebrow{color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.12em}.topbar h1{margin:3px 0 5px;font-size:clamp(27px,4vw,42px);letter-spacing:-.04em}.topbar p{margin:0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line2);border-radius:12px;background:#101c2e;color:#dce8f8;padding:10px 14px;font-weight:750}.btn:hover{border-color:#47617f;transform:translateY(-1px)}.btn.primary{border-color:transparent;background:linear-gradient(135deg,var(--accent),#82d7ff);color:#031018}.btn.ghost{background:transparent}
+    .status{display:flex;align-items:center;gap:8px;border:1px solid #214a41;background:#09231f;color:#aef1dc;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:750;white-space:nowrap}.dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+    .hero{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:26px;background:linear-gradient(135deg,#0d1a2c,#0a1423 60%,#0c1f24);padding:26px;box-shadow:var(--shadow);margin-bottom:18px}.hero:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;left:-80px;top:-120px;background:#58e0ba12;filter:blur(8px)}.hero-inner{position:relative;z-index:1;display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center}.hero h2{margin:0 0 7px;font-size:23px}.hero p{margin:0;color:#9db0c9;max-width:760px}.hero-metrics{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}.metric{min-width:100px;padding:11px 14px;border:1px solid var(--line2);background:#07111dcc;border-radius:15px}.metric b{display:block;font-size:20px}.metric span{font-size:11px;color:var(--muted)}
+    .layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:18px}.panel{border:1px solid var(--line);background:linear-gradient(180deg,#0c1524,#0a1220);border-radius:var(--radius);padding:20px;box-shadow:0 12px 35px #0002}.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;margin-bottom:18px}.panel-head h3{margin:0;font-size:17px}.panel-head p{margin:3px 0 0;color:var(--muted);font-size:12px}.badge{padding:5px 9px;border-radius:999px;background:#122137;border:1px solid var(--line2);color:#a9bdd7;font-size:11px}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.field label{display:flex;justify-content:space-between;gap:8px;color:#b9c8dc;font-size:12px;margin:0 0 6px}.field label span{color:#657995}.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);outline:none;border-radius:12px;background:#060d18;color:var(--text);padding:11px 12px}.field input:focus,.field select:focus,.field textarea:focus{border-color:#41617f;box-shadow:0 0 0 3px #4b8bc01c}.field textarea{min-height:110px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;direction:ltr;text-align:left}.wide{grid-column:1/-1}.segmented{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.segmented button{border:1px solid var(--line);background:#08111e;color:#9db0c7;border-radius:10px;padding:9px;font-size:12px}.segmented button.active{background:#123025;border-color:#2b6758;color:#baf5e3}
+    .profile-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.profile-card{position:relative;border:1px solid var(--line);background:#08111e;border-radius:14px;padding:12px;text-align:right}.profile-card input{position:absolute;opacity:0}.profile-card label{display:block;cursor:pointer}.profile-card strong{display:block;font-size:13px}.profile-card small{display:block;color:var(--muted);font-size:10px;margin-top:2px}.profile-card:has(input:checked){border-color:#327d68;background:#0b211c;box-shadow:inset 0 0 0 1px #2b6758}.profile-card:has(input:checked) strong{color:#b7f5e2}
+    .package-summary{display:flex;gap:7px;flex-wrap:wrap}.chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:#08111d;border-radius:999px;padding:6px 9px;color:#a9bbd2;font-size:11px}.chip b{color:#fff}.install-grid{display:grid;gap:9px}.install-card{border:1px solid var(--line);background:#08111e;border-radius:14px;padding:12px}.install-card h4{margin:0 0 8px;font-size:12px}.install-card code{display:inline-block;color:#9dc4e8;background:#0c1727;border:1px solid #1b2a40;border-radius:7px;padding:3px 6px;margin:2px;direction:ltr}.notice{border-radius:14px;padding:13px 14px;border:1px solid #554622;background:#201b0d;color:#d9c997;font-size:12px}.notice b{color:#ffdb83}.safe{border-color:#214a41;background:#09231f;color:#a9e6d5}
+    .output{margin-top:18px}.output-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:12px}.tab{border:0;background:transparent;color:#71839b;padding:10px 12px;border-bottom:2px solid transparent}.tab.active{color:#eaf3ff;border-color:var(--accent)}.output-wrap{position:relative}.output textarea{width:100%;min-height:280px;border:1px solid var(--line);border-radius:14px;background:#030811;color:#bfe2ff;padding:16px;direction:ltr;text-align:left;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}.copy-float{position:absolute;left:10px;top:10px}
+    .footer{display:flex;justify-content:space-between;gap:15px;align-items:center;color:#63748c;font-size:11px;padding-top:18px}.kbd{border:1px solid var(--line2);border-bottom-width:2px;border-radius:6px;padding:2px 6px;color:#9db0c7}
+    @media(max-width:1000px){.shell{grid-template-columns:1fr}.sidebar{position:relative;height:auto;border-left:0;border-bottom:1px solid var(--line);padding:12px 16px}.brand{padding:2px 4px 10px}.nav{grid-template-columns:repeat(3,1fr)}.side-note{display:none}.hero-inner,.layout{grid-template-columns:1fr}.hero-metrics{justify-content:flex-start}.topbar{flex-direction:column}.actions{width:100%}}
+    @media(max-width:650px){main{padding:20px 14px 40px}.form-grid,.profile-cards{grid-template-columns:1fr}.nav{grid-template-columns:1fr 1fr}.hero{padding:19px}.panel{padding:15px}.metric{min-width:90px}.status{display:none}.topbar h1{font-size:29px}.actions .btn{flex:1}.footer{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
-<main>
-  <h1>Static Universal Deployer</h1>
-  <p class="muted">This offline HTML helper generates install commands, shell scripts, and deployment notes for Node.js, Next.js, and Cloudflare Worker projects. It runs entirely in the browser and does not need a server.</p>
-  <section class="warn">
-    <strong>Browser limitation:</strong> a plain HTML page cannot install packages or modify your local project automatically because browsers are sandboxed. It can safely generate downloadable scripts and commands that you run in Termux, VS Code terminal, Cloudflare, Vercel, Render, or a VPS.
-  </section>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">S4</div><div><strong>Scraper4</strong><small>Universal Deployer</small></div></div>
+    <nav class="nav" aria-label="ناوبری"><button class="active" onclick="scrollToId('config')">⚙️ تنظیمات</button><button onclick="scrollToId('libraries')">📦 کتابخانه‌ها</button><button onclick="scrollToId('output')">🚀 خروجی استقرار</button></nav>
+    <div class="side-note"><b>نسخه جدید رابط کاربری</b><br>پیکربندی، انتخاب پروفایل و تولید اسکریپت در یک جریان ساده‌تر. این ابزار همچنان کاملاً آفلاین اجرا می‌شود.</div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><div class="eyebrow">DEPLOYMENT CONTROL CENTER</div><h1>دیپلوی پروژه، بدون دردسر</h1><p>محیط اجرا و پروفایل استخراج را انتخاب کن؛ دستورها و فایل‌های لازم را همین‌جا بساز.</p></div>
+      <div class="actions"><span class="status"><i class="dot"></i> آفلاین و آماده</span><button class="btn ghost" onclick="resetForm()">بازنشانی</button><button class="btn primary" onclick="generate()">ساخت خروجی ↗</button></div>
+    </header>
 
-  <div class="grid" style="margin-top:16px">
-    <section>
-      <h2>Project</h2>
-      <label>Project name</label><input id="name" value="scraper4-cloudflare">
-      <label>Environment</label><select id="env">
-        <option value="termux-offline">Termux mobile, offline</option>
-        <option value="vscode">VS Code mobile/desktop</option>
-        <option value="cloudflare-worker">Cloudflare Worker</option>
-        <option value="vercel">Vercel</option>
-        <option value="render">Render</option>
-        <option value="vps">VPS server</option>
-      </select>
-      <label>Package manager</label><select id="pm"><option>npm</option><option>pnpm</option><option>yarn</option><option>bun</option></select>
-      <label>Build command</label><input id="build" value="npm run worker:build">
-      <label>Start command</label><input id="start" value="npm start">
-      <label>Port</label><input id="port" value="3000">
+    <section class="hero">
+      <div class="hero-inner"><div><h2>یک داشبورد، همه مسیرهای استقرار</h2><p>از Termux و VS Code تا Cloudflare، Vercel، Render و VPS. محدودیت‌های هر محیط در تولید دستورها لحاظ می‌شود.</p></div><div class="hero-metrics"><div class="metric"><b id="metricPackages">0</b><span>پکیج انتخابی</span></div><div class="metric"><b id="metricGroups">0</b><span>گروه فعال</span></div><div class="metric"><b id="metricEnv">Node</b><span>محیط فعلی</span></div></div></div>
     </section>
-    <section>
-      <h2>Scraping libraries</h2>
-      <label>Library profile</label><select id="profile">
-        <option value="minimal">minimal: edge parsers only</option>
-        <option value="edge">edge: Cloudflare-friendly extraction</option>
-        <option value="node" selected>node: general Node scraping</option>
-        <option value="browser">browser: Playwright/Puppeteer rendering</option>
-        <option value="full">full: all curated scraping libraries</option>
-      </select>
-      <p class="muted">Profiles are curated. Cloudflare Workers cannot run browser engines such as Playwright/Puppeteer. Proxy packages are included only for authorized networks, not for bypassing access controls.</p>
-      <div id="groups"></div>
+
+    <div class="layout">
+      <section class="panel" id="config">
+        <div class="panel-head"><div><h3>پیکربندی پروژه</h3><p>اطلاعات پایه‌ای که در اسکریپت استقرار استفاده می‌شود.</p></div><span class="badge">STEP 01</span></div>
+        <div class="form-grid">
+          <div class="field"><label>نام پروژه <span>Project name</span></label><input id="name" value="scraper4-cloudflare"></div>
+          <div class="field"><label>محیط اجرا <span>Runtime</span></label><select id="env"><option value="termux-offline">Termux موبایل / آفلاین</option><option value="vscode">VS Code</option><option value="cloudflare-worker">Cloudflare Worker</option><option value="vercel">Vercel</option><option value="render">Render</option><option value="vps">VPS Server</option></select></div>
+          <div class="field"><label>Package Manager</label><div class="segmented" id="pmButtons"><button data-pm="npm" class="active">npm</button><button data-pm="pnpm">pnpm</button><button data-pm="yarn">yarn</button></div><input id="pm" type="hidden" value="npm"></div>
+          <div class="field"><label>پروفایل استخراج <span>Scraping profile</span></label><select id="profile"><option value="minimal">Minimal — سبک</option><option value="edge">Edge — Cloudflare-friendly</option><option value="node" selected>Node — عمومی</option><option value="browser">Browser — رندر کامل</option><option value="full">Full — همه گزینه‌های منتخب</option></select></div>
+          <div class="field"><label>Build command</label><input id="build" value="npm run worker:build" dir="ltr"></div>
+          <div class="field"><label>Start command</label><input id="start" value="npm start" dir="ltr"></div>
+          <div class="field"><label>Port</label><input id="port" value="3000" inputmode="numeric" dir="ltr"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="libraries">
+        <div class="panel-head"><div><h3>کتابخانه‌های نصب</h3><p>بر اساس پروفایل انتخابی، لیست پکیج‌ها خودکار ساخته می‌شود.</p></div><span class="badge">STEP 02</span></div>
+        <div id="profileDescription" class="notice safe">پروفایل عمومی Node برای سرویس‌های معمول scraping مناسب است.</div>
+        <div style="height:12px"></div>
+        <div id="groups" class="install-grid"></div>
+        <div style="height:12px"></div>
+        <div class="package-summary" id="packageSummary"></div>
+      </section>
+    </div>
+
+    <section class="panel" style="margin-top:18px">
+      <div class="panel-head"><div><h3>کتابخانه‌های آماده پروژه</h3><p>وابسته به محیط انتخابی؛ برای دید سریع به اجزای قابل استفاده.</p></div><span class="badge" id="envBadge">NODE</span></div>
+      <div id="installedLibraries" class="install-grid"></div>
     </section>
-  </div>
 
-  <section style="margin-top:16px">
-    <h2>Installed libraries by type</h2>
-    <p class="muted">These are the libraries already included in the Scraper4 project, grouped by their role. Optional profiles above can generate extra install commands.</p>
-    <div id="installedLibraries" class="lib-grid"></div>
-  </section>
+    <section class="panel output" id="output">
+      <div class="panel-head"><div><h3>خروجی استقرار</h3><p>اسکریپت یا یادداشت deployment را بساز، کپی کن یا ذخیره کن.</p></div><span class="badge">STEP 03</span></div>
+      <div class="output-tabs"><button class="tab active" data-tab="script">install-generated.sh</button><button class="tab" data-tab="notes">deployment-notes.md</button></div>
+      <div class="output-wrap"><button class="btn copy-float" onclick="copyCurrent()">کپی</button><textarea id="out" spellcheck="false" aria-label="Generated output"></textarea></div>
+      <div class="actions" style="margin-top:10px"><button class="btn primary" onclick="generate()">بازسازی خروجی</button><button class="btn" onclick="downloadCurrent()">ذخیره فایل</button></div>
+    </section>
 
-  <section style="margin-top:16px">
-    <h2>Generated output</h2>
-    <button onclick="generate()">Generate</button>
-    <button class="secondary" onclick="copyOut()">Copy</button>
-    <button class="secondary" onclick="download('install-generated.sh',out.value)">Download shell script</button>
-    <button class="secondary" onclick="download('deployment-notes.md',notes())">Download notes</button>
-    <textarea id="out" spellcheck="false"></textarea>
-  </section>
-
-  <section class="ok" style="margin-top:16px">
-    <h2>Recommended safe SnappShop-like scraping flow</h2>
-    <p>Use an authorized normal network, respect robots.txt and terms, and prefer official or permitted APIs. For JavaScript-heavy shops, use a Node/browser discovery step to inspect allowed JSON responses, then map products with JSONPath or fall back to rendered DOM extraction.</p>
-  </section>
-</main>
+    <section class="notice safe" style="margin-top:18px"><b>نکته امنیتی:</b> از proxy، browser engine یا APIهای scraping برای دور زدن access control استفاده نکن. منابع مجاز، robots.txt و شرایط سرویس مقصد را رعایت کن. این ابزار فقط command و فایل کمکی تولید می‌کند و چیزی را مخفیانه نصب نمی‌کند.</section>
+    <footer class="footer"><span>Static Universal Deployer · Scraper4</span><span>میانبر: <span class="kbd">Generate</span> برای ساخت خروجی جدید</span></footer>
+  </main>
+</div>
 <script>
 const installedLibrariesByEnv={
- 'cloudflare-worker':[
-  ['Runtime / API',['Cloudflare Workers runtime','hono']],
-  ['Extraction / edge parsing',['HTMLRewriter','JSON-LD parser','__NEXT_DATA__ parser','metadata parser','inline-script JSON parser','heuristic product-card parser','linkedom-compatible selectors']],
-  ['Storage / queue',['Cloudflare D1','Cloudflare Queues','Cron Triggers','Web Crypto vault']],
-  ['Build bundle only',['wrangler','esbuild','typescript']]
- ],
- vscode:[
-  ['Runtime / API',['hono','@hono/node-server']],
-  ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
-  ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
-  ['Data import / backup',['read-excel-file','fflate']],
-  ['Storage',['pg','node:sqlite','Basalam SDK optional adapter']],
-  ['Build / deploy / types',['wrangler','esbuild','typescript','@types/node','@types/pg']]
- ],
- render:[
-  ['Runtime / API',['hono','@hono/node-server']],
-  ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
-  ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
-  ['Data import / backup',['read-excel-file','fflate']],
-  ['Storage',['pg','node:sqlite fallback']],
-  ['Build / deploy / types',['esbuild','typescript']]
- ],
- vps:[
-  ['System packages',['git','curl','nginx','build-essential','postgresql','nodejs']],
-  ['Node scraper libraries',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],
-  ['Storage',['PostgreSQL','node:sqlite fallback']]
- ],
- 'termux-offline':[
-  ['Termux system packages',['git','gh','openssh','nodejs-lts','python','make','clang','chromium']],
-  ['Node scraping runtime',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],
-  ['Storage',['node:sqlite','PostgreSQL optional']]
- ],
- vercel:[
-  ['Serverless-compatible',['Node runtime','hono','cheerio','linkedom','undici']],
-  ['Not installed for Vercel runtime',['Playwright runtime','Puppeteer runtime','long crawler workers']]
- ]
+ 'cloudflare-worker':[['Runtime / API',['Cloudflare Workers runtime','hono']],['Extraction / edge parsing',['HTMLRewriter','JSON-LD parser','__NEXT_DATA__ parser','metadata parser','inline-script JSON parser','heuristic product-card parser','linkedom-compatible selectors']],['Storage / queue',['Cloudflare D1','Cloudflare Queues','Cron Triggers','Web Crypto vault']],['Build bundle only',['wrangler','esbuild','typescript']]],
+ vscode:[['Runtime / API',['hono','@hono/node-server']],['Extraction / HTML parsing',['cheerio','linkedom','undici']],['Browser rendering / crawling',['playwright','puppeteer','crawlee']],['Data import / backup',['read-excel-file','fflate']],['Storage',['pg','node:sqlite','Basalam SDK optional adapter']],['Build / deploy / types',['wrangler','esbuild','typescript','@types/node','@types/pg']]],
+ render:[['Runtime / API',['hono','@hono/node-server']],['Extraction / HTML parsing',['cheerio','linkedom','undici']],['Browser rendering / crawling',['playwright','puppeteer','crawlee']],['Data import / backup',['read-excel-file','fflate']],['Storage',['pg','node:sqlite fallback']],['Build / deploy / types',['esbuild','typescript']]],
+ vps:[['System packages',['git','curl','nginx','build-essential','postgresql','nodejs']],['Node scraper libraries',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],['Storage',['PostgreSQL','node:sqlite fallback']]],
+ 'termux-offline':[['Termux system packages',['git','gh','openssh','nodejs-lts','python','make','clang','chromium']],['Node scraping runtime',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],['Storage',['node:sqlite','PostgreSQL optional']]],
+ vercel:[['Serverless-compatible',['Node runtime','hono','cheerio','linkedom','undici']],['Not installed for Vercel runtime',['Playwright runtime','Puppeteer runtime','long crawler workers']]]
 };
-const groups={
- edge:['htmlparser2','parse5','node-html-parser','linkedom','css-select','domutils','entities','he','jsonpath-plus','secure-json-parse'],
- node:['undici','got','axios','cheerio','jsdom','happy-dom','xpath','fontoxpath','html-metadata-parser','metascraper','metascraper-title','metascraper-image','metascraper-description','fast-xml-parser','xml2js','rss-parser','sitemap','csv-parse','papaparse','fast-csv','read-excel-file','exceljs','xlsx','sanitize-html','html-to-text','turndown','normalize-url'],
- browser:['playwright','puppeteer-core'],
- crawler:['crawlee','p-queue','bottleneck','robots-parser'],
- data:['jsonpath-plus','jmespath','object-scan','schema-dts','@mozilla/readability','unfluff'],
- media:['probe-image-size','image-size','file-type','pdf-parse','pdfjs-dist','mammoth'],
- locale:['persian-tools','jalaali-js','dayjs','slugify','xregexp'],
- proxy:['proxy-agent','https-proxy-agent','socks-proxy-agent','proxy-chain','user-agents']
-};
+const groups={edge:['htmlparser2','parse5','node-html-parser','linkedom','css-select','domutils','entities','he','jsonpath-plus','secure-json-parse'],node:['undici','got','axios','cheerio','jsdom','happy-dom','xpath','fontoxpath','html-metadata-parser','metascraper','metascraper-title','metascraper-image','metascraper-description','fast-xml-parser','xml2js','rss-parser','sitemap','csv-parse','papaparse','fast-csv','read-excel-file','exceljs','xlsx','sanitize-html','html-to-text','turndown','normalize-url'],browser:['playwright','puppeteer-core'],crawler:['crawlee','p-queue','bottleneck','robots-parser'],data:['jsonpath-plus','jmespath','object-scan','schema-dts','@mozilla/readability','unfluff'],media:['probe-image-size','image-size','file-type','pdf-parse','pdfjs-dist','mammoth'],locale:['persian-tools','jalaali-js','dayjs','slugify','xregexp'],proxy:['proxy-agent','https-proxy-agent','socks-proxy-agent','proxy-chain','user-agents']};
 const profiles={minimal:['edge'],edge:['edge','data','locale'],node:['edge','node','crawler','data','locale'],browser:['node','browser','crawler','data','locale'],full:['edge','node','browser','crawler','data','media','locale','proxy']};
-function uniq(a){return [...new Set(a)]}
-function pkgs(){return uniq(profiles[profile.value].flatMap(g=>groups[g]))}
-function addCmd(list){const s=list.join(' '),m=pm.value;return m==='pnpm'?`pnpm add ${s}`:m==='yarn'?`yarn add ${s}`:m==='bun'?`bun add ${s}`:`npm install ${s}`}
-function deployBlock(){const e=env.value,n=name.value,p=port.value,b=build.value,st=start.value;if(e==='termux-offline')return `pkg install -y nodejs-lts tar\n# Copy the project archive here first.\n${addCmd(pkgs())}\n${b}\n${st}`;if(e==='vscode')return `${addCmd(pkgs())}\n${b}\n${st}`;if(e==='cloudflare-worker')return `npm ci\n${addCmd(pkgs())}\nnpm run worker:test\nnpm run worker:deploy`;if(e==='vercel')return `npm ci\n${addCmd(pkgs())}\n${b}\nnpx vercel deploy --prod`;if(e==='render')return `# Render build command:\nnpm ci && ${addCmd(pkgs())} && ${b}\n# Render start command:\n${st}`;return `sudo apt-get update\nsudo apt-get install -y nodejs npm nginx\nnpm ci\n${addCmd(pkgs())}\n${b}\nPORT=${p} ${st}`}
-function generate(){out.value=`#!/usr/bin/env bash\nset -euo pipefail\n\n# Generated by Static Universal Deployer\n# Environment: ${env.value}\n# Scraping profile: ${profile.value}\n\n${deployBlock()}\n`}
-function notes(){return `# Deployment notes\n\nProject: ${name.value}\nEnvironment: ${env.value}\nScraping profile: ${profile.value}\n\nPackages:\n\n${pkgs().map(x=>`- ${x}`).join('\n')}\n\nInstall command:\n\n\`\`\`bash\n${addCmd(pkgs())}\n\`\`\`\n\nSecurity note: do not use proxies, browser engines, or scraping APIs to bypass access controls. Use authorized sources and respect robots.txt and terms.\n`}
-async function copyOut(){await navigator.clipboard.writeText(out.value)}
-function download(filename,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-function renderInstalledLibraries(){const list=installedLibrariesByEnv[env.value]||installedLibrariesByEnv.vscode;document.getElementById('installedLibraries').innerHTML=list.map(([type,items])=>`<div class="lib-card"><h3>${type}</h3><small>${items.length} items for ${env.value}</small>${items.map(x=>`<code>${x}</code>`).join(' ')}</div>`).join('')}
-function renderGroups(){document.getElementById('groups').innerHTML=Object.entries(groups).map(([k,v])=>`<div><span class="pill">${k}</span><span class="muted">${v.length} packages</span></div>`).join('')}
-profile.onchange=generate;env.onchange=()=>{renderInstalledLibraries();generate()};pm.onchange=generate;renderGroups();renderInstalledLibraries();generate();
+const descriptions={minimal:'حداقل وابستگی‌ها برای parsing در edge. مناسب وقتی حجم نصب باید پایین بماند.',edge:'تمرکز روی Cloudflare و استخراج سبک HTML/JSON؛ بدون browser engine سنگین.',node:'پروفایل عمومی Node برای scraping، parsing، crawling و پردازش داده.',browser:'برای پروژه‌هایی که rendering واقعی مرورگر لازم دارند؛ مناسب Node/VPS/Render.',full:'مجموعه کامل کتابخانه‌های منتخب؛ برای محیط‌های قدرتمندتر و توسعه آزمایشگاهی.'};
+const envLabels={'termux-offline':'Termux','vscode':'VS Code','cloudflare-worker':'Cloudflare','vercel':'Vercel','render':'Render','vps':'VPS'};
+let currentTab='script';
+const $=id=>document.getElementById(id), name=$('name'),env=$('env'),pm=$('pm'),profile=$('profile'),build=$('build'),start=$('start'),port=$('port'),out=$('out');
+function uniq(a){return [...new Set(a)]}function pkgs(){return uniq(profiles[profile.value].flatMap(g=>groups[g]))}
+function addCmd(list){const s=list.join(' '),m=pm.value;return m==='pnpm'?`pnpm add ${s}`:m==='yarn'?`yarn add ${s}`:`npm install ${s}`}
+function deployBlock(){const e=env.value,p=port.value,b=build.value,st=start.value;if(e==='termux-offline')return `pkg install -y nodejs-lts tar\n${addCmd(pkgs())}\n${b}\n${st}`;if(e==='vscode')return `${addCmd(pkgs())}\n${b}\n${st}`;if(e==='cloudflare-worker')return `npm ci\n${addCmd(pkgs())}\nnpm run worker:test\nnpm run worker:deploy`;if(e==='vercel')return `npm ci\n${addCmd(pkgs())}\n${b}\nnpx vercel deploy --prod`;if(e==='render')return `# Render build command:\nnpm ci && ${addCmd(pkgs())} && ${b}\n# Render start command:\n${st}`;return `sudo apt-get update\nsudo apt-get install -y nodejs npm nginx\nnpm ci\n${addCmd(pkgs())}\n${b}\nPORT=${p} ${st}`}
+function script(){return `#!/usr/bin/env bash\nset -euo pipefail\n\n# Generated by Scraper4 Universal Deployer\n# Project: ${name.value}\n# Environment: ${env.value}\n# Scraping profile: ${profile.value}\n\n${deployBlock()}\n`}
+function notes(){return `# Deployment notes\n\n**Project:** ${name.value}\n**Environment:** ${envLabels[env.value]}\n**Scraping profile:** ${profile.value}\n**Port:** ${port.value}\n\n## Packages\n\n${pkgs().map(x=>`- ${x}`).join('\n')}\n\n## Install command\n\n\`\`\`bash\n${addCmd(pkgs())}\n\`\`\`\n\n## Security\n\nUse authorized sources and respect robots.txt and terms. Do not use proxy/browser tooling to bypass access controls.\n`}
+function generate(){out.value=currentTab==='script'?script():notes();updateStats()}
+function updateStats(){const p=pkgs();$('metricPackages').textContent=p.length;$('metricGroups').textContent=profiles[profile.value].length;$('metricEnv').textContent=envLabels[env.value];$('envBadge').textContent=envLabels[env.value].toUpperCase();$('profileDescription').textContent=descriptions[profile.value]}
+function renderGroups(){const selected=profiles[profile.value];$('groups').innerHTML=selected.map(k=>`<div class="install-card"><h4>${k.toUpperCase()} <span style="color:#60748e;font-weight:400">· ${groups[k].length} packages</span></h4><div>${groups[k].map(x=>`<code>${x}</code>`).join('')}</div></div>`).join('');$('packageSummary').innerHTML=pkgs().map(x=>`<span class="chip">${x}</span>`).join('')}
+function renderInstalled(){const list=installedLibrariesByEnv[env.value]||installedLibrariesByEnv.vscode;$('installedLibraries').innerHTML=list.map(([type,items])=>`<div class="install-card"><h4>${type}</h4><div>${items.map(x=>`<code>${x}</code>`).join('')}</div></div>`).join('')}
+async function copyCurrent(){try{await navigator.clipboard.writeText(out.value);const b=document.querySelector('.copy-float');const old=b.textContent;b.textContent='کپی شد ✓';setTimeout(()=>b.textContent=old,1200)}catch(e){out.select();document.execCommand('copy')}}
+function downloadCurrent(){const filename=currentTab==='script'?'install-generated.sh':'deployment-notes.md';const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([out.value],{type:'text/plain;charset=utf-8'}));a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function resetForm(){name.value='scraper4-cloudflare';env.value='termux-offline';profile.value='node';build.value='npm run worker:build';start.value='npm start';port.value='3000';setPM('npm');refresh()}
+function setPM(v){pm.value=v;document.querySelectorAll('#pmButtons button').forEach(b=>b.classList.toggle('active',b.dataset.pm===v))}
+function refresh(){renderGroups();renderInstalled();generate()}
+function scrollToId(id){$(id).scrollIntoView({behavior:'smooth',block:'start'})}
+document.querySelectorAll('#pmButtons button').forEach(b=>b.onclick=()=>{setPM(b.dataset.pm);generate()});document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{currentTab=b.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));generate()});[env,profile,build,start,port,name].forEach(x=>x.addEventListener('input',refresh));
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='enter'){e.preventDefault();generate()}});refresh();
 </script>
 </body>
 </html>
