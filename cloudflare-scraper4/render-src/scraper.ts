@@ -472,7 +472,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
 export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
-  lastNetworkApiStats=null;
+  lastNetworkApiStats=null;lastRenderedSnapshot=null;
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url);
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
@@ -560,7 +560,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   }
   if(!autoFirst&&firstError)throw firstError;
   const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
-  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(engine==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{})};
+  return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(engine==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{}),...(BROWSER_ENGINES.has(engine)&&lastRenderedSnapshot?{renderedSnapshot:lastRenderedSnapshot}:{})};
 }
 export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
 
@@ -665,6 +665,32 @@ export type NetworkApiStats={responsesSeen:number;failedResponses:number;jsonBod
 /** Last network_api capture outcome; reset per scrapeListWithMeta call. */
 let lastNetworkApiStats:NetworkApiStats|null=null;
 export function lastNetworkApiStatsUsed():NetworkApiStats|null{return lastNetworkApiStats}
+export type RenderedSnapshot={title:string;htmlLength:number;textLength:number;textPrefix:string;scripts:number;scriptSrcs:string[];links:number;images:number};
+/**
+ * 1.152.0 — a compact fingerprint of what a browser engine actually saw.
+ * Zero-product browser runs attach it to the result, so a pasted diagnostic
+ * carries the forensics (bot-wall? empty shell? real shop?) with no dump
+ * files or terminal steps.
+ */
+export function renderedSnapshotFromHtml(html:string):RenderedSnapshot{
+  const body=String(html||'');
+  const empty:RenderedSnapshot={title:'',htmlLength:body.length,textLength:0,textPrefix:'',scripts:0,scriptSrcs:[],links:0,images:0};
+  if(!body)return empty;
+  try{
+    const $=cheerio.load(body);
+    const scriptSrcs:string[]=[];
+    $('script[src]').each((_,el)=>{ if(scriptSrcs.length<10)scriptSrcs.push(String($(el).attr('src')||'').slice(0,160)); });
+    const snap:RenderedSnapshot={title:$('title').first().text().trim().slice(0,200),htmlLength:body.length,textLength:0,textPrefix:'',
+      scripts:$('script').length,scriptSrcs,links:$('a[href]').length,images:$('img').length};
+    $('script,style,noscript,template').remove();
+    const text=$('body').text().replace(/\s+/g,' ').trim();
+    snap.textLength=text.length; snap.textPrefix=text.slice(0,500);
+    return snap;
+  }catch{ return empty; }
+}
+/** Last zero-product browser snapshot; reset per scrapeListWithMeta call. */
+let lastRenderedSnapshot:RenderedSnapshot|null=null;
+export function lastRenderedSnapshotUsed():RenderedSnapshot|null{return lastRenderedSnapshot}
 /**
  * Walk API JSON with FULL recursion: unlike giant Next.js blobs (where the
  * key filter skips noise), API bodies are dense and nest products under
@@ -820,6 +846,7 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
     // Drain: wait for every in-flight body read (bounded, so one stuck
     // response cannot hang the run) instead of dropping them at the bell.
     await Promise.race([Promise.allSettled(pendingBodies), new Promise(resolve => setTimeout(resolve, 5000))]);
+    try { lastRenderedSnapshot = renderedSnapshotFromHtml(await page.content()); } catch { /* content unreadable: the stats still stand */ }
     done = true;
     const products = networkApiProducts(bodies, page.url());
     lastNetworkApiStats = { responsesSeen: seenResponses, failedResponses, jsonBodies: bodies.length, bytes: totalBytes, parsed: products.length, endpoints: endpoints.slice(0, 20), failedEndpoints: failedEndpoints.slice(0, 20) };
@@ -854,7 +881,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
       await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
       const finalUrl = page.url();
       const html = await page.content();
-      dumpRenderedHtml(html, page.url(), 'playwright');
+      dumpRenderedHtml(html, page.url(), 'playwright');lastRenderedSnapshot=renderedSnapshotFromHtml(html);
       const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
       lastBrowserLayer = rescued.layer;
       console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
@@ -876,7 +903,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     await page.waitForNetworkIdle({ timeout: 15_000 }).catch(() => undefined);
     const finalUrl = page.url();
     const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'puppeteer');
+    dumpRenderedHtml(html, page.url(), 'puppeteer');lastRenderedSnapshot=renderedSnapshotFromHtml(html);
     const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] puppeteer extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
@@ -897,7 +924,7 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
   const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'crawlee');
+    dumpRenderedHtml(html, page.url(), 'crawlee');lastRenderedSnapshot=renderedSnapshotFromHtml(html);
     const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
@@ -2158,7 +2185,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
-      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
   }

@@ -114,6 +114,11 @@ bypass the job processor and ignore the profile's page count):
   "no product with a link was found" while the diagnostic had just listed 20 products. The link is now taken
   from the element itself, its parent, or the nearest `a[href]` inside the card, on every extraction path.
 
+Since 1.152.0 a zero-product browser run also fingerprints what it rendered: the result carries a `renderedSnapshot`
+(page title, HTML/text lengths, a 500-character text prefix, script/link/image counts and the first script URLs),
+surfaced in the diagnostic as `snapshot`. A pasted report therefore shows whether Chromium met a bot-wall, an empty
+shell, or a real shop — no dump files or terminal steps needed.
+
 ## Node.js-only browser engines
 
 These require the Node/Render/VPS runtime because Cloudflare Workers cannot launch Chromium:
