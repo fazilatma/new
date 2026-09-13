@@ -122,6 +122,15 @@ shell, or a real shop — no dump files or terminal steps needed. Since 1.153.0 
 fails loud instead of parsing the empty document: a blank page previously masqueraded as a "silent shop" with zero
 API calls, which is exactly what Snappshop's 39-byte render turned out to be.
 
+Two structural traps from that same shop are worth knowing when a profile extracts the WRONG data instead
+of nothing (1.154.0): on the Snappshop PLP each card is a classless `A[href*="/product/snp-"]` WRAPPING the
+`ARTICLE`, so the link is the card's parent rather than a child — the seeded `snappshop-kitchen-real`
+profile uses the anchor itself as the container and the link resolves to self on both runtimes. And both
+runtimes' `numberFromText()` takes the MAXIMUM number in the price text, so a card-level price selector
+returns the crossed-out OLD price on every discounted row; the sale price must be isolated with its own
+element selector (`[class*="productPrice__new"]`). Below-fold cards carry `image-fallback.svg` lazy
+placeholders instead of CDN URLs until scrolled into view.
+
 ## Node.js-only browser engines
 
 These require the Node/Render/VPS runtime because Cloudflare Workers cannot launch Chromium:

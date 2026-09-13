@@ -55,6 +55,7 @@ check('poisoned product rows cannot blank the results page', src('worker-src/db.
 check('network_api drains in-flight bodies and ranks product URLs', src('render-src/scraper.ts').includes('Promise.allSettled(pendingBodies)') && src('render-src/scraper.ts').includes('export function scoreUrl') && src('render-src/scraper.ts').includes('function isJsonish'));
 check('zero-product browser runs attach a rendered snapshot', src('render-src/scraper.ts').includes('export function renderedSnapshotFromHtml') && src('render-src/scraper.ts').includes('renderedSnapshot:lastRenderedSnapshot') && src('render-src/scraper.ts').includes('{ snapshot: result.renderedSnapshot }'));
 check('blank browser landings retry once, then fail loud', src('render-src/scraper.ts').includes('export function isBlankPageUrl') && src('render-src/scraper.ts').includes('retryResponse') && src('render-src/scraper.ts').includes('صفحهٔ خالی تحویل گرفت'));
+check('snappshop real profile is wired (seed + JSON + fixture + test)', src('profiles/snappshop-kitchen-profiles.json').includes('"snappshop-kitchen-real"') && src('migrations/0007_seed_snappshop_real_profile.sql').includes('snappshop-kitchen-real') && existsSync(join(ROOT, 'worker-tests', 'fixtures', 'snappshop-kitchen-plp.html')) && src('worker-tests/snappshop-plp-profile.test.mjs').includes('snp-1784183539'));
 
 // 3. Render build exists and is newer than its sources.
 const distServer = join(ROOT, 'render-dist', 'server.js');

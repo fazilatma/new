@@ -60,6 +60,26 @@
       "syncBasalam": false,
       "intervalMinutes": 0
     },
+    "snappshop-kitchen-real": {
+      "id": "snappshop-kitchen-real",
+      "name": "SnappShop Kitchen Appliances — Real PLP",
+      "url": "https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1",
+      "enabled": true,
+      "pages": 3,
+      "pagination": "query_page",
+      "extractionEngine": "cheerio",
+      "paginationValue": "page",
+      "selectors": {
+        "container": "a[href*=\"/product/snp-\"]",
+        "title": "h3",
+        "price": "[class*=\"productPrice__new\"]",
+        "link": "a[href]",
+        "image": "img"
+      },
+      "syncWoo": false,
+      "syncBasalam": false,
+      "intervalMinutes": 0
+    },
     "mantoopatris-products": {
       "id": "mantoopatris-products",
       "name": "Mantoopatris Products — In Stock New",
