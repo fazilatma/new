@@ -140,7 +140,10 @@ CSS-module hash tails stripped, no combinators or positional pseudo-classes),
 verifies every suggestion against the cards it found, and prints an importable
 profile JSON — failing loud in the console when a field has no trustworthy
 selector. Full usage (Persian): `SELECTOR-INJECTOR-FA.md`. A bookmarklet
-one-liner is built with `node scripts/make-bookmarklet.mjs`.
+one-liner is built with `node scripts/make-bookmarklet.mjs`. In 1.156.0 the
+same script ships inside the dashboard (drawer section with one-click copy
+and an exact-byte test pin), so every runtime — Worker, Render, Termux, VPS —
+serves it from the single shared dashboard source.
 
 ## Node.js-only browser engines
 

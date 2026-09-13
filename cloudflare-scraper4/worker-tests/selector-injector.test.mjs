@@ -192,3 +192,19 @@ test('injector: an empty page fails loud, never with empty selectors', async () 
   assert.equal(r.ok, false);
   assert.ok(r.reason && r.reason.length > 10, 'the failure must explain itself');
 });
+
+test('injector: the dashboard embeds the snippet byte-for-byte (no drift, all environments)', async () => {
+  const dash = await readFile(join(ROOT, 'worker-src', 'dashboard.ts'), 'utf8');
+  const open = '<script type="text/plain" id="s4injectorSrc">';
+  const i = dash.indexOf(open);
+  assert.ok(i >= 0, 'the dashboard must carry the injector source block');
+  const embedded = dash.slice(i + open.length, dash.indexOf('</script>', i));
+  // Reverse the TS template-literal escaping (backslash, backtick) and compare bytes.
+  assert.equal(embedded.replace(/\\(\\|`)/g, '$1'), injectorSrc, 'dashboard copy must equal tools/selector-injector.js exactly');
+  for (const marker of ["'injector'", 'data-copy-injector', 'function copyInjectorScript(', 'renderInjectorPreview()', 'injectorPreview', 'injectorCopyStatus']) {
+    assert.ok(dash.includes(marker), `dashboard must wire ${marker}`);
+  }
+  // One dashboard source serves every runtime (render re-exports it).
+  const renderDash = await readFile(join(ROOT, 'render-src', 'dashboard.ts'), 'utf8');
+  assert.ok(renderDash.includes('../worker-src/dashboard.js'), 'render must keep serving the shared dashboard');
+});
