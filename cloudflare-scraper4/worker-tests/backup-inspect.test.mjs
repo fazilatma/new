@@ -65,7 +65,7 @@ Object.defineProperty(URL, 'createObjectURL', { value: blob => { downloadedBlob 
 Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, writable: true, configurable: true });
 const failures = [];
 process.on('unhandledRejection', error => failures.push(error));
-try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup};'); } catch (error) { failures.push(error); }
+try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus};'); } catch (error) { failures.push(error); }
 const backup = globalThis.__backupTest;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(fn, label, timeoutMs = 8000) {
@@ -162,5 +162,28 @@ test('one-click full backup downloads, reports and remembers itself', async () =
   assert.match(document.getElementById('backupLastLine').textContent, new RegExp(remembered.name));
   assert.match(document.getElementById('bkLastLine').textContent, new RegExp(remembered.name));
   assert.match(document.querySelector('#resultModal .result-body').textContent, /بستهٔ تنظیمات/);
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('bootstrap restore controls exist in both panels', async () => {
+  assert.equal(document.querySelectorAll('[data-ma="backup-bootstrap"]').length, 2, 'menu and version panels both offer the bootstrap download');
+  await backup.renderBootstrapStatus();
+  assert.match(document.getElementById('backupBootstrapLine').textContent, /بوت‌استرپ/);
+  assert.match(document.getElementById('bkBootstrapLine').textContent, /بوت‌استرپ/);
+});
+
+test('one-click bootstrap download uses the fixed name and shows the Render guide', async () => {
+  await backup.doBootstrapDownload();
+  assert.ok(downloadedBlob, 'a file download was triggered');
+  assert.deepEqual(JSON.parse(await downloadedBlob.text()), bundle, 'the bootstrap file is the unfiltered full bundle');
+  const remembered = JSON.parse(store.get('scraper4:last-backup'));
+  assert.equal(remembered.name, 'render-bootstrap.json');
+  assert.equal(remembered.sections, 'بوت‌استرپ رندر (نام ثابت)');
+  assert.match(document.getElementById('transferStatus').textContent, /بوت‌استرپ آماده شد/);
+  assert.match(document.querySelector('#resultModal .result-head').textContent, /راهنمای بوت‌استرپ/);
+  const body = document.querySelector('#resultModal .result-body').textContent;
+  assert.match(body, /render-bootstrap\.json/);
+  assert.match(body, /Secret Files/);
+  assert.match(body, /کامیت نکنید/);
   assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
 });

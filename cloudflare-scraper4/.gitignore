@@ -16,3 +16,6 @@ storage/
 
 # Built worker bundle: committed only on Release commits, rebuilt by worker:build.
 scraper4.worker.js
+
+# Bootstrap bundles hold secrets (API keys/tokens): never commit them.
+bootstrap/*.json

@@ -87,6 +87,7 @@ app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
 app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.166.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(url:string)=>safeFetch(url,{apiMode:true,headers:{Accept:'application/vnd.github+json'}},200000,15000);
 app.get('/api/deployer/branches',async c=>c.json(await scanDeployerBranches(githubApiFetch,c.env.WORKER_VERSION||'1.166.0')));
 // Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports

@@ -1,18 +1,19 @@
 import { serve } from '@hono/node-server';
 import { timingSafeEqual } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, preferredAiChatModel, productNeedsEnrichment, recordVote, resetAiTestRun, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
+import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
 import { scanDeployerBranches } from '../worker-src/deployer-branches.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
-import { fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, markBasalamCategoriesTried, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, importAutoreplyLog, importCategoryLearning, isFreshDatabase, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, markBasalamCategoriesTried, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
@@ -180,6 +181,23 @@ async function initializeDatabase(): Promise<boolean> {
   }
 }
 await initializeDatabase();
+// Fresh-database bootstrap restore (see render-src/bootstrap.ts): on by default
+// on Render so every deploy re-seeds settings from the secret file. A configured
+// database is never touched, and failures are surfaced via the status endpoint
+// instead of crashing the boot.
+let bootstrapLastError: string | null = null;
+try {
+  const boot = await maybeRestoreBootstrap({
+    env: process.env as unknown as Record<string, string>, cwd: process.cwd(),
+    exists: (path: string) => { try { return existsSync(path); } catch { return false; } },
+    readFile: (path: string) => readFileSync(path, 'utf8'),
+    isFresh: isFreshDatabase,
+    importBundle: (bundle: unknown) => importSettingsBundle(bundle),
+    setMarker: async (at: string, path: string) => { await setState(BOOTSTRAP_MARKER_KEY, { at, path }); },
+  });
+  if (!boot.ok) { bootstrapLastError = boot.error || 'unknown error'; console.error(`[bootstrap] restore failed: ${bootstrapLastError}`); }
+  else if (boot.restored) console.log(`[bootstrap] settings restored from ${boot.path}`);
+} catch (error) { bootstrapLastError = error instanceof Error ? error.message : String(error); console.error(`[bootstrap] restore failed: ${bootstrapLastError}`); }
 
 const app = new Hono();
 const dashboardHeaders = secureHeaders({
@@ -369,19 +387,29 @@ app.get('/api/settings-export', async c => {
   const bundle=await createPhpSettingsBundle(new URL(c.req.url).host),stamp=new Date().toISOString().replace(/[-:T]/g,'').slice(0,15);
   return c.json(bundle,200,{'content-disposition':`attachment; filename="settings_${stamp}.json"`});
 });
-app.post('/api/settings-import', async c => {
-  const files=decodePhpSettingsBundle(await c.req.json());let profiles=0,products=0,states=0,categories=0,autoreplyLogs=0,connections=false;const warnings:string[]=[];
-  const rawProfiles=files['profiles.json'];
+// Shared by the manual import route and the fresh-database bootstrap restore.
+async function importSettingsBundle(bundle: unknown): Promise<Record<string, unknown>> {
+  const files=decodePhpSettingsBundle(bundle);let profiles=0,products=0,states=0,categories=0,autoreplyLogs=0,connections=false;const warnings:string[]=[];
+  const rawProfiles=files['profiles.json'],rawProfileProducts=files['profile_products.json'] as Record<string,unknown>|undefined;
   if(rawProfiles&&typeof rawProfiles==='object')for(const [id,raw] of Object.entries(rawProfiles as Record<string,any>)){
-    try{const profile=normalizeProfile({...raw,id});await saveProfile(profile);profiles++;for(const product of legacyProducts(raw?.products)){await upsertProduct(profile.id,product);products++;}}
+    try{const profile=normalizeProfile({...raw,id});await saveProfile(profile);profiles++;for(const product of legacyProducts(rawProfileProducts?.[id]??raw?.products)){await upsertProduct(profile.id,product);products++;}}
     catch(error){warnings.push(`${id}: ${error instanceof Error?error.message:String(error)}`)}
   }
   const rawConnections=files['connections.json'] as any;
-  if(rawConnections){const woo=rawConnections.woocommerce||rawConnections.woo||{},basalam=rawConnections.basalam||{},ai=rawConnections.ai||{};await saveConnections({woo:{url:woo.url||woo.store_url||'',key:woo.consumer_key||woo.ck||woo.key||'',secret:woo.consumer_secret||woo.cs||woo.secret||'',categoryId:woo.category_id||0},basalam:{token:basalam.token||'',vendorId:String(basalam.vendor_id||basalam.vendorId||''),api:basalam.api_base||basalam.api||'https://openapi.basalam.com/v1',preparationDays:basalam.preparation_days,weight:basalam.weight,packageWeight:basalam.package_weight,stock:basalam.stock,categoryId:basalam.category_id,autoCategory:basalam.auto_category,netIndirect:basalam.net_indirect,shops:basalam.shops},ai:{baseUrl:ai.base_url||ai.baseUrl||'',apiKey:ai.api_key||ai.apiKey||'',model:ai.model||'',providers:ai.providers,candidates:ai.candidates,master:ai.master,network:ai.network},notifications:rawConnections.notifications||{}});connections=true;}
+  if(rawConnections){const partialConn:any={};const woo=rawConnections.woocommerce||rawConnections.woo;if(woo)partialConn.woo={url:woo.url||woo.store_url||'',key:woo.consumer_key||woo.ck||woo.key||'',secret:woo.consumer_secret||woo.cs||woo.secret||'',categoryId:woo.category_id||0};const basalam=rawConnections.basalam;if(basalam)partialConn.basalam={token:basalam.token||'',vendorId:String(basalam.vendor_id||basalam.vendorId||''),api:basalam.api_base||basalam.api||'https://openapi.basalam.com/v1',preparationDays:basalam.preparation_days,weight:basalam.weight,packageWeight:basalam.package_weight,stock:basalam.stock,categoryId:basalam.category_id,autoCategory:basalam.auto_category,netIndirect:basalam.net_indirect,shops:basalam.shops};if(rawConnections.ai||rawConnections.src_network){const ai=rawConnections.ai||{};partialConn.ai={baseUrl:ai.base_url||ai.baseUrl||'',apiKey:ai.api_key||ai.apiKey||'',model:ai.model||'',providers:ai.providers,candidates:ai.candidates,master:ai.master,network:ai.network||(rawConnections.src_network?{mode:rawConnections.src_network.mode,proxyUrl:rawConnections.src_network.proxy||'',workerUrl:rawConnections.src_network.worker_url||'',dohUrl:rawConnections.src_network.doh_url||'',resolveIp:rawConnections.src_network.resolve_ip||''}:undefined)}};if(rawConnections.notifications)partialConn.notifications=rawConnections.notifications;if(Object.keys(partialConn).length){await saveConnections(partialConn);connections=true;}}
   if(files['category_learning.json'])categories=await importCategoryLearning(files['category_learning.json']);
   if(files['autoreply_log.json'])autoreplyLogs=await importAutoreplyLog(files['autoreply_log.json']);
   for(const [file,value] of Object.entries(files)){const key=stateKeyForFile(file);if(key){await setState(key,value);states++;}}
-  return c.json({ok:true,format:'scraper4-php-compatible',imported:{profiles,products,states,categories,autoreplyLogs,connections},warnings});
+  return ({ok:true,format:'scraper4-php-compatible',imported:{profiles,products,states,categories,autoreplyLogs,connections},warnings});
+}
+app.post('/api/settings-import', async c => c.json(await importSettingsBundle(await c.req.json())));
+app.get('/api/bootstrap/status', async c => {
+  const env = process.env as unknown as Record<string, string>, decision = shouldAutoRestoreBootstrap(env);
+  let path: string | null = null;
+  for (const candidate of bootstrapCandidates(env, process.cwd())) { try { if (existsSync(candidate)) { path = candidate; break; } } catch { /* unreadable */ } }
+  let fresh = true, marker: unknown = null;
+  try { if (databaseReady) { fresh = await isFreshDatabase(); marker = await getState(BOOTSTRAP_MARKER_KEY, null); } } catch { /* report what we have */ }
+  return c.json({ ok: true, supported: true, enabled: decision.enabled, reason: decision.reason, path, fileFound: Boolean(path), databaseReady, fresh, lastRestored: marker, lastError: bootstrapLastError });
 });
 app.get('/api/profile-stats', async c => c.json({ok:true,items:await profileStats()}));
 app.post('/api/maintenance/recon/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({})) as any;return c.json({ok:true,report:await recon(target as any,String(body.profileId||''))})});

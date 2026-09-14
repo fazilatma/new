@@ -402,6 +402,14 @@ export async function setState(key: string, value: unknown): Promise<void> {
 }
 export async function deleteState(key: string): Promise<void> { await pool.query('DELETE FROM app_state WHERE key=$1', [key]); }
 
+/** True only when nothing was ever configured: no profiles and no stored state. */
+export async function isFreshDatabase(): Promise<boolean> {
+  const profiles = await pool.query('SELECT COUNT(*) AS n FROM profiles');
+  if (Number(profiles.rows[0]?.n || 0) > 0) return false;
+  const states = await pool.query('SELECT COUNT(*) AS n FROM app_state');
+  return Number(states.rows[0]?.n || 0) === 0;
+}
+
 export async function createBackup(): Promise<Record<string, unknown>> {
   const [profiles,products,jobs,states,maps,learning,autoreply] = await Promise.all([
     pool.query('SELECT * FROM profiles ORDER BY created_at'),pool.query('SELECT * FROM products ORDER BY profile_id,created_at'),pool.query('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 1000'),pool.query('SELECT * FROM app_state ORDER BY key'),pool.query('SELECT * FROM destination_map ORDER BY profile_id,target,account_key'),pool.query('SELECT * FROM category_learning ORDER BY hits DESC'),pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT 5000')
