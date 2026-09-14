@@ -42,8 +42,8 @@ const mockFetch = async (input, init = {}) => {
   if (url.pathname === '/api/settings-export') return json(bundle);
   if (url.pathname === '/api/connections') return json({ ok: true, connections: { ai: { providers: [], candidates: [] }, woo: {}, basalam: { shops: [] } } });
   if (url.pathname === '/api/profiles') return json({ ok: true, profiles: [] });
-  if (url.pathname === '/api/status') return json({ ok: true, version: '1.166.0', databaseReady: true, connections: { woo: { ok: false }, basalam: { ok: false } } });
-  if (url.pathname === '/health') return json({ ok: true, version: '1.166.0', databaseReady: true });
+  if (url.pathname === '/api/status') return json({ ok: true, version: '1.167.0', databaseReady: true, connections: { woo: { ok: false }, basalam: { ok: false } } });
+  if (url.pathname === '/health') return json({ ok: true, version: '1.167.0', databaseReady: true });
   if (url.pathname === '/api/settings') return json({ ok: true, settings: {} });
   if (url.pathname === '/api/jobs') return json({ ok: true, jobs: [] });
   if (url.pathname === '/api/ai/test-runs/current' || url.pathname === '/api/destination/basalam/category-runs/current') return json({ ok: true, run: null });
