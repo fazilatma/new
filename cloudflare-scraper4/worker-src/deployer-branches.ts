@@ -11,8 +11,10 @@ export interface DeployerBranch {
 }
 export interface DeployerBranchScan {
   ok: true;
+  repo: string;
   running: string;
   cached: boolean;
+  latest: string | null;
   branches: DeployerBranch[];
 }
 export type DeployerBranchStage = 'list' | 'manifest';
@@ -25,10 +27,30 @@ export interface DeployerBranchFailure {
 }
 const DEPLOYER_BRANCHES_TTL_MS = 5 * 60 * 1000;
 const MANIFEST_PATH = 'cloudflare-scraper4/package.json';
-let deployerBranchCache: { at: number; branches: { name: string; version: string }[] } | null = null;
+export const DEFAULT_REPO = 'fazilatma/new';
+const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+let deployerBranchCache: Record<string, { at: number; branches: { name: string; version: string }[] }> = {};
 
 export function clearDeployerBranchCache(): void {
-  deployerBranchCache = null;
+  deployerBranchCache = {};
+}
+
+export function normalizeRepo(raw: unknown): string | null {
+  const repo = String(raw || '').trim();
+  return REPO_PATTERN.test(repo) ? repo : null;
+}
+
+export function latestBranch(branches: { name: string; version: string }[]): string | null {
+  let best: string | null = null, bestCore: [number, number, number] | null = null;
+  for (const branch of branches) {
+    const core = numericCore(branch.version);
+    if (!core) continue;
+    if (!bestCore || core[0] > bestCore[0] || (core[0] === bestCore[0] && (core[1] > bestCore[1] || (core[1] === bestCore[1] && core[2] > bestCore[2])))) {
+      best = branch.name;
+      bestCore = core;
+    }
+  }
+  return best;
 }
 
 function numericCore(value: string): [number, number, number] | null {
@@ -57,10 +79,10 @@ function decodeBase64ToBinary(b64: string): string {
   return atob(clean);
 }
 
-async function fetchManifestVersion(fetcher: BranchFetcher, branch: string): Promise<string> {
+async function fetchManifestVersion(fetcher: BranchFetcher, repo: string, branch: string): Promise<string> {
   const ref = encodeURIComponent(branch);
   try {
-    const raw = await fetcher(`https://raw.githubusercontent.com/fazilatma/new/${ref}/${MANIFEST_PATH}`);
+    const raw = await fetcher(`https://raw.githubusercontent.com/${repo}/${ref}/${MANIFEST_PATH}`);
     if (raw && raw.ok) {
       const body = (await raw.json()) as { version?: unknown };
       if (body && body.version) return String(body.version);
@@ -69,7 +91,7 @@ async function fetchManifestVersion(fetcher: BranchFetcher, branch: string): Pro
     // Fall through to the Contents API below.
   }
   try {
-    const viaApi = await fetcher(`https://api.github.com/repos/fazilatma/new/contents/${MANIFEST_PATH}?ref=${ref}`);
+    const viaApi = await fetcher(`https://api.github.com/repos/${repo}/contents/${MANIFEST_PATH}?ref=${ref}`);
     if (viaApi && viaApi.ok) {
       const body = (await viaApi.json()) as { content?: unknown };
       const content = body && typeof body.content === 'string' ? body.content : '';
@@ -85,19 +107,22 @@ function scanFailure(stage: DeployerBranchStage, error: DeployerBranchError, det
   return { ok: false, stage, error, detail };
 }
 
-export async function scanDeployerBranches(fetcher: BranchFetcher, running: string): Promise<DeployerBranchScan | DeployerBranchFailure> {
+export async function scanDeployerBranches(fetcher: BranchFetcher, running: string, repo: string = DEFAULT_REPO): Promise<DeployerBranchScan | DeployerBranchFailure> {
   const now = Date.now();
-  if (deployerBranchCache && now - deployerBranchCache.at < DEPLOYER_BRANCHES_TTL_MS) {
+  const hit = deployerBranchCache[repo];
+  if (hit && now - hit.at < DEPLOYER_BRANCHES_TTL_MS) {
     return {
       ok: true,
+      repo,
       running,
       cached: true,
-      branches: deployerBranchCache.branches.map(b => ({ name: b.name, version: b.version, status: branchVersionStatus(b.version, running) })),
+      latest: latestBranch(hit.branches),
+      branches: hit.branches.map(b => ({ name: b.name, version: b.version, status: branchVersionStatus(b.version, running) })),
     };
   }
   let list: unknown;
   try {
-    const response = await fetcher('https://api.github.com/repos/fazilatma/new/branches?per_page=100');
+    const response = await fetcher(`https://api.github.com/repos/${repo}/branches?per_page=100`);
     if (!response) return scanFailure('list', 'UNREACHABLE', 'empty response');
     if (response.status === 403 || response.status === 429) return scanFailure('list', 'RATE_LIMIT', `HTTP ${response.status}`);
     if (!response.ok) return scanFailure('list', 'UNREACHABLE', `HTTP ${response.status}`);
@@ -113,12 +138,14 @@ export async function scanDeployerBranches(fetcher: BranchFetcher, running: stri
       if (name) names.push(name);
     }
   }
-  const versions = await Promise.all(names.map(async name => ({ name, version: await fetchManifestVersion(fetcher, name) })));
-  deployerBranchCache = { at: now, branches: versions.map(v => ({ name: v.name, version: v.version })) };
+  const versions = await Promise.all(names.map(async name => ({ name, version: await fetchManifestVersion(fetcher, repo, name) })));
+  deployerBranchCache[repo] = { at: now, branches: versions.map(v => ({ name: v.name, version: v.version })) };
   return {
     ok: true,
+    repo,
     running,
     cached: false,
+    latest: latestBranch(versions),
     branches: versions.map(v => ({ name: v.name, version: v.version, status: branchVersionStatus(v.version, running) })),
   };
 }

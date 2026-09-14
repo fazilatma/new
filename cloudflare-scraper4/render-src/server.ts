@@ -9,7 +9,8 @@ import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generate
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
-import { scanDeployerBranches } from '../worker-src/deployer-branches.js';
+import { DEFAULT_REPO, normalizeRepo, scanDeployerBranches } from '../worker-src/deployer-branches.js';
+import { fetchBranchBackupFile, listBranchBackupFiles } from '../worker-src/branch-backup.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
@@ -265,7 +266,9 @@ app.post('/api/visual-ticket', async c => {
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
 app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
 const githubApiFetch=(url:string)=>safeFetch(url,{apiMode:true,directRoute:true,headers:{Accept:'application/vnd.github+json'}},200000);
-app.get('/api/deployer/branches',async c=>c.json(await scanDeployerBranches(githubApiFetch,runtimeVersion())));
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch,runtimeVersion(),repo))});
+app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch,c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
+app.get('/api/branch-file',async c=>{const r=await fetchBranchBackupFile(githubApiFetch,c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {

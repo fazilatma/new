@@ -27,18 +27,18 @@ function extractFns(src, names) {
 }
 
 function loadBranchTable(src, stubs) {
-  const factory = new Function('$', 'api', 'fetch', 'esc', 'escAttr', 'location', 'window', 'navigator', 'document', 'notice',
-    `${extractFns(src, ['deployerEnvKind', 'deployerBranchChip', 'deployerBranchErrorText', 'scanDeployerBranches', 'deployerBranchAction'])}
+  const factory = new Function('$', 'api', 'fetch', 'esc', 'escAttr', 'location', 'window', 'navigator', 'document', 'notice', 'localStorage', 'fa',
+    `${extractFns(src, ['deployerEnvKind', 'deployerBranchChip', 'deployerBranchErrorText', 'scanDeployerBranches', 'deployerBranchAction', 'currentBranchRepo', 'syncBranchDropdown', 'refreshBranchFiles', 'loadBranchBackup', 'saveBranchBackup'])}
      return { deployerEnvKind, deployerBranchChip, deployerBranchErrorText, scanDeployerBranches, deployerBranchAction };`);
   return factory(stubs.$, stubs.api, stubs.fetch, stubs.esc, stubs.escAttr, stubs.location,
-    stubs.window, stubs.navigator, stubs.document, stubs.notice);
+    stubs.window, stubs.navigator, stubs.document, stubs.notice, stubs.localStorage, stubs.fa);
 }
 
-const TRIVIAL = { $: () => null, api: async () => ({}), fetch: async () => { throw Error('no network'); }, esc: s => s, escAttr: s => s, window: {}, navigator: {}, document: {}, notice: () => {} };
+const TRIVIAL = { $: () => null, api: async () => ({}), fetch: async () => { throw Error('no network'); }, esc: s => s, escAttr: s => s, window: {}, navigator: {}, document: {}, notice: () => {}, localStorage: { getItem: () => null, setItem: () => {} }, fa: s => s };
 
-test('version tab: the deployer block is present and complete', async () => {
+test('version tab: the unified backup panel hosts the deployer block', async () => {
   const text = await dashboard();
-  for (const token of ['🚀 دیپلویر و انتشار', 'deployerEnvHint', 'renderDeployerEnvHint();',
+  for (const token of ['💾 بکاپ، بازیابی، نسخه و انتشار', 'unifiedBackupDetails', '🚀 دیپلویر و جدول برنچ‌ها', 'deployerEnvHint', 'renderDeployerEnvHint();',
     'data-copy-install=\\"deployer\\"', 'copyInstall-deployer', 'http://localhost:8790',
     '/api/version', 'CLOUDFLARE-WORKER.md']) {
     assert.ok(text.includes(token), `the deployer block must include ${token}`);
@@ -106,11 +106,14 @@ test('branches table: scan renders the server reply and per-env actions', async 
       { name: 'main', version: '', status: 'unknown' }
     ]
   };
+  const branchSel = { innerHTML: '', value: '' }, fileSel = { innerHTML: '', value: '' };
   const stubs = {
     ...TRIVIAL, notice: (m, k) => notices.push([m, k]),
-    $: id => ({ deployerBranches: box, deployerRunningVer: run }[id] || null),
+    $: id => ({ deployerBranches: box, deployerRunningVer: run, vcBranchStatus: { textContent: '' }, vcRepo: { value: 'fazilatma/new' }, vcBranch: branchSel, vcFile: fileSel, vcFileStatus: { textContent: '' }, vcPath: { value: 'backups' } }[id] || null),
     api: async path => {
-      assert.equal(path, '/api/deployer/branches', 'the scan must be same-origin');
+      assert.ok(path.startsWith('/api/'), 'every call must be same-origin');
+      if (path.startsWith('/api/branch-files')) return { ok: true, files: [] };
+      assert.ok(path.startsWith('/api/deployer/branches?repo='), 'the scan must carry the selected repo');
       return reply;
     },
     fetch: async () => { throw Error('the client must never call GitHub directly'); },
@@ -119,6 +122,8 @@ test('branches table: scan renders the server reply and per-env actions', async 
   };
   const { scanDeployerBranches, deployerBranchAction } = loadBranchTable(src, stubs);
   await scanDeployerBranches();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(branchSel.value, 'arena/01a09468-new', 'the newest-version branch must be pre-selected');
   assert.ok(run.textContent.includes('1.127.0'), 'the running version must be shown');
   assert.ok(run.textContent.includes('از کش'), 'a cached reply must say so');
   for (const token of ['pdest-table', 'arena/01a09468-new', '1.160.0', '—', 'جدیدتر', 'نامشخص', 'data-deployer-branch']) {

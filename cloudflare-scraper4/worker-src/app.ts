@@ -22,7 +22,8 @@ import { basicAuth, byteLength, escapeHtml, message, normalizePersianText } from
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, resetBackgroundRun, retryAiTestPart, startAiTestRun, startAllUnapprovedCategoryRun, startDedupRun } from './background.js';
 import { fontFile, fontStylesheet } from './fonts.js';
-import { scanDeployerBranches } from './deployer-branches.js';
+import { DEFAULT_REPO, normalizeRepo, scanDeployerBranches } from './deployer-branches.js';
+import { fetchBranchBackupFile, listBranchBackupFiles } from './branch-backup.js';
 
 type Variables={requestId:string};
 export const app=new Hono<{Bindings:Env;Variables:Variables}>();
@@ -89,7 +90,9 @@ app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capa
 app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.167.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(url:string)=>safeFetch(url,{apiMode:true,headers:{Accept:'application/vnd.github+json'}},200000,15000);
-app.get('/api/deployer/branches',async c=>c.json(await scanDeployerBranches(githubApiFetch,c.env.WORKER_VERSION||'1.167.0')));
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch,c.env.WORKER_VERSION||'1.167.0',repo))});
+app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch,c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
+app.get('/api/branch-file',async c=>{const r=await fetchBranchBackupFile(githubApiFetch,c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 // Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
 // the exact rows it read/wrote, so we meter our own consumption against the
 // documented free-plan limits (5M reads / 100k writes per UTC day).

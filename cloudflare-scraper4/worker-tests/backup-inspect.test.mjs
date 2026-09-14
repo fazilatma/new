@@ -38,7 +38,7 @@ bundle.total_bytes = Object.values(bundle.files).reduce((sum, x) => sum + (x.siz
 
 const mockFetch = async (input, init = {}) => {
   const url = new URL(typeof input === 'string' ? input : input.url, 'http://backup.test'), method = String(init.method || 'GET').toUpperCase();
-  const json = body => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   if (url.pathname === '/api/settings-export') return json(bundle);
   if (url.pathname === '/api/connections') return json({ ok: true, connections: { ai: { providers: [], candidates: [] }, woo: {}, basalam: { shops: [] } } });
   if (url.pathname === '/api/profiles') return json({ ok: true, profiles: [] });
@@ -50,8 +50,29 @@ const mockFetch = async (input, init = {}) => {
   if (url.pathname === '/api/import/history') return json({ ok: true, items: [] });
   if (url.pathname === '/api/runtime/libraries') return json({ ok: true, libraries: [] });
   if (url.pathname === '/api/ai/test-results') return json({ ok: true, results: [] });
+  if (url.pathname === '/api/deployer/branches') {
+    const repo = url.searchParams.get('repo') || 'fazilatma/new';
+    if (!repo.includes('/')) return json({ ok: false, stage: 'list', error: 'INVALID', detail: 'Repo must look like owner/name.' }, 400);
+    fetched.push('branches:' + repo);
+    return json({ ok: true, repo, running: '1.167.0', cached: false, latest: 'arena/01a09468-new', branches: [
+      { name: 'main', version: '1.160.0', status: 'older' },
+      { name: 'arena/01a09468-new', version: '1.167.0', status: 'equal' }
+    ] });
+  }
+  if (url.pathname === '/api/branch-files') {
+    fetched.push('files:' + url.searchParams.get('branch') + ':' + url.searchParams.get('path'));
+    return json({ ok: true, repo: 'fazilatma/new', branch: 'arena/01a09468-new', path: 'backups', files: [
+      { name: 'nightly-new.json', path: 'backups/nightly-new.json', size: 42, sha: 'n' },
+      { name: 'nightly-old.json', path: 'backups/nightly-old.json', size: 40, sha: 'o' }
+    ] });
+  }
+  if (url.pathname === '/api/branch-file') {
+    fetched.push('file:' + url.searchParams.get('path'));
+    return json({ ok: true, name: 'nightly-new.json', size: bundle.total_bytes, bundle });
+  }
   return json({ ok: true });
 };
+const fetched = [];
 
 const { window } = parseHTML(DASHBOARD);
 const store = new Map();
@@ -65,7 +86,7 @@ Object.defineProperty(URL, 'createObjectURL', { value: blob => { downloadedBlob 
 Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, writable: true, configurable: true });
 const failures = [];
 process.on('unhandledRejection', error => failures.push(error));
-try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus};'); } catch (error) { failures.push(error); }
+try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus,scanDeployerBranches,refreshBranchFiles,doBranchRestore,syncBranchDropdown,currentBranchRepo};'); } catch (error) { failures.push(error); }
 const backup = globalThis.__backupTest;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(fn, label, timeoutMs = 8000) {
@@ -78,15 +99,20 @@ async function waitFor(fn, label, timeoutMs = 8000) {
   }
 }
 
-test('boot shows the empty last-backup line in both panels', async () => {
-  await waitFor(() => document.getElementById('backupLastLine'), 'menu backup section');
+test('boot shows the unified backup panel and a menu shortcut', async () => {
+  await waitFor(() => document.getElementById('unifiedBackupDetails'), 'unified backup panel');
   await waitFor(() => backup.state.connected, 'dashboard boot');
   assert.equal(failures.length, 0, failures.map(error => error?.stack || String(error)).join('\n'));
-  assert.match(document.getElementById('backupLastLine').textContent, /هنوز بکاپی گرفته نشده/);
+  assert.ok(document.querySelector('[data-ma="goto-backup"]'), 'the menu keeps a shortcut to the unified panel');
+  assert.equal(document.getElementById('backupLastLine'), null, 'no second last-backup line anymore');
+  assert.equal(document.getElementById('sxFile'), null, 'no second restore file input anymore');
   assert.match(document.getElementById('bkLastLine').textContent, /هنوز بکاپی گرفته نشده/);
   assert.ok(document.querySelector('[data-ma="backup-full"]'), 'one-click full backup button is rendered');
   assert.ok(document.querySelector('[data-ma="backup-inspect"]'), 'inspect button is rendered');
+  assert.ok(document.querySelector('[data-ma="branch-restore"]'), 'branch restore button is rendered');
   assert.equal(document.getElementById('bkRepo'), null, 'dead scheduled-push controls are gone');
+  const push = [...document.querySelectorAll('#unifiedBackupDetails button')].find(b => b.textContent.includes('پوش بکاپ'));
+  assert.ok(push && push.disabled, 'branch push stays disabled without a token');
 });
 
 test('the inspector counts every section of a settings bundle', () => {
@@ -158,17 +184,16 @@ test('one-click full backup downloads, reports and remembers itself', async () =
   const remembered = JSON.parse(store.get('scraper4:last-backup'));
   assert.match(remembered.name, /^backup_full_.*\.json$/);
   assert.equal(remembered.sections, 'کامل (همهٔ بخش‌ها)');
-  assert.match(document.getElementById('backupLastLine').textContent, /آخرین بکاپ/);
-  assert.match(document.getElementById('backupLastLine').textContent, new RegExp(remembered.name));
+  assert.match(document.getElementById('bkLastLine').textContent, /آخرین بکاپ/);
   assert.match(document.getElementById('bkLastLine').textContent, new RegExp(remembered.name));
   assert.match(document.querySelector('#resultModal .result-body').textContent, /بستهٔ تنظیمات/);
   assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
 });
 
-test('bootstrap restore controls exist in both panels', async () => {
-  assert.equal(document.querySelectorAll('[data-ma="backup-bootstrap"]').length, 2, 'menu and version panels both offer the bootstrap download');
+test('bootstrap restore controls live in the unified panel', async () => {
+  assert.equal(document.querySelectorAll('[data-ma="backup-bootstrap"]').length, 1, 'the unified panel offers the bootstrap download');
   await backup.renderBootstrapStatus();
-  assert.match(document.getElementById('backupBootstrapLine').textContent, /بوت‌استرپ/);
+  assert.equal(document.getElementById('backupBootstrapLine'), null, 'no second bootstrap line anymore');
   assert.match(document.getElementById('bkBootstrapLine').textContent, /بوت‌استرپ/);
 });
 
@@ -186,4 +211,59 @@ test('one-click bootstrap download uses the fixed name and shows the Render guid
   assert.match(body, /Secret Files/);
   assert.match(body, /کامیت نکنید/);
   assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('branch scan fills the table and auto-selects the latest-version branch', async () => {
+  await backup.scanDeployerBranches();
+  const rows = [...document.querySelectorAll('#deployerBranches tbody tr')];
+  assert.equal(rows.length, 2, 'both scanned branches render');
+  assert.ok(rows.some(r => r.textContent.includes('arena/01a09468-new')), 'the session branch renders');
+  assert.match(document.getElementById('deployerRunningVer').textContent, /۱\.۱۶۷\.۰|1\.167\.0/);
+  assert.equal(document.getElementById('vcBranch').value, 'arena/01a09468-new', 'the latest-version branch is auto-selected');
+  assert.match(document.getElementById('vcBranchStatus').textContent, /آخرین نسخه/);
+  assert.ok(fetched.includes('branches:fazilatma/new'), 'the default repo is scanned');
+});
+
+test('branch files fill newest-first and the newest is pre-selected', async () => {
+  await waitFor(() => document.getElementById('vcFile').value === 'backups/nightly-new.json', 'branch file list');
+  const options = [...document.getElementById('vcFile').querySelectorAll('option')];
+  assert.deepEqual(options.map(o => o.getAttribute('value')), ['backups/nightly-new.json', 'backups/nightly-old.json']);
+  assert.match(document.getElementById('vcFileStatus').textContent, /۲ فایل/);
+});
+
+test('branch restore downloads the file and opens the section picker', async () => {
+  await backup.doBranchRestore();
+  assert.match(document.getElementById('transferStatus').textContent, /nightly-new\.json/);
+  assert.match(document.querySelector('#resultModal .result-head').textContent, /انتخاب بخش/);
+  const body = document.querySelector('#resultModal .result-body').textContent;
+  assert.match(body, /بستهٔ تنظیمات/);
+  assert.match(body, /arena\/01a09468-new\/nightly-new\.json/);
+  assert.ok(document.querySelector('#resultModal [data-restore-confirm]'), 'explicit confirm is intact');
+  assert.ok(fetched.includes('file:backups/nightly-new.json'), 'the selected file downloads');
+});
+
+test('a custom repo is validated and used for the scan', async () => {
+  const repo = document.getElementById('vcRepo'), custom = document.getElementById('vcRepoCustom');
+  repo.value = 'custom';
+  repo.dispatchEvent(new Event('change', { bubbles: true }));
+  assert.equal(custom.closest('.crow').style.display, '', 'the custom input appears');
+  assert.equal(backup.currentBranchRepo(), '', 'an empty custom repo is invalid');
+  custom.value = 'acme/widgets';
+  assert.equal(backup.currentBranchRepo(), 'acme/widgets');
+  await backup.scanDeployerBranches();
+  assert.ok(fetched.includes('branches:acme/widgets'), 'the custom repo is scanned');
+  custom.value = 'not a repo';
+  assert.equal(backup.currentBranchRepo(), '', 'a malformed custom repo is rejected');
+  repo.value = 'fazilatma/new';
+  repo.dispatchEvent(new Event('change', { bubbles: true }));
+  assert.equal(custom.closest('.crow').style.display, 'none', 'the custom input hides again');
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('the menu shortcut opens the unified panel', async () => {
+  const details = document.getElementById('unifiedBackupDetails');
+  details.open = false;
+  document.querySelector('[data-ma="goto-backup"]').click();
+  await sleep(20);
+  assert.equal(details.open, true, 'the shortcut opens the unified panel');
 });

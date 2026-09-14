@@ -70,8 +70,10 @@ test('deployer branches: success scans versions with fallback and statuses', asy
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.ok, true);
+  assert.equal(body.repo, 'fazilatma/new');
   assert.equal(body.running, '2.0.0');
   assert.equal(body.cached, false);
+  assert.equal(body.latest, 'arena/01a09468-new', 'the branch holding the newest code version');
   assert.deepEqual(body.branches, [
     { name: 'arena/01a09468-new', version: '2.0.0', status: 'equal' },
     { name: 'arena/01a0803e-new', version: '1.5.0', status: 'older' },
@@ -89,6 +91,7 @@ test('deployer branches: the success scan is cached', async () => {
   assert.equal(fetches, 0, 'a cached scan must not touch the network');
   assert.equal(body.ok, true);
   assert.equal(body.cached, true);
+  assert.equal(body.latest, 'arena/01a09468-new', 'latest survives the cache');
   assert.equal(body.running, '9.9.9', 'the cached versions are re-compared against the caller');
   assert.deepEqual(body.branches.map(b => b.status), ['older', 'older', 'unknown']);
 });
@@ -102,7 +105,8 @@ test('deployer branches: both runtimes wire the shared scan', async () => {
   ]);
   const version = JSON.parse(pkg).version;
   for (const token of ['export async function scanDeployerBranches', 'export function branchVersionStatus',
-    'export function clearDeployerBranchCache', 'DEPLOYER_BRANCHES_TTL_MS = 5 * 60 * 1000']) {
+    'export function clearDeployerBranchCache', 'DEPLOYER_BRANCHES_TTL_MS = 5 * 60 * 1000',
+    'export function latestBranch', 'export function normalizeRepo', "DEFAULT_REPO = 'fazilatma/new'"]) {
     assert.ok(helper.includes(token), `the helper must define ${token}`);
   }
   assert.ok(app.includes("from './deployer-branches.js'"), 'the worker must import the shared scan');
@@ -110,5 +114,11 @@ test('deployer branches: both runtimes wire the shared scan', async () => {
   assert.ok(app.includes(`c.env.WORKER_VERSION||'${version}'`), 'the worker running version must track the package version');
   assert.ok(server.includes("from '../worker-src/deployer-branches.js'"), 'render must reuse the shared scan, not fork it');
   assert.ok(server.includes("app.get('/api/deployer/branches'"), 'render must expose the endpoint');
-  assert.ok(server.includes('scanDeployerBranches(githubApiFetch,runtimeVersion())'), 'render must report its running version');
+  assert.ok(server.includes('scanDeployerBranches(githubApiFetch,runtimeVersion(),repo)'), 'render must report its running version');
+  for (const route of ["app.get('/api/branch-files'", "app.get('/api/branch-file'"]) {
+    assert.ok(app.includes(route), `the worker must expose ${route}`);
+    assert.ok(server.includes(route), `render must expose ${route}`);
+  }
+  assert.ok(app.includes("from './branch-backup.js'"), 'the worker must import the shared branch-file reader');
+  assert.ok(server.includes("from '../worker-src/branch-backup.js'"), 'render must reuse the shared branch-file reader, not fork it');
 });

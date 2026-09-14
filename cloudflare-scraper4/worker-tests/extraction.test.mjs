@@ -200,7 +200,7 @@ test('dashboard startup cannot be stopped by a stale file input and settings res
   const source=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8');
   assert.doesNotMatch(source,/\$\('restoreFile'\)/,'removed restoreFile input must not be bound');
   assert.doesNotMatch(source,/\$\('[^']+'\)\.addEventListener/,'literal event bindings must tolerate an optional/moved UI control');
-  assert.match(source,/\['sxFile','bkFile'\][\s\S]*restoreSettingsFile\(file\)/);
+  assert.match(source,/\['bkFile'\][\s\S]*restoreSettingsFile\(file\)/);
   assert.match(source,/api\('\/api\/settings-import'/);
   assert.match(source,/بازیابی کامل شد/);
 });
