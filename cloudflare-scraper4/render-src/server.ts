@@ -8,6 +8,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, preferredAiChatModel, productNeedsEnrichment, recordVote, resetAiTestRun, startAiTestRun, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
+import { scanDeployerBranches } from '../worker-src/deployer-branches.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
@@ -25,7 +26,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.160.0'; } catch { return process.env.npm_package_version || '1.160.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.161.0'; } catch { return process.env.npm_package_version || '1.161.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -244,6 +245,8 @@ app.post('/api/visual-ticket', async c => {
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
 app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
+const githubApiFetch=(url:string)=>safeFetch(url,{apiMode:true,directRoute:true,headers:{Accept:'application/vnd.github+json'}},200000);
+app.get('/api/deployer/branches',async c=>c.json(await scanDeployerBranches(githubApiFetch,runtimeVersion())));
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {

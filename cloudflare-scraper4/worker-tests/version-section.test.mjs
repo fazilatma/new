@@ -28,8 +28,8 @@ function extractFns(src, names) {
 
 function loadBranchTable(src, stubs) {
   const factory = new Function('$', 'api', 'fetch', 'esc', 'escAttr', 'location', 'window', 'navigator', 'document', 'notice',
-    `${extractFns(src, ['deployerEnvKind', 'compareBranchVersions', 'scanDeployerBranches', 'deployerBranchAction'])}
-     return { deployerEnvKind, compareBranchVersions, scanDeployerBranches, deployerBranchAction };`);
+    `${extractFns(src, ['deployerEnvKind', 'deployerBranchChip', 'deployerBranchErrorText', 'scanDeployerBranches', 'deployerBranchAction'])}
+     return { deployerEnvKind, deployerBranchChip, deployerBranchErrorText, scanDeployerBranches, deployerBranchAction };`);
   return factory(stubs.$, stubs.api, stubs.fetch, stubs.esc, stubs.escAttr, stubs.location,
     stubs.window, stubs.navigator, stubs.document, stubs.notice);
 }
@@ -76,49 +76,52 @@ test('version tab: the deployer install guide is a first-class group', async () 
   assert.equal(claimed[1], version, 'the deployer guide must track the current version');
 });
 
-test('branches table: compare and environment logic behave', async () => {
-  const { deployerEnvKind, compareBranchVersions } = loadBranchTable(await dashboard(),
-    { ...TRIVIAL, location: { hostname: 'localhost' } });
-  assert.equal(compareBranchVersions('1.159.0', '1.127.0'), 1);
-  assert.equal(compareBranchVersions('1.127.0', '1.159.0'), -1);
-  assert.equal(compareBranchVersions('1.159.0', '1.159.0'), 0);
-  assert.equal(compareBranchVersions('g1.152.0', '1.159.0'), -1, 'odd tags compare by their numeric core');
-  assert.equal(compareBranchVersions('', '1.159.0'), 0, 'missing versions are unknown, never newer');
-  assert.equal(compareBranchVersions('1.159.0', '?'), 0);
+test('branches table: environment, chips and error text behave', async () => {
+  const src = await dashboard();
   for (const [host, kind] of [['localhost', 'local'], ['127.0.0.1', 'local'], ['', 'local'],
     ['my.workers.dev', 'worker'], ['svc.onrender.com', 'render'], ['91.99.0.1', 'remote']]) {
-    const { deployerEnvKind: kindOf } = loadBranchTable(await dashboard(), { ...TRIVIAL, location: { hostname: host } });
-    assert.equal(kindOf(), kind, `${host || '(empty)'} must resolve to ${kind}`);
+    const { deployerEnvKind } = loadBranchTable(src, { ...TRIVIAL, location: { hostname: host } });
+    assert.equal(deployerEnvKind(), kind, `${host || '(empty)'} must resolve to ${kind}`);
   }
-  assert.equal(deployerEnvKind(), 'local');
+  const { deployerBranchChip, deployerBranchErrorText } = loadBranchTable(src, { ...TRIVIAL, location: { hostname: '' } });
+  assert.ok(deployerBranchChip('newer').includes('جدیدتر'));
+  assert.ok(deployerBranchChip('older').includes('قدیمی‌تر'));
+  assert.ok(deployerBranchChip('equal').includes('برابر'));
+  assert.ok(deployerBranchChip('unknown').includes('نامشخص'));
+  assert.ok(deployerBranchChip('bogus').includes('نامشخص'), 'an unknown status must degrade, not blank the cell');
+  const rate = deployerBranchErrorText({ ok: false, stage: 'list', error: 'RATE_LIMIT', detail: 'HTTP 403' });
+  assert.ok(rate.includes('محدودیت نرخ') && rate.includes('فهرست برنچ‌ها') && rate.includes('HTTP 403'));
+  assert.ok(deployerBranchErrorText({ ok: false, stage: 'list', error: 'UNREACHABLE', detail: 'boom' }).includes('از دست سرور'));
+  assert.ok(deployerBranchErrorText(null).includes('پاسخ خالی'));
 });
 
-test('branches table: scan renders versions, statuses and per-env actions', async () => {
+test('branches table: scan renders the server reply and per-env actions', async () => {
   const src = await dashboard();
-  const branches = [{ name: 'arena/01a09468-new' }, { name: 'arena/01a0803e-new' }, { name: 'main' }];
-  const versions = { 'arena/01a09468-new': '1.159.0', 'arena/01a0803e-new': '1.127.0' };
-  const fetchCalls = [];
-  const fetch = async url => {
-    fetchCalls.push(url);
-    if (url.includes('api.github.com')) return { json: async () => branches };
-    const name = branches.find(b => url.includes(encodeURIComponent(b.name)))?.name;
-    return versions[name] ? { ok: true, json: async () => ({ version: versions[name] }) } : { ok: false };
-  };
   const box = { innerHTML: '' }, run = { textContent: '' };
   const opened = [], notices = [];
+  const reply = {
+    ok: true, running: '1.127.0', cached: true,
+    branches: [
+      { name: 'arena/01a09468-new', version: '1.160.0', status: 'newer' },
+      { name: 'main', version: '', status: 'unknown' }
+    ]
+  };
   const stubs = {
-    ...TRIVIAL, fetch, notice: (m, k) => notices.push([m, k]),
+    ...TRIVIAL, notice: (m, k) => notices.push([m, k]),
     $: id => ({ deployerBranches: box, deployerRunningVer: run }[id] || null),
-    api: async () => ({ version: '1.127.0' }),
+    api: async path => {
+      assert.equal(path, '/api/deployer/branches', 'the scan must be same-origin');
+      return reply;
+    },
+    fetch: async () => { throw Error('the client must never call GitHub directly'); },
     location: { hostname: 'localhost' }, window: { open: (...a) => opened.push(a), isSecureContext: true },
     navigator: { clipboard: { writeText: async () => {} } }
   };
   const { scanDeployerBranches, deployerBranchAction } = loadBranchTable(src, stubs);
   await scanDeployerBranches();
   assert.ok(run.textContent.includes('1.127.0'), 'the running version must be shown');
-  assert.equal(fetchCalls.filter(u => u.includes('api.github.com')).length, 1, 'one branch-list call per scan');
-  assert.equal(fetchCalls.filter(u => u.includes('raw.githubusercontent.com')).length, 3, 'one manifest fetch per branch');
-  for (const token of ['pdest-table', 'arena/01a09468-new', '1.159.0', '1.127.0', '—', 'جدیدتر', 'برابر', 'نامشخص', 'data-deployer-branch']) {
+  assert.ok(run.textContent.includes('از کش'), 'a cached reply must say so');
+  for (const token of ['pdest-table', 'arena/01a09468-new', '1.160.0', '—', 'جدیدتر', 'نامشخص', 'data-deployer-branch']) {
     assert.ok(box.innerHTML.includes(token), `the table must render ${token}`);
   }
   assert.ok(box.innerHTML.includes('نصب در دیپلویر'), 'localhost rows must offer the deployer install');
@@ -135,15 +138,23 @@ test('branches table: scan renders versions, statuses and per-env actions', asyn
   await remote.deployerBranchAction('arena/01a0803e-new');
   assert.equal(copied, 'arena/01a0803e-new');
   assert.ok(notices.some(([m, k]) => k === 'ok' && m.includes('کپی شد')), 'the copy must be acknowledged');
+  // A failed scan names the stage and the cause instead of a bare error.
+  await loadBranchTable(src, {
+    ...stubs, api: async () => ({ ok: false, stage: 'list', error: 'RATE_LIMIT', detail: 'HTTP 403' })
+  }).scanDeployerBranches();
+  assert.ok(box.innerHTML.includes('خطا در خواندن برنچ‌ها'), 'the failure must keep its heading');
+  assert.ok(box.innerHTML.includes('محدودیت نرخ') && box.innerHTML.includes('HTTP 403'), 'the failure must name the cause');
 });
 
 test('branches table: wiring and deployer deep-link are in place', async () => {
   const text = await dashboard();
   for (const token of ['deployer-scan-branches', 'scanDeployerBranches();return', 'data-deployer-branch',
-    'deployerBranchAction(dbr.dataset.deployerBranch)', 'api.github.com/repos/fazilatma/new/branches',
-    'raw.githubusercontent.com', 'localhost:8790/#branches']) {
+    'deployerBranchAction(dbr.dataset.deployerBranch)', '/api/deployer/branches', 'deployerBranchErrorText(data)',
+    'deployerBranchChip(r.status)', 'localhost:8790/#branches']) {
     assert.ok(text.includes(token), `the branches table must include ${token}`);
   }
+  assert.ok(!text.includes('api.github.com'), 'the dashboard must not call GitHub from the browser (CSP)');
+  assert.ok(!text.includes('raw.githubusercontent.com'), 'the dashboard must not fetch manifests from the browser (CSP)');
   const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
   assert.ok(deployer.includes("location.hash==='#branches'"), 'the deployer must honor the #branches deep-link');
 });
