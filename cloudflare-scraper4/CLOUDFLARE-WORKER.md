@@ -69,8 +69,8 @@ Git integration پس از هر push جدید به شاخهٔ production، reposi
 
 1. در Cloudflare Dashboard به **Workers & Pages → scraper4-cloudflare → Settings → Builds** بروید.
 2. **Production branch** را `arena/01a09468-new` بگذارید و **Save** بزنید.
-3. در **Deployments** روی آخرین deployment دکمهٔ **Retry deployment** (یا **Redeploy**) را بزنید.
-4. بعد از سبز شدن بیلد، `/api/version` را باز کنید و نسخه را با `package.json` همین شاخه مقایسه کنید.
+3. یک کامیت تازه به همین شاخه push کنید تا بیلد جدید شروع شود (ساده‌ترین راه بدون ترمینال: ویرایش یک غلط املایی در همین فایل از داخل سایت GitHub و Commit). دکمهٔ Retry deployment فقط همان کامیت قبلی را دوباره می‌سازد و شاخهٔ جدید را نمی‌گیرد.
+4. بعد از سبز شدن بیلد، `/api/version` را باز کنید و نسخه را با `package.json` همین شاخه مقایسه کنید. اگر بیلد سبز شد ولی نسخه عوض نشد، هش کامیت نمایش‌داده‌شده در صفحهٔ Deployments را با آخرین کامیت شاخه مقایسه کنید.
 
 از این به بعد هر push به همین شاخه خودکار مستقر می‌شود. اگر بیلد قرمز شد، با Rollback در همان صفحه به نسخهٔ قبلی سالم برگردید.
 

@@ -38,7 +38,7 @@ test('deploy pointers: Cloudflare doc names the checked-out branch', () => {
 
 test('deploy pointers: stale-deployment recovery is documented', () => {
   const doc = readFileSync(join(ROOT, 'CLOUDFLARE-WORKER.md'), 'utf8');
-  for (const token of ['Production branch', 'Retry deployment', 'Rollback', '/api/version', 'package.json']) {
+  for (const token of ['Production branch', 'Retry deployment', 'Rollback', '/api/version', 'package.json', 'کامیت تازه', 'Deployments']) {
     assert.ok(doc.includes(token), `the recovery guide must mention ${token}`);
   }
 });
