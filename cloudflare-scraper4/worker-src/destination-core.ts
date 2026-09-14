@@ -226,10 +226,13 @@ export function selectCategoryModels(input: { mode?: any; master?: any; candidat
   if (mode === 'master' || mode === 'master-candidates') {
     const pinned = String(input.master ?? '').trim();
     if (!pinned) throw new Error('مدل مستر انتخاب نشده است؛ ابتدا در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل را مستر کنید.');
-    const masterKey = resolveMasterKey(usable, pinned);
-    if (!masterKey) throw new Error(`مدل مستر (${pinned}) در آخرین تست مدل‌ها موفق نبوده است؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.`);
+    // Manual selection wins: the pinned master and candidates run even when the last
+    // server-side test marked them red (or never tested them). Only the ensemble,
+    // which the user does not hand-pick, stays limited to green models.
+    const masterKey = resolveMasterKey(configured, pinned);
+    if (!masterKey) throw new Error(`مدل مستر (${pinned}) دیگر در میان مدل‌های پیکربندی‌شده نیست؛ در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل معتبر را مستر کنید.`);
     if (mode === 'master') return [masterKey];
-    return [masterKey, ...wanted.filter(key => key !== masterKey && usable.includes(key))].slice(0, 5);
+    return [masterKey, ...wanted.filter(key => key !== masterKey && configured.includes(key))].slice(0, 5);
   }
   return [...new Set([...wanted.filter(key => usable.includes(key)), ...usable])].slice(0, 5);
 }

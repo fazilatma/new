@@ -207,20 +207,23 @@ test('resolveMasterKey matches full keys and bare model names', () => {
   assert.equal(core.resolveMasterKey(configured, null), null);
 });
 
-test('selectCategoryModels runs the master alone or fails with guidance', () => {
+test('selectCategoryModels runs the pinned master even when it is red', () => {
   const base = { master: 'p1::m1', candidates: ['p1::m2'], configured: ['p1::m1', 'p1::m2', 'p1::m3'], green: ['p1::m1', 'p1::m2', 'p1::m3'] };
   assert.deepEqual(core.selectCategoryModels({ ...base, mode: 'master' }), ['p1::m1']);
+  // Manual selection wins over the test gate: a red or untested master still runs.
+  assert.deepEqual(core.selectCategoryModels({ ...base, mode: 'master', green: ['p1::m2'] }), ['p1::m1']);
+  assert.deepEqual(core.selectCategoryModels({ ...base, mode: 'master', green: [] }), ['p1::m1']);
   assert.throws(() => core.selectCategoryModels({ ...base, mode: 'master', master: '' }), /مستر انتخاب نشده/);
-  assert.throws(() => core.selectCategoryModels({ ...base, mode: 'master', green: ['p1::m2'] }), /آخرین تست/);
+  assert.throws(() => core.selectCategoryModels({ ...base, mode: 'master', master: 'p9::gone' }), /پیکربندی‌شده/);
 });
 
-test('selectCategoryModels backs the master with green candidates, capped at 5', () => {
-  const configured = ['m::master', 'c::c1', 'c::c2', 'c::c3', 'c::c4', 'c::c5', 'x::other'];
+test('selectCategoryModels backs the master with pinned candidates, capped at 5', () => {
+  const configured = ['m::master', 'c::c1', 'c::c2', 'c::c3', 'c::c4', 'c::c5', 'c::red', 'x::other'];
   assert.deepEqual(core.selectCategoryModels({ mode: 'master-candidates', master: 'm::master', candidates: ['c::c1', 'c::c2', 'c::c3', 'c::c4', 'c::c5'], configured, green: [...configured] }),
     ['m::master', 'c::c1', 'c::c2', 'c::c3', 'c::c4']);
-  // Non-candidate green models never join this mode; red candidates are skipped.
+  // Non-candidate models never join this mode, but pinned candidates run even when red.
   assert.deepEqual(core.selectCategoryModels({ mode: 'master-candidates', master: 'm::master', candidates: ['c::c1', 'c::red'], configured, green: ['m::master', 'c::c1', 'x::other'] }),
-    ['m::master', 'c::c1']);
+    ['m::master', 'c::c1', 'c::red']);
   assert.throws(() => core.selectCategoryModels({ mode: 'master-candidates', master: '', candidates: [], configured, green: [...configured] }), /مستر انتخاب نشده/);
 });
 

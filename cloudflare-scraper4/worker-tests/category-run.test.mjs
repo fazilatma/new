@@ -314,25 +314,34 @@ test('master mode votes with the pinned master alone', async () => {
   assert.deepEqual(harness.suggestCalls.map(call => call.key), ['p1::boss'], 'only the master is asked');
 });
 
-test('master mode without a green master fails fast with guidance', async () => {
+test('master mode runs a red master; only a missing or stale pin fails fast', async () => {
   reset();
   harness.providers = [greenProvider('p1', ['boss'])];
   setTestResults([{ ok: true, provider: 'p1', model: 'boss' }]);
   await assert.rejects(() => categoryRun.startCategoryRun({ mode: 'master' }), /مستر انتخاب نشده/);
   assert.ok(!harness.states.has(RUN_KEY));
+  harness.master = 'p1::gone';
+  await assert.rejects(() => categoryRun.startCategoryRun({ mode: 'master' }), /پیکربندی‌شده/);
+  assert.ok(!harness.states.has(RUN_KEY));
+  // A red master still runs: manual selection wins over the test gate.
   harness.master = 'p1::boss';
   setTestResults([{ ok: false, provider: 'p1', model: 'boss' }]);
-  await assert.rejects(() => categoryRun.startCategoryRun({ mode: 'master' }), /آخرین تست/);
-  assert.ok(!harness.states.has(RUN_KEY));
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [{ products: [{ id: 14, shopId: '55', title: 'Nu' }] }];
+  harness.votes = { 'p1::boss': { categoryId: 101, categoryName: 'A' } };
+  const { run } = await categoryRun.startCategoryRun({ mode: 'master' });
+  assert.deepEqual(run.modelKeys, ['p1::boss']);
+  const done = await waitDone();
+  assert.equal(done.changed, 1);
 });
 
-test('master-candidates mode backs the master with green candidates only', async () => {
+test('master-candidates mode backs the master with pinned candidates, red included', async () => {
   reset();
-  harness.providers = [greenProvider('p1', ['boss', 'c1', 'c2', 'outsider'])];
+  harness.providers = [greenProvider('p1', ['boss', 'c1', 'c2', 'c3red', 'outsider'])];
   harness.master = 'p1::boss';
-  harness.candidates = ['p1::c1', 'p1::c2'];
+  harness.candidates = ['p1::c1', 'p1::c2', 'p1::c3red'];
   setTestResults(['boss', 'c1', 'c2', 'outsider'].map(model => ({ ok: true, provider: 'p1', model })));
-  assert.deepEqual(await categoryRun.successfulCategoryModels('master-candidates'), ['p1::boss', 'p1::c1', 'p1::c2']);
+  assert.deepEqual(await categoryRun.successfulCategoryModels('master-candidates'), ['p1::boss', 'p1::c1', 'p1::c2', 'p1::c3red']);
   harness.categories = [{ id: 101, name: 'A', leaf: true }];
   harness.pages = [{ products: [{ id: 12, shopId: '55', title: 'Lambda' }] }];
   harness.votes = { 'p1::boss': { categoryId: 101, categoryName: 'A' }, 'p1::c1': { categoryId: 101, categoryName: 'A' } };

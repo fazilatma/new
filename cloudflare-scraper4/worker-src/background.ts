@@ -175,7 +175,7 @@ export async function startAiTestRun(input:any,waitUntil?:(promise:Promise<unkno
 
 async function successfulCategoryModels(mode?:any):Promise<string[]>{
   const[tests,connections]=await Promise.all([getLastAiTestResults(),loadConnections()]),green=new Set<string>((Array.isArray(tests?.results)?tests.results:[]).filter((row:any)=>row?.ok===true).map((row:any)=>`${row.provider}::${row.model}`)),ai=connections.ai,candidates=Array.isArray(ai.candidates)?ai.candidates.map(String):[],providers=ai.providers.length?ai.providers:[{id:'default',models:ai.model?[ai.model]:[],enabled:true}],configured:string[]=[];
-  for(const provider of providers)if(provider.enabled!==false)for(const model of provider.models||[]){const key=`${provider.id}::${model}`;if(model&&green.has(key)&&isChatCompatibleAiModel(provider,model))configured.push(key)}
+  for(const provider of providers)if(provider.enabled!==false)for(const model of provider.models||[]){const key=`${provider.id}::${model}`;if(model&&isChatCompatibleAiModel(provider,model))configured.push(key)}
   return selectCategoryModels({mode,master:(ai as any).master,candidates,configured,green});
 }
 export async function startAllUnapprovedCategoryRun(waitUntil?:(promise:Promise<unknown>)=>void,input?:any):Promise<{run:any;existing:boolean}>{

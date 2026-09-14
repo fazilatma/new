@@ -56,9 +56,11 @@ export async function getPublicCategoryRun(): Promise<any> { return publicRun(aw
 export async function resetCategoryRun(): Promise<void> { await setState(RUN_KEY, null); }
 
 /**
- * Green chat-compatible models from the last server-side AI test, capped at 5.
- * Mirrors the Worker's successfulCategoryModels(): candidates the user pinned
- * come first, then every other green configured model. Node providers are
+ * Models eligible to vote, capped at 5. Mirrors the Worker's
+ * successfulCategoryModels(): every enabled chat-compatible model is configured,
+ * the green set from the last server-side AI test only gates the automatic
+ * ensemble, and manually pinned masters/candidates always run. Candidates the
+ * user pinned come first, then every other configured model. Node providers are
  * OpenAI-compatible chat endpoints, so only the explicit non-chat lists opt a
  * model out (per-provider nonChatModels plus OpenRouter's dedicated models).
  */
@@ -68,7 +70,7 @@ export async function successfulCategoryModels(mode?: any): Promise<string[]> {
   const ai = connections.ai, candidates = Array.isArray(ai.candidates) ? ai.candidates.map(String) : [], providers = await aiProviders(), configured: string[] = [];
   for (const provider of providers) if (provider.enabled !== false) for (const model of provider.models || []) {
     const key = `${provider.id}::${model}`;
-    if (model && green.has(key) && isUsableCategoryModel(provider, model)) configured.push(key);
+    if (model && isUsableCategoryModel(provider, model)) configured.push(key);
   }
   return selectCategoryModels({ mode, master: (ai as any).master, candidates, configured, green });
 }
