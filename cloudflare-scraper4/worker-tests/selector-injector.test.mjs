@@ -201,9 +201,13 @@ test('injector: the dashboard embeds the snippet byte-for-byte (no drift, all en
   const embedded = dash.slice(i + open.length, dash.indexOf('</script>', i));
   // Reverse the TS template-literal escaping (backslash, backtick) and compare bytes.
   assert.equal(embedded.replace(/\\(\\|`)/g, '$1'), injectorSrc, 'dashboard copy must equal tools/selector-injector.js exactly');
-  for (const marker of ["'injector'", 'data-copy-injector', 'function copyInjectorScript(', 'renderInjectorPreview()', 'injectorPreview', 'injectorCopyStatus']) {
+  for (const marker of ['data-copy-injector', 'injectorCopyBtn', 'function copyInjectorScript(', 'renderInjectorPreview()', 'injectorPreview', 'injectorCopyStatus']) {
     assert.ok(dash.includes(marker), `dashboard must wire ${marker}`);
   }
+  // The injector lives in the selectors sub-panel (moved out of the hamburger menu in 1.162).
+  assert.ok(!dash.includes("'injector'"), 'injector must not linger as a hamburger-menu key');
+  const selPane = dash.indexOf('data-panel="selectors"'), injPrev = dash.indexOf('id="injectorPreview"'), detPane = dash.indexOf('data-panel="details"');
+  assert.ok(selPane >= 0 && selPane < injPrev && injPrev < detPane, 'injector card must sit inside the selectors sub-panel');
   // One dashboard source serves every runtime (render re-exports it).
   const renderDash = await readFile(join(ROOT, 'render-src', 'dashboard.ts'), 'utf8');
   assert.ok(renderDash.includes('../worker-src/dashboard.js'), 'render must keep serving the shared dashboard');
