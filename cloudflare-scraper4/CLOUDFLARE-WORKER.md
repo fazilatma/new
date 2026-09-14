@@ -38,7 +38,7 @@ R2 عمداً در تنظیمات production تعریف نشده است، زیر
 1. در Cloudflare Dashboard به **Workers & Pages** بروید.
 2. **Create application / Import a repository** را انتخاب کنید و repository را از GitHub متصل کنید.
 3. نام Worker را `scraper4-cloudflare` قرار دهید.
-4. شاخهٔ production را `arena/01a0765b-new` انتخاب کنید.
+4. شاخهٔ production را `arena/01a09468-new` انتخاب کنید.
 5. Root directory را `cloudflare-scraper4` بگذارید.
 6. در **Build variables and secrets** متغیر build زیر را اضافه کنید تا فایل Python قدیمی repository نصب نشود:
 
@@ -62,6 +62,17 @@ R2 عمداً در تنظیمات production تعریف نشده است، زیر
 10. **Save and Deploy** را بزنید.
 
 Git integration پس از هر push جدید به شاخهٔ production، repository را خودش checkout و build می‌کند. Worker در runtime دستور `git pull` اجرا نمی‌کند و نباید هم‌زمان یک GitHub Actions deploy جداگانه فعال شود.
+
+### اگر نسخهٔ مستقر قدیمی مانده (مثلاً ۱.۱۲۷)
+
+نسخهٔ داشبورد (نشان بالای صفحه یا `/api/version`) باید با آخرین نسخهٔ همین شاخه یکی باشد. اگر عقب است، شاخهٔ production در Workers Builds روی شاخهٔ قدیمی قفل شده:
+
+1. در Cloudflare Dashboard به **Workers & Pages → scraper4-cloudflare → Settings → Builds** بروید.
+2. **Production branch** را `arena/01a09468-new` بگذارید و **Save** بزنید.
+3. در **Deployments** روی آخرین deployment دکمهٔ **Retry deployment** (یا **Redeploy**) را بزنید.
+4. بعد از سبز شدن بیلد، `/api/version` را باز کنید و نسخه را با `package.json` همین شاخه مقایسه کنید.
+
+از این به بعد هر push به همین شاخه خودکار مستقر می‌شود. اگر بیلد قرمز شد، با Rollback در همان صفحه به نسخهٔ قبلی سالم برگردید.
 
 ### 2. resourceهایی که deploy خودکار می‌سازد
 

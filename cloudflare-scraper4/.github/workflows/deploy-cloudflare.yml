@@ -1,13 +1,13 @@
 # Deploy Cloudflare Worker — GitHub Actions workflow
 # ⚠️ GitHub به اپلیکیشن‌ها (عامل‌های خودکار) اجازه نمی‌دهد فایل workflow بسازند؛
 # پس این قالب باید دستی به مسیر `.github/workflows/deploy-cloudflare.yml` منتقل شود.
-# بعد از commit این فایل روی برنچ arena/01a02198-code، دیپلوی خودکار اجرا می‌شود.
+# بعد از commit این فایل روی برنچ arena/01a09468-new، دیپلوی خودکار اجرا می‌شود.
 
 name: Deploy Cloudflare Worker
 
 on:
   push:
-    branches: [arena/01a02198-code]
+    branches: [arena/01a09468-new]
   workflow_dispatch:
     inputs:
       CF_API_TOKEN:
