@@ -3,6 +3,8 @@ import { MISTRAL_MODEL_ENDPOINTS, OPENROUTER_NON_CHAT_MODELS } from './ai-catalo
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { assertPublicUrl, normalizeProxyUrl, safeFetch } from './network.js';
+import { categoryPrompt, parseCategoryId } from './destination-core.js';
+import type { AiCategoryOption } from './destination-core.js';
 
 export type CfAccountKey={accountId:string;token:string};
 export type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels:string[];nonChatModels?:string[];vendor?:string;enabled:boolean};
@@ -365,14 +367,7 @@ function aiErrorMessage(body:any):string{
   return String(body?.error?.message||body?.message||body?.error||'').trim();
 }
 
-export type AiCategoryOption={id:number;name:string;path?:string;parentId?:number|null;leaf?:boolean};
-function categoryRows(title:string,categories:AiCategoryOption[]){
-  const words=normalizeCategoryText(title).split(' ').filter(word=>word.length>1),rows=categories.filter(row=>Number.isInteger(Number(row.id))&&Number(row.id)>0&&(row.leaf!==false||!categories.some(other=>Number(other.parentId)===Number(row.id))));
-  return rows.map((row,index)=>{const name=String(row.path||row.name),normalized=normalizeCategoryText(name),score=words.reduce((sum,word)=>sum+(normalized.includes(word)?word.length+2:0),0);return{row,index,name,score}}).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,500);
-}
-function normalizeCategoryText(value:string){return normalizePersianText(value).replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim()}
-function categoryPrompt(title:string,categories:AiCategoryOption[]){const ranked=categoryRows(title,categories),allowed:AiCategoryOption[]=[],lines:string[]=[];let length=0;for(const item of ranked){const line=`${item.row.id} | ${item.name}`;if(length+line.length+1>18_000)break;lines.push(line);allowed.push(item.row);length+=line.length+1}if(!lines.length)throw new Error('فهرست معتبر دسته‌بندی باسلام در دسترس نیست.');return{allowed,prompt:`برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}`}}
-function parseCategoryId(text:string,categories:AiCategoryOption[]){const source=String(text||''),valid=new Set(categories.map(row=>Number(row.id)));for(const candidate of [source,...[...source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map(match=>match[1])])try{const parsed=JSON.parse(candidate.trim());const id=Number(parsed?.category_id??parsed?.categoryId??parsed?.id);if(valid.has(id))return id}catch{/* response can contain prose */}for(const match of source.matchAll(/["']?category_(?:id)?["']?\s*[:=]\s*["']?(\d+)/gi)){const id=Number(match[1]);if(valid.has(id))return id}const numbers=[...source.matchAll(/\d+/g)].map(match=>Number(match[0])).filter(id=>valid.has(id));return numbers.length?numbers.at(-1)!:0}
+export type { AiCategoryOption } from './destination-core.js';
 async function categoryWithTask(task:AiTestTask,title:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number){
   if(!isChatCompatibleAiModel(task.p,task.model))throw new AiResponseError('این مدل endpoint اختصاصی دارد و برای گفت‌وگو یا دسته‌بندی کاندید نمی‌شود.',{ok:false,skipped:true,phase:'unsupported-task',provider:task.p.id,providerName:task.p.name,model:task.model,prompt:title,endpointType:aiModelEndpoint(task.p,task.model),chatCompatible:false,latencyMs:0,raw:{reason:'dedicated endpoint model'}});
   const prepared=categoryPrompt(title,categories),detail=await aiCall(task.p,task.model,prepared.prompt,network,timeoutMs),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);

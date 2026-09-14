@@ -6,14 +6,14 @@ import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
+import { applyPrice, basalamStatuses, bulkPayload, categoryChildren, categoryRoots, clamp, dedupeCategories, directPayload, flattenCategoryTree, imageValue, msg, normalizeCategoryAssignments, normalizeRefs, normalizeRemote, numberOrNull, rowsFrom, selectShops, statusPayload, unwrapProduct, wooListStatus } from './destination-core.js';
+import type { BasalamShopStall, CatalogQuery, DestinationCategory, ProductRef, RichRemote } from './destination-core.js';
 
 const norm=(v:string)=>normalizePersianText(v).replace(/\s*[\[(](?:کد|code|sku)?\s*[:：]?\s*\d+[\])]]\s*$/i,'').trim();
 type Target='woo'|'basalam';
-type Shop={name:string;token:string;vendorId:string;pricePercent:number;primary:boolean};
-export type Remote={id:number;name:string;title:string;sku:string;images:string[];image:string;status:string;statusLabel:string;price:number;priceRaw:number;stock:number|null;category:string;categoryId:number|null;shopId:string;shopName:string;rejectionReason:string;shortDescription:string;description:string;raw:any};
-type CatalogQuery={page?:number;perPage?:number;q?:string;status?:string;shopId?:string;counts?:boolean};
-type ProductRef={id:number;shopId:string};
-export type DestinationCategory={id:number;name:string;path:string;parentId:number|null;depth:number;leaf:boolean};
+type Shop=BasalamShopStall;
+export type Remote=RichRemote;
+export type { DestinationCategory } from './destination-core.js';
 
 /**
  * PHP scraper4 v10.170 parity: reconciliation ("مغایرت‌گیری") table.
@@ -318,32 +318,6 @@ async function applyBulk(target:Target,updates:Array<{ref:ProductRef;payload:any
   for(const item of updates)try{if(item.payload.delete){await destinationDelete('woo',item.ref.id,item.payload.force);deleted++}else{await wooUpdate(item.ref.id,item.payload);changed++}}catch(error){failed.push({id:item.ref.id,shopId:'default',error:msg(error)})}return{changed,deleted,failed};
 }
 
-function directPayload(target:Target,input:any,current:Remote):any{
-  const payload:any={};
-  if(input.title!==undefined&&String(input.title).trim()&&String(input.title).trim()!==current.title)payload[target==='woo'?'name':'name']=String(input.title).trim().slice(0,target==='woo'?300:120);
-  if(input.price!==undefined&&input.price!==''&&Number.isFinite(Number(input.price))){const price=Math.max(0,Math.round(Number(input.price)));if(price!==current.price)payload[target==='woo'?'regular_price':'primary_price']=target==='woo'?String(price):price*10}
-  if(input.stock!==undefined&&input.stock!==''&&Number.isFinite(Number(input.stock))){const stock=Math.max(0,Math.round(Number(input.stock)));target==='woo'?Object.assign(payload,{manage_stock:true,stock_quantity:stock,stock_status:stock>0?'instock':'outofstock'}):payload.stock=stock}
-  if(input.status!==undefined&&String(input.status))Object.assign(payload,statusPayload(target,String(input.status)));
-  if(input.shortDescription!==undefined)payload[target==='woo'?'short_description':'brief']=String(input.shortDescription).slice(0,target==='woo'?20_000:250);
-  if(input.description!==undefined)payload.description=String(input.description).slice(0,100_000);
-  if(input.sku!==undefined&&target==='woo')payload.sku=String(input.sku).slice(0,100);
-  if(input.categoryId!==undefined&&Number(input.categoryId)>0)target==='woo'?payload.categories=[{id:Number(input.categoryId)}]:payload.category_id=Number(input.categoryId);
-  if(target==='basalam')for(const key of ['preparation_days','weight','package_weight'])if(input[key]!==undefined&&Number(input[key])>=0)payload[key]=Number(input[key]);
-  return payload;
-}
-function bulkPayload(target:Target,ops:any,current:Remote){const payload:any={},summary:any={};
-  if(ops.price&&typeof ops.price==='object'){const next=applyPrice(String(ops.price.op||''),String(ops.price.val??''),current.price);if(next!==null&&next!==current.price){payload[target==='woo'?'regular_price':'primary_price']=target==='woo'?String(next):next*10;summary.newPrice=next;summary.pricePercent=current.price?Math.round((next-current.price)/current.price*1000)/10:0}}
-  if(ops.stock!==undefined&&ops.stock!==''){const stock=Math.max(0,Math.round(Number(ops.stock)||0));target==='woo'?Object.assign(payload,{manage_stock:true,stock_quantity:stock,stock_status:stock>0?'instock':'outofstock'}):payload.stock=stock;summary.stock=stock}
-  if(ops.status)Object.assign(payload,statusPayload(target,String(ops.status)));
-  if(ops.description!==undefined||ops.desc!==undefined)payload.description=String(ops.description??ops.desc).slice(0,100_000);
-  if(ops.shortDescription!==undefined||ops.short_desc!==undefined)payload[target==='woo'?'short_description':'brief']=String(ops.shortDescription??ops.short_desc).slice(0,target==='woo'?20_000:250);
-  if(ops.categoryId!==undefined&&Number(ops.categoryId)>0){const categoryId=Math.round(Number(ops.categoryId));target==='woo'?payload.categories=[{id:categoryId}]:payload.category_id=categoryId;summary.newCategoryId=categoryId}
-  const title=(String(ops.titlePrefix??ops.title_prefix??'')+current.title+String(ops.titleSuffix??ops.title_suffix??'')).trim();if(title&&title!==current.title){payload.name=title.slice(0,target==='woo'?300:120);summary.newTitle=title}
-  return{payload,summary};
-}
-function statusPayload(target:Target,status:string){if(target==='woo'){if(!['publish','draft','private','pending','trash'].includes(status))throw Error('وضعیت ووکامرس نامعتبر است.');return{status}}const number=Number(status);if(![2976,3790,3567,3568,4184].includes(number))throw Error('وضعیت باسلام نامعتبر است.');return{status:number}}
-function applyPrice(op:string,value:string,current:number):number|null{if(!['set','inc','dec'].includes(op))return null;const percent=value.trim().endsWith('%'),amount=Number(value.replace('%','').replace(/,/g,''));if(!Number.isFinite(amount))return null;let next=op==='set'?amount:op==='inc'?current+(percent?current*amount/100:amount):current-(percent?current*amount/100:amount);return Math.max(0,Math.round(next))}
-
 async function remoteProducts(target:Target):Promise<Remote[]>{return listDestinationProducts(target)}
 async function wooProducts(){const out:Remote[]=[];for(let page=1;page<=100;page++){const data=await wooCatalog({page,perPage:100,q:'',status:'all'});out.push(...data.products);if(page>=data.totalPages)break}return out}
 async function basalamProducts(){const out:Remote[]=[];for(const shop of await basalamShops())for(let page=1;page<=100;page++){const data=await basalamCatalog({page,perPage:100,q:'',status:'all',shopId:shop.vendorId});out.push(...data.products);if(page>=data.totalPages)break}return out}
@@ -359,7 +333,6 @@ async function wooStatusCounts(){const statuses=['all','publish','draft','pendin
 async function wooGet(id:number){const c=(await loadConnections()).woo,auth=basicAuth(c.key,c.secret),result=await fetchJson(`${wooBase(c)}/${id}`,{headers:{authorization:auth,accept:'application/json'}},true);return normalizeRemote('woo',unwrapProduct(result.body),'default','فروشگاه ووکامرس')}
 async function wooUpdate(id:number,payload:any){const c=(await loadConnections()).woo,auth=basicAuth(c.key,c.secret),result=await fetchJson(`${wooBase(c)}/${id}`,{method:'PUT',headers:{authorization:auth,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},true);return result.body}
 function wooBase(c:ConnectionVault['woo']){if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');return c.url.replace(/\/$/,'')+'/wp-json/wc/v3/products'}
-function wooListStatus(status:string){return ['publish','draft','pending','private','trash'].includes(status)?status:'any'}
 
 async function basalamCatalog(query:{page:number;perPage:number;q:string;status:string;shopId:string}){
   const shops=selectShops(await basalamShops(),query.shopId);if(!shops.length)throw Error('غرفهٔ باسلام پیدا نشد.');
@@ -373,26 +346,6 @@ async function basalamUpdate(id:number,payload:any,shopId=''){const shops=select
 async function basalamBatchUpdate(shopId:string,items:any[]){const shop=(await basalamShops()).find(item=>item.vendorId===shopId);if(!shop)throw Error('غرفهٔ باسلام پیدا نشد.');return(await basalamFetch(shop,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/batch-updates`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({data:items})})).body}
 async function basalamFetch(shop:Shop,url:string,init:RequestInit={}){return fetchJson(url,{...init,headers:{authorization:`Bearer ${shop.token}`,accept:'application/json',...init.headers}},'basalam')}
 async function basalamShops():Promise<Shop[]>{const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const rows:Shop[]=[{name:'غرفه پیش‌فرض',token:c.token,vendorId:String(c.vendorId),pricePercent:0,primary:true},...c.shops.filter(shop=>shop.token&&shop.vendorId).map(shop=>({...shop,vendorId:String(shop.vendorId),primary:false}))],seen=new Set<string>();return rows.filter(row=>row.vendorId&&!seen.has(row.vendorId)&&(seen.add(row.vendorId),true))}
-function selectShops(shops:Shop[],shopId:string){return !shopId||shopId==='all'||shopId==='0'?shops:shops.filter(shop=>shop.vendorId===String(shopId))}
-function basalamStatuses(status:string){const map:Record<string,string[]>={all:['2976','3790','3567','3568','4184','2977','2978','3248','4221'],active:['2976'],inactive:['3790'],not_approved:['3567'],pending:['3568'],archived:['4184']};return map[status]||([2976,3790,3567,3568,4184].includes(Number(status))?[String(status)]:map.all)}
-function categoryRoots(body:any):any[]{const candidates=[body?.data?.categories,body?.data,body?.categories,body?.results,body?.items,body];for(const value of candidates)if(Array.isArray(value))return value;return[]}
-function categoryChildren(row:any):any[]{for(const value of [row?.children,row?.childs,row?.subcategories,row?.categories,row?.data?.children])if(Array.isArray(value))return value;return[]}
-function flattenCategoryTree(rows:any[],out:DestinationCategory[],parents:string[],depth:number,parentId:number|null){for(const row of rows){const id=Number(row?.id??row?.category_id??row?.value),name=String(row?.name??row?.title??row?.label??'').trim();if(!Number.isInteger(id)||id<=0||!name)continue;const children=categoryChildren(row),path=[...parents,name];out.push({id,name,path:path.join(' ← '),parentId,depth,leaf:children.length===0});if(children.length)flattenCategoryTree(children,out,path,depth+1,id)}}
-function dedupeCategories(rows:DestinationCategory[]){const seen=new Set<number>();return rows.filter(row=>!seen.has(row.id)&&(seen.add(row.id),true))}
-
-function normalizeRemote(target:Target,x:any,shopId:string,shopName:string):Remote{
-  const revision=x?.revision?.data||{},rawStatus=x?.status??revision.status??'',status=typeof rawStatus==='object'?String(rawStatus.value??rawStatus.id??''):String(rawStatus||''),statusLabel=typeof rawStatus==='object'?String(rawStatus.name||rawStatus.description||status):target==='basalam'?({'2976':'فعال','3790':'غیرفعال','3567':'تأیید نشده','3568':'در انتظار تأیید','4184':'بایگانی'}[status]||status):status;
-  const rawImages=target==='woo'?(x?.images||[]):(x?.photos||revision.photos||x?.images||(x?.photo||revision.photo?[x?.photo||revision.photo]:[])),images=(Array.isArray(rawImages)?rawImages:[]).map(imageValue).filter(Boolean),priceRaw=Number(x?.primary_price??revision.primary_price??x?.price??x?.regular_price??0)||0,category=x?.categories?.[0]||revision.category||x?.category||{},reasons=[rawStatus?.description,...(x?.revision?.rejection_reasons||[]).flatMap((item:any)=>[item?.name,item?.description])].filter(Boolean).join(' | ');
-  const title=String(x?.name||x?.title||revision.title||'');return{id:Number(x?.id)||0,name:title,title,sku:String(x?.sku||revision.sku||''),images,image:images[0]||'',status,statusLabel,price:target==='basalam'?Math.round(priceRaw/10):priceRaw,priceRaw,stock:numberOrNull(x?.stock_quantity??x?.inventory??revision.inventory??x?.stock),category:String(category?.name||category?.title||x?.category_name||''),categoryId:Number(category?.id||x?.category_id)||null,shopId,shopName,rejectionReason:reasons,shortDescription:String(x?.short_description||x?.brief||revision.brief||''),description:String(x?.description||revision.description||''),raw:x};
-}
-function imageValue(value:any):string{if(typeof value==='string')return value;if(!value||typeof value!=='object')return'';return String(value.src||value.original||value.lg||value.md||value.sm||value.xs||value.url||'')}
-function rowsFrom(body:any):any[]{const rows=body?.data??body?.products??body?.results??body?.items??body;return Array.isArray(rows)?rows:[]}
-function unwrapProduct(body:any):any{return body?.data?.product??body?.data??body?.product??body??{}}
-function numberOrNull(value:any):number|null{return value===null||value===undefined||value===''?null:(Number.isFinite(Number(value))?Number(value):null)}
-function normalizeRefs(ids:any[],shopId=''):ProductRef[]{const seen=new Set<string>(),rows:ProductRef[]=[];for(const value of ids||[]){const id=Number(typeof value==='object'?value.id:value),shop=String(typeof value==='object'?(value.shopId||value.shop_id||shopId):shopId||'');if(!Number.isInteger(id)||id<=0)continue;const key=`${shop}:${id}`;if(!seen.has(key)){seen.add(key);rows.push({id,shopId:shop})}}return rows}
-function normalizeCategoryAssignments(value:any){const rows=Array.isArray(value)?value:[],map=new Map<string,{categoryId:number;categoryName:string;source:string}>();for(const row of rows){const id=Number(row?.id),categoryId=Number(row?.categoryId??row?.category_id),shopId=String(row?.shopId??row?.shop_id??'');if(Number.isInteger(id)&&id>0&&Number.isInteger(categoryId)&&categoryId>0)map.set(`${shopId}:${id}`,{categoryId,categoryName:String(row?.categoryName??row?.category_name??''),source:String(row?.source??'')})}return map}
-function clamp(value:any,min:number,max:number,fallback:number){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.round(n))):fallback}
 
 class DestinationHttpError extends Error{constructor(public status:number,public body:any,url:string){super(`HTTP ${status} از ${new URL(url).hostname}: ${String(body?.message||body?.error||JSON.stringify(body)).slice(0,300)}`)}}
 async function fetchJson(url:string,init:RequestInit={},woo:boolean|'basalam'=false){const response=await (woo==='basalam'?safeBasalamFetch(url,init,10_000_000):woo?safeWooFetch(url,init,10_000_000):safeFetch(url,init,10_000_000)),text=await response.text();let body:any;try{body=text?JSON.parse(text):{}}catch{body={message:text.slice(0,500)}}if(!response.ok)throw new DestinationHttpError(response.status,body,url);return{response,body}}
-const msg=(e:unknown)=>e instanceof Error?e.message:String(e);

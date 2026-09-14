@@ -297,7 +297,7 @@ async function categorizeProduct(run:CategoryRun,product:any,categories:any[]):P
   const winner=[...votes.values()].sort((a,b)=>b.count-a.count)[0];
   if(winner&&currentCategory&&Number(winner.row.categoryId)===currentCategory){
     // The model's majority already matches the product's stored category: nothing to do.
-    run.processed++;appendCategoryItem(run,{...product,ok:true,categoryId:currentCategory,categoryName:String(winner.row.categoryName||''),source:`دستهٔ فعلی تأیید شد (${winner.count} از ${responded} مدل)`,confidence:responded?Math.round(winner.count/responded*100):0,error:undefined});
+    appendCategoryItem(run,{...product,ok:true,categoryId:currentCategory,categoryName:String(winner.row.categoryName||''),source:`دستهٔ فعلی تأیید شد (${winner.count} از ${responded} مدل)`,confidence:responded?Math.round(winner.count/responded*100):0,error:undefined});
   }else if(winner){
     try{const source=`هوش مصنوعی سرورساید: ${winner.count} از ${responded} مدل`;await applyBasalamCategory(product.id,product.shopId,Number(winner.row.categoryId),product.title,String(winner.row.categoryName||''),source);run.changed++;appendCategoryItem(run,{...product,ok:true,categoryId:Number(winner.row.categoryId),categoryName:String(winner.row.categoryName||''),source,confidence:responded?Math.round(winner.count/responded*100):0})}
     catch(error){await markBasalamCategoriesTried(product.shopId,product.id,[Number(winner.row.categoryId)]);run.failed++;appendCategoryItem(run,{...product,ok:false,error:(error instanceof Error?error.message:String(error))+' (دستهٔ پیشنهادی برای این محصول ثبت شد تا دوباره امتحان نشود.)'})}
@@ -328,7 +328,7 @@ async function processCategoryRun(run:CategoryRun):Promise<BackgroundOutcome>{
   // No start write: categorizeBatch/listCategoryProducts persist the checkpoint at
   // the end of every invocation, so an extra write here only wastes D1 write quota.
   run.status='running';run.startedAt ||= now();
-  return run.phase==='listing'||run.products.length===0?listCategoryProducts(run):categorizeBatch(run);
+  return run.phase==='listing'?listCategoryProducts(run):categorizeBatch(run);
 }
 
 function appendDedupItem(run:DedupRun,item:DedupItemLog){run.items.push({...item,name:String(item.name||'').slice(0,160),...(item.error?{error:String(item.error).slice(0,400)}:{})});if(run.items.length>400)run.items=run.items.slice(-400)}

@@ -372,6 +372,21 @@ export async function learnCategory(title:string,categoryId:number,categoryName=
 export async function findLearnedCategory(title:string,maxWords=5):Promise<{categoryId:number;categoryName:string;phrase:string;hits:number}|null>{const words=normalizeLearning(title).split(' ').filter(Boolean).slice(0,Math.max(1,Math.min(5,maxWords)));for(let n=words.length;n>=1;n--){const phrase=words.slice(0,n).join(' '),{rows}=await pool.query(`SELECT category_id,category_name,phrase,hits FROM category_learning WHERE phrase=$1 ORDER BY hits DESC,updated_at DESC LIMIT 1`,[phrase]);if(rows[0])return{categoryId:Number(rows[0].category_id),categoryName:rows[0].category_name,phrase:rows[0].phrase,hits:rows[0].hits}}return null}
 export async function importCategoryLearning(raw:any):Promise<number>{const items=Array.isArray(raw)?raw:Object.entries(raw||{}).map(([phrase,value]:any)=>({phrase,...(typeof value==='object'?value:{category_id:value})}));let count=0;for(const item of items){const phrase=normalizeLearning(String(item.phrase||item.key||'')),categoryId=Number(item.category_id||item.categoryId||item.cat_id||item.id);if(!phrase||!categoryId)continue;await pool.query(`INSERT INTO category_learning(phrase,category_id,category_name,hits,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(phrase,category_id) DO UPDATE SET category_name=EXCLUDED.category_name,hits=GREATEST(category_learning.hits,EXCLUDED.hits),updated_at=now()`,[phrase,categoryId,String(item.category_name||item.categoryName||item.cat_name||item.name||''),Math.max(1,Number(item.hits||item.count||1))]);count++}return count}
 export async function listCategoryLearning(limit=1000):Promise<any[]>{const {rows}=await pool.query('SELECT phrase,category_id,category_name,hits,updated_at FROM category_learning ORDER BY hits DESC,updated_at DESC LIMIT $1',[limit]);return rows}
+
+// ─── Basalam category bulk-fix: tried-category memory ─────────────────────────
+// Mirrors worker-src/db.ts byte-for-byte in behavior: same app_state key, same
+// 50-id cap per shop:product, so Worker and Node never retry a failed suggestion.
+export async function getTriedBasalamCategories(shopId:string,id:number):Promise<number[]>{
+  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
+  return Array.isArray(data[`${shopId}:${id}`])?data[`${shopId}:${id}`]:[];
+}
+export async function markBasalamCategoriesTried(shopId:string,id:number,ids:Array<number|string>):Promise<number[]>{
+  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),key=`${shopId}:${id}`,set=new Set(Array.isArray(data[key])?data[key]:[]);
+  for(const raw of ids||[]){const n=Number(raw);if(Number.isInteger(n)&&n>0)set.add(n)}
+  data[key]=[...set].slice(-50);
+  await setState('basalam_tried_categories_v1',data);
+  return data[key];
+}
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES($1,$2,$3,$4,$5)',[row.chatId,row.customer,row.input,row.output,row.source])}
 export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[Number(row.chat_id||0)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
 export async function listAutoreplyLog(limit=100):Promise<any[]>{const {rows}=await pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT $1',[limit]);return rows}

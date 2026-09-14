@@ -3,6 +3,8 @@ import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { assertPublicUrl, privateIp, safeFetch, viaWorkerUrl } from './network.js';
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
+import { categoryPrompt, parseCategoryId } from '../worker-src/destination-core.js';
+import type { AiCategoryOption } from '../worker-src/destination-core.js';
 
 type Provider={id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean};
 type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string};
@@ -367,4 +369,23 @@ ${context}
   } catch (error) {
     return { ok: false, changed: false, fields: [], provider: picked.provider.id, model: picked.model, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Asks one configured model for a Basalam category id. Mirrors the Worker's
+ * suggestCategoryWithModel(): the prompt builder and id parser are the shared
+ * worker-src/destination-core.ts, only the HTTP call below is Node-specific.
+ * Always resolves (never throws on model errors) so bulk voting can continue
+ * with the remaining models; only a missing title or unknown modelKey throws.
+ */
+export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[]){
+  const providers=await aiProviders(),[providerId,...modelParts]=String(modelKey||'').split('::'),model=modelParts.join('::'),provider=providers.find(item=>item.id===providerId&&item.enabled!==false&&item.models.includes(model));
+  if(!String(title||'').trim())throw new Error('عنوان محصول برای دسته‌بندی لازم است.');
+  if(!provider||!model)throw new Error('مدل انتخاب‌شده در تنظیمات فعال هوش مصنوعی پیدا نشد.');
+  const key=`${provider.id}::${model}`,categoryTitle=String(title).trim();
+  try{
+    const prepared=categoryPrompt(categoryTitle,categories),detail=await aiCall(provider,model,prepared.prompt),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
+    if(!category)return{ok:false,key,provider:provider.id,model,categoryTitle,categoryId:0,allowedCategoryCount:prepared.allowed.length,text:detail.text,latencyMs:detail.latencyMs,error:'مدل هیچ شناسهٔ معتبر از فهرست دسته‌بندی باسلام برنگرداند.'};
+    return{ok:true,key,provider:provider.id,model,text:detail.text,latencyMs:detail.latencyMs,categoryTitle,categoryId,categoryName:String(category.name),categoryPath:String(category.path||category.name),allowedCategoryCount:prepared.allowed.length};
+  }catch(error){return{ok:false,key,provider:provider.id,model,categoryTitle,error:error instanceof Error?error.message:String(error)}}
 }
