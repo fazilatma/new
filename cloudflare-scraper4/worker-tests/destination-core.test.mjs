@@ -188,3 +188,45 @@ test('clamp and msg behave like the Worker originals', () => {
   assert.equal(core.msg(new Error('boom')), 'boom');
   assert.equal(core.msg('plain'), 'plain');
 });
+
+test('normalizeCategoryMode accepts the three vote modes and defaults to ensemble', () => {
+  assert.equal(core.normalizeCategoryMode('master'), 'master');
+  assert.equal(core.normalizeCategoryMode('master-candidates'), 'master-candidates');
+  assert.equal(core.normalizeCategoryMode('ensemble'), 'ensemble');
+  assert.equal(core.normalizeCategoryMode('bogus'), 'ensemble');
+  assert.equal(core.normalizeCategoryMode(undefined), 'ensemble');
+  assert.equal(core.normalizeCategoryMode(''), 'ensemble');
+});
+
+test('resolveMasterKey matches full keys and bare model names', () => {
+  const configured = ['p1::m1', 'p2::m2'];
+  assert.equal(core.resolveMasterKey(configured, 'p1::m1'), 'p1::m1');
+  assert.equal(core.resolveMasterKey(configured, 'm2'), 'p2::m2');
+  assert.equal(core.resolveMasterKey(configured, 'p9::m9'), null);
+  assert.equal(core.resolveMasterKey(configured, ''), null);
+  assert.equal(core.resolveMasterKey(configured, null), null);
+});
+
+test('selectCategoryModels runs the master alone or fails with guidance', () => {
+  const base = { master: 'p1::m1', candidates: ['p1::m2'], configured: ['p1::m1', 'p1::m2', 'p1::m3'], green: ['p1::m1', 'p1::m2', 'p1::m3'] };
+  assert.deepEqual(core.selectCategoryModels({ ...base, mode: 'master' }), ['p1::m1']);
+  assert.throws(() => core.selectCategoryModels({ ...base, mode: 'master', master: '' }), /مستر انتخاب نشده/);
+  assert.throws(() => core.selectCategoryModels({ ...base, mode: 'master', green: ['p1::m2'] }), /آخرین تست/);
+});
+
+test('selectCategoryModels backs the master with green candidates, capped at 5', () => {
+  const configured = ['m::master', 'c::c1', 'c::c2', 'c::c3', 'c::c4', 'c::c5', 'x::other'];
+  assert.deepEqual(core.selectCategoryModels({ mode: 'master-candidates', master: 'm::master', candidates: ['c::c1', 'c::c2', 'c::c3', 'c::c4', 'c::c5'], configured, green: [...configured] }),
+    ['m::master', 'c::c1', 'c::c2', 'c::c3', 'c::c4']);
+  // Non-candidate green models never join this mode; red candidates are skipped.
+  assert.deepEqual(core.selectCategoryModels({ mode: 'master-candidates', master: 'm::master', candidates: ['c::c1', 'c::red'], configured, green: ['m::master', 'c::c1', 'x::other'] }),
+    ['m::master', 'c::c1']);
+  assert.throws(() => core.selectCategoryModels({ mode: 'master-candidates', master: '', candidates: [], configured, green: [...configured] }), /مستر انتخاب نشده/);
+});
+
+test('selectCategoryModels ensemble keeps candidates first across every green model', () => {
+  assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', master: '', candidates: ['p::c2'], configured: ['p::c1', 'p::c2', 'p::c3'], green: new Set(['p::c1', 'p::c2', 'p::c3']) }),
+    ['p::c2', 'p::c1', 'p::c3']);
+  assert.deepEqual(core.selectCategoryModels({ mode: 'whatever', configured: ['p::a'], green: ['p::a'] }), ['p::a']);
+  assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', configured: ['p::a'], green: [] }), []);
+});

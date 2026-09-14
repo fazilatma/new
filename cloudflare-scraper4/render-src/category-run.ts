@@ -19,6 +19,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { OPENROUTER_NON_CHAT_MODELS } from '../worker-src/ai-catalog.js';
+import { normalizeCategoryMode, selectCategoryModels } from '../worker-src/destination-core.js';
 import { aiProviders, suggestCategoryWithModel } from './ai.js';
 import { loadConnections } from './connections.js';
 import { getState, getTriedBasalamCategories, markBasalamCategoriesTried, setState } from './db.js';
@@ -30,7 +31,7 @@ export type CategoryRunItem = { id: number; shopId: string; title: string; ok: b
 export type CategoryRun = {
   id: string; kind: 'category-all'; status: CategoryRunStatus; phase: string; stopRequested: boolean;
   createdAt: string; updatedAt: string; startedAt: string | null; finishedAt: string | null;
-  attempts: number; error: string | null; modelKeys: string[];
+  attempts: number; error: string | null; modelKeys: string[]; mode: string;
   page: number; totalPages: number; products: CategoryProduct[]; cursor: number;
   total: number; processed: number; changed: number; failed: number; items: CategoryRunItem[];
 };
@@ -61,7 +62,7 @@ export async function resetCategoryRun(): Promise<void> { await setState(RUN_KEY
  * OpenAI-compatible chat endpoints, so only the explicit non-chat lists opt a
  * model out (per-provider nonChatModels plus OpenRouter's dedicated models).
  */
-export async function successfulCategoryModels(): Promise<string[]> {
+export async function successfulCategoryModels(mode?: any): Promise<string[]> {
   const [tests, connections] = await Promise.all([getState<any>('ai_test_results', null), loadConnections()]);
   const green = new Set((Array.isArray(tests?.results) ? tests.results : []).filter((row: any) => row?.ok === true).map((row: any) => `${row.provider}::${row.model}`));
   const ai = connections.ai, candidates = Array.isArray(ai.candidates) ? ai.candidates.map(String) : [], providers = await aiProviders(), configured: string[] = [];
@@ -69,7 +70,7 @@ export async function successfulCategoryModels(): Promise<string[]> {
     const key = `${provider.id}::${model}`;
     if (model && green.has(key) && isUsableCategoryModel(provider, model)) configured.push(key);
   }
-  return [...new Set([...candidates.filter((key: string) => green.has(key) && configured.includes(key)), ...configured])].slice(0, 5);
+  return selectCategoryModels({ mode, master: (ai as any).master, candidates, configured, green });
 }
 
 function isUsableCategoryModel(provider: any, model: string): boolean {
@@ -80,10 +81,10 @@ function isUsableCategoryModel(provider: any, model: string): boolean {
 
 let running = false;
 
-export async function startCategoryRun(): Promise<{ run: any; existing: boolean }> {
+export async function startCategoryRun(input?: any): Promise<{ run: any; existing: boolean }> {
   const previous = await readRun();
   if (previous && active(previous)) return { run: publicRun(previous), existing: true };
-  const modelKeys = await successfulCategoryModels();
+  const mode = normalizeCategoryMode(input?.mode), modelKeys = await successfulCategoryModels(mode);
   if (!modelKeys.length) throw new Error('هیچ مدل موفقی برای دسته‌بندی پیدا نشد؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.');
   // Fail fast before starting a long job when the category connection is incomplete.
   await destinationCategories();
@@ -91,7 +92,7 @@ export async function startCategoryRun(): Promise<{ run: any; existing: boolean 
   const run: CategoryRun = {
     id: randomUUID(), kind: 'category-all', status: 'queued', phase: 'listing', stopRequested: false,
     createdAt: timestamp, updatedAt: timestamp, startedAt: null, finishedAt: null,
-    attempts: 0, error: null, modelKeys, page: 1, totalPages: 1, products: [], cursor: 0,
+    attempts: 0, error: null, modelKeys, mode, page: 1, totalPages: 1, products: [], cursor: 0,
     total: 0, processed: 0, changed: 0, failed: 0, items: [],
   };
   await writeRun(run);

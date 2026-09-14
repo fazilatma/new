@@ -13,3 +13,6 @@ data/
 
 # Crawlee scratch data (request queues, session state) created at runtime
 storage/
+
+# Built worker bundle: committed only on Release commits, rebuilt by worker:build.
+scraper4.worker.js

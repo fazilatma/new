@@ -203,3 +203,33 @@ export function parseCategoryId(text: string, categories: AiCategoryOption[]) {
   const numbers = [...source.matchAll(/\d+/g)].map(match => Number(match[0])).filter(id => valid.has(id));
   return numbers.length ? numbers[numbers.length - 1] : 0;
 }
+
+/* ------------------------- Category vote-mode selection ----------------------- */
+/* Bulk Basalam categorization offers three voter modes. Both runtimes resolve
+   the voter list through selectCategoryModels so Worker and Node always agree
+   on which models vote: the pinned master alone, the master backed by pinned
+   candidates, or the full multi-model ensemble of green models. */
+export type CategoryVoteMode = 'master' | 'master-candidates' | 'ensemble';
+export function normalizeCategoryMode(value: any): CategoryVoteMode {
+  const mode = String(value ?? '').trim();
+  return mode === 'master' || mode === 'master-candidates' ? mode : 'ensemble';
+}
+export function resolveMasterKey(configured: string[], master: any): string | null {
+  const raw = String(master ?? '').trim();
+  if (!raw) return null;
+  if (raw.includes('::')) return configured.includes(raw) ? raw : null;
+  return configured.find(key => key.split('::').slice(1).join('::') === raw) || null;
+}
+export function selectCategoryModels(input: { mode?: any; master?: any; candidates?: any; configured?: string[]; green?: Set<string> | string[] }): string[] {
+  const mode = normalizeCategoryMode(input.mode), configured = Array.isArray(input.configured) ? input.configured : [], green = new Set<string>(input.green || []);
+  const usable = configured.filter(key => green.has(key)), wanted = (Array.isArray(input.candidates) ? input.candidates : []).map(String);
+  if (mode === 'master' || mode === 'master-candidates') {
+    const pinned = String(input.master ?? '').trim();
+    if (!pinned) throw new Error('مدل مستر انتخاب نشده است؛ ابتدا در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل را مستر کنید.');
+    const masterKey = resolveMasterKey(usable, pinned);
+    if (!masterKey) throw new Error(`مدل مستر (${pinned}) در آخرین تست مدل‌ها موفق نبوده است؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.`);
+    if (mode === 'master') return [masterKey];
+    return [masterKey, ...wanted.filter(key => key !== masterKey && usable.includes(key))].slice(0, 5);
+  }
+  return [...new Set([...wanted.filter(key => usable.includes(key)), ...usable])].slice(0, 5);
+}

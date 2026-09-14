@@ -17,7 +17,7 @@ const harness = globalThis.__categoryHarness = {
   pages: [], states: new Map(), catalogQueries: [],
   suggestCalls: [], votes: {}, gate: null,
   applyCalls: [], applyFailIds: new Set(), tried: new Map(),
-  categories: [], categoriesFail: false, providers: [], candidates: [],
+  categories: [], categoriesFail: false, providers: [], candidates: [], master: '',
 };
 
 const stubs = {
@@ -25,7 +25,7 @@ const stubs = {
     export async function destinationCatalog(target,query){h.catalogQueries.push({target,query:{...query}});const page=h.pages[(query.page||1)-1]||{products:[]},total=h.pages.reduce((n,p)=>n+(p.products||[]).length,0);return{ok:true,target,products:page.products||[],totalPages:h.pages.length||1,total}}
     export async function destinationCategories(){if(h.categoriesFail)throw new Error('توکن باسلام خالی است.');return{items:h.categories,cached:false,updatedAt:new Date().toISOString()}}
     export async function applyBasalamCategory(id,shopId,categoryId,title,categoryName,source){h.applyCalls.push({id,shopId,categoryId,title,categoryName,source});if(h.applyFailIds.has(Number(id)))throw new Error('PATCH failed');return{ok:true,id,shopId,categoryId}}`,
-  './connections.js': `export async function loadConnections(){return{woo:{},basalam:{token:'t',vendorId:'10'},ai:{providers:[],candidates:globalThis.__categoryHarness.candidates,model:''}}}`,
+  './connections.js': `export async function loadConnections(){const h=globalThis.__categoryHarness;return{woo:{},basalam:{token:'t',vendorId:'10'},ai:{providers:[],candidates:h.candidates,master:h.master,model:''}}}`,
   './db.js': `const h=globalThis.__categoryHarness;
     export async function getState(key,fallback){return h.states.has(key)?JSON.parse(h.states.get(key)):fallback}
     export async function setState(key,value){h.states.set(key,JSON.stringify(value))}
@@ -54,7 +54,7 @@ const reset = () => {
   harness.pages = []; harness.states.clear(); harness.catalogQueries = [];
   harness.suggestCalls = []; harness.votes = {}; harness.gate = null;
   harness.applyCalls = []; harness.applyFailIds = new Set(); harness.tried = new Map();
-  harness.categories = []; harness.categoriesFail = false; harness.providers = []; harness.candidates = [];
+  harness.categories = []; harness.categoriesFail = false; harness.providers = []; harness.candidates = []; harness.master = '';
 };
 const setTestResults = rows => harness.states.set('ai_test_results', JSON.stringify({ at: new Date().toISOString(), results: rows }));
 const greenProvider = (id, models, extra = {}) => ({ id, name: id, baseUrl: 'https://ai.example', apiKey: 'k', models, enabled: true, ...extra });
@@ -295,4 +295,65 @@ test('reset clears the run and recovery resumes queued runs after a restart', as
   await categoryRun.recoverCategoryRun();
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal((await categoryRun.getPublicCategoryRun()).status, 'paused');
+});
+
+test('master mode votes with the pinned master alone', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['boss', 'helper'])];
+  harness.master = 'p1::boss';
+  setTestResults([{ ok: true, provider: 'p1', model: 'boss' }, { ok: true, provider: 'p1', model: 'helper' }]);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [{ products: [{ id: 11, shopId: '55', title: 'Kappa' }] }];
+  harness.votes = { 'p1::boss': { categoryId: 101, categoryName: 'A' }, 'p1::helper': { categoryId: 102, categoryName: 'B' } };
+  const { run } = await categoryRun.startCategoryRun({ mode: 'master' });
+  assert.equal(run.mode, 'master');
+  assert.deepEqual(run.modelKeys, ['p1::boss']);
+  const done = await waitDone();
+  assert.equal(done.processed, 1);
+  assert.equal(done.changed, 1);
+  assert.deepEqual(harness.suggestCalls.map(call => call.key), ['p1::boss'], 'only the master is asked');
+});
+
+test('master mode without a green master fails fast with guidance', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['boss'])];
+  setTestResults([{ ok: true, provider: 'p1', model: 'boss' }]);
+  await assert.rejects(() => categoryRun.startCategoryRun({ mode: 'master' }), /مستر انتخاب نشده/);
+  assert.ok(!harness.states.has(RUN_KEY));
+  harness.master = 'p1::boss';
+  setTestResults([{ ok: false, provider: 'p1', model: 'boss' }]);
+  await assert.rejects(() => categoryRun.startCategoryRun({ mode: 'master' }), /آخرین تست/);
+  assert.ok(!harness.states.has(RUN_KEY));
+});
+
+test('master-candidates mode backs the master with green candidates only', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['boss', 'c1', 'c2', 'outsider'])];
+  harness.master = 'p1::boss';
+  harness.candidates = ['p1::c1', 'p1::c2'];
+  setTestResults(['boss', 'c1', 'c2', 'outsider'].map(model => ({ ok: true, provider: 'p1', model })));
+  assert.deepEqual(await categoryRun.successfulCategoryModels('master-candidates'), ['p1::boss', 'p1::c1', 'p1::c2']);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [{ products: [{ id: 12, shopId: '55', title: 'Lambda' }] }];
+  harness.votes = { 'p1::boss': { categoryId: 101, categoryName: 'A' }, 'p1::c1': { categoryId: 101, categoryName: 'A' } };
+  const { run } = await categoryRun.startCategoryRun({ mode: 'master-candidates' });
+  assert.equal(run.mode, 'master-candidates');
+  const done = await waitDone();
+  assert.equal(done.changed, 1);
+  assert.ok(harness.suggestCalls.every(call => call.key !== 'p1::outsider'));
+});
+
+test('unknown modes fall back to the full ensemble', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['m1', 'm2'])];
+  setTestResults(['m1', 'm2'].map(model => ({ ok: true, provider: 'p1', model })));
+  assert.deepEqual(await categoryRun.successfulCategoryModels('bogus'), ['p1::m1', 'p1::m2']);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [{ products: [{ id: 13, shopId: '55', title: 'Mu' }] }];
+  harness.votes = { 'p1::m1': { categoryId: 101, categoryName: 'A' }, 'p1::m2': { categoryId: 101, categoryName: 'A' } };
+  const { run } = await categoryRun.startCategoryRun({ mode: 'bogus' });
+  assert.equal(run.mode, 'ensemble');
+  const done = await waitDone();
+  assert.equal(done.mode, 'ensemble');
+  assert.equal(done.processed, 1);
 });

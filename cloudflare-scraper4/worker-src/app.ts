@@ -221,7 +221,7 @@ app.post('/api/destination/basalam/category/suggest',async c=>{const b=await jso
 // Tried-category memory for the bulk Basalam category fix (avoids repeating failed suggestions).
 app.get('/api/destination/basalam/category-tried',async c=>{const shopId=String(c.req.query('shopId')||''),id=Number(c.req.query('id'));return c.json({ok:true,tried:await getTriedBasalamCategories(shopId,id)})});
 app.post('/api/destination/basalam/category-tried',async c=>{const b=await jsonBody(c);return c.json({ok:true,tried:await markBasalamCategoriesTried(String(b.shopId||''),Number(b.id),Array.isArray(b.ids)?b.ids:[])})});
-app.post('/api/destination/basalam/category-runs',async c=>{const started=await startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise));return c.json({ok:true,...started},started.existing?200:202)});
+app.post('/api/destination/basalam/category-runs',async c=>{const started=await startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise),await jsonBody(c));return c.json({ok:true,...started},started.existing?200:202)});
 app.get('/api/destination/basalam/category-runs/current',async c=>c.json({ok:true,run:await getPublicBackgroundRun('category-all')}));
 app.post('/api/destination/basalam/category-runs/control',async c=>{const b=await jsonBody(c),action=String(b.action)==='resume'?'resume':'stop';return c.json({ok:true,run:await controlBackgroundRun('category-all',action,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise))})});
 app.post('/api/destination/basalam/category-runs/reset',async c=>{await resetBackgroundRun('category-all');return c.json({ok:true,run:await getPublicBackgroundRun('category-all')})});
