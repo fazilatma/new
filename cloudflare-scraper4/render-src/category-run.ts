@@ -3,6 +3,9 @@
  *
  * Worker runs this via Queue + background.ts; Node runs in-process like dedup-run.
  * Modes: master | master-candidates | ensemble (with optional explicit model list).
+ *
+ * server.ts imports: controlCategoryRun, getPublicCategoryRun, recoverCategoryRun,
+ * resetCategoryRun, startCategoryRun
  */
 import { randomUUID } from 'node:crypto';
 import { aiCall, aiProviders, getLeaderboard } from './ai.js';
@@ -94,7 +97,8 @@ async function resolveModelKeys(mode: CategoryVoteMode, explicit?: string[]): Pr
 
 let running = false;
 
-export async function startCategoryAllRun(input?: any): Promise<{ run: any; existing: boolean }> {
+/** Name expected by render-src/server.ts */
+export async function startCategoryRun(input?: any): Promise<{ run: any; existing: boolean }> {
   const previous = await readRun();
   if (previous && active(previous)) return { run: publicRun(previous), existing: true };
 
@@ -136,6 +140,9 @@ export async function startCategoryAllRun(input?: any): Promise<{ run: any; exis
   void drive();
   return { run: publicRun(run), existing: false };
 }
+
+/** Alias kept for callers that used the older name. */
+export const startCategoryAllRun = startCategoryRun;
 
 export async function controlCategoryRun(action: 'stop' | 'resume'): Promise<any> {
   const run = await readRun();
@@ -335,7 +342,7 @@ export async function maybeStartScheduledCategoryCorrection(): Promise<any> {
   const previous = await readRun();
   if (previous && active(previous)) return { skipped: true, reason: 'already-running' };
 
-  const result = await startCategoryAllRun({
+  const result = await startCategoryRun({
     mode: cfg.mode,
     models: cfg.models,
   });
