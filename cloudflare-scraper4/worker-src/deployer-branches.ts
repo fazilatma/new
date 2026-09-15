@@ -18,7 +18,7 @@ export interface DeployerBranchScan {
   branches: DeployerBranch[];
 }
 export type DeployerBranchStage = 'list' | 'manifest';
-export type DeployerBranchError = 'RATE_LIMIT' | 'UNREACHABLE' | 'INVALID';
+export type DeployerBranchError = 'RATE_LIMIT' | 'UNREACHABLE' | 'INVALID' | 'FORBIDDEN';
 export interface DeployerBranchFailure {
   ok: false;
   stage: DeployerBranchStage;
@@ -38,6 +38,49 @@ export function clearDeployerBranchCache(): void {
 export function normalizeRepo(raw: unknown): string | null {
   const repo = String(raw || '').trim();
   return REPO_PATTERN.test(repo) ? repo : null;
+}
+
+/** Headers GitHub requires: an explicit user-agent plus an optional token. */
+export function githubApiHeaders(token?: unknown, version?: unknown): Record<string, string> {
+  const tag = String(version || '').trim();
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'user-agent': tag ? `Scraper4/${tag}` : 'Scraper4',
+  };
+  const auth = String(token || '').trim();
+  if (auth) headers.authorization = `Bearer ${auth}`;
+  return headers;
+}
+
+function resetHint(response: Response): string {
+  const reset = Number(response.headers.get('x-ratelimit-reset') || 0);
+  if (Number.isFinite(reset) && reset > 0) {
+    const secs = Math.max(1, Math.round(reset - Date.now() / 1000));
+    if (secs < 90) return ` (quota resets in ~${secs}s)`;
+    return ` (quota resets in ~${Math.round(secs / 60)}m)`;
+  }
+  const retry = String(response.headers.get('retry-after') || '').trim();
+  if (/^\d+$/.test(retry)) return ` (retry in ~${retry}s)`;
+  return '';
+}
+
+/**
+ * A denied GitHub call is not always a rate limit: read the evidence instead
+ * of guessing. Only a 429, an explicit message, or an exhausted quota counts
+ * as RATE_LIMIT; anything else is FORBIDDEN with GitHub's own words.
+ */
+export async function classifyGitHubDenial(response: Response): Promise<{ error: 'RATE_LIMIT' | 'FORBIDDEN'; detail: string }> {
+  let message = '';
+  try {
+    const body = (await response.json()) as { message?: unknown };
+    if (body && typeof body.message === 'string') message = body.message.trim();
+  } catch { /* non-JSON denial */ }
+  const remaining = String(response.headers.get('x-ratelimit-remaining') ?? '').trim();
+  const rateLimited = response.status === 429 || /rate limit/i.test(message) || remaining === '0';
+  if (rateLimited) {
+    return { error: 'RATE_LIMIT', detail: `HTTP ${response.status}${message ? ` — ${message}` : ''}${resetHint(response)}` };
+  }
+  return { error: 'FORBIDDEN', detail: `GitHub says: ${message ? message.slice(0, 180) : `HTTP ${response.status}`}` };
 }
 
 export function latestBranch(branches: { name: string; version: string }[]): string | null {
@@ -124,7 +167,10 @@ export async function scanDeployerBranches(fetcher: BranchFetcher, running: stri
   try {
     const response = await fetcher(`https://api.github.com/repos/${repo}/branches?per_page=100`);
     if (!response) return scanFailure('list', 'UNREACHABLE', 'empty response');
-    if (response.status === 403 || response.status === 429) return scanFailure('list', 'RATE_LIMIT', `HTTP ${response.status}`);
+    if (response.status === 401 || response.status === 403 || response.status === 429) {
+      const denial = await classifyGitHubDenial(response);
+      return scanFailure('list', denial.error, denial.detail);
+    }
     if (!response.ok) return scanFailure('list', 'UNREACHABLE', `HTTP ${response.status}`);
     list = await response.json();
   } catch (error) {

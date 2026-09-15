@@ -14400,7 +14400,7 @@ function saveBlobAs(text,name,mime){const blob=new Blob([text],{type:mime||'text
 function downloadInstallScript(key){const item=INSTALL_COMMAND_GROUPS_CLIENT.find(x=>x.key===key);if(!item)return;const name=installScriptName(item);saveBlobAs(item.body,name,'text/plain;charset=utf-8');if(name.endsWith('.ps1')){const launcherName=name.replace(/\.ps1$/,'-RUN-ME.cmd');setTimeout(()=>{saveBlobAs(windowsLauncherCmd(item.body,name),launcherName,'application/octet-stream');notice('دو فایل دانلود شد: '+launcherName+' را دابل\u200cکلیک کنید (فایل .ps1 با دابل\u200cکلیک اجرا نمی\u200cشود).','ok')},400)}else notice('فایل اجرای این محیط دانلود شد: '+name,'ok')}
 function renderInstallCommandCards(){const root=$('installCommandCards');if(!root)return;root.innerHTML=INSTALL_COMMAND_GROUPS_CLIENT.map(x=>'<details class="install-command-card"><summary><b>'+esc(x.title)+'</b> <span class="chip">'+esc(x.badge)+'</span></summary><pre>'+esc(x.body)+'</pre><div class="menu-actions"><button type="button" class="btn btn-blue btn-sm" data-copy-install="'+escAttr(x.key)+'">📋 Copy all</button><button type="button" class="btn btn-green btn-sm" data-download-install="'+escAttr(x.key)+'">⬇ دانلود فایل اجرا</button><span class="copy-flash" id="copyInstall-'+escAttr(x.key)+'"></span></div></details>').join('');const all=$('installAllCommands');if(all)all.value=installCommandText('all')}
 async function copyInjectorScript(){const el=document.getElementById('s4injectorSrc'),text=el?el.textContent||'':'';if(!text)return;try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove()}const st=$('injectorCopyStatus');if(st){st.textContent='کپی شد';setTimeout(()=>{if(st)st.textContent=''},1800)}notice('اسکریپت تزریقگر کپی شد.','ok')}catch(error){notice('کپی خودکار ممکن نشد؛ متن را دستی انتخاب کنید.','error')}}
-function deployerEnvKind(){const h=(location.hostname||'').toLowerCase();if(h===''||h==='localhost'||h==='127.0.0.1'||h.endsWith('.localhost'))return 'local';if(h.endsWith('.workers.dev'))return 'worker';if(h.endsWith('.onrender.com'))return 'render';return 'remote'}function deployerBranchChip(status){return status==='newer'?'<span class="chip">⬆ جدیدتر</span>':status==='older'?'<span class="chip">⬇ قدیمی‌تر</span>':status==='equal'?'<span class="chip">＝ برابر</span>':'<span class="chip">؟ نامشخص</span>'}function deployerBranchErrorText(data){const stage=data&&data.stage==='manifest'?'جزئیات برنچ‌ها':'فهرست برنچ‌ها';const reason=!data||typeof data!=='object'?'پاسخ خالی سرور.':data.error==='RATE_LIMIT'?'محدودیت نرخ GitHub؛ چند دقیقه بعد دوباره امتحان کنید.':data.error==='UNREACHABLE'?'GitHub از دست سرور در دسترس نیست.':data.error==='INVALID'?'پاسخ GitHub معتبر نیست.':String(data.error||data.detail||'خطای ناشناخته.');return reason+' (مرحلهٔ '+stage+')'+(data&&data.detail?' · '+data.detail:'')}async function scanDeployerBranches(){const box=$('deployerBranches'),run=$('deployerRunningVer'),status=$('vcBranchStatus');if(!box)return;const repo=currentBranchRepo();if(!repo){if(status)status.textContent='❌ قالب مخزن معتبر نیست (owner/repo).';notice('قالب مخزن دلخواه معتبر نیست (مثلاً owner/repo).','error');return}box.innerHTML='<div class="menu-text">در حال خواندن برنچ‌ها از GitHub…</div>';if(status)status.textContent='⏳ در حال خواندن برنچ‌ها…';try{const data=await api('/api/deployer/branches?repo='+encodeURIComponent(repo));if(!data||data.ok!==true)throw Error(deployerBranchErrorText(data));const running=String(data.running||'?');if(run)run.textContent='نسخهٔ در حال اجرا: '+running+(data.cached?' (از کش)':'');const rows=Array.isArray(data.branches)?data.branches:[];const local=deployerEnvKind()==='local';box.innerHTML='<div style="overflow:auto"><table class="pdest-table"><thead><tr><th>شاخه</th><th>نسخهٔ برنچ</th><th>وضعیت</th><th>اقدام</th></tr></thead><tbody>'+rows.map(r=>{const act=local?'<button type="button" class="btn btn-green btn-sm" data-deployer-branch="'+escAttr(r.name)+'">📥 نصب در دیپلویر</button>':'<button type="button" class="btn btn-gray btn-sm" data-deployer-branch="'+escAttr(r.name)+'">📋 کپی نام برنچ</button>';return '<tr><td dir="ltr" style="text-align:left">'+esc(r.name)+'</td><td dir="ltr">'+esc(r.version||'—')+'</td><td>'+deployerBranchChip(r.status)+'</td><td>'+act+'</td></tr>'}).join('')+'</tbody></table></div>';syncBranchDropdown(data)}catch(error){box.innerHTML='<div class="menu-text">خطا در خواندن برنچ‌ها: '+esc(error.message)+'</div>';if(status)status.textContent='❌ خطا در خواندن برنچ‌ها: '+error.message;syncBranchDropdown(null)}}
+function deployerEnvKind(){const h=(location.hostname||'').toLowerCase();if(h===''||h==='localhost'||h==='127.0.0.1'||h.endsWith('.localhost'))return 'local';if(h.endsWith('.workers.dev'))return 'worker';if(h.endsWith('.onrender.com'))return 'render';return 'remote'}function deployerBranchChip(status){return status==='newer'?'<span class="chip">⬆ جدیدتر</span>':status==='older'?'<span class="chip">⬇ قدیمی‌تر</span>':status==='equal'?'<span class="chip">＝ برابر</span>':'<span class="chip">؟ نامشخص</span>'}function deployerBranchErrorText(data){const stage=data&&data.stage==='manifest'?'جزئیات برنچ‌ها':'فهرست برنچ‌ها';const reason=!data||typeof data!=='object'?'پاسخ خالی سرور.':data.error==='RATE_LIMIT'?'محدودیت واقعی نرخ GitHub؛ اگر مداوم است، یک توکن GH_BACKUP_TOKEN روی سرویس ست کنید.':data.error==='FORBIDDEN'?'گیت‌هاب درخواست را رد کرد (این خطا محدودیت نرخ نیست).':data.error==='UNREACHABLE'?'GitHub از دست سرور در دسترس نیست.':data.error==='INVALID'?'پاسخ GitHub معتبر نیست.':String(data.error||data.detail||'خطای ناشناخته.');return reason+' (مرحلهٔ '+stage+')'+(data&&data.detail?' · '+data.detail:'')}async function scanDeployerBranches(){const box=$('deployerBranches'),run=$('deployerRunningVer'),status=$('vcBranchStatus');if(!box)return;const repo=currentBranchRepo();if(!repo){if(status)status.textContent='❌ قالب مخزن معتبر نیست (owner/repo).';notice('قالب مخزن دلخواه معتبر نیست (مثلاً owner/repo).','error');return}box.innerHTML='<div class="menu-text">در حال خواندن برنچ‌ها از GitHub…</div>';if(status)status.textContent='⏳ در حال خواندن برنچ‌ها…';try{const data=await api('/api/deployer/branches?repo='+encodeURIComponent(repo));if(!data||data.ok!==true)throw Error(deployerBranchErrorText(data));const running=String(data.running||'?');if(run)run.textContent='نسخهٔ در حال اجرا: '+running+(data.cached?' (از کش)':'');const rows=Array.isArray(data.branches)?data.branches:[];const local=deployerEnvKind()==='local';box.innerHTML='<div style="overflow:auto"><table class="pdest-table"><thead><tr><th>شاخه</th><th>نسخهٔ برنچ</th><th>وضعیت</th><th>اقدام</th></tr></thead><tbody>'+rows.map(r=>{const act=local?'<button type="button" class="btn btn-green btn-sm" data-deployer-branch="'+escAttr(r.name)+'">📥 نصب در دیپلویر</button>':'<button type="button" class="btn btn-gray btn-sm" data-deployer-branch="'+escAttr(r.name)+'">📋 کپی نام برنچ</button>';return '<tr><td dir="ltr" style="text-align:left">'+esc(r.name)+'</td><td dir="ltr">'+esc(r.version||'—')+'</td><td>'+deployerBranchChip(r.status)+'</td><td>'+act+'</td></tr>'}).join('')+'</tbody></table></div>';syncBranchDropdown(data)}catch(error){box.innerHTML='<div class="menu-text">خطا در خواندن برنچ‌ها: '+esc(error.message)+'</div>';if(status)status.textContent='❌ خطا در خواندن برنچ‌ها: '+error.message;syncBranchDropdown(null)}}
 const BRANCH_BACKUP_KEY='scraper4:branch-backup';
 function loadBranchBackup(){try{const v=JSON.parse(localStorage.getItem(BRANCH_BACKUP_KEY)||'{}');return v&&typeof v==='object'?v:{}}catch{return{}}}
 function saveBranchBackup(patch){try{localStorage.setItem(BRANCH_BACKUP_KEY,JSON.stringify({...loadBranchBackup(),...patch}))}catch{}}
@@ -19240,6 +19240,41 @@ function normalizeRepo(raw2) {
   const repo = String(raw2 || "").trim();
   return REPO_PATTERN.test(repo) ? repo : null;
 }
+function githubApiHeaders(token, version) {
+  const tag = String(version || "").trim();
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "user-agent": tag ? `Scraper4/${tag}` : "Scraper4"
+  };
+  const auth = String(token || "").trim();
+  if (auth) headers.authorization = `Bearer ${auth}`;
+  return headers;
+}
+function resetHint(response) {
+  const reset = Number(response.headers.get("x-ratelimit-reset") || 0);
+  if (Number.isFinite(reset) && reset > 0) {
+    const secs = Math.max(1, Math.round(reset - Date.now() / 1e3));
+    if (secs < 90) return ` (quota resets in ~${secs}s)`;
+    return ` (quota resets in ~${Math.round(secs / 60)}m)`;
+  }
+  const retry = String(response.headers.get("retry-after") || "").trim();
+  if (/^\d+$/.test(retry)) return ` (retry in ~${retry}s)`;
+  return "";
+}
+async function classifyGitHubDenial(response) {
+  let message2 = "";
+  try {
+    const body = await response.json();
+    if (body && typeof body.message === "string") message2 = body.message.trim();
+  } catch {
+  }
+  const remaining = String(response.headers.get("x-ratelimit-remaining") ?? "").trim();
+  const rateLimited = response.status === 429 || /rate limit/i.test(message2) || remaining === "0";
+  if (rateLimited) {
+    return { error: "RATE_LIMIT", detail: `HTTP ${response.status}${message2 ? ` \u2014 ${message2}` : ""}${resetHint(response)}` };
+  }
+  return { error: "FORBIDDEN", detail: `GitHub says: ${message2 ? message2.slice(0, 180) : `HTTP ${response.status}`}` };
+}
 function latestBranch(branches) {
   let best = null, bestCore = null;
   for (const branch of branches) {
@@ -19315,7 +19350,10 @@ async function scanDeployerBranches(fetcher, running, repo = DEFAULT_REPO) {
   try {
     const response = await fetcher(`https://api.github.com/repos/${repo}/branches?per_page=100`);
     if (!response) return scanFailure("list", "UNREACHABLE", "empty response");
-    if (response.status === 403 || response.status === 429) return scanFailure("list", "RATE_LIMIT", `HTTP ${response.status}`);
+    if (response.status === 401 || response.status === 403 || response.status === 429) {
+      const denial = await classifyGitHubDenial(response);
+      return scanFailure("list", denial.error, denial.detail);
+    }
     if (!response.ok) return scanFailure("list", "UNREACHABLE", `HTTP ${response.status}`);
     list = await response.json();
   } catch (error) {
@@ -19375,13 +19413,9 @@ async function listBranchBackupFiles(fetcher, repoRaw, branchRaw, pathRaw) {
     return failure("list", "GitHub is unreachable from this server.");
   }
   if (response.status === 404) return { ok: true, repo, branch, path, files: [] };
-  if (response.status === 403) {
-    try {
-      const body = await response.json();
-      if (typeof body?.message === "string" && /rate limit/i.test(body.message)) return failure("list", "GitHub API rate limit exceeded; try again in a few minutes.");
-    } catch {
-    }
-    return failure("list", "GitHub refused the listing (private repo or blocked token).");
+  if (response.status === 401 || response.status === 403 || response.status === 429) {
+    const denial = await classifyGitHubDenial(response);
+    return failure("list", denial.detail);
   }
   if (!response.ok) return failure("list", `GitHub listing failed (HTTP ${response.status}).`);
   let entries;
@@ -19409,6 +19443,10 @@ async function fetchBranchBackupFile(fetcher, repoRaw, branchRaw, pathRaw) {
     return failure("fetch", "GitHub is unreachable from this server.");
   }
   if (response.status === 404) return failure("fetch", "That file is no longer on the branch; refresh the file list.");
+  if (response.status === 401 || response.status === 403 || response.status === 429) {
+    const denial = await classifyGitHubDenial(response);
+    return failure("fetch", denial.detail);
+  }
   if (!response.ok) return failure("fetch", `GitHub download failed (HTTP ${response.status}).`);
   let entry;
   try {
@@ -19540,18 +19578,18 @@ app.get("/api/debug", async (c) => c.json(await runDiagnostics()));
 app.get("/api/parity", (c) => c.json({ ok: true, total: PHP_MENU_CAPABILITIES.length, capabilities: PHP_MENU_CAPABILITIES, dispatcherAudit: { reference: "scraper4.php v10.170", total: 178, get: 150, post: 28, mapped: 178, missing: 0, artifact: "parity-manifest.json" } }));
 app.get("/api/version", (c) => c.json({ ok: true, version: c.env.WORKER_VERSION || "1.168.0", runtime: "cloudflare-workers", deployment: "wrangler versions deploy / wrangler rollback" }));
 app.get("/api/bootstrap/status", (c) => c.json({ ok: true, supported: false, reason: "Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys." }));
-var githubApiFetch = (url) => safeFetch(url, { apiMode: true, headers: { Accept: "application/vnd.github+json" } }, 2e5, 15e3);
+var githubApiFetch = (token, version) => (url) => safeFetch(url, { apiMode: true, headers: githubApiHeaders(token, version) }, 2e5, 15e3);
 app.get("/api/deployer/branches", async (c) => {
   const raw2 = c.req.query("repo"), repo = raw2 === void 0 || raw2 === "" ? DEFAULT_REPO : normalizeRepo(raw2);
   if (!repo) return c.json({ ok: false, stage: "list", error: "INVALID", detail: "Repo must look like owner/name." }, 400);
-  return c.json(await scanDeployerBranches(githubApiFetch, c.env.WORKER_VERSION || "1.168.0", repo));
+  return c.json(await scanDeployerBranches(githubApiFetch(c.env.GH_BACKUP_TOKEN, c.env.WORKER_VERSION), c.env.WORKER_VERSION || "1.168.0", repo));
 });
 app.get("/api/branch-files", async (c) => {
-  const r = await listBranchBackupFiles(githubApiFetch, c.req.query("repo") ?? DEFAULT_REPO, c.req.query("branch"), c.req.query("path"));
+  const r = await listBranchBackupFiles(githubApiFetch(c.env.GH_BACKUP_TOKEN), c.req.query("repo") ?? DEFAULT_REPO, c.req.query("branch"), c.req.query("path"));
   return c.json(r, !r.ok && r.stage === "params" ? 400 : 200);
 });
 app.get("/api/branch-file", async (c) => {
-  const r = await fetchBranchBackupFile(githubApiFetch, c.req.query("repo") ?? DEFAULT_REPO, c.req.query("branch"), c.req.query("path"));
+  const r = await fetchBranchBackupFile(githubApiFetch(c.env.GH_BACKUP_TOKEN), c.req.query("repo") ?? DEFAULT_REPO, c.req.query("branch"), c.req.query("path"));
   return c.json(r, !r.ok && r.stage === "params" ? 400 : 200);
 });
 app.get("/api/quota", async (c) => {

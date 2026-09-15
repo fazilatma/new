@@ -117,3 +117,24 @@ test('branch file: non-JSON paths are a 400', async () => {
   assert.equal(response.status, 400);
   assert.equal((await response.json()).stage, 'params');
 });
+
+test('branch files: a non-rate 403 surfaces GitHub\u2019s message honestly', async () => {
+  const body = await withGitHub(async () => json({ message: 'Resource not accessible by integration' }, 403), async () => (await call('/api/branch-files?branch=main')).json());
+  assert.equal(body.ok, false);
+  assert.ok(body.error.includes('Resource not accessible'));
+  assert.ok(!body.error.toLowerCase().includes('rate limit'), 'must not be mislabeled as a rate limit');
+});
+
+test('branch files: a real rate limit names the reset window', async () => {
+  const reset = Math.floor(Date.now() / 1000) + 600;
+  const body = await withGitHub(async () => new Response(JSON.stringify({ message: 'API rate limit exceeded for 1.2.3.4.' }), { status: 403, headers: { 'x-ratelimit-reset': String(reset) } }), async () => (await call('/api/branch-files?branch=main')).json());
+  assert.equal(body.ok, false);
+  assert.ok(body.error.includes('rate limit'));
+  assert.ok(body.error.includes('resets in ~10m'), body.error);
+});
+
+test('branch file: a bad token is reported, not hidden', async () => {
+  const body = await withGitHub(async () => json({ message: 'Bad credentials' }, 401), async () => (await call('/api/branch-file?branch=main&path=x.json')).json());
+  assert.equal(body.ok, false);
+  assert.ok(body.error.includes('Bad credentials'));
+});

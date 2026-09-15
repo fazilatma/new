@@ -51,6 +51,7 @@ const mockFetch = async (input, init = {}) => {
   if (url.pathname === '/api/runtime/libraries') return json({ ok: true, libraries: [] });
   if (url.pathname === '/api/ai/test-results') return json({ ok: true, results: [] });
   if (url.pathname === '/api/deployer/branches') {
+    if (branchesOverride) return branchesOverride();
     const repo = url.searchParams.get('repo') || 'fazilatma/new';
     if (!repo.includes('/')) return json({ ok: false, stage: 'list', error: 'INVALID', detail: 'Repo must look like owner/name.' }, 400);
     fetched.push('branches:' + repo);
@@ -73,6 +74,7 @@ const mockFetch = async (input, init = {}) => {
   return json({ ok: true });
 };
 const fetched = [];
+let branchesOverride = null;
 
 const { window } = parseHTML(DASHBOARD);
 const store = new Map();
@@ -266,4 +268,16 @@ test('the menu shortcut opens the unified panel', async () => {
   document.querySelector('[data-ma="goto-backup"]').click();
   await sleep(20);
   assert.equal(details.open, true, 'the shortcut opens the unified panel');
+});
+
+test('a non-rate GitHub denial is shown honestly, not as a rate limit', async () => {
+  branchesOverride = () => new Response(JSON.stringify({ ok: false, stage: 'list', error: 'FORBIDDEN', detail: 'GitHub says: API blocked for this IP.' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  await backup.scanDeployerBranches();
+  assert.match(document.getElementById('vcBranchStatus').textContent, /رد کرد/);
+  assert.match(document.getElementById('vcBranchStatus').textContent, /محدودیت نرخ نیست/);
+  assert.match(document.querySelector('#deployerBranches').textContent, /API blocked/);
+  branchesOverride = null;
+  await backup.scanDeployerBranches();
+  assert.equal(document.getElementById('vcBranch').value, 'arena/01a09468-new', 'a later scan recovers');
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
 });

@@ -2,7 +2,7 @@
 // repos). The dashboard CSP forbids the browser from calling api.github.com,
 // so the server lists and downloads backup files same-origin. Both runtimes
 // inject their own safeFetch; the logic stays single-source.
-import { DEFAULT_REPO, normalizeRepo, type BranchFetcher } from './deployer-branches.js';
+import { DEFAULT_REPO, classifyGitHubDenial, normalizeRepo, type BranchFetcher } from './deployer-branches.js';
 
 export const DEFAULT_BACKUP_REPO = DEFAULT_REPO;
 export const DEFAULT_BACKUP_PATH = 'backups';
@@ -65,12 +65,9 @@ export async function listBranchBackupFiles(fetcher: BranchFetcher, repoRaw: unk
     return failure('list', 'GitHub is unreachable from this server.');
   }
   if (response.status === 404) return { ok: true, repo, branch, path, files: [] };
-  if (response.status === 403) {
-    try {
-      const body = (await response.json()) as { message?: unknown };
-      if (typeof body?.message === 'string' && /rate limit/i.test(body.message)) return failure('list', 'GitHub API rate limit exceeded; try again in a few minutes.');
-    } catch { /* fall through */ }
-    return failure('list', 'GitHub refused the listing (private repo or blocked token).');
+  if (response.status === 401 || response.status === 403 || response.status === 429) {
+    const denial = await classifyGitHubDenial(response);
+    return failure('list', denial.detail);
   }
   if (!response.ok) return failure('list', `GitHub listing failed (HTTP ${response.status}).`);
   let entries: unknown;
@@ -110,6 +107,10 @@ export async function fetchBranchBackupFile(fetcher: BranchFetcher, repoRaw: unk
     return failure('fetch', 'GitHub is unreachable from this server.');
   }
   if (response.status === 404) return failure('fetch', 'That file is no longer on the branch; refresh the file list.');
+  if (response.status === 401 || response.status === 403 || response.status === 429) {
+    const denial = await classifyGitHubDenial(response);
+    return failure('fetch', denial.detail);
+  }
   if (!response.ok) return failure('fetch', `GitHub download failed (HTTP ${response.status}).`);
   let entry: Record<string, unknown>;
   try {

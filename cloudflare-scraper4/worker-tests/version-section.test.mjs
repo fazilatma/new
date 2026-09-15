@@ -90,7 +90,9 @@ test('branches table: environment, chips and error text behave', async () => {
   assert.ok(deployerBranchChip('unknown').includes('نامشخص'));
   assert.ok(deployerBranchChip('bogus').includes('نامشخص'), 'an unknown status must degrade, not blank the cell');
   const rate = deployerBranchErrorText({ ok: false, stage: 'list', error: 'RATE_LIMIT', detail: 'HTTP 403' });
-  assert.ok(rate.includes('محدودیت نرخ') && rate.includes('فهرست برنچ‌ها') && rate.includes('HTTP 403'));
+  assert.ok(rate.includes('محدودیت') && rate.includes('GH_BACKUP_TOKEN') && rate.includes('فهرست برنچ‌ها') && rate.includes('HTTP 403'));
+  const forbidden = deployerBranchErrorText({ ok: false, stage: 'list', error: 'FORBIDDEN', detail: 'GitHub says: blocked' });
+  assert.ok(forbidden.includes('رد کرد') && forbidden.includes('محدودیت نرخ نیست') && forbidden.includes('blocked'));
   assert.ok(deployerBranchErrorText({ ok: false, stage: 'list', error: 'UNREACHABLE', detail: 'boom' }).includes('از دست سرور'));
   assert.ok(deployerBranchErrorText(null).includes('پاسخ خالی'));
 });
@@ -148,7 +150,7 @@ test('branches table: scan renders the server reply and per-env actions', async 
     ...stubs, api: async () => ({ ok: false, stage: 'list', error: 'RATE_LIMIT', detail: 'HTTP 403' })
   }).scanDeployerBranches();
   assert.ok(box.innerHTML.includes('خطا در خواندن برنچ‌ها'), 'the failure must keep its heading');
-  assert.ok(box.innerHTML.includes('محدودیت نرخ') && box.innerHTML.includes('HTTP 403'), 'the failure must name the cause');
+  assert.ok(box.innerHTML.includes('محدودیت') && box.innerHTML.includes('نرخ') && box.innerHTML.includes('HTTP 403'), 'the failure must name the cause');
 });
 
 test('branches table: wiring and deployer deep-link are in place', async () => {
