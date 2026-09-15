@@ -192,7 +192,8 @@ test('branches table: every row offers a one-click version install', async () =>
   }
   await loadBranchTable(src, { ...stubs, location: { hostname: 'my.workers.dev' } }).scanDeployerBranches();
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(box.innerHTML.includes('📋 کپی دستور نصب'), 'remote rows must offer the install-command copy');
+  assert.ok(box.innerHTML.includes('▶️ اجرای این نسخه'), 'remote rows must offer the same one-click install');
+  assert.ok(!box.innerHTML.includes('کپی دستور نصب'), 'no row may degrade to copy-only upfront');
 });
 
 test('version install: local confirm posts to the deployer proxy and reports', async () => {
@@ -218,28 +219,39 @@ test('version install: local confirm posts to the deployer proxy and reports', a
   assert.equal(calls.length, 1, 'no second call after cancel');
 });
 
-test('version install: off-device and unmanaged setups get the install commands', async () => {
+test('version install: off-device dashboards attempt the install first', async () => {
   const src = await dashboard();
-  let copied = '';
-  const notices = [];
+  const calls = [], modals = [];
   const stubs = {
     ...TRIVIAL, location: { hostname: 'my.workers.dev' },
-    window: { isSecureContext: true }, navigator: { clipboard: { writeText: async t => { copied = t; } } },
-    notice: (m, k) => notices.push([m, k]),
-    api: async () => { throw Error('must not post off-device'); }
+    openResultModal: (title, body) => modals.push([title, body]),
+    api: async (path, opts) => {
+      calls.push([path, JSON.parse(opts.body)]);
+      return { ok: true, branch: 'arena/01a09468-new', changed: true, restarting: true, message: 'Branch installed.' };
+    }
   };
-  const fns = loadBranchTable(src, stubs);
-  await fns.installBranchVersion('arena/01a09468-new');
-  for (const line of ['git fetch origin arena/01a09468-new', 'git checkout -B arena/01a09468-new origin/arena/01a09468-new', 'cd cloudflare-scraper4', 'npm install', 'esbuild-check']) {
-    assert.ok(copied.includes(line), `the copied commands must include ${line}`);
+  await loadBranchTable(src, stubs).installBranchVersion('arena/01a09468-new');
+  assert.deepEqual(calls, [['/api/deployer/install-branch', { branch: 'arena/01a09468-new' }]], 'the server decides; the hostname must not gate the attempt');
+  assert.equal(modals.length, 1);
+  assert.ok(modals[0][0].includes('arena/01a09468-new'), 'the report names the installed branch');
+});
+
+test('version install: servers without a deployer fall back to the install commands', async () => {
+  const src = await dashboard();
+  for (const hostname of ['localhost', 'my.workers.dev']) {
+    let copied = '';
+    const notices = [];
+    const stubs = {
+      ...TRIVIAL, location: { hostname },
+      window: { isSecureContext: true }, navigator: { clipboard: { writeText: async t => { copied = t; } } },
+      notice: (m, k) => notices.push([m, k]),
+      api: async () => ({ ok: false, code: 'NO_DEPLOYER', error: 'No local deployer manages this scraper.' })
+    };
+    await loadBranchTable(src, stubs).installBranchVersion('main');
+    for (const line of ['git fetch origin main', 'git checkout -B main origin/main', 'cd cloudflare-scraper4', 'npm install', 'esbuild-check']) {
+      assert.ok(copied.includes(line), `[${hostname}] the copied commands must include ${line}`);
+    }
+    assert.ok(notices.some(([m, k]) => k === 'info' && m.includes('دیپلویر محلی در دسترس نیست')), `[${hostname}] the fallback must say why`);
+    assert.ok(notices.some(([m]) => m.includes('Build & start')), `[${hostname}] the fallback must say how to get one-click install`);
   }
-  assert.ok(notices.some(([m, k]) => k === 'ok' && m.includes('کپی شد')), 'the copy must be acknowledged');
-  // A local scraper without a managing deployer degrades to the same copy.
-  copied = '';
-  await loadBranchTable(src, {
-    ...stubs, location: { hostname: 'localhost' },
-    api: async () => ({ ok: false, code: 'NO_DEPLOYER', error: 'No local deployer manages this scraper.' })
-  }).installBranchVersion('main');
-  assert.ok(copied.includes('git fetch origin main'), 'the unmanaged fallback must copy branch-specific commands');
-  assert.ok(notices.some(([m, k]) => k === 'info' && m.includes('دیپلویر محلی در دسترس نیست')), 'the fallback must say why');
 });
