@@ -42,8 +42,8 @@ const mockFetch = async (input, init = {}) => {
   if (url.pathname === '/api/settings-export') return json(bundle);
   if (url.pathname === '/api/connections') return json({ ok: true, connections: { ai: { providers: [], candidates: [] }, woo: {}, basalam: { shops: [] } } });
   if (url.pathname === '/api/profiles') return json({ ok: true, profiles: [] });
-  if (url.pathname === '/api/status') return json({ ok: true, version: '1.169.0', databaseReady: true, connections: { woo: { ok: false }, basalam: { ok: false } } });
-  if (url.pathname === '/health') return json({ ok: true, version: '1.169.0', databaseReady: true });
+  if (url.pathname === '/api/status') return json({ ok: true, version: '1.170.0', databaseReady: true, connections: { woo: { ok: false }, basalam: { ok: false } } });
+  if (url.pathname === '/health') return json({ ok: true, version: '1.170.0', databaseReady: true });
   if (url.pathname === '/api/settings') {
     if (method === 'POST') { try { postedSettings.push(JSON.parse(init.body || '{}')); } catch {} return json({ ok: true }); }
     return json({ ok: true, settings: {} });
@@ -62,9 +62,9 @@ const mockFetch = async (input, init = {}) => {
     const repo = url.searchParams.get('repo') || 'fazilatma/new';
     if (!repo.includes('/')) return json({ ok: false, stage: 'list', error: 'INVALID', detail: 'Repo must look like owner/name.' }, 400);
     fetched.push('branches:' + repo);
-    return json({ ok: true, repo, running: '1.169.0', cached: false, latest: 'arena/01a09468-new', branches: [
+    return json({ ok: true, repo, running: '1.170.0', cached: false, latest: 'arena/01a09468-new', branches: [
       { name: 'main', version: '1.160.0', status: 'older' },
-      { name: 'arena/01a09468-new', version: '1.169.0', status: 'equal' }
+      { name: 'arena/01a09468-new', version: '1.170.0', status: 'equal' }
     ] });
   }
   if (url.pathname === '/api/branch-files') {
