@@ -23,7 +23,7 @@ import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, resetBackgroundRun, retryAiTestPart, startAiTestRun, startAllUnapprovedCategoryRun, startDedupRun } from './background.js';
 import { fontFile, fontStylesheet } from './fonts.js';
 import { DEFAULT_REPO, githubApiHeaders, normalizeRepo, pickGithubToken, scanDeployerBranches } from './deployer-branches.js';
-import { fetchBranchBackupFile, listBranchBackupFiles } from './branch-backup.js';
+import { fetchBranchBackupFile, listBranchBackupFiles, pushBranchBackupFile } from './branch-backup.js';
 
 type Variables={requestId:string};
 export const app=new Hono<{Bindings:Env;Variables:Variables}>();
@@ -90,9 +90,11 @@ app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capa
 app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.170.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
+const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
 app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.170.0',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const r=await fetchBranchBackupFile(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
+app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupFile(githubApiFetch(token),githubApiPut(token),b?.repo,b?.branch,b?.path,b?.name,b?.bundle);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/github/token-status',async c=>{const settings=await getState<any>('settings',{});const env=String(c.env.GH_BACKUP_TOKEN||'').trim(),stored=typeof settings?.githubBackupToken==='string'?settings.githubBackupToken.trim():'';const active=env||stored;return c.json({ok:true,active:env?'env':stored?'stored':null,env:Boolean(env),stored:Boolean(stored),hint:active?active.slice(-4):null})});
 // Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
 // the exact rows it read/wrote, so we meter our own consumption against the

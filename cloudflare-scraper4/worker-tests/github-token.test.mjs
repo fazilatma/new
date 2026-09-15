@@ -104,13 +104,13 @@ test('a stored token authorizes real GitHub reads; the env token still wins', as
   assert.ok(seen.every(h => h === 'Bearer env-BBB'), 'the env token overrides the saved one: ' + JSON.stringify(seen));
 });
 
-test('all three GitHub routes on both runtimes share the same token lookup', async () => {
+test('all four GitHub routes on both runtimes share the same token lookup', async () => {
   const [app, server] = await Promise.all([
     readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8'),
     readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8'),
   ]);
   const workerLookups = app.split("pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))").length - 1;
   const renderLookups = server.split('pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState(\'settings\',{}).catch(()=>({})))').length - 1;
-  assert.equal(workerLookups, 3, 'scan + files + file on the worker');
-  assert.equal(renderLookups, 3, 'scan + files + file on render');
+  assert.equal(workerLookups, 4, 'scan + files + file + push on the worker');
+  assert.equal(renderLookups, 4, 'scan + files + file + push on render');
 });

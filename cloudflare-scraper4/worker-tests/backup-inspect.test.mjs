@@ -78,12 +78,17 @@ const mockFetch = async (input, init = {}) => {
     fetched.push('file:' + url.searchParams.get('path'));
     return json({ ok: true, name: 'nightly-new.json', size: bundle.total_bytes, bundle });
   }
+  if (url.pathname === '/api/branch-push' && method === 'POST') {
+    try { postedPushes.push(JSON.parse(init.body || '{}')); } catch {}
+    return json({ ok: true, repo: 'fazilatma/new', branch: 'arena/01a09468-new', path: 'backups/pushed.json', sha: 'abc123', commit: 'def456', updated: false });
+  }
   return json({ ok: true });
 };
 const fetched = [];
 let branchesOverride = null;
 let tokenStatusOverride = null;
 const postedSettings = [];
+const postedPushes = [];
 
 const { window } = parseHTML(DASHBOARD);
 const store = new Map();
@@ -123,7 +128,7 @@ test('boot shows the unified backup panel and a menu shortcut', async () => {
   assert.ok(document.querySelector('[data-ma="branch-restore"]'), 'branch restore button is rendered');
   assert.equal(document.getElementById('bkRepo'), null, 'dead scheduled-push controls are gone');
   const push = [...document.querySelectorAll('#unifiedBackupDetails button')].find(b => b.textContent.includes('پوش بکاپ'));
-  assert.ok(push && push.disabled, 'branch push stays disabled without a token');
+  assert.ok(push && !push.disabled, 'branch push is enabled');
 });
 
 test('the inspector counts every section of a settings bundle', () => {
@@ -343,4 +348,24 @@ test('the inspect file input is back in the backup pane', () => {
   assert.equal(picker.type, 'file');
   assert.match(picker.getAttribute('accept') || '', /json/);
   assert.equal(picker.closest('.utup').id, 'utup-backup', 'it sits next to the inspect button');
+});
+
+test('branch push uploads the full bundle and refreshes the file list', async () => {
+  assert.ok(document.querySelector('[data-ma="branch-push"]'), 'the push button is rendered');
+  const before = postedPushes.length;
+  document.querySelector('[data-ma="branch-push"]').click();
+  await waitFor(() => postedPushes.length > before, 'branch push');
+  const sent = postedPushes[postedPushes.length - 1];
+  assert.equal(sent.repo, 'fazilatma/new');
+  assert.equal(sent.branch, 'arena/01a09468-new');
+  assert.equal(sent.path, 'backups');
+  assert.match(sent.name, /^backup_push_.*\.json$/);
+  assert.equal(sent.bundle.kind, 'settings-export', 'the full unfiltered bundle is pushed');
+  assert.match(document.getElementById('transferStatus').textContent, /پوش شد/);
+  assert.match(document.querySelector('#resultModal .result-head').textContent, /پوش به برنچ/);
+  assert.match(document.querySelector('#resultModal .result-body').textContent, /abc123/);
+  await waitFor(() => document.getElementById('vcFile').value === 'backups/nightly-new.json', 'file list refresh after push');
+  const remembered = JSON.parse(store.get('scraper4:last-backup'));
+  assert.match(remembered.name, /^backup_push_.*\.json$/);
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
 });
