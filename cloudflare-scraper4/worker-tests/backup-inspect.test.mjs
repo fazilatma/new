@@ -80,13 +80,23 @@ const mockFetch = async (input, init = {}) => {
   }
   if (url.pathname === '/api/branch-push' && method === 'POST') {
     try { postedPushes.push(JSON.parse(init.body || '{}')); } catch {}
-    return json({ ok: true, repo: 'fazilatma/new', branch: 'arena/01a09468-new', path: 'backups/pushed.json', sha: 'abc123', commit: 'def456', updated: false });
+    const final = { ok: true, repo: 'fazilatma/new', branch: 'arena/01a09468-new', path: 'backups/pushed.json', sha: 'abc123', commit: 'def456', updated: false };
+    if (url.searchParams.get('live') !== '1') return json(final);
+    const frames = [JSON.stringify({ stage: 'reading' }), JSON.stringify({ stage: 'uploading', bytes: 1234 }), JSON.stringify(final)];
+    if (!livePushDelay) return new Response(frames.map(frame => frame + '\n').join(''), { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
+    return new Response(new ReadableStream({ async start(controller) { const enc = new TextEncoder(); for (const frame of frames) { controller.enqueue(enc.encode(frame + '\n')); await sleep(8); } controller.close(); } }), { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
+  }
+  if (url.pathname === '/api/branch-push-status') {
+    if (pushStatusOverride) return pushStatusOverride();
+    return json({ ok: true, last: null });
   }
   return json({ ok: true });
 };
 const fetched = [];
 let branchesOverride = null;
 let tokenStatusOverride = null;
+let pushStatusOverride = null;
+let livePushDelay = false;
 const postedSettings = [];
 const postedPushes = [];
 
@@ -102,7 +112,7 @@ Object.defineProperty(URL, 'createObjectURL', { value: blob => { downloadedBlob 
 Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, writable: true, configurable: true });
 const failures = [];
 process.on('unhandledRejection', error => failures.push(error));
-try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus,scanDeployerBranches,refreshBranchFiles,doBranchRestore,syncBranchDropdown,currentBranchRepo,unifiedTab,initUnifiedTabs,renderGithubTokenStatus};'); } catch (error) { failures.push(error); }
+try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus,scanDeployerBranches,refreshBranchFiles,doBranchRestore,syncBranchDropdown,currentBranchRepo,unifiedTab,initUnifiedTabs,renderGithubTokenStatus,doBranchPush,renderSchedPushStatus,copySchedPushCurrent};'); } catch (error) { failures.push(error); }
 const backup = globalThis.__backupTest;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(fn, label, timeoutMs = 8000) {
@@ -367,5 +377,68 @@ test('branch push uploads the full bundle and refreshes the file list', async ()
   await waitFor(() => document.getElementById('vcFile').value === 'backups/nightly-new.json', 'file list refresh after push');
   const remembered = JSON.parse(store.get('scraper4:last-backup'));
   assert.match(remembered.name, /^backup_push_.*\.json$/);
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('branch push shows live GitHub progress while the stream flows', async () => {
+  livePushDelay = true;
+  try {
+    const statusEl = document.getElementById('transferStatus');
+    const seen = new Set([statusEl.textContent]);
+    let done = false;
+    const poller = (async () => { while (!done) { seen.add(statusEl.textContent); await sleep(1); } })();
+    await backup.doBranchPush();
+    done = true;
+    await poller;
+    const stages = [...seen].join('\n');
+    assert.match(stages, /در حال خواندن نسخهٔ فعلی/, 'the reading stage shows live');
+    assert.match(stages, /در حال ارسال به گیت‌هاب/, 'the uploading stage shows live');
+    assert.match(stages, /بایت/, 'the upload byte count shows live');
+    assert.match(statusEl.textContent, /پوش شد/, 'the final status still lands');
+  } finally {
+    livePushDelay = false;
+  }
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('scheduled-push controls bind to settings and copy the current selection', async () => {
+  for (const [id, key] of [['schedPushEnabled', 'branchPush.enabled'], ['schedPushInterval', 'branchPush.intervalMin'], ['schedPushRepo', 'branchPush.repo'], ['schedPushBranch', 'branchPush.branch'], ['schedPushPath', 'branchPush.path']]) {
+    const el = document.getElementById(id);
+    assert.ok(el, id + ' is rendered');
+    assert.equal(el.getAttribute('data-setting'), key, id + ' binds to ' + key);
+  }
+  document.getElementById('vcBranch').value = 'arena/01a09468-new';
+  document.getElementById('vcPath').value = 'backups';
+  const before = postedSettings.length;
+  backup.copySchedPushCurrent();
+  await waitFor(() => postedSettings.length > before, 'schedule copy save');
+  assert.equal(document.getElementById('schedPushRepo').value, 'fazilatma/new');
+  assert.equal(document.getElementById('schedPushBranch').value, 'arena/01a09468-new');
+  assert.equal(document.getElementById('schedPushPath').value, 'backups');
+  const saved = postedSettings[postedSettings.length - 1];
+  assert.equal(saved.branchPush.repo, 'fazilatma/new');
+  assert.equal(saved.branchPush.branch, 'arena/01a09468-new');
+  assert.equal(saved.branchPush.path, 'backups');
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('scheduled-push status renders the last run honestly', async () => {
+  const line = () => document.getElementById('schedPushStatus').textContent;
+  const asResponse = last => new Response(JSON.stringify({ ok: true, last }), { headers: { 'content-type': 'application/json' } });
+  pushStatusOverride = () => asResponse(null);
+  await backup.renderSchedPushStatus();
+  assert.match(line(), /هنوز اجرا نشده/);
+  pushStatusOverride = () => asResponse({ at: new Date().toISOString(), ok: true, path: 'main/backups/scheduled-backup.json', sha: 'abc', updated: true });
+  await backup.renderSchedPushStatus();
+  assert.match(line(), /آخرین پوش خودکار/);
+  assert.match(line(), /به‌روزرسانی/);
+  pushStatusOverride = () => asResponse({ at: new Date().toISOString(), ok: false, skipped: 'no-token' });
+  await backup.renderSchedPushStatus();
+  assert.match(line(), /توکن گیت‌هاب/);
+  pushStatusOverride = () => asResponse({ at: new Date().toISOString(), ok: false, stage: 'push', error: 'GitHub refused the write (HTTP 422).' });
+  await backup.renderSchedPushStatus();
+  assert.match(line(), /ناموفق بود/);
+  assert.match(line(), /422/);
+  pushStatusOverride = null;
   assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
 });

@@ -3,7 +3,7 @@
 // The dashboard CSP forbids the browser from calling api.github.com, so the
 // server lists, downloads and uploads backup files same-origin. Both runtimes
 // inject their own safeFetch; the logic stays single-source.
-import { DEFAULT_REPO, classifyGitHubDenial, normalizeRepo, type BranchFetcher } from './deployer-branches.js';
+import { DEFAULT_REPO, classifyGitHubDenial, normalizeRepo, pickGithubToken, type BranchFetcher } from './deployer-branches.js';
 
 export const DEFAULT_BACKUP_REPO = DEFAULT_REPO;
 export const DEFAULT_BACKUP_PATH = 'backups';
@@ -181,7 +181,10 @@ export interface BranchPushResult {
  * token with contents:write; without one GitHub answers 401/404 and the
  * honest denial below is what the user sees.
  */
-export async function pushBranchBackupFile(getter: BranchFetcher, putter: BranchPutter, repoRaw: unknown, branchRaw: unknown, folderRaw: unknown, nameRaw: unknown, bundle: unknown): Promise<BranchPushResult | BranchFileFailure> {
+export type PushStage = 'reading' | 'uploading';
+export type PushStageCallback = (stage: PushStage, info?: { bytes?: number }) => void;
+
+export async function pushBranchBackupFile(getter: BranchFetcher, putter: BranchPutter, repoRaw: unknown, branchRaw: unknown, folderRaw: unknown, nameRaw: unknown, bundle: unknown, onStage?: PushStageCallback): Promise<BranchPushResult | BranchFileFailure> {
   const repo = normalizeRepo(repoRaw);
   if (!repo) return failure('params', 'Repo must look like owner/name.');
   const branch = normalizeBranch(branchRaw);
@@ -196,6 +199,7 @@ export async function pushBranchBackupFile(getter: BranchFetcher, putter: Branch
   const fullPath = `${folder}/${name}`;
   let current: Response;
   try {
+    onStage?.('reading');
     current = await getter(apiUrl(repo, fullPath, branch));
   } catch {
     return failure('push', 'GitHub is unreachable from this server.');
@@ -219,6 +223,7 @@ export async function pushBranchBackupFile(getter: BranchFetcher, putter: Branch
   if (sha) payload.sha = sha;
   let pushed: Response;
   try {
+    onStage?.('uploading', { bytes: text.length });
     pushed = await putter(putUrl(repo, fullPath), payload);
   } catch {
     return failure('push', 'GitHub is unreachable from this server.');
@@ -242,4 +247,100 @@ export async function pushBranchBackupFile(getter: BranchFetcher, putter: Branch
     if (typeof done?.commit?.sha === 'string') commitSha = done.commit.sha;
   } catch { /* metadata unreadable; the write itself succeeded */ }
   return { ok: true, repo, branch, path: fullPath, sha: fileSha, commit: commitSha, updated: pushed.status === 200 };
+}
+
+export const SCHEDULED_PUSH_NAME = 'scheduled-backup.json';
+export const SCHEDULED_PUSH_MIN_MINUTES = 5;
+export const SCHEDULED_PUSH_MAX_MINUTES = 10080;
+export const SCHEDULED_PUSH_STATE_KEY = 'branch_push_last';
+
+export interface ScheduledPushDeps {
+  settings: unknown;
+  envToken: unknown;
+  lastAt: string | null;
+  now?: number;
+  buildBundle: () => Promise<unknown>;
+  connect: (token: string) => { getter: BranchFetcher; putter: BranchPutter };
+  onStage?: PushStageCallback;
+}
+
+export interface ScheduledPushOutcome {
+  ran: boolean;
+  skipped?: 'disabled' | 'not-due' | 'no-token' | 'no-target';
+  result?: BranchPushResult | BranchFileFailure;
+}
+
+/**
+ * One scheduled-push decision. Pure apart from the injected IO: the bundle is
+ * built only when a push really goes out, and the branch has no default (the
+ * repo falls back to the default, the folder to backups).
+ */
+export async function runScheduledBranchPush(deps: ScheduledPushDeps): Promise<ScheduledPushOutcome> {
+  const root = deps.settings && typeof deps.settings === 'object' ? (deps.settings as Record<string, unknown>).branchPush : null;
+  const cfg = root && typeof root === 'object' ? (root as Record<string, unknown>) : null;
+  if (!cfg || cfg.enabled !== true) return { ran: false, skipped: 'disabled' };
+  const everyMin = Math.min(SCHEDULED_PUSH_MAX_MINUTES, Math.max(SCHEDULED_PUSH_MIN_MINUTES, Number(cfg.intervalMin) || 360));
+  const now = typeof deps.now === 'number' ? deps.now : Date.now();
+  const last = deps.lastAt ? Date.parse(deps.lastAt) : NaN;
+  if (Number.isFinite(last) && now - last < everyMin * 60_000) return { ran: false, skipped: 'not-due' };
+  const token = pickGithubToken(deps.envToken, deps.settings);
+  if (!token) return { ran: false, skipped: 'no-token' };
+  const branch = normalizeBranch(cfg.branch);
+  if (!branch) return { ran: false, skipped: 'no-target' };
+  const repo = normalizeRepo(cfg.repo) || DEFAULT_REPO;
+  const folder = normalizeBackupPath((cfg.path ?? DEFAULT_BACKUP_PATH) as unknown) || DEFAULT_BACKUP_PATH;
+  const { getter, putter } = deps.connect(token);
+  const bundle = await deps.buildBundle();
+  const result = await pushBranchBackupFile(getter, putter, repo, branch, folder, SCHEDULED_PUSH_NAME, bundle, deps.onStage);
+  return { ran: true, result };
+}
+
+export interface ScheduledPushTickIO {
+  settings: unknown;
+  envToken: unknown;
+  loadLast: () => Promise<{ at?: unknown } | null>;
+  saveLast: (rec: Record<string, unknown>) => Promise<void>;
+  buildBundle: () => Promise<unknown>;
+  connect: (token: string) => { getter: BranchFetcher; putter: BranchPutter };
+  log?: (message: string) => void;
+}
+
+let scheduledPushRunning = false;
+
+/**
+ * Scheduler entry shared by the Worker cron, the Node in-web scheduler and
+ * the standalone cron script. Never throws; records the outcome for the
+ * dashboard and refuses to overlap itself (a push can outlast the 60s tick).
+ */
+export async function scheduledBranchPushTick(io: ScheduledPushTickIO): Promise<void> {
+  if (scheduledPushRunning) return;
+  scheduledPushRunning = true;
+  try {
+    const last = await io.loadLast().catch(() => null);
+    const lastAt = last && typeof last.at === 'string' ? last.at : null;
+    const outcome = await runScheduledBranchPush({
+      settings: io.settings, envToken: io.envToken, lastAt,
+      buildBundle: io.buildBundle, connect: io.connect,
+    });
+    if (!outcome.ran) {
+      if (outcome.skipped === 'no-token' || outcome.skipped === 'no-target') {
+        await io.saveLast({ at: new Date().toISOString(), ok: false, skipped: outcome.skipped }).catch(() => {});
+      }
+      return;
+    }
+    const r = outcome.result as BranchPushResult | BranchFileFailure;
+    if (r.ok) {
+      await io.saveLast({ at: new Date().toISOString(), ok: true, path: `${r.branch}/${r.path}`, sha: r.sha, updated: r.updated }).catch(() => {});
+      io.log?.(`scheduled branch push: ${r.branch}/${r.path} ${r.updated ? 'updated' : 'created'}`);
+    } else {
+      await io.saveLast({ at: new Date().toISOString(), ok: false, stage: r.stage, error: r.error }).catch(() => {});
+      io.log?.(`scheduled branch push failed (${r.stage}): ${r.error}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await io.saveLast({ at: new Date().toISOString(), ok: false, error: message }).catch(() => {});
+    io.log?.(`scheduled branch push crashed: ${message}`);
+  } finally {
+    scheduledPushRunning = false;
+  }
 }
