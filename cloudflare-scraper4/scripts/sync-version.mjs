@@ -6,6 +6,9 @@
 //
 //   node scripts/sync-version.mjs          rewrite every target with package.json version
 //   node scripts/sync-version.mjs --check  verify only; exit 1 when a target drifted
+//
+// Grok-generated releases use an optional leading "g" (e.g. g1.175.0) so the
+// operator can tell arena vs Grok builds apart at a glance.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,16 +17,18 @@ const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const checkOnly = process.argv.includes('--check');
 const pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8'));
 const version = String(pkg.version || '').trim();
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  console.error(`sync-version: package.json version must be x.y.z, got "${version}"`);
+// Allow optional leading "g" for Grok builds: g1.175.0 or 1.175.0
+if (!/^g?\d+\.\d+\.\d+$/.test(version)) {
+  console.error(`sync-version: package.json version must be [g]x.y.z, got "${version}"`);
   process.exit(1);
 }
 const faDigits = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = value => String(value).replace(/\d/g, d => faDigits[Number(d)]);
 const V = version;
 const FA = toFa(version);
-const N = String.raw`\d+\.\d+\.\d+`;
-const F = String.raw`[۰-۹]+\.[۰-۹]+\.[۰-۹]+`;
+// Match both plain and g-prefixed semver in existing sources when rewriting.
+const N = String.raw`g?\d+\.\d+\.\d+`;
+const F = String.raw`g?[۰-۹]+\.[۰-۹]+\.[۰-۹]+`;
 
 // Each rule is anchored on a label so historical changelog entries are never touched.
 const rules = [
