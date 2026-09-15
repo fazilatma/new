@@ -785,6 +785,8 @@ function startScraper(retryDepth = 0) {
     ...baseEnv,
     PORT: String(scraperPort),
     DEPLOYER_MANAGED: 'true',
+    DEPLOYER_UI_TOKEN: token,
+    DEPLOYER_UI_PORT: String(port),
     RUN_WORKER_IN_WEB: baseEnv.RUN_WORKER_IN_WEB || 'true',
     LOCAL_SCRAPER_AUTO_UPDATE: baseEnv.LOCAL_SCRAPER_AUTO_UPDATE || 'true',
     DATABASE_URL: normalizeDatabaseUrl(baseEnv.DATABASE_URL)

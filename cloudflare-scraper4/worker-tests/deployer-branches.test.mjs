@@ -162,3 +162,12 @@ test('deployer branches: both runtimes wire the shared scan', async () => {
   assert.ok(server.includes('githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN'), 'render must forward its token to GitHub reads');
   assert.ok(server.includes("app.get('/api/github/token-status'"), 'render must expose the token status');
 });
+
+test('deployer install-branch: the worker answers honestly instead of 404', async () => {
+  const response = await worker.fetch(new Request('https://worker.test/api/deployer/install-branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ branch: 'main' }) }), { DB: db, VAULT_SECRET: 'vault-secret' }, ctx);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.code, 'NO_DEPLOYER');
+  assert.ok(body.error.includes('Worker'));
+});

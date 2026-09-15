@@ -14,7 +14,7 @@ import worker from '../scraper4.worker.js';
 // which source is active with a last-4 hint, never the token itself.
 const temporary = await mkdtemp(join(tmpdir(), 'scraper4-github-token-'));
 await build({ entryPoints: { helper: new URL('../worker-src/deployer-branches.ts', import.meta.url).pathname }, bundle: true, format: 'esm', platform: 'node', target: 'node18', outdir: temporary, entryNames: '[name]', outExtension: { '.js': '.mjs' } });
-const { pickGithubToken } = await import(pathToFileURL(join(temporary, 'helper.mjs')));
+const { pickGithubToken, normalizeInstallBranch } = await import(pathToFileURL(join(temporary, 'helper.mjs')));
 
 test('pickGithubToken: the env token wins, the saved token is the fallback', () => {
   assert.equal(pickGithubToken('env-tok', { githubBackupToken: 'saved-tok' }), 'env-tok');
@@ -113,4 +113,15 @@ test('all four GitHub routes on both runtimes share the same token lookup', asyn
   const renderLookups = server.split('pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState(\'settings\',{}).catch(()=>({})))').length - 1;
   assert.equal(workerLookups, 4, 'scan + files + file + push on the worker');
   assert.equal(renderLookups, 4, 'scan + files + file + push on render');
+});
+
+test('normalizeInstallBranch: the deployer install rule, shared by both runtimes', () => {
+  assert.equal(normalizeInstallBranch('arena/01a09468-new'), 'arena/01a09468-new');
+  assert.equal(normalizeInstallBranch('origin/main'), 'main', 'an origin/ prefix is stripped');
+  assert.equal(normalizeInstallBranch('  main  '), 'main');
+  assert.equal(normalizeInstallBranch(''), null);
+  assert.equal(normalizeInstallBranch('HEAD'), null);
+  assert.equal(normalizeInstallBranch('a;b'), null, 'shell metacharacters are rejected');
+  assert.equal(normalizeInstallBranch('a b'), null);
+  assert.equal(normalizeInstallBranch('feature/x.y-1'), 'feature/x.y-1', 'dots, slashes and dashes are branch-legal');
 });

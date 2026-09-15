@@ -40,6 +40,13 @@ export function normalizeRepo(raw: unknown): string | null {
   return REPO_PATTERN.test(repo) ? repo : null;
 }
 
+/** Branch names the install path accepts: the deployer's own rule, shared so both runtimes validate identically. */
+export function normalizeInstallBranch(raw: unknown): string | null {
+  const name = String(raw || '').replace(/^origin\//, '').trim();
+  if (!name || name === 'HEAD' || /[^\w./-]/.test(name)) return null;
+  return name;
+}
+
 /** Env token wins (ops override); otherwise the token saved in the dashboard. */
 export function pickGithubToken(envToken?: unknown, settings?: unknown): string {
   const fromEnv = String(envToken || '').trim();
