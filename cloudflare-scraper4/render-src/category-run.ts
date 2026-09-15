@@ -99,10 +99,20 @@ let running = false;
 
 /** Name expected by render-src/server.ts */
 export async function startCategoryRun(input?: any): Promise<{ run: any; existing: boolean }> {
+  // Paused runs must not block a fresh start after the user changes vote mode
+  // (مستر تکی / پشتیبان / اجماعی). active() used to include "paused".
   const previous = await readRun();
-  if (previous && active(previous)) return { run: publicRun(previous), existing: true };
+  const requestedMode = normalizeCategoryMode(input?.mode);
+  if (previous && active(previous)) {
+    const modeChanged = String(previous.mode || '') !== requestedMode;
+    if (previous.status === 'paused' || previous.stopRequested || modeChanged) {
+      await resetCategoryRun();
+    } else {
+      return { run: publicRun(previous), existing: true };
+    }
+  }
 
-  const mode = normalizeCategoryMode(input?.mode);
+  const mode = requestedMode;
   const explicit = Array.isArray(input?.models) ? input.models : Array.isArray(input?.modelKeys) ? input.modelKeys : undefined;
   const modelKeys = await resolveModelKeys(mode, explicit);
   if (!modelKeys.length) {
