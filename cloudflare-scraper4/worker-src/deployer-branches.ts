@@ -40,6 +40,14 @@ export function normalizeRepo(raw: unknown): string | null {
   return REPO_PATTERN.test(repo) ? repo : null;
 }
 
+/** Env token wins (ops override); otherwise the token saved in the dashboard. */
+export function pickGithubToken(envToken?: unknown, settings?: unknown): string {
+  const fromEnv = String(envToken || '').trim();
+  if (fromEnv) return fromEnv;
+  const store = settings && typeof settings === 'object' ? (settings as Record<string, unknown>).githubBackupToken : null;
+  return typeof store === 'string' ? store.trim() : '';
+}
+
 /** Headers GitHub requires: an explicit user-agent plus an optional token. */
 export function githubApiHeaders(token?: unknown, version?: unknown): Record<string, string> {
   const tag = String(version || '').trim();

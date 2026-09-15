@@ -44,7 +44,14 @@ const mockFetch = async (input, init = {}) => {
   if (url.pathname === '/api/profiles') return json({ ok: true, profiles: [] });
   if (url.pathname === '/api/status') return json({ ok: true, version: '1.169.0', databaseReady: true, connections: { woo: { ok: false }, basalam: { ok: false } } });
   if (url.pathname === '/health') return json({ ok: true, version: '1.169.0', databaseReady: true });
-  if (url.pathname === '/api/settings') return json({ ok: true, settings: {} });
+  if (url.pathname === '/api/settings') {
+    if (method === 'POST') { try { postedSettings.push(JSON.parse(init.body || '{}')); } catch {} return json({ ok: true }); }
+    return json({ ok: true, settings: {} });
+  }
+  if (url.pathname === '/api/github/token-status') {
+    if (tokenStatusOverride) return tokenStatusOverride();
+    return json({ ok: true, active: null, env: false, stored: false, hint: null });
+  }
   if (url.pathname === '/api/jobs') return json({ ok: true, jobs: [] });
   if (url.pathname === '/api/ai/test-runs/current' || url.pathname === '/api/destination/basalam/category-runs/current') return json({ ok: true, run: null });
   if (url.pathname === '/api/import/history') return json({ ok: true, items: [] });
@@ -75,6 +82,8 @@ const mockFetch = async (input, init = {}) => {
 };
 const fetched = [];
 let branchesOverride = null;
+let tokenStatusOverride = null;
+const postedSettings = [];
 
 const { window } = parseHTML(DASHBOARD);
 const store = new Map();
@@ -88,7 +97,7 @@ Object.defineProperty(URL, 'createObjectURL', { value: blob => { downloadedBlob 
 Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, writable: true, configurable: true });
 const failures = [];
 process.on('unhandledRejection', error => failures.push(error));
-try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus,scanDeployerBranches,refreshBranchFiles,doBranchRestore,syncBranchDropdown,currentBranchRepo};'); } catch (error) { failures.push(error); }
+try { (0, eval)(DASHBOARD_JS + '\n;globalThis.__backupTest={state,$,inspectSettingsBundle,renderBackupSummaryHtml,openRestoreSectionsModal,inspectBackupFile,doFullBackup,renderLastBackup,doBootstrapDownload,renderBootstrapStatus,scanDeployerBranches,refreshBranchFiles,doBranchRestore,syncBranchDropdown,currentBranchRepo,unifiedTab,initUnifiedTabs,renderGithubTokenStatus};'); } catch (error) { failures.push(error); }
 const backup = globalThis.__backupTest;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(fn, label, timeoutMs = 8000) {
@@ -280,4 +289,58 @@ test('a non-rate GitHub denial is shown honestly, not as a rate limit', async ()
   await backup.scanDeployerBranches();
   assert.equal(document.getElementById('vcBranch').value, 'arena/01a09468-new', 'a later scan recovers');
   assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('the unified panel splits into three persisted sub-tabs', async () => {
+  const tabs = [...document.querySelectorAll('.utabs [data-utab]')];
+  assert.deepEqual(tabs.map(b => b.getAttribute('data-utab')), ['backup', 'branch', 'version']);
+  assert.ok(document.getElementById('utup-backup').classList.contains('active'), 'backup shows first');
+  assert.ok(!document.getElementById('utup-branch').classList.contains('active'));
+  document.querySelector('[data-utab="branch"]').click();
+  await sleep(30);
+  assert.ok(document.getElementById('utup-branch').classList.contains('active'), 'the branch pane opens');
+  assert.ok(!document.getElementById('utup-backup').classList.contains('active'));
+  assert.ok(!document.getElementById('utup-version').classList.contains('active'));
+  assert.equal(store.get('scraper4:unified-tab'), 'branch', 'the choice persists');
+  assert.equal(document.getElementById('vcBranch').closest('.utup').id, 'utup-branch', 'branch controls live in the branch pane');
+  assert.equal(document.getElementById('ghToken').closest('.utup').id, 'utup-branch', 'the token field lives in the branch pane');
+  document.querySelector('[data-utab="version"]').click();
+  await sleep(30);
+  assert.ok(document.getElementById('utup-version').classList.contains('active'), 'the version pane opens');
+  assert.equal(document.getElementById('deployerBranches').closest('.utup').id, 'utup-version', 'the deployer table lives in the version pane');
+  document.querySelector('[data-utab="backup"]').click();
+  await sleep(30);
+  assert.ok(document.getElementById('utup-backup').classList.contains('active'), 'back to backup');
+  assert.equal(document.getElementById('bkFile').closest('.utup').id, 'utup-backup', 'restore controls live in the backup pane');
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('the GitHub token field binds to settings and reports its source honestly', async () => {
+  const field = document.getElementById('ghToken');
+  assert.equal(field.type, 'password', 'the token is masked');
+  assert.equal(field.getAttribute('data-setting'), 'githubBackupToken', 'the standard settings binding saves it');
+  field.value = 'ghp_testtoken1999';
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => postedSettings.length > 0, 'token autosave');
+  assert.equal(postedSettings[postedSettings.length - 1].githubBackupToken, 'ghp_testtoken1999', 'typing the token autosaves it into settings');
+  const status = override => { tokenStatusOverride = override; return backup.renderGithubTokenStatus(); };
+  const line = () => document.getElementById('ghTokenStatus').textContent;
+  await status(() => new Response(JSON.stringify({ ok: true, active: 'stored', env: false, stored: true, hint: '1999' }), { headers: { 'content-type': 'application/json' } }));
+  assert.match(line(), /پیشخوان/);
+  assert.match(line(), /1999/);
+  assert.ok(!line().includes('ghp_testtoken1999'), 'the full token never shows on screen');
+  await status(() => new Response(JSON.stringify({ ok: true, active: 'env', env: true, stored: true, hint: 'ENV4' }), { headers: { 'content-type': 'application/json' } }));
+  assert.match(line(), /محیط سرور/);
+  await status(() => new Response(JSON.stringify({ ok: true, active: null, env: false, stored: false, hint: null }), { headers: { 'content-type': 'application/json' } }));
+  assert.match(line(), /ذخیره نشده/);
+  tokenStatusOverride = null;
+  assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
+});
+
+test('the inspect file input is back in the backup pane', () => {
+  const picker = document.getElementById('backupInspectFile');
+  assert.ok(picker, 'the picker exists again');
+  assert.equal(picker.type, 'file');
+  assert.match(picker.getAttribute('accept') || '', /json/);
+  assert.equal(picker.closest('.utup').id, 'utup-backup', 'it sits next to the inspect button');
 });

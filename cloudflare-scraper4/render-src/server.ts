@@ -9,7 +9,7 @@ import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generate
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
-import { DEFAULT_REPO, githubApiHeaders, normalizeRepo, scanDeployerBranches } from '../worker-src/deployer-branches.js';
+import { DEFAULT_REPO, githubApiHeaders, normalizeRepo, pickGithubToken, scanDeployerBranches } from '../worker-src/deployer-branches.js';
 import { fetchBranchBackupFile, listBranchBackupFiles } from '../worker-src/branch-backup.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
@@ -266,9 +266,10 @@ app.post('/api/visual-ticket', async c => {
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
 app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,directRoute:true,headers:githubApiHeaders(token,version)},200000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(process.env.GH_BACKUP_TOKEN,runtimeVersion()),runtimeVersion(),repo))});
-app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(process.env.GH_BACKUP_TOKEN),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
-app.get('/api/branch-file',async c=>{const r=await fetchBranchBackupFile(githubApiFetch(process.env.GH_BACKUP_TOKEN),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),runtimeVersion()),runtimeVersion(),repo))});
+app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
+app.get('/api/branch-file',async c=>{const r=await fetchBranchBackupFile(githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
+app.get('/api/github/token-status', async c => { const settings = await getState<any>('settings', {}); const env = String(process.env.GH_BACKUP_TOKEN || '').trim(), stored = typeof settings?.githubBackupToken === 'string' ? settings.githubBackupToken.trim() : ''; const active = env || stored; return c.json({ ok: true, active: env ? 'env' : stored ? 'stored' : null, env: Boolean(env), stored: Boolean(stored), hint: active ? active.slice(-4) : null }); });
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {

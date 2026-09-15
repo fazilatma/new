@@ -142,7 +142,7 @@ test('deployer branches: both runtimes wire the shared scan', async () => {
   for (const token of ['export async function scanDeployerBranches', 'export function branchVersionStatus',
     'export function clearDeployerBranchCache', 'DEPLOYER_BRANCHES_TTL_MS = 5 * 60 * 1000',
     'export function latestBranch', 'export function normalizeRepo', "DEFAULT_REPO = 'fazilatma/new'",
-    'export function githubApiHeaders', 'export async function classifyGitHubDenial', "'FORBIDDEN'"]) {
+    'export function githubApiHeaders', 'export async function classifyGitHubDenial', "'FORBIDDEN'", 'export function pickGithubToken']) {
     assert.ok(helper.includes(token), `the helper must define ${token}`);
   }
   assert.ok(app.includes("from './deployer-branches.js'"), 'the worker must import the shared scan');
@@ -150,13 +150,15 @@ test('deployer branches: both runtimes wire the shared scan', async () => {
   assert.ok(app.includes(`c.env.WORKER_VERSION||'${version}'`), 'the worker running version must track the package version');
   assert.ok(server.includes("from '../worker-src/deployer-branches.js'"), 'render must reuse the shared scan, not fork it');
   assert.ok(server.includes("app.get('/api/deployer/branches'"), 'render must expose the endpoint');
-  assert.ok(server.includes('scanDeployerBranches(githubApiFetch(process.env.GH_BACKUP_TOKEN,runtimeVersion()),runtimeVersion(),repo)'), 'render must report its running version');
+  assert.ok(server.includes("scanDeployerBranches(githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),runtimeVersion()),runtimeVersion(),repo)"), 'render must report its running version');
   for (const route of ["app.get('/api/branch-files'", "app.get('/api/branch-file'"]) {
     assert.ok(app.includes(route), `the worker must expose ${route}`);
     assert.ok(server.includes(route), `render must expose ${route}`);
   }
   assert.ok(app.includes("from './branch-backup.js'"), 'the worker must import the shared branch-file reader');
   assert.ok(server.includes("from '../worker-src/branch-backup.js'"), 'render must reuse the shared branch-file reader, not fork it');
-  assert.ok(app.includes('githubApiFetch(c.env.GH_BACKUP_TOKEN'), 'the worker must forward its token to GitHub reads');
-  assert.ok(server.includes('githubApiFetch(process.env.GH_BACKUP_TOKEN'), 'render must forward its token to GitHub reads');
+  assert.ok(app.includes('githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN'), 'the worker must forward its token to GitHub reads');
+  assert.ok(app.includes("app.get('/api/github/token-status'"), 'the worker must expose the token status');
+  assert.ok(server.includes('githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN'), 'render must forward its token to GitHub reads');
+  assert.ok(server.includes("app.get('/api/github/token-status'"), 'render must expose the token status');
 });
