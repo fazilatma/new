@@ -129,7 +129,7 @@ def main():
         except Exception:
             continue
 
-    respond({"ok": True, "id": remote_id, "transport": "sdk", "sdkVersion": sdk_version()})
+    respond({"ok": True, "id": remote_id, "id_str": str(remote_id), "transport": "sdk", "sdkVersion": sdk_version()})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { isoDateTime, normalizePersianText } from '../worker-src/utils.js';
+import { isoDateTime, normalizeDbValue, normalizePersianText, toRemoteId } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -76,7 +76,12 @@ async function getSqliteDb(): Promise<any> {
     }
     throw new Error(`node:sqlite could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
   }
-  sqliteDb = new mod.DatabaseSync(file);
+  // readBigInts: without it node:sqlite THROWS `RangeError: Value is too large
+  // to be represented as a JavaScript number` on any INTEGER above 2^53
+  // (real case: Basalam remote id 3838404244461599744), failing the whole
+  // operation. With it every integer arrives as a BigInt and query()
+  // normalizes safe ones back to numbers, huge ones to exact strings.
+  sqliteDb = new mod.DatabaseSync(file, { readBigInts: true });
   sqliteDb.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   return sqliteDb;
 }
@@ -105,6 +110,7 @@ export async function snapshotSqliteDatabase(): Promise<{ b64: string; bytes: nu
   }
 }
 function normalizeSqliteParam(value: unknown): unknown {
+  if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'boolean') return value ? 1 : 0;
   if (value instanceof Date) return value.toISOString();
   if (value && typeof value === 'object') return JSON.stringify(value);
@@ -125,7 +131,10 @@ async function query(sql: string, params: unknown[] = []): Promise<{ rows: any[]
   const text = tx.sql.trim();
   if (!text) return { rows: [], rowCount: 0 };
   if (/^(select|pragma)\b/i.test(text) || /\breturning\b/i.test(text)) {
-    const rows = db.prepare(text).all(...tx.params);
+    const rows = db.prepare(text).all(...tx.params) as Record<string, unknown>[];
+    // node:sqlite returns every integer as BigInt (see readBigInts above);
+    // JSON.stringify rejects BigInt, so normalize before anything can leak.
+    for (const row of rows) for (const key of Object.keys(row)) row[key] = normalizeDbValue(row[key]);
     return { rows, rowCount: rows.length };
   }
   const info = db.prepare(text).run(...tx.params);
@@ -386,19 +395,19 @@ export async function maintenanceRows(profileId=''):Promise<any[]>{
   if(useSqlite){const products=(await query(`SELECT * FROM products WHERE (?='' OR profile_id=?) ORDER BY updated_at DESC`,[profileId,profileId])).rows;const maps=(await query('SELECT * FROM destination_map')).rows;return products.map(p=>({...p,data:parseJson<Product>(p.data,p.data),active:Boolean(p.active),maps:maps.filter(m=>m.profile_id===p.profile_id&&m.source_key===p.source_key)}))}
   const {rows}=await pool.query(`SELECT p.profile_id,p.source_key,p.data,p.title,p.price,p.source_url,p.remote_woo_id,p.remote_basalam_id,p.active,p.missing_since,COALESCE(json_agg(dm) FILTER(WHERE dm.remote_id IS NOT NULL),'[]') maps FROM products p LEFT JOIN destination_map dm ON dm.profile_id=p.profile_id AND dm.source_key=p.source_key WHERE ($1='' OR p.profile_id=$1) GROUP BY p.profile_id,p.source_key ORDER BY p.updated_at DESC`,[profileId]);return rows}
 
-export async function setRemoteId(profileId: string, sourceKey: string, target: 'woo'|'basalam', id: number): Promise<void> {
+export async function setRemoteId(profileId: string, sourceKey: string, target: 'woo'|'basalam', id: number | string): Promise<void> {
   const column = target === 'woo' ? 'remote_woo_id' : 'remote_basalam_id';
   await pool.query(`UPDATE products SET ${column}=$3,updated_at=now() WHERE profile_id=$1 AND source_key=$2`, [profileId, sourceKey, id]);
 }
 
-export async function getRemoteId(profileId: string, sourceKey: string, target: 'woo'|'basalam'): Promise<number | null> {
+export async function getRemoteId(profileId: string, sourceKey: string, target: 'woo'|'basalam'): Promise<number | string | null> {
   const column = target === 'woo' ? 'remote_woo_id' : 'remote_basalam_id';
   const { rows } = await pool.query(`SELECT ${column} id FROM products WHERE profile_id=$1 AND source_key=$2`, [profileId, sourceKey]);
-  return rows[0]?.id ? Number(rows[0].id) : null;
+  return toRemoteId(rows[0]?.id);
 }
 
-export async function getDestinationId(profileId:string,sourceKey:string,target:string,accountKey='default'):Promise<number|null>{const {rows}=await pool.query('SELECT remote_id FROM destination_map WHERE profile_id=$1 AND source_key=$2 AND target=$3 AND account_key=$4',[profileId,sourceKey,target,accountKey]);return rows[0]?.remote_id?Number(rows[0].remote_id):null}
-export async function setDestinationId(profileId:string,sourceKey:string,target:string,accountKey:string,remoteId:number):Promise<void>{await pool.query(`INSERT INTO destination_map(profile_id,source_key,target,account_key,remote_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(profile_id,source_key,target,account_key) DO UPDATE SET remote_id=EXCLUDED.remote_id,updated_at=now()`,[profileId,sourceKey,target,accountKey,remoteId])}
+export async function getDestinationId(profileId:string,sourceKey:string,target:string,accountKey='default'):Promise<number|string|null>{const {rows}=await pool.query('SELECT remote_id FROM destination_map WHERE profile_id=$1 AND source_key=$2 AND target=$3 AND account_key=$4',[profileId,sourceKey,target,accountKey]);return toRemoteId(rows[0]?.remote_id)}
+export async function setDestinationId(profileId:string,sourceKey:string,target:string,accountKey:string,remoteId:number|string):Promise<void>{await pool.query(`INSERT INTO destination_map(profile_id,source_key,target,account_key,remote_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(profile_id,source_key,target,account_key) DO UPDATE SET remote_id=EXCLUDED.remote_id,updated_at=now()`,[profileId,sourceKey,target,accountKey,remoteId])}
 
 export async function markProfileRun(id: string): Promise<void> { await pool.query('UPDATE profiles SET last_run_at=now() WHERE id=$1', [id]); }
 
@@ -422,7 +431,7 @@ export async function markBasalamCategoriesTried(shopId:string,id:number,ids:Arr
   return data[key];
 }
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES($1,$2,$3,$4,$5)',[row.chatId,row.customer,row.input,row.output,row.source])}
-export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[Number(row.chat_id||0)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
+export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[toRemoteId(row.chat_id)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
 export async function listAutoreplyLog(limit=100):Promise<any[]>{const {rows}=await pool.query('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT $1',[limit]);return rows}
 function normalizeLearning(value:string){return normalizePersianText(value).replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()}
 

@@ -1,4 +1,5 @@
 import { loadConnections } from './connections.js';
+import { toRemoteId } from '../worker-src/utils.js';
 import { findLearnedCategory, getDestinationId, getRemoteId, setDestinationId, setRemoteId } from './db.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -14,7 +15,7 @@ export async function syncWoo(product: Product, profile: Profile): Promise<'crea
   const sku = product.sku || `s4-${profile.id}-${product.sourceKey}`.slice(0, 100);
   if (!id) {
     const search = await safeFetch(`${base}?sku=${encodeURIComponent(sku)}`, { headers: { authorization: auth, accept: 'application/json' }, apiMode: true, directRoute: true }, 2_000_000);
-    if (search.ok) { const rows = await search.json() as any[]; id = rows[0]?.id ? Number(rows[0].id) : null; }
+    if (search.ok) { const rows = await search.json() as any[]; id = toRemoteId(rows[0]?.id); }
   }
   // The configured WooCommerce adjustment percentage (0 = unchanged).
   const wooPercent = Number(c.pricePercent) || 0;
@@ -26,14 +27,14 @@ export async function syncWoo(product: Product, profile: Profile): Promise<'crea
   const response = await safeFetch(id ? `${base}/${id}` : base, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) , apiMode: true, directRoute: true }, 3_000_000);
   const body = await response.json().catch(() => ({})) as any;
   if (!response.ok) throw new Error(`WooCommerce HTTP ${response.status}: ${body.message || JSON.stringify(body).slice(0,300)}`);
-  const remoteId = Number(body.id || id); if (remoteId) await setRemoteId(profile.id, product.sourceKey, 'woo', remoteId);
+  const remoteId = toRemoteId(body.id || id) ?? 0; if (remoteId) await setRemoteId(profile.id, product.sourceKey, 'woo', remoteId);
   return id ? 'updated' : 'created';
 }
 
 function basalamPrice(product:Product,percent=0):number{const base=Math.round(product.price*(1+percent/100));return /(?:ریال|rial|irr)/i.test(product.priceText||'')?base:base*10;}
 
 type BasalamAccount={name:string;token:string;vendorId:string;pricePercent?:number};
-type BasalamSyncResult={shop:string;action:'created'|'updated';id:number;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
+type BasalamSyncResult={shop:string;action:'created'|'updated';id:number|string;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
 /**
  * Basalam's product schema. `photo` must be the INTEGER id of a file uploaded to
  * /v1/files (not a URL), `status` is required (2976 = PUBLISHED) and the price
@@ -223,11 +224,11 @@ export async function runBasalamSdkBridge(request:any,timeoutMs=Number(process.e
   });
 }
 async function callMaybe(fn:any,...args:any[]):Promise<any>{return typeof fn==='function'?fn(...args):undefined}
-async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{
+async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,existing:number|string|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number|string;body:any;packageName:string}>{
   const payloadForSdk=basalamPayload(product,c,account,categoryId,photoIds);
   try{
     const answer=await runBasalamSdkBridge({action:existing?'update':'create',token:account.token,refreshToken:c.refreshToken||'',vendorId:account.vendorId,productId:existing||0,payload:payloadForSdk});
-    if(answer?.ok)return{id:Number(answer.id||existing||0),body:answer,packageName:`basalam-sdk (python${answer.sdkVersion?' '+answer.sdkVersion:''})`};
+    if(answer?.ok)return{id:toRemoteId(answer.id_str ?? answer.id ?? existing) ?? 0,body:answer,packageName:`basalam-sdk (python${answer.sdkVersion?' '+answer.sdkVersion:''})`};
     throw new Error(String(answer?.error||'Basalam Python SDK bridge failed'));
   }catch(bridgeError){
     const bridgeText=bridgeError instanceof Error?bridgeError.message:String(bridgeError);
@@ -236,8 +237,8 @@ async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,e
     return await sendBasalamWithNpmSdk(loaded,product,c,account,existing,categoryId,photoIds);
   }
 }
-async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:Number(body?.id||body?.product?.id||existing),body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
-async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds,!existing);response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${basalamPhotoHint(response?.status||0,body)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);const newId=Number(body.id||body.product?.id||existing);
+async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|string|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number|string;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:toRemoteId(body?.id||body?.product?.id||existing) ?? 0,body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
+async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|string|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number|string;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds,!existing);response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${basalamPhotoHint(response?.status||0,body)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);const newId=toRemoteId(body.id||body.product?.id||existing) ?? 0;
   return{id:newId,body}}
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
@@ -251,13 +252,13 @@ export async function syncBasalam(product: Product, profile: Profile): Promise<B
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;
     const action=existing?'updated':'created';
     const price=basalamPrice(product,Number(account.pricePercent)||0);
-    let remoteId=0,transport:BasalamSyncResult['transport']='sdk',fallback='';
+    let remoteId:number|string=0,transport:BasalamSyncResult['transport']='sdk',fallback='';
     try{
       // Photos are uploaded once per stall and reused by both transports.
       const photoIds=await uploadBasalamPhotos(product,c,account);
       // SDK first, REST API as the fallback.
-      try{const sdk=await sendBasalamWithSdk(product,c,account,existing,categoryAttempts[0],photoIds);remoteId=Number(sdk.id||existing);transport='sdk'}
-      catch(error){fallback=error instanceof Error?error.message:String(error);const api=await sendBasalamWithApi(product,c,account,existing,categoryAttempts,photoIds);remoteId=Number(api.id||existing);transport='api'}
+      try{const sdk=await sendBasalamWithSdk(product,c,account,existing,categoryAttempts[0],photoIds);remoteId=toRemoteId(sdk.id||existing) ?? 0;transport='sdk'}
+      catch(error){fallback=error instanceof Error?error.message:String(error);const api=await sendBasalamWithApi(product,c,account,existing,categoryAttempts,photoIds);remoteId=toRemoteId(api.id||existing) ?? 0;transport='api'}
     }catch(error){
       // Both transports failed for THIS stall; keep publishing to the others.
       results.push({shop:account.name,action,id:0,transport:'api',price,error:error instanceof Error?error.message:String(error),fallback:fallback||undefined});
