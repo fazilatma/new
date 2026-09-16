@@ -57,7 +57,7 @@ test('network_api: product URLs outrank noise when capture slots run out', () =>
 
 test('network_api: the engine is wired into chains, benchmark, UI and gates', async () => {
   const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
-  assert.ok(scraper.includes("if (name === 'network_api') return scrapeListWithNetworkApi(url);"), 'pick() must dispatch network_api');
+  assert.ok(scraper.includes("if (name === 'network_api') return withBrowserSlot(() => scrapeListWithNetworkApi(url));"), 'pick() must dispatch network_api inside the browser slot');
   assert.ok(scraper.includes("'crawlee_playwright','network_api'"), 'the auto chain must end with network_api after the browsers');
   assert.ok(scraper.includes("page.on('response'"), 'the driver must listen on network responses');
   assert.ok(scraper.includes("type !== 'xhr' && type !== 'fetch'"), 'only XHR/fetch responses may be captured');

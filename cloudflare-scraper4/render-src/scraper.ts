@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -524,10 +524,10 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if (engine !== 'auto' && name === engine) throw new Error('مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.');
       return [] as Product[];
     }
-    if (name === 'playwright') return scrapeListWithPlaywright(url, activeSelectors);
-    if (name === 'puppeteer') return scrapeListWithPuppeteer(url, activeSelectors);
-    if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, activeSelectors);
-    if (name === 'network_api') return scrapeListWithNetworkApi(url);
+    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors));
+    if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors));
+    if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors));
+    if (name === 'network_api') return withBrowserSlot(() => scrapeListWithNetworkApi(url));
     const { text, url: finalUrl } = await source();
     if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
     if (name === 'jsonld') return jsonLdProducts(text, finalUrl);
@@ -596,14 +596,51 @@ function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined
     // Fall back to a browser already installed on the machine before giving up.
     || systemBrowser();
 }
+/** A cache directory only counts when it holds a real browser binary: a stale
+ * ms-playwright folder from a failed/interrupted download used to report
+ * "available", so every browser probe died in launch with the giant
+ * "Executable doesn't exist" error instead of skipping cleanly. */
+function cacheHasBrowserBinary(root: string): boolean {
+  const names = new Set(['chrome', 'headless_shell', 'chromium', 'firefox', 'webkit']);
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+  while (stack.length) {
+    const { dir, depth } = stack.pop()!;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (names.has(entry.name)) return true;
+      if (entry.isDirectory() && depth < 4) stack.push({ dir: join(dir, entry.name), depth: depth + 1 });
+    }
+  }
+  return false;
+}
 /** True when some Chromium is reachable, so the engine list can say why not. */
 export function browserEngineAvailable(): boolean {
   if (browserExecutable('playwright')) return true;
-  // Playwright downloads into a predictable cache; treat its presence as usable.
+  // Playwright downloads into a predictable cache; treat it as usable only
+  // when a browser binary is actually inside.
   try {
     const home = process.env.HOME || process.env.USERPROFILE || '';
-    return Boolean(home) && existsSync(`${home}/.cache/ms-playwright`);
+    if (!home) return false;
+    return cacheHasBrowserBinary(join(home, '.cache', 'ms-playwright'))
+      || cacheHasBrowserBinary(join(home, '.cache', 'puppeteer'));
   } catch { return false; }
+}
+/**
+ * Browser launch mutex: at most ONE Chromium runs at a time per process.
+ * Without it, two simultaneous operations (diagnostic + benchmark, a retry
+ * on top of a slow run, two open tabs) pile up full browsers until a small
+ * VPS runs out of memory and the kernel kills the server mid-request — the
+ * "crash" that only happens where browsers actually launch. Every browser
+ * engine funnels through pick(), so gating there covers all callers.
+ */
+let browserLaunchChain: Promise<void> = Promise.resolve();
+export async function withBrowserSlot<T>(task: () => Promise<T>): Promise<T> {
+  const previous = browserLaunchChain;
+  let release: () => void = () => undefined;
+  browserLaunchChain = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try { return await task(); } finally { release(); }
 }
 function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
 /** A goto interrupted by the page's own redirect/reload rejects with net::ERR_ABORTED even though the follow-up page loads fine — survivable. */
@@ -963,8 +1000,11 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
 async function scrapeListWithPlaywright(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright'); }
 async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer'); }
 async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors): Promise<Product[]> {
-  const { PlaywrightCrawler, Dataset } = await import('crawlee');
-  const dataset = await Dataset.open(`scraper4-${Date.now()}`);
+  const { PlaywrightCrawler } = await import('crawlee');
+  // The crawl covers exactly one page, so the products ride home in a closure
+  // variable — the old per-run Dataset left a scraper4-<timestamp> storage
+  // directory behind on every benchmark/diagnostic page, forever.
+  let found: Product[] = [];
   // Same browser resolution as the Playwright/Puppeteer engines: drive the
   // detected system Chromium (Termux/VPS/desktop) with sandbox-free flags.
   // Crawlee's default launch looks for Playwright's bundled browsers, which
@@ -979,11 +1019,10 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
     const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
-    await dataset.pushData(rescued.products);
+    found = rescued.products;
   }});
   await crawler.run([url]);
-  const data = await dataset.getData();
-  return dedupe(data.items.flat() as Product[]);
+  return dedupe(found);
 }
 function parseProductsFromHtml(html: string, baseUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(html); const products: Product[] = [];
