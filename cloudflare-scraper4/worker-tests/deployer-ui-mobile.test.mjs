@@ -239,3 +239,15 @@ test('deployer markup: the off switches accept the words people actually type', 
   assert.match(source, /LOCAL_DEPLOYER_AUTO_UPDATE=false\s+disable the automatic branch scanner/,
     'and the documented value has to stay what the printed guide shows');
 });
+
+test('deployer markup: nothing on the first paint claims a state it has not read', () => {
+  // The pills are filled by the first refresh(), so their static text must be a question, not an
+  // answer - otherwise a page that never reaches the API still looks healthy.
+  assert.match(body, /id="autoPill" aria-live="polite">Auto-update: checking…<\/span>/,
+    'the auto-update pill must not open by promising it is on');
+  assert.match(body, /id="servingPill">serving: checking…<\/span>/, 'same for the serving pill');
+  for (const chip of ['railDb', 'railScraper', 'railGit', 'railBranch']) {
+    assert.match(body, new RegExp(`id="${chip}">[\\s\\S]{0,80}?<b>checking…</b>`), `${chip} must start unknown`);
+  }
+  assert.match(script, /if \(autoPill\) autoPill\.textContent = 'Auto-update: '/, 'and one line owns that text afterwards');
+});

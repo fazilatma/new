@@ -1456,7 +1456,7 @@ details.note>div{padding-bottom:.55rem;max-width:74ch}
 <button class="chip" onclick="refresh()" type="button">Refresh now</button>
 </div>
 </div>
-<div class="pills"><span class="pill">Node ${process.version}</span><span class="pill" title="package.json version — a trailing + is the agent-built release marker">v${pkg.version || '-'}</span><span class="pill" id="autoPill" aria-live="polite">Auto-update on</span><span class="pill">Token protected</span></div>
+<div class="pills"><span class="pill">Node ${process.version}</span><span class="pill" title="package.json version — a trailing + is the agent-built release marker">v${pkg.version || '-'}</span><span class="pill" id="autoPill" aria-live="polite">Auto-update: checking…</span><span class="pill">Token protected</span></div>
 <div class="rail" id="rail">
 <span class="stat" id="railDb"><span class="dot"></span>database <b>checking…</b></span>
 <span class="stat" id="railScraper"><span class="dot"></span>scraper <b>checking…</b></span>
