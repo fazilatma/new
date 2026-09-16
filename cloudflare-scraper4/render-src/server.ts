@@ -28,13 +28,28 @@ import { controlCategoryRun, getPublicCategoryRun, recoverCategoryRun, resetCate
 import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { benchmarkProbeUrl, browserEngineAvailable, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
-import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
+import { basalamSdkBridgePath, basalamSdkStatus, describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
 const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.183.0+'; } catch { return process.env.npm_package_version || '1.183.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
+type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
+function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
+  const pythonName=process.env.BASALAM_PYTHON||process.env.PYTHON||'python3';
+  const pythonPath=/[/\\]/.test(pythonName)?(existsSync(pythonName)?pythonName:''):command(pythonName);
+  let pythonVersion='';
+  if(pythonPath){try{const v=spawnSync(pythonName,['--version'],{encoding:'utf8',timeout:10000});pythonVersion=String(v.stdout||v.stderr||'').trim().split(/\s+/).pop()||''}catch{/* version probe is best-effort */}}
+  let sdk={available:false,version:'',python:'',executable:'',error:''};
+  try{sdk=basalamSdkStatus()}catch(error){sdk={available:false,version:'',python:'',executable:pythonName,error:error instanceof Error?error.message:String(error)}}
+  const bridge=(()=>{try{return basalamSdkBridgePath()}catch{return''}})();
+  return[
+    item('python3 interpreter',Boolean(pythonPath),pythonVersion||pythonPath||pythonName,'system command',pythonPath?'':'set BASALAM_PYTHON or install python3, then: npm run basalam:install'),
+    item('basalam-sdk-bridge.py',Boolean(bridge&&existsSync(bridge)),bridge?'scripts/basalam-sdk-bridge.py':'','project script'),
+    item('basalam-sdk (pip)',sdk.available,sdk.version||(sdk.available?'installed':''),'python bridge',sdk.available?`via ${sdk.executable||pythonName}`:(sdk.error?`missing: ${sdk.error.slice(0,160)}`:'run: npm run basalam:install')),
+  ];
+}
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
   const deps={...(pkgJson.dependencies||{}),...(pkgJson.devDependencies||{})};
@@ -47,6 +62,7 @@ function nodeLibraryProbe(){
     {label:'Installed npm scraping/runtime libraries',items:['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg','@basalam/sdk','@basalam/node-sdk','basalam-sdk','basalam'].map(npm)},
     {label:'Build/deploy dependencies',items:['typescript','esbuild','wrangler'].map(npm)},
     {label:'System browser/tools',items:['chromium','chromium-browser','google-chrome','git','gh','psql'].map(name=>{const path=command(name);return item(name,Boolean(path),path,'system command')})},
+    {label:'Python / Basalam SDK',items:pythonSdkItems(item,command)},
     {label:'Storage configuration',items:[item(databaseLabel,true,databaseDriver,'database'),item('DATABASE_URL',Boolean(process.env.DATABASE_URL),'configured','environment'),item('RUN_WORKER_IN_WEB',config.runWorkerInWeb,'configured','environment')]}
   ];
   return{ok:true,environment:process.env.TERMUX_VERSION?'termux-node':process.env.RENDER?'render-node':'local-node',queriedAt:new Date().toISOString(),dynamic:true,projectDir:String(root.pathname),groups};

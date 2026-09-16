@@ -685,7 +685,7 @@ function cloudflareLibraryProbe(env:Env){
     {label:'Cloudflare runtime/API',items:[item('Cloudflare Workers runtime',true,'workerd','runtime'),item('Hono',true,'bundled','npm/bundle'),item('HTMLRewriter',typeof (globalThis as any).HTMLRewriter!=='undefined','','runtime'),item('Web Crypto',Boolean(globalThis.crypto?.subtle),'','runtime')]},
     {label:'Storage/queue bindings',items:[item('Cloudflare D1 DB',Boolean(env.DB),'binding','runtime'),item('Cloudflare Queues JOBS',Boolean(env.JOBS),'binding','runtime'),item('R2 backups',Boolean(env.BACKUPS),'binding','runtime'),item('Cron Triggers',true,'configured in wrangler.toml','platform')]},
     {label:'Bundled edge parsers',items:['JSON-LD parser','__NEXT_DATA__ parser','metadata parser','inline script JSON parser','heuristic product-card parser','linkedom-compatible selector helpers','read-excel-file web-worker'].map(name=>item(name,true,'bundled','worker bundle'))},
-    {label:'Not installed in Worker runtime',items:['playwright','puppeteer','crawlee','pg','node:sqlite'].map(name=>item(name,false,'','not available','Node-only; shown as unavailable here'))}
+    {label:'Not installed in Worker runtime',items:['playwright','puppeteer','crawlee','pg','node:sqlite','python3','basalam-sdk'].map(name=>item(name,false,'','not available','Node-only; shown as unavailable here'))}
   ];
   return{ok:true,environment:'cloudflare-worker',queriedAt:new Date().toISOString(),dynamic:true,groups};
 }

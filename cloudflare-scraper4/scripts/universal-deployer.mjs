@@ -627,13 +627,14 @@ APP_NAME="${meta.name}"
 RELEASE_DIR="${releaseDir}"
 ARCHIVE="${meta.name}-vps.tar.gz"
 sudo apt-get update
-sudo apt-get install -y nodejs npm nginx tar
+sudo apt-get install -y nodejs npm nginx tar python3 python3-pip
 sudo mkdir -p "$RELEASE_DIR/releases"
 sudo tar -xzf "$ARCHIVE" -C "$RELEASE_DIR/releases"
 NEW_RELEASE=$(find "$RELEASE_DIR/releases" -maxdepth 1 -type d -name "$APP_NAME-*" | sort | tail -1)
 sudo ln -sfn "$NEW_RELEASE" "$RELEASE_DIR/current"
 cd "$RELEASE_DIR/current"
 sudo npm ci --omit=dev || npm ci --omit=dev
+sudo python3 -m pip install --break-system-packages basalam-sdk || python3 -m pip install --break-system-packages basalam-sdk || true
 ${meta.build ? `sudo ${meta.build} || ${meta.build}\n` : ''}sudo cp "${meta.name}.service" /etc/systemd/system/ || true
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$APP_NAME"

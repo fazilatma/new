@@ -32,6 +32,7 @@
     "local": "npm run deployer:ui",
     "scraper:local": "npm run render:build && npm run render:start",
     "browsers:install": "node scripts/browsers-install.mjs",
+    "basalam:install": "node scripts/basalam-sdk-install.mjs",
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check"
   },

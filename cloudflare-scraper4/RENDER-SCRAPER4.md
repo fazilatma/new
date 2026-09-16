@@ -865,6 +865,13 @@ DOM with the real `/api/status` shape).
 
 ## 1.183.0+ — a version notice that leaves the process, and the deployer inside the hamburger menu
 
+**Rebased onto your `1.182.0`** (`7f6160b`: the three-tab backup/version panel, the Basalam SDK install on
+Node, the new library groups and install commands). Their panel, their `productCodeSuffix`, their library
+cards and their tests are kept as-is; this branch re-applies on top of them the new drawer section, the
+proxy, the notification module, and the per-row guard around the results list — which is defense in depth,
+not a duplicate of your fix: yours makes the suffix helper stop throwing, this one keeps one unrenderable
+row from blanking the whole list. Because your release number was already `1.182.0`, mine is `1.183.0+`.
+
 - **The scan now tells the operating system.** `scripts/deployer-notify.mjs` picks whichever notifier the
   platform already has (`termux-notification` → `notify-send` → `osascript` → PowerShell toast, or
   `LOCAL_DEPLOYER_NOTIFY_CMD`), and `announceVersions()` fires it whenever a branch is found whose version

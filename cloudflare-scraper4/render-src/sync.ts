@@ -1,6 +1,6 @@
 import { loadConnections } from './connections.js';
 import { findLearnedCategory, getDestinationId, getRemoteId, setDestinationId, setRemoteId } from './db.js';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { safeBasalamFetch, safeFetch } from './network.js';
@@ -170,6 +170,35 @@ async function tryImportBasalamSdk():Promise<any>{const importer=new Function('s
 // python3 bridge process and fall back to REST when Python or the SDK is absent.
 export function basalamSdkBridgePath():string{
   return fileURLToPath(new URL('../scripts/basalam-sdk-bridge.py',import.meta.url));
+}
+export type BasalamSdkStatus={available:boolean;version:string;python:string;executable:string;error:string};
+// Synchronous SDK status for the runtime-libraries probe (cached 60s: one
+// python spawn per dashboard boot, not per request). Uses the SAME bridge
+// and interpreter resolution as real sends, so the libraries card can never
+// claim an SDK the sync path cannot reach.
+let basalamSdkStatusCache:{at:number;status:BasalamSdkStatus}|null=null;
+export function basalamSdkStatus(force=false):BasalamSdkStatus{
+  const now=Date.now();
+  if(!force&&basalamSdkStatusCache&&now-basalamSdkStatusCache.at<60_000)return basalamSdkStatusCache.status;
+  const status=probeBasalamSdkOnce();
+  basalamSdkStatusCache={at:now,status};
+  return status;
+}
+function probeBasalamSdkOnce():BasalamSdkStatus{
+  const blank:BasalamSdkStatus={available:false,version:'',python:'',executable:'',error:''};
+  const python=process.env.BASALAM_PYTHON||process.env.PYTHON||'python3';
+  const script=basalamSdkBridgePath();
+  if(!existsSync(script))return{...blank,executable:python,error:`bridge script missing at ${script}`};
+  try{
+    const run=spawnSync(python,[script],{input:JSON.stringify({action:'probe'}),encoding:'utf8',timeout:20000});
+    if(run.error)return{...blank,executable:python,error:String(run.error.message||run.error)};
+    const text=String(run.stdout||'').trim();
+    try{
+      const answer=JSON.parse(text);
+      if(answer?.ok)return{available:true,version:String(answer.sdkVersion||''),python:String(answer.python||''),executable:String(answer.executable||python),error:''};
+      return{...blank,executable:python,error:String(answer?.error||'probe failed')};
+    }catch{return{...blank,executable:python,error:text?`invalid probe JSON: ${text.slice(0,120)}`:(String(run.stderr||'').trim().slice(0,120)||`no output (exit ${run.status??'killed'})`)}}
+  }catch(error){return{...blank,executable:python,error:error instanceof Error?error.message:String(error)}}
 }
 export async function runBasalamSdkBridge(request:any,timeoutMs=Number(process.env.BASALAM_SDK_TIMEOUT_MS)||45000):Promise<any>{
   const python=process.env.BASALAM_PYTHON||process.env.PYTHON||'python3';
