@@ -82,9 +82,9 @@ test('the results list renders the rows the runtime returned, not just the count
   // The code suffix comes from the configured format: this is the very expression that used to throw.
   // The configured format — not the built-in default — must reach the row: a Promise handed to
   // productCodeSuffix silently degrades to the default and that is exactly what used to kill the list.
-  assert.equal(cards[0].querySelector('.psuffix').textContent, 'کد:SKU-1', 'settings.dedup.suffixFormats drives the code suffix');
+  assert.equal(cards[0].querySelector('.psuffix'), null, 'only stored titles are rendered; no fictitious suffix');
   assert.match(cards[1].innerHTML, /بدون تصویر/, 'a product without an image still gets a card');
-  assert.equal(cards[1].querySelector('.psuffix').textContent, 'کد:p2', 'no sku falls back to sourceKey');
+  assert.equal(cards[1].querySelector('.psuffix'), null, 'suffixes must first be saved on the Results record');
   assert.equal(failures.length, 0, failures.map(error => error?.stack || String(error)).join('\n'));
 });
 
@@ -100,7 +100,7 @@ test('the formats helper stays synchronous, because its caller reads the value',
   assert.doesNotMatch(DASHBOARD_JS, /async function productSuffixFormats\(/, 'a stray async here once blanked every result list');
   const formats = ui.productSuffixFormats();
   assert.ok(Array.isArray(formats) && formats.length, 'the caller receives a real list of formats, never a Promise');
-  assert.equal(ui.productCodeSuffix({ title: 'کفش', sku: 'A-9' }), 'کد:A-9', 'the configured format is applied to the code');
+  assert.equal(ui.productCodeSuffix({ title: 'کفش', sku: 'A-9' }), '', 'format application belongs to the stored Results stage');
   assert.equal(ui.productCodeSuffix({ title: 'کفش (کد: 77)', sku: 'A-9' }), '(کد: 77)', 'a code already in the title wins');
   assert.equal(ui.productCodeSuffix({ title: 'کفش' }), '', 'nothing to render when there is no code at all');
 });

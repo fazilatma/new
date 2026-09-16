@@ -1,3 +1,4 @@
+import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
 import { isoDateTime, normalizeDbValue, normalizePersianText, toRemoteId } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -335,9 +336,10 @@ export async function stopRequested(id: string): Promise<boolean> {
 
 function validProductRow(p: any): p is Product { return !!p && typeof p === 'object' && !Array.isArray(p); }
 
-export async function upsertProduct(profileId: string, product: Product): Promise<'added' | 'updated'> {
+export async function upsertProduct(profileId: string, product: Product, options: {source?:boolean} = {}): Promise<'added' | 'updated'> {
   if (!validProductRow(product)) throw new Error('upsertProduct refused a non-object product');
   const { rows } = await pool.query('SELECT 1 FROM products WHERE profile_id=$1 AND source_key=$2', [profileId, product.sourceKey]);
+  if(options.source||(product as any).resultBase){const profile=await getProfile(profileId);if(profile){if(options.source)delete (product as any).resultBase;const settings=await getState<any>('settings',{});applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));}}
   await pool.query(`INSERT INTO products(profile_id,source_key,data,title,price,source_url) VALUES($1,$2,$3,$4,$5,$6)
     ON CONFLICT(profile_id,source_key) DO UPDATE SET data=EXCLUDED.data,title=EXCLUDED.title,price=EXCLUDED.price,source_url=EXCLUDED.source_url,active=true,missing_since=NULL,updated_at=now()`,
     [profileId, product.sourceKey, JSON.stringify(product), product.title, product.price, product.url]);
@@ -418,16 +420,33 @@ export async function listCategoryLearning(limit=1000):Promise<any[]>{const {row
 // ─── Basalam category bulk-fix: tried-category memory ─────────────────────────
 // Mirrors worker-src/db.ts byte-for-byte in behavior: same app_state key, same
 // 50-id cap per shop:product, so Worker and Node never retry a failed suggestion.
+const CATEGORY_NOTEBOOK_PREFIX='basalam_category_notebook_v2:';
+const categoryNotebookKey=(shopId:string,id:number)=>CATEGORY_NOTEBOOK_PREFIX+encodeURIComponent(shopId)+':'+String(id);
 export async function getTriedBasalamCategories(shopId:string,id:number):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
-  return Array.isArray(data[`${shopId}:${id}`])?data[`${shopId}:${id}`]:[];
+  const entry=await getState<{ids:number[]}|null>(categoryNotebookKey(shopId,id),null);
+  if(entry)return entry.ids||[];
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
+  return legacy[`${shopId}:${id}`]||[];
 }
 export async function markBasalamCategoriesTried(shopId:string,id:number,ids:Array<number|string>):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),key=`${shopId}:${id}`,set=new Set(Array.isArray(data[key])?data[key]:[]);
-  for(const raw of ids||[]){const n=Number(raw);if(Number.isInteger(n)&&n>0)set.add(n)}
-  data[key]=[...set].slice(-50);
-  await setState('basalam_tried_categories_v1',data);
-  return data[key];
+  const tried=new Set(await getTriedBasalamCategories(shopId,id));
+  for(const raw of ids){const value=Number(raw);if(Number.isInteger(value)&&value>0)tried.add(value)}
+  const values=[...tried];
+  await setState(categoryNotebookKey(shopId,id),{ids:values,updatedAt:new Date().toISOString()});
+  return values;
+}
+/** Only call after a complete, successful inventory of ALL unapproved pages/shops. */
+export async function pruneBasalamCategoryNotebooks(products:Array<{shopId:string;id:number}>):Promise<number>{
+  const keep=new Set(products.map(p=>categoryNotebookKey(p.shopId,p.id)));
+  const statement=useSqlite
+    ? `DELETE FROM app_state WHERE substr(key,1,${CATEGORY_NOTEBOOK_PREFIX.length})='${CATEGORY_NOTEBOOK_PREFIX}' AND key NOT IN (SELECT value FROM json_each($1))`
+    : `DELETE FROM app_state WHERE substr(key,1,${CATEGORY_NOTEBOOK_PREFIX.length})='${CATEGORY_NOTEBOOK_PREFIX}' AND key NOT IN (SELECT jsonb_array_elements_text($1::jsonb))`;
+  const removed=(await pool.query(statement,[JSON.stringify([...keep])])).rowCount||0;
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),legacyKeep=new Set(products.map(p=>`${p.shopId}:${p.id}`));
+  const filtered=Object.fromEntries(Object.entries(legacy).filter(([key])=>legacyKeep.has(key)));
+  if(Object.keys(filtered).length)await setState('basalam_tried_categories_v1',filtered);
+  else await deleteState('basalam_tried_categories_v1');
+  return removed;
 }
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES($1,$2,$3,$4,$5)',[row.chatId,row.customer,row.input,row.output,row.source])}
 export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[toRemoteId(row.chat_id)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
@@ -537,3 +556,19 @@ export async function getImportHistory(): Promise<any[]> {
   return Array.isArray(items) ? items.slice(-60) : [];
 }
 export async function clearImportHistory(): Promise<void> { await setState('import_history', []); }
+
+/** Keyset pagination stays stable while updated_at changes. Conflicting edits are not overwritten. */
+export async function applyStoredResultSettings(profile:Profile,after='',previousSuffix=profile.titleSuffix||''){
+  const settings=await getState<any>('settings',{}),batch=(await pool.query('SELECT source_key,data FROM products WHERE profile_id=$1 AND source_key>$2 ORDER BY source_key LIMIT 20',[profile.id,after])).rows;
+  let changed=0,conflicts=0;
+  for(const row of batch){
+    const product=parseJson<Product>(row.data,row.data);
+    if(!validProductRow(product))continue;
+    const originalData=typeof row.data==='string'?row.data:JSON.stringify(row.data);
+    if(!(product as any).resultBase&&previousSuffix&&product.title.endsWith(previousSuffix.trim())){(product as any).resultBase={title:product.title.slice(0,-previousSuffix.trim().length).trimEnd(),price:product.price,priceText:product.priceText};}
+    applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));
+    const result=await pool.query('UPDATE products SET data=$1,title=$2,price=$3,updated_at=now() WHERE profile_id=$4 AND source_key=$5 AND data=$6',[JSON.stringify(product),product.title,product.price,profile.id,row.source_key,originalData]);
+    if(result.rowCount)changed++;else conflicts++;
+  }
+  return{changed,conflicts,next:batch.length===20?String(batch[batch.length-1].source_key):null};
+}

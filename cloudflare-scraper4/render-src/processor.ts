@@ -1,6 +1,6 @@
 import { pushJobFinished } from './web-push.js';
 import { allProducts, claimJob, getJob, getProfile, getState, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
-import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError, listSelectorsStatus } from './scraper.js';
+import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, browserEngineAvailable, lastBrowserEngineError, listSelectorsStatus } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
@@ -221,8 +221,6 @@ export async function processOneJob(): Promise<boolean> {
               recovered ? 'info' : 'warning');
           }
         }
-        for (const product of products) transformProduct(product, profile);
-        products.splice(0, products.length, ...products.filter(product => !profile.minPrice || product.price >= profile.minPrice));
         await categorizeExtractedProducts(job, profile, products);
         // AI enrichment FALLBACK: fill only what the page itself could not
         // provide, using the pinned master model. A failure here must never
@@ -253,12 +251,12 @@ export async function processOneJob(): Promise<boolean> {
               reportItem(product, { newPrice: Number(product.price) || 0 }));
             continue;
           }
-          const result = await upsertProduct(profile.id, product); result === 'added' ? job.added++ : job.updated++;
+          const result = await upsertProduct(profile.id, product, {source:true}); result === 'added' ? job.added++ : job.updated++;
         }
         if (job.skippedNoPrice) append(job, `${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`, 'warning');
         const retired=await markMissingProducts(profile.id,products.map(p=>p.sourceKey));if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
         await markProfileRun(profile.id);
-        if (job.target !== 'none') await runSync(job, profile, products);
+        if (job.target !== 'none') await runSync(job, profile, await allProducts(profile.id));
       }
     } else {
       await runSync(job, profile, await allProducts(profile.id));
@@ -276,6 +274,7 @@ async function runSync(job: Job, profile: Awaited<ReturnType<typeof getProfile>>
   const settings = await getState<any>('settings', {});
   const patterns = suffixPatterns(parseSuffixFormats((settings as any)?.dedup?.suffixFormats || ''));
   for (const product of products) {
+    if(product.price<=0||(profile.minPrice&&product.price<profile.minPrice)){job.processed++;append(job,`${product.title}: قیمت نهایی معتبر یا بالاتر از حداقل ارسال نیست؛ در نتایج باقی ماند و ارسال نشد.`,'warning');continue;}
     if (await stopRequested(job.id)) { job.status = 'stopped'; return; }
     if (!hasCodeSuffix(String(product.title || ''), patterns)) {
       append(job, `${product.title}: بدون پسوند «(کد ایکس)» — هماهنگ‌سازی نشد.`, 'info');
@@ -326,7 +325,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 
 /** Category assignment is a separate post-extraction stage, not a description toggle. */
 async function categorizeExtractedProducts(job: Job, profile: { basalamCategoryId: number; minPrice: number }, products: Product[]): Promise<void> {
-  const pending = products.filter(product => product.price > 0 && (!profile.minPrice || product.price >= profile.minPrice) && productNeedsBasalamCategory(product));
+  const pending = products.filter(product => product.price > 0 && productNeedsBasalamCategory(product));
   if (!pending.length) return;
   const previousPhase = job.phase;
   job.phase = 'basalam-categories'; await save(job);

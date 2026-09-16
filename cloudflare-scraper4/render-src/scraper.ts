@@ -1,3 +1,4 @@
+import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import * as cheerio from 'cheerio';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -1589,20 +1590,7 @@ function sanitizeHtml(html: string, base: string): string {
 }
 
 export function transformProduct(product: Product, profile: Profile): Product {
-  // Call once, AFTER detail extraction/rescue, never on stored sync products.
-  product.title = normalize(product.title + (profile.titleSuffix || ''));
-  const sourcePrice = Number(product.price), value = Number(profile.priceValue) || 0;
-  let price = Number.isFinite(sourcePrice) && sourcePrice > 0 ? sourcePrice : 0;
-  // A markup must not turn an unavailable/missing source price into a sale price.
-  if (price > 0) {
-    if (profile.priceMode === 'add') price += value;
-    if (profile.priceMode === 'percent') price *= 1 + value / 100;
-    if (profile.priceMode === 'multiply') price *= value;
-    if (profile.roundPrice > 0) price = Math.ceil(price / profile.roundPrice) * profile.roundPrice;
-  }
-  product.price = Number.isFinite(price) ? Math.max(0, Math.round(price)) : 0;
-  if (product.price !== sourcePrice) product.priceText = product.price.toLocaleString('fa-IR') + (/(?:ریال|rial|irr)/i.test(product.priceText || '') ? ' ریال' : ' تومان');
-  return product;
+  return applyResultAdjustments(product, profile);
 }
 
 export async function mapLimit<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {

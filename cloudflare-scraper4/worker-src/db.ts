@@ -1,3 +1,4 @@
+import { applyResultAdjustments } from './result-adjustments.js';
 import { getEnv, type D1Database, type D1PreparedStatement } from './env.js';
 import { SCHEMA } from './schema.js';
 import { isWriteQuotaError, normalizeDbValue, normalizePersianText, toRemoteId } from './utils.js';
@@ -316,9 +317,10 @@ export async function pruneFinishedJobs(keep=20):Promise<number>{
   let deleted=0;for(const row of finished.slice(limit))if(await deleteJob(row.id))deleted++;return deleted;
 }
 
-export async function upsertProduct(profileId:string,product:Product):Promise<'added'|'updated'>{
+export async function upsertProduct(profileId:string,product:Product,options:{source?:boolean}={}):Promise<'added'|'updated'>{
   if(!validProductRow(product))throw new Error('upsertProduct refused a non-object product');
   const existing=await statement('SELECT 1 AS found FROM products WHERE profile_id=? AND source_key=?',[profileId,product.sourceKey]).first();const timestamp=now();
+  if(options.source||(product as any).resultBase){const profile=await getProfile(profileId);if(profile){if(options.source)delete (product as any).resultBase;const settings=await getState<any>('settings',{});applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));}}
   await run(`INSERT INTO products(profile_id,source_key,data,title,price,source_url,active,missing_since,created_at,updated_at) VALUES(?,?,?,?,?,?,1,NULL,?,?)
     ON CONFLICT(profile_id,source_key) DO UPDATE SET data=excluded.data,title=excluded.title,price=excluded.price,source_url=excluded.source_url,active=1,missing_since=NULL,updated_at=excluded.updated_at`,
     [profileId,product.sourceKey,JSON.stringify(product),product.title,product.price,product.url,timestamp,timestamp]);return existing?'updated':'added';
@@ -359,16 +361,30 @@ export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isAr
 export async function listAutoreplyLog(limit=100):Promise<any[]>{return rows('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT ?',[limit]);}
 
 // ─── Basalam category bulk-fix: tried-category memory ─────────────────────────
+const CATEGORY_NOTEBOOK_PREFIX='basalam_category_notebook_v2:';
+const categoryNotebookKey=(shopId:string,id:number)=>CATEGORY_NOTEBOOK_PREFIX+encodeURIComponent(shopId)+':'+String(id);
 export async function getTriedBasalamCategories(shopId:string,id:number):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
-  return Array.isArray(data[`${shopId}:${id}`])?data[`${shopId}:${id}`]:[];
+  const entry=await getState<{ids:number[]}|null>(categoryNotebookKey(shopId,id),null);
+  if(entry)return entry.ids||[];
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
+  return legacy[`${shopId}:${id}`]||[];
 }
 export async function markBasalamCategoriesTried(shopId:string,id:number,ids:Array<number|string>):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),key=`${shopId}:${id}`,set=new Set(Array.isArray(data[key])?data[key]:[]);
-  for(const raw of ids||[]){const n=Number(raw);if(Number.isInteger(n)&&n>0)set.add(n)}
-  data[key]=[...set].slice(-50);
-  await setState('basalam_tried_categories_v1',data);
-  return data[key];
+  const tried=new Set(await getTriedBasalamCategories(shopId,id));
+  for(const raw of ids){const value=Number(raw);if(Number.isInteger(value)&&value>0)tried.add(value)}
+  const values=[...tried];
+  await setState(categoryNotebookKey(shopId,id),{ids:values,updatedAt:new Date().toISOString()});
+  return values;
+}
+/** Only call after a complete, successful inventory of ALL unapproved pages/shops. */
+export async function pruneBasalamCategoryNotebooks(products:Array<{shopId:string;id:number}>):Promise<number>{
+  const keep=new Set(products.map(p=>categoryNotebookKey(p.shopId,p.id)));
+  const removed=await run(`DELETE FROM app_state WHERE substr(key,1,${CATEGORY_NOTEBOOK_PREFIX.length})='${CATEGORY_NOTEBOOK_PREFIX}' AND key NOT IN (SELECT value FROM json_each(?))`,[JSON.stringify([...keep])]);
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),legacyKeep=new Set(products.map(p=>`${p.shopId}:${p.id}`));
+  const filtered=Object.fromEntries(Object.entries(legacy).filter(([key])=>legacyKeep.has(key)));
+  if(Object.keys(filtered).length)await setState('basalam_tried_categories_v1',filtered);
+  else await deleteState('basalam_tried_categories_v1');
+  return removed;
 }
 export async function getState<T>(key:string,fallback:T):Promise<T>{const row=await statement('SELECT value FROM app_state WHERE key=?',[key]).first<{value:string}>();return row?json(row.value,fallback):fallback;}
 export async function setState(key:string,value:unknown):Promise<void>{await run(`INSERT INTO app_state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,[key,JSON.stringify(value),now()]);}
@@ -401,7 +417,7 @@ export async function createBackup():Promise<Record<string,unknown>>{const [prof
 export async function restoreBackup(bundle:any):Promise<{profiles:number;products:number;states:number}>{
   if(!bundle||!['scraper4-cloudflare','scraper4-backup','scraper4-render'].includes(bundle.app)||bundle.version!==1)throw new Error('Invalid Scraper 4 backup');let profiles=0,products=0,states=0;
   for(const row of bundle.profiles||[]){const data=json<any>(row.data,row.data||{});await saveProfile({...data,id:row.id,enabled:Boolean(row.enabled),intervalMinutes:Number(row.interval_minutes||0),lastRunAt:row.last_run_at||null,createdAt:row.created_at||now(),updatedAt:now()});profiles++;}
-  for(const row of bundle.products||[]){const product=json<Product>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id){const wooId=toRemoteId(row.remote_woo_id);if(wooId!=null)await setRemoteId(row.profile_id,row.source_key,'woo',wooId);}if(row.remote_basalam_id){const basalamId=toRemoteId(row.remote_basalam_id);if(basalamId!=null)await setRemoteId(row.profile_id,row.source_key,'basalam',basalamId);}products++;}
+  for(const row of bundle.products||[]){const product=json<any>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id){const wooId=toRemoteId(row.remote_woo_id);if(wooId!=null)await setRemoteId(row.profile_id,row.source_key,'woo',wooId);}if(row.remote_basalam_id){const basalamId=toRemoteId(row.remote_basalam_id);if(basalamId!=null)await setRemoteId(row.profile_id,row.source_key,'basalam',basalamId);}products++;}
   for(const row of bundle.destinationMap||[]){const mapId=toRemoteId(row.remote_id);if(mapId!=null)await setDestinationId(row.profile_id,row.source_key,row.target,row.account_key,mapId);}
   await importCategoryLearning(bundle.categoryLearning||[]);await importAutoreplyLog(bundle.autoreplyLog||[]);
   for(const row of bundle.states||[]){await setState(row.key,json(row.value,row.value));states++;}return{profiles,products,states};
@@ -410,3 +426,19 @@ export async function profileStats():Promise<any[]>{const profiles=await listPro
 export async function reapStalledJobs(minutes=30):Promise<number>{const cutoff=new Date(Date.now()-Math.max(0.5,Number(minutes)||30)*60_000).toISOString();return run(`UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog',finished_at=?,updated_at=? WHERE status='running' AND updated_at<?`,[now(),now(),cutoff]);}
 export async function recoverFailedAndStalledJobs(minutes=30):Promise<number>{const cutoff=new Date(Date.now()-Math.max(0.5,Number(minutes)||30)*60_000).toISOString(),timestamp=now();return run(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=0,error=NULL,finished_at=NULL,updated_at=? WHERE status='failed' OR (status='running' AND updated_at<?)`,[timestamp,cutoff]);}
 export async function enqueueDueProfiles():Promise<Job[]>{const timestamp=Date.now(),profiles=await listProfiles(),jobs:Job[]=[];for(const profile of profiles){if(!profile.enabled||!profile.intervalMinutes)continue;const due=!profile.lastRunAt||timestamp-new Date(profile.lastRunAt).getTime()>=profile.intervalMinutes*60_000;if(!due)continue;const job=await createJob(profile.id,profile.noExtract?'sync':'scrape',profile.syncWoo&&profile.syncBasalam?'both':profile.syncWoo?'woo':profile.syncBasalam?'basalam':'none');jobs.push(job);await markProfileRun(profile.id)}return jobs;}
+
+/** Keyset pagination stays stable while updated_at changes. Conflicting edits are not overwritten. */
+export async function applyStoredResultSettings(profile:Profile,after='',previousSuffix=profile.titleSuffix||''){
+  const settings=await getState<any>('settings',{}),batch=await rows<{source_key:string;data:string}>('SELECT source_key,data FROM products WHERE profile_id=? AND source_key>? ORDER BY source_key LIMIT 20',[profile.id,after]);
+  let changed=0,conflicts=0;
+  for(const row of batch){
+    const product=json<any>(row.data,row.data);
+    if(!validProductRow(product))continue;
+    const originalData=typeof row.data==='string'?row.data:JSON.stringify(row.data);
+    if(!(product as any).resultBase&&previousSuffix&&product.title.endsWith(previousSuffix.trim())){(product as any).resultBase={title:product.title.slice(0,-previousSuffix.trim().length).trimEnd(),price:product.price,priceText:product.priceText};}
+    applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));
+    const result=await run('UPDATE products SET data=?,title=?,price=?,updated_at=? WHERE profile_id=? AND source_key=? AND data=?',[JSON.stringify(product),product.title,product.price,now(),profile.id,row.source_key,originalData]);
+    if(result)changed++;else conflicts++;
+  }
+  return{changed,conflicts,next:batch.length===20?String(batch[batch.length-1].source_key):null};
+}

@@ -1328,7 +1328,7 @@ test('manual sync runs list, details and delivery in one click', async () => {
   const proc = await readProjectFile('render-src/processor.ts');
   const details = proc.indexOf("job.phase = 'details'");
   const save = proc.indexOf("job.phase = 'save'");
-  const sync = proc.indexOf('await runSync(job, profile, products)');
+  const sync = proc.indexOf('await runSync(job, profile, await allProducts(profile.id))');
   assert.ok(details > 0 && save > details && sync > save, 'details must run before save, and delivery last');
   assert.match(proc, /if \(job\.target !== 'none'\) await runSync/, 'delivery must run whenever a destination is set');
 });

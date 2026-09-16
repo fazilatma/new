@@ -137,8 +137,8 @@ async function pipeline(runtime,options={}){
     getState:async(k,f)=>k==='ai_description_settings'?{enabled:options.enabled!==false}:structuredClone(states.get(k)??f),
     setState:async(k,v)=>{states.set(k,structuredClone(v));snapshots.push(structuredClone(v))},deleteState:async k=>states.delete(k),
     updateJob:async(id,patch)=>Object.assign(job,patch),stopRequested:async()=>false,saveProfile:async()=>{},markProfileRun:async()=>{},
-    upsertProduct:async(id,p)=>{saved.push(structuredClone(p));return'added'},getProduct:async()=>options.previous||null,
-    allProducts:async()=>structuredClone(options.products||[]),listProducts:async()=>({products:structuredClone(options.products||[]),total:(options.products||[]).length}),
+    upsertProduct:async(id,p,opts)=>{assert.equal(opts?.source,true);twins[runtime].transformProduct(p,profile);saved.push(structuredClone(p));return'added'},getProduct:async(id,key)=>saved.findLast(p=>p.sourceKey===key)||options.previous||null,
+    allProducts:async()=>structuredClone(saved.length?saved:options.products||[]),listProducts:async()=>({products:structuredClone(options.products||[]),total:(options.products||[]).length}),
     findMissingProducts:async()=>[],markMissingProducts:async()=>0,destinationCategories:async()=>({items:categories}),
     syncWoo:async p=>{syncs.push(structuredClone(p));return'updated'},syncBasalam:async()=>[],
     getEnv:()=>({JOB_CHUNK_SIZE:options.chunkSize||1}),pushJobFinished:async()=>{},
@@ -177,8 +177,8 @@ for(const runtime of ['render','worker']){
     const run=await pipeline(runtime,{detail:false});assert.equal(run.saved[0].price,110000);
     const sync=await pipeline(runtime,{syncOnly:true,target:'woo',products:run.saved});assert.equal(sync.syncs[0].price,110000);assert.equal(sync.syncs[0].title,'Shoe (code)');assert.deepEqual(sync.events,[]);
   });
-  test(`${runtime}: minimum price uses adjusted final detail, not list or unadjusted detail`,async()=>{
-    const run=await pipeline(runtime,{profile:{minPrice:215000,priceValue:-10}});assert.equal(run.saved.length,0);
+  test(`${runtime}: minimum price limits delivery without discarding stored Results`,async()=>{
+    const run=await pipeline(runtime,{profile:{minPrice:215000,priceValue:-10},target:'woo'});assert.equal(run.saved.length,1);assert.equal(run.saved[0].price,180000);assert.equal(run.syncs.length,0);
   });
 }
 test('worker: raw checkpoints survive multiple chunks; missing prices advance without using previous adjusted price',async()=>{
@@ -196,7 +196,7 @@ for(const runtime of ['render','worker']){
   test(`${runtime}: inline extraction prices final details, assigns category and supports nonpersisted preview`,async()=>{
     for(const persist of [true,false]){
       const run=await pipeline(runtime,{inline:true,body:{persist},profile:{minPrice:210000,basalamCategoryId:17,aiDescriptions:false}});
-      assert.equal(run.status,200);assert.equal(run.body.products.length,1);assert.equal(run.body.products[0].price,220000);assert.equal(run.body.products[0].basalamCategoryId,17);assert.equal(run.saved.length,persist?1:0);assert.deepEqual(run.events,[]);
+      assert.equal(run.status,200);assert.equal(run.body.products.length,1);assert.equal(run.body.products[0].price,persist?220000:200000);assert.equal(run.body.products[0].basalamCategoryId,17);assert.equal(run.saved.length,persist?1:0);assert.deepEqual(run.events,[]);
     }
   });
   test(`${runtime}: inline stored-only delivery never re-transforms or reclassifies products`,async()=>{

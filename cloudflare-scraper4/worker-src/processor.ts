@@ -2,7 +2,7 @@ import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProf
 import { getEnv } from './env.js';
 import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
 import { destinationCategories } from './maintenance.js';
-import { listSelectorsStatus, mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
+import { listSelectorsStatus, mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
 import { message } from './utils.js';
@@ -17,15 +17,15 @@ function chunkSize():number{return Math.min(50,Math.max(1,Number(getEnv().JOB_CH
 function preserveExisting(fresh:Product,previous:Product|null):Product{
   if(!previous)return fresh;
   return {...fresh,
-    title:fresh.title||previous.title,price:fresh.price,priceText:fresh.priceText,url:fresh.url||previous.url,
+    title:fresh.title||(previous as any).resultBase?.title||previous.title,price:fresh.price,priceText:fresh.priceText,url:fresh.url||previous.url,
     basalamCategoryId:fresh.basalamCategoryId||previous.basalamCategoryId,
     basalamCategoryName:fresh.basalamCategoryId?fresh.basalamCategoryName:previous.basalamCategoryName,
     basalamCategoryPath:fresh.basalamCategoryId?fresh.basalamCategoryPath:previous.basalamCategoryPath,
     image:fresh.image||previous.image,images:[...new Set([fresh.image,...(previous.images||[]),...(fresh.images||[])].filter(Boolean))],
     shortDesc:fresh.shortDesc||previous.shortDesc,longDesc:fresh.longDesc||previous.longDesc,sku:fresh.sku||previous.sku,brand:fresh.brand||previous.brand,
     stock:fresh.stock??previous.stock,weight:fresh.weight??previous.weight,category:fresh.category||previous.category,tags:fresh.tags||previous.tags,
-    variations:fresh.variations?.length?fresh.variations:previous.variations,variationGroups:fresh.variationGroups?.length?fresh.variationGroups:previous.variationGroups,
-    variationPrices:Object.keys(fresh.variationPrices||{}).length?fresh.variationPrices:previous.variationPrices
+    variations:fresh.variations?.length?fresh.variations:previous.variations,variationGroups:fresh.variationGroups?.length?fresh.variationGroups:previous.variationGroups?.map((group,i)=>({...group,prices:(previous as any).resultBase?.groupPrices?.[i]||group.prices})),
+    variationPrices:Object.keys(fresh.variationPrices||{}).length?fresh.variationPrices:(previous as any).resultBase?.variationPrices||previous.variationPrices
   };
 }
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
@@ -213,7 +213,6 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   // Work on copies: checkpoints retain unadjusted source prices across retries.
   for (const product of batch) {
     rawPriceByKey.set(product.sourceKey, product.price);
-    transformProduct(product, profile);
   }
   await categorizeExtractedProducts(job, profile, batch);
   // AI enrichment FALLBACK: fill only what the page itself could not provide,
@@ -221,7 +220,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   // and before save/sync, and can never fail the scrape.
   const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
   if(aiSettings?.enabled!==false&&profile?.aiDescriptions!==false){
-    const pending=batch.filter(product=>product.price>0&&(!profile.minPrice||product.price>=profile.minPrice)&&productNeedsEnrichment(product).any);
+    const pending=batch.filter(product=>product.price>0&&productNeedsEnrichment(product).any);
     if(pending.length){
       const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
       let filled=0,failed=0,reported='';
@@ -245,13 +244,13 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       append(job,`${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
       continue;
     }
-    if(profile.minPrice&&product.price<profile.minPrice)continue;
     if(product.stock===0)append(job,`${product.title}: موجودی مبدأ به صفر رسیده است.`,'warning','out-of-stock',reportItem(product));
-    if(previous&&previous.price>0&&product.price>0&&previous.price!==product.price){const delta=product.price-previous.price,percent=Number((delta/previous.price*100).toFixed(2));append(job,`${product.title}: قیمت ${delta>0?'افزایش':'کاهش'} یافت (${percent}٪).`,delta>0?'warning':'info',delta>0?'price-increased':'price-decreased',reportItem(product,{oldPrice:previous.price,newPrice:product.price,delta,percent}))}
+
     let saved=false;
-    try{const result=await upsertProduct(profile.id,product);result==='added'?job.added++:job.updated++;append(job,`${product.title}: ${result==='added'?'محصول جدید ثبت شد':'اطلاعات محصول به‌روزرسانی شد'}`,'info',result,reportItem(product));saved=true}
+    try{const result=await upsertProduct(profile.id,product,{source:true});result==='added'?job.added++:job.updated++;append(job,`${product.title}: ${result==='added'?'محصول جدید ثبت شد':'اطلاعات محصول به‌روزرسانی شد'}`,'info',result,reportItem(product));saved=true}
     catch(error){const errorText=message(error);checkpoint.retireSafe=false;job.failed++;append(job,`${product.title}: ذخیره: ${errorText}`,'error','failed',reportItem(product,{error:errorText}))}
-    if(saved){await syncProduct(job,profile,product);checkpoint.seen.push(product.sourceKey)}
+    if(saved&&previous&&previous.price>0&&product.price>0&&previous.price!==product.price){const delta=product.price-previous.price,percent=Number((delta/previous.price*100).toFixed(2));append(job,`${product.title}: قیمت ${delta>0?'افزایش':'کاهش'} یافت (${percent}٪).`,delta>0?'warning':'info',delta>0?'price-increased':'price-decreased',reportItem(product,{oldPrice:previous.price,newPrice:product.price,delta,percent}))}
+    if(saved){const stored=await getProduct(profile.id,product.sourceKey);if(stored)await syncProduct(job,profile,stored);checkpoint.seen.push(product.sourceKey)}
   }
   checkpoint.seen=[...new Set(checkpoint.seen)];
   if(checkpoint.index<checkpoint.products.length){await setState(key,checkpoint);await save(job);return true}
@@ -298,6 +297,7 @@ async function codeSuffixPatterns():Promise<RegExp[]>{
   return suffixPatterns(parseSuffixFormats(settings?.dedup?.suffixFormats||''));
 }
 async function syncProduct(job:Job,profile:Profile,product:Product):Promise<void>{
+  if(product.price<=0||(profile.minPrice&&product.price<profile.minPrice)){append(job,`${product.title}: قیمت نهایی معتبر یا بالاتر از حداقل ارسال نیست؛ در نتایج باقی ماند و ارسال نشد.`,'warning');return;}
   if(job.target==='woo'||job.target==='both')try{const action=await syncWoo(product,profile);append(job,`${product.title} [WooCommerce]: ${action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'woo',shop:'فروشگاه ووکامرس'}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [WooCommerce]: ${errorText}`,'error','failed',reportItem(product,{target:'woo',error:errorText}))}
   // Basalam publishes to EVERY stall. Each stall is reported on its own line and
   // a failure in one must not abandon the others: the whole loop used to sit in
@@ -327,7 +327,7 @@ export async function retryAndEnqueue(id:string,waitUntil?:(promise:Promise<unkn
 
 /** Category assignment is a separate post-extraction stage, not a description toggle. */
 async function categorizeExtractedProducts(job: Job, profile: { basalamCategoryId: number; minPrice: number }, products: Product[]): Promise<void> {
-  const pending = products.filter(product => product.price > 0 && (!profile.minPrice || product.price >= profile.minPrice) && productNeedsBasalamCategory(product));
+  const pending = products.filter(product => product.price > 0 && productNeedsBasalamCategory(product));
   if (!pending.length) return;
   const previousPhase = job.phase;
   job.phase = 'basalam-categories'; await save(job);
