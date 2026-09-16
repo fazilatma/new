@@ -58,7 +58,8 @@ export async function reconTable(target:Target,profileId=''){
     if(key){const list=byTitle.get(key)||[];list.push(row);byTitle.set(key,list)}
     const sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);
     if(sku&&!bySku.has(sku))bySku.set(sku,row);
-    const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0);
+    let fromMapId=0;for(const m of (row.maps||[])){if(String(m.target||'')===target&&Number(m.remote_id)>0){fromMapId=Number(m.remote_id);break}}
+    const mapped=fromMapId||(target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0));
     if(mapped>0&&!byRemoteId.has(mapped))byRemoteId.set(mapped,row);
   }
   const consumed=new Set<any>();
@@ -116,11 +117,11 @@ export async function reconAccounts():Promise<ReconAccount[]>{
   return accounts;
 }
 async function remoteForAccount(account:ReconAccount):Promise<ReconRemote[]>{
-  if(account.target==='woo')return (await wooProducts()).map(x=>({id:x.id,name:x.name,sku:x.sku,price:x.price,status:x.status}));
+  if(account.target==='woo')return (await wooProducts()).map(x=>({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status}));
   const out:ReconRemote[]=[];
   for(let page=1;page<=100;page++){
     const data=await basalamCatalog({page,perPage:100,q:'',status:'all',shopId:account.accountKey});
-    for(const x of data.products)out.push({id:x.id,name:x.name,sku:x.sku,price:x.price,status:x.status,shopId:String(account.accountKey),shopName:account.name});
+    for(const x of data.products)out.push({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status,shopId:String(account.accountKey),shopName:account.name});
     if(page>=data.totalPages)break;
   }
   return out;
@@ -143,7 +144,7 @@ export async function unifiedRecon(profileId=''){
     catch(error){const message=error instanceof Error?error.message:String(error);failures.push({account:account.name,error:message});rows.push(...unreachableAccountRows(local,account,profileNames,suffixFormats,message))}
   }
   const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
-    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows).length,failures,rows};
+    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows,suffixFormats).length,failures,rows};
   await setState('recon_unified',report);
   return report;
 }
@@ -152,7 +153,7 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
   const actions=planActions(report.rows as UnifiedReconRow[],report.suffixFormats).slice(0,Math.max(1,Math.min(1000,limit)));
   if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),
     matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
-    noPrice:report.noPrice,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
+    noPrice:report.noPrice,unreachable:report.unreachable,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
     accountsBreakdown:report.accountsBreakdown,profiles:report.profiles,failures:report.failures,
     rows:report.rows};
   let changed=0;const failed:any[]=[];
@@ -160,7 +161,7 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
     try{
       if(action.kind==='updatePrice'&&action.remoteId&&action.toPrice){
         if(action.target==='woo')await wooUpdate(action.remoteId,{regular_price:String(action.toPrice)});
-        else await basalamUpdateShop(action.accountKey,action.remoteId,{price:action.toPrice});
+        else await basalamUpdateShop(action.accountKey,action.remoteId,{primary_price:action.toPrice});
         changed++;
       }else if(action.kind==='create'){
         // Re-publishing goes through the queue so category/photo/stock rules and
@@ -178,7 +179,7 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
   const after=changed?await unifiedRecon(profileId):report;
   return{ok:failed.length===0,dryRun:false,planned:actions.length,changed,failed:failed.slice(0,20),
     matched:after.matched,priceDiff:after.priceDiff,missing:after.missing,extra:after.extra,
-    noPrice:after.noPrice,inSync:after.inSync,local:after.local,localAll:after.localAll,skippedNoCode:after.skippedNoCode,accounts:after.accounts,
+    noPrice:after.noPrice,unreachable:after.unreachable,inSync:after.inSync,local:after.local,localAll:after.localAll,skippedNoCode:after.skippedNoCode,accounts:after.accounts,
     accountsBreakdown:after.accountsBreakdown,profiles:after.profiles,failures:after.failures,
     rows:after.rows};
 }

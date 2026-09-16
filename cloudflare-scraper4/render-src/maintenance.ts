@@ -101,7 +101,7 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
   const actions = planActions(report.rows as UnifiedReconRow[], report.suffixFormats).slice(0, Math.max(1, Math.min(1000, limit)));
   if (!apply) return { ok: true, dryRun: true, planned: actions.length, actions: actions.slice(0, 200),
     matched: report.matched, priceDiff: report.priceDiff, missing: report.missing, extra: report.extra,
-    noPrice: report.noPrice, inSync: report.inSync, local: report.local, localAll: report.localAll, skippedNoCode: report.skippedNoCode, accounts: report.accounts,
+    noPrice: report.noPrice, unreachable: report.unreachable, inSync: report.inSync, local: report.local, localAll: report.localAll, skippedNoCode: report.skippedNoCode, accounts: report.accounts,
     accountsBreakdown: report.accountsBreakdown, profiles: report.profiles, failures: report.failures,
     rows: report.rows };
   let changed = 0; const failed: any[] = [];
@@ -110,7 +110,7 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
     try {
       if (action.kind === 'updatePrice' && action.remoteId && action.toPrice) {
         if (action.target === 'woo') await wooUpdate(action.remoteId, { regular_price: String(action.toPrice) });
-        else await basalamUpdateShop(action.accountKey, action.remoteId, { price: action.toPrice });
+        else await basalamUpdateShop(action.accountKey, action.remoteId, { primary_price: action.toPrice });
         changed++;
       } else if (action.kind === 'create') {
         const key = `${action.profileId}\u0000${action.sourceKey}`;
@@ -130,7 +130,7 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
   const after = changed ? await unifiedRecon(profileId) : report;
   return { ok: failed.length === 0, dryRun: false, planned: actions.length, changed, failed: failed.slice(0, 20),
     matched: after.matched, priceDiff: after.priceDiff, missing: after.missing, extra: after.extra,
-    noPrice: after.noPrice, inSync: after.inSync, local: after.local, localAll: after.localAll, skippedNoCode: after.skippedNoCode, accounts: after.accounts,
+    noPrice: after.noPrice, unreachable: after.unreachable, inSync: after.inSync, local: after.local, localAll: after.localAll, skippedNoCode: after.skippedNoCode, accounts: after.accounts,
     accountsBreakdown: after.accountsBreakdown, profiles: after.profiles, failures: after.failures,
     rows: after.rows };
 }
@@ -177,16 +177,53 @@ async function basalamUpdateShop(accountKey: string, id: number, payload: any) {
   if (!r.ok) throw Error(`Basalam update ${id}: HTTP ${r.status}`);
 }
 
-/** Single-destination table, kept for the existing per-target buttons. */
+/** Single-destination table, kept for the existing per-target buttons.
+ * Same legacy scope as the Worker's reconTable (PHP v10.170 parity): every
+ * product is compared, raw price against raw price, with no code-suffix
+ * filtering — the unified table is the filtered, adjustment-aware one. */
+const reconPrice = (value: unknown): number | null => { const n = Math.round(Number(value) || 0); return n > 0 ? n : null; };
 export async function reconTable(target: 'woo' | 'basalam', profileId = '') {
-  const local = await maintenanceRows(profileId) as ReconLocal[];
-  const profileNames: Record<string, string> = {};
-  for (const profile of await listProfiles()) profileNames[profile.id] = profile.name || profile.id;
-  const accounts = (await reconAccounts()).filter(a => a.target === target);
-  if (!accounts.length) throw Error(target === 'woo' ? 'اتصال ووکامرس کامل نیست' : 'اتصال باسلام کامل نیست');
-  const rows: UnifiedReconRow[] = [];
-  for (const account of accounts) rows.push(...reconcileAccount(local, await remoteForAccount(account), account, profileNames));
-  const report = { ok: true, target, at: new Date().toISOString(), profileId, local: local.length, remote: rows.filter(r => r.remoteId).length, ...summarize(rows), accountsBreakdown: byAccount(rows), rows };
+  const local = await maintenanceRows(profileId), remote = await remoteProducts(target);
+  const rows: any[] = [];
+  const byTitle = new Map<string, any[]>(), bySku = new Map<string, any>(), byRemoteId = new Map<number, any>();
+  for (const row of local) {
+    const key = reconNormTitle(row.title);
+    if (key) { const list = byTitle.get(key) || []; list.push(row); byTitle.set(key, list); }
+    const sku = row.data?.sku || `s4-${row.profile_id}-${row.source_key}`.slice(0, 100);
+    if (sku && !bySku.has(sku)) bySku.set(sku, row);
+    let fromMapId = 0;
+    for (const m of (row.maps || [])) { if (String(m.target || '') === target && Number(m.remote_id) > 0) { fromMapId = Number(m.remote_id); break; } }
+    const mapped = fromMapId || (target === 'woo' ? Number(row.remote_woo_id || 0) : Number(row.remote_basalam_id || 0));
+    if (mapped > 0 && !byRemoteId.has(mapped)) byRemoteId.set(mapped, row);
+  }
+  const consumed = new Set<any>();
+  for (const item of remote) {
+    const key = reconNormTitle(item.name || (item as any).title || '');
+    let source = (byTitle.get(key) || []).find(row => !consumed.has(row)) || null, matchedBy = source ? 'title' : 'none';
+    if (!source && item.sku && bySku.has(item.sku)) { const candidate = bySku.get(item.sku); if (!consumed.has(candidate)) { source = candidate; matchedBy = 'sku'; } }
+    if (!source && byRemoteId.has(item.id)) { const candidate = byRemoteId.get(item.id); if (!consumed.has(candidate)) { source = candidate; matchedBy = 'id'; } }
+    const remotePrice = reconPrice(item.price);
+    if (!source) {
+      rows.push({ bucket: 'extra', title: item.name || (item as any).title || '', remoteTitle: item.name || (item as any).title || '', remoteId: item.id || null, profileId: '', sourceKey: '', sourcePrice: null, remotePrice, delta: null, matchedBy: 'none', shopId: String((item as any).shopId || ''), shopName: String((item as any).shopName || ''), status: String(item.status || ''), why: 'در هیچ پروفایل/مبدأ نیست' });
+      continue;
+    }
+    consumed.add(source);
+    const sourcePrice = reconPrice(source.price);
+    const base = { title: source.title || '', remoteTitle: item.name || (item as any).title || '', remoteId: item.id || null, profileId: String(source.profile_id || ''), sourceKey: String(source.source_key || ''), sourcePrice, remotePrice, matchedBy, shopId: String((item as any).shopId || ''), shopName: String((item as any).shopName || ''), status: String(item.status || '') };
+    if (sourcePrice === null) rows.push({ ...base, bucket: 'noPrice', delta: null, why: 'قیمت مبدأ ثبت نشده — مقایسه نشد' });
+    else if (remotePrice !== sourcePrice) rows.push({ ...base, bucket: 'priceDiff', delta: (remotePrice || 0) - sourcePrice, why: 'قیمت مقصد با مبدأ یکی نیست' });
+    else rows.push({ ...base, bucket: 'matched', delta: 0, why: '' });
+  }
+  for (const row of local) {
+    if (consumed.has(row)) continue;
+    if (!row.active) continue;
+    rows.push({ bucket: 'missing', title: row.title || '', remoteTitle: '', remoteId: null, profileId: String(row.profile_id || ''), sourceKey: String(row.source_key || ''), sourcePrice: reconPrice(row.price), remotePrice: null, delta: null, matchedBy: 'none', shopId: '', shopName: '', status: '', why: 'در مبدأ هست ولی در مقصد نیست' });
+  }
+  const count = (bucket: string) => rows.filter(row => row.bucket === bucket).length;
+  const summary = { matched: count('matched'), priceDiff: count('priceDiff'), extra: count('extra'), missing: count('missing'), noPrice: count('noPrice') };
+  const matchedByTitle = rows.filter(row => row.matchedBy === 'title').length, matchedBySku = rows.filter(row => row.matchedBy === 'sku').length, matchedById = rows.filter(row => row.matchedBy === 'id').length;
+  const inSync = summary.priceDiff === 0 && summary.extra === 0 && summary.missing === 0;
+  const report = { ok: true, target, at: new Date().toISOString(), profileId, local: local.length, remote: remote.length, ...summary, inSync, matchedByTitle, matchedBySku, matchedById, rows };
   await setState(`recon_table_${target}`, report);
   return report;
 }
@@ -214,7 +251,7 @@ export async function destinationDelete(target:'woo'|'basalam',id:number,force=f
 }
 async function remoteProducts(target:'woo'|'basalam'):Promise<Remote[]>{return listDestinationProducts(target)}
 async function wooProducts(){const c=(await loadConnections()).woo;if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');const auth=`Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`,out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.url}/wp-json/wc/v3/products?per_page=100&page=${page}&status=any`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},10_000_000),data=await r.json() as any[];if(!r.ok)throw Error(`Woo HTTP ${r.status}`);for(const x of data)out.push({id:Number(x.id),name:String(x.name||''),sku:String(x.sku||''),images:x.images||[],status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}
-async function basalamProducts(){const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products?per_page=100&page=${page}`,{headers:{authorization:`Bearer ${c.token}`,accept:'application/json'}},10_000_000),body=await r.json() as any;if(!r.ok)throw Error(`Basalam HTTP ${r.status}`);const data=body.data||body.products||body.results||body.items||[];for(const x of data)out.push({id:Number(x.id),name:String(x.name||x.title||''),sku:String(x.sku||''),images:x.photos||x.images||(x.photo?[x.photo]:[]),status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}
+async function basalamProducts(){const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products?per_page=100&page=${page}`,{headers:{authorization:`Bearer ${c.token}`,accept:'application/json'}},10_000_000),body=await r.json() as any;if(!r.ok)throw Error(`Basalam HTTP ${r.status}`);const data=body.data||body.products||body.results||body.items||[];for(const x of data)out.push({id:Number(x.id),name:String(x.name||x.title||''),sku:String(x.sku||''),images:x.photos||x.images||(x.photo?[x.photo]:[]),status:String(x.status||''),price:Math.round(Number(x.price||0)/10),raw:x});if(data.length<100)break}return out}
 async function wooUpdate(id:number,payload:any){const c=(await loadConnections()).woo,auth=basicAuth(c.key,c.secret),result=await fetchJson(`${wooBase(c)}/${id}`,{method:'PUT',headers:{authorization:auth,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},true);return result.body}
 async function basalamUpdate(id:number,payload:any,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');if(!shops.length)throw Error('غرفهٔ باسلام پیدا نشد.');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{return(await basalamFetch(shop,endpoint,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})).body}catch(error){last=error;if(!(error instanceof DestinationHttpError&&error.status===404))throw error}}throw last instanceof Error?last:Error(`ویرایش محصول باسلام #${id} ناموفق بود.`)}
 const msg=(e:unknown)=>e instanceof Error?e.message:String(e);

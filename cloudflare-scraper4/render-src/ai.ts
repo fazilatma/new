@@ -358,6 +358,10 @@ export async function preferredAiChatModel(): Promise<{ provider: Provider; mode
 }
 
 /** A product needs enrichment when the scraper could not fill these in. */
+export function productNeedsBasalamCategory(product: any): boolean {
+  return !(Number(product?.basalamCategoryId) > 0);
+}
+
 export function productNeedsEnrichment(product: any): { longDesc: boolean; shortDesc: boolean; images: boolean; variations: boolean; any: boolean } {
   const text = (value: unknown) => String(value ?? '').trim();
   const longDesc = text(product?.longDesc).length < 40;
@@ -391,11 +395,26 @@ export type DescriptionResult = {
  * master AI model. Only empty fields are written: a real value scraped from the
  * source site is never overwritten by generated text.
  */
-export async function generateProductDescription(product: any, options: { force?: boolean } = {}): Promise<DescriptionResult> {
+export async function generateProductDescription(product: any, options: { force?: boolean; categories?: AiCategoryOption[] } = {}): Promise<DescriptionResult> {
   const need = productNeedsEnrichment(product);
-  if (!options.force && !need.any) return { ok: true, changed: false, fields: [] };
+  const needCategory = productNeedsBasalamCategory(product);
+  if (!options.force && !need.any && !needCategory) return { ok: true, changed: false, fields: [] };
+  const earlyFields: string[] = [];
+  if (needCategory) {
+    try {
+      const learned = await findLearnedCategory(String(product?.title || ''));
+      if (learned && Number(learned.categoryId) > 0) {
+        product.basalamCategoryId = Number(learned.categoryId);
+        if (learned.categoryName) product.basalamCategoryName = String(learned.categoryName);
+        earlyFields.push('basalamCategory');
+      }
+    } catch { /* a learning lookup must never block enrichment */ }
+  }
   const picked = await preferredAiChatModel();
-  if (!picked) return { ok: false, changed: false, fields: [], error: 'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.' };
+  if (!picked) {
+    if (earlyFields.length) { product.aiEnrichedAt = new Date().toISOString(); return { ok: true, changed: true, fields: earlyFields }; }
+    return { ok: false, changed: false, fields: [], error: 'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.' };
+  }
 
   const context = [
     `نام محصول: ${String(product?.title || '').trim()}`,
@@ -418,7 +437,7 @@ ${context}
     const answer = await aiCall(picked.provider, picked.model, prompt, 900);
     const parsed = firstJsonObject(answer.text);
     if (!parsed) return { ok: false, changed: false, fields: [], provider: picked.provider.id, model: picked.model, error: 'پاسخ مدل قابل تبدیل به JSON نبود.' };
-    const fields: string[] = [];
+    const fields: string[] = earlyFields;
     const clean = (value: unknown) => String(value ?? '').trim();
     if ((options.force || need.shortDesc) && clean(parsed.shortDesc)) { product.shortDesc = clean(parsed.shortDesc); fields.push('shortDesc'); }
     if ((options.force || need.longDesc) && clean(parsed.longDesc)) { product.longDesc = clean(parsed.longDesc); fields.push('longDesc'); }
@@ -429,6 +448,18 @@ ${context}
     // The gallery is never invented: images must come from the source site.
     if (need.images && Array.isArray(product?.images) && product.image && !product.images.includes(product.image)) {
       product.images = [product.image, ...product.images];
+    }
+    if (productNeedsBasalamCategory(product) && Array.isArray(options.categories) && options.categories.length) {
+      try {
+        const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, options.categories);
+        if (suggestion && (suggestion as any).ok && Number((suggestion as any).categoryId) > 0) {
+          product.basalamCategoryId = Number((suggestion as any).categoryId);
+          if ((suggestion as any).categoryName) product.basalamCategoryName = String((suggestion as any).categoryName);
+          if ((suggestion as any).categoryPath) product.basalamCategoryPath = String((suggestion as any).categoryPath);
+          fields.push('basalamCategory');
+          try { await learnCategory(String(product?.title || '').trim(), Number((suggestion as any).categoryId), String((suggestion as any).categoryName || '')); } catch { /* ignore */ }
+        }
+      } catch { /* category AI must never fail the description */ }
     }
     product.aiEnrichedAt = new Date().toISOString();
     return { ok: true, changed: fields.length > 0, fields, provider: picked.provider.id, model: picked.model };

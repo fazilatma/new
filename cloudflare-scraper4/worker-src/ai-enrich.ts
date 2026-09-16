@@ -40,12 +40,16 @@ export interface AiEnrichTickIO {
   /** Fast skip when no chat model is configured (avoids pointless scans). */
   modelReady(): boolean | Promise<boolean>;
   listProfileIds(): string[] | Promise<string[]>;
+  /** Per-profile switch; missing means every profile is eligible. */
+  profileEnabled?(profileId: string): boolean | Promise<boolean>;
   loadCursor(): AiEnrichCursor | null | Promise<AiEnrichCursor | null>;
   saveCursor(cursor: AiEnrichCursor): unknown | Promise<unknown>;
   /** Stalest-first slice so enriched rows sink and needy rows surface. */
   listStalest(profileId: string, limit: number): unknown[] | Promise<unknown[]>;
+  /** Live Basalam taxonomy for the category step; fetched once per turn. Missing = descriptions only. */
+  categories?(): any[] | Promise<any[]>;
   /** Runtime wrapper around generateProductDescription; must mutate in place. */
-  enrich(product: unknown): { changed?: boolean } | Promise<{ changed?: boolean }>;
+  enrich(product: unknown, categories?: any[]): { changed?: boolean } | Promise<{ changed?: boolean }>;
   /** Runtime wrapper around upsertProduct; only called when changed. */
   saveProduct(profileId: string, product: unknown): unknown | Promise<unknown>;
   batch?: number;
@@ -61,13 +65,30 @@ export async function aiEnrichTick(io: AiEnrichTickIO): Promise<AiEnrichResult> 
   if (saved.backoffUntil && Date.now() < Date.parse(String(saved.backoffUntil))) {
     return { ran: false, profileId: null, scanned: 0, enriched: 0, failed: 0, skipped: 'backoff' };
   }
-  const next = ids.find(id => id > String(saved.profile || '')) || ids[0];
+  // Rotation skips profiles whose own switch is off, advancing the cursor past
+  // them so a disabled profile never blocks the sweep. Bounded by the profile
+  // count, so an all-disabled fleet terminates instead of looping forever.
+  let cursorProfile = String(saved.profile || ''), next: string | null = null;
+  const eligible = io.profileEnabled || (async () => true);
+  for (let step = 0; step < ids.length; step++) {
+    const candidate = ids.find(id => id > cursorProfile) || ids[0];
+    cursorProfile = candidate;
+    if (await eligible(candidate)) { next = candidate; break; }
+  }
+  if (!next) {
+    await io.saveCursor({ profile: cursorProfile, at: new Date().toISOString(), scanned: 0, enriched: 0, failed: 0, backoffUntil: null });
+    return { ran: false, profileId: null, scanned: 0, enriched: 0, failed: 0, skipped: 'all-disabled' };
+  }
   const batch = Math.max(1, Math.min(20, Number(io.batch) || AI_ENRICH_BATCH));
   const products = ((await io.listStalest(next, batch)) || []) as unknown[];
   let enriched = 0, failed = 0;
+  let categories: any[] | undefined;
+  if (io.categories) {
+    try { categories = (await io.categories()) || []; } catch { categories = []; }
+  }
   for (const product of products) {
     try {
-      const result = (await io.enrich(product)) || {};
+      const result = (await io.enrich(product, categories)) || {};
       if (result && (result as { changed?: boolean }).changed) {
         await io.saveProduct(next, product);
         enriched++;

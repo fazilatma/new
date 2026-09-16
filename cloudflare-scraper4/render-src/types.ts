@@ -41,6 +41,8 @@ export type Profile = {
   basalamCategoryId: number;
   syncWoo: boolean;
   syncBasalam: boolean;
+  /** Per-profile AI description-enricher switch. Missing/true = on. */
+  aiDescriptions?: boolean;
   intervalMinutes: number;
   lastRunAt: string | null;
   createdAt: string;
@@ -62,6 +64,10 @@ export type Product = {
   stock?: number;
   weight?: number;
   category?: string;
+  /** Basalam-format category resolved by the AI enricher (numeric category_id + labels). */
+  basalamCategoryId?: number;
+  basalamCategoryName?: string;
+  basalamCategoryPath?: string;
   /** Specification rows scraped from the product page. */
   specs?: Array<{ name: string; value: string }>;
   sourcePage: string;

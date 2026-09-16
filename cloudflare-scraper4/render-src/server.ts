@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
+import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
@@ -33,7 +33,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.178.0'; } catch { return process.env.npm_package_version || '1.178.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.179.0'; } catch { return process.env.npm_package_version || '1.179.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -362,11 +362,12 @@ app.post('/api/profiles/:id/ai-descriptions',async c=>{
   const picked=await preferredAiChatModel();
   if(!picked)return c.json({ok:false,error:'هیچ مدل هوش مصنوعی فعالی پیدا نشد. ابتدا یک ارائه‌دهنده و مدل مستر تنظیم کنید.'},400);
   const stored=(await listProducts(profile.id,1000,0,'')).products||[];
-  const targets=stored.filter((row:any)=>force||productNeedsEnrichment(row.data||row).any).slice(0,limit);
+  const targets=stored.filter((row:any)=>force||productNeedsEnrichment(row.data||row).any||productNeedsBasalamCategory(row.data||row)).slice(0,limit);
+  let enrichCategories:any[]=[];try{enrichCategories=(await destinationCategories()).items}catch{}
   let filled=0;const failures:any[]=[];
   for(const row of targets){
     const product=(row as any).data||row;
-    const result=await generateProductDescription(product,{force});
+    const result=await generateProductDescription(product,{force,categories:enrichCategories});
     if(result.changed){await upsertProduct(profile.id,product);filled++}
     else if(!result.ok)failures.push({title:product.title,error:result.error});
   }
@@ -639,7 +640,7 @@ function startBackground(): void {
   if (!config.runWorkerInWeb || !databaseReady || backgroundStarted) return;
   backgroundStarted = true;
   void workerLoop(config.workerPollMs);
-  const schedule = async () => { try { const settings=await getState<any>('settings',{}),stallMin=Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));if(settings.watchdog?.enabled!==false){const recovered=settings.watchdog?.autoContinue!==false?await recoverFailedAndStalledJobs(stallMin):await reapStalledJobs(stallMin);if(recovered)console.log(`Recovered ${recovered} stalled/failed job(s)`)}const count=await enqueueDueProfiles();if(count)console.log(`Scheduled ${count} profile(s)`);await scheduledBranchPushTick({settings,envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:nodeSnapshotDatabase,log:m=>console.log('[scheduled-push]',m)});await recoverCategoryRun();await categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});if(!aiEnrichRunning){aiEnrichRunning=true;try{await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settings',{enabled:true}))?.enabled!==false,modelReady:async()=>Boolean(await preferredAiChatModel()),listProfileIds:async()=>(await listProfiles()).map(p=>p.id),loadCursor:()=>getState<any>(AI_ENRICH_LAST_KEY,null),saveCursor:rec=>setState(AI_ENRICH_LAST_KEY,rec),listStalest:(profileId,limit)=>listStalestProducts(profileId,limit),enrich:product=>generateProductDescription(product),saveProduct:(profileId,product)=>upsertProduct(profileId,product as any),log:m=>console.log('[ai-enrich]',m)});}finally{aiEnrichRunning=false;}}const automation=await automationTick();if(Object.keys(automation).length)console.log('Automation',JSON.stringify(automation)); } catch (error) { console.error('Scheduler error', error); } };
+  const schedule = async () => { try { const settings=await getState<any>('settings',{}),stallMin=Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));if(settings.watchdog?.enabled!==false){const recovered=settings.watchdog?.autoContinue!==false?await recoverFailedAndStalledJobs(stallMin):await reapStalledJobs(stallMin);if(recovered)console.log(`Recovered ${recovered} stalled/failed job(s)`)}const count=await enqueueDueProfiles();if(count)console.log(`Scheduled ${count} profile(s)`);await scheduledBranchPushTick({settings,envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:nodeSnapshotDatabase,log:m=>console.log('[scheduled-push]',m)});await recoverCategoryRun();await categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});if(!aiEnrichRunning){aiEnrichRunning=true;try{await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settings',{enabled:true}))?.enabled!==false,modelReady:async()=>Boolean(await preferredAiChatModel()),listProfileIds:async()=>(await listProfiles()).map(p=>p.id),profileEnabled:async id=>(await getProfile(id))?.aiDescriptions!==false,loadCursor:()=>getState<any>(AI_ENRICH_LAST_KEY,null),saveCursor:rec=>setState(AI_ENRICH_LAST_KEY,rec),listStalest:(profileId,limit)=>listStalestProducts(profileId,limit),categories:async()=>{try{return(await destinationCategories()).items}catch{return[]}},enrich:(product,cats)=>generateProductDescription(product,{categories:cats}),saveProduct:(profileId,product)=>upsertProduct(profileId,product as any),log:m=>console.log('[ai-enrich]',m)});}finally{aiEnrichRunning=false;}}const automation=await automationTick();if(Object.keys(automation).length)console.log('Automation',JSON.stringify(automation)); } catch (error) { console.error('Scheduler error', error); } };
   void schedule(); scheduler = setInterval(schedule, 60_000); scheduler.unref();
 }
 startBackground();
@@ -693,6 +694,6 @@ function normalizeProfile(raw: any): Profile {
     paginationValue: String(raw.paginationValue || raw.pagVal || 'page'), selectors, titleSuffix: String(raw.titleSuffix || ''),
     priceMode: ['none','add','percent','multiply'].includes(raw.priceMode) ? raw.priceMode : 'none', priceValue: Number(raw.priceValue ?? raw.priceVal) || 0,
     roundPrice: Math.max(0,Number(raw.roundPrice)||0), minPrice: Math.max(0,Number(raw.minPrice)||0), wooCategoryId: Number(raw.wooCategoryId)||0,
-    basalamCategoryId: Number(raw.basalamCategoryId ?? raw.bslCategoryId)||0, syncWoo: Boolean(raw.syncWoo), syncBasalam: Boolean(raw.syncBasalam),
+    basalamCategoryId: Number(raw.basalamCategoryId ?? raw.bslCategoryId)||0, syncWoo: Boolean(raw.syncWoo), syncBasalam: Boolean(raw.syncBasalam), aiDescriptions: raw.aiDescriptions!==false,
     intervalMinutes: Math.max(0,Number(raw.intervalMinutes)||0), lastRunAt: raw.lastRunAt || null, createdAt: raw.createdAt || now, updatedAt: now };
 }

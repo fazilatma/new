@@ -2,7 +2,7 @@ import { normalizePersianText } from './utils.js';
 import { aiModelEndpoint, isChatCompatibleAiModel, isOpenRouter, isReasoningAiModel, parseModelKeySuffix, type AiEndpointProvider, type AiModelEndpoint } from './ai-catalog.js';
 export { aiModelEndpoint, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, type AiModelEndpoint };
 import { loadConnections } from './connections.js';
-import { getState, setState } from './db.js';
+import { findLearnedCategory, getState, learnCategory, setState } from './db.js';
 import { assertPublicUrl, normalizeProxyUrl, safeFetch } from './network.js';
 import { categoryPrompt, parseCategoryId } from './destination-core.js';
 import type { AiCategoryOption } from './destination-core.js';
@@ -273,7 +273,7 @@ function cloudflareModelIds(raw:string):string[]{
 }
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.178.0'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.179.0'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -510,6 +510,7 @@ export async function recordVote(task:string,winner:string,candidates:string[]){
 // Mirrors render-src/ai.ts so the Cloudflare Worker and the Node runtime fill
 // missing product content identically. Only EMPTY fields are written: text that
 // was really scraped from the source site is never overwritten.
+export function productNeedsBasalamCategory(product:any):boolean{return !(Number(product?.basalamCategoryId)>0);}
 export function productNeedsEnrichment(product:any):{longDesc:boolean;shortDesc:boolean;images:boolean;variations:boolean;any:boolean}{
   const text=(value:unknown)=>String(value??'').trim();
   const longDesc=text(product?.longDesc).length<40;
@@ -528,11 +529,18 @@ function firstJsonObject(text:string):any{
   return null;
 }
 export type DescriptionResult={ok:boolean;changed:boolean;fields:string[];model?:string;provider?:string;error?:string};
-export async function generateProductDescription(product:any,options:{force?:boolean}={}):Promise<DescriptionResult>{
-  const need=productNeedsEnrichment(product);
-  if(!options.force&&!need.any)return{ok:true,changed:false,fields:[]};
+export async function generateProductDescription(product:any,options:{force?:boolean;categories?:AiCategoryOption[]}={}):Promise<DescriptionResult>{
+  const need=productNeedsEnrichment(product),needCategory=productNeedsBasalamCategory(product);
+  if(!options.force&&!need.any&&!needCategory)return{ok:true,changed:false,fields:[]};
+  const earlyFields:string[]=[];
+  if(needCategory){
+    try{
+      const learned=await findLearnedCategory(String(product?.title||''));
+      if(learned&&Number(learned.categoryId)>0){product.basalamCategoryId=Number(learned.categoryId);if(learned.categoryName)product.basalamCategoryName=String(learned.categoryName);earlyFields.push('basalamCategory')}
+    }catch{/* a learning lookup must never block enrichment */}
+  }
   const picked=await preferredAiChatModel();
-  if(!picked)return{ok:false,changed:false,fields:[],error:'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.'};
+  if(!picked){if(earlyFields.length){product.aiEnrichedAt=new Date().toISOString();return{ok:true,changed:true,fields:earlyFields}}return{ok:false,changed:false,fields:[],error:'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.'};}
   const context=[
     `نام محصول: ${String(product?.title||'').trim()}`,
     product?.brand?`برند: ${product.brand}`:'',
@@ -552,7 +560,7 @@ ${context}
     const answer=await aiChat(picked.provider,picked.model,[{role:'user',content:prompt}],undefined,undefined,900);
     const parsed=firstJsonObject(answer.text);
     if(!parsed)return{ok:false,changed:false,fields:[],provider:picked.provider.id,model:picked.model,error:'پاسخ مدل قابل تبدیل به JSON نبود.'};
-    const fields:string[]=[],clean=(value:unknown)=>String(value??'').trim();
+    const fields:string[]=earlyFields,clean=(value:unknown)=>String(value??'').trim();
     if((options.force||need.shortDesc)&&clean(parsed.shortDesc)){product.shortDesc=clean(parsed.shortDesc);fields.push('shortDesc')}
     if((options.force||need.longDesc)&&clean(parsed.longDesc)){product.longDesc=clean(parsed.longDesc);fields.push('longDesc')}
     if((options.force||need.variations)&&Array.isArray(parsed.variations)){
@@ -561,6 +569,18 @@ ${context}
     }
     // The gallery is never invented: images must come from the source site.
     if(need.images&&Array.isArray(product?.images)&&product.image&&!product.images.includes(product.image))product.images=[product.image,...product.images];
+    if(productNeedsBasalamCategory(product)&&Array.isArray(options.categories)&&options.categories.length){
+      try{
+        const suggestion=await suggestCategoryWithModel(String(product?.title||'').trim(),`${picked.provider.id}::${picked.model}`,options.categories);
+        if(suggestion&&suggestion.ok&&Number(suggestion.categoryId)>0){
+          product.basalamCategoryId=Number(suggestion.categoryId);
+          if(suggestion.categoryName)product.basalamCategoryName=String(suggestion.categoryName);
+          if(suggestion.categoryPath)product.basalamCategoryPath=String(suggestion.categoryPath);
+          fields.push('basalamCategory');
+          try{await learnCategory(String(product?.title||'').trim(),Number(suggestion.categoryId),String(suggestion.categoryName||''))}catch{}
+        }
+      }catch{/* category AI must never fail the description */}
+    }
     product.aiEnrichedAt=new Date().toISOString();
     return{ok:true,changed:fields.length>0,fields,provider:picked.provider.id,model:picked.model};
   }catch(error){

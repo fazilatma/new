@@ -2,7 +2,8 @@ import { allProducts, claimJob, getJob, getProfile, getState, markMissingProduct
 import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError, listSelectorsStatus } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
-import { generateProductDescription, productNeedsEnrichment } from './ai.js';
+import { generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
+import { destinationCategories } from './maintenance.js';
 import type { Job, Product } from './types.js';
 
 let stopping = false;
@@ -223,15 +224,19 @@ export async function processOneJob(): Promise<boolean> {
         // provide, using the pinned master model. A failure here must never
         // fail the scrape, so each product is guarded.
         const aiSettings = await getState<any>('ai_description_settings', { enabled: true });
-        if (aiSettings?.enabled !== false) {
-          const pending = products.filter(product => productNeedsEnrichment(product).any);
+        if (aiSettings?.enabled !== false && profile?.aiDescriptions !== false) {
+          const pending = products.filter(product => productNeedsEnrichment(product).any || productNeedsBasalamCategory(product));
           if (pending.length) {
             job.phase = 'ai-descriptions'; await save(job);
+            let enrichCategories: any[] | undefined;
+            if (pending.some(product => productNeedsBasalamCategory(product))) {
+              try { enrichCategories = (await destinationCategories()).items; } catch { enrichCategories = []; }
+            }
             let filled = 0, failed = 0; let reported = '';
             await mapLimit(pending, Math.max(1, Number(process.env.AI_DESCRIPTION_CONCURRENCY || 2)), async product => {
               if (await stopRequested(job.id)) return;
               try {
-                const result = await generateProductDescription(product);
+                const result = await generateProductDescription(product, { categories: enrichCategories });
                 if (result.changed) filled++;
                 else if (!result.ok) { failed++; if (!reported && result.error) reported = result.error; }
               } catch (error) { failed++; if (!reported) reported = message(error); }

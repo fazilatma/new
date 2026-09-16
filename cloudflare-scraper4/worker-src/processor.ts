@@ -1,6 +1,7 @@
 import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
-import { generateProductDescription, productNeedsEnrichment } from './ai.js';
+import { generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
+import { destinationCategories, type DestinationCategory } from './maintenance.js';
 import { listSelectorsStatus, mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
@@ -206,14 +207,15 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   // using the pinned master model. Runs after the scraper-first rescue above
   // and before save/sync, and can never fail the scrape.
   const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
-  if(aiSettings?.enabled!==false){
-    const pending=batch.filter(product=>productNeedsEnrichment(product).any);
+  if(aiSettings?.enabled!==false&&profile?.aiDescriptions!==false){
+    const pending=batch.filter(product=>productNeedsEnrichment(product).any||productNeedsBasalamCategory(product));
     if(pending.length){
       const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
+      let enrichCategories:DestinationCategory[]|undefined;if(pending.some(product=>productNeedsBasalamCategory(product))){try{enrichCategories=(await destinationCategories()).items}catch{enrichCategories=[]}}
       let filled=0,failed=0,reported='';
       await mapLimit(pending,Math.max(1,Number(getEnv().AI_DESCRIPTION_CONCURRENCY)||2),async product=>{
         if(await stopRequested(job.id))return;
-        try{const result=await generateProductDescription(product);if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
+        try{const result=await generateProductDescription(product,{categories:enrichCategories});if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
         catch(error){failed++;if(!reported)reported=message(error)}
       });
       if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);

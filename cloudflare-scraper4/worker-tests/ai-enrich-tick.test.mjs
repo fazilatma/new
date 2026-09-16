@@ -122,3 +122,27 @@ test('expired backoff resumes the rotation', async () => {
   const { io } = makeIo({ cursor: { profile: 'a', backoffUntil: new Date(Date.now() - 1000).toISOString() } });
   assert.equal((await aiEnrichTick(io)).profileId, 'b');
 });
+
+test('profiles whose own switch is off are skipped in the rotation', async () => {
+  const { io } = makeIo({ io: { profileEnabled: async (id) => id !== 'a' } });
+  const result = await aiEnrichTick(io);
+  assert.equal(result.ran, true);
+  assert.equal(result.profileId, 'b');
+  assert.equal(result.scanned, 2);
+});
+
+test('a disabled cursor profile resumes at the next enabled id', async () => {
+  const { io } = makeIo({
+    cursor: { profile: 'a', at: new Date().toISOString() },
+    io: { profileEnabled: async (id) => id !== 'b' },
+  });
+  assert.equal((await aiEnrichTick(io)).profileId, 'a');
+});
+
+test('an all-disabled fleet terminates with all-disabled', async () => {
+  const { io, saved } = makeIo({ io: { profileEnabled: async () => false } });
+  const result = await aiEnrichTick(io);
+  assert.equal(result.ran, false);
+  assert.equal(result.skipped, 'all-disabled');
+  assert.equal(saved.length, 1);
+});
