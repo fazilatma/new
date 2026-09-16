@@ -18,7 +18,7 @@ function extractFunction(name) {
 const clientSource = [
   'function esc(', 'function fa(', 'function productSuffixFormats(', 'function productCodeSuffix(',
   'function destinationPrice(', 'function basalamAccountsForPricing(', 'function headlineFinalPrice(',
-  'function productRowHtml(', 'async function loadProducts(){'
+  'function productRowHtml(', 'async function loadProducts(opts){'
 ].map(extractFunction).join('\n');
 
 function makeClient(payload) {

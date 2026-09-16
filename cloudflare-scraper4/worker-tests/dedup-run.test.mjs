@@ -19,7 +19,7 @@ const stubs={
     export async function destinationChangeStatus(target,id,status,shopId=''){h.statusChanges.push({target,id,status:String(status),shopId});return{ok:true,id,status}}
     export async function destinationCategories(){return{items:[],cached:true,updatedAt:''}}
     export async function applyBasalamCategory(){return{ok:true}}`,
-  './connections.js':`export async function loadConnections(){return{woo:{url:'https://shop.example',key:'k',secret:'s'},basalam:{token:'t',vendorId:'10',api:'https://core.basalam.com/v3',shops:[]},ai:{providers:[],candidates:[],master:'',model:''}}}`,
+  './connections.js':`export async function loadConnections(){return{woo:{url:'https://shop.example',key:'k',secret:'s'},basalam:{token:'t',vendorId:'10',api:'https://core.basalam.com/v3',shops:[]},ai:{providers:[],candidates:[],master:'',model:''}}}\nexport async function saveConnections(){return{}}`,
   './db.js':`const h=globalThis.__dedupHarness;
     export async function getState(key,fallback){return h.states.has(key)?JSON.parse(h.states.get(key)):fallback}
     export async function setState(key,value){h.states.set(key,JSON.stringify(value));h.stateUpdatedAt.set(key,new Date().toISOString());h.writeCount[key]=(h.writeCount[key]||0)+1}
