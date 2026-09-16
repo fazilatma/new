@@ -339,12 +339,13 @@ test('Cloudflare AI provider editor shows account-id/token fields and export tra
 });
 
 test('provider editor supports multiple API keys and model lists show key suffixes',async()=>{
-  const dash=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),ai=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8'),vault=await readFile(new URL('../worker-src/vault.ts',import.meta.url),'utf8');
+  const dash=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),ai=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8'),vault=await readFile(new URL('../worker-src/vault.ts',import.meta.url),'utf8'),shared=await readFile(new URL('../worker-src/ai-catalog.ts',import.meta.url),'utf8');
   for(const token of ['aiEditKeys','ai-key-add','ai-key-remove','renderAiEditKeys','aiKeySuffixLabel','aiProviderKeyCount'])assert.match(dash,new RegExp(token.replace(/[.\/]/g,'\\$&')),token);
   assert.match(ai,/apiKeys\?:Array<string\|CfAccountKey>/);
   assert.match(ai,/providerKeys\(provider/);
   assert.match(ai,/providerWithKey\(provider/);
-  assert.match(ai,/parseModelKeySuffix\(/);
+  assert.match(shared,/export function parseModelKeySuffix\(/,'key-suffix parsing is single-sourced in the shared catalog');
+  assert.match(ai,/parseModelKeySuffix[^;]*from '\.\/ai-catalog\.js'/,'worker ai.ts re-exports the shared parser');
   assert.match(ai,/keyLabel:aiKeySuffixLabel\(ki\)/,'test tasks carry a visible key suffix');
   assert.match(ai,/\[K'\+String\(index\+1\)\.replace\(\/\\d\/g,d=>'۰۱۲۳۴۵۶۷۸۹'/,'suffix uses Persian digits');
   assert.match(vault,/apiKeys:Array<string\|\{accountId:string;token:string\}>/);

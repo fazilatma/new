@@ -332,8 +332,9 @@ test('importing the real provider file keeps per-model flags, vendor and every e
 });
 
 test('a model flagged non-chat in the imported file is not treated as a chat model', async () => {
-  const ai = await read('../worker-src/ai.ts');
-  assert.match(ai, /if\(provider\.nonChatModels\?\.includes\(model\)\)return false/, 'isChatCompatibleAiModel must honour the imported flag');
+  const ai = await read('../worker-src/ai.ts'), catalog = await read('../worker-src/ai-catalog.ts');
+  assert.match(catalog, /if\(provider\.nonChatModels\?\.includes\(model\)\)return false/, 'isChatCompatibleAiModel must honour the imported flag');
+  assert.match(ai, /isChatCompatibleAiModel[^;]*from '\.\/ai-catalog\.js'/, 'worker ai.ts re-exports the shared chat-compatibility check');
   // Both vaults have to persist the fields, otherwise they are lost on save.
   const workerVault = await read('../worker-src/vault.ts');
   const renderVault = await read('../render-src/vault.ts');

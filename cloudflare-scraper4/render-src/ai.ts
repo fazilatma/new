@@ -5,8 +5,11 @@ import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { categoryPrompt, parseCategoryId } from '../worker-src/destination-core.js';
 import type { AiCategoryOption } from '../worker-src/destination-core.js';
+import { isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix } from '../worker-src/ai-catalog.js';
+import { destinationCategories } from './maintenance.js';
 
-type Provider={id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean};
+type Provider={id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean;apiKeys?:any[];nonChatModels?:string[];reasoningModels?:string[]};
+export { isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix };
 type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string};
 
 /**
@@ -49,9 +52,25 @@ export function aiConfigProblem(provider:Provider,model:string):string{
   if(!String(provider.apiKey||'').trim()&&!isKeylessAiProvider(provider))return `کلید API برای «${name}» وارد نشده است؛ در بخش ارائه‌دهنده‌ها کلید را ثبت کنید.`;
   return '';
 }
+/**
+ * Active API keys of a provider (fallback to the single apiKey). Mirrors the
+ * Worker's providerKeys(); only the entry shape differs (Node stores plain
+ * `{token|key}` objects, never Cloudflare account keys).
+ */
+export function providerKeys(provider:Provider):string[]{
+  const keys=Array.isArray(provider.apiKeys)&&provider.apiKeys.length?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);
+  return keys.map(k=>typeof k==='string'?String(k).trim():String((k as any)?.token||(k as any)?.key||'').trim()).filter(Boolean);
+}
+/** Clone of the provider bound to the n-th key (falls back to the first key). */
+export function providerWithKey(provider:Provider,index=0):Provider{
+  const keys=Array.isArray(provider.apiKeys)&&provider.apiKeys.length?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);
+  const chosen=keys[index]??keys[0]??(provider.apiKey||'');
+  const token=typeof chosen==='string'?chosen:String((chosen as any)?.token||(chosen as any)?.key||'');
+  return{...provider,apiKey:token||provider.apiKey};
+}
 
 export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
-export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),results});return results}
+export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),runId:randomUUID(),prompt,categoryTitle:'',onlyCandidates,results});return results}
 /**
  * Server-side AI test run for the Node runtime.
  *
@@ -127,7 +146,7 @@ async function runAiTests(tasks:Array<{p:Provider;model:string;key:string}>):Pro
   if(!aiRun) return;
   aiRun.status='done'; aiRun.phase='finished'; aiRun.currentStartedAt=null; aiRun.finishedAt=nowIso();
   await persistAiRun();
-  try{ await setState('ai_test_results',{at:nowIso(),results:aiRun.result.results}); }catch{/* results still live on the run */}
+  try{ await setState('ai_test_results',{at:nowIso(),runId:aiRun.id,prompt:aiRun.prompt,categoryTitle:aiRun.categoryTitle,onlyCandidates:aiRun.onlyCandidates,results:aiRun.result.results}); }catch{/* results still live on the run */}
 }
 
 export async function controlAiTestRun(action:string):Promise<AiTestRunState|null>{
@@ -148,6 +167,38 @@ export async function resetAiTestRun():Promise<void>{
   if(aiRun) aiRun.stopRequested=true;
   aiRun=null; aiRunTask=null;
   try{ await setState(AI_RUN_KEY,null); }catch{/* nothing to clear */}
+}
+
+/**
+ * Re-runs one model's failed part of the last server-side test. Mirrors the
+ * Worker's retryAiTestPart(): the stored prompt/category title are reused so
+ * the retry tests exactly what the run tested, the live run row is patched
+ * too, and the full results array is returned for the dashboard table.
+ */
+export async function retryAiTestPart(key:string,part:string):Promise<{runId:string;results:any[]}>{
+  const modelKey=String(key||'').trim();
+  if(!modelKey)throw new Error('کلید مدل خالی است.');
+  if(part!=='message'&&part!=='category')throw new Error('بخش نامعتبر است.');
+  const stored=await getState<any>('ai_test_results',null),results=Array.isArray(stored?.results)?[...stored.results]:[];
+  const index=results.findIndex((row:any)=>String(row?.key||'')===modelKey||`${row?.provider}::${row?.model}`===modelKey);
+  if(index<0)throw new Error('این مدل در آخرین نتیجهٔ تست پیدا نشد؛ ابتدا تست مدل‌ها را اجرا کنید.');
+  const row=results[index],providers=await aiProviders();
+  const provider=providers.find(p=>p.id===row.provider&&p.enabled!==false)||providers.find(p=>p.id===row.provider);
+  if(!provider)throw new Error('ارائه‌دهنده پیدا نشد.');
+  if(part==='message'){
+    const prompt=String(stored?.prompt||'Reply with exactly: SCRAPER4_OK');
+    try{results[index]={...await aiCall(provider,row.model,prompt),key:String(row.key||modelKey)}}
+    catch(error){results[index]={ok:false,key:String(row.key||modelKey),provider:provider.id,model:row.model,error:error instanceof Error?error.message:String(error)}}
+  }else{
+    const categoryTitle=String(stored?.categoryTitle||'').trim();
+    if(!categoryTitle)throw new Error('عنوان دسته‌بندی در آخرین تست ذخیره نشده است؛ تست را با عنوان دسته تکرار کنید.');
+    const categories=(await destinationCategories()).items;
+    results[index]={...row,categoryResult:await suggestCategoryWithModel(categoryTitle,`${provider.id}::${row.model}`,categories)};
+  }
+  const live=await getCurrentAiRun();
+  if(live){const at=live.result.results.findIndex((r:any)=>String(r?.key||'')===modelKey||`${r?.provider}::${r?.model}`===modelKey);if(at>=0){live.result.results[at]=results[index];await persistAiRun()}}
+  await setState('ai_test_results',{...(stored||{}),at:nowIso(),results});
+  return{runId:String(stored?.runId||live?.id||randomUUID()),results};
 }
 
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}

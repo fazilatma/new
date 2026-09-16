@@ -233,3 +233,71 @@ test('selectCategoryModels ensemble keeps candidates first across every green mo
   assert.deepEqual(core.selectCategoryModels({ mode: 'whatever', configured: ['p::a'], green: ['p::a'] }), ['p::a']);
   assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', configured: ['p::a'], green: [] }), []);
 });
+
+test('selectCategoryModels ensemble honors a pinned consensus list over the green set', () => {
+  const configured = ['p::a', 'p::b', 'p::c'];
+  // Manual order wins; red/untested models run; non-configured entries drop.
+  assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', candidates: ['p::a'], configured, green: ['p::a'], pinned: ['p::c', 'p::b', 'gone::x'] }), ['p::c', 'p::b']);
+  assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', configured, green: [], pinned: ['p::b'] }), ['p::b']);
+  // Empty pinned list keeps the automatic ensemble behavior.
+  assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', configured, green: ['p::a'], pinned: [] }), ['p::a']);
+  // Pinned consensus caps at 5 even when every entry is configured.
+  const many = ['p::a', 'p::b', 'p::c', 'p::d', 'p::e', 'p::f'];
+  assert.deepEqual(core.selectCategoryModels({ mode: 'ensemble', configured: many, green: [], pinned: many }), many.slice(0, 5));
+  // Pinned lists never leak into the master modes.
+  assert.deepEqual(core.selectCategoryModels({ mode: 'master', master: 'p::a', configured, green: [], pinned: ['p::b'] }), ['p::a']);
+});
+
+test('normalizeCategoryFixPinned cleans raw consensus lists', () => {
+  assert.deepEqual(core.normalizeCategoryFixPinned(['p::a', ' p::b ', 'p::a', 'nope', '', null, 7]), ['p::a', 'p::b']);
+  assert.deepEqual(core.normalizeCategoryFixPinned('p::a'), []);
+  assert.deepEqual(core.normalizeCategoryFixPinned(undefined), []);
+  assert.deepEqual(core.categoryFixPinnedModels({ categoryFix: { consensusModels: ['p::a'] } }), ['p::a']);
+  assert.deepEqual(core.categoryFixPinnedModels({}), []);
+  assert.deepEqual(core.categoryFixPinnedModels(null), []);
+});
+
+test('normalizeCategoryFixSchedule defaults to disabled, 6h, consensus', () => {
+  assert.deepEqual(core.normalizeCategoryFixSchedule({}), { enabled: false, everyHours: 6, mode: 'ensemble' });
+  assert.deepEqual(core.normalizeCategoryFixSchedule(null), { enabled: false, everyHours: 6, mode: 'ensemble' });
+  assert.deepEqual(core.normalizeCategoryFixSchedule({ categoryFix: { periodic: { enabled: true } } }), { enabled: true, everyHours: 6, mode: 'ensemble' });
+  assert.deepEqual(core.normalizeCategoryFixSchedule({ categoryFix: { periodic: { enabled: true, everyHours: 12, mode: 'master' } } }), { enabled: true, everyHours: 12, mode: 'master' });
+  assert.equal(core.normalizeCategoryFixSchedule({ categoryFix: { periodic: { enabled: true, everyHours: 0 } } }).everyHours, 1);
+  assert.equal(core.normalizeCategoryFixSchedule({ categoryFix: { periodic: { enabled: true, everyHours: 999 } } }).everyHours, 168);
+  assert.equal(core.normalizeCategoryFixSchedule({ categoryFix: { periodic: { enabled: true, everyHours: 'bogus' } } }).everyHours, 6);
+  assert.equal(core.CATEGORY_FIX_DEFAULT_EVERY_HOURS, 6);
+});
+
+test('categoryFixDue gates the periodic run on the configured gap', () => {
+  const on = { enabled: true, everyHours: 6, mode: 'ensemble' };
+  assert.equal(core.categoryFixDue({ enabled: false, everyHours: 6, mode: 'ensemble' }, null), false);
+  assert.equal(core.categoryFixDue(on, null), true);
+  assert.equal(core.categoryFixDue(on, { at: 'not-a-date' }), true);
+  const base = Date.parse('2026-09-16T00:00:00.000Z');
+  assert.equal(core.categoryFixDue(on, { at: new Date(base).toISOString() }, base + 6 * 3_600_000 - 1), false);
+  assert.equal(core.categoryFixDue(on, { at: new Date(base).toISOString() }, base + 6 * 3_600_000), true);
+  assert.equal(core.categoryFixDue({ enabled: true, everyHours: 1, mode: 'master' }, { at: new Date(base).toISOString() }, base + 3_600_000), true);
+});
+
+test('categoryFixTick starts due runs, skips everything else, never throws', async () => {
+  const enabled = { categoryFix: { periodic: { enabled: true, everyHours: 6, mode: 'master-candidates' }, consensusModels: ['p::a'] } };
+  const calls = [];
+  const io = (settings, last, start) => ({ settings, now: Date.parse('2026-09-16T12:00:00.000Z'), loadLast: async () => last, saveLast: async rec => calls.push(rec), start, log: () => {} });
+  const fresh = await core.categoryFixTick(io(enabled, null, async input => { calls.push(input); return { existing: false }; }));
+  assert.deepEqual(fresh, { started: true, reason: 'started' });
+  assert.deepEqual(calls[0], { mode: 'master-candidates', consensusModels: ['p::a'], trigger: 'periodic' });
+  calls.length = 0;
+  const quiet = await core.categoryFixTick(io({}, null, async () => { throw new Error('must not start'); }));
+  assert.deepEqual(quiet, { started: false, reason: 'disabled' });
+  const recent = await core.categoryFixTick(io(enabled, { at: '2026-09-16T11:00:00.000Z' }, async () => { throw new Error('must not start'); }));
+  assert.deepEqual(recent, { started: false, reason: 'not-due' });
+  const active = await core.categoryFixTick(io(enabled, { at: '2026-01-01T00:00:00.000Z' }, async () => ({ existing: true })));
+  assert.deepEqual(active, { started: false, reason: 'active' });
+  assert.equal(calls.length, 0);
+  const failed = await core.categoryFixTick(io(enabled, null, async () => { throw new Error('no green models'); }));
+  assert.deepEqual(failed, { started: false, reason: 'failed' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].ok, false);
+  assert.equal(calls[0].trigger, 'periodic');
+  assert.match(calls[0].error, /no green models/);
+});

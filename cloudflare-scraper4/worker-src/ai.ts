@@ -1,5 +1,6 @@
 import { normalizePersianText } from './utils.js';
-import { MISTRAL_MODEL_ENDPOINTS, OPENROUTER_NON_CHAT_MODELS } from './ai-catalog.js';
+import { aiModelEndpoint, isChatCompatibleAiModel, isOpenRouter, isReasoningAiModel, parseModelKeySuffix, type AiEndpointProvider, type AiModelEndpoint } from './ai-catalog.js';
+export { aiModelEndpoint, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, type AiModelEndpoint };
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { assertPublicUrl, normalizeProxyUrl, safeFetch } from './network.js';
@@ -41,18 +42,10 @@ export function providerWithKey(provider:Provider,index=0):Provider{
   const token=(chosen as CfAccountKey).token||provider.apiKey||'';
   return{...provider,apiKey:token,baseUrl:account?`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/`:provider.baseUrl};
 }
-/** Parses an optional trailing `::k<n>` suffix from a model reference. */
-export function parseModelKeySuffix(raw:string):{model:string;keyIndex:number}{const match=String(raw||'').match(/^(.*?)::k(\d+)$/);return match?{model:match[1],keyIndex:Math.max(0,Number(match[2])-1)}:{model:String(raw||''),keyIndex:0}}
 /** Display suffix for non-primary keys, e.g. index 1 -> ' [K۲]'. */
 export function aiKeySuffixLabel(index:number):string{return index>0?' [K'+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)])+']':''}
 export async function aiProviders():Promise<Provider[]>{return providersFromAi((await loadConnections()).ai)}
 
-/** Explicit user flags win first; the fallback covers common reasoning families already saved before this setting existed. */
-export function isReasoningAiModel(provider:Pick<Provider,'reasoningModels'>|undefined,model:string):boolean{
-  if(provider?.reasoningModels?.includes(model))return true;
-  const value=String(model||'').toLowerCase();
-  return /(?:^|[\/_:.-])(?:deepseek[-_.]?(?:r1|v4)|qwq|qwen3|gpt[-_.]?oss|gpt[-_.]?5|o[1-5](?:[-_.]|$)|reason(?:ing|er)?|thinking|think|magistral|leanstral|kimi[-_.]?k2|glm[-_.]?[45]|nemotron|reflection|bonsai|liquid)(?:[\/_:.-]|$)/i.test(value)||/cohere[^/]*reason/i.test(value);
-}
 
 export async function preferredAiChatModel():Promise<{provider:Provider;model:string}|null>{
   const ai=(await loadConnections()).ai,providers=providersFromAi(ai).filter(provider=>provider.enabled!==false),preferred=[ai.model,ai.master,...(Array.isArray(ai.candidates)?ai.candidates:[])].map(String).filter(Boolean);
@@ -61,11 +54,6 @@ export async function preferredAiChatModel():Promise<{provider:Provider;model:st
   return null;
 }
 
-export type AiModelEndpoint='chat-completions'|'ocr'|'embeddings';
-type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'|'nonChatModels'>>;
-function isMistralProvider(provider:AiEndpointProvider):boolean{return provider.id==='mistral'||/api\.mistral\.ai/i.test(String(provider.baseUrl||''))}
-export function aiModelEndpoint(provider:AiEndpointProvider,model:string):AiModelEndpoint{return isMistralProvider(provider)?MISTRAL_MODEL_ENDPOINTS[model]||'chat-completions':'chat-completions'}
-export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(provider.nonChatModels?.includes(model))return false;if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
 
 /**
  * A provider is only testable when it has a base URL, at least one API key and a
@@ -284,7 +272,6 @@ function cloudflareModelIds(raw:string):string[]{
   return [...new Set(out.filter(Boolean))];
 }
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
-function isOpenRouter(provider:Pick<Provider,'id'> & Partial<Pick<Provider,'name'|'baseUrl'>>,endpoint=''){return provider.id==='openrouter'||/openrouter/i.test(String(provider.name||''))||/openrouter\.ai/i.test(String(provider.baseUrl||endpoint||''))}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
   const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.174.0'};
   if(method==='POST')headers['content-type']='application/json';

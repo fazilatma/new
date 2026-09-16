@@ -18,8 +18,8 @@
  * categorize identically.
  */
 import { randomUUID } from 'node:crypto';
-import { OPENROUTER_NON_CHAT_MODELS } from '../worker-src/ai-catalog.js';
-import { normalizeCategoryMode, selectCategoryModels } from '../worker-src/destination-core.js';
+import { isChatCompatibleAiModel } from '../worker-src/ai-catalog.js';
+import { CATEGORY_FIX_LAST_KEY, categoryFixPinnedModels, normalizeCategoryFixPinned, normalizeCategoryMode, selectCategoryModels } from '../worker-src/destination-core.js';
 import { aiProviders, suggestCategoryWithModel } from './ai.js';
 import { loadConnections } from './connections.js';
 import { getState, getTriedBasalamCategories, markBasalamCategoriesTried, setState } from './db.js';
@@ -64,21 +64,15 @@ export async function resetCategoryRun(): Promise<void> { await setState(RUN_KEY
  * OpenAI-compatible chat endpoints, so only the explicit non-chat lists opt a
  * model out (per-provider nonChatModels plus OpenRouter's dedicated models).
  */
-export async function successfulCategoryModels(mode?: any): Promise<string[]> {
+export async function successfulCategoryModels(mode?: any, pinned: string[] = []): Promise<string[]> {
   const [tests, connections] = await Promise.all([getState<any>('ai_test_results', null), loadConnections()]);
   const green = new Set((Array.isArray(tests?.results) ? tests.results : []).filter((row: any) => row?.ok === true).map((row: any) => `${row.provider}::${row.model}`));
   const ai = connections.ai, candidates = Array.isArray(ai.candidates) ? ai.candidates.map(String) : [], providers = await aiProviders(), configured: string[] = [];
   for (const provider of providers) if (provider.enabled !== false) for (const model of provider.models || []) {
     const key = `${provider.id}::${model}`;
-    if (model && isUsableCategoryModel(provider, model)) configured.push(key);
+    if (model && isChatCompatibleAiModel(provider, model)) configured.push(key);
   }
-  return selectCategoryModels({ mode, master: (ai as any).master, candidates, configured, green });
-}
-
-function isUsableCategoryModel(provider: any, model: string): boolean {
-  if (Array.isArray(provider?.nonChatModels) && provider.nonChatModels.map(String).includes(String(model))) return false;
-  if (String(provider?.id) === 'openrouter' && (OPENROUTER_NON_CHAT_MODELS as string[]).includes(String(model))) return false;
-  return true;
+  return selectCategoryModels({ mode, master: (ai as any).master, candidates, configured, green, pinned });
 }
 
 let running = false;
@@ -86,8 +80,8 @@ let running = false;
 export async function startCategoryRun(input?: any): Promise<{ run: any; existing: boolean }> {
   const previous = await readRun();
   if (previous && active(previous)) return { run: publicRun(previous), existing: true };
-  const mode = normalizeCategoryMode(input?.mode), modelKeys = await successfulCategoryModels(mode);
-  if (!modelKeys.length) throw new Error('هیچ مدل موفقی برای دسته‌بندی پیدا نشد؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.');
+  const mode = normalizeCategoryMode(input?.mode), explicit = normalizeCategoryFixPinned(input?.consensusModels), stored = categoryFixPinnedModels(await getState<any>('settings', {})), pinned = explicit.length ? explicit : stored, modelKeys = await successfulCategoryModels(mode, pinned);
+  if (!modelKeys.length) throw new Error(pinned.length ? 'مدل‌های انتخاب‌شده در اجتماع دیگر در میان مدل‌های پیکربندی‌شده نیستند؛ فهرست اجتماع را به‌روزرسانی کنید یا آن را خالی بگذارید.' : 'هیچ مدل موفقی برای دسته‌بندی پیدا نشد؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.');
   // Fail fast before starting a long job when the category connection is incomplete.
   await destinationCategories();
   const timestamp = now();
@@ -98,6 +92,7 @@ export async function startCategoryRun(input?: any): Promise<{ run: any; existin
     total: 0, processed: 0, changed: 0, failed: 0, items: [],
   };
   await writeRun(run);
+  await setState(CATEGORY_FIX_LAST_KEY, { at: timestamp, ok: true, trigger: input?.trigger === 'periodic' ? 'periodic' : 'manual', mode, runId: run.id });
   void drive();
   return { run: publicRun(run), existing: false };
 }

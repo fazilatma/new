@@ -10604,6 +10604,45 @@ function upgradeAiProviderCatalog(ai) {
   }
   return changed;
 }
+var AGENT_TOOL_MODELS = [
+  // Cloudflare Workers AI — function-calling models (verified against the official
+  // Workers AI catalog, Aug 2026). All run on the free tier's daily neuron quota.
+  { id: "@cf/meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B 16E Instruct", vendor: "Meta \u2014 Workers AI", free: true, toolCalling: true, note: "\u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 + vision\u061B \u0645\u062F\u0644 \u067E\u06CC\u0646\u200C\u0634\u062F\u0647\u0654 \u06A9\u0627\u062A\u0627\u0644\u0648\u06AF Workers AI. \u062F\u0631 \u0633\u0647\u0645\u06CC\u0647\u0654 \u0631\u0627\u06CC\u06AF\u0627\u0646 \u0631\u0648\u0632\u0627\u0646\u0647 \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0627\u0633\u062A." },
+  { id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", name: "Llama 3.3 70B Instruct (FP8 Fast)", vendor: "Meta \u2014 Workers AI", free: true, toolCalling: true, note: "\u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0631\u0633\u0645\u06CC\u061B \u062F\u0642\u062A \u0628\u0627\u0644\u0627 \u0628\u0631\u0627\u06CC \u062A\u062D\u0644\u06CC\u0644\u200C\u0647\u0627\u06CC \u067E\u06CC\u0686\u06CC\u062F\u0647." },
+  { id: "@cf/qwen/qwen3.8-27b", name: "Qwen 3.8 27B", vendor: "Alibaba \u2014 Workers AI", free: true, toolCalling: true, note: "\u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 + \u0627\u0633\u062A\u062F\u0644\u0627\u0644 + vision\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F2\u06F6\u06F2K \u062A\u0648\u06A9\u0646. (\u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 Qwen2.5-Coder)" },
+  { id: "@cf/openai/gpt-oss-120b", name: "GPT-OSS 120B", vendor: "OpenAI \u2014 Workers AI", free: true, toolCalling: true, note: "\u0645\u062F\u0644 \u0645\u062A\u0646\u200C\u0628\u0627\u0632 OpenAI \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F1\u06F2\u06F8K." },
+  { id: "@cf/deepseek-ai/deepseek-v4-flash-0731", name: "DeepSeek V4 Flash 0731", vendor: "DeepSeek \u2014 Workers AI", free: true, toolCalling: true, note: "\u0627\u0633\u062A\u062F\u0644\u0627\u0644\u06CC + \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F1M \u062A\u0648\u06A9\u0646." },
+  { id: "@cf/deepseek-ai/deepseek-v4-pro-0813", name: "DeepSeek V4 Pro 0813", vendor: "DeepSeek \u2014 Workers AI", free: true, toolCalling: true, note: "\u0646\u0633\u062E\u0647\u0654 \u0642\u0648\u06CC\u200C\u062A\u0631 V4 \u0628\u0631\u0627\u06CC \u06A9\u0627\u0631\u0647\u0627\u06CC \u0686\u0646\u062F\u0645\u0631\u062D\u0644\u0647\u200C\u0627\u06CC\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F1M \u062A\u0648\u06A9\u0646." },
+  { id: "@cf/zai-org/glm-5.2", name: "GLM-5.2", vendor: "Z.ai \u2014 Workers AI", free: true, toolCalling: true, note: "\u0645\u062F\u0644 \u0639\u0627\u0645\u0644\u200C\u0645\u062D\u0648\u0631 Z.ai \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644 \u0628\u0631\u0627\u06CC \u06A9\u062F\u0646\u0648\u06CC\u0633\u06CC." },
+  { id: "@cf/moonshotai/kimi-k2.7-code", name: "Kimi K2.7 Code", vendor: "Moonshot AI \u2014 Workers AI", free: true, toolCalling: true, note: "\u06F1T \u067E\u0627\u0631\u0627\u0645\u062A\u0631\u061B \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0686\u0646\u062F\u0646\u0648\u0628\u062A\u0647 + \u0627\u0633\u062A\u062F\u0644\u0627\u0644 + vision\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F2\u06F6\u06F2K." },
+  { id: "@cf/moonshotai/kimi-k2.6", name: "Kimi K2.6", vendor: "Moonshot AI \u2014 Workers AI", free: true, toolCalling: true, note: "\u0646\u0633\u0644 \u0642\u0628\u0644\u06CC K2.6 \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644." },
+  { id: "Prism-ML/Ternary-Bonsai-27B", name: "Prism Ternary Bonsai 27B", vendor: "PrismML \u2014 Together AI", free: true, toolCalling: true, note: "\u0631\u0627\u06CC\u06AF\u0627\u0646 \u0631\u0648\u06CC Together AI (api.together.xyz/v1)\u061B \u0645\u062F\u0644 \u0627\u0633\u062A\u062F\u0644\u0627\u0644\u06CC \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631. \u0628\u0631\u0627\u06CC \u0627\u0633\u062A\u0641\u0627\u062F\u0647\u060C \u06CC\u06A9 \u0627\u0631\u0627\u0626\u0647\u200C\u062F\u0647\u0646\u062F\u0647 \u0628\u0627 Base URL \xABhttps://api.together.xyz/v1\xBB \u0628\u0633\u0627\u0632\u06CC\u062F \u0648 \u0647\u0645\u06CC\u0646 \u0634\u0646\u0627\u0633\u0647 \u0631\u0627 \u0628\u0647 \u0645\u062F\u0644\u200C\u0647\u0627\u06CC\u0634 \u0627\u0636\u0627\u0641\u0647 \u06A9\u0646\u06CC\u062F." },
+  { id: "labs-leanstral-1-5", name: "Leanstral 1.5 (119B)", vendor: "Mistral AI (Labs \u2014 \u0631\u0627\u06CC\u06AF\u0627\u0646)", free: true, toolCalling: true, note: "\u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 Leanstral 2603 (\u0628\u0627\u0632\u0646\u0634\u0633\u062A\u0647). \u0631\u0627\u06CC\u06AF\u0627\u0646 \u0631\u0648\u06CC Labs \u0645\u0627\u06CC\u0633\u062A\u0631\u0627\u0644 \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644\u061B \u0634\u0646\u0627\u0633\u0647\u0654 API: labs-leanstral-1-5." },
+  { id: "*configured", name: "\u0645\u062F\u0644\u200C\u0647\u0627\u06CC \u0627\u0631\u0627\u0626\u0647\u200C\u062F\u0647\u0646\u062F\u0647\u200C\u0647\u0627\u06CC \u062A\u0646\u0638\u06CC\u0645\u200C\u0634\u062F\u0647", vendor: "OpenAI-compatible (GPT\u060C DeepSeek\u060C Qwen \u0648\u2026)", free: false, toolCalling: false, note: "\u0627\u0632 \u0645\u062F\u0644\u200C\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647\u0654 \u062E\u0648\u062F\u062A\u0627\u0646 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F\u061B \u0645\u062F\u0644 \u0628\u0627\u06CC\u062F \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 (tool calling) \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u06A9\u0646\u062F." }
+];
+function isOpenRouter(provider, endpoint = "") {
+  return provider.id === "openrouter" || /openrouter/i.test(String(provider.name || "")) || /openrouter\.ai/i.test(String(provider.baseUrl || endpoint || ""));
+}
+function parseModelKeySuffix(raw2) {
+  const match2 = String(raw2 || "").match(/^(.*?)::k(\d+)$/);
+  return match2 ? { model: match2[1], keyIndex: Math.max(0, Number(match2[2]) - 1) } : { model: String(raw2 || ""), keyIndex: 0 };
+}
+function isReasoningAiModel(provider, model) {
+  if (provider?.reasoningModels?.includes(model)) return true;
+  const value = String(model || "").toLowerCase();
+  return /(?:^|[\/_:.-])(?:deepseek[-_.]?(?:r1|v4)|qwq|qwen3|gpt[-_.]?oss|gpt[-_.]?5|o[1-5](?:[-_.]|$)|reason(?:ing|er)?|thinking|think|magistral|leanstral|kimi[-_.]?k2|glm[-_.]?[45]|nemotron|reflection|bonsai|liquid)(?:[\/_:.-]|$)/i.test(value) || /cohere[^/]*reason/i.test(value);
+}
+function isMistralProvider(provider) {
+  return provider.id === "mistral" || /api\.mistral\.ai/i.test(String(provider.baseUrl || ""));
+}
+function aiModelEndpoint(provider, model) {
+  return isMistralProvider(provider) ? MISTRAL_MODEL_ENDPOINTS[model] || "chat-completions" : "chat-completions";
+}
+function isChatCompatibleAiModel(provider, model) {
+  if (provider.nonChatModels?.includes(model)) return false;
+  if (isOpenRouter(provider) && OPENROUTER_NON_CHAT_MODELS.includes(model)) return false;
+  return aiModelEndpoint(provider, model) === "chat-completions";
+}
 
 // worker-src/connections.ts
 init_db();
@@ -11144,7 +11183,66 @@ function selectCategoryModels(input) {
     if (mode === "master") return [masterKey];
     return [masterKey, ...wanted.filter((key2) => key2 !== masterKey && configured.includes(key2))].slice(0, 5);
   }
+  const pin = Array.isArray(input.pinned) ? input.pinned.map(String).filter((key2) => configured.includes(key2)) : [];
+  if (pin.length) return [...new Set(pin)].slice(0, CATEGORY_FIX_MAX_PINNED_MODELS);
   return [.../* @__PURE__ */ new Set([...wanted.filter((key2) => usable.includes(key2)), ...usable])].slice(0, 5);
+}
+var CATEGORY_FIX_DEFAULT_EVERY_HOURS = 6;
+var CATEGORY_FIX_MAX_EVERY_HOURS = 168;
+var CATEGORY_FIX_MAX_PINNED_MODELS = 5;
+var CATEGORY_FIX_LAST_KEY = "category_fix_last";
+function normalizeCategoryFixPinned(raw2) {
+  if (!Array.isArray(raw2)) return [];
+  const seen = /* @__PURE__ */ new Set(), out = [];
+  for (const entry of raw2) {
+    const key2 = String(entry ?? "").trim();
+    if (!key2 || !key2.includes("::") || seen.has(key2)) continue;
+    seen.add(key2);
+    out.push(key2);
+    if (out.length >= CATEGORY_FIX_MAX_PINNED_MODELS) break;
+  }
+  return out;
+}
+function categoryFixPinnedModels(settings) {
+  return normalizeCategoryFixPinned(settings?.categoryFix?.consensusModels);
+}
+function normalizeCategoryFixSchedule(settings) {
+  const raw2 = settings?.categoryFix?.periodic ?? {}, hours = Number(raw2?.everyHours);
+  return { enabled: raw2?.enabled === true, everyHours: Number.isFinite(hours) ? Math.min(CATEGORY_FIX_MAX_EVERY_HOURS, Math.max(1, Math.trunc(hours))) : CATEGORY_FIX_DEFAULT_EVERY_HOURS, mode: normalizeCategoryMode(raw2?.mode) };
+}
+function categoryFixDue(schedule, last, now4 = Date.now()) {
+  if (!schedule?.enabled) return false;
+  const at = Date.parse(String(last?.at ?? ""));
+  if (!Number.isFinite(at)) return true;
+  return now4 - at >= schedule.everyHours * 36e5;
+}
+async function categoryFixTick(io) {
+  const schedule = normalizeCategoryFixSchedule(io.settings);
+  if (!schedule.enabled) return { started: false, reason: "disabled" };
+  let last = null;
+  try {
+    last = await io.loadLast();
+  } catch {
+    last = null;
+  }
+  const moment = Number(io.now) > 0 ? Number(io.now) : Date.now();
+  if (!categoryFixDue(schedule, last, moment)) return { started: false, reason: "not-due" };
+  try {
+    const started = await io.start({ mode: schedule.mode, consensusModels: categoryFixPinnedModels(io.settings), trigger: "periodic" });
+    if (started?.existing) return { started: false, reason: "active" };
+    return { started: true, reason: "started" };
+  } catch (error) {
+    const message2 = error instanceof Error ? error.message : String(error);
+    try {
+      await io.saveLast({ at: new Date(moment).toISOString(), ok: false, trigger: "periodic", mode: schedule.mode, error: message2 });
+    } catch {
+    }
+    try {
+      io.log?.(`category-fix periodic skipped: ${message2}`);
+    } catch {
+    }
+    return { started: false, reason: "failed" };
+  }
 }
 
 // worker-src/ai.ts
@@ -11183,20 +11281,11 @@ function providerWithKey(provider, index = 0) {
   const token = chosen.token || provider.apiKey || "";
   return { ...provider, apiKey: token, baseUrl: account ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/` : provider.baseUrl };
 }
-function parseModelKeySuffix(raw2) {
-  const match2 = String(raw2 || "").match(/^(.*?)::k(\d+)$/);
-  return match2 ? { model: match2[1], keyIndex: Math.max(0, Number(match2[2]) - 1) } : { model: String(raw2 || ""), keyIndex: 0 };
-}
 function aiKeySuffixLabel(index) {
   return index > 0 ? " [K" + String(index + 1).replace(/\d/g, (d) => "\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9"[Number(d)]) + "]" : "";
 }
 async function aiProviders() {
   return providersFromAi((await loadConnections()).ai);
-}
-function isReasoningAiModel(provider, model) {
-  if (provider?.reasoningModels?.includes(model)) return true;
-  const value = String(model || "").toLowerCase();
-  return /(?:^|[\/_:.-])(?:deepseek[-_.]?(?:r1|v4)|qwq|qwen3|gpt[-_.]?oss|gpt[-_.]?5|o[1-5](?:[-_.]|$)|reason(?:ing|er)?|thinking|think|magistral|leanstral|kimi[-_.]?k2|glm[-_.]?[45]|nemotron|reflection|bonsai|liquid)(?:[\/_:.-]|$)/i.test(value) || /cohere[^/]*reason/i.test(value);
 }
 async function preferredAiChatModel() {
   const ai = (await loadConnections()).ai, providers = providersFromAi(ai).filter((provider) => provider.enabled !== false), preferred = [ai.model, ai.master, ...Array.isArray(ai.candidates) ? ai.candidates : []].map(String).filter(Boolean);
@@ -11210,17 +11299,6 @@ async function preferredAiChatModel() {
     if (model) return { provider, model };
   }
   return null;
-}
-function isMistralProvider(provider) {
-  return provider.id === "mistral" || /api\.mistral\.ai/i.test(String(provider.baseUrl || ""));
-}
-function aiModelEndpoint(provider, model) {
-  return isMistralProvider(provider) ? MISTRAL_MODEL_ENDPOINTS[model] || "chat-completions" : "chat-completions";
-}
-function isChatCompatibleAiModel(provider, model) {
-  if (provider.nonChatModels?.includes(model)) return false;
-  if (isOpenRouter(provider) && OPENROUTER_NON_CHAT_MODELS.includes(model)) return false;
-  return aiModelEndpoint(provider, model) === "chat-completions";
 }
 function isKeylessAiProvider(provider) {
   const base = String(provider.baseUrl || "");
@@ -11461,9 +11539,6 @@ function cloudflareModelIds(raw2) {
 }
 function canonicalAiModel(model) {
   return String(model || "").trim().replace(/^~+/, "");
-}
-function isOpenRouter(provider, endpoint = "") {
-  return provider.id === "openrouter" || /openrouter/i.test(String(provider.name || "")) || /openrouter\.ai/i.test(String(provider.baseUrl || endpoint || ""));
 }
 function aiRequestHeaders(provider, endpoint, method = "POST") {
   const headers = { authorization: `Bearer ${provider.apiKey}`, accept: "application/json", "user-agent": "Scraper4/1.174.0" };
@@ -13013,22 +13088,6 @@ async function fetchJson(url, init = {}, woo = false) {
 }
 
 // worker-src/agent.ts
-var AGENT_TOOL_MODELS = [
-  // Cloudflare Workers AI — function-calling models (verified against the official
-  // Workers AI catalog, Aug 2026). All run on the free tier's daily neuron quota.
-  { id: "@cf/meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B 16E Instruct", vendor: "Meta \u2014 Workers AI", free: true, toolCalling: true, note: "\u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 + vision\u061B \u0645\u062F\u0644 \u067E\u06CC\u0646\u200C\u0634\u062F\u0647\u0654 \u06A9\u0627\u062A\u0627\u0644\u0648\u06AF Workers AI. \u062F\u0631 \u0633\u0647\u0645\u06CC\u0647\u0654 \u0631\u0627\u06CC\u06AF\u0627\u0646 \u0631\u0648\u0632\u0627\u0646\u0647 \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0627\u0633\u062A." },
-  { id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", name: "Llama 3.3 70B Instruct (FP8 Fast)", vendor: "Meta \u2014 Workers AI", free: true, toolCalling: true, note: "\u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0631\u0633\u0645\u06CC\u061B \u062F\u0642\u062A \u0628\u0627\u0644\u0627 \u0628\u0631\u0627\u06CC \u062A\u062D\u0644\u06CC\u0644\u200C\u0647\u0627\u06CC \u067E\u06CC\u0686\u06CC\u062F\u0647." },
-  { id: "@cf/qwen/qwen3.8-27b", name: "Qwen 3.8 27B", vendor: "Alibaba \u2014 Workers AI", free: true, toolCalling: true, note: "\u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 + \u0627\u0633\u062A\u062F\u0644\u0627\u0644 + vision\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F2\u06F6\u06F2K \u062A\u0648\u06A9\u0646. (\u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 Qwen2.5-Coder)" },
-  { id: "@cf/openai/gpt-oss-120b", name: "GPT-OSS 120B", vendor: "OpenAI \u2014 Workers AI", free: true, toolCalling: true, note: "\u0645\u062F\u0644 \u0645\u062A\u0646\u200C\u0628\u0627\u0632 OpenAI \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F1\u06F2\u06F8K." },
-  { id: "@cf/deepseek-ai/deepseek-v4-flash-0731", name: "DeepSeek V4 Flash 0731", vendor: "DeepSeek \u2014 Workers AI", free: true, toolCalling: true, note: "\u0627\u0633\u062A\u062F\u0644\u0627\u0644\u06CC + \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F1M \u062A\u0648\u06A9\u0646." },
-  { id: "@cf/deepseek-ai/deepseek-v4-pro-0813", name: "DeepSeek V4 Pro 0813", vendor: "DeepSeek \u2014 Workers AI", free: true, toolCalling: true, note: "\u0646\u0633\u062E\u0647\u0654 \u0642\u0648\u06CC\u200C\u062A\u0631 V4 \u0628\u0631\u0627\u06CC \u06A9\u0627\u0631\u0647\u0627\u06CC \u0686\u0646\u062F\u0645\u0631\u062D\u0644\u0647\u200C\u0627\u06CC\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F1M \u062A\u0648\u06A9\u0646." },
-  { id: "@cf/zai-org/glm-5.2", name: "GLM-5.2", vendor: "Z.ai \u2014 Workers AI", free: true, toolCalling: true, note: "\u0645\u062F\u0644 \u0639\u0627\u0645\u0644\u200C\u0645\u062D\u0648\u0631 Z.ai \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644 \u0628\u0631\u0627\u06CC \u06A9\u062F\u0646\u0648\u06CC\u0633\u06CC." },
-  { id: "@cf/moonshotai/kimi-k2.7-code", name: "Kimi K2.7 Code", vendor: "Moonshot AI \u2014 Workers AI", free: true, toolCalling: true, note: "\u06F1T \u067E\u0627\u0631\u0627\u0645\u062A\u0631\u061B \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0686\u0646\u062F\u0646\u0648\u0628\u062A\u0647 + \u0627\u0633\u062A\u062F\u0644\u0627\u0644 + vision\u061B \u067E\u0646\u062C\u0631\u0647\u0654 \u06F2\u06F6\u06F2K." },
-  { id: "@cf/moonshotai/kimi-k2.6", name: "Kimi K2.6", vendor: "Moonshot AI \u2014 Workers AI", free: true, toolCalling: true, note: "\u0646\u0633\u0644 \u0642\u0628\u0644\u06CC K2.6 \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644." },
-  { id: "Prism-ML/Ternary-Bonsai-27B", name: "Prism Ternary Bonsai 27B", vendor: "PrismML \u2014 Together AI", free: true, toolCalling: true, note: "\u0631\u0627\u06CC\u06AF\u0627\u0646 \u0631\u0648\u06CC Together AI (api.together.xyz/v1)\u061B \u0645\u062F\u0644 \u0627\u0633\u062A\u062F\u0644\u0627\u0644\u06CC \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631. \u0628\u0631\u0627\u06CC \u0627\u0633\u062A\u0641\u0627\u062F\u0647\u060C \u06CC\u06A9 \u0627\u0631\u0627\u0626\u0647\u200C\u062F\u0647\u0646\u062F\u0647 \u0628\u0627 Base URL \xABhttps://api.together.xyz/v1\xBB \u0628\u0633\u0627\u0632\u06CC\u062F \u0648 \u0647\u0645\u06CC\u0646 \u0634\u0646\u0627\u0633\u0647 \u0631\u0627 \u0628\u0647 \u0645\u062F\u0644\u200C\u0647\u0627\u06CC\u0634 \u0627\u0636\u0627\u0641\u0647 \u06A9\u0646\u06CC\u062F." },
-  { id: "labs-leanstral-1-5", name: "Leanstral 1.5 (119B)", vendor: "Mistral AI (Labs \u2014 \u0631\u0627\u06CC\u06AF\u0627\u0646)", free: true, toolCalling: true, note: "\u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 Leanstral 2603 (\u0628\u0627\u0632\u0646\u0634\u0633\u062A\u0647). \u0631\u0627\u06CC\u06AF\u0627\u0646 \u0631\u0648\u06CC Labs \u0645\u0627\u06CC\u0633\u062A\u0631\u0627\u0644 \u0628\u0627 \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 \u0648 \u0627\u0633\u062A\u062F\u0644\u0627\u0644\u061B \u0634\u0646\u0627\u0633\u0647\u0654 API: labs-leanstral-1-5." },
-  { id: "*configured", name: "\u0645\u062F\u0644\u200C\u0647\u0627\u06CC \u0627\u0631\u0627\u0626\u0647\u200C\u062F\u0647\u0646\u062F\u0647\u200C\u0647\u0627\u06CC \u062A\u0646\u0638\u06CC\u0645\u200C\u0634\u062F\u0647", vendor: "OpenAI-compatible (GPT\u060C DeepSeek\u060C Qwen \u0648\u2026)", free: false, toolCalling: false, note: "\u0627\u0632 \u0645\u062F\u0644\u200C\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647\u0654 \u062E\u0648\u062F\u062A\u0627\u0646 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F\u061B \u0645\u062F\u0644 \u0628\u0627\u06CC\u062F \u0641\u0631\u0627\u062E\u0648\u0627\u0646\u06CC \u0627\u0628\u0632\u0627\u0631 (tool calling) \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u06A9\u0646\u062F." }
-];
 var AGENT_PROMPT_TEMPLATES = [
   { id: "site-status", name: "\u{1FA7A} \u0648\u0636\u0639\u06CC\u062A \u0633\u0627\u06CC\u062A", description: "\u0648\u0636\u0639\u06CC\u062A \u06A9\u0644\u06CC\u060C \u06A9\u0627\u0631\u0647\u0627\u06CC \u0641\u0639\u0627\u0644 \u0648 \u0627\u062A\u0635\u0627\u0644\u200C\u0647\u0627", maxSteps: 4, prompt: "\u0648\u0636\u0639\u06CC\u062A \u06A9\u0644\u06CC \u0633\u0627\u06CC\u062A \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646: \u062A\u0639\u062F\u0627\u062F \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u060C \u06A9\u0627\u0631\u0647\u0627\u06CC \u062F\u0631 \u062D\u0627\u0644 \u0627\u062C\u0631\u0627 \u0648 \u062F\u0631 \u0635\u0641\u060C \u0648\u0636\u0639\u06CC\u062A \u0627\u062A\u0635\u0627\u0644 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0628\u0627\u0633\u0644\u0627\u0645 \u0648 \u0648\u0636\u0639\u06CC\u062A \u0635\u0641 \u0633\u0631\u0648\u0631 \u0631\u0627 \u06AF\u0632\u0627\u0631\u0634 \u0628\u062F\u0647. \u0627\u0639\u062F\u0627\u062F \u0631\u0627 \u0641\u0627\u0631\u0633\u06CC \u0628\u0646\u0648\u06CC\u0633.", tools: ["site_status", "jobs_report"] },
   { id: "morning-report", name: "\u{1F305} \u06AF\u0632\u0627\u0631\u0634 \u0635\u0628\u062D\u06AF\u0627\u0647\u06CC", description: "\u06AF\u0632\u0627\u0631\u0634 \u06A9\u0627\u0645\u0644: \u06A9\u0627\u0631\u0647\u0627 + \u0622\u0645\u0627\u0631 \u0647\u0631 \u062F\u0648 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 + \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC\u200C\u0647\u0627", maxSteps: 8, prompt: "\u06CC\u06A9 \u06AF\u0632\u0627\u0631\u0634 \u0635\u0628\u062D\u06AF\u0627\u0647\u06CC \u06A9\u0627\u0645\u0644 \u0622\u0645\u0627\u062F\u0647 \u06A9\u0646: \u06A9\u0627\u0631\u0647\u0627\u06CC \u0627\u062E\u06CC\u0631 \u0628\u0627 \u0648\u0636\u0639\u06CC\u062A \u0648 \u062E\u0637\u0627\u0647\u0627\u060C \u0622\u0645\u0627\u0631 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0628\u0627\u0633\u0644\u0627\u0645 (\u062A\u0639\u062F\u0627\u062F \u0648 \u0648\u0636\u0639\u06CC\u062A\u200C\u0647\u0627) \u0648 \u06F5 \u0645\u0648\u0631\u062F \u067E\u0631\u06A9\u0627\u0631\u0628\u0631\u062F \u0627\u0632 \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC\u200C\u0647\u0627\u06CC \u06CC\u0627\u062F\u06AF\u0631\u0641\u062A\u0647\u200C\u0634\u062F\u0647 \u0631\u0627 \u0641\u0647\u0631\u0633\u062A \u06A9\u0646.", tools: ["jobs_report", "destination_overview", "categories_learned", "profile_stats"] },
@@ -15254,8 +15313,13 @@ function renderCategoryAllRun(run){if(!run||!categoryAllVisible)return;const tot
 async function refreshCurrentCategoryRun(presentActive=false){const token=++categoryAllPollToken;clearTimeout(categoryAllTimer);try{const data=await api('/api/destination/basalam/category-runs/current'),run=data.run;if(token!==categoryAllPollToken)return run;if(run&&presentActive&&['queued','running'].includes(run.status))categoryAllVisible=true;if(run&&categoryAllVisible)renderCategoryAllRun(run);if(run&&['queued','running'].includes(run.status))categoryAllTimer=setTimeout(()=>refreshCurrentCategoryRun(false),2000);return run}catch(error){if(categoryAllVisible)categoryAllTimer=setTimeout(()=>refreshCurrentCategoryRun(false),5000);return null}}
 async function controlCategoryAllRun(action){if(action==='refresh')return refreshCurrentCategoryRun(false);const data=await api('/api/destination/basalam/category-runs/control',{method:'POST',body:JSON.stringify({action})});categoryAllVisible=true;renderCategoryAllRun(data.run);notice(action==='stop'?'توقف امن در checkpoint سرور ثبت شد.':'دسته‌بندی همهٔ تأییدنشده‌ها از checkpoint ادامه یافت.','info');return refreshCurrentCategoryRun(false)}
 function categoryVoteModeLabel(mode){return{master:'مدل مستر فقط','master-candidates':'مستر با پشتیبانی کاندیدها',ensemble:'اجتماع چندمدلی'}[mode]||'اجتماع چندمدلی'}
-async function startCategoryAllRun(){const ai=state.connections?.ai||{},master=String(ai.master||''),candidates=(Array.isArray(ai.candidates)?ai.candidates:[]).map(String),hasMaster=Boolean(master),option=(value,title,desc,disabled)=>'<label data-category-mode-card="'+value+'" style="display:flex;gap:9px;align-items:flex-start;padding:10px 12px;border:1px solid #334155;border-radius:10px;margin:8px 0;cursor:'+(disabled?'not-allowed':'pointer')+';'+(disabled?'opacity:.45':'')+'"><input type="radio" name="categoryVoteMode" value="'+value+'" data-category-mode style="margin-top:3px"'+(value==='ensemble'?' checked':'')+(disabled?' disabled':'')+'><span><b>'+title+'</b><br><small style="color:#94a3b8">'+desc+'</small></span></label>';modalShell('🏷 انتخاب حالت رأی دسته‌بندی جمعی','<div class="result-summary ok"><b>همهٔ محصولات «تأیید نشده» در تمام صفحات و تمام غرفه‌های باسلام دسته‌بندی و تغییر واقعی داده می‌شوند.</b><br>در دو حالت اول، همان مدل‌هایی که دستی انتخاب کرده‌اید به کار می‌روند، حتی اگر در آخرین تست موفق نبوده باشند.<br><small>مدل مستر: '+(hasMaster?'<span dir="ltr">'+esc(master.includes('::')?master.split('::').slice(1).join('::'):master)+'</span>':'<span class="muted">پین نشده</span>')+' · کاندیدها: '+fa(candidates.length)+'</small></div>'+option('master','👑 مدل مستر فقط','سریع‌ترین حالت؛ فقط مدل مستر پیشنهاد می‌دهد و همان تصمیم نهایی است.',!hasMaster)+option('master-candidates','👑➕ مستر با پشتیبانی کاندیدها','مستر به‌همراه مدل‌های کاندید رأی می‌دهند و اکثریت تصمیم می‌گیرد (حداکثر ۵ مدل).',!hasMaster)+option('ensemble','🤝 اجتماع چندمدلی','همهٔ مدل‌های موفق در رأی‌گیری شرکت می‌کنند؛ دقیق‌ترین حالت (حداکثر ۵ مدل).',false)+(!hasMaster?'<div class="help-box">برای دو حالت اول، ابتدا در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل را مستر کنید.</div>':'')+'<div class="bulk-actions"><button class="btn btn-blue" data-category-mode-start>▶ شروع دسته‌بندی</button><button class="btn btn-gray" data-modal-action="close">انصراف</button></div>');const root=$('resultModal'),baseClick=root.onclick;root.onclick=e=>{if(e.target.closest('[data-category-mode-start]')){const picked=[...root.querySelectorAll('[data-category-mode]')].find(x=>x.checked),mode=picked?picked.value:'ensemble';beginCategoryAllRun(mode).catch(error=>openResultModal('⚠️ شروع دسته‌بندی همهٔ تأییدنشده‌ها',{ok:false,error:error.message,recommendations:['ابتدا تست سرورساید مدل‌ها را کامل کنید تا حداقل یک مدل موفق ثبت شود.','توکن و دسته‌های باسلام را از بخش اتصال آزمایش کنید.']}));return}baseClick(e)}}
-async function beginCategoryAllRun(mode){categoryAllVisible=true;modalShell('🏷 آماده‌سازی دسته‌بندی همهٔ تأییدنشده‌ها','<div class="dest-loading">در حال بررسی اتصال، دسته‌ها و مدل‌های موفق…</div>');try{const data=await api('/api/destination/basalam/category-runs',{method:'POST',body:JSON.stringify({mode})});renderCategoryAllRun(data.run);notice(data.existing?'اجرای قبلی هنوز فعال است و همان progress بازیابی شد.':'اجرای سرورساید همهٔ محصولات تأییدنشده آغاز شد ('+categoryVoteModeLabel(data.run?.mode||mode)+').','info');return refreshCurrentCategoryRun(false)}catch(error){categoryAllVisible=false;throw error}}
+let categoryFixConsensus=[],categoryFixChatModels=[];
+function categoryFixConsensusOptions(){return categoryFixChatModels.filter(m=>m&&m.chat!==false&&!categoryFixConsensus.includes(String(m.providerId)+'::'+String(m.model)))}
+function renderCategoryConsensusEditor(){const chips=$('categoryConsensusChips'),select=$('categoryConsensusAdd');if(chips)chips.innerHTML=categoryFixConsensus.length?categoryFixConsensus.map(key=>'<span style="display:inline-block;background:#0f766e;border-radius:20px;padding:2px 6px 2px 10px;margin:2px" dir="ltr">'+esc(String(key).includes('::')?String(key).split('::').slice(1).join('::'):String(key))+' <button class="btn btn-sm btn-red" data-consensus-remove="'+escAttr(key)+'" style="padding:0 7px">✕</button></span>').join(''):'<span class="muted">خالی = اجتماع خودکار از مدل‌های موفق آخرین تست</span>';if(select){const opts=categoryFixConsensusOptions();select.innerHTML='<option value="">＋ افزودن مدل…</option>'+opts.map(m=>'<option value="'+escAttr(String(m.providerId)+'::'+String(m.model))+'">'+esc(String(m.providerName||m.providerId)+' · '+String(m.model))+'</option>').join('');select.disabled=!opts.length||categoryFixConsensus.length>=5}}
+function categoryFixLastText(last){if(!last||!last.at)return 'هنوز هیچ اجرای دسته‌بندی ثبت نشده است.';const when=esc(new Date(last.at).toLocaleString('fa-IR')),trigger=last.trigger==='periodic'?'خودکار':'دستی',mode=categoryVoteModeLabel(last.mode);if(last.ok===false)return 'آخرین تلاش ('+trigger+' · '+mode+' · '+when+') ناموفق بود: '+esc(last.error||'خطای نامشخص');return 'آخرین اجرا: '+trigger+' · '+mode+' · '+when}
+async function saveCategoryFixSchedule(){const enabled=Boolean($('categoryFixPeriodic')&&$('categoryFixPeriodic').checked);let hours=Math.trunc(Number($('categoryFixHours')&&$('categoryFixHours').value));if(!Number.isFinite(hours))hours=6;hours=Math.min(168,Math.max(1,hours));const picked=$('categoryFixMode')&&$('categoryFixMode').value,mode=['master','master-candidates','ensemble'].includes(picked)?picked:'ensemble',settings=structuredClone(state.settings||{});settings.categoryFix={periodic:{enabled,everyHours:hours,mode},consensusModels:[...categoryFixConsensus]};await api('/api/settings',{method:'POST',body:JSON.stringify(settings)});state.settings=settings;notice('زمان‌بندی رفع دوره‌ای دسته‌بندی ذخیره شد.','info');try{const d=await api('/api/category-fix-status'),line=$('categoryFixLast');if(line)line.innerHTML=categoryFixLastText(d.last)}catch(error){}}
+async function startCategoryAllRun(){const ai=state.connections?.ai||{},master=String(ai.master||''),candidates=(Array.isArray(ai.candidates)?ai.candidates:[]).map(String),hasMaster=Boolean(master),sched=(state.settings&&state.settings.categoryFix&&state.settings.categoryFix.periodic)||{};categoryFixConsensus=(state.settings&&state.settings.categoryFix&&Array.isArray(state.settings.categoryFix.consensusModels)?state.settings.categoryFix.consensusModels:[]).map(String).filter(key=>key.includes('::')).slice(0,5);categoryFixChatModels=[];const option=(value,title,desc,disabled)=>'<label data-category-mode-card="'+value+'" style="display:flex;gap:9px;align-items:flex-start;padding:10px 12px;border:1px solid #334155;border-radius:10px;margin:8px 0;cursor:'+(disabled?'not-allowed':'pointer')+';'+(disabled?'opacity:.45':'')+'"><input type="radio" name="categoryVoteMode" value="'+value+'" data-category-mode style="margin-top:3px"'+(value==='ensemble'?' checked':'')+(disabled?' disabled':'')+'><span><b>'+title+'</b><br><small style="color:#94a3b8">'+desc+'</small></span></label>';modalShell('🏷 انتخاب حالت رأی دسته‌بندی جمعی','<div class="result-summary ok"><b>همهٔ محصولات «تأیید نشده» در تمام صفحات و تمام غرفه‌های باسلام دسته‌بندی و تغییر واقعی داده می‌شوند.</b><br>در دو حالت اول، همان مدل‌هایی که دستی انتخاب کرده‌اید به کار می‌روند، حتی اگر در آخرین تست موفق نبوده باشند.<br><small>مدل مستر: '+(hasMaster?'<span dir="ltr">'+esc(master.includes('::')?master.split('::').slice(1).join('::'):master)+'</span>':'<span class="muted">پین نشده</span>')+' · کاندیدها: '+fa(candidates.length)+'</small></div>'+option('master','👑 مدل مستر فقط','سریع‌ترین حالت؛ فقط مدل مستر پیشنهاد می‌دهد و همان تصمیم نهایی است.',!hasMaster)+option('master-candidates','👑➕ مستر با پشتیبانی کاندیدها','مستر به‌همراه مدل‌های کاندید رأی می‌دهند و اکثریت تصمیم می‌گیرد (حداکثر ۵ مدل).',!hasMaster)+option('ensemble','🤝 اجتماع چندمدلی','همهٔ مدل‌های موفق در رأی‌گیری شرکت می‌کنند؛ دقیق‌ترین حالت (حداکثر ۵ مدل).',false)+(!hasMaster?'<div class="help-box">برای دو حالت اول، ابتدا در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل را مستر کنید.</div>':'')+'<h3 style="margin-top:14px">🤝 مدل‌های اجتماع (اختیاری)</h3><div id="categoryConsensusChips" style="margin:6px 0"></div><div class="row"><div class="field"><label>افزودن مدل به اجتماع دستی</label><select id="categoryConsensusAdd"></select></div></div><p class="field-hint">خالی = خودکار (مدل‌های موفق آخرین تست). فهرست دستی فقط در حالت «اجتماع چندمدلی» اعمال می‌شود و دقیقاً همین مدل‌ها رأی می‌دهند؛ حداکثر ۵ مدل.</p><h3 style="margin-top:14px">⏰ اجرای خودکار دوره‌ای</h3><div class="row"><div class="field"><label><input type="checkbox" id="categoryFixPeriodic"'+(sched.enabled===true?' checked':'')+'> فعال‌سازی اجرای خودکار</label></div><div class="field"><label>فاصله اجرا (ساعت)</label><input type="number" id="categoryFixHours" min="1" max="168" value="'+(Number(sched.everyHours)||6)+'"></div><div class="field"><label>حالت رأی اجرای خودکار</label><select id="categoryFixMode">'+['master','master-candidates','ensemble'].map(m=>'<option value="'+m+'"'+((sched.mode||'ensemble')===m?' selected':'')+'>'+categoryVoteModeLabel(m)+'</option>').join('')+'</select></div></div><div class="bulk-actions"><button class="btn btn-purple btn-sm" data-category-fix-save>💾 ذخیره زمان‌بندی</button></div><p class="field-hint" id="categoryFixLast">در حال خواندن آخرین اجرا…</p><div class="bulk-actions"><button class="btn btn-blue" data-category-mode-start>▶ شروع دسته‌بندی</button><button class="btn btn-gray" data-modal-action="close">انصراف</button></div>');const root=$('resultModal'),baseClick=root.onclick;root.onclick=e=>{const remove=e.target.closest('[data-consensus-remove]');if(remove){categoryFixConsensus=categoryFixConsensus.filter(key=>key!==remove.dataset.consensusRemove);renderCategoryConsensusEditor();return}if(e.target.closest('[data-category-fix-save]')){saveCategoryFixSchedule().catch(error=>notice(error.message,'error'));return}if(e.target.closest('[data-category-mode-start]')){const picked=[...root.querySelectorAll('[data-category-mode]')].find(x=>x.checked),mode=picked?picked.value:'ensemble';beginCategoryAllRun(mode,[...categoryFixConsensus]).catch(error=>openResultModal('⚠️ شروع دسته‌بندی همهٔ تأییدنشده‌ها',{ok:false,error:error.message,recommendations:['ابتدا تست سرورساید مدل‌ها را کامل کنید تا حداقل یک مدل موفق ثبت شود، یا در همین پنجره چند مدل به اجتماع دستی اضافه کنید.','توکن و دسته‌های باسلام را از بخش اتصال آزمایش کنید.']}));return}baseClick(e)};root.onchange=e=>{if(e.target&&e.target.id==='categoryConsensusAdd'&&e.target.value){if(categoryFixConsensus.length>=5)notice('حداکثر ۵ مدل در اجتماع دستی.','error');else if(!categoryFixConsensus.includes(e.target.value))categoryFixConsensus.push(e.target.value);renderCategoryConsensusEditor()}};renderCategoryConsensusEditor();api('/api/ai/chat-models').then(d=>{categoryFixChatModels=Array.isArray(d.models)?d.models:[];renderCategoryConsensusEditor()}).catch(()=>{categoryFixChatModels=[];renderCategoryConsensusEditor()});api('/api/category-fix-status').then(d=>{const line=$('categoryFixLast');if(line)line.innerHTML=categoryFixLastText(d.last)}).catch(()=>{const line=$('categoryFixLast');if(line)line.innerHTML='خواندن آخرین اجرا ممکن نشد.'})}
+async function beginCategoryAllRun(mode,consensusModels){categoryAllVisible=true;modalShell('🏷 آماده‌سازی دسته‌بندی همهٔ تأییدنشده‌ها','<div class="dest-loading">در حال بررسی اتصال، دسته‌ها و مدل‌های موفق…</div>');try{const data=await api('/api/destination/basalam/category-runs',{method:'POST',body:JSON.stringify({mode,consensusModels:Array.isArray(consensusModels)?consensusModels:[]})});renderCategoryAllRun(data.run);notice(data.existing?'اجرای قبلی هنوز فعال است و همان progress بازیابی شد.':'اجرای سرورساید همهٔ محصولات تأییدنشده آغاز شد ('+categoryVoteModeLabel(data.run?.mode||mode)+').','info');return refreshCurrentCategoryRun(false)}catch(error){categoryAllVisible=false;throw error}}
 function destinationAiModels(lastTest={}){const ai=state.connections?.ai||{},providers=Array.isArray(ai.providers)&&ai.providers.length?ai.providers:[{id:'default',name:'پیش‌فرض',models:ai.model?[ai.model]:[],enabled:true}],wanted=new Set((ai.candidates||[]).map(String)),green=new Set((Array.isArray(lastTest.results)?lastTest.results:[]).filter(row=>row.ok===true&&row.chatCompatible!==false&&!aiDedicatedEndpoint(row.model)).map(row=>String(row.provider)+'::'+String(row.model))),rows=[];for(const provider of providers)if(provider.enabled!==false)for(const model of provider.models||[]){const key=String(provider.id)+'::'+String(model);if(model&&aiChatCompatibleModel(model)&&green.has(key))rows.push({key,provider:String(provider.name||provider.id),model:String(model),preferred:wanted.has(key)})}if(rows.length&&!rows.some(x=>x.preferred))rows[0].preferred=true;return rows}
 function selectableCategoryOptions(){if(!categoryManager)return[];const leaves=categoryManager.categories.filter(item=>item.leaf!==false);return leaves.length?leaves:categoryManager.categories}
 function categoryOptions(query=''){if(!categoryManager)return;const normalized=String(query).trim().toLowerCase(),select=$('categorySelect'),before=select.value,items=selectableCategoryOptions().filter(item=>!normalized||String(item.name+' '+item.path+' '+item.id).toLowerCase().includes(normalized)).slice(0,500);select.innerHTML=items.map(item=>'<option value="'+item.id+'">'+esc((item.path||item.name)+' (#'+item.id+')')+'</option>').join('')||'<option value="">نتیجه‌ای پیدا نشد</option>';if(items.some(item=>String(item.id)===before))select.value=before}
@@ -18854,23 +18918,24 @@ async function startAiTestRun(input, waitUntil) {
   await enqueue2({ task: "ai-test", runId: id }, waitUntil);
   return { run: publicRun(run2), existing: false };
 }
-async function successfulCategoryModels(mode) {
+async function successfulCategoryModels(mode, pinned = []) {
   const [tests, connections] = await Promise.all([getLastAiTestResults(), loadConnections()]), green = new Set((Array.isArray(tests?.results) ? tests.results : []).filter((row) => row?.ok === true).map((row) => `${row.provider}::${row.model}`)), ai = connections.ai, candidates = Array.isArray(ai.candidates) ? ai.candidates.map(String) : [], providers = ai.providers.length ? ai.providers : [{ id: "default", models: ai.model ? [ai.model] : [], enabled: true }], configured = [];
   for (const provider of providers) if (provider.enabled !== false) for (const model of provider.models || []) {
     const key2 = `${provider.id}::${model}`;
     if (model && isChatCompatibleAiModel(provider, model)) configured.push(key2);
   }
-  return selectCategoryModels({ mode, master: ai.master, candidates, configured, green });
+  return selectCategoryModels({ mode, master: ai.master, candidates, configured, green, pinned });
 }
 async function startAllUnapprovedCategoryRun(waitUntil, input) {
   const previous = await currentBackgroundRun("category-all");
   if (active2(previous)) return { run: publicRun(previous), existing: true };
-  const mode = normalizeCategoryMode(input?.mode), modelKeys = await successfulCategoryModels(mode);
-  if (!modelKeys.length) throw new Error("\u0647\u06CC\u0686 \u0645\u062F\u0644 \u0645\u0648\u0641\u0642\u06CC \u0628\u0631\u0627\u06CC \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F\u061B \u0627\u0628\u062A\u062F\u0627 \u062A\u0633\u062A \u0633\u0631\u0648\u0631\u0633\u0627\u06CC\u062F \u0645\u062F\u0644\u200C\u0647\u0627 \u0631\u0627 \u06A9\u0627\u0645\u0644 \u06A9\u0646\u06CC\u062F.");
+  const mode = normalizeCategoryMode(input?.mode), explicit = normalizeCategoryFixPinned(input?.consensusModels), stored = categoryFixPinnedModels(await getState("settings", {})), pinned = explicit.length ? explicit : stored, modelKeys = await successfulCategoryModels(mode, pinned);
+  if (!modelKeys.length) throw new Error(pinned.length ? "\u0645\u062F\u0644\u200C\u0647\u0627\u06CC \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647 \u062F\u0631 \u0627\u062C\u062A\u0645\u0627\u0639 \u062F\u06CC\u06AF\u0631 \u062F\u0631 \u0645\u06CC\u0627\u0646 \u0645\u062F\u0644\u200C\u0647\u0627\u06CC \u067E\u06CC\u06A9\u0631\u0628\u0646\u062F\u06CC\u200C\u0634\u062F\u0647 \u0646\u06CC\u0633\u062A\u0646\u062F\u061B \u0641\u0647\u0631\u0633\u062A \u0627\u062C\u062A\u0645\u0627\u0639 \u0631\u0627 \u0628\u0647\u200C\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06CC \u06A9\u0646\u06CC\u062F \u06CC\u0627 \u0622\u0646 \u0631\u0627 \u062E\u0627\u0644\u06CC \u0628\u06AF\u0630\u0627\u0631\u06CC\u062F." : "\u0647\u06CC\u0686 \u0645\u062F\u0644 \u0645\u0648\u0641\u0642\u06CC \u0628\u0631\u0627\u06CC \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F\u061B \u0627\u0628\u062A\u062F\u0627 \u062A\u0633\u062A \u0633\u0631\u0648\u0631\u0633\u0627\u06CC\u062F \u0645\u062F\u0644\u200C\u0647\u0627 \u0631\u0627 \u06A9\u0627\u0645\u0644 \u06A9\u0646\u06CC\u062F.");
   await destinationCategories();
   const timestamp2 = now3(), id = crypto.randomUUID(), run2 = { id, kind: "category-all", status: "queued", phase: "listing", stopRequested: false, createdAt: timestamp2, updatedAt: timestamp2, startedAt: null, finishedAt: null, attempts: 0, error: null, modelKeys, mode, page: 1, totalPages: 1, products: [], cursor: 0, total: 0, processed: 0, changed: 0, failed: 0, items: [] };
   await writeRun2(run2);
   await setState(pointerKey2("category-all"), id);
+  await setState(CATEGORY_FIX_LAST_KEY, { at: timestamp2, ok: true, trigger: input?.trigger === "periodic" ? "periodic" : "manual", mode, runId: id });
   await enqueue2({ task: "category-all", runId: id }, waitUntil);
   return { run: publicRun(run2), existing: false };
 }
@@ -20163,6 +20228,7 @@ app.post("/api/destination/basalam/category-runs/reset", async (c) => {
   await resetBackgroundRun("category-all");
   return c.json({ ok: true, run: await getPublicBackgroundRun("category-all") });
 });
+app.get("/api/category-fix-status", async (c) => c.json({ ok: true, last: await getState(CATEGORY_FIX_LAST_KEY, null) }));
 app.post("/api/destination/:target/:id/update", async (c) => {
   const target = validDestination(c.req.param("target")), b = await jsonBody(c);
   return c.json(await destinationUpdate(target, Number(c.req.param("id")), b, b.confirm === "APPLY", String(b.shopId || "")));
@@ -21098,6 +21164,7 @@ async function scheduledTasks(env, waitUntil) {
     waitUntil(agentCronTick((promise) => waitUntil(promise)));
     waitUntil(automationTick());
     waitUntil(scheduledBranchPushTick({ settings, envToken: env.GH_BACKUP_TOKEN, loadLast: () => getState("branch_push_last", null), saveLast: (rec) => setState("branch_push_last", rec), buildBundle: () => createPhpSettingsBundle(), connect: (token) => ({ getter: githubApiFetch(token), putter: githubApiPut(token) }), log: (m) => console.log("[scheduled-push]", m) }));
+    waitUntil(categoryFixTick({ settings, loadLast: () => getState(CATEGORY_FIX_LAST_KEY, null), saveLast: (rec) => setState(CATEGORY_FIX_LAST_KEY, rec), start: (input) => startAllUnapprovedCategoryRun((promise) => waitUntil(promise), input), log: (m) => console.log("[category-fix]", m) }));
     waitUntil(maybeCronPing(settings));
   } finally {
     await releaseCronLock();

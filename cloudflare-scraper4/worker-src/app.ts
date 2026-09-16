@@ -24,6 +24,7 @@ import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, re
 import { fontFile, fontStylesheet } from './fonts.js';
 import { DEFAULT_REPO, githubApiHeaders, normalizeRepo, pickGithubToken, scanDeployerBranches } from './deployer-branches.js';
 import { fetchBranchBackupFile, listBranchBackupFiles, pushBranchBackupFile, scheduledBranchPushTick } from './branch-backup.js';
+import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from './destination-core.js';
 
 type Variables={requestId:string};
 export const app=new Hono<{Bindings:Env;Variables:Variables}>();
@@ -234,6 +235,7 @@ app.post('/api/destination/basalam/category-runs',async c=>{const started=await 
 app.get('/api/destination/basalam/category-runs/current',async c=>c.json({ok:true,run:await getPublicBackgroundRun('category-all')}));
 app.post('/api/destination/basalam/category-runs/control',async c=>{const b=await jsonBody(c),action=String(b.action)==='resume'?'resume':'stop';return c.json({ok:true,run:await controlBackgroundRun('category-all',action,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise))})});
 app.post('/api/destination/basalam/category-runs/reset',async c=>{await resetBackgroundRun('category-all');return c.json({ok:true,run:await getPublicBackgroundRun('category-all')})});
+app.get('/api/category-fix-status',async c=>c.json({ok:true,last:await getState<any>(CATEGORY_FIX_LAST_KEY,null)}));
 app.post('/api/destination/:target/:id/update',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await destinationUpdate(target,Number(c.req.param('id')),b,b.confirm==='APPLY',String(b.shopId||'')))});
 app.post('/api/destination/:target/:id/status',async c=>{const b=await jsonBody(c);if(b.confirm!=='APPLY')return c.json({ok:false,error:'برای اعمال واقعی عبارت APPLY لازم است.'},400);return c.json(await destinationChangeStatus(validDestination(c.req.param('target')),Number(c.req.param('id')),String(b.status||''),String(b.shopId||'')))});
 app.delete('/api/destination/:target/:id',async c=>{if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'برای حذف یا بایگانی، تأیید DELETE لازم است.'},400);return c.json(await destinationDelete(validDestination(c.req.param('target')),Number(c.req.param('id')),c.req.query('force')==='true',c.req.query('shop')||''))});
@@ -659,6 +661,7 @@ export async function scheduledTasks(env:Env,waitUntil:(promise:Promise<unknown>
     waitUntil(agentCronTick((promise:Promise<unknown>)=>waitUntil(promise)));
     waitUntil(automationTick());
     waitUntil(scheduledBranchPushTick({settings,envToken:env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),log:m=>console.log('[scheduled-push]',m)}));
+    waitUntil(categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>waitUntil(promise),input),log:m=>console.log('[category-fix]',m)}));
     waitUntil(maybeCronPing(settings));
   }finally{await releaseCronLock()}
 }
@@ -684,3 +687,4 @@ async function maybeCronPing(settings:any){
   for(const channel of ['bale','rubika','webhook'] as const)try{delivery.push({channel,...await sendNotification(channel,text)})}catch(error){delivery.push({channel,skipped:true,error:error instanceof Error?error.message:String(error)})}
   if(delivery.some(item=>item.ok))await setState('cron_ping',{at:new Date().toISOString(),delivery});
 }
+

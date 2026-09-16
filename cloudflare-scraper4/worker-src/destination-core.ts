@@ -220,7 +220,7 @@ export function resolveMasterKey(configured: string[], master: any): string | nu
   if (raw.includes('::')) return configured.includes(raw) ? raw : null;
   return configured.find(key => key.split('::').slice(1).join('::') === raw) || null;
 }
-export function selectCategoryModels(input: { mode?: any; master?: any; candidates?: any; configured?: string[]; green?: Set<string> | string[] }): string[] {
+export function selectCategoryModels(input: { mode?: any; master?: any; candidates?: any; configured?: string[]; green?: Set<string> | string[]; pinned?: string[] }): string[] {
   const mode = normalizeCategoryMode(input.mode), configured = Array.isArray(input.configured) ? input.configured : [], green = new Set<string>(input.green || []);
   const usable = configured.filter(key => green.has(key)), wanted = (Array.isArray(input.candidates) ? input.candidates : []).map(String);
   if (mode === 'master' || mode === 'master-candidates') {
@@ -234,5 +234,70 @@ export function selectCategoryModels(input: { mode?: any; master?: any; candidat
     if (mode === 'master') return [masterKey];
     return [masterKey, ...wanted.filter(key => key !== masterKey && configured.includes(key))].slice(0, 5);
   }
+  // A manually picked consensus list wins over the automatic green set (manual
+  // selection runs even when the last server-side test marked models red or
+  // never tested them); an empty list keeps the automatic ensemble behavior.
+  const pin = Array.isArray(input.pinned) ? input.pinned.map(String).filter(key => configured.includes(key)) : [];
+  if (pin.length) return [...new Set(pin)].slice(0, CATEGORY_FIX_MAX_PINNED_MODELS);
   return [...new Set([...wanted.filter(key => usable.includes(key)), ...usable])].slice(0, 5);
+}
+/** Default gap between automatic bulk Basalam category fixes (hours). */
+export const CATEGORY_FIX_DEFAULT_EVERY_HOURS = 6;
+/** Longest gap a user may schedule between automatic bulk fixes (one week). */
+export const CATEGORY_FIX_MAX_EVERY_HOURS = 168;
+/** Cap on manually picked consensus models (shared with the green-model cap). */
+export const CATEGORY_FIX_MAX_PINNED_MODELS = 5;
+/** Key of the last-fix record shared by the manual and periodic triggers. */
+export const CATEGORY_FIX_LAST_KEY = 'category_fix_last';
+/** Normalize a raw consensus-model list: `provider::model` keys, deduped, capped. */
+export function normalizeCategoryFixPinned(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>(), out: string[] = [];
+  for (const entry of raw) {
+    const key = String(entry ?? '').trim();
+    if (!key || !key.includes('::') || seen.has(key)) continue;
+    seen.add(key); out.push(key);
+    if (out.length >= CATEGORY_FIX_MAX_PINNED_MODELS) break;
+  }
+  return out;
+}
+/** Read the stored consensus-model list from settings (empty means automatic). */
+export function categoryFixPinnedModels(settings: any): string[] { return normalizeCategoryFixPinned(settings?.categoryFix?.consensusModels); }
+export interface CategoryFixSchedule { enabled: boolean; everyHours: number; mode: CategoryVoteMode }
+/** Normalize the periodic-fix schedule; defaults to disabled / 6h / consensus. */
+export function normalizeCategoryFixSchedule(settings: any): CategoryFixSchedule {
+  const raw = settings?.categoryFix?.periodic ?? {}, hours = Number(raw?.everyHours);
+  return { enabled: raw?.enabled === true, everyHours: Number.isFinite(hours) ? Math.min(CATEGORY_FIX_MAX_EVERY_HOURS, Math.max(1, Math.trunc(hours))) : CATEGORY_FIX_DEFAULT_EVERY_HOURS, mode: normalizeCategoryMode(raw?.mode) };
+}
+/** True when the periodic fix may start (never started, or the gap has passed). */
+export function categoryFixDue(schedule: CategoryFixSchedule, last: { at?: unknown } | null | undefined, now: number = Date.now()): boolean {
+  if (!schedule?.enabled) return false;
+  const at = Date.parse(String((last as any)?.at ?? ''));
+  if (!Number.isFinite(at)) return true;
+  return now - at >= schedule.everyHours * 3_600_000;
+}
+export interface CategoryFixTickIO { settings: unknown; now?: number; loadLast: () => Promise<any>; saveLast: (record: Record<string, unknown>) => Promise<void>; start: (input: { mode: CategoryVoteMode; consensusModels: string[]; trigger: 'periodic' }) => Promise<{ existing?: boolean; run?: unknown }>; log?: (message: string) => void }
+/**
+ * One periodic-fix tick shared by every runtime (Worker cron, Node in-web
+ * scheduler, Render cron). Never throws: failures are recorded in the
+ * last-fix state so the dashboard can show them. The manual starter records
+ * the same state, so a manual run also resets the periodic clock.
+ */
+export async function categoryFixTick(io: CategoryFixTickIO): Promise<{ started: boolean; reason: string }> {
+  const schedule = normalizeCategoryFixSchedule(io.settings);
+  if (!schedule.enabled) return { started: false, reason: 'disabled' };
+  let last: any = null;
+  try { last = await io.loadLast(); } catch { last = null; }
+  const moment = Number(io.now) > 0 ? Number(io.now) : Date.now();
+  if (!categoryFixDue(schedule, last, moment)) return { started: false, reason: 'not-due' };
+  try {
+    const started = await io.start({ mode: schedule.mode, consensusModels: categoryFixPinnedModels(io.settings), trigger: 'periodic' });
+    if (started?.existing) return { started: false, reason: 'active' };
+    return { started: true, reason: 'started' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try { await io.saveLast({ at: new Date(moment).toISOString(), ok: false, trigger: 'periodic', mode: schedule.mode, error: message }); } catch {}
+    try { io.log?.(`category-fix periodic skipped: ${message}`); } catch {}
+    return { started: false, reason: 'failed' };
+  }
 }
