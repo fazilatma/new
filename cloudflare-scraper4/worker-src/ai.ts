@@ -273,7 +273,7 @@ function cloudflareModelIds(raw:string):string[]{
 }
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.191.0+'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.192.0+'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -361,10 +361,10 @@ async function categoryWithTask(task:AiTestTask,title:string,categories:AiCatego
   if(!category)throw new AiResponseError('مدل هیچ شناسهٔ معتبر از فهرست دسته‌بندی باسلام برنگرداند.',{...detail,ok:false,phase:'validation',categoryTitle:title,categoryId:0,allowedCategoryCount:prepared.allowed.length});
   return{...detail,categoryTitle:title,categoryId,categoryName:String(category.name),categoryPath:String(category.path||category.name),allowedCategoryCount:prepared.allowed.length};
 }
-export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[]){
+export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[],timeoutMs?:number){
   const ai=(await loadConnections()).ai,providers=providersFromAi(ai),[providerId,...modelParts]=String(modelKey||'').split('::'),model=modelParts.join('::'),provider=providers.find(item=>item.id===providerId&&item.enabled!==false&&item.models.includes(model));
   if(!String(title||'').trim())throw new Error('عنوان محصول برای دسته‌بندی لازم است.');if(!provider||!model)throw new Error('مدل انتخاب‌شده در تنظیمات فعال هوش مصنوعی پیدا نشد.');
-  const task={p:provider,model,key:`${provider.id}::${model}`,keyIndex:0,keyLabel:''};try{return{...await categoryWithTask(task,String(title).trim(),categories,ai.network),key:task.key}}catch(error){return aiTestFailure(error,task,String(title).trim())}
+  const task={p:provider,model,key:`${provider.id}::${model}`,keyIndex:0,keyLabel:''};try{return{...await categoryWithTask(task,String(title).trim(),categories,ai.network,timeoutMs),key:task.key}}catch(error){return aiTestFailure(error,task,String(title).trim())}
 }
 
 /** One model per provider per invocation keeps each provider at 1 in-flight request (avoids rate limits) while finishing the list faster. */
@@ -529,7 +529,7 @@ function firstJsonObject(text:string):any{
   return null;
 }
 export type DescriptionResult={ok:boolean;changed:boolean;fields:string[];model?:string;provider?:string;error?:string};
-export async function generateProductDescription(product: any, options: { force?: boolean; categories?: AiCategoryOption[]; categoryOnly?: boolean; skipCategory?: boolean; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
+export async function generateProductDescription(product: any, options: { timeoutMs?:number; force?: boolean; categories?: AiCategoryOption[]; categoryOnly?: boolean; skipCategory?: boolean; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
   const need = productNeedsEnrichment(product);
   // Complete category assignment before building the description prompt. A failed
   // description must not discard a successful category (including its save flag).
@@ -560,7 +560,7 @@ ${context}
 قوانین: همه‌چیز فارسی و روان باشد. اگر تنوع مشخصی از نام محصول قابل استنباط نیست، آرایهٔ variations را خالی بگذار. هیچ ادعای نادرست یا مشخصات فنی ساختگی ننویس.`;
 
   try {
-    const answer = await aiChat(picked.provider, picked.model, [{role: 'user', content: prompt}], undefined, undefined, 900);
+    const answer = await aiChat(picked.provider, picked.model, [{role: 'user', content: prompt}], undefined, options.timeoutMs, 900);
     const parsed = firstJsonObject(answer.text);
     if (!parsed) return { ok: false, changed: earlyFields.length > 0, fields: earlyFields, provider: picked.provider.id, model: picked.model, error: 'پاسخ مدل قابل تبدیل به JSON نبود.' };
     const fields: string[] = earlyFields;
@@ -583,7 +583,7 @@ ${context}
 }
 
 /** Resolve existing/manual -> learned -> validated model taxonomy, independently of descriptions. */
-export async function assignProductBasalamCategory(product: any, options: { categories?: AiCategoryOption[]; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
+export async function assignProductBasalamCategory(product: any, options: { timeoutMs?:number; categories?: AiCategoryOption[]; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
   const fields: string[] = [];
   if (!productNeedsBasalamCategory(product)) return { ok: true, changed: false, fields };
   const categories = options.categories || [];
@@ -607,7 +607,7 @@ export async function assignProductBasalamCategory(product: any, options: { cate
   try {
     const picked = await preferredAiChatModel();
     if (!picked || !categories.length) return { ok: false, changed: false, fields, error: 'مدل فعال یا فهرست دسته‌بندی باسلام در دسترس نیست.' };
-    const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, categories);
+    const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, categories, options.timeoutMs);
     const id = Number(suggestion.categoryId);
     if (!suggestion.ok || !categories.some(row => Number(row.id) === id))
       return { ok: false, changed: false, fields, error: suggestion.error || 'دسته‌بندی معتبر باسلام پیدا نشد.' };

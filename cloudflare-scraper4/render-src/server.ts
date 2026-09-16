@@ -38,7 +38,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.191.0+'; } catch { return process.env.npm_package_version || '1.191.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.192.0+'; } catch { return process.env.npm_package_version || '1.192.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -671,8 +671,15 @@ app.post('/api/test-connection/:target', async c => {
 });
 app.get('/api/categories/:target',async c=>{const target=c.req.param('target'),connections=await loadConnections();if(target==='woo'){const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'اتصال ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,items:any[]=[];for(let page=1;page<=20;page++){const r=await safeFetch(`${x.url}/wp-json/wc/v3/products/categories?per_page=100&page=${page}`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},3_000_000),rows=await r.json() as any[];if(!r.ok)return c.json({ok:false,error:`Woo HTTP ${r.status}`},502);items.push(...rows);if(rows.length<100)break}return c.json({ok:true,items})}if(target==='basalam'){try{const result=await destinationCategories(c.req.query('refresh')==='1');return c.json({ok:true,...result,total:result.items.length})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}}return c.json({ok:false,error:'Invalid target'},400)});
 app.get('/api/profiles', async c => c.json({ ok: true, profiles: await listProfiles() }));
-app.post('/api/profiles', async c => {
-  const profile = normalizeProfile(await c.req.json()); return c.json({ ok: true, profile: await saveProfile(profile) });
+app.post('/api/profiles',async c=>{
+ const profile=normalizeProfile(await c.req.json()),before=await getProfile(profile.id);
+ const saved=await saveProfile(profile);let job=null;
+ if(before&&['priceMode','priceValue','roundPrice'].some(key=>String((before as any)[key]??'')!==String((saved as any)[key]??''))){
+  const connections=await loadConnections(),woo=Boolean(connections.woo.url&&connections.woo.key&&connections.woo.secret),basalam=Boolean(connections.basalam.token&&connections.basalam.vendorId||connections.basalam.shops.some(s=>s.token&&s.vendorId));
+  const target=woo&&basalam?'both':woo?'woo':basalam?'basalam':'none';
+  if(target!=='none'){job=await createJob(saved.id,'sync',target,{priceSync:true});triggerLocalJobDrain();}
+ }
+ return c.json({ok:true,profile:saved,priceSyncJob:job,priceSync:job?'queued':'not-requested'});
 });
 app.post('/api/profiles/:id/results/apply',async c=>{
   const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);
@@ -790,7 +797,7 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 let aiEnrichRunning=false;
 let scheduler: NodeJS.Timeout | undefined;
 let backgroundStarted = false;
-const jobDispatcher = createJobDispatcher({ processOneJob, pollMs: config.workerPollMs, onError: error => console.error('Job dispatcher error', error) });
+const jobDispatcher = createJobDispatcher({ processOneJob, concurrency:async()=>Number((await getState<any>('settings',{}))?.general?.maxConcurrentProfiles)||2, pollMs: config.workerPollMs, onError: error => console.error('Job dispatcher error', error) });
 function triggerLocalJobDrain(): void { jobDispatcher.wake(); }
 function startBackground(): void {
   if (!config.runWorkerInWeb || !databaseReady || backgroundStarted) return;

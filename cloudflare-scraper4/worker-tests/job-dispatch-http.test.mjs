@@ -9,7 +9,7 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const sqliteAvailable=await import('node:sqlite').then(()=>true,()=>false);
-test('real Node HTTP extraction and sync buttons drain SQLite with continuous worker disabled', {skip:!sqliteAvailable,timeout:30000}, async()=>{
+test('real Node HTTP extraction and sync buttons drain SQLite with continuous worker disabled', {skip:!sqliteAvailable,timeout:60000}, async()=>{
   const cache=new URL('../node_modules/.cache/queue-http/',import.meta.url).pathname;
   await mkdir(cache,{recursive:true});const dir=await mkdtemp(join(cache,'server-'));
   const outfile=join(dir,'server.mjs'),sentFile=join(dir,'sent.json');
@@ -60,7 +60,14 @@ test('real Node HTTP extraction and sync buttons drain SQLite with continuous wo
     const delivery=await api(`/api/profiles/${profile.id}/sync`,{target:'woo'});
     for(let i=0;i<50;i++){({job}=await api('/api/jobs/'+delivery.job.id));if(!['queued','running'].includes(job.status))break;await delay(50)}
     assert.equal(job.status,'done',JSON.stringify(job));const sent=JSON.parse(await readFile(sentFile,'utf8'));assert.equal(sent.price,adjusted.products[0].price);assert.equal(sent.title,adjusted.products[0].title);
-
+    await api('/api/connections',{woo:{url:'https://woo.example',key:'offline-key',secret:'offline-secret'}});
+    const auto=await api('/api/profiles',{...profile,syncWoo:false,syncBasalam:false,priceMode:'percent',priceValue:30,titleSuffix:' (کد:41)'});
+    assert.equal(auto.priceSyncJob.kind,'sync');assert.equal(auto.priceSyncJob.target,'woo','all configured destinations, even with profile switch off');
+    for(let i=0;i<100;i++){({job}=await api('/api/jobs/'+auto.priceSyncJob.id));if(!['queued','running'].includes(job.status))break;await delay(50)}
+    assert.equal(job.status,'done',JSON.stringify(job));
+    const updated=await api(`/api/profiles/${profile.id}/products`),autoSent=JSON.parse(await readFile(sentFile,'utf8'));
+    assert.equal(updated.products[0].price,Math.round(base*1.3));assert.equal(autoSent.price,updated.products[0].price);assert.equal(autoSent.title,updated.products[0].title);
+    assert.ok(job.log.some(row=>row.level==='stage'&&row.message==='apply-results'));assert.ok(job.log.some(row=>row.level==='stage'&&row.message==='sync'));
 
   }finally{
     child.kill('SIGTERM');

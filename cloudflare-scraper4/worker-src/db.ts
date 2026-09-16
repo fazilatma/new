@@ -240,10 +240,11 @@ export async function deleteProfile(id: string): Promise<boolean> {
   ]); return true;
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean } = {}): Promise<Job> {
   const settings = await getState<any>('settings', {}), dedup = settings?.general?.queueDedup !== false;
   const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
-  if (active && dedup) {
+  if(_options.priceSync){const queued=await statement("SELECT * FROM jobs WHERE profile_id=? AND kind='sync' AND target=? AND status='queued' AND started_at IS NULL ORDER BY created_at LIMIT 1",[profileId,target]).first();if(queued)return jobFromRow(queued);}
+  if (active && dedup && !_options.priceSync) {
     const job = jobFromRow(active), staleMin = Math.max(1, Number(settings?.general?.queueDedupStale) || 120), age = Date.now() - new Date(job.updatedAt).getTime();
     if (age >= staleMin * 60_000) await updateJob(job.id, {status:'failed', phase:'stale-replaced', error:'کار قبلی همین پروفایل به‌خاطر گیرکردن طولانی بسته شد تا کار تازه جایگزین شود.', finishedAt: now(), stopRequested:true});
     else return job;
@@ -272,9 +273,9 @@ export async function setJobPriorities(ids:string[]):Promise<Record<string,numbe
 }
 function jobPriority(map:Record<string,number>,job:Job):number{return Number(map[job.id])||0;}
 export async function listQueuedJobs(limit=200):Promise<Job[]>{
-  const jobs=(await rows(`SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT ?`,[Math.max(1,limit)])).map(jobFromRow);
+  const jobs=(await rows(`SELECT * FROM jobs WHERE status='queued' ORDER BY started_at IS NULL,created_at LIMIT ?`,[Math.max(1,limit)])).map(jobFromRow);
   const map=await getJobPriorities();
-  return jobs.sort((a,b)=>jobPriority(map,b)-jobPriority(map,a)||a.createdAt.localeCompare(b.createdAt));
+  return jobs.sort((a,b)=>Number(Boolean(b.startedAt))-Number(Boolean(a.startedAt))||jobPriority(map,b)-jobPriority(map,a)||a.createdAt.localeCompare(b.createdAt));
 }
 // ─── Background-run priority map (task-manager drag order) ───────────────────
 // Ranks run kinds ('ai-test' | 'dedup' | 'category-all' | 'agent'): the first
@@ -289,10 +290,13 @@ export async function setRunPriorities(kinds:string[]):Promise<Record<string,num
   return map;
 }
 export async function claimJob(id?:string):Promise<Job|null>{
-  const candidate=id?await statement("SELECT id FROM jobs WHERE id=? AND status='queued'",[id]).first<{id:string}>():await statement("SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1").first<{id:string}>();
-  if(!candidate)return null;const timestamp=now();const changed=await run("UPDATE jobs SET status='running',phase='starting',started_at=?,updated_at=? WHERE id=? AND status='queued'",[timestamp,timestamp,candidate.id]);
+  const settings=await getState<any>('settings',{}),limit=Math.max(1,Math.min(8,Math.trunc(Number(settings?.general?.maxConcurrentProfiles)||2)));
+  const candidate=id?await statement("SELECT id FROM jobs WHERE id=? AND status='queued'",[id]).first<{id:string}>():await statement("SELECT id FROM jobs WHERE status='queued' ORDER BY started_at IS NULL,created_at LIMIT 1").first<{id:string}>();
+  if(!candidate)return null;const timestamp=now();
+  const changed=await run(`UPDATE jobs SET status='running',phase=CASE WHEN started_at IS NULL THEN 'starting' ELSE phase END,started_at=COALESCE(started_at,?),updated_at=? WHERE id=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM jobs busy WHERE busy.profile_id=jobs.profile_id AND busy.id<>jobs.id AND (busy.status='running' OR (busy.status='queued' AND busy.started_at IS NOT NULL AND (busy.created_at<jobs.created_at OR (busy.created_at=jobs.created_at AND busy.id<jobs.id))))) AND (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running') < ${limit} AND (started_at IS NOT NULL OR (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running' OR (status='queued' AND started_at IS NOT NULL)) < ${limit})`,[timestamp,timestamp,candidate.id]);
   return changed?getJob(candidate.id):null;
 }
+
 export async function updateJob(id:string,patch:Partial<Job>):Promise<void>{
   const allowed:Record<string,string>={status:'status',phase:'phase',total:'total',processed:'processed',added:'added',updated:'updated',failed:'failed',stopRequested:'stop_requested',error:'error',log:'log',finishedAt:'finished_at'};
   const entries=Object.entries(patch).filter(([key])=>allowed[key]);if(!entries.length)return;

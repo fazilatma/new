@@ -272,10 +272,11 @@ export async function deleteProfile(id: string): Promise<boolean> {
   return Boolean(result.rowCount);
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean } = {}): Promise<Job> {
   const settings=await getState<any>('settings',{}),staleMin=Math.max(1,Number(settings?.general?.queueDedupStale)||120);
   const active=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]);
-  if(active.rows[0]){
+  if(_options.priceSync){const queued=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND kind='sync' AND target=$2 AND status='queued' AND started_at IS NULL ORDER BY created_at LIMIT 1",[profileId,target]);if(queued.rows[0])return jobFromRow(queued.rows[0]);}
+  if(active.rows[0]&&!_options.priceSync){
     const job=jobFromRow(active.rows[0]),age=Date.now()-new Date(job.updatedAt).getTime();
     if(age>=staleMin*60_000) await updateJob(job.id,{status:'failed',phase:'stale-replaced',error:'Previous active job for this profile was stale and was replaced.',finishedAt:new Date().toISOString(),stopRequested:true});
     else return job;
@@ -301,23 +302,22 @@ export async function listJobs(limit = 50): Promise<Job[]> {
 }
 
 export async function claimJob(): Promise<Job | null> {
-  if (useSqlite) {
-    // A single UPDATE is atomic across processes and does not leave a shared
-    // SQLite connection in an open transaction across JavaScript awaits.
-    const result = await query(`UPDATE jobs SET status='running',phase='starting',started_at=datetime('now'),updated_at=datetime('now')
-      WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY created_at,id LIMIT 1) AND status='queued' RETURNING *`);
-    return result.rows[0] ? jobFromRow(result.rows[0]) : null;
+  const settings=await getState<any>('settings',{}),limit=Math.max(1,Math.min(8,Math.trunc(Number(settings?.general?.maxConcurrentProfiles)||2)));
+  const eligible=`NOT EXISTS (SELECT 1 FROM jobs busy WHERE busy.profile_id=jobs.profile_id AND busy.id<>jobs.id AND (busy.status='running' OR (busy.status='queued' AND busy.started_at IS NOT NULL AND (busy.created_at<jobs.created_at OR (busy.created_at=jobs.created_at AND busy.id<jobs.id))))) AND (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running') < ${limit} AND (started_at IS NOT NULL OR (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running' OR (status='queued' AND started_at IS NOT NULL)) < ${limit})`;
+  if(useSqlite){
+    const result=await query(`UPDATE jobs SET status='running',phase=CASE WHEN started_at IS NULL THEN 'starting' ELSE phase END,started_at=COALESCE(started_at,datetime('now')),updated_at=datetime('now') WHERE id=(SELECT id FROM jobs WHERE status='queued' AND ${eligible} ORDER BY started_at IS NULL,created_at,id LIMIT 1) AND status='queued' RETURNING *`);
+    return result.rows[0]?jobFromRow(result.rows[0]):null;
   }
-  const client = await pool.connect();
-  try {
+  const client=await pool.connect();
+  try{
     await client.query('BEGIN');
-    const { rows } = await client.query(`SELECT id FROM jobs WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`);
-    if (!rows[0]) { await client.query('COMMIT'); return null; }
-    const result = await client.query(`UPDATE jobs SET status='running',phase='starting',started_at=now(),updated_at=now() WHERE id=$1 RETURNING *`, [rows[0].id]);
-    await client.query('COMMIT');
-    return jobFromRow(result.rows[0]);
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
-  finally { client.release(); }
+    // Serialize admission, not processing: counting running jobs under row locks alone races.
+    await client.query('LOCK TABLE jobs IN SHARE ROW EXCLUSIVE MODE');
+    const {rows}=await client.query(`SELECT id FROM jobs WHERE status='queued' AND ${eligible} ORDER BY started_at IS NULL,created_at,id LIMIT 1 FOR UPDATE`);
+    if(!rows[0]){await client.query('COMMIT');return null}
+    const result=await client.query(`UPDATE jobs SET status='running',phase=CASE WHEN started_at IS NULL THEN 'starting' ELSE phase END,started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1 RETURNING *`,[rows[0].id]);
+    await client.query('COMMIT');return jobFromRow(result.rows[0]);
+  }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
 }
 
 export async function updateJob(id: string, patch: Partial<Job>): Promise<void> {

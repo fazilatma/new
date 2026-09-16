@@ -1,4 +1,5 @@
-import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
+import { createAiStageRunner } from './job-ai-stage.js';
+import { applyStoredResultSettings, claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
 import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
 import { destinationCategories } from './maintenance.js';
@@ -10,10 +11,10 @@ import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
 type ScrapeCheckpoint={rawPricing?:boolean;page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean;engineSelectorsSaved?:boolean};
-type SyncCheckpoint={offset:number};
+type SyncCheckpoint={offset:number;applied?:boolean;applyAfter?:string};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
-// Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
-function chunkSize():number{return Math.min(50,Math.max(1,Number(getEnv().JOB_CHUNK_SIZE)||10))}
+// Small chunks leave room for stage progress, AI checkpoints and destination requests.
+function chunkSize():number{return Math.min(50,Math.max(1,Number(getEnv().JOB_CHUNK_SIZE)||2))}
 function preserveExisting(fresh:Product,previous:Product|null):Product{
   if(!previous)return fresh;
   return {...fresh,
@@ -43,7 +44,7 @@ async function detailProbe(sample:Product,selectors:any,indirect:boolean):Promis
 }
 async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job,onlyMissing=true):Promise<number>{
   try{
-    const suggested=await suggestSelectors(url,mode),selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));
+    const suggested=(await runAiStage(job!,mode+'-selectors',{},async()=>({ok:true,value:await suggestSelectors(url,mode)}))).value||{selectors:{}},selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));
     if(!entries.length)return 0;
     profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];
     await saveProfile({...profile,updatedAt:new Date().toISOString()});
@@ -54,7 +55,7 @@ async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'
 type JobLog=Job['log'][number];
 function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,price:Number(product.price)||undefined,...extra}}
 function append(job:Job,text:string,level='info',event?:JobLog['event'],item?:JobLog['item']){job.log.push({at:new Date().toISOString(),level,message:text,event,item});if(job.log.length>1500)job.log=job.log.slice(-1500)}
-async function save(job:Job){const current=await getJob(job.id);if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return;if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')}await updateJob(job.id,{status:job.status,phase:job.phase,total:job.total,processed:job.processed,added:job.added,updated:job.updated,failed:job.failed,error:job.error,log:job.log,finishedAt:job.finishedAt})}
+async function save(job:Job){const lastStage=[...job.log].reverse().find(row=>row.level==='stage');if(lastStage?.message!==job.phase)append(job,job.phase,'stage');const current=await getJob(job.id);if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return;if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')}await updateJob(job.id,{status:job.status,phase:job.phase,total:job.total,processed:job.processed,added:job.added,updated:job.updated,failed:job.failed,error:job.error,log:job.log,finishedAt:job.finishedAt});if(['done','failed','stopped'].includes(job.status))await deleteState('job_ai:'+job.id);}
 
 export async function enqueueJob(job:Job,waitUntil?:(promise:Promise<unknown>)=>void):Promise<void>{
   const queue=getEnv().JOBS;
@@ -224,9 +225,9 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     if(pending.length){
       const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
       let filled=0,failed=0,reported='';
-      await mapLimit(pending,Math.max(1,Number(getEnv().AI_DESCRIPTION_CONCURRENCY)||2),async product=>{
+      await mapLimit(pending,1,async product=>{
         if(await stopRequested(job.id))return;
-        try{const result=await generateProductDescription(product,{skipCategory:true});if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
+        try{const result=await runAiStage(job,'ai-descriptions',product,(copy,timeoutMs)=>generateProductDescription(copy,{skipCategory:true,timeoutMs}));if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
         catch(error){failed++;if(!reported)reported=message(error)}
       });
       if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
@@ -246,6 +247,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     }
     if(product.stock===0)append(job,`${product.title}: موجودی مبدأ به صفر رسیده است.`,'warning','out-of-stock',reportItem(product));
 
+    job.phase='save';append(job,'save','stage');
     let saved=false;
     try{const result=await upsertProduct(profile.id,product,{source:true});result==='added'?job.added++:job.updated++;append(job,`${product.title}: ${result==='added'?'محصول جدید ثبت شد':'اطلاعات محصول به‌روزرسانی شد'}`,'info',result,reportItem(product));saved=true}
     catch(error){const errorText=message(error);checkpoint.retireSafe=false;job.failed++;append(job,`${product.title}: ذخیره: ${errorText}`,'error','failed',reportItem(product,{error:errorText}))}
@@ -272,13 +274,14 @@ async function finishScrape(job:Job,profile:Profile,checkpoint:ScrapeCheckpoint)
 async function runSyncChunk(job:Job,profile:Profile):Promise<boolean>{
   const key=stateKey(job.id),checkpoint=await getState<SyncCheckpoint>(key,{offset:0});
   if(await stopRequested(job.id)){job.status='stopped';return false}
+  if(!checkpoint.applied){job.phase='apply-results';await save(job);const applied=await applyStoredResultSettings(profile,checkpoint.applyAfter||'');if(applied.conflicts)throw Error('محصولات همزمان تغییر کردند؛ برای اعمال کامل قیمت دوباره اجرا کنید.');checkpoint.applyAfter=applied.next||'';checkpoint.applied=!applied.next;await setState(key,checkpoint);await save(job);return true}
   job.phase='sync';
   const result=await listProducts(profile.id,chunkSize(),checkpoint.offset,'');job.total=result.total;
   const patterns=await codeSuffixPatterns();
   for(const product of result.products){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
     if(!hasCodeSuffix(String(product.title||''),patterns)){
-      append(job,`${product.title}: بدون پسوند «(کد ایکس)» — هماهنگ‌سازی نشد.`,'info');
+      append(job,`${product.title}: بدون پسوند «(کد ایکس)» — هماهنگ‌سازی نشد.`,'info','sync-skipped',reportItem(product,{target:job.target,error:'پسوند کد ارسال معتبر نیست'}));
       checkpoint.offset++;job.processed++;continue;
     }
     await syncProduct(job,profile,product);
@@ -297,13 +300,15 @@ async function codeSuffixPatterns():Promise<RegExp[]>{
   return suffixPatterns(parseSuffixFormats(settings?.dedup?.suffixFormats||''));
 }
 async function syncProduct(job:Job,profile:Profile,product:Product):Promise<void>{
-  if(product.price<=0||(profile.minPrice&&product.price<profile.minPrice)){append(job,`${product.title}: قیمت نهایی معتبر یا بالاتر از حداقل ارسال نیست؛ در نتایج باقی ماند و ارسال نشد.`,'warning');return;}
-  if(job.target==='woo'||job.target==='both')try{const action=await syncWoo(product,profile);append(job,`${product.title} [WooCommerce]: ${action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'woo',shop:'فروشگاه ووکامرس'}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [WooCommerce]: ${errorText}`,'error','failed',reportItem(product,{target:'woo',error:errorText}))}
+  if(job.target==='none')return;job.phase='sync';await save(job);
+  if(product.price<=0||(profile.minPrice&&product.price<profile.minPrice)){append(job,`${product.title}: قیمت نهایی معتبر یا بالاتر از حداقل ارسال نیست؛ در نتایج باقی ماند و ارسال نشد.`,'warning','sync-skipped',reportItem(product,{target:job.target,error:'قیمت کمتر از حداقل ارسال'}));return;}
+  if(job.target==='woo'||job.target==='both'){job.phase='sync-woo';await save(job);try{const action=await syncWoo(product,profile);append(job,`${product.title} [WooCommerce]: ${action==='created'?'ایجاد':'به‌روزرسانی'} شد.`,'info',action==='created'?'sync-created':'sync-updated',reportItem(product,{target:'woo',shop:'فروشگاه ووکامرس'}))}catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [WooCommerce]: ${errorText}`,'error','failed',reportItem(product,{target:'woo',error:errorText}))}}
   // Basalam publishes to EVERY stall. Each stall is reported on its own line and
   // a failure in one must not abandon the others: the whole loop used to sit in
   // a single try/catch, so one bad stall silently cancelled the rest and hid the
   // successes that had already happened.
   if(job.target==='basalam'||job.target==='both'){
+    job.phase='sync-basalam';await save(job);
     let results:Awaited<ReturnType<typeof syncBasalam>>=[];
     try{results=await syncBasalam(product,profile)}
     catch(error){const errorText=message(error);job.failed++;append(job,`${product.title} [Basalam]: ${errorText}`,'error','failed',reportItem(product,{target:'basalam',error:errorText}))}
@@ -332,12 +337,12 @@ async function categorizeExtractedProducts(job: Job, profile: { basalamCategoryI
   const previousPhase = job.phase;
   job.phase = 'basalam-categories'; await save(job);
   let enrichCategories: any[] = [];
-  try { enrichCategories = (await destinationCategories()).items; } catch { /* manual/learned categories still work offline */ }
+  try { enrichCategories = (await runAiStage(job,'category-taxonomy',{},async()=>({ok:true,value:await destinationCategories()}))).value?.items||[]; } catch { /* manual/learned categories still work offline */ }
   let filled = 0, failed = 0, reported = '';
-  await mapLimit(pending, 2, async product => {
+  await mapLimit(pending, 1, async product => {
     if (await stopRequested(job.id)) return;
     try {
-      const result = await assignProductBasalamCategory(product, { categories: enrichCategories, profileCategoryId: profile.basalamCategoryId });
+      const result = await runAiStage(job,'basalam-categories',product,(copy,timeoutMs)=>assignProductBasalamCategory(copy, { categories: enrichCategories, profileCategoryId: profile.basalamCategoryId, timeoutMs }));
       if (result.changed) filled++;
       if (!result.ok) { failed++; if (!reported) reported = result.error || ''; }
     } catch (error) { failed++; if (!reported) reported = message(error); }
@@ -345,4 +350,11 @@ async function categorizeExtractedProducts(job: Job, profile: { basalamCategoryI
   if (filled) append(job, `دسته‌بندی باسلام ${filled} محصول پیش از تولید توضیحات تعیین شد.`);
   if (failed) append(job, `دسته‌بندی باسلام ${failed} محصول تعیین نشد${reported ? ': ' + reported : ''}؛ استخراج ادامه دارد.`, 'warning');
   job.phase = previousPhase; await save(job);
+}
+
+const aiStageRunners=new WeakMap<Job,ReturnType<typeof createAiStageRunner>>();
+async function runAiStage(job:Job,stage:string,product:any,work:(copy:any,timeoutMs:number)=>Promise<any>):Promise<any>{
+ let runner=aiStageRunners.get(job);
+ if(!runner){const key='job_ai:'+job.id,states=await getState<any>(key,{}),settings=await getState<any>('settings',{});runner=createAiStageRunner({settings,states,persist:()=>setState(key,states),log:(_stage,text)=>append(job,text,'warning'),progress:()=>save(job)});aiStageRunners.set(job,runner)}
+ return runner(stage,product,work);
 }

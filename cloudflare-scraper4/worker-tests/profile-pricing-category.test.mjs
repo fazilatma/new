@@ -130,7 +130,8 @@ async function pipeline(runtime,options={}){
   const job={id:'j',profileId:'p',kind:options.syncOnly?'sync':'scrape',target:options.target||'none',status:'running',log:[],total:0,processed:0,added:0,updated:0,failed:0};
   const saved=[],states=new Map(),snapshots=[],syncs=[];
   const list=async()=>({url:BASE,nextUrl:'',usedEngine:'cheerio',products:structuredClone(options.products||[product()])});
-  const io={...ai,...twins[runtime],
+  const {createAiStageRunner}=await compileFunctions(await read('worker-src/job-ai-stage.ts'),['createAiStageRunner']);
+  const io={...ai,...twins[runtime],createAiStageRunner,applyStoredResultSettings:async()=>({changed:0,conflicts:0,next:null}),
     scrapeListPage:list,scrapeListWithMeta:list,
     listSelectorsStatus:()=> 'custom',suggestSelectors:async()=>({selectors:options.rescue?{shortDesc:'.short',price:'.detail-price'}:{}}),
     claimJob:async()=>{job.status='running';return job},getJob:async()=>job,getProfile:async()=>profile,
@@ -144,6 +145,7 @@ async function pipeline(runtime,options={}){
     getEnv:()=>({JOB_CHUNK_SIZE:options.chunkSize||1}),pushJobFinished:async()=>{},
     message:e=>e.message,hasCodeSuffix:()=>true,parseSuffixFormats:()=>[],suffixPatterns:()=>[]
   };
+  if(options.aiFailure){io.assignProductBasalamCategory=async()=>{ai.events.push({type:'category-failed'});return{ok:false,error:'offline'}};io.generateProductDescription=async()=>{ai.events.push({type:'description-failed'});return{ok:false,error:'offline'}}}
   if(runtime==='render')delete io.message;
   const source=await read(`${runtime}-src/processor.ts`);
   const name=runtime==='render'?'processOneJob':'processJob';
@@ -219,4 +221,9 @@ for(const runtime of ['render','worker']){
 test('worker: legacy adjusted checkpoint is re-extracted instead of compounded',async()=>{
   const checkpoint={page:1,url:BASE,nextUrl:'',index:0,seen:[],retireSafe:true,products:[product({price:110000,title:'Shoe (code)'})]};
   const run=await pipeline('worker',{detail:false,checkpoint});assert.equal(run.saved[0].price,110000);assert.equal(run.saved[0].title,'Shoe (code)');
+});
+
+for(const runtime of ['render','worker'])test(runtime+': failed AI substages are skipped while saved-product delivery continues',async()=>{
+ const run=await pipeline(runtime,{aiFailure:true,target:'woo',products:Array.from({length:5},(_,i)=>product({sourceKey:'p'+i}))});
+ assert.equal(run.saved.length,5);assert.equal(run.syncs.length,5);assert.equal(run.events.filter(e=>e.type==='category-failed').length,3);assert.equal(run.events.filter(e=>e.type==='description-failed').length,3);assert.equal(run.job.status,'done');
 });

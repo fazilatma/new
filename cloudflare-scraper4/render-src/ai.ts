@@ -69,7 +69,7 @@ export function providerWithKey(provider:Provider,index=0):Provider{
   return{...provider,apiKey:token||provider.apiKey};
 }
 
-export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
+export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200,timeoutMs?:number){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',signal:AbortSignal.timeout(Math.max(1000,Number(timeoutMs)||30000)),headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
 
 /**
  * Chat with the whole conversation instead of a flattened transcript.
@@ -80,7 +80,7 @@ export async function aiCall(provider:Provider,model:string,prompt:string,maxTok
  * payload; the request shape (endpoint, guard, timeout, response parsing) stays identical to
  * aiCall so the AI-endpoint URL rule keeps applying.
  */
-export async function aiChatWithMessages(provider:Provider,model:string,messages:{role:string;content:string}[],maxTokens=1200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages,max_tokens:Math.max(1,Number(maxTokens)||1200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
+export async function aiChatWithMessages(provider:Provider,model:string,messages:{role:string;content:string}[],maxTokens=1200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',signal:AbortSignal.timeout(Math.max(1000,Number(timeoutMs)||30000)),headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages,max_tokens:Math.max(1,Number(maxTokens)||1200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
 export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),runId:randomUUID(),prompt,categoryTitle:'',onlyCandidates,results});return results}
 /**
  * Server-side AI test run for the Node runtime.
@@ -406,7 +406,7 @@ export type DescriptionResult = {
  * master AI model. Only empty fields are written: a real value scraped from the
  * source site is never overwritten by generated text.
  */
-export async function generateProductDescription(product: any, options: { force?: boolean; categories?: AiCategoryOption[]; categoryOnly?: boolean; skipCategory?: boolean; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
+export async function generateProductDescription(product: any, options: { timeoutMs?:number; force?: boolean; categories?: AiCategoryOption[]; categoryOnly?: boolean; skipCategory?: boolean; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
   const need = productNeedsEnrichment(product);
   // Complete category assignment before building the description prompt. A failed
   // description must not discard a successful category (including its save flag).
@@ -437,7 +437,7 @@ ${context}
 قوانین: همه‌چیز فارسی و روان باشد. اگر تنوع مشخصی از نام محصول قابل استنباط نیست، آرایهٔ variations را خالی بگذار. هیچ ادعای نادرست یا مشخصات فنی ساختگی ننویس.`;
 
   try {
-    const answer = await aiCall(picked.provider, picked.model, prompt, 900);
+    const answer = await aiCall(picked.provider, picked.model, prompt, 900, options.timeoutMs);
     const parsed = firstJsonObject(answer.text);
     if (!parsed) return { ok: false, changed: earlyFields.length > 0, fields: earlyFields, provider: picked.provider.id, model: picked.model, error: 'پاسخ مدل قابل تبدیل به JSON نبود.' };
     const fields: string[] = earlyFields;
@@ -460,7 +460,7 @@ ${context}
 }
 
 /** Resolve existing/manual -> learned -> validated model taxonomy, independently of descriptions. */
-export async function assignProductBasalamCategory(product: any, options: { categories?: AiCategoryOption[]; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
+export async function assignProductBasalamCategory(product: any, options: { timeoutMs?:number; categories?: AiCategoryOption[]; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
   const fields: string[] = [];
   if (!productNeedsBasalamCategory(product)) return { ok: true, changed: false, fields };
   const categories = options.categories || [];
@@ -484,7 +484,7 @@ export async function assignProductBasalamCategory(product: any, options: { cate
   try {
     const picked = await preferredAiChatModel();
     if (!picked || !categories.length) return { ok: false, changed: false, fields, error: 'مدل فعال یا فهرست دسته‌بندی باسلام در دسترس نیست.' };
-    const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, categories);
+    const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, categories, options.timeoutMs);
     const id = Number(suggestion.categoryId);
     if (!suggestion.ok || !categories.some(row => Number(row.id) === id))
       return { ok: false, changed: false, fields, error: suggestion.error || 'دسته‌بندی معتبر باسلام پیدا نشد.' };
@@ -503,13 +503,13 @@ export async function assignProductBasalamCategory(product: any, options: { cate
  * Always resolves (never throws on model errors) so bulk voting can continue
  * with the remaining models; only a missing title or unknown modelKey throws.
  */
-export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[]){
+export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[],timeoutMs?:number){
   const providers=await aiProviders(),[providerId,...modelParts]=String(modelKey||'').split('::'),model=modelParts.join('::'),provider=providers.find(item=>item.id===providerId&&item.enabled!==false&&item.models.includes(model));
   if(!String(title||'').trim())throw new Error('عنوان محصول برای دسته‌بندی لازم است.');
   if(!provider||!model)throw new Error('مدل انتخاب‌شده در تنظیمات فعال هوش مصنوعی پیدا نشد.');
   const key=`${provider.id}::${model}`,categoryTitle=String(title).trim();
   try{
-    const prepared=categoryPrompt(categoryTitle,categories),detail=await aiCall(provider,model,prepared.prompt),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
+    const prepared=categoryPrompt(categoryTitle,categories),detail=await aiCall(provider,model,prepared.prompt,200,timeoutMs),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
     if(!category)return{ok:false,key,provider:provider.id,model,categoryTitle,categoryId:0,allowedCategoryCount:prepared.allowed.length,text:detail.text,latencyMs:detail.latencyMs,error:'مدل هیچ شناسهٔ معتبر از فهرست دسته‌بندی باسلام برنگرداند.'};
     return{ok:true,key,provider:provider.id,model,text:detail.text,latencyMs:detail.latencyMs,categoryTitle,categoryId,categoryName:String(category.name),categoryPath:String(category.path||category.name),allowedCategoryCount:prepared.allowed.length};
   }catch(error){return{ok:false,key,provider:provider.id,model,categoryTitle,error:error instanceof Error?error.message:String(error)}}

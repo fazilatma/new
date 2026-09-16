@@ -271,13 +271,13 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
 
 export async function syncBasalam(product:Product,profile:Profile):Promise<BasalamSyncResult[]>{
   const c=(await loadConnections()).basalam;
-  if(!c.token||!c.vendorId)throw new Error('تنظیمات باسلام کامل نیست');
+  if(!(c.token&&c.vendorId)&&!c.shops.some(s=>s.token&&s.vendorId))throw new Error('تنظیمات باسلام کامل نیست');
   const learned=c.autoCategory?await findLearnedCategory(product.title):null;
   const categories=[product.basalamCategoryId,profile.basalamCategoryId,learned?.categoryId,c.categoryId,...(profile.basalamFallbackCategoryIds||[]),...c.fallbackCategoryIds].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index);
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
-  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0},...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
+  const accounts=[...(c.token&&c.vendorId?[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0}]:[]),...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
   for(const account of accounts){
-    const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
+    const accountKey=String(account.vendorId),legacy=String(account.vendorId)===String(c.vendorId)?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;
     const action=existing?'updated':'created';
     const price=basalamPrice(product,Number(account.pricePercent)||0);
@@ -301,7 +301,7 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
       results.push({shop:account.name,action,id:0,transport:'api',price,error:error instanceof Error?error.message:String(error),fallback:fallback||undefined});
       continue;
     }
-    if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(account===accounts[0])await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
+    if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(String(account.vendorId)===String(c.vendorId))await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
     results.push({shop:account.name,action,id:remoteId,transport,price,fallback:transport==='api'?fallback:undefined});
   }
   return results;

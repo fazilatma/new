@@ -1,6 +1,7 @@
 type DispatcherIO = {
   processOneJob(): Promise<boolean>;
   pollMs: number;
+  concurrency?(): Promise<number>;
   onError(error: unknown): void;
   schedule?(fn: () => void, delay: number): ReturnType<typeof setTimeout>;
   cancel?(timer: ReturnType<typeof setTimeout>): void;
@@ -9,7 +10,7 @@ type DispatcherIO = {
 /** One web-process runner for both manual wake-ups and background polling.
  * Database claims remain atomic across separate web/worker processes.
  */
-export function createJobDispatcher(io: DispatcherIO) {
+function createSingleJobDispatcher(io: DispatcherIO) {
   const schedule = io.schedule || ((fn, delay) => setTimeout(fn, delay));
   const cancel = io.cancel || clearTimeout;
   const pollMs = Math.max(500, Number(io.pollMs) || 2000);
@@ -62,4 +63,11 @@ export function createJobDispatcher(io: DispatcherIO) {
     stop() { stopped = true; continuous = false; if (timer !== undefined) cancel(timer); timer = undefined; },
     status() { return { mode: 'node', running, scheduled: timer !== undefined, continuous, lastAttemptAt, lastError, processed }; }
   };
+}
+
+/** Database admission is authoritative across web and standalone worker processes. */
+export function createJobDispatcher(io:DispatcherIO){
+  if(!io.concurrency)return createSingleJobDispatcher(io);
+  const lanes=Array.from({length:8},(_,index)=>createSingleJobDispatcher({...io,processOneJob:async()=>index<Math.max(1,Math.min(8,Number(await io.concurrency!())||2))?io.processOneJob():false}));
+  return {wake(){lanes.forEach(l=>l.wake())},start(){lanes.forEach(l=>l.start())},stop(){lanes.forEach(l=>l.stop())},status(){const states=lanes.map(l=>l.status());return {...states[0],running:states.some(s=>s.running),scheduled:states.some(s=>s.scheduled),lastError:states.some(s=>s.lastError),processed:states.reduce((n,s)=>n+s.processed,0),activeLanes:states.filter(s=>s.running).length}}};
 }

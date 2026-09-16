@@ -242,13 +242,13 @@ async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,e
   return{id:newId,body}}
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
-  const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');
+  const c=(await loadConnections()).basalam;if(!(c.token&&c.vendorId)&&!c.shops.some(s=>s.token&&s.vendorId))throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');
   const learned=c.autoCategory?await findLearnedCategory(product.title):null,categoryId=product.basalamCategoryId||profile.basalamCategoryId||learned?.categoryId||c.categoryId||undefined;
   const categories=([categoryId,...((profile as any).basalamFallbackCategoryIds||[]),...((c as any).fallbackCategoryIds||[])].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index));
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
-  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0},...c.shops.filter(s=>s.token&&s.vendorId)];const results:BasalamSyncResult[]=[];
+  const accounts=[...(c.token&&c.vendorId?[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0}]:[]),...c.shops.filter(s=>s.token&&s.vendorId)];const results:BasalamSyncResult[]=[];
   for(const account of accounts){
-    const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
+    const accountKey=String(account.vendorId),legacy=String(account.vendorId)===String(c.vendorId)?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;
     const action=existing?'updated':'created';
     const price=basalamPrice(product,Number(account.pricePercent)||0);
@@ -264,7 +264,7 @@ export async function syncBasalam(product: Product, profile: Profile): Promise<B
       results.push({shop:account.name,action,id:0,transport:'api',price,error:error instanceof Error?error.message:String(error),fallback:fallback||undefined});
       continue;
     }
-    if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(account===accounts[0])await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
+    if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(String(account.vendorId)===String(c.vendorId))await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
     results.push({shop:account.name,action,id:remoteId,transport,price,fallback:transport==='api'?fallback:undefined});
   }
   return results;

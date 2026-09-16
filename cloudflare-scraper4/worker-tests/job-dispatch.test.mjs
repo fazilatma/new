@@ -60,7 +60,7 @@ test('real SQLite concurrent claims never nest transactions or claim a job twice
 });
 test('real SQLite claims are exclusive between separate worker processes',{skip:!sqliteAvailable},async()=>{
   await databaseScript(`await db.pool.query("DELETE FROM jobs");for(let i=0;i<20;i++)await db.pool.query("INSERT INTO jobs(id,profile_id,kind) VALUES($1,'p','sync')",['job-'+i]);console.log('true');await db.pool.end();`);
-  const worker=`const ids=[];for(;;){const job=await db.claimJob();if(!job)break;ids.push(job.id)}console.log(JSON.stringify(ids));await db.pool.end();`;
+  const worker=`const ids=[];for(;;){const job=await db.claimJob();if(!job)break;ids.push(job.id);await db.updateJob(job.id,{status:'done'})}console.log(JSON.stringify(ids));await db.pool.end();`;
   const ids=(await Promise.all([databaseScript(worker),databaseScript(worker)])).flat();
   assert.equal(ids.length,20);assert.equal(new Set(ids).size,20);
 });
@@ -105,4 +105,8 @@ test('real SQLite sync product loader uses portable SQL and ignores null/corrupt
     await db.pool.query("INSERT INTO products(profile_id,source_key,data,title) VALUES('p','null','null','Null'),('p','corrupt','broken','Bad'),('p','array','[]','Array')");
     console.log(JSON.stringify(await db.allProducts('p')));await db.pool.end();`);
   assert.deepEqual(rows.map(row=>row.sourceKey),['good']);
+});
+test('price changes queue one follow-up behind an active profile and coalesce pending sends',{skip:!sqliteAvailable},async()=>{
+ const data=await databaseScript(`await db.pool.query("DELETE FROM jobs");const active=await db.createJob('p','scrape','none');await db.claimJob();const send=await db.createJob('p','sync','woo',{priceSync:true});const again=await db.createJob('p','sync','woo',{priceSync:true});const blocked=await db.claimJob();await db.updateJob(active.id,{status:'done'});const next=await db.claimJob();console.log(JSON.stringify({active:active.id,send:send.id,again:again.id,blocked,next:next.id}));await db.pool.end();`);
+ assert.notEqual(data.active,data.send);assert.equal(data.send,data.again);assert.equal(data.blocked,null);assert.equal(data.next,data.send);
 });
