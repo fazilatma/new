@@ -910,3 +910,24 @@ released `1.183.0` and this branch moved again — see the note above.
   can run at once); `worker-tests/deployer-local-panel.test.mjs` (8 tests) checks the
   allow-list, the argument guards, token leakage, and that every button in the new section maps to a handler
   and to a proxied action. `extraction.test.mjs` gained the new drawer title in its ordered list.
+
+## Live extraction diagnosis
+
+The extraction-diagnosis window now uses the authenticated POST endpoint
+`/api/profiles/:id/extraction-diagnostic?live=1`. Node and Cloudflare send NDJSON
+progress events as real diagnostic stages start and finish, followed by the
+complete report **after** selector persistence. The existing endpoint without
+`live=1` still returns the legacy JSON report.
+
+The window shows an indeterminate activity bar (not a fabricated completion
+percentage), stage status cards, elapsed time, counters and an event log. Closing
+and reopening the modal in the same page reattaches the current run rather than
+starting another one. Navigation/reload is not a durable background-job resume:
+a truncated stream is marked incomplete, never successful.
+
+For VPS installations behind Nginx or another reverse proxy, disable response
+buffering for this endpoint, allow streaming responses and choose a read timeout
+appropriate for a diagnostic run. The application sends `X-Accel-Buffering: no`
+and `Cache-Control: no-store, no-transform`, with a heartbeat every five seconds
+while asynchronous operations are pending. A proxy that ignores these headers
+may delay visual updates until completion.

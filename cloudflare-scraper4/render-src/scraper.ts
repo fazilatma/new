@@ -1,3 +1,4 @@
+import { diagnosticProgress, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import * as cheerio from 'cheerio';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -2226,16 +2227,18 @@ export async function diagnoseBenchmarkEngine(
   return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
 };
 
-export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
+export async function diagnoseExtraction(profile: Profile, urlOverride = '', onProgress?: DiagnosticObserver) {
   const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
   const stages: any[] = [], recommendations: string[] = [];
-  const add = (name: string, ok: boolean, summary: string, details: any = {}) => stages.push({ name, ok, summary, ...details });
+  const progress = diagnosticProgress(onProgress);
+  const add = (name: string, ok: boolean, summary: string, details: any = {}) => { const stage = { name, ok, summary, ...details }; stages.push(stage); progress.finish(stage); };
   if (!url) {
     add('configuration', false, 'آدرس مبدأ خالی است.');
     return { ok: false, profileId: profile.id, url, stages, selectorsToSave: {}, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
   }
   let page: { text: string; url: string };
   try {
+    progress.begin('network', 'در حال اتصال به مبدأ و دریافت HTML…', {url, indirect: Boolean(profile.networkIndirect)});
     page = await safeText(url, 4_000_000, { indirect: Boolean(profile.networkIndirect) });
     const bytes = Buffer.byteLength(page.text, 'utf8');
     const title = normalize(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ') || '');
@@ -2256,6 +2259,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const selectorsToSave: Record<string, string> = {};
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
+    progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
     const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
@@ -2286,6 +2290,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   // the manual suggest button when auto-save had nothing to persist.
   if (!products.length) {
     try {
+      progress.begin('selector-discovery', 'در حال جست‌وجوی ساختار کارت‌های محصول…');
       const discovery = discoverListSelectorsFromHtml(page.text, page.url);
       const proposed = Object.entries(discovery.selectors).filter(([, value]) => String(value || '').trim());
       if (discovery.method !== 'none' && proposed.length >= 2 && discovery.selectors.container && discovery.selectors.title) {
@@ -2296,10 +2301,12 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
       } else {
         add('selector-discovery', false, 'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.', { method: discovery.method });
       }
-    } catch { /* informational only */ }
+    } catch(error) { progress.finish({name:'selector-discovery',ok:false,summary:String(error)}); }
   }
+  progress.begin('selector-evidence', 'در حال بررسی تک‌تک سلکتورها روی HTML واقعی…');
   const evidence: Record<string, unknown> = {};
   for (const field of ['container', 'title', 'price', 'link', 'image'] as const) {
+    progress.begin('selector-evidence', 'در حال بررسی سلکتور '+field, {field});
     const selector = String((profile.selectors as any)?.[field] || '').trim();
     if (!selector) { evidence[field] = { ok: false, count: 0, error: 'سلکتور خالی است' }; continue; }
     try {
@@ -2335,6 +2342,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     ? 'سلکتور ظرف فقط ' + containerCount + ' مورد در کل صفحه پیدا کرد؛ یعنی به‌جای هر کارت محصول، کل فهرست را گرفته است. سلکتوری بنویسید که به تعداد محصولات صفحه تکرار شود.'
     : 'سلکتور ظرف ' + containerCount + ' مورد پیدا کرد ولی عنوان داخل آن‌ها نبود؛ سلکتور عنوان باید نسبت به ظرف داخلی باشد یا خودِ ظرف را هدف بگیرد.');
   let detail: any = null;
+  progress.begin('detail-extraction', 'در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate = products.find(product => product.url);
   const detailKeys = ['shortDesc', 'longDesc', 'sku', 'category', 'tags', 'weight', 'stock', 'brand', 'detailImage', 'gallery', 'variations'];
   const wantsDetail = detailKeys.some(key => String((profile.selectors as any)?.[key] || '').trim().length > 0);
@@ -2352,11 +2360,13 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     const missingDetail = detailKeys.filter(key => !String((profile.selectors as any)?.[key] || '').trim().length);
     if (missingDetail.length) {
       try {
+        progress.begin('detail-discovery', 'در حال دریافت صفحهٔ محصول برای پیشنهاد سلکتورهای جزئیات…');
         const suggested = await suggestSelectors(detailSample, 'detail');
         for (const [key, value] of Object.entries(suggested.selectors || {})) {
           if (String(value || '').trim() && (missingDetail as string[]).includes(key)) selectorsToSave[key] = String(value);
         }
-      } catch { /* discovery is best-effort; the report below still stands */ }
+        progress.finish({name:'detail-discovery',ok:true,summary:'پیشنهاد سلکتورهای جزئیات بررسی شد.'});
+      } catch(error) { progress.finish({name:'detail-discovery',ok:false,summary:String(error)}); }
     }
   }
   if (Object.keys(selectorsToSave).length) recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');

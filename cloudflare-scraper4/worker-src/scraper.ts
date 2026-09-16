@@ -1,3 +1,4 @@
+import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progress.js';
 import { getState } from './db.js';
 import { resolveSourceNetwork } from './source-network.js';
 import { loadConnections } from './connections.js';
@@ -853,12 +854,14 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
   if(fetchHint&&!dropReasons.some(reason=>String(reason).includes('سلکتور نامعتبر')))hint=fetchHint;
   return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
 }
-export async function diagnoseExtraction(profile:Profile,urlOverride=''){
+export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgress?:DiagnosticObserver){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
-  const add=(name:string,ok:boolean,summary:string,details:any={})=>stages.push({name,ok,summary,...details});
+  const progress=diagnosticProgress(onProgress);
+  const add=(name:string,ok:boolean,summary:string,details:any={})=>{const stage={name,ok,summary,...details};stages.push(stage);progress.finish(stage)};
   if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,selectorsToSave:{},recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
   let page:{text:string;url:string;contentType:string;route?:string};
   try{
+    progress.begin('network','در حال اتصال به مبدأ و دریافت HTML…',{url,indirect:Boolean(profile.networkIndirect)});
     page=await sourceText(url,Boolean(profile.networkIndirect));
     const bytes=new TextEncoder().encode(page.text).byteLength,title=cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g,' ')||'');
     add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,route:page.route,indirect:Boolean(profile.networkIndirect)});
@@ -870,8 +873,12 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   // non-custom sets), and an overridden test URL never rewrites the profile.
   const selectorsToSave:Record<string,string>={},overriddenTestUrl=String(urlOverride||'').trim().length>0&&url!==String(profile.url||'').trim();
   try{
+    progress.begin('list-extraction','در حال اجرای موتور استخراج فهرست…',{engine:profile.extractionEngine||'auto'});
     let listSelectors=profile.selectors;
-    try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{/* best-effort; extraction below uses the profile selectors */}
+    progress.begin('selector-verification','در حال کشف و راستی‌آزمایی سلکتورهای فهرست…');
+    let selectorCheckOk=true;
+    try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{selectorCheckOk=false;/* best-effort; extraction below uses the profile selectors */}
+    progress.finish({name:'selector-verification',ok:selectorCheckOk,summary:selectorCheckOk?'بررسی اولیه پایان یافت؛ موتور با سلکتورهای موجود یا کشف‌شده اجرا می‌شود.':'بررسی خودکار سلکتورها کامل نشد؛ موتور با سلکتورهای موجود ادامه می‌دهد.'});
     const engineResult=await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
@@ -883,6 +890,7 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   // the manual suggest button when auto-save had nothing to persist.
   if(!products.length){
     try{
+      progress.begin('selector-discovery','در حال جست‌وجوی ساختار کارت‌های محصول…');
       const discovery=await discoverListSelectorsFromHtml(page.text,page.url);
       const proposed=Object.entries(discovery.selectors).filter(([,value])=>String(value||'').trim());
       if(discovery.method!=='none'&&proposed.length>=2&&discovery.selectors.container&&discovery.selectors.title){
@@ -891,20 +899,22 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
       }else{
         add('selector-discovery',false,'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.',{method:discovery.method});
       }
-    }catch{/* informational only */}
+    }catch(error){progress.finish({name:'selector-discovery',ok:false,summary:String(error)})}
   }
+  progress.begin('selector-evidence','در حال بررسی تک‌تک سلکتورها روی HTML واقعی…');
   const evidence:Record<string,unknown>={};
-  for(const field of ['container','title','price','link','image'] as const){const selector=String(profile.selectors[field]||'').trim();if(!selector){evidence[field]={ok:false,count:0,error:'سلکتور خالی است'};continue}try{const type=field==='link'?'link':field==='image'?'image':'text',values=await extractSelectorValues(page.text,page.url,selector,type);evidence[field]={ok:values.length>0,count:values.length,sample:values.slice(0,3)}}catch(error){evidence[field]={ok:false,count:0,error:error instanceof Error?error.message:String(error)}}}
+  for(const field of ['container','title','price','link','image'] as const){progress.begin('selector-evidence','در حال بررسی سلکتور '+field,{field});const selector=String(profile.selectors[field]||'').trim();if(!selector){evidence[field]={ok:false,count:0,error:'سلکتور خالی است'};continue}try{const type=field==='link'?'link':field==='image'?'image':'text',values=await extractSelectorValues(page.text,page.url,selector,type);evidence[field]={ok:values.length>0,count:values.length,sample:values.slice(0,3)}}catch(error){evidence[field]={ok:false,count:0,error:error instanceof Error?error.message:String(error)}}}
   const evidenceOk=['container','title'].every(key=>(evidence[key] as any)?.ok);
   add('selector-evidence',evidenceOk,evidenceOk?'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.':'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.',{evidence});
   let detail:any=null;
+  progress.begin('detail-extraction','در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate=products.find(product=>product.url);
   if(candidate&&hasDetailSelectors(profile.selectors))try{const extracted=await scrapeDetails(candidate,profile.selectors,Boolean(profile.networkIndirect));detail={url:candidate.url,title:extracted.title,shortDesc:extracted.shortDesc,descriptionCharacters:String(extracted.longDesc||'').length,sku:extracted.sku,brand:extracted.brand,stock:extracted.stock,weight:extracted.weight,category:extracted.category,tags:extracted.tags,image:extracted.image,galleryCount:extracted.images.length,variations:extracted.variations?.slice(0,20)};add('detail-extraction',true,'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.',{sample:detail})}catch(error){add('detail-extraction',false,error instanceof Error?error.message:String(error),{url:candidate.url})}
   else add('detail-extraction',true,candidate?'برای این پروفایل سلکتور جزئیات تنظیم نشده است.':'محصول دارای لینک برای تست جزئیات پیدا نشد.',{skipped:true});
   // Detail selectors are suggested from a real product page only when some
   // are missing; already-configured keys are never overwritten.
   const detailSample=candidate&&candidate.url?candidate.url:'';
-  if(!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value)}catch{/* discovery is best-effort; the report below still stands */}}
+  if(!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{progress.begin('detail-discovery','در حال دریافت صفحهٔ محصول برای پیشنهاد سلکتورهای جزئیات…');const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value);progress.finish({name:'detail-discovery',ok:true,summary:'پیشنهاد سلکتورهای جزئیات بررسی شد.'})}catch(error){progress.finish({name:'detail-discovery',ok:false,summary:String(error)})}}
   if(Object.keys(selectorsToSave).length)recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   const deepPage=Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i)||[])[2]||0);
   if(!products.length&&deepPage>1)recommendations.push(`آدرس صفحهٔ ${deepPage.toLocaleString('fa-IR')} است؛ اول همین عیب‌یاب را روی صفحهٔ اول (بدون پارامتر صفحه) اجرا کنید — صفحه‌های عمیق اغلب خالی‌اند یا ساختار دیگری دارند.`);
