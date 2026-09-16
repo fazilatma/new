@@ -910,3 +910,37 @@ released `1.183.0` and this branch moved again — see the note above.
   can run at once); `worker-tests/deployer-local-panel.test.mjs` (8 tests) checks the
   allow-list, the argument guards, token leakage, and that every button in the new section maps to a handler
   and to a proxied action. `extraction.test.mjs` gained the new drawer title in its ordered list.
+
+## 1.185.0+ — the control beside its label, and foldable explanations everywhere
+
+- **Compact forms, on by default.** `appearance.inlineFields` (a switch in «⚙️ تنظیمات عمومی», next to the
+  site font and theme) puts every input next to its label instead of under it: the main panes use
+  `grid-template-columns:max(26%,7.5rem) minmax(0,1fr)` so a long label can never eat the field, drawer
+  rows go to a 32% label column, and `.field-hint` keeps its place under the input it belongs to. Below
+  640px nothing changes — a phone already has one column and a second would only shrink the field. The
+  default is carried on the served `<html data-fields="inline">` so there is no relayout flash, and the
+  switch takes effect on change (the existing `[data-setting]` auto-save persists it; no second
+  persistence path was invented). The deployer page gets the same idea at ≥44rem, in `rem` only, because
+  that sheet deliberately has no `px` layout declarations. The rule is scoped with :has(>label:first-child):
+  25 of the 89 `.field` sites are paragraph boxes or button rows, so an unguarded rule would hand them an
+  empty 7.5rem column — and on an engine without `has()` the rule is dropped as a whole, which leaves
+  the old stacked layout rather than a broken one.
+- **Every explanation on the site folds.** One shared pass wraps `help-box` blocks, modal notes, the
+  drawer guide and paragraph-form `menu-text` in a `<details>`, styled like the version panel's own
+  folded help so the site keeps one visual language. A fold's summary carries the name of the section it
+  explains rather than a bare icon; already-collapsible blocks are left alone; live readouts (status
+  lines, counters, the deployer panel's state text) are never folded, which is decided by tag and text
+  length, not by a class name that is reused for both; short strings are not explanations at all. Open
+  state is remembered in `localStorage`, so re-rendering a pane does not close what the reader opened.
+- **Two bugs the harness caught before they reached a phone.** Guarding the observer with
+  `if(!window.MutationObserver)` is not enough: an embedding can expose a non-callable stub there while
+  the global is absent, and since the call sits on the boot line that exception would have taken the rest
+  of startup with it — the constructor is checked now, and the fold simply does not attach. And open/closed
+  is written and read through the `open` **attribute**, because the IDL property does not reflect
+  consistently across DOM implementations (linkedom reads back `undefined`), which is exactly the case a
+  behavior test catches and a grep cannot.
+- **Guards.** `worker-tests/ui-compact-forms-and-folding.test.mjs` (8 tests) esbuilds the dashboard,
+  slices the shipped `foldDescriptions` / `applyInlineFields` out of the bundle and runs them on a parsed
+  DOM: folding the right blocks and only them, idempotence, remembered state, the 640px guard, the
+  binding and default of the switch, and the deployer page's own fold.
+
