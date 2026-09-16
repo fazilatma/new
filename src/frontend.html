@@ -67,6 +67,8 @@ tailwind.config = {
   table.tbl tbody tr.row-nocost td, .lg-nocost { background: rgba(245,158,11,.14); }
   table.tbl tbody tr.row-ok td, .lg-ok { background: rgba(16,185,129,.10); }
   table.tbl tbody tr.row-pending td, .lg-pending { background: rgba(100,116,139,.10); }
+  table.tbl tbody tr.row-supplier-placed td, .lg-supplier-placed { background: rgba(14,165,233,.18); }
+  .dark table.tbl tbody tr.row-supplier-placed td, .dark .lg-supplier-placed { background: rgba(14,165,233,.28); }
   .dark table.tbl tbody tr.row-cancelled td, .dark .lg-cancelled { background: rgba(244,63,94,.20); }
   .dark table.tbl tbody tr.row-returned td, .dark .lg-returned { background: rgba(249,115,22,.21); }
   .dark table.tbl tbody tr.row-nocost td, .dark .lg-nocost { background: rgba(245,158,11,.22); }
@@ -234,6 +236,7 @@ tailwind.config = {
       <div class="glass card p-4">
         <div class="text-xs text-slate-500 mb-2"><span id="orders-count" class="font-black"></span> سفارش</div>
         <div id="orders-legend" class="flex flex-wrap gap-1.5 text-[11px] mb-3 text-slate-600 dark:text-slate-300 no-print">
+          <span class="lg lg-supplier-placed">🛒 سفارش خرید ثبت‌شده</span>
           <span class="lg lg-ok">✅ هزینه ثبت‌شده</span>
           <span class="lg lg-nocost">⚠️ نیازمند ثبت هزینه</span>
           <span class="lg lg-pending">⏳ در انتظار تایید</span>
@@ -278,6 +281,9 @@ tailwind.config = {
             <div class="grid md:grid-cols-3 gap-3">
               <div><label class="text-xs font-bold">تامین‌کننده (واسطه) *</label>
                 <div class="flex gap-1"><select id="o-sup" class="inp"></select><button type="button" class="btn btn-soft !px-3" onclick="quickAdd('supplier')" title="تامین‌کننده جدید">＋</button></div></div>
+              <div><label for="o-supplier-order-status" class="text-xs font-bold">وضعیت ثبت سفارش خرید از تامین‌کننده</label><select id="o-supplier-order-status" class="inp">
+                <option value="not_placed">ثبت سفارش نشده</option><option value="placed">ثبت سفارش شده</option>
+              </select></div>
               <div><label class="text-xs font-bold">نوع خرید از تامین‌کننده</label><select id="o-ptype" class="inp"></select></div>
               <div><label id="lbl-ucost" class="text-xs font-bold">هزینه خرید واحد (تمام‌شده تامین‌کننده) *</label><input id="o-ucost" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);liveCalc()"></div>
               <div><label class="text-xs font-bold">کمیسیون (باسلام/درگاه) 🤖</label><input id="o-comm" type="text" inputmode="numeric" value="۰" class="inp num" oninput="fmtInp(this);AUTO.commT=true;liveCalc()" title="پیشنهاد خودکار از ٪ غرفه؛ قابل ویرایش دستی"></div>
@@ -538,7 +544,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.17.0';
+const APP_VER = '1.18.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1263,6 +1269,7 @@ function filteredOrders(opts = {}) {
 }
 /* رنگ ردیف سفارش: لغو/مرجوعی/نیازمند هزینه/کامل/در انتظار */
 function orderRowClass(o) {
+  if (o.supplier_order_status === 'placed') return 'row-supplier-placed';
   const st = o.status || 'pending';
   if (st === 'cancelled') return 'row-cancelled';
   if (st === 'returned') return 'row-returned';
@@ -1468,6 +1475,7 @@ function formData() {
     customer_name: $('#o-customer').value.trim(), customer_phone: $('#o-phone').value.trim(), city: $('#o-city').value.trim(),
     product_name: $('#o-product').value.trim(), quantity: N($('#o-qty').value) || 1,
     supplier_id: supId || null, supplier_name: sup ? sup.name : '',
+    supplier_order_status: $('#o-supplier-order-status').value,
     unit_sale: M('o-usale') / _tdiv, unit_cost: M('o-ucost') / _tdiv, discount: M('o-disc'),
     shipping_cost: M('o-ship'), shipping_rev: M('o-shiprev'), packaging_cost: M('o-pack'), commission: M('o-comm'),
     ads_cost: M('o-ads'), other_cost: M('o-other'), other_label: $('#o-otherlabel').value.trim(),
@@ -1528,6 +1536,7 @@ function editOrder(id) {
   $('#o-phone').value = o.customer_phone || ''; $('#o-city').value = o.city || '';
   $('#o-product').value = o.product_name || ''; $('#o-qty').value = o.quantity || 1;
   $('#o-sup').value = o.supplier_id || '';
+  $('#o-supplier-order-status').value = o.supplier_order_status === 'placed' ? 'placed' : 'not_placed';
   const _tmult = costMode() === 'total' ? (o.quantity || 1) : 1; // حالت کلی: نمایش مبلغ کل
   setMoney('o-usale', N(o.unit_sale) * _tmult); setMoney('o-ucost', N(o.unit_cost) * _tmult);
   setMoney('o-disc', o.discount); setMoney('o-ship', o.shipping_cost); setMoney('o-shiprev', o.shipping_rev);

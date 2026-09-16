@@ -25,7 +25,7 @@ const SCHEMA = [
     order_code TEXT, source TEXT NOT NULL DEFAULT 'basalam', booth_id INTEGER,
     customer_name TEXT DEFAULT '', customer_phone TEXT DEFAULT '', city TEXT DEFAULT '',
     product_name TEXT DEFAULT '', quantity INTEGER DEFAULT 1,
-    supplier_id INTEGER, supplier_name TEXT DEFAULT '',
+    supplier_id INTEGER, supplier_name TEXT DEFAULT '', supplier_order_status TEXT DEFAULT 'not_placed',
     unit_sale REAL DEFAULT 0, unit_cost REAL DEFAULT 0, discount REAL DEFAULT 0,
     shipping_cost REAL DEFAULT 0, shipping_rev REAL DEFAULT 0, packaging_cost REAL DEFAULT 0, commission REAL DEFAULT 0,
     ads_cost REAL DEFAULT 0, other_cost REAL DEFAULT 0, other_label TEXT DEFAULT '',
@@ -49,6 +49,7 @@ const SCHEMA = [
 
 /* مهاجرت ستون‌های جدید روی دیتابیس‌های قدیمی (خطای ستون تکراری نادیده گرفته می‌شود) */
 const MIGRATIONS = [
+  ['orders', 'supplier_order_status', "TEXT DEFAULT 'not_placed'"],
   ['integrations', 'sync_every_min', 'INTEGER DEFAULT 60'],
   ['booths', 'ship_single', 'REAL DEFAULT 0'],
   ['booths', 'ship_multi', 'REAL DEFAULT 0'],
@@ -59,7 +60,7 @@ const MIGRATIONS = [
 ];
 const ORDER_FIELDS = [
   'order_code', 'source', 'booth_id', 'customer_name', 'customer_phone', 'city',
-  'product_name', 'quantity', 'supplier_id', 'supplier_name',
+  'product_name', 'quantity', 'supplier_id', 'supplier_name', 'supplier_order_status',
   'unit_sale', 'unit_cost', 'discount', 'shipping_cost', 'shipping_rev', 'packaging_cost',
   'commission', 'ads_cost', 'other_cost', 'other_label',
   'status', 'payment_status', 'purchase_type', 'customer_ptype', 'order_date', 'jdate', 'jy', 'jm', 'jd', 'notes',

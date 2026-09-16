@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS orders (
   city TEXT DEFAULT '',
   product_name TEXT DEFAULT '',
   quantity INTEGER DEFAULT 1,
+  supplier_order_status TEXT DEFAULT 'not_placed',
   supplier_id INTEGER,
   supplier_name TEXT DEFAULT '',
   unit_sale REAL DEFAULT 0,
