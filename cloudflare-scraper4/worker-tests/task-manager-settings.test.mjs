@@ -8,6 +8,17 @@ async function compile(text,names,io={}){const js=(await transform(text,{loader:
 const helpers=await compile(source.slice(source.indexOf('function mInput('),source.indexOf('function mMasterCombo(')),['mInput','mCheck','mButton']);
 const a=source.indexOf('function activitySettingsHtml('),b=source.indexOf('function openActivityManager(',a),nestedGet=(o,path)=>path.split('.').reduce((x,k)=>x?.[k],o);
 async function settingsUI(extra={}){return compile(source.slice(a,b),['activitySettingsHtml','hydrateActivitySettings'],{...helpers,BSET:key=>['data-setting',key],nestedGet,state:{settings:{general:{maxConcurrentProfiles:4},watchdog:{enabled:false}}},autoSaveDrafts:new Map(),autoSaveInFlightDraft:null,...extra})}
+test('task settings are native collapsible details and start closed on every opening',async()=>{
+ const ui=await settingsUI();
+ for(let i=0;i<2;i++){
+  const {document}=parseHTML(ui.activitySettingsHtml()),panel=document.querySelector('#activitySettings');
+  assert.equal(panel.tagName,'DETAILS');assert.equal(panel.hasAttribute('open'),false);
+  assert.equal(panel.firstElementChild.tagName,'SUMMARY');assert.match(panel.firstElementChild.textContent,/تنظیمات اجرای وظایف/);
+  assert.equal(panel.querySelector('details').hasAttribute('open'),false);
+  panel.setAttribute('open','');ui.hydrateActivitySettings(document);
+  assert.equal(panel.hasAttribute('open'),true);assert.equal(panel.querySelector('#maxConcurrentProfiles').value,'4');
+ }
+});
 test('queue, concurrency and AI/watchdog settings live in Task Manager, not duplicate sidebar forms',async()=>{
  const ui=await settingsUI(),html=ui.activitySettingsHtml(),{document}=parseHTML('<main>'+html+'</main>');ui.hydrateActivitySettings(document);
  assert.equal(document.querySelector('#maxConcurrentProfiles').value,'4');assert.equal(document.querySelector('#stallWatchdog').checked,false);
@@ -23,7 +34,7 @@ test('live activity refreshes do not replace controls or reset edited settings',
  const ui=await settingsUI(),{document}=parseHTML('<main>'+ui.activitySettingsHtml()+'<div id="activityBody"></div></main>'),input=document.querySelector('#maxConcurrentProfiles');input.value='6';document.querySelector('#activitySettings').scrollTop=80;
  const a=source.indexOf('function renderActivity(d)'),b=source.indexOf('\n}\n',a)+2;
  const {renderActivity}=await compile(source.slice(a,b),['renderActivity'],{$:id=>document.getElementById(id),activityDragging:false,localTasks:new Map(),mergeActivityRuns:(local,remote)=>[...local,...remote],renderQuotaBar:()=>'<div id="testQuota">quota</div>',d1QuotaHtml:()=>{throw Error('do not duplicate quota summaries')},fa:String,esc:String});
- renderActivity({counts:{}});renderActivity({counts:{jobs:3}});assert.equal(document.querySelector('#maxConcurrentProfiles'),input);assert.equal(input.value,'6');assert.equal(document.querySelectorAll('#testQuota').length,1);assert.equal(document.querySelector('#activitySettings').scrollTop,80);
+ const panel=document.querySelector('#activitySettings');renderActivity({counts:{}});assert.equal(panel.hasAttribute('open'),false);panel.setAttribute('open','');renderActivity({counts:{jobs:3}});assert.equal(panel.hasAttribute('open'),true);panel.removeAttribute('open');renderActivity({counts:{}});assert.equal(panel.hasAttribute('open'),false);assert.equal(document.querySelector('#maxConcurrentProfiles'),input);assert.equal(input.value,'6');assert.equal(document.querySelectorAll('#testQuota').length,1);assert.equal(document.querySelector('#activitySettings').scrollTop,80);
 });
 test('Task Manager bindings autosave while preserving settings from unmounted panels',async()=>{
  const ui=await settingsUI(),{window}=parseHTML('<main><span id="autoSaveState"></span>'+ui.activitySettingsHtml()+'</main>'),$=id=>window.document.getElementById(id),state={connected:true,profiles:[],settings:{appearance:{font:'vazir'},general:{maxConcurrentProfiles:2}},connections:{}},sent=[];
