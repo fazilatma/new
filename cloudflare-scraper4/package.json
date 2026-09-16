@@ -1,6 +1,6 @@
 {
   "name": "scraper4-cloudflare",
-  "version": "1.181.0",
+  "version": "1.182.0",
   "private": true,
   "description": "Cloudflare Workers-native Scraper 4 with D1, Queues, Cron, and downloadable backups",
   "type": "module",
@@ -32,6 +32,7 @@
     "local": "npm run deployer:ui",
     "scraper:local": "npm run render:build && npm run render:start",
     "browsers:install": "node scripts/browsers-install.mjs",
+    "basalam:install": "node scripts/basalam-sdk-install.mjs",
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check"
   },
