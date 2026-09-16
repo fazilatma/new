@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFi
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { pyExtract, pyStatus } from './py-extract-run.mjs';
+import { notifyEnabledFor, pendingNotices, pickNotifyChannel, pushNotice, sendNotification } from './deployer-notify.mjs';
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`Scraper4 Local Deployer UI
@@ -138,13 +139,49 @@ function readIntervalMs(value, fallback = DEFAULT_BRANCH_SCAN_INTERVAL_MS) {
   if (parsed === 0) return 0;                                  // 0 means "never scan automatically"
   return Math.max(MIN_BRANCH_SCAN_INTERVAL_MS, Math.round(parsed));
 }
-const autoUpdateEnabled = startupEnv.LOCAL_DEPLOYER_AUTO_UPDATE !== 'false';
+// 0 / no / off are what people actually type in a shell profile; only 'false' used to work, so
+// `LOCAL_DEPLOYER_AUTO_UPDATE=0` left the branch scanner running git operations on a timer.
+const autoUpdateEnabled = !/^(?:false|0|no|off)$/i.test(String(startupEnv.LOCAL_DEPLOYER_AUTO_UPDATE ?? 'true').trim());
 let branchScanIntervalMs = readIntervalMs(startupEnv.LOCAL_DEPLOYER_SCAN_INTERVAL_MS || startupEnv.LOCAL_DEPLOYER_AUTO_UPDATE_MS);
 let autoInstallLatestEnabled = startupEnv.LOCAL_DEPLOYER_AUTO_INSTALL_LATEST !== 'false';
 let autoUpdateRunning = false;
 let lastAutoUpdate = null;
 let lastDirtySkipLogged = -1;
 let lastUnpushedSkipLogged = -1;
+// A background deployer has to reach the operating system, not only its own log: every scan that
+// finds a newer version announces it once, through whichever notifier this platform has (see
+// scripts/deployer-notify.mjs). LOCAL_DEPLOYER_NOTIFY=0 turns that off; the page keeps announcing
+// through the browser Notifications API, which lands in the same OS notification centre.
+const notifyEnabled = notifyEnabledFor(startupEnv.LOCAL_DEPLOYER_NOTIFY);
+const notifyChannel = pickNotifyChannel({ env: startupEnv });
+// Which events were already announced, so a one-minute scanner cannot spam the same notice. The
+// ledger is a file, not a Set that dies with the process: a watchdog that restarts the deployer must
+// not wake the phone for a release that was already announced, and «the last notices» should still be
+// there after an update. LOCAL_DEPLOYER_NOTIFY_STATE moves it (tests, or a read-only checkout).
+const notifyStateFile = resolve(startupEnv.LOCAL_DEPLOYER_NOTIFY_STATE || join(projectDir, 'data', '.deployer-notices.json'));
+function readNotifyState() {
+  try {
+    const raw = JSON.parse(readFileSync(notifyStateFile, 'utf8'));
+    return {
+      seen: Array.isArray(raw.seen) ? raw.seen.map(String).filter(Boolean) : [],
+      recent: Array.isArray(raw.recent) ? raw.recent.filter(entry => entry && entry.key) : []
+    };
+  } catch {
+    return { seen: [], recent: [] };
+  }
+}
+const notifyStored = readNotifyState();
+const notifySeen = new Set(notifyStored.seen.slice(-200));
+const notifyLog = notifyStored.recent.slice(0, 20);
+function saveNotifyState() {
+  if (!notifyEnabled) return;
+  try {
+    mkdirSync(resolve(notifyStateFile, '..'), { recursive: true });
+    writeFileSync(notifyStateFile, JSON.stringify({ seen: [...notifySeen].slice(-200), recent: notifyLog }, null, 2) + '\n', { mode: 0o600 });
+  } catch (error) {
+    console.log('[deployer] could not store the notice ledger: ' + (error && error.message ? error.message : error));
+  }
+}
 let branchScannerTimer = null;
 const branchMetaCache = new Map(); // branch name -> { sha, version, hasCode }
 const branchState = { scanning: false, lastScanAt: null, lastScanMs: null, lastScanError: null, lastAction: null, branches: [], latest: null, current: null, origin: null };
@@ -533,6 +570,9 @@ function scanAllBranches(reason = 'manual') {
     branchState.lastScanAt = new Date().toISOString();
     branchState.lastScanMs = Date.now() - startedAt;
     branchState.lastScanError = null;
+    // Announcing is a side quest of the scan: it must not change what the scan reports, and a slow
+    // or missing notifier must not delay the table or the auto-install.
+    announceVersions({ reason }).catch(error => console.log('[deployer] notification pass failed: ' + (error?.message || error)));
     if (reason !== 'timer') console.log(`[deployer] branch scan (${reason}): ${branches.length} branch(es), newest ${latest ? latest.name + ' v' + latest.version : '-'}`);
     return branchCatalogPayload();
   } catch (error) {
@@ -541,6 +581,38 @@ function scanAllBranches(reason = 'manual') {
   } finally {
     branchState.scanning = false;
   }
+}
+
+// Sends one notification per newly noticed event. Fire-and-forget by design: a machine without a
+// notifier, or one where notify-send hangs, must never stall a scan or an auto-install.
+async function announceVersions({ reason = 'scan' } = {}) {
+  if (!notifyEnabled) return { ok: false, skipped: 'disabled', sent: [] };
+  const pending = pendingNotices({
+    branchState,
+    code: staleCode(),
+    installedVersion: (branchState.current && branchState.current.version) || pkg.version || '',
+    seen: notifySeen
+  });
+  const sent = [];
+  for (const notice of pending) {
+    notifySeen.add(notice.key);
+    const result = await sendNotification(notifyChannel, notice.title, notice.body);
+    pushNotice(notifyLog, { at: new Date().toISOString(), reason, key: notice.key, kind: notice.kind, title: notice.title, body: notice.body, ...result });
+    console.log('[deployer] new version noticed (' + notice.kind + ') via ' + (notifyChannel ? notifyChannel.id : 'no notifier') + ': ' + notice.title + (result.ok ? '' : ' [' + result.error + ']'));
+    sent.push({ key: notice.key, kind: notice.kind, ok: Boolean(result.ok), channel: result.channel, error: result.error || '' });
+  }
+  if (sent.length) saveNotifyState();
+  return { ok: true, sent, announced: sent.length, restored: notifyStored.seen.length };
+}
+function notifyPayload() {
+  return {
+    enabled: notifyEnabled,
+    channel: notifyChannel ? { id: notifyChannel.id, label: notifyChannel.label } : null,
+    seen: notifySeen.size,
+    restored: notifyStored.seen.length,
+    file: notifyStateFile.startsWith(projectDir + '/') ? notifyStateFile.slice(projectDir.length + 1) : notifyStateFile,
+    recent: notifyLog.slice(0, 10)
+  };
 }
 
 function maybeAutoInstallNewest() {
@@ -1036,6 +1108,7 @@ function status() {
       packageLock: existsSync(join(projectDir, 'package-lock.json')),
       staticHtmlDeployer: existsSync(join(projectDir, 'deploy-setup/static-universal-deployer.html'))
     },
+    notify: notifyPayload(),
     jobs: [...jobs.values()].map(({ child, ...j }) => j),
     scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort, command: scraper.command || scraperCommand, serving: servingState() } : { running: false, port: scraperPort, command: scraperCommand, serving: servingState() }
   };
@@ -1095,6 +1168,20 @@ const server = http.createServer(async (req, res) => {
       const result = updateFromGit({ branch: name, force: true, install: true });
       if (result.ok) restartUiSoon();
       return send(res, 200, { ...result, restarting: Boolean(result.ok), message: result.ok ? 'Branch ' + name + ' installed. This UI restarts in a few seconds.' : 'Install failed. See step output below.' });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/notifications') return send(res, 200, { ok: true, ...notifyPayload() });
+    if (req.method === 'POST' && url.pathname === '/api/notifications/test') {
+      if (!notifyEnabled) return send(res, 200, { ok: false, channel: 'off', error: 'Announcements are off (LOCAL_DEPLOYER_NOTIFY=0/no/off).' });
+      const result = await sendNotification(notifyChannel, 'Scraper4 deployer', 'This is your machine talking to itself: system notifications work.');
+      pushNotice(notifyLog, { at: new Date().toISOString(), reason: 'test', key: 'test:' + Date.now(), kind: 'test', title: 'Test notification', body: 'sent from the deployer page', ...result });
+      saveNotifyState();
+      console.log('[deployer] test notification ' + (result.ok ? 'sent via ' + result.channel : 'failed: ' + result.error));
+      return send(res, 200, { ok: Boolean(result.ok), ...result, label: notifyChannel ? notifyChannel.label : '' });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/notifications/scan') {
+      const catalog = scanAllBranches('notify');
+      const announce = await announceVersions({ reason: 'notify' });
+      return send(res, 200, { ok: true, ...catalog, announce, notify: notifyPayload() });
     }
     if (req.method === 'GET' && url.pathname === '/api/libraries') return send(res, 200, installedLibraryProbe(url.searchParams.get('env') || 'vscode'));
     if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, { ok: true, jobs: [...jobs.values()].map(({ child, ...j }) => j) });
@@ -1195,6 +1282,11 @@ Codespaces: open forwarded ports ${port} and ${scraperPort}; keep the token in t
 `);
     const bootCode = staleCode();
     if (bootCode.stale) console.log(`[deployer] WARNING: this process is running v${bootCode.running} but v${bootCode.onDisk} is on disk. Restart the deployer (Ctrl+C, then npm run deployer:ui) to pick up the update.\n`);
+    // The scraper dashboard proxies this server (see /api/deployer/local/* in render-src/server.ts)
+    // and needs the port - which listenWithRetry may have moved - plus the token. A file in the
+    // gitignored data/ dir, readable only by this user, is how two local processes hand that over
+    // without anyone copying a secret by hand.
+    writeDeployerHandshake({ port, host, token, pid: process.pid, version: pkg.version || '' });
     autoStartScraper();
   });
 }
@@ -1202,6 +1294,20 @@ Codespaces: open forwarded ports ${port} and ${scraperPort}; keep the token in t
 // The scraper must come up on its own address as soon as the deployer is
 // installed or updated, so opening it never depends on the deployer page
 // (which used to be the only way to trigger startScraper()).
+// Where the port and token are published for the scraper dashboard to pick up (it proxies this
+// server through /api/deployer/local/*). DEPLOYER_HANDSHAKE_FILE lets a test or a second install
+// point it somewhere else, so a scratch run cannot overwrite the handshake of the real one.
+export const DEPLOYER_HANDSHAKE_FILE = startupEnv.DEPLOYER_HANDSHAKE_FILE || join(projectDir, 'data', '.deployer-token');
+function writeDeployerHandshake(info) {
+  try {
+    mkdirSync(resolve(DEPLOYER_HANDSHAKE_FILE, '..'), { recursive: true });
+    writeFileSync(DEPLOYER_HANDSHAKE_FILE, JSON.stringify({ ...info, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+  } catch (error) {
+    // Nothing downstream is security-critical enough to justify killing the UI over a scratch file.
+    console.log('[deployer] could not write ' + DEPLOYER_HANDSHAKE_FILE + ': ' + (error?.message || error));
+  }
+}
+
 function autoStartScraper() {
   if (String(process.env.LOCAL_SCRAPER_AUTOSTART || '').toLowerCase() === 'false') {
     console.log('[deployer] scraper autostart disabled (LOCAL_SCRAPER_AUTOSTART=false).');
@@ -1286,20 +1392,270 @@ process.on('SIGINT', shutdownUi);
 process.on('SIGTERM', shutdownUi);
 
 function page(token) {
-  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run basalam:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.183.0\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.183.0\nnpm run basalam:install\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n  winget install --id Python.Python.3.12 -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.183.0\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nwhere python || winget install --id Python.Python.3.12 -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.183.0\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\npip install -q beautifulsoup4 lxml requests  # deps for the deployer Python extract tab\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run basalam:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.183.0\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# No ADMIN_TOKEN needed locally: the vault key is generated at data/vault.key on first save.\n# Keep that file - deleting it makes already-saved API keys unreadable.\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.183.0\n6) The build also installs the Python basalam-sdk; verify it in the libraries card", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.183.0\nCheck daily D1 usage: https://YOUR-WORKER.workers.dev/api/quota\n  Free plan: 5,000,000 rows read + 100,000 rows written per day, reset 00:00 UTC.\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.183.0"};
-  return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scraper4 Local Deployer</title>
+  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run basalam:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.185.0+\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.185.0+\nnpm run basalam:install\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n  winget install --id Python.Python.3.12 -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.185.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nwhere python || winget install --id Python.Python.3.12 -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.185.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\npip install -q beautifulsoup4 lxml requests  # deps for the deployer Python extract tab\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run basalam:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.185.0+\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# No ADMIN_TOKEN needed locally: the vault key is generated at data/vault.key on first save.\n# Keep that file - deleting it makes already-saved API keys unreadable.\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.185.0+\n6) The build also installs the Python basalam-sdk; verify it in the libraries card", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.185.0+\nCheck daily D1 usage: https://YOUR-WORKER.workers.dev/api/quota\n  Free plan: 5,000,000 rows read + 100,000 rows written per day, reset 00:00 UTC.\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.185.0+"};
+  return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark light"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#04070f"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f6fd"><title>Scraper4 Local Deployer</title>
 <style>
-:root{color-scheme:dark;--bg:#050814;--bg2:#0b1220;--card:#111c31cc;--card2:#0f172acc;--line:#263854;--text:#e7eefb;--muted:#93a4bc;--brand:#38bdf8;--brand2:#a78bfa;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--shadow:0 24px 80px #0009}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 12% -10%,#164e63 0,#0f172a 33%,#020617 78%);color:var(--text);font:14px/1.55 Inter,ui-sans-serif,system-ui,Segoe UI,Arial}.shell{max-width:1320px;margin:0 auto;padding:22px}.hero{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;padding:20px;border:1px solid #ffffff18;border-radius:28px;background:linear-gradient(135deg,#0f172add,#111827aa);box-shadow:var(--shadow);position:sticky;top:12px;z-index:5;backdrop-filter:blur(16px)}.brand{display:flex;gap:14px;align-items:center}.logo{width:52px;height:52px;border-radius:18px;background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:0 0 45px #38bdf866}.hero h1{font-size:24px;margin:0}.muted{color:var(--muted)}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:#02061799;color:#dbeafe;padding:7px 11px;margin:3px}.grid{display:grid;grid-template-columns:330px 1fr;gap:18px;margin-top:18px}.card{border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,var(--card),var(--card2));padding:18px;box-shadow:var(--shadow)}.side{position:sticky;top:120px;align-self:start}.steps{display:grid;gap:10px}.step{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid #263854;border-radius:16px;background:#07111f}.step b{color:#bfdbfe}.step .num{width:28px;height:28px;border-radius:10px;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#00111f;display:grid;place-items:center;font-weight:900;flex:none}label{display:block;margin:12px 0 5px;color:#cbd5e1;font-weight:700}select,input{width:100%;border:1px solid var(--line);border-radius:14px;background:#020817;color:var(--text);padding:12px}button{border:0;border-radius:14px;background:linear-gradient(135deg,var(--brand),#60a5fa);color:#00111f;font-weight:900;padding:11px 15px;cursor:pointer;margin:4px 4px 4px 0;box-shadow:0 10px 25px #0004}button:hover{filter:brightness(1.08)}.secondary{background:#24344e;color:#e5edf7}.success{background:linear-gradient(135deg,#22c55e,#86efac);color:#04140a}.danger{background:#ef4444;color:white}.warn{background:#f59e0b;color:#1c0a00}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.tabs button{background:#0f1b31;color:#cbd5e1}.tabs button.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#00111f}.panel{display:none}.panel.active{display:block}.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.metric{background:#06101e;border:1px solid var(--line);border-radius:18px;padding:14px;min-height:76px}.metric small{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:17px;margin-top:5px}.dot{width:10px;height:10px;border-radius:99px;background:var(--muted);display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 15px #22c55e}.dot.warn{background:var(--warn)}pre{white-space:pre-wrap;word-break:break-word;background:#020617;border:1px solid var(--line);border-radius:18px;padding:15px;min-height:220px;max-height:520px;overflow:auto;color:#dbeafe}.guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.guide-card{border:1px solid var(--line);border-radius:20px;padding:14px;background:#07111f}.guide-card h3{margin:0 0 8px}.lib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px;margin-top:10px}.lib-card{border:1px solid var(--line);border-radius:16px;padding:12px;background:#06101e}.lib-card h3{margin:0 0 8px;color:#bfdbfe}.lib-card code{display:inline-block;margin:2px;padding:2px 6px;border-radius:999px;background:#020617;border:1px solid #334155;color:#dbeafe;font-size:11px}.lib-card small{display:block;color:var(--muted);margin-bottom:7px}.guide-card pre{min-height:160px;max-height:260px;font-size:12px}.copy-ok{color:#86efac;font-size:12px;margin-left:8px}.banner{border:1px solid #f59e0b66;background:#42200688;color:#fde68a;border-radius:18px;padding:12px;margin-bottom:14px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.kbd{font-family:ui-monospace,Menlo,Consolas,monospace;background:#020617;border:1px solid var(--line);border-radius:7px;padding:2px 7px}.small{font-size:12px}@media(max-width:900px){.hero{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.side{position:static}.shell{padding:12px}.hero h1{font-size:20px}}
-.tbl{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}.tbl th,.tbl td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;background:#06101e}.tbl th{background:#0b1c31;color:#bfdbfe;font-size:12px}.tbl tr.current td{background:#052e1666}.tbl .num{font-family:ui-monospace,Menlo,Consolas,monospace;color:#93c5fd}.tbl small{color:var(--muted)}
-</style></head><body><main class="shell"><section class="hero"><div class="brand"><div class="logo"></div><div><h1>Scraper4 Local Deployer</h1><div class="muted">Install, database, local scraper, cloud deploy — one guided dashboard</div></div></div><div><span class="pill">Node ${process.version}</span><span class="pill">v${pkg.version || '-'}</span><span class="pill">Token protected</span><span class="pill" id="autoPill">Auto-update on</span></div></section>
-<section class="grid"><aside class="card side"><h2>Smart setup</h2><div id="detected" class="banner">Detecting environment…</div><label>Environment</label><select id="env"><option value="vscode">VS Code / Desktop</option><option value="windows">Windows local</option><option value="termux-offline">Termux / Android</option><option value="cloudflare-worker">Cloudflare Worker</option><option value="vercel">Vercel</option><option value="render">Render</option><option value="vps">VPS</option></select><label>Scraping libraries</label><select id="libs"><option value="minimal">Minimal</option><option value="edge">Edge / Cloudflare-friendly</option><option value="node" selected>Node scraping stack</option><option value="browser">Browser rendering stack</option><option value="full">Full stack</option></select><div class="small muted" style="margin-top:8px">Installed library inventory is grouped in the Copy commands tab.</div><label>Package manager</label><select id="pm"><option>npm</option><option>pnpm</option><option>yarn</option><option>bun</option></select><label>Port</label><input id="port" value="3000"><div class="steps"><div class="step"><span class="num">1</span><div><b>Install deps</b><br><span class="muted small">npm dependencies and scraper libraries.</span></div></div><div class="step"><span class="num">2</span><div><b>Install/connect database</b><br><span class="muted small">Automatic where possible; panel instructions elsewhere.</span></div></div><div class="step"><span class="num">3</span><div><b>Start scraper</b><br><span class="muted small">Open the scraper dashboard after it starts.</span></div></div></div></aside>
-<section><div class="tabs"><button class="active" onclick="tab('dash',this)">Overview</button><button onclick="tab('database',this)">Database</button><button onclick="tab('scraper',this)">Local scraper</button><button onclick="tab('guide',this)">Copy commands</button><button onclick="tab('branches',this)">Branches</button><button onclick="tab('jobs',this)">Logs</button><button onclick="tab('pyextract',this)">Python extract</button></div>
-<div id="dash" class="panel active"><div class="card"><h2>Project status</h2><p class="muted">If you see <span class="kbd">getaddrinfo ENOTFOUND HOST</span>, your DATABASE_URL still contains the placeholder HOST. On Windows (and on machines without Docker) the database button now configures the <b>SQLite database built into Node.js</b> automatically - no PostgreSQL install/service is needed.</p><div id="status" class="status"></div><div class="row" style="margin-top:14px"><button onclick="run('install')">Install / retry npm</button><button class="success" onclick="run('databaseInstall')">Install / connect database</button><button onclick="run('localBuild')">Build local scraper</button><button class="secondary" onclick="updateCode(false)">Update from GitHub</button><button class="secondary" onclick="refresh()">Refresh</button></div></div></div>
-<div id="database" class="panel"><div class="card"><h2>Database setup</h2><p class="muted">The deployer auto-detects Termux, Codespaces, desktop, Render, Vercel and Windows. On Windows / machines without Docker it configures the <b>built-in SQLite database</b> (nothing to install). On Docker/Codespaces it starts PostgreSQL automatically; on Render/Cloudflare/Vercel it shows panel instructions.</p><div class="row"><button class="success" onclick="run('databaseInstall')">Install database now</button><button class="secondary" onclick="showDbHelp()">Show panel instructions</button></div><pre id="dbHelp"></pre></div></div>
-<div id="scraper" class="panel"><div class="card"><h2>Run scraper locally</h2><p class="muted">The scraper starts automatically with the deployer and keeps its own address: <a href="http://localhost:${scraperPort}/" target="_blank" rel="noreferrer">http://localhost:${scraperPort}/</a> (no token needed). It is a separate process, so it stays up after you close the deployer, and the terminal prints its URL under the deployer URL. Use the database button first if DATABASE_URL is missing or contains HOST. Set <span class="kbd">LOCAL_SCRAPER_AUTOSTART=false</span> to stop it starting on its own, or <span class="kbd">LOCAL_SCRAPER_STOP_WITH_UI=true</span> to shut it down together with the deployer. The first start runs <span class="kbd">render:build</span>, which takes tens of seconds on Termux/ARM; Open scraper now waits for that build instead of failing with ECONNREFUSED. The dashboard works the same whether you open it here under /scraper/ or directly on its own port, because it resolves its API calls relative to the address you opened it at. Raise <span class="kbd">LOCAL_SCRAPER_PROXY_WAIT_MS</span> (default 180000) on a very slow device.</p><div class="row"><button class="success" onclick="scraperStart()">Build & start local scraper</button><button class="secondary" onclick="openScraper('/')">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')">Open /health</button><button class="danger" onclick="scraperStop()">Stop</button><button class="secondary" onclick="scraperLogs()">Refresh logs</button></div><div id="scraperStale"></div><pre id="scraperLog"></pre></div></div>
-<div id="guide" class="panel"><div class="card"><h2>Installed libraries by type</h2><p class="muted">This inventory is generated from package.json plus required runtime/platform packages, so you can see what is already installed before copying commands.</p><div id="libraryGroups" class="lib-grid"></div></div><div class="card"><h2>One-click copy commands</h2><p class="muted">Each environment has its own copy button. Paste only plain text into Termux; never paste Markdown links.</p><div id="guideCards" class="guide-grid"></div></div></div>
-<div id="branches" class="panel"><div class="card"><h2>Repo branches - newest version tracking</h2><p class="muted">Every <b id="branchIntervalLabel">1 minute</b> the deployer fetches all branches of <span class="kbd">fazilatma/new</span>, reads the Scraper4 version from each branch (<span class="kbd">cloudflare-scraper4/package.json</span>) and - when enabled - automatically installs the branch carrying the <b>newest version</b>. Use the row button to install a specific branch.</p><div class="row" style="margin:10px 0"><label style="margin:0 10px 0 0;width:auto;font-weight:600"><input type="checkbox" id="autoInstallLatest" style="width:auto" checked> Auto-install newest version</label><select id="branchInterval" style="width:auto"><option value="1">every 1 minute</option><option value="5">every 5 minutes</option><option value="10">every 10 minutes</option><option value="30">every 30 minutes</option><option value="0">never (manual only)</option></select><button class="secondary" onclick="scanNow()">Scan now</button><button class="secondary" onclick="renderBranches(true)">Refresh table</button></div><div id="branchSummary" class="banner"></div><div style="overflow:auto"><table class="tbl"><thead><tr><th>Branch</th><th>Version on branch</th><th>Installed version</th><th>Last commit</th><th>Status</th><th>Action</th></tr></thead><tbody id="branchRows"><tr><td colspan="6" class="muted">Loading branches…</td></tr></tbody></table></div></div></div>
-<div id="jobs" class="panel"><div class="card"><h2>Command output</h2><pre id="log"></pre></div></div><div id="pyextract" class="panel"><div class="card"><h2>Automatic extraction with Python</h2><p class="muted">Runs <span class="kbd">scripts/py-auto-extract.py</span> on one list page: no manual selectors needed — the structural parser plus auto-discovery find the products (explicit selectors, including XPath, are optional). Needs <span class="kbd">python3</span> with <span class="kbd">beautifulsoup4</span> (<span class="kbd">lxml</span> for XPath, <span class="kbd">requests</span> for live URLs).</p><div id="pyStatus" class="banner">Checking Python…</div><div class="row"><button class="secondary" onclick="pyRefresh()">Refresh status</button><button onclick="pyInstall()">Install Python deps</button></div><label>List page URL</label><input id="pyUrl" dir="ltr" placeholder="https://shop.example/category/shoes"><label>Explicit selectors (optional JSON)</label><input id="pySelectors" dir="ltr" placeholder='{"container": "//div[@class=\"card\"]"}'><div class="row" style="margin-top:10px"><button class="success" onclick="pyRun()">Extract with Python</button></div><div id="pyResult"></div></div></div></section></section></main>
+*,*::before,*::after{box-sizing:border-box}
+:root{color-scheme:dark;--bg:#04070f;--bg2:#0a1322;--card:#0d1728;--card2:#0a1322;--line:#1f2f49;--line2:#2c4166;--text:#e8eefb;--muted:#a6b7d1;--brand:#4cc2ff;--brand2:#a78bfa;--ok:#3ddc84;--warn:#fbbf24;--bad:#ff6b6b;--glow:#0e3a5566;--shadow:0 20px 45px -22px #000d;--tap:2.85rem;--r:1.05rem;--r-sm:.75rem;--pad:1.05rem}
+:root[data-theme=light]{--bg:#f3f6fd;--bg2:#ffffff;--card:#ffffff;--card2:#f7f9ff;--line:#dbe4f3;--line2:#c4d3ea;--text:#0f1728;--muted:#4d5f78;--brand:#0a76b8;--brand2:#6a49cf;--ok:#0e8b4c;--warn:#9a5806;--bad:#c22a2a;--glow:#cfe3f7aa;--shadow:0 16px 36px -24px #16233d66}
+@media(prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f3f6fd;--bg2:#ffffff;--card:#ffffff;--card2:#f7f9ff;--line:#dbe4f3;--line2:#c4d3ea;--text:#0f1728;--muted:#4d5f78;--brand:#0a76b8;--brand2:#6a49cf;--ok:#0e8b4c;--warn:#9a5806;--bad:#c22a2a;--glow:#cfe3f7aa;--shadow:0 16px 36px -24px #16233d66}}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left);color:var(--text);line-height:1.7;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,sans-serif;font-size:1rem;background:radial-gradient(115% 52% at 6% -14%,var(--glow) 0,transparent 60%) no-repeat,var(--bg);min-height:100dvh;transition:background .2s ease,color .2s ease}
+body{-webkit-tap-highlight-color:transparent}
+h1{font-size:clamp(1.34rem,1.06rem + 1.5vw,1.9rem);line-height:1.18;margin:0;font-weight:800;letter-spacing:-.018em}
+h2{font-size:clamp(1.1rem,1rem + .5vw,1.32rem);line-height:1.32;margin:0 0 .45rem;font-weight:750;letter-spacing:-.01em}
+h3{font-size:1.03rem;font-weight:720;margin:0 0 .4rem;line-height:1.4}
+p{margin:.3rem 0 0;max-width:72ch}
+a{color:var(--brand);overflow-wrap:anywhere}
+code,pre,.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.shell{width:100%;max-width:84rem;margin:0 auto;padding:clamp(.85rem,3vw,1.4rem)}
+.hero{display:grid;gap:.75rem;align-items:center;padding:.95rem 0 .35rem}
+@media(min-width:52em){.hero{grid-template-columns:minmax(0,1fr) auto;gap:1rem;padding-top:1.15rem}}
+.brand{display:flex;gap:.8rem;align-items:center;min-width:0}
+.logo{width:2.7rem;height:2.7rem;flex:none;border-radius:.9rem;background:linear-gradient(140deg,var(--brand),var(--brand2));box-shadow:0 10px 26px -12px var(--brand);display:grid;place-items:center;font-size:1.3rem;line-height:1;color:#04121f}
+.tagline{color:var(--muted);font-size:.97rem;margin:.1rem 0 0;max-width:52ch}
+.pills{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--line);border-radius:999px;background:var(--card2);color:var(--text);padding:.42rem .72rem;font-size:.87rem;line-height:1.4;font-variant-numeric:tabular-nums}
+.pill.live{border-color:var(--ok)}
+.grid{display:grid;gap:.85rem;grid-template-columns:minmax(0,1fr);margin-top:.9rem;align-items:start}
+@media(min-width:62em){.grid{grid-template-columns:minmax(0,20rem) minmax(0,1fr);gap:1rem}.side{position:sticky;top:1rem;order:0}.stack{order:0}}
+.stack{order:-1;min-width:0;display:grid;gap:.85rem}
+.card{border:1px solid var(--line);border-radius:var(--r);background:linear-gradient(180deg,var(--card),var(--card2));padding:var(--pad);box-shadow:var(--shadow);min-width:0}
+.tabs{display:flex;gap:.35rem;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;padding:.34rem;border:1px solid var(--line);border-radius:999px;background:var(--card);box-shadow:var(--shadow);position:sticky;top:.35rem;z-index:5;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+@media(min-width:62em){.tabs{position:static;flex-wrap:wrap}}
+.tabs button{flex:0 0 auto;scroll-snap-align:center;border:0;background:transparent;color:var(--muted);border-radius:999px;padding:.5rem .95rem;min-height:2.55rem;font:inherit;font-size:.94rem;font-weight:680;white-space:nowrap;box-shadow:none}
+.tabs button.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#04121f;font-weight:750}
+.panel{display:none;min-width:0}
+.panel.active{display:grid;gap:.85rem;animation:rise .16s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(.3rem)}to{opacity:1;transform:none}}
+button{font:inherit;font-size:.96rem;font-weight:720;line-height:1.25;border:1px solid transparent;border-radius:var(--r-sm);background:linear-gradient(135deg,var(--brand),#6ab6f5);color:#04121f;padding:.72rem 1.05rem;min-height:var(--tap);cursor:pointer;box-shadow:0 10px 22px -16px #000c;transition:filter .14s ease,transform .1s ease,background-color .18s ease;-webkit-tap-highlight-color:transparent}
+button:active{transform:translateY(1px)}
+button.secondary{background:var(--bg2);color:var(--text);border-color:var(--line2);box-shadow:none}
+button.success{background:linear-gradient(135deg,var(--ok),#7fe6ac);color:#04140a}
+button.danger{background:linear-gradient(135deg,#e23b3b,var(--bad));color:#fff}
+button.warn{background:linear-gradient(135deg,var(--warn),#fcd34d);color:#231000}
+button.chip{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:999px;padding:.4rem .8rem;min-height:2.4rem;font-size:.86rem;font-weight:640;box-shadow:none}
+button[disabled]{opacity:.6;cursor:progress}
+@media(hover:hover) and (pointer:fine){button:hover{filter:brightness(1.06)}}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.75rem}
+.row>button{flex:1 1 min(100%,10.5rem)}
+@media(min-width:47em){.row>button{flex:0 1 auto}}
+label{display:block;margin:.8rem 0 .3rem;font-weight:720;font-size:.9rem;color:var(--muted);letter-spacing:.01em}@media(min-width:44rem){label[for]{display:inline-block;width:12rem;vertical-align:middle;margin:.45rem 0 .2rem}label[for]+input,label[for]+select{width:calc(100% - 13rem);vertical-align:middle;margin-top:.45rem}label[for]+textarea{width:100%;margin-top:.2rem}}
+select,input{width:100%;border:1px solid var(--line2);border-radius:var(--r-sm);background:var(--bg2);color:var(--text);padding:.68rem .8rem;font:inherit;font-size:1rem;min-height:var(--tap);transition:border-color .15s ease}
+input[type=checkbox]{width:1.35rem;height:1.35rem;min-height:0;padding:0;accent-color:var(--brand);flex:none}
+.check{display:inline-flex;align-items:center;gap:.5rem;margin:0;font-weight:640;font-size:.94rem;color:var(--text)}
+select.auto{width:auto;min-width:0;padding:.5rem 2rem .5rem .7rem}
+select:focus-visible,input:focus-visible,button:focus-visible,a:focus-visible,summary:focus-visible{outline:.2rem solid var(--brand);outline-offset:.14rem}
+.status{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,10.5rem),1fr));margin-top:.75rem}
+.metric{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg2);padding:.75rem .85rem;min-width:0;overflow-wrap:anywhere}
+.metric small{display:block;color:var(--muted);font-size:.8rem;font-weight:640}
+.metric b{display:block;font-size:1.05rem;margin-top:.25rem;line-height:1.4}
+.dot{width:.7rem;height:.7rem;flex:none;border-radius:99px;background:var(--muted);display:inline-block;box-shadow:0 0 10px -2px var(--muted)}
+.dot.ok{background:var(--ok);box-shadow:0 0 12px -1px var(--ok)}
+.dot.warn{background:var(--warn);box-shadow:0 0 12px -1px var(--warn)}
+.dot.err{background:var(--bad);box-shadow:0 0 12px -1px var(--bad)}
+/* updateRail names the third state "bad"; the rest of the page says "err" — both must be red. */
+.dot.bad{background:var(--bad);box-shadow:0 0 12px -1px var(--bad)}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r-sm);padding:.85rem;min-height:5rem;max-height:max(14rem,58vh);overflow:auto;overscroll-behavior:contain;color:var(--text);font-size:.89rem;line-height:1.55;margin:.75rem 0 0;-webkit-overflow-scrolling:touch}
+.guide-grid{display:grid;gap:.7rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,17.5rem),1fr));margin-top:.7rem}
+.guide-card{border:1px solid var(--line);border-radius:var(--r-sm);padding:.85rem;background:var(--bg2);min-width:0;display:grid;gap:.5rem;align-content:start}
+.guide-card .row{margin-top:0}
+.guide-card pre{min-height:7rem;max-height:max(13rem,52vh);margin:0}
+.lib-grid{display:grid;gap:.55rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr));margin-top:.7rem}
+.lib-card{border:1px solid var(--line);border-radius:var(--r-sm);padding:.75rem;background:var(--bg2);min-width:0}
+.lib-card small{display:block;color:var(--muted);margin-bottom:.45rem;font-size:.82rem}
+.lib-card code{display:inline-block;margin:.12rem;padding:.22rem .5rem;border-radius:999px;background:var(--card);border:1px solid var(--line);font-size:.83rem;overflow-wrap:anywhere}
+.guide-card code,.lib-card code{background:var(--card)}
+.kbd{font-size:.86em;background:var(--bg2);border:1px solid var(--line);border-radius:.4rem;padding:.08em .38em;overflow-wrap:anywhere}
+.muted{color:var(--muted)}
+.small{font-size:.87rem}
+.copy-ok{color:var(--ok);font-size:.86rem;font-weight:680}
+.banner{border:1px solid var(--line2);background:var(--bg2);border-radius:var(--r-sm);padding:.7rem .85rem;margin-top:.75rem;font-size:.95rem;overflow-wrap:anywhere;min-width:0}
+.banner.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.steps{display:grid;gap:.5rem;margin-top:.85rem}
+.step{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.6rem;align-items:start;padding:.6rem .7rem;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg2);min-width:0}
+.step .num{width:1.8rem;height:1.8rem;border-radius:.6rem;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#04121f;display:grid;place-items:center;font-weight:850;font-size:.86rem;font-variant-numeric:tabular-nums}
+.step div{min-width:0;font-size:.93rem}
+details.note{border:1px dashed var(--line2);border-radius:var(--r-sm);padding:.35rem .8rem;margin-top:.75rem;background:var(--card2)}
+details.note>summary{cursor:pointer;font-weight:720;color:var(--muted);padding:.35rem 0;min-height:1.9rem;font-size:.92rem;list-style:none}
+details.note>summary::-webkit-details-marker{display:none}
+details.note>summary::before{content:"⌄ ";display:inline-block;transition:transform .15s ease}
+details.note[open]>summary::before{transform:rotate(180deg)}
+details.note>div{padding-bottom:.55rem;max-width:74ch}
+.scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:var(--r-sm);margin-top:.75rem;overscroll-behavior-x:contain}
+.tbl{width:100%;border-collapse:collapse;font-size:.92rem;min-width:0}
+.tbl th,.tbl td{border-bottom:1px solid var(--line);padding:.6rem .5rem;text-align:left;vertical-align:top;overflow-wrap:anywhere;min-width:0}
+.tbl th{color:var(--muted);font-size:.8rem;font-weight:750;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.tbl tr.current td{background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.tbl .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+@media(max-width:47em){.scrollx{overflow:visible}.tbl,.tbl tbody,.tbl tr,.tbl td,.tbl th{display:block;width:100%}.tbl thead{display:none}.tbl tr{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg2);padding:.35rem .7rem;margin-bottom:.6rem}.tbl tr.current{border-color:var(--brand)}.tbl td{border:0;padding:.3rem 0;display:grid;grid-template-columns:minmax(0,7rem) minmax(0,1fr);gap:.5rem;align-items:start}.tbl td:only-child{display:block}.tbl td::before{content:attr(data-label);color:var(--muted);font-size:.78rem;font-weight:750;letter-spacing:.03em;text-transform:uppercase;padding-top:.15rem}.tbl td>button{width:100%;margin-top:.25rem}.tbl td code{font-size:.86rem}}
+.dock{position:fixed;inset-inline:0;bottom:0;display:grid;grid-template-columns:1fr 1fr;gap:.45rem;padding:.55rem .8rem calc(.55rem + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--card) 92%,transparent);border-top:1px solid var(--line);z-index:7;box-shadow:0 -14px 32px -24px #000d;backdrop-filter:blur(10px)}
+.dock .primary{grid-column:1/-1}
+@media(min-width:62em){.dock{display:none}}
+@media(max-width:61.99em){body{padding-bottom:8.5rem}}
+.skip{position:absolute;left:.6rem;top:-4rem;z-index:20;background:var(--brand);color:#04121f;padding:.55rem .85rem;border-radius:.6rem;font-weight:750;transition:top .15s ease}
+.skip:focus{top:.6rem}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+@media(prefers-contrast:more){:root{--line:var(--line2);--muted:var(--text)}.card,.banner,.metric,.step,.lib-card,.guide-card{border-width:2px}}
+/* v2 additions — the parts that turn a restyled page into an instrument you can read at 400%.
+   A persistent status rail (you should never have to scroll to learn whether anything is up),
+   tab badges (which panel wants attention), skeleton tiles (the page must not look broken while
+   the first /api/status is in flight), a toast (feedback without hunting for a 12px span),
+   filters for the two long lists, and an in-page text-size control, because the em/rem cascade
+   above means that control scales the whole interface the way OS zoom should. */
+.rail{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.65rem;align-items:center}
+.stat{display:inline-flex;align-items:center;gap:.42rem;border:1px solid var(--line);background:var(--card2);border-radius:999px;padding:.34rem .66rem;font-size:.84rem;line-height:1.45;min-width:0}
+.stat b{font-weight:720;overflow-wrap:anywhere}
+.stat.ok{border-color:color-mix(in srgb,var(--ok) 45%,var(--line))}
+.stat.bad{border-color:color-mix(in srgb,var(--bad) 55%,var(--line))}
+.stat.warn{border-color:color-mix(in srgb,var(--warn) 50%,var(--line))}
+.upd{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;margin-left:auto}
+.controls{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+.stepper{display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:999px;background:var(--card2);overflow:hidden}
+.stepper button{border:0;background:transparent;color:var(--text);border-radius:0;min-height:var(--tap);padding:.25rem .75rem;box-shadow:none;font-weight:800;font-size:1rem}
+.stepper .val{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;min-width:3.1rem;text-align:center}
+.card-head{display:grid;gap:.3rem;margin-bottom:.15rem}
+.card-head .row{margin-top:0}
+.head-in{display:flex;flex-wrap:wrap;gap:.5rem .85rem;align-items:flex-start;justify-content:space-between}
+.card-head p{margin:0;font-size:.9rem;color:var(--muted);max-width:70ch}
+.tabs button{display:inline-flex;align-items:center;gap:.42rem}
+.tabs .ico{font-size:1.05em;line-height:1}
+.tabs .badge{font-size:.72rem;font-weight:800;background:#ffffff21;border-radius:999px;padding:.04rem .42rem;min-width:1.4rem;text-align:center;font-variant-numeric:tabular-nums}
+.tabs button.active .badge{background:#04121f2e}
+.tabs .attn{width:.45rem;height:.45rem;border-radius:99px;background:var(--bad);box-shadow:0 0 10px -1px var(--bad)}
+.skel{position:relative;overflow:hidden;background:var(--card2);border-color:transparent;color:transparent}
+.skel::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#ffffff14,transparent);transform:translateX(-60%);animation:shimmer 1.4s linear infinite}
+@keyframes shimmer{to{transform:translateX(60%)}}
+.toast{position:fixed;left:50%;bottom:calc(.7rem + env(safe-area-inset-bottom));transform:translate(-50%,.6rem);z-index:30;display:flex;align-items:center;gap:.55rem;max-width:min(94vw,34rem);border:1px solid var(--line2);background:var(--card);color:var(--text);border-radius:999px;padding:.6rem .95rem;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;font-size:.92rem}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast[data-kind=bad]{border-color:color-mix(in srgb,var(--bad) 60%,var(--line))}
+.toast[data-kind=ok]{border-color:color-mix(in srgb,var(--ok) 55%,var(--line))}
+@media(max-width:61.99em){.toast{bottom:calc(6.4rem + env(safe-area-inset-bottom))}}
+.filter{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.75rem}
+.filter input{flex:1 1 12rem;min-width:0}
+.filter .small{color:var(--muted)}
+.guide-card .cmdwrap{display:grid;gap:.35rem}
+.guide-card pre{max-height:max(9rem,34vh);transition:max-height .18s ease}
+.guide-card.tall pre{max-height:none}
+.guide-card .twist{display:inline-block;transition:transform .15s ease;font-size:.8rem}
+.guide-card.tall .twist{transform:rotate(180deg)}
+.ok-ico{color:var(--ok);font-weight:800}
+.bad-ico{color:var(--bad);font-weight:800}
+.tbl tr[hidden],.guide-card[hidden]{display:none}
+.logbar{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;justify-content:space-between;margin-bottom:.5rem}
+@media(prefers-reduced-motion:reduce){.skel::after{animation:none}.toast{transition:none}}
+@media(min-width:52em){.hero{grid-template-columns:minmax(0,1fr)}}
+
+</style></head><body>
+<a class="skip" href="#main">Skip to the deployer panels</a>
+<noscript><div class="shell"><div class="banner bad" style="margin-top:0">This page needs JavaScript: every button here calls the local deployer API, and without it the page is only text.</div></div></noscript>
+<main class="shell">
+<header class="hero">
+<div class="head-in">
+<div class="brand"><span class="logo" aria-hidden="true">⚙</span><div><h1>Scraper4 Local Deployer</h1><p class="tagline">Install, database, local scraper, cloud deploy — one guided dashboard</p></div></div>
+<div class="controls">
+<span class="stepper" role="group" aria-label="Text size"><button type="button" onclick="bumpFont(-1)" title="Smaller text" aria-label="Smaller text">A−</button><span class="val" id="fontVal" role="status">100%</span><button type="button" onclick="bumpFont(1)" title="Larger text" aria-label="Larger text">A+</button></span>
+<button class="chip" id="themeBtn" onclick="toggleTheme()" type="button" title="Switch between the dark and light palette">Light palette</button>
+<button class="chip" id="notifyBtn" onclick="armNotify()" type="button" title="Let the browser raise new-version notices in your OS notification centre">🔔 arm notifications</button>
+<button class="chip" onclick="refresh()" type="button">Refresh now</button>
+</div>
+</div>
+<div class="pills"><span class="pill">Node ${process.version}</span><span class="pill" title="package.json version — a trailing + is the agent-built release marker">v${pkg.version || '-'}</span><span class="pill" id="autoPill" aria-live="polite">Auto-update: checking…</span><span class="pill">Token protected</span></div>
+<div class="rail" id="rail">
+<span class="stat" id="railDb"><span class="dot"></span>database <b>checking…</b></span>
+<span class="stat" id="railScraper"><span class="dot"></span>scraper <b>checking…</b></span>
+<span class="stat" id="railGit"><span class="dot"></span>git <b>checking…</b></span>
+<span class="stat" id="railBranch"><span class="dot"></span>newest branch <b>checking…</b></span>
+<span class="stat" id="railNotify"><span class="dot"></span>notify <b>checking…</b></span>
+<span class="upd" id="updated">not updated yet</span>
+</div>
+</header>
+<div class="grid">
+<section id="main" class="stack">
+<nav class="tabs" role="tablist" aria-label="Deployer sections"><button role="tab" aria-selected="true" aria-controls="dash" class="active" onclick="tab('dash',this)" type="button"><span class="ico" aria-hidden="true">◧</span>Overview</button><button role="tab" aria-selected="false" aria-controls="database" onclick="tab('database',this)" type="button"><span class="ico" aria-hidden="true">▤</span>Database</button><button role="tab" aria-selected="false" aria-controls="scraper" onclick="tab('scraper',this)" type="button"><span class="ico" aria-hidden="true">▶</span>Local scraper<span class="badge" id="badgeScraper"></span></button><button role="tab" aria-selected="false" aria-controls="guide" onclick="tab('guide',this)" type="button"><span class="ico" aria-hidden="true">⧉</span>Copy commands<span class="badge" id="badgeGuide"></span></button><button role="tab" aria-selected="false" aria-controls="branches" onclick="tab('branches',this)" type="button"><span class="ico" aria-hidden="true">⌥</span>Branches<span class="badge" id="badgeBranches"></span></button><button role="tab" aria-selected="false" aria-controls="jobs" onclick="tab('jobs',this)" type="button"><span class="ico" aria-hidden="true">≡</span>Logs<span class="badge" id="badgeJobs"></span></button><button role="tab" aria-selected="false" aria-controls="pyextract" onclick="tab('pyextract',this)" type="button"><span class="ico" aria-hidden="true">⌛</span>Python extract</button></nav>
+<div id="dash" class="panel active" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">◧</span> Project status</h2><span class="pill" id="servingPill">serving: checking…</span></div><p class="muted small">Everything here comes from the local deployer API and refreshes on its own.</p></div>
+<div id="status" class="status" aria-live="polite"><div class="metric skel"><small>Package</small><b>·</b></div><div class="metric skel"><small>Version</small><b>·</b></div><div class="metric skel"><small>Database</small><b>·</b></div><div class="metric skel"><small>Scraper</small><b>·</b></div><div class="metric skel"><small>Git</small><b>·</b></div><div class="metric skel"><small>Project</small><b>·</b></div></div>
+<div class="row"><button onclick="run('install')" type="button">Install / retry npm</button><button class="success" onclick="run('databaseInstall')" type="button">Install / connect database</button><button onclick="run('localBuild')" type="button">Build local scraper</button><button class="secondary" onclick="updateCode(false)" type="button">Update from GitHub</button><button class="secondary" onclick="refresh()" type="button">Refresh</button></div>
+<details class="note"><summary>When the database address is wrong</summary><div><p class="muted">If you see <span class="kbd">getaddrinfo ENOTFOUND HOST</span>, your DATABASE_URL still contains the placeholder HOST. On Windows (and on machines without Docker) the database button now configures the <b>SQLite database built into Node.js</b> automatically - no PostgreSQL install/service is needed.</p></div></details>
+</div>
+</div>
+<div id="database" class="panel" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">▤</span> Database setup</h2><span class="pill" id="dbPill">method: checking…</span></div><p class="muted small">The deployer auto-detects Termux, Codespaces, desktop, Render, Vercel and Windows, and picks the database that needs no server on that platform.</p></div>
+<div class="row"><button class="success" onclick="run('databaseInstall')" type="button">Install database now</button><button class="secondary" onclick="showDbHelp()" type="button">Show panel instructions</button></div>
+<details class="note"><summary>How each platform is handled</summary><div><p class="muted">On Windows / machines without Docker it configures the <b>built-in SQLite database</b> (nothing to install). On Docker/Codespaces it starts PostgreSQL automatically; on Render/Cloudflare/Vercel it shows panel instructions.</p></div></details>
+<pre id="dbHelp"></pre>
+</div>
+</div>
+<div id="scraper" class="panel" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">▶</span> Run scraper locally</h2><span class="pill" id="scraperPill">state: checking…</span></div><p>Its own address: <a href="http://localhost:${scraperPort}/" target="_blank" rel="noreferrer">http://localhost:${scraperPort}/</a> — no token needed, and it stays up after you close this page.</p></div>
+<div class="row"><button class="success" onclick="scraperStart()" type="button">Build &amp; start local scraper</button><button class="secondary" onclick="openScraper('/')" type="button">Open scraper dashboard</button><button class="secondary" onclick="openScraper('/health')" type="button">Open /health</button><button class="danger" onclick="scraperStop()" type="button">Stop</button><button class="secondary" onclick="scraperLogs()" type="button">Refresh logs</button></div>
+<div id="scraperStale" aria-live="polite"></div>
+<details class="note"><summary>What happens on the first start (and the knobs that change it)</summary><div><p class="muted">The scraper starts automatically with the deployer, and the terminal prints its URL under the deployer URL. Use the database button first if DATABASE_URL is missing or contains HOST. Set <span class="kbd">LOCAL_SCRAPER_AUTOSTART=false</span> to stop it starting on its own, or <span class="kbd">LOCAL_SCRAPER_STOP_WITH_UI=true</span> to shut it down together with the deployer. The first start runs <span class="kbd">render:build</span>, which takes tens of seconds on Termux/ARM; Open scraper now waits for that build instead of failing with ECONNREFUSED. The dashboard works the same whether you open it here under /scraper/ or directly on its own port, because it resolves its API calls relative to the address you opened it at. Raise <span class="kbd">LOCAL_SCRAPER_PROXY_WAIT_MS</span> (default 180000) on a very slow device.</p></div></details>
+<pre id="scraperLog" aria-live="polite"></pre>
+</div>
+</div>
+<div id="guide" class="panel" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">⧉</span> Installed libraries by type</h2><span class="pill">from package.json + live probe</span></div><p class="muted small">Generated from package.json plus the required runtime/platform packages, so you can see what is already installed before copying commands.</p></div>
+<div id="libraryGroups" class="lib-grid"><div class="lib-card skel"><h3>Loading</h3><small>·</small></div></div>
+</div>
+<div class="card">
+<div class="card-head"><div class="head-in"><h2>One-click copy commands</h2><span class="pill">each card copies on its own</span></div><p class="muted small">Each environment has its own copy button. Paste only plain text into Termux; never paste Markdown links.</p></div>
+<div class="filter"><input id="guideFilter" type="text" placeholder="Filter environments — try termux or windows" dir="ltr" autocomplete="off" aria-label="Filter command guides"><span class="small" id="guideCount"></span></div>
+<div id="guideCards" class="guide-grid"></div>
+</div>
+</div>
+<div id="branches" class="panel" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">⌥</span> Repo branches — newest version tracking</h2><span class="pill" id="branchPill">last scan: never</span></div><p class="muted">Every <b id="branchIntervalLabel">1 minute</b> the deployer lists all branches of <span class="kbd">fazilatma/new</span>, reads the Scraper4 version of each one and - when enabled - installs the branch with the <b>newest version</b>. A row button installs a specific branch.</p></div>
+<div class="row"><label class="check"><input type="checkbox" id="autoInstallLatest" checked> Auto-install newest version</label><select id="branchInterval" class="auto" aria-label="Scan interval"><option value="1">every 1 minute</option><option value="5">every 5 minutes</option><option value="10">every 10 minutes</option><option value="30">every 30 minutes</option><option value="0">never (manual only)</option></select><button class="secondary" onclick="scanNow()" type="button">Scan now</button><button class="secondary" onclick="renderBranches(true)" type="button">Refresh table</button><button class="secondary" onclick="testNotify()" type="button" title="Send one notification through whichever channel this machine has">Test system notification</button></div>
+<div id="branchSummary" class="banner" aria-live="polite"></div>
+<div class="filter"><input id="branchFilter" type="text" placeholder="Filter branches" dir="ltr" autocomplete="off" aria-label="Filter branches"><span class="small" id="branchCount"></span></div>
+<div class="scrollx"><table class="tbl"><caption class="small muted" style="caption-side:bottom;text-align:left;padding:.5rem 0">On a narrow screen every row turns into a card, so nothing needs sideways scrolling.</caption><thead><tr><th scope="col">Branch</th><th scope="col">Version on branch</th><th scope="col">Installed</th><th scope="col">Last commit</th><th scope="col">Status</th><th scope="col">Action</th></tr></thead><tbody id="branchRows"><tr><td colspan="6" class="muted">Loading branches…</td></tr></tbody></table></div>
+</div>
+</div>
+<div id="jobs" class="panel" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">≡</span> Command output</h2><label class="check"><input type="checkbox" id="logFollow" checked> Follow the log</label></div><p class="muted small">Job output lands here while it runs; the log keeps the last lines of the current job.</p></div>
+<pre id="log" aria-live="polite"></pre>
+</div>
+</div>
+<div id="pyextract" class="panel" role="tabpanel">
+<div class="card">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">⌛</span> Automatic extraction with Python</h2><span class="pill" id="pyPill">python: checking…</span></div></div>
+<div id="pyStatus" class="banner" style="margin-top:0" aria-live="polite">Checking Python…</div>
+<div class="row"><button class="secondary" onclick="pyRefresh()" type="button">Refresh status</button><button onclick="pyInstall()" type="button">Install Python deps</button></div>
+<label for="pyUrl">List page URL</label><input id="pyUrl" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://shop.example/category/shoes">
+<label for="pySelectors">Explicit selectors (optional JSON)</label><input id="pySelectors" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder='{"container": "//div[@class=card]"}'>
+<div class="row"><button class="success" onclick="pyRun()" type="button">Extract with Python</button></div>
+<div id="pyResult"></div>
+<details class="note"><summary>What this runner needs and what it does</summary><div><p class="muted">Runs <span class="kbd">scripts/py-auto-extract.py</span> on one list page: no manual selectors needed — the structural parser plus auto-discovery find the products (explicit selectors, including XPath, are optional). Needs <span class="kbd">python3</span> with <span class="kbd">beautifulsoup4</span> (<span class="kbd">lxml</span> for XPath, <span class="kbd">requests</span> for live URLs).</p></div></details>
+</div>
+</div>
+</section>
+<aside class="card side" aria-label="Smart setup">
+<div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">✦</span> Smart setup</h2></div></div>
+<div id="detected" class="banner" style="margin-top:0" aria-live="polite">Detecting environment…</div>
+<label for="env">Environment</label><select id="env"><option value="vscode">VS Code / Desktop</option><option value="windows">Windows local</option><option value="termux-offline">Termux / Android</option><option value="cloudflare-worker">Cloudflare Worker</option><option value="vercel">Vercel</option><option value="render">Render</option><option value="vps">VPS</option></select>
+<label for="libs">Scraping libraries</label><select id="libs"><option value="minimal">Minimal</option><option value="edge">Edge / Cloudflare-friendly</option><option value="node" selected>Node scraping stack</option><option value="browser">Browser rendering stack</option><option value="full">Full stack</option></select>
+<p class="small muted">The installed library inventory is grouped in the Copy commands tab.</p>
+<label for="pm">Package manager</label><select id="pm"><option>npm</option><option>pnpm</option><option>yarn</option><option>bun</option></select>
+<label for="port">Port</label><input id="port" value="3000" inputmode="numeric" pattern="[0-9]*" dir="ltr" autocomplete="off">
+<div class="steps"><div class="step"><span class="num">1</span><div><b>Install deps</b><br><span class="muted small">npm dependencies and scraper libraries.</span></div></div><div class="step"><span class="num">2</span><div><b>Install/connect database</b><br><span class="muted small">Automatic where possible; panel instructions elsewhere.</span></div></div><div class="step"><span class="num">3</span><div><b>Start scraper</b><br><span class="muted small">Open the scraper dashboard after it starts.</span></div></div></div>
+</aside>
+</div>
+</main>
+<output class="toast" id="toast" aria-live="polite"><span class="msg"></span></output>
+<nav class="dock" aria-label="Primary actions">
+<button class="success primary" onclick="scraperStart()" type="button">Build &amp; start local scraper</button>
+<button class="secondary" onclick="openScraper('/')" type="button">Open scraper</button>
+<button class="secondary" onclick="refresh()" type="button">Refresh</button>
+</nav>
 <script>
 const TOKEN = ${JSON.stringify(token)};
 const COMMANDS = ${JSON.stringify(commands)};
@@ -1311,9 +1667,228 @@ const logError = err => {
   const log = $('log');
   const db = $('dbHelp');
   if (log) log.textContent = msg;
+  toast(msg, 'bad');
   if (db && !db.textContent) db.textContent = msg;
   console.error(err);
 };
+const THEME_KEY = 'scraper4-deployer-theme';
+function applyDeployerTheme(mode) {
+  // One attribute on the root element switches palettes; the stylesheet owns every colour,
+  // so nothing here needs to know a single value.
+  document.documentElement.dataset.theme = mode;
+  const btn = $('themeBtn');
+  if (btn) btn.textContent = mode === 'light' ? 'Dark palette' : 'Light palette';
+  try { localStorage.setItem(THEME_KEY, mode); } catch (err) { /* private mode: not important */ }
+}
+function toggleTheme() {
+  applyDeployerTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+}
+(function initDeployerTheme() {
+  let saved = '';
+  try { saved = localStorage.getItem(THEME_KEY) || ''; } catch (err) { saved = ''; }
+  applyDeployerTheme(saved === 'light' || saved === 'dark' ? saved
+    : (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+})();
+
+const TEXT_KEY = 'scraper4-deployer-text';
+// Browser zoom and the OS slider already work because every length in this page is rem/em, but on
+// a phone at 400% zoom people still ask for one more notch. Root font-size is the only knob that
+// scales text, padding, tap targets and the em breakpoints together, so this is real zoom rather
+// than a text-only hack that breaks the layout.
+const TEXT_STEPS = [100, 112.5, 125, 137.5];
+let textStep = 0;
+function applyTextSize(step) {
+  textStep = Math.max(0, Math.min(TEXT_STEPS.length - 1, step));
+  document.documentElement.style.fontSize = TEXT_STEPS[textStep] + '%';
+  const val = $('fontVal');
+  if (val) val.textContent = TEXT_STEPS[textStep] + '%';
+  try { localStorage.setItem(TEXT_KEY, String(textStep)); } catch (err) { /* private mode */ }
+}
+function bumpFont(delta) { applyTextSize(textStep + (delta > 0 ? 1 : -1)); toast('Text size ' + TEXT_STEPS[textStep] + '%'); }
+(function initTextSize() {
+  let saved = NaN;
+  try { saved = Number(localStorage.getItem(TEXT_KEY)); } catch (err) { saved = NaN; }
+  applyTextSize(Number.isFinite(saved) ? saved : 0);
+})();
+
+let toastTimer = 0;
+function toast(message, kind) {
+  const el = $('toast');
+  if (!el) return;
+  const msg = el.querySelector('.msg');
+  if (msg) msg.textContent = String(message);
+  el.dataset.kind = kind || '';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2800);
+}
+
+function followLog(el, force) {
+  if (!el) return;
+  if (!force) {
+    const cb = $('logFollow');
+    if (cb && !cb.checked) return;
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+// The browser half of the announcement. The server fires the OS notifier; this covers a machine
+// with no CLI notifier, or a headless VPS where somebody is nevertheless watching the page. The
+// "already told you" memory is kept per version key in localStorage, so the five-second poll
+// cannot nag about the same release.
+const NOTIFY_SEEN_KEY = 'scraper4-deployer-notified';
+function notifySeenKeys() {
+  try { return String(localStorage.getItem(NOTIFY_SEEN_KEY) || '').split('|').filter(Boolean); } catch (err) { return []; }
+}
+function notifySeenBefore(key) { return notifySeenKeys().includes(key); }
+function markNotifySeen(key) {
+  try { localStorage.setItem(NOTIFY_SEEN_KEY, notifySeenKeys().concat(key).slice(-12).join('|')); } catch (err) { /* private mode */ }
+}
+function notifyPermission() { return (window.Notification && Notification.permission) || 'unsupported'; }
+function paintNotifyButton(state) {
+  const btn = $('notifyBtn');
+  if (!btn) return;
+  const value = state || notifyPermission();
+  btn.textContent = value === 'granted' ? '🔔 notifications armed' : value === 'denied' ? '🔕 notifications blocked' : value === 'unsupported' ? '🔕 no browser notifications' : '🔔 arm notifications';
+  btn.title = value === 'granted' ? 'The browser raises new-version notices in your OS notification centre'
+    : value === 'denied' ? 'Your browser is blocking notifications for this site; unblock it in site settings'
+    : 'Let the browser raise new-version notices in your OS notification centre';
+  btn.dataset.state = value;
+}
+function armNotify() {
+  if (!window.Notification) { toast('This browser has no Notification API — the deployer still notifies through your system notifier', 'bad'); return; }
+  if (Notification.permission === 'granted') { try { new Notification('Scraper4 deployer', { body: 'Notifications are armed from this page.', tag: 'scraper4-arm' }); } catch (err) { /* ignored */ } toast('Browser notifications armed', 'ok'); paintNotifyButton('granted'); return; }
+  Promise.resolve(Notification.requestPermission()).then(function (state) {
+    paintNotifyButton(state);
+    toast(state === 'granted' ? 'Browser notifications armed' : 'Permission not granted — notices stay with the system channel', state === 'granted' ? 'ok' : 'bad');
+  }).catch(function (error) { logError(error); });
+}
+function announceBrowserNotice(d) {
+  const notify = (d && d.notify) || {};
+  const chip = $('railNotify');
+  const recent = notify.recent || [];
+  if (chip) {
+    const label = notify.channel ? notify.channel.label : (notify.enabled === false ? 'off' : 'no notifier');
+    const delivered = recent.some(function (entry) { return entry.ok; });
+    chip.className = 'stat' + (delivered ? ' ok' : ' warn');
+    chip.innerHTML = '<span class="dot"></span>notify <b>' + escHtml(label) + (recent.length ? ' · ' + recent.length + ' noticed' : '') + '</b>';
+  }
+  const latest = recent[0];
+  if (!latest || notifySeenBefore(latest.key)) return;
+  markNotifySeen(latest.key);
+  if (window.Notification && Notification.permission === 'granted') {
+    try { new Notification(latest.title, { body: latest.body, tag: 'scraper4-' + latest.kind, requireInteraction: latest.kind === 'newer-branch' }); } catch (err) { /* some platforms need a service worker */ }
+  }
+  toast(latest.title, 'ok');
+  badge('branches', '!');
+}
+async function testNotify() {
+  try {
+    const d = await api('/api/notifications/test', { method: 'POST', body: '{}' });
+    toast(d.ok ? 'Test notification sent via ' + (d.label || d.channel) : 'No system notification: ' + (d.error || 'unknown'), d.ok ? 'ok' : 'bad');
+    refresh();
+  } catch (error) { logError(error); }
+}
+window.armNotify = armNotify;
+window.testNotify = testNotify;
+paintNotifyButton();
+function foldLongHelp() {
+  document.querySelectorAll('p:not([data-folded])').forEach(p => {
+    if (p.closest('details') || p.closest('label') || p.closest('button')) return;
+    if (!p.parentNode) return;
+    const text = String(p.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text.length < 90) return;
+    p.setAttribute('data-folded', '1');
+    const box = document.createElement('details');
+    box.className = 'note';
+    const summary = document.createElement('summary');
+    summary.textContent = 'ℹ️ Why this is here';
+    box.appendChild(summary);
+    p.parentNode.insertBefore(box, p);
+    box.appendChild(p);
+  });
+}
+foldLongHelp();
+
+let lastRefreshAt = 0;
+function tickUpdated() {
+  const el = $('updated');
+  if (!el) return;
+  el.textContent = lastRefreshAt
+    ? 'updated ' + Math.max(0, Math.round((Date.now() - lastRefreshAt) / 1000)) + 's ago'
+    : 'not updated yet';
+}
+
+function statChip(id, kind, label, valueHtml) {
+  const el = $(id);
+  if (!el) return;
+  el.className = 'stat' + (kind ? ' ' + kind : '');
+  el.innerHTML = '<span class="dot ' + (kind || '') + '"></span>' + escHtml(label) + ' <b>' + valueHtml + '</b>';
+}
+
+function badge(panelId, text) {
+  const el = $('badge' + panelId.charAt(0).toUpperCase() + panelId.slice(1));
+  if (el) el.textContent = text || '';
+  const tabBtn = document.querySelector('.tabs button[aria-controls="' + panelId + '"]');
+  if (!tabBtn) return;
+  const has = Boolean(tabBtn.querySelector('.attn'));
+  if (text === '!' && !has) {
+    const dot = document.createElement('span');
+    dot.className = 'attn';
+    tabBtn.appendChild(dot);
+  } else if (text !== '!' && has) {
+    tabBtn.querySelector('.attn').remove();
+  }
+}
+
+function updateRail(d) {
+  const db = d.database || {}, scraper = d.scraper || {}, git = d.git || {}, code = d.code || {}, br = d.branches || {};
+  const serving = scraper.serving || {};
+  const dirtyCount = String(git.dirty || '').split(String.fromCharCode(10)).filter(Boolean).length;
+  const dbOk = Boolean(db.configured) && !db.rawHasPlaceholder;
+  statChip('railDb', dbOk ? 'ok' : 'warn', 'database', escHtml(db.methodLabel || (db.configured ? 'configured' : 'missing')));
+  statChip('railScraper', scraper.running ? (serving.stale ? 'warn' : 'ok') : 'bad', 'scraper',
+    escHtml(scraper.running ? (serving.stale ? 'stale build on :' + scraper.port : 'live on :' + scraper.port) : (scraper.exitCode ? 'stopped (exit ' + scraper.exitCode + ')' : 'stopped')));
+  statChip('railGit', dirtyCount ? 'warn' : 'ok', 'git',
+    escHtml((git.branch || '-') + (git.commit ? ' ' + String(git.commit).slice(0, 40) : '')) + (dirtyCount ? ' <b>' + dirtyCount + ' changed</b>' : ''));
+  statChip('railBranch', br.latest && br.latest.version ? 'ok' : 'warn', 'newest branch',
+    br.latest ? escHtml((br.latest.name || '?') + ' v' + (br.latest.version || '?')) : 'not scanned yet');
+  const servingPill = $('servingPill');
+  if (servingPill) servingPill.textContent = code.stale
+    ? 'running v' + (code.running || '?') + ', disk has v' + (code.onDisk || '?')
+    : 'running v' + (code.running || (d.package && d.package.version) || '?');
+  const dbPill = $('dbPill');
+  if (dbPill) dbPill.textContent = 'method: ' + (db.methodLabel || db.method || 'unknown');
+  const scraperPill = $('scraperPill');
+  if (scraperPill) scraperPill.textContent = scraper.running ? ('pid ' + (scraper.pid || '?') + ' · port ' + scraper.port) : 'not running';
+  badge('scraper', scraper.running ? (serving.stale ? '!' : 'live') : '');
+  badge('jobs', (d.jobs || []).some(function (j) { return j.running; }) ? 'running' : '');
+  const branchPill = $('branchPill');
+  if (branchPill) branchPill.textContent = 'last scan: ' + (br.lastScanAt ? new Date(br.lastScanAt).toLocaleTimeString() : 'never')
+    + (br.scanning ? ' (scanning now)' : '') + (br.count ? ' · ' + br.count + ' branches' : '');
+}
+
+function toggleCmd(btn) {
+  const card = btn && btn.closest ? btn.closest('.guide-card') : null;
+  if (!card) return;
+  card.classList.toggle('tall');
+  const twist = card.querySelector('.twist');
+  if (twist) twist.textContent = card.classList.contains('tall') ? '▲' : '▼';
+}
+
+function filterGuides() {
+  const needle = String(($('guideFilter') || {}).value || '').trim().toLowerCase();
+  let shown = 0;
+  const cards = document.querySelectorAll('#guideCards .guide-card');
+  Array.prototype.forEach.call(cards, function (card) {
+    const hit = !needle || String(card.textContent || '').toLowerCase().indexOf(needle) >= 0;
+    card.hidden = !hit;
+    if (hit) shown++;
+  });
+  const count = $('guideCount');
+  if (count) count.textContent = needle ? shown + ' of ' + cards.length + ' environments match' : cards.length + ' environments';
+}
+
 async function api(path, opt = {}) {
   const r = await fetch(path, { ...opt, headers: { 'content-type': 'application/json', 'x-local-deployer-token': TOKEN, ...(opt.headers || {}) } });
   const d = await r.json();
@@ -1324,8 +1899,19 @@ function selectTab(id, btn) {
   document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
   const panel = $(id);
   if (panel) panel.classList.add('active');
-  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+  document.querySelectorAll('.tabs button').forEach(x => {
+    x.classList.remove('active');
+    x.setAttribute('aria-selected', 'false');
+  });
+  if (btn) {
+    btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true');
+    const flag = btn.querySelector('.attn');
+    if (flag) flag.remove();
+    // On a phone (or at 400% zoom) the tab strip scrolls sideways; bring the chosen tab into
+    // view without disturbing the vertical scroll the user was reading at.
+    try { btn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); } catch (err) { /* older engines */ }
+  }
 }
 function tab(id, btn) { selectTab(id, btn); }
 function tabByIndex(id, index) { selectTab(id, document.querySelectorAll('.tabs button')[index]); }
@@ -1358,7 +1944,8 @@ async function pollJobs() {
     const data = await api('/api/jobs');
     const job = data.jobs.find(j => j.name === activeJob) || data.jobs.at(-1);
     if (job) $('log').textContent = '$ ' + job.command + String.fromCharCode(10,10) + job.log;
-    if (job?.running) setTimeout(pollJobs, 1200);
+    followLog($('log'), false);
+    if (job?.running) { badge('jobs', 'running'); setTimeout(pollJobs, 1200); } else badge('jobs', job && job.ok === false ? '!' : '');
     refresh();
   } catch (err) { logError(err); }
 }
@@ -1378,6 +1965,8 @@ async function pyRefresh() {
     $('pyStatus').innerHTML = (s.python ? pill('Python ' + s.version, true) : pill('Python missing', false))
       + pill('bs4', s.hasBs4) + pill('lxml', s.hasLxml) + pill('requests', s.hasRequests)
       + (s.scriptExists ? '' : pill('py-auto-extract.py missing', false));
+    const pyPill = $('pyPill');
+    if (pyPill) pyPill.textContent = s.python ? ('python ' + (s.version || '?') + ' ready') : 'python missing';
   } catch (err) { $('pyStatus').textContent = 'Status check failed: ' + (err && err.message ? err.message : err); }
 }
 async function pyInstall() {
@@ -1399,7 +1988,7 @@ async function pyRun() {
     else {
       html += '<div style="overflow:auto"><table class="tbl"><thead><tr><th>#</th><th>Title</th><th>Price</th><th>Link</th><th>Image</th></tr></thead><tbody>';
       products.forEach((p, i) => {
-        html += '<tr><td>' + i + '</td><td>' + escHtml(String(p.title || '')) + '</td><td>' + escHtml(String(p.price || '')) + '</td><td>' + (p.link ? '<a href="' + escHtml(String(p.link)) + '" target="_blank" rel="noreferrer">open</a>' : '<span class="muted">—</span>') + '</td><td>' + (p.image ? 'yes' : 'NO') + '</td></tr>';
+        html += '<tr><td data-label="#">' + i + '</td><td data-label="Title">' + escHtml(String(p.title || '')) + '</td><td data-label="Price">' + escHtml(String(p.price || '')) + '</td><td data-label="Link">' + (p.link ? '<a href="' + escHtml(String(p.link)) + '" target="_blank" rel="noreferrer">open</a>' : '<span class="muted">—</span>') + '</td><td data-label="Image">' + (p.image ? 'yes' : 'NO') + '</td></tr>';
       });
       html += '</tbody></table></div>';
     }
@@ -1418,6 +2007,7 @@ async function scraperLogs() {
   try {
     const d = await api('/api/scraper/logs');
     $('scraperLog').textContent = d.log || 'No logs yet.';
+    followLog($('scraperLog'), Boolean(d.scraper?.running));
     refresh();
     if (d.scraper?.running) setTimeout(scraperLogs, 1500);
   } catch (err) { logError(err); }
@@ -1486,9 +2076,11 @@ async function branchConfigChanged() {
   } catch (err) { logError(err); }
 }
 function shortSha(sha) { return sha ? String(sha).slice(0, 7) : ''; }
+let lastBranchPayload = null;
 function renderBranchesData(d, force) {
   const rows = $('branchRows');
   if (!rows) return;
+  lastBranchPayload = d;
   const summary = $('branchSummary');
   const latest = d.latest || null;
   const currentName = (d.current && d.current.branch) || '';
@@ -1512,7 +2104,18 @@ function renderBranchesData(d, force) {
     const lab = $('branchIntervalLabel');
     if (lab) lab.textContent = d.intervalMs > 0 ? String(Math.max(1, Math.round(d.intervalMs / 60000))) + ' minute(s)' : 'manual (timer off)';
   }
-  const list = d.branches || [];
+  const needle = String(($('branchFilter') || {}).value || '').trim().toLowerCase();
+  const all = d.branches || [];
+  const list = needle
+    ? all.filter(function (b) { return String(b.name || '').toLowerCase().indexOf(needle) >= 0 || String(b.version || '').toLowerCase().indexOf(needle) >= 0; })
+    : all;
+  const countEl = $('branchCount');
+  if (countEl) countEl.textContent = needle ? list.length + ' of ' + all.length + ' branches match' : all.length + ' branches';
+  badge('branches', String(all.length));
+  if (!list.length && needle) {
+    rows.innerHTML = '<tr><td colspan="6" class="muted">No branch name or version contains “' + escHtml(needle) + '”.</td></tr>';
+    return;
+  }
   if (!list.length) {
     rows.innerHTML = '<tr><td colspan="6" class="muted">No remote branches found yet. If this is a fresh clone wait for the first scan or press Scan now.</td></tr>';
     return;
@@ -1534,11 +2137,12 @@ function renderBranchesData(d, force) {
         ? '<span class="muted small">installed</span> <button class="secondary" onclick="updateCode(true)">Update branch</button>'
         : '<button class="success" onclick="installBranch(' + String.fromCharCode(39) + b.name + String.fromCharCode(39) + ', this)">Install</button>';
     }
-    return '<tr' + (isCurrent ? ' class="current"' : '') + '><td><code>' + escHtml(b.name) + '</code></td>' +
-      '<td class="num"><b>' + versionCell + '</b></td>' +
-      '<td class="num">' + escHtml(installedVersion) + '</td>' +
-      '<td><code>' + escHtml(shortSha(b.sha)) + '</code><br><small>' + escHtml(b.date || '') + '</small></td>' +
-      '<td>' + statusCell + '</td><td>' + actionCell + '</td></tr>';
+    return '<tr' + (isCurrent ? ' class="current"' : '') + '>' +
+      '<td data-label="Branch"><code>' + escHtml(b.name) + '</code></td>' +
+      '<td data-label="On branch" class="num"><b>' + versionCell + '</b></td>' +
+      '<td data-label="Installed" class="num">' + escHtml(installedVersion) + '</td>' +
+      '<td data-label="Last commit"><code>' + escHtml(shortSha(b.sha)) + '</code><br><small>' + escHtml(b.date || '') + '</small></td>' +
+      '<td data-label="Status">' + statusCell + '</td><td data-label="Action">' + actionCell + '</td></tr>';
   }).join('');
   if (d.scanning) setTimeout(function () { renderBranches(true); }, 1800);
 }
@@ -1567,8 +2171,10 @@ function renderGuides() {
   const container = $('guideCards');
   if (!container) return;
   const names = Object.keys(COMMANDS);
-  container.innerHTML = names.map((name, i) => '<div class="guide-card"><h3>' + name + '</h3><button class="secondary" onclick="copyCommand(' + i + ',this)">Copy all</button><button class="secondary" onclick="downloadCommand(' + i + ')">Download executable script</button><span class="copy-ok" id="copied' + i + '"></span><pre id="cmd' + i + '"></pre></div>').join('');
+  container.innerHTML = names.map((name, i) => '<div class="guide-card"><h3>' + name + '</h3><div class="row"><button class="secondary" onclick="copyCommand(' + i + ',this)">Copy all</button><button class="secondary" onclick="downloadCommand(' + i + ')">Download executable script</button><button class="chip" onclick="toggleCmd(this)" type="button"><span class="twist">▼</span> full script</button><span class="copy-ok" id="copied' + i + '"></span></div><pre id="cmd' + i + '"></pre></div>').join('');
   Object.values(COMMANDS).forEach((cmd, i) => { $('cmd' + i).textContent = cmd; });
+  filterGuides();
+  badge('guide', String(names.length));
 }
 function commandFileName(name) {
   if (/PowerShell/i.test(name)) return 'scraper4-install-windows.ps1';
@@ -1636,6 +2242,7 @@ async function copyCommand(i, btn) {
     const text = Object.values(COMMANDS)[i];
     await navigator.clipboard.writeText(text);
     $('copied' + i).textContent = 'Copied';
+    toast('Copied ' + (Object.keys(COMMANDS)[i] || 'command') + ' to the clipboard', 'ok');
     setTimeout(() => { const el = $('copied' + i); if (el) el.textContent = ''; }, 1800);
   } catch (err) { logError(err); }
 }
@@ -1673,9 +2280,16 @@ async function refresh() {
     }
     const statusEl = $('status');
     if (statusEl) statusEl.innerHTML = '<div class="metric"><small>Package</small><b>' + d.package.name + '</b></div><div class="metric"><small>Version</small><b>' + (d.package.version || '-') + '</b></div><div class="metric"><small>Database</small><b>' + dbLabel + '</b><small>' + (db.maskedUrl || db.methodLabel || 'Use Database tab') + '</small></div><div class="metric"><small>Scraper</small><b>' + servingLabel(scraper) + '</b></div><div class="metric"><small>Git</small><b class="small">' + (d.git?.commit || '-') + '</b></div><div class="metric"><small>Project</small><b class="small">' + d.projectDir + '</b></div>';
+    updateRail(d);
+    announceBrowserNotice(d);
+    lastRefreshAt = Date.now();
+    tickUpdated();
   } catch (err) { logError(err); }
 }
 window.tab = tab;
+window.bumpFont = bumpFont;
+window.toggleCmd = toggleCmd;
+window.filterGuides = filterGuides;
 window.run = run;
 window.scraperStart = scraperStart;
 window.openScraper = openScraper;
@@ -1704,6 +2318,15 @@ showDbHelp();
 pyRefresh();
 refresh();
 if(location.hash==='#branches')tab('branches',document.querySelectorAll('.tabs button')[4]);
-setInterval(refresh, 5000);
+$('branchFilter')?.addEventListener('input', function () { if (lastBranchPayload) renderBranchesData(lastBranchPayload, true); });
+$('guideFilter')?.addEventListener('input', filterGuides);
+$('logFollow')?.addEventListener('change', function () { followLog($('log'), true); });
+setInterval(tickUpdated, 1000);
+// A phone backgrounding the browser must not keep hammering the local API; the 5s poll is the
+// difference between "live" and "frozen at whatever I last looked at", so it resumes on focus.
+setInterval(function () { if (!document.hidden) refresh(); }, 5000);
+window.addEventListener('focus', function () { refresh(); });
+// The bell label is a fact about the browser, not the server: repaint it whenever the page is seen.
+window.addEventListener('focus', function () { paintNotifyButton(); });
 </script></body></html>`;
 }

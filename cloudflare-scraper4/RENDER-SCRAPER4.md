@@ -752,3 +752,195 @@ way. Re-run the diagnostic after a save and the list/detail stages should
 go green.
 
 Same update path: pull, restart the deployer process, re-run the diagnostic.
+
+## 1.180.0+ — merged onto your 1.179.0: results list, local AI providers, the `+` marker, redesigned deployer
+
+This release has your `1.179.0` (per-profile enricher switch, Basalam categories inside enrichment,
+recon audit) plus your `1.178.0` (extraction timer, background enricher, chat/category test switch)
+and `1.177.0` (auto-candidates, searchable green-marked dropdowns, auto-refresh results) as
+ancestors; none of that is changed here.
+The four fixes below were still missing on the production branch, and all of them are the only
+deltas in the shared dashboard besides the changelog — your `combo-list` dropdowns and your
+`loadProducts({noActivate:true})` auto-refresh survived the merge (pinned in the tests).
+
+- **Results section renders rows again.** `productSuffixFormats` was `async` while
+  `productCodeSuffix` read it synchronously, so `formats[0]` was `undefined` on a Promise and any
+  row with a `sku`/`sourceKey` threw inside `rows.map(productRowHtml)`, discarding the whole list
+  and breaking `openProductModal` too. The helper is synchronous, the formats result is validated
+  with the `(کد:x)` fallback, each row is guarded (a failure becomes one warning card naming the
+  error) and the modal says when a row is missing. `worker-tests/results-products-ui.test.mjs`
+  drives the real bundle and fails if the stray `async` returns.
+- **Local/LAN AI providers on Linux and Termux.** `assertAiEndpointUrl` in
+  `render-src/network.ts` plus an explicit `aiEndpoint` opt-in in `safeFetch` (redirect hops and
+  the `/models` probe included), used by every Node AI call. http/https only, no URL credentials,
+  `169.254.0.0/16` refused; scrape targets keep `assertPublicUrl`.
+- **Chat keeps its history** on Node (messages posted with roles, `keyIndex` reported), and
+  `LOCAL_SCRAPER_AUTO_UPDATE` also accepts `0` / `no` / `off`.
+- **Version marker.** Agent releases are `x.y.z+` (`1.180.0+`); `sync-version` accepts and
+  propagates it, the branch comparator still uses the numeric core, and the runtime pin reads
+  `packageJson.version` instead of embedding it in a regex.
+- **Deployer page rebuilt for a zoomed phone**: rem/em type and em breakpoints everywhere, no
+  px layout lengths, overflow-safe `minmax(min(100%,X),1fr)` grids, tables that become labelled
+  cards when narrow, a sticky snapping tab rail, 2.85rem tap targets, a pinned bottom dock with
+  safe-area padding, collapsible explanations, and dark/light palettes with a persisted switch.
+  Same ids, same handlers, same routes.
+
+## 1.181.0+ — deployer round two: a live status rail, a text-size step, badges, filters, and behaviour tests
+
+Only `scripts/local-deployer-ui.mjs` and its tests change. Every `/api/*` route, id, handler and
+the token flow (`?token=` plus `x-local-deployer-token`) stay as they were, and the tab order that
+`tabByIndex()` and the `#branches` deep link depend on is untouched. The worker bundle picks up
+nothing but the changelog lines.
+
+- **Status rail in the header**: database / local scraper / git / newest branch, filled from the
+  existing `status()` payload, with an `updated Ns ago` stamp. A stale build served on localhost
+  reads `warn` there, so you see it before opening the tab. The rail is deliberately not an ARIA
+  live region; the toast (`<output>` at the bottom) is the only announced thing.
+- **Text zoom**: four steps 100 / 112.5 / 125 / 137.5 percent on the root font size. Because the
+  whole page is rem/em — type, padding, tap targets and every media query — this is real zoom, not
+  a text-only hack that breaks the grid. Persisted under `scraper4-deployer-text`; both buttons
+  carry `aria-label` and take `min-height:var(--tap)`.
+- **Tab badges**: counts for the branch list and the command guides, `running` while a job polls,
+  and `!` plus a red dot when the scraper serves a stale build. The dot is added and removed by the
+  same `badge()` call that writes the text, so it cannot outlive the condition.
+- **Loading, empty and error states**: skeleton metric tiles and library cards (shimmer, stilled
+  under `prefers-reduced-motion`) with no interactive markup inside them, and toasts in place of
+  `alert()`, including one that mirrors a copied command. An empty filter result says so.
+- **Filters and folds**: `#branchFilter` re-renders from the cached payload (no extra request),
+  `#guideFilter` hides non-matching environment cards, and every long script folds behind
+  `toggleCmd` while keeping its `#cmdN` id for the copy/download handlers.
+- **Phone manners**: the 5 second poll is skipped while `document.hidden` and resumes on `focus`;
+  the job log only auto-scrolls while `#logFollow` is ticked, while the scraper log follows while
+  its process is running.
+- **Found in the same review**: the environment filter existed but was never wired to
+  `filterGuides()`; `updateRail` labelled the third state `bad` while the stylesheet only knew `err`,
+  so a stopped scraper rendered a grey dot; and a status payload without `package` threw inside the
+  refresh loop instead of falling back.
+
+Guards: `worker-tests/deployer-ui-mobile.test.mjs` pins the markup and stylesheet contract (no px
+type, every queried id present, restated `[hidden]` rules), and the new
+`worker-tests/deployer-ui-live.test.mjs` executes the page script itself against a parsed DOM so the
+rail, badges, zoom steps, filters, toast and follow-up are checked as behaviour, not as strings.
+
+## 1.182.0+ — rebased onto your 1.180.0 + 1.181.0: the redesigned deployer page, plus four Node deltas
+
+Your tree is the base and stays untouched: per-profile indirect routing on Node with route
+reporting and the `reconTable` fix (1.180.0), the results-tab render fix, one-at-a-time browsers and
+honest browser availability (1.181.0). Your new tests (`results-tab`, `results-suffix`,
+`node-source-route`, `browser-slot`) run on this merge as-is.
+
+### Why the number moved
+
+The deployer redesign was first pushed on this branch as `1.181.0+`, and you then released
+`1.180.0`/`1.181.0` on the production branch. `numericCore` in `worker-src/deployer-branches.ts`,
+which decides "newest branch" in the deployer, compares the numeric core and ignores the `+`, so both
+releases read as the same version. Mine is `1.182.0+` now and carries the same content; the `+`
+marker on every agent release stays, propagated by `npm run version:sync`.
+
+### Node deltas this branch adds
+
+- `assertAiEndpointUrl` in `render-src/network.ts` and the `aiEndpoint` opt-in in `ApiRequestInit`
+  (both `safeFetch` hops and the `/models` probe): an AI base URL you typed yourself may point at
+  Ollama on `127.0.0.1:11434`, `host.docker.internal` or a LAN host, while scrape targets keep
+  `assertPublicUrl`; http/https only, no URL credentials, `169.254.0.0/16` refused.
+- `/api/ai/chat` on Node posts the messages with their roles instead of one flattened prompt, and
+  reports the `keyIndex` the `[K۲]` picker selected.
+- `productRowFailureHtml` keeps a single broken result in its own warning card instead of dropping
+  the whole list, and `openProductModal` says why it cannot open. Your synchronous
+  `productSuffixFormats` fix is the base and is untouched; `worker-tests/results-products-ui.test.mjs
+  and your `results-tab.test.mjs` both pass against it.
+- `LOCAL_SCRAPER_AUTO_UPDATE` and `LOCAL_DEPLOYER_AUTO_UPDATE` also accept `0` / `no` / `off`.
+
+### Deployer page (`scripts/local-deployer-ui.mjs`)
+
+The second round of the redesign, additive on top of the mobile-first 1.178.0+ work: a header status
+rail fed from the existing `status()` payload with an `updated Ns ago` stamp, a four-notch text-size
+step (100 to 137.5 percent on the root font size, persisted), per-tab count badges with a red
+attention dot, shimmer skeletons for loading state, toasts instead of `alert()`, filters for the branch
+and environment lists, foldable command scripts, and polling that stops while the tab is hidden.
+No route, id or handler changed, and the rail is deliberately not an ARIA live region. Guards:
+`worker-tests/deployer-ui-mobile.test.mjs` (markup and stylesheet contract) and
+`worker-tests/deployer-ui-live.test.mjs` (behaviour, executing the page script itself against a parsed
+DOM with the real `/api/status` shape).
+
+## 1.184.0+ — a version notice that leaves the process, and the deployer inside the hamburger menu
+
+**Renumbered to `1.184.0+`.** You released `1.183.0` (`386a9ce`, exact big-int remote ids) while this branch was already published as `1.183.0+`; the deployer compares the numeric core and ignores the `+`, so two releases with the same number would make "newest branch" and the version stamp ambiguous — the same reason `1.182.0+` existed. Your big-int work is kept untouched (`worker-src/utils.ts`, `render-src/db.ts`, `sync.ts`, `maintenance.ts`, and the 222-line `bigint-ids.test.mjs`).
+
+**Rebased onto your `1.182.0`** (`7f6160b`: the three-tab backup/version panel, the Basalam SDK install on
+Node, the new library groups and install commands). Their panel, their `productCodeSuffix`, their library
+cards and their tests are kept as-is; this branch re-applies on top of them the new drawer section, the
+proxy, the notification module, and the per-row guard around the results list — which is defense in depth,
+not a duplicate of your fix: yours makes the suffix helper stop throwing, this one keeps one unrenderable
+row from blanking the whole list. Your number was `1.182.0`, so mine went to `1.183.0+`; you then
+released `1.183.0` and this branch moved again — see the note above.
+
+- **The scan now tells the operating system.** `scripts/deployer-notify.mjs` picks whichever notifier the
+  platform already has (`termux-notification` → `notify-send` → `osascript` → PowerShell toast, or
+  `LOCAL_DEPLOYER_NOTIFY_CMD`), and `announceVersions()` fires it whenever a branch is found whose version
+  beats the running one, or the current branch moved. Deduplication is per event (`kind:name:version:sha12`
+  in `data/.deployer-notices.json`, read back on boot so a watchdog restart cannot re-announce a release the
+  user already saw, and movable with `LOCAL_DEPLOYER_NOTIFY_STATE`), so a scanner that runs every minute
+  cannot spam the same notice, and a
+  failing notifier is recorded rather than thrown — `scanAllBranches()` stays synchronous and never blocks
+  on a desktop binary that does not exist. Version comparison ignores the `+` marker on purpose: it is the
+  same numeric core `numericCore()` in `worker-src/deployer-branches.ts` uses, so a notice cannot call a
+  version new while the branch table calls it equal. Three routes expose it (`GET /api/notifications`,
+  `POST /api/notifications/test`, `POST /api/notifications/scan`); when the machine has no notifier the
+  deployer page falls back to the browser Notifications API, with a bell in the header that explains the
+  permission state instead of failing silently. A custom command may carry its own arguments
+  (`sh hook.sh`); the title and body are appended as argv and never handed to a shell.
+- **`🚀 دیپلویر محلی` is now a hamburger section.** The dashboard offers the same jobs as the deployer
+  page — status read, immediate scan (which announces), install newest, scraper build/restart/stop,
+  `npm install`, database, update from git, test notification, open the deployer page — through
+  `GET|POST /api/deployer/local/:action` on the Node server, which forwards to `127.0.0.1` so the browser
+  never handles a token or a CORS problem. The address comes from `DEPLOYER_UI_TOKEN` + `DEPLOYER_UI_PORT`
+  (the pair the deployer already gives an installed scraper) or from `data/.deployer-token`, and replies
+  carry `{ deployer: { base, source } }` with the secret stripped. It is an allow-list, not a proxy: only
+  the sixteen named calls exist, the branch name is re-validated more strictly than
+  `normalizeInstallBranch()` (which accepts `../../../etc` and `-x`), `/api/job` is limited to
+  `install|test|build|localBuild|databaseInstall`, a wedged deployer is cut off at 20s, and an unreachable
+  one answers 503 with the reason plus the command to run. On Cloudflare and Render the same route answers
+  an honest 501 `NO_DEPLOYER`, because those runtimes cannot see a local process. The GitHub branch table
+  stays in the version panel (`worker-tests/version-section.test.mjs` pins it there) and the new section
+  cross-references it; adding a section also renumbered the positional `menuGroupAt` headings.
+- **Guards.** `worker-tests/deployer-notify.test.mjs` (11 tests) spawns the real deployer against a fake
+  notifier in a throwaway git repo — 401 without a token, handshake file contents, dedupe, the ledger
+  surviving a restart, the no-origin scan returning `sent: []` (the test grabs a free port, so two suites
+  can run at once); `worker-tests/deployer-local-panel.test.mjs` (8 tests) checks the
+  allow-list, the argument guards, token leakage, and that every button in the new section maps to a handler
+  and to a proxied action. `extraction.test.mjs` gained the new drawer title in its ordered list.
+
+## 1.185.0+ — the control beside its label, and foldable explanations everywhere
+
+- **Compact forms, on by default.** `appearance.inlineFields` (a switch in «⚙️ تنظیمات عمومی», next to the
+  site font and theme) puts every input next to its label instead of under it: the main panes use
+  `grid-template-columns:max(26%,7.5rem) minmax(0,1fr)` so a long label can never eat the field, drawer
+  rows go to a 32% label column, and `.field-hint` keeps its place under the input it belongs to. Below
+  640px nothing changes — a phone already has one column and a second would only shrink the field. The
+  default is carried on the served `<html data-fields="inline">` so there is no relayout flash, and the
+  switch takes effect on change (the existing `[data-setting]` auto-save persists it; no second
+  persistence path was invented). The deployer page gets the same idea at ≥44rem, in `rem` only, because
+  that sheet deliberately has no `px` layout declarations. The rule is scoped with :has(>label:first-child):
+  25 of the 89 `.field` sites are paragraph boxes or button rows, so an unguarded rule would hand them an
+  empty 7.5rem column — and on an engine without `has()` the rule is dropped as a whole, which leaves
+  the old stacked layout rather than a broken one.
+- **Every explanation on the site folds.** One shared pass wraps `help-box` blocks, modal notes, the
+  drawer guide and paragraph-form `menu-text` in a `<details>`, styled like the version panel's own
+  folded help so the site keeps one visual language. A fold's summary carries the name of the section it
+  explains rather than a bare icon; already-collapsible blocks are left alone; live readouts (status
+  lines, counters, the deployer panel's state text) are never folded, which is decided by tag and text
+  length, not by a class name that is reused for both; short strings are not explanations at all. Open
+  state is remembered in `localStorage`, so re-rendering a pane does not close what the reader opened.
+- **Two bugs the harness caught before they reached a phone.** Guarding the observer with
+  `if(!window.MutationObserver)` is not enough: an embedding can expose a non-callable stub there while
+  the global is absent, and since the call sits on the boot line that exception would have taken the rest
+  of startup with it — the constructor is checked now, and the fold simply does not attach. And open/closed
+  is written and read through the `open` **attribute**, because the IDL property does not reflect
+  consistently across DOM implementations (linkedom reads back `undefined`), which is exactly the case a
+  behavior test catches and a grep cannot.
+- **Guards.** `worker-tests/ui-compact-forms-and-folding.test.mjs` (8 tests) esbuilds the dashboard,
+  slices the shipped `foldDescriptions` / `applyInlineFields` out of the bundle and runs them on a parsed
+  DOM: folding the right blocks and only them, idempotence, remembered state, the 640px guard, the
+  binding and default of the switch, and the deployer page's own fold.
+

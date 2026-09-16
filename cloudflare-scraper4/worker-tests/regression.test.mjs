@@ -1485,8 +1485,13 @@ test('the AI proxy URL is wrapped exactly once', async () => {
       `a pre-wrapped URL must set directRoute, otherwise it is proxied twice: ${line.trim().slice(0, 80)}`);
   }
   // The real model call path, not just the diagnostic.
-  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true},3_000_000)"),
+  // The real model call path, not just the diagnostic. The proxy hop is wrapped exactly once and
+  // still opts out of the second wrap; the AI exemption rides along because the configured proxy
+  // Worker is itself a user-typed address (the lab proxy answers on 127.0.0.1:8787).
+  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true,aiEndpoint:true},3_000_000)"),
     'networkFetch must not let safeFetch re-proxy an already-proxied URL');
+  assert.ok(ai.includes('await assertAiEndpointUrl(url)'),
+    'networkFetch must validate provider URLs with the AI guard, not the scrape-site guard');
 
   // Behavioural proof of the double-wrap that caused 1042.
   const via = (w, t) => w.includes('{url}') ? w.replace('{url}', encodeURIComponent(t))

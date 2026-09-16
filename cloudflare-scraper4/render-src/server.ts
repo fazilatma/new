@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
+import { aiCall, aiChatWithMessages, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
@@ -33,7 +33,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.183.0'; } catch { return process.env.npm_package_version || '1.183.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.185.0+'; } catch { return process.env.npm_package_version || '1.185.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -67,7 +67,9 @@ function nodeLibraryProbe(){
   ];
   return{ok:true,environment:process.env.TERMUX_VERSION?'termux-node':process.env.RENDER?'render-node':'local-node',queriedAt:new Date().toISOString(),dynamic:true,projectDir:String(root.pathname),groups};
 }
-const localScraperAutoUpdate = process.env.LOCAL_SCRAPER_AUTO_UPDATE !== 'false' && process.env.RENDER !== 'true';
+// '0', 'no' and 'off' are what people actually type in an .env file; only 'false' used to work,
+// so a Termux box that meant "leave my working tree alone" kept running git reset --hard on a timer.
+const localScraperAutoUpdate = !/^(?:false|0|no|off)$/i.test(String(process.env.LOCAL_SCRAPER_AUTO_UPDATE ?? 'true').trim()) && process.env.RENDER !== 'true';
 const localScraperAutoUpdateMs = Math.max(60_000, Number(process.env.LOCAL_SCRAPER_AUTO_UPDATE_MS || 600_000));
 let localScraperUpdateRunning = false;
 let localScraperDirtySkipLogged = -1;
@@ -297,6 +299,117 @@ const BRANCH_PUSH_AUTH_ERROR='Push needs a GitHub token with contents:write on t
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:BRANCH_PUSH_AUTH_ERROR}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:await nodeSnapshotDatabase()},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:BRANCH_PUSH_AUTH_ERROR},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:await nodeSnapshotDatabase()});return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-push-status',async c=>c.json({ok:true,last:await getState<any>('branch_push_last',null)}));
 app.post('/api/deployer/install-branch',async c=>{const b:any=await c.req.json().catch(()=>({}));const name=normalizeInstallBranch(b?.branch);if(!name)return c.json({ok:false,error:'Invalid branch name.'},400);if(process.env.DEPLOYER_MANAGED!=='true')return c.json({ok:false,code:'NO_DEPLOYER',error:'No local deployer manages this scraper.'});const token=process.env.DEPLOYER_UI_TOKEN||'',port=Number(process.env.DEPLOYER_UI_PORT);if(!token||!Number.isInteger(port)||port<1||port>65535)return c.json({ok:false,code:'NO_DEPLOYER',error:'The deployer did not share its control token with this scraper; stop it and press Build & start again.'});const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10*60*1000);try{const r=await fetch(`http://127.0.0.1:${port}/api/branches/install`,{method:'POST',headers:{'content-type':'application/json','x-local-deployer-token':token},body:JSON.stringify({branch:name}),signal:controller.signal});const data:any=await r.json().catch(()=>null);if(!data||typeof data!=='object')return c.json({ok:false,error:'The deployer answered unreadably.'});return c.json(data,r.status)}catch{return c.json({ok:false,code:'DEPLOYER_DOWN',error:'The local deployer is not reachable.'})}finally{clearTimeout(timer)}});
+// --- Local deployer proxy --------------------------------------------------------------
+// The dashboard's «دیپلویر» section drives the separate deployer process. The browser must not
+// learn that process's token, and this server must not become an open proxy, so only the fixed
+// actions below are forwarded — the request never contributes a path, only an allowlist key.
+// The port and token come from the handshake file the deployer writes when it binds (its port can
+// move when 8790 is busy), or from DEPLOYER_URL / DEPLOYER_UI_TOKEN for someone running it
+// elsewhere.
+const DEPLOYER_LOCAL_CALLS = {
+  status: { method: 'GET', path: '/api/status' },
+  branches: { method: 'GET', path: '/api/branches' },
+  jobs: { method: 'GET', path: '/api/jobs' },
+  logs: { method: 'GET', path: '/api/scraper/logs' },
+  libraries: { method: 'GET', path: '/api/libraries' },
+  pyStatus: { method: 'GET', path: '/api/py/status' },
+  notifications: { method: 'GET', path: '/api/notifications' },
+  scan: { method: 'POST', path: '/api/branches/scan' },
+  install: { method: 'POST', path: '/api/branches/install', branch: true },
+  update: { method: 'POST', path: '/api/update' },
+  job: { method: 'POST', path: '/api/job', jobAction: true },
+  scraperStart: { method: 'POST', path: '/api/scraper/start' },
+  scraperStop: { method: 'POST', path: '/api/scraper/stop' },
+  scraperRestart: { method: 'POST', path: '/api/scraper/restart' },
+  notifyTest: { method: 'POST', path: '/api/notifications/test' },
+  notifyScan: { method: 'POST', path: '/api/notifications/scan' }
+};
+const DEPLOYER_LOCAL_JOB_ACTIONS = new Set(['install', 'test', 'build', 'localBuild', 'databaseInstall']);
+/* normalizeInstallBranch() only knows GitHub ref syntax, so `../../../etc` and `-x` survive it.
+ * This route is a localhost endpoint anyone on the machine can reach and its value ends up in a git
+ * argv, so refuse traversal, option-looking names and anything with a path separator surprise. */
+const DEPLOYER_LOCAL_BRANCH_SAFE = /^[\w][\w.\/\-]*$/;
+function deployerLocalBranchSafe(value) {
+  const name = normalizeInstallBranch(value);
+  if (!name || name.startsWith('-') || name.includes('..') || !DEPLOYER_LOCAL_BRANCH_SAFE.test(name)) return null;
+  return name;
+}
+function deployerLocalHandshake(): { base: string; token: string; source: string } {
+  /* A deployer-managed install already receives DEPLOYER_UI_TOKEN + DEPLOYER_UI_PORT as env vars
+   * (see /api/deployer/install-branch below), so honour that pair first: a manual
+   * `npm run deployer:ui` and a deployer-installed scraper then behave identically here. */
+  const envToken = String(process.env.DEPLOYER_UI_TOKEN || '').trim();
+  const envPort = Number(process.env.DEPLOYER_UI_PORT);
+  if (envToken && Number.isInteger(envPort) && envPort > 0 && envPort <= 65535) {
+    return { base: `http://127.0.0.1:${envPort}`, token: envToken, source: 'DEPLOYER_UI_PORT' };
+  }
+  const explicit = String(process.env.DEPLOYER_URL || process.env.LOCAL_DEPLOYER_URL || '').trim().replace(/\/+$/, '');
+  const tokenEnv = String(process.env.DEPLOYER_UI_TOKEN || '').trim();
+  if (explicit) return { base: explicit, token: tokenEnv, source: 'DEPLOYER_URL' };
+  try {
+    const raw = JSON.parse(readFileSync(new URL('../data/.deployer-token', import.meta.url), 'utf8'));
+    const port = Number(raw && raw.port) || 8790;
+    return { base: `http://127.0.0.1:${port}`, token: tokenEnv || String((raw && raw.token) || ''), source: 'data/.deployer-token' };
+  } catch {
+    return { base: 'http://127.0.0.1:8790', token: tokenEnv, source: 'default' };
+  }
+}
+async function deployerLocalUnavailable(detail: string) {
+  const { base, source } = deployerLocalHandshake();
+  return {
+    ok: false,
+    code: 'DEPLOYER_UNREACHABLE',
+    error: 'دیپلویر محلی روی این دستگاه پاسخ نمی‌دهد (' + detail + ').',
+    hint: 'روی همین ماشین «npm run deployer:ui» را اجرا کنید؛ آدرسی که امتحان شد ' + base + ' (از ' + source + ').',
+    tried: base,
+    source
+  };
+}
+
+app.on(['GET', 'POST'], '/api/deployer/local/:action', async c => {
+  const name = String(c.req.param('action') || '');
+  const call = (DEPLOYER_LOCAL_CALLS as any)[name];
+  if (!call) return c.json({ ok: false, code: 'UNKNOWN_ACTION', error: 'این فرمان در فهرست مجاز دیپلویر نیست.' }, 400);
+  const { base, token, source } = deployerLocalHandshake();
+  let payload: any = {};
+  if (c.req.method === 'POST') {
+    payload = await c.req.json().catch(() => ({})) as any;
+    if (call.branch) {
+      const branch = deployerLocalBranchSafe(payload?.branch);
+      if (!branch) return c.json({ ok: false, error: 'نام برنچ معتبر نیست.' }, 400);
+      payload = { branch };
+    } else if (call.jobAction) {
+      const action = String(payload?.action || '');
+      if (!DEPLOYER_LOCAL_JOB_ACTIONS.has(action)) return c.json({ ok: false, error: 'اجرای هر فرمانی از این‌جا مجاز نیست.', allowed: [...DEPLOYER_LOCAL_JOB_ACTIONS] }, 400);
+      payload = { action };
+    } else {
+      payload = {};
+    }
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 20_000);
+  try {
+    const response = await fetch(base + call.path, {
+      method: call.method,
+      headers: { 'content-type': 'application/json', 'x-local-deployer-token': token },
+      body: call.method === 'POST' ? JSON.stringify(payload) : undefined,
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let data: any;
+    try { data = JSON.parse(text); } catch { data = { ok: false, error: text.slice(0, 300) || ('HTTP ' + response.status) }; }
+    if (response.status === 401) {
+      return c.json({ ok: false, code: 'DEPLOYER_TOKEN', error: 'توکن دیپلویر محلی با این سرور هم‌خوان نیست.', hint: 'DEPLOYER_UI_TOKEN را برای هر دو طرف یکسان بگذارید یا فایل data/.deployer-token را پاک کنید و دیپلویر را دوباره اجرا کنید.' }, 401);
+    }
+    return c.json({ ...data, deployer: { base, source: token ? source : 'unsigned' } }, response.ok ? 200 : 502);
+  } catch (error) {
+    return c.json(await deployerLocalUnavailable(timedOut ? 'بی‌پاسخ ماند (۲۰ ثانیه)' : String((error as Error)?.message || error).slice(0, 160)), 503);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 app.get('/api/github/token-status', async c => { const settings = await getState<any>('settings', {}); const env = String(process.env.GH_BACKUP_TOKEN || '').trim(), stored = typeof settings?.githubBackupToken === 'string' ? settings.githubBackupToken.trim() : ''; const active = env || stored; return c.json({ ok: true, active: env ? 'env' : stored ? 'stored' : null, env: Boolean(env), stored: Boolean(stored), hint: active ? active.slice(-4) : null }); });
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
@@ -320,7 +433,7 @@ app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch
 app.post('/api/ai/test-runs/control', async c => { const body = await c.req.json().catch(() => ({})) as any; const run = await controlAiTestRun(String(body.action || '')); return c.json({ ok: true, status: run?.status || 'idle', run }); });
 app.post('/api/ai/test-runs/reset', async c => { await resetAiTestRun(); return c.json({ ok: true }); });
 app.post('/api/ai/test-runs/retry', async c => { try { const body = await c.req.json().catch(() => ({})) as any, part = String(body.part) === 'category' ? 'category' : 'message'; return c.json({ ok: true, part, ...await retryAiTestPart(String(body.key || ''), part) }); } catch (error) { return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400); } });
-app.post('/api/ai/chat', async c => { try { const body = await c.req.json().catch(() => ({})) as any, provider = (await aiProviders()).find(p => p.id === String(body.providerId || body.provider || '')); if (!provider) return c.json({ ok: false, error: 'ارائه‌دهنده پیدا نشد.' }, 404); const model = String(body.model || '').trim(); if (!model) return c.json({ ok: false, error: 'نام مدل لازم است.' }, 400); const { model: cleanModel, keyIndex } = parseModelKeySuffix(model); const messages = (Array.isArray(body.messages) ? body.messages : []).slice(-40).map((m: any) => ({ role: String(m.role || 'user'), content: String(m.content ?? '') })).filter((m: any) => m.content); if (!messages.length || messages[messages.length - 1].role !== 'user') return c.json({ ok: false, error: 'آخرین پیام باید از سمت کاربر باشد.' }, 400); const prompt = messages.map((m: any) => `${m.role}: ${m.content}`).join('\n'); return c.json(await aiCall(providerWithKey(provider, keyIndex), cleanModel, prompt, 1200)); } catch (error) { return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400); } });
+app.post('/api/ai/chat', async c => { try { const body = await c.req.json().catch(() => ({})) as any, provider = (await aiProviders()).find(p => p.id === String(body.providerId || body.provider || '')); if (!provider) return c.json({ ok: false, error: 'ارائه‌دهنده پیدا نشد.' }, 404); const model = String(body.model || '').trim(); if (!model) return c.json({ ok: false, error: 'نام مدل لازم است.' }, 400); const { model: cleanModel, keyIndex } = parseModelKeySuffix(model); const messages = (Array.isArray(body.messages) ? body.messages : []).slice(-40).map((m: any) => ({ role: String(m.role || 'user'), content: String(m.content ?? '') })).filter((m: any) => m.content); if (!messages.length || messages[messages.length - 1].role !== 'user') return c.json({ ok: false, error: 'آخرین پیام باید از سمت کاربر باشد.' }, 400); return c.json({ ...(await aiChatWithMessages(providerWithKey(provider, keyIndex), cleanModel, messages, 1200)), keyIndex }); } catch (error) { return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400); } });
 app.get('/api/agent/templates', c => c.json({ ok: true, templates: [] }));
 app.get('/api/agent/tools', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
 app.get('/api/agent/tasks', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
