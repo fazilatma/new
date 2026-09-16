@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { safeText } from './network.js';
+import { safeText, sourceRoute } from './network.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile, type Selectors } from './types.js';
 
 // Playwright resolves its browser-registry directory at IMPORT time and only
@@ -469,12 +469,12 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
-  const source=()=>sourcePromise ||= safeText(url);
+  const source=()=>sourcePromise ||= safeText(url,8_000_000,{indirect});
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
   // carry the WooCommerce DEFAULT_SELECTORS (empty list selectors are rejected),
   // so "selectors not configured" never looked empty and the engines ran blind:
@@ -562,7 +562,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
   return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(engine==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{}),...(BROWSER_ENGINES.has(engine)&&lastRenderedSnapshot?{renderedSnapshot:lastRenderedSnapshot}:{})};
 }
-export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
+export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true, indirect = false): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover, indirect)).products; }
 
 /**
  * Finds a Chromium to drive. `.npmrc` deliberately skips the bundled browser
@@ -1490,9 +1490,9 @@ export function heuristicProducts(html: string, baseUrl: string): Product[] {
   // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
   for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' ')))); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
-export async function scrapeDetails(product: Product, selectors: Selectors): Promise<Product> {
+export async function scrapeDetails(product: Product, selectors: Selectors, indirect = false): Promise<Product> {
   if (!product.url) return product;
-  const { text, url } = await safeText(product.url); const $ = cheerio.load(text); const body = $.root();
+  const { text, url } = await safeText(product.url, 8_000_000, { indirect }); const $ = cheerio.load(text); const body = $.root();
   const css = (selector?: string) => selector ? (xpathToCss(selector) ?? selector) : '';
   const textField = (selector?: string) => selector ? normalize(body.find(css(selector)).first().text()) : '';
   product.shortDesc = textField(selectors.shortDesc) || product.shortDesc;
@@ -2197,13 +2197,13 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   }
   let page: { text: string; url: string };
   try {
-    page = await safeText(url, 4_000_000);
+    page = await safeText(url, 4_000_000, { indirect: Boolean(profile.networkIndirect) });
     const bytes = Buffer.byteLength(page.text, 'utf8');
     const title = normalize(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ') || '');
-    add('network', true, `صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`, { requestedUrl: url, finalUrl: page.url, bytes, title, runtime: 'node' });
+    add('network', true, `صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`, { requestedUrl: url, finalUrl: page.url, bytes, title, runtime: 'node', indirect: Boolean(profile.networkIndirect), route: sourceRoute(Boolean(profile.networkIndirect)) });
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
-    add('network', false, text, { requestedUrl: url, runtime: 'node' });
+    add('network', false, text, { requestedUrl: url, runtime: 'node', indirect: Boolean(profile.networkIndirect), route: sourceRoute(Boolean(profile.networkIndirect)) });
     recommendations.push(/ضدربات|چالش|challenge|403/i.test(text)
       ? 'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی این دستگاه را در مبدأ مجاز کنید یا از روش اتصال غیرمستقیم استفاده کنید.'
       : 'آدرس، دسترسی اینترنت دستگاه و تنظیمات روش اتصال مبدأ را بررسی کنید.');
@@ -2217,7 +2217,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const selectorsToSave: Record<string, string> = {};
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster);
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).
@@ -2301,7 +2301,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const wantsDetail = detailKeys.some(key => String((profile.selectors as any)?.[key] || '').trim().length > 0);
   if (candidate && wantsDetail) {
     try {
-      const extracted = await scrapeDetails(candidate, profile.selectors);
+      const extracted = await scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect));
       detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || '').length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images?.length || 0, variations: extracted.variations?.slice(0, 20) };
       add('detail-extraction', true, 'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.', { sample: detail });
     } catch (error) { add('detail-extraction', false, error instanceof Error ? error.message : String(error), { url: candidate.url }); }

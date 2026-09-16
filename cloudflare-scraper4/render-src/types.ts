@@ -18,6 +18,19 @@ export type Selectors = {
 
 export type ExtractionEngine = 'auto' | 'cheerio' | 'htmlrewriter' | 'jsonld' | 'next_data' | 'metadata' | 'script_json' | 'heuristic' | 'structural' | 'playwright' | 'puppeteer' | 'crawlee_playwright' | 'network_api';
 
+export type GalleryConfig = {
+  mode: 'off'|'auto'|'manual'|'number'|'variations';
+  box: string;
+  selectors: string;
+  /** For mode 'variations': the product-variations selector whose images become the gallery. */
+  variations?: string;
+  pattern: string;
+  from: number;
+  to: number;
+  max: number;
+  skip_first: boolean;
+};
+
 export type Profile = {
   id: string;
   name: string;
@@ -32,6 +45,7 @@ export type Profile = {
   extractionEngineBenchmarks?: Array<{engine: ExtractionEngine; elapsedMs: number; pagesScanned: number; products: number; productsPerMinute: number; ok: boolean; error?: string}>;
   paginationValue: string;
   selectors: Selectors;
+  gallery?: GalleryConfig;
   titleSuffix: string;
   priceMode: 'none' | 'add' | 'percent' | 'multiply';
   priceValue: number;
@@ -39,6 +53,9 @@ export type Profile = {
   minPrice: number;
   wooCategoryId: number;
   basalamCategoryId: number;
+  basalamFallbackCategoryIds?: number[];
+  networkIndirect?: boolean;
+  noExtract?: boolean;
   syncWoo: boolean;
   syncBasalam: boolean;
   /** Per-profile AI description-enricher switch. Missing/true = on. */

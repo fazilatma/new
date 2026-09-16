@@ -129,7 +129,8 @@ test('barfbox: explicit engine falls back on throw in real runs, stays loud in p
   const thin = '<html><body><div class="flex"><span>no product here</span></div></body></html>';
   await writeFile(join(stubDir, 'stub-network.mjs'),
     `const FIX=${JSON.stringify(html)};\nconst THIN=${JSON.stringify(thin)};\n` +
-    `export async function safeText(raw){ const u=String(raw); return { text: u.includes('/thin') ? THIN : FIX, url: u }; }`);
+    `export async function safeText(raw){ const u=String(raw); return { text: u.includes('/thin') ? THIN : FIX, url: u }; }\n` +
+    `export function sourceRoute(){ return 'direct'; }`);
   const outdir = await mkdtemp(join(ROOT, 'node_modules', '.cache', 'scraper4-lab', 'test-loop-'));
   const stubPlugin = { name: 'stub-network', setup(b) { b.onResolve({ filter: /network\.js$/ }, () => ({ path: join(stubDir, 'stub-network.mjs') })); } };
   await build({ entryPoints: { scraper: join(ROOT, 'render-src', 'scraper.ts') }, bundle: true, format: 'cjs', platform: 'node', target: 'node22', packages: 'external', outdir, entryNames: '[name]', outExtension: { '.js': '.cjs' }, plugins: [stubPlugin] });

@@ -30,10 +30,10 @@ function hasDetailSelectors(selectors: any): boolean {
   return DETAIL_KEYS.some(key => String(selectors?.[key] || '').trim());
 }
 /** Scrapes one product and reports whether ANY detail field was populated. */
-async function detailProbe(sample: Product, selectors: any): Promise<boolean> {
+async function detailProbe(sample: Product, selectors: any, indirect = false): Promise<boolean> {
   try {
     const before = JSON.stringify(DETAIL_KEYS.map(key => (sample as any)[key] ?? null));
-    const probe = await scrapeDetails({ ...sample }, selectors);
+    const probe = await scrapeDetails({ ...sample }, selectors, indirect);
     return JSON.stringify(DETAIL_KEYS.map(key => (probe as any)[key] ?? null)) !== before;
   } catch { return false; }
 }
@@ -71,7 +71,7 @@ export async function processOneJob(): Promise<boolean> {
       for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = followUrl || pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
-        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector);
+        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector, true, Boolean(profile.networkIndirect));
         if (nextSelector) {
           followUrl = scraped.nextUrl || '';
           if (!followUrl && page < pageLimit) append(job, `لینک «صفحهٔ بعد» با سلکتور «${nextSelector}» پیدا نشد؛ صفحه‌بندی همین‌جا تمام شد.`, 'warning');
@@ -113,7 +113,7 @@ export async function processOneJob(): Promise<boolean> {
             append(job, 'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
             const filled = await applySelectorSuggestions(profile, url, 'list', job, false);
             if (filled) {
-              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster);
+              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
               if (retry.products.length) {
                 append(job, `پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);
                 if (retry.usedEngine) { profile.extractionEngineMaster = retry.usedEngine; await saveProfile({ ...profile, updatedAt: new Date().toISOString() }); }
@@ -161,12 +161,12 @@ export async function processOneJob(): Promise<boolean> {
             filled && hasDetailSelectors(profile.selectors) ? 'info' : 'warning');
         }
         if (sample?.url && hasDetailSelectors(profile.selectors)) {
-          const probe = await detailProbe(sample, profile.selectors);
+          const probe = await detailProbe(sample, profile.selectors, Boolean(profile.networkIndirect));
           if (!probe && !detailRescued) {
             detailRescued = true;
             append(job, 'سلکتورهای جزئیات هیچ فیلدی را پر نکردند؛ پیشنهاد خودکار به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
             const filled = await applySelectorSuggestions(profile, sample.url, 'detail', job, false);
-            if (filled && await detailProbe(sample, profile.selectors)) append(job, 'پیشنهاد خودکار جواب داد: سلکتورهای جزئیات بازتنظیم شدند.');
+            if (filled && await detailProbe(sample, profile.selectors, Boolean(profile.networkIndirect))) append(job, 'پیشنهاد خودکار جواب داد: سلکتورهای جزئیات بازتنظیم شدند.');
             else if (filled) append(job, 'پیشنهاد خودکار هم فیلدی پیدا نکرد؛ سلکتورهای جزئیات را دستی بررسی کنید.', 'warning');
           }
         }
@@ -177,7 +177,7 @@ export async function processOneJob(): Promise<boolean> {
             if (await stopRequested(job.id)) return;
             try {
               const before = productNeedsEnrichment(product).any;
-              await scrapeDetails(product, profile.selectors);
+              await scrapeDetails(product, profile.selectors, Boolean(profile.networkIndirect));
               if (before && !productNeedsEnrichment(product).any) enriched++;
               append(job, `${product.title}: جزئیات خوانده شد.`, 'info', 'updated',
                 reportItem(product, { price: Number(product.price) || undefined }));
@@ -211,7 +211,7 @@ export async function processOneJob(): Promise<boolean> {
             await mapLimit(needsDetail, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
               if (await stopRequested(job.id)) return;
               const before = productNeedsEnrichment(product).any;
-              try { await scrapeDetails(product, profile.selectors); } catch { return; }
+              try { await scrapeDetails(product, profile.selectors, Boolean(profile.networkIndirect)); } catch { return; }
               if (before && !productNeedsEnrichment(product).any) recovered++;
             });
             append(job, recovered

@@ -21,7 +21,8 @@ const SHELL = '<html><head><title></title><script id="__NEXT_DATA__" type="appli
 const stubDir = await mkdtemp(join(ROOT, 'node_modules', '.cache', 'scraper4-lab', 'test-diag-net-'));
 await writeFile(join(stubDir, 'stub-network.mjs'),
   `const SHELL=${JSON.stringify(SHELL)};\n` +
-  `export async function safeText(raw){ const u=String(raw); return { text: SHELL, url: u }; }`);
+  `export async function safeText(raw){ const u=String(raw); return { text: SHELL, url: u }; }\n` +
+  `export function sourceRoute(){ return 'direct'; }`);
 const outdir = await mkdtemp(join(ROOT, 'node_modules', '.cache', 'scraper4-lab', 'test-diag-'));
 const stubPlugin = { name: 'stub-network', setup(b) { b.onResolve({ filter: /network\.js$/ }, () => ({ path: join(stubDir, 'stub-network.mjs') })); } };
 await build({ entryPoints: { scraper: join(ROOT, 'render-src', 'scraper.ts') }, bundle: true, format: 'cjs', platform: 'node', target: 'node22', packages: 'external', outdir, entryNames: '[name]', outExtension: { '.js': '.cjs' }, plugins: [stubPlugin] });
