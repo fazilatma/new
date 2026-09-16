@@ -339,17 +339,15 @@ test('Cloudflare AI provider editor shows account-id/token fields and export tra
 });
 
 test('provider editor supports multiple API keys and model lists show key suffixes',async()=>{
-  const dash=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),ai=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8'),caps=await readFile(new URL('../worker-src/ai-model-capabilities.ts',import.meta.url),'utf8'),vault=await readFile(new URL('../worker-src/vault.ts',import.meta.url),'utf8');
+  const dash=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),ai=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8'),vault=await readFile(new URL('../worker-src/vault.ts',import.meta.url),'utf8'),shared=await readFile(new URL('../worker-src/ai-catalog.ts',import.meta.url),'utf8');
   for(const token of ['aiEditKeys','ai-key-add','ai-key-remove','renderAiEditKeys','aiKeySuffixLabel','aiProviderKeyCount'])assert.match(dash,new RegExp(token.replace(/[.\/]/g,'\\$&')),token);
   assert.match(ai,/apiKeys\?:Array<string\|CfAccountKey>/);
-  // 1.175.0: the key/capability rules live in one shared module so the Node twin
-  // (Termux / VPS / Render) resolves multi-key providers exactly like the Worker.
-  assert.match(caps,/providerKeys\(provider/);
-  assert.match(caps,/providerWithKey<T extends AiCapableProvider>\(provider: T, index = 0\)/);
-  assert.match(caps,/\[K'\+String\(index\+1\)\.replace\(\/\\d\/g,d=>'۰۱۲۳۴۵۶۷۸۹'/,'suffix uses Persian digits');
-  assert.match(ai,/export \{[\s\S]{0,400}?\} from '\.\/ai-model-capabilities\.js';/,'worker-src/ai.ts must keep re-exporting the shared capability helpers');
-  assert.match(caps,/export function parseModelKeySuffix\(raw: string\)/,'the ::kN key suffix parser is shared by both twins');
+  assert.match(ai,/providerKeys\(provider/);
+  assert.match(ai,/providerWithKey\(provider/);
+  assert.match(shared,/export function parseModelKeySuffix\(/,'key-suffix parsing is single-sourced in the shared catalog');
+  assert.match(ai,/parseModelKeySuffix[^;]*from '\.\/ai-catalog\.js'/,'worker ai.ts re-exports the shared parser');
   assert.match(ai,/keyLabel:aiKeySuffixLabel\(ki\)/,'test tasks carry a visible key suffix');
+  assert.match(ai,/\[K'\+String\(index\+1\)\.replace\(\/\\d\/g,d=>'۰۱۲۳۴۵۶۷۸۹'/,'suffix uses Persian digits');
   assert.match(vault,/apiKeys:Array<string\|\{accountId:string;token:string\}>/);
   assert.match(dash,/apiKeys:keys\.length\?keys/,'export/import round-trips the keys array');
   assert.match(dash,/querySelectorAll\('#aiEditKeys \.ai-account-row'\)/,'Cloudflare accounts are read from their rows when saving');

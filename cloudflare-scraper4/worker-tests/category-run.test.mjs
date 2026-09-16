@@ -366,3 +366,66 @@ test('unknown modes fall back to the full ensemble', async () => {
   assert.equal(done.mode, 'ensemble');
   assert.equal(done.processed, 1);
 });
+
+test('ensemble with a pinned consensus list runs exactly those models without green results', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['m1', 'm2']), greenProvider('p2', ['m3'])];
+  setTestResults([]);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [];
+  const started = await categoryRun.startCategoryRun({ mode: 'ensemble', consensusModels: ['p2::m3', 'p1::m1', 'ghost::gone'] });
+  assert.equal(started.existing, false);
+  assert.deepEqual(started.run.modelKeys, ['p2::m3', 'p1::m1']);
+  const last = JSON.parse(harness.states.get('category_fix_last'));
+  assert.equal(last.ok, true);
+  assert.equal(last.trigger, 'manual');
+  assert.equal(last.mode, 'ensemble');
+  assert.equal(last.runId, started.run.id);
+  assert.ok(Date.parse(last.at) > 0);
+  await waitDone();
+});
+
+test('stored settings consensus applies when the start call pins nothing', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['m1', 'm2'])];
+  setTestResults([]);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [];
+  harness.states.set('settings', JSON.stringify({ categoryFix: { consensusModels: ['p1::m2'] } }));
+  const started = await categoryRun.startCategoryRun({ mode: 'ensemble' });
+  assert.equal(started.existing, false);
+  assert.deepEqual(started.run.modelKeys, ['p1::m2']);
+  await waitDone();
+});
+
+test('an explicit consensus list wins over the stored settings list', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['m1', 'm2'])];
+  setTestResults([]);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [];
+  harness.states.set('settings', JSON.stringify({ categoryFix: { consensusModels: ['p1::m1'] } }));
+  const started = await categoryRun.startCategoryRun({ mode: 'ensemble', consensusModels: ['p1::m2'] });
+  assert.deepEqual(started.run.modelKeys, ['p1::m2']);
+  await waitDone();
+});
+
+test('a fully unconfigured pinned list fails with consensus guidance', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['m1'])];
+  setTestResults([]);
+  await assert.rejects(() => categoryRun.startCategoryRun({ mode: 'ensemble', consensusModels: ['ghost::gone'] }), /فهرست اجتماع/);
+  assert.ok(!harness.states.has('category_fix_last'), 'a rejected start records no last-fix state');
+});
+
+test('a periodic trigger is recorded on the last-fix state', async () => {
+  reset();
+  harness.providers = [greenProvider('p1', ['m1'])];
+  setTestResults([{ ok: true, provider: 'p1', model: 'm1' }]);
+  harness.categories = [{ id: 101, name: 'A', leaf: true }];
+  harness.pages = [];
+  const started = await categoryRun.startCategoryRun({ mode: 'ensemble', trigger: 'periodic' });
+  assert.equal(started.existing, false);
+  assert.equal(JSON.parse(harness.states.get('category_fix_last')).trigger, 'periodic');
+  await waitDone();
+});

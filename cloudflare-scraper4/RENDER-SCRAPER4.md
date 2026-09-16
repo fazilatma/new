@@ -753,55 +753,31 @@ go green.
 
 Same update path: pull, restart the deployer process, re-run the diagnostic.
 
-## 1.175.0 — periodic Basalam category correction, and the AI sections finally work here
+## 1.176.0 — the results section renders again, and local AI providers connect
 
-The bulk category fix can now run by itself: `⏰ تصحیح دوره‌ای دسته‌بندی باسلام` inside the
-Basalam destination section. Default interval is 6 hours (1..168), the same three vote modes as
-the manual dialog (master only / master + candidates / consensus) and, for consensus, a model list
-you can add to and remove from (max 5; empty = every model that passed the last server-side test).
-The plan is saved in `settings`, the schedule bookkeeping in its own app_state key.
+Two fixes on top of 1.175.0, both reproduced against a live Node server before being changed:
 
-This runtime drives it from `automationTick()`, which the Node build calls once a minute from the
-in-process scheduler (`startBackground`, i.e. `RUN_WORKER_IN_WEB=true` — Render and the Termux /
-VPS / deployer installs) and from `npm run render:cron` when you prefer an external crontab. A
-started pass runs in-process here (no Cloudflare Queue), checkpoints into the same state record the
-dashboard already reads, and a second pass is never started while one is still running.
+- **`بخش نتایج استخراج` was empty while the counter was right.** Since 1.174.0 the shared dashboard
+  declared `productSuffixFormats` as `async` while `productCodeSuffix` still read it synchronously, so
+  `formats[0]` was `undefined` on a Promise. Every row with a `sku`/`sourceKey` threw, and because the
+  throw happened inside `rows.map(productRowHtml)` inside `loadProducts`’ `try`, the whole list was
+  discarded and `openProductModal` could not open a row either. `productSuffixFormats` is synchronous
+  again, `productCodeSuffix` validates the list and falls back to `(کد:x)`, `loadProducts` renders each
+  row in its own guard (a failure becomes one warning card with the error text, never a blank section),
+  and `openProductModal` names the reason instead of returning silently. Covered by
+  `worker-tests/results-products-ui.test.mjs`, which fails if the stray `async` comes back.
+- **AI base URLs on the machine itself.** `render-src/network.ts` gained `assertAiEndpointUrl`, and AI
+  calls pass `aiEndpoint: true`, so Ollama on `127.0.0.1:11434`, llama.cpp/vLLM on the LAN and
+  `host.docker.internal` work for model tests, the model list and chat on Termux/VPS. http/https only,
+  no credentials in the URL, `169.254.0.0/16` still refused; scraping and every other route keep
+  `assertPublicUrl`.
+- **`چت با مدل‌ها` kept its history.** The Node chat route joined the message list into one `role: content` string, so the system prompt was
+  buried and the model answered a transcript; it now posts the messages with their roles (and honours the `::k2` key
+  pick, reporting `keyIndex` back), matching the Worker. Verified live: a two-message chat reaches the provider as two
+  messages.
+- `LOCAL_SCRAPER_AUTO_UPDATE` now also accepts `0` / `no` / `off`, so a phone that was told not to
+  auto-update stops running `git reset --hard` on a timer.
 
-Fixes in the AI sections on Linux / Termux / VPS / Render / local (they were Worker-only):
-
-- `بخش مدل‌ها`: the provider+model picker and «🔗 تست جامع این مدل» now test the model you
-  selected (multi-provider setups, per-key `[K۲]` rows, and a transient
-  `{baseUrl,apiKey,model}` probe) instead of demanding the legacy shared triple.
-- `چت با مدل‌ها`: `GET /api/ai/chat-models` returns the real capability rows (it answered an
-  empty array, so the picker was blank), the chat endpoint sends the whole message list with its
-  roles instead of flattening it into one prompt, and a `::k2` pick now really uses key 2.
-- `تست مدل‌ها`: every model is tested per API key, each row also carries the Basalam category
-  probe (`categoryResult`), so the دسته‌بندی column and the ensemble gate work; the per-row
-  ↻ retry button works instead of answering 501.
-- Local model servers: `http://127.0.0.1:11434` (Ollama), LAN llama.cpp / vLLM and
-  `host.docker.internal` are allowed for AI providers — with the `/v1` path Ollama needs — while
-  scraping untrusted shop URLs keeps the old SSRF guard and cloud metadata stays closed.
-- `connectionStatus` now accepts provider rows, so the AI tabs are no longer greyed out on an
-  install that configures providers instead of the single shared endpoint.
-
-## 1.176.0 — the results section is populated again (regression fix from 1.174.0)
-
-Reported as “after extraction the products are not shown in the results section, at least on Node”.
-It is not a Node storage bug: `GET /api/profiles/:id/products` returns the rows and the counter in the
-dashboard updates, but `#products` keeps its empty placeholder. The shared dashboard had been broken
-since 1.174.0, where `productSuffixFormats` was made `async` while its only caller still read the value
-synchronously — `formats[0]` was `undefined` on a Promise, so the first card threw and the whole
-`rows.map(productRowHtml)` was discarded inside a `catch` that only showed a toast. Products with a
-`sku` or `sourceKey` always hit it, which is why Node/VPS/Termux installs (where scraped rows carry
-codes, and where CSV/import rows carry only a few fields) noticed first.
-
-- `productSuffixFormats()` is synchronous again — it reads the `#dedupSuffix` field and
-  `settings.dedup.suffixFormats`, nothing asynchronous about it.
-- `productCodeSuffix()` validates the result and falls back to the `(کد:x)` format, so a future shape
-  change cannot blank a list again.
-- `loadProducts()` builds each row inside its own guard: one unrenderable result is shown as a warning
-  card carrying the error text instead of hiding every other product; `openProductModal` now says why
-  it cannot open instead of returning silently.
-
-Reproduced in the lab by booting the real dashboard JS in a DOM against a live Node server with SQLite,
-then covered by `worker-tests/results-products-ui.test.mjs` (real DOM, same JSON contract Node returns).
+Deliberately unchanged: the periodic `categoryFix` schedule that shipped in 1.175.0 stays the single
+implementation (`settings.categoryFix.periodic` + `app_state[category_fix_last]` + `categoryFixTick`
+wired in both runtimes); this release does not add a second one.

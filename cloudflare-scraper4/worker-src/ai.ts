@@ -1,18 +1,11 @@
 import { normalizePersianText } from './utils.js';
+import { aiModelEndpoint, isChatCompatibleAiModel, isOpenRouter, isReasoningAiModel, parseModelKeySuffix, type AiEndpointProvider, type AiModelEndpoint } from './ai-catalog.js';
+export { aiModelEndpoint, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, type AiModelEndpoint };
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { assertPublicUrl, normalizeProxyUrl, safeFetch } from './network.js';
 import { categoryPrompt, parseCategoryId } from './destination-core.js';
 import type { AiCategoryOption } from './destination-core.js';
-import {
-  adjustChatPayload, aiCategoryModelRows, aiChatModelRows, isCreditAiStatus, isCreditAiText, isPayloadShapeError, isBatchOnlyError, aiKeySuffixLabel, aiModelEndpoint, canonicalAiModel, cloudflareAccountId, isChatCompatibleAiModel,
-  isCloudflareNative, isReasoningAiModel, isOpenRouter, openAiEndpoint, parseModelKeySuffix, providerKeys, providerWithKey,
-  unmarkdownUrl, type AiModelEndpoint,
-} from './ai-model-capabilities.js';
-export {
-  adjustChatPayload, aiCategoryModelRows, aiChatModelRows, isBatchOnlyError, isCreditAiStatus, isCreditAiText, isPayloadShapeError, aiKeySuffixLabel, aiModelEndpoint, isChatCompatibleAiModel, isReasoningAiModel,
-  parseModelKeySuffix, providerKeys, providerWithKey, type AiModelEndpoint,
-} from './ai-model-capabilities.js';
 
 export type CfAccountKey={accountId:string;token:string};
 export type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels:string[];nonChatModels?:string[];vendor?:string;enabled:boolean};
@@ -35,7 +28,24 @@ function sharedKeyFitsProvider(ai:any,provider:any):boolean{
 }
 function providersFromAi(ai:any):Provider[]{return ai.providers.length?ai.providers.map((provider:any)=>{const rawKeys=Array.isArray(provider.apiKeys)?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const first=keys[0]||provider.apiKey||'';let apiKey=typeof first==='string'?first:first?.token||'';if(!String(apiKey).trim()&&String(ai.apiKey||'').trim()&&sharedKeyFitsProvider(ai,provider))apiKey=String(ai.apiKey);return{...provider,baseUrl:String(provider.baseUrl||'').trim()||(sharedKeyFitsProvider(ai,provider)?String(ai.baseUrl||''):''),apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),reasoningModels:Array.isArray(provider.reasoningModels)?provider.reasoningModels.map(String):[],nonChatModels:Array.isArray(provider.nonChatModels)?provider.nonChatModels.map(String):[]}}):[{id:'default',name:'Default',baseUrl:ai.baseUrl,apiKey:ai.apiKey,apiKeys:ai.apiKey?[String(ai.apiKey)]:[],models:ai.model?[ai.model]:[],reasoningModels:[],enabled:true}]}
 
+/** Active API keys of a provider (fallback to the single apiKey). */
+export function providerKeys(provider:Provider):string[]{
+  const keys=Array.isArray(provider.apiKeys)&&provider.apiKeys.length?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);
+  return keys.filter(k=>k&&(typeof k==='string'?String(k).trim():String((k as CfAccountKey).token||'').trim())).map(k=>typeof k==='string'?k:(k as CfAccountKey).token||'');
+}
+/** Clone of the provider bound to the n-th key (falls back to the first key). */
+export function providerWithKey(provider:Provider,index=0):Provider{
+  const keys=Array.isArray(provider.apiKeys)&&provider.apiKeys.length?provider.apiKeys:(provider.apiKey?[provider.apiKey]:[]);
+  const chosen=keys[index]??keys[0]??(provider.apiKey||'');
+  if(typeof chosen==='string')return{...provider,apiKey:chosen};
+  const account=(chosen as CfAccountKey).accountId||cloudflareAccountId(provider.baseUrl)||'';
+  const token=(chosen as CfAccountKey).token||provider.apiKey||'';
+  return{...provider,apiKey:token,baseUrl:account?`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/`:provider.baseUrl};
+}
+/** Display suffix for non-primary keys, e.g. index 1 -> ' [K۲]'. */
+export function aiKeySuffixLabel(index:number):string{return index>0?' [K'+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)])+']':''}
 export async function aiProviders():Promise<Provider[]>{return providersFromAi((await loadConnections()).ai)}
+
 
 export async function preferredAiChatModel():Promise<{provider:Provider;model:string}|null>{
   const ai=(await loadConnections()).ai,providers=providersFromAi(ai).filter(provider=>provider.enabled!==false),preferred=[ai.model,ai.master,...(Array.isArray(ai.candidates)?ai.candidates:[])].map(String).filter(Boolean);
@@ -44,7 +54,6 @@ export async function preferredAiChatModel():Promise<{provider:Provider;model:st
   return null;
 }
 
-type AiEndpointProvider=Pick<Provider,'id'> & Partial<Pick<Provider,'baseUrl'|'nonChatModels'>>;
 
 /**
  * A provider is only testable when it has a base URL, at least one API key and a
@@ -90,6 +99,7 @@ export async function aiCall(provider:Provider,model:string,prompt:string,networ
   if(!response.ok)throw new AiResponseError(`HTTP ${response.status}: ${errorText}`,{...failureDetail(provider,model,prompt,reportedEndpoint,latencyMs,response,body),reasoning});
   return validatedChatSuccess(provider,model,prompt,reportedEndpoint,latencyMs,response,body,{endpointType:'chat-completions',chatCompatible:true,reasoning});
 }
+
 
 /** Chat with full conversation history (aiCall only sends a single prompt). */
 export async function aiChat(provider:Provider,model:string,messages:Array<{role:string;content:string}>,networkOverride?:Network,timeoutMs?:number,maxTokens=1200,keyIndex=0){const providerUsed=providerWithKey(provider,keyIndex);provider=providerUsed;
@@ -238,6 +248,14 @@ const guide=/no such model|not found|bad input|oneof|one of/i.test(message)?' ا
   throw new AiResponseError(`HTTP ${status}: ${message}${guide}`,{...failureDetail(provider,model,prompt,safeEndpoint(lastEndpoint),latencyMs,response,body),cloudflare});
 }
 
+function isCloudflareNative(raw:string):boolean{return /\/accounts\/[^/]+\/ai\/run(?:\/|$)/i.test(unmarkdownUrl(raw))}
+function cloudflareAccountId(raw:string):string{return unmarkdownUrl(raw).match(/\/accounts\/([^/]+)\/ai\/run(?:\/|$)/i)?.[1]||''}
+function unmarkdownUrl(raw:string):string{const value=String(raw||'').trim(),match=value.match(/^\[[^\]]+\]\(([^)]+)\)$/);return match?.[1]||value}
+function openAiEndpoint(raw:string):string{
+  const value=unmarkdownUrl(raw),url=new URL(value);if(/\/chat\/completions\/?$/i.test(url.pathname))return url.toString();
+  if(url.port==='11434'&&!/\/v1\/?$/i.test(url.pathname))url.pathname=url.pathname.replace(/\/$/,'')+'/v1';
+  url.pathname=url.pathname.replace(/\/$/,'')+'/chat/completions';return url.toString();
+}
 function mistralEndpoint(raw:string,type:Exclude<AiModelEndpoint,'chat-completions'>):string{
   const url=new URL(unmarkdownUrl(raw)),suffix=type==='ocr'?'ocr':'embeddings';
   url.pathname=url.pathname.replace(/\/(?:chat\/completions|ocr|embeddings)\/?$/i,'').replace(/\/$/,'')+'/'+suffix;
@@ -253,6 +271,7 @@ function cloudflareModelIds(raw:string):string[]{
   }
   return [...new Set(out.filter(Boolean))];
 }
+function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
   const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.176.0'};
   if(method==='POST')headers['content-type']='application/json';
@@ -275,6 +294,23 @@ async function requestAiGet(endpoint:string,provider:Provider,network:Network,ti
   try{const response=await networkFetch(endpoint,{method:'GET',headers:aiRequestHeaders(provider,endpoint,'GET')},network,timeoutMs),rawText=await response.text(),body=parseResponse(rawText,provider.apiKey);return{response,body,rawText}}
   catch(error){return{networkError:error instanceof Error?error.message:String(error)}}
 }
+function isCreditAiText(value:string){return /(?:^|\b)(?:402|insufficient[_.\s-]?quota|insufficient[_.\s-]?credit|credit[_.\s-]?balance|payment[_.\s-]?required|billing|out of credits|no credits|موجودی اعتبار|اعتبار.*تمام|شارژ.*تمام)(?:\b|$)/i.test(String(value||''))&&!/(?:429|rate.?limit|too many requests)/i.test(String(value||''))}
+function isCreditAiStatus(status:number,message:string){return status===402||isCreditAiText(`${status} ${message}`)}
+function isPayloadShapeError(status:number,message:string){return(status===400||status===422)&&!isCreditAiText(message)&&!isBatchOnlyError(status,message)}
+function adjustChatPayload(payload:any,errorText:string):any|null{
+  const msg=String(errorText||''),next={...payload};let changed=false;
+  if(/temperature/i.test(msg)&&'temperature' in next){delete next.temperature;changed=true}
+  if(/max_completion_tokens/i.test(msg)&&next.max_tokens!=null){next.max_completion_tokens=next.max_tokens;delete next.max_tokens;changed=true}
+  else if(/max_tokens/i.test(msg)&&next.max_completion_tokens!=null){next.max_tokens=next.max_completion_tokens;delete next.max_completion_tokens;changed=true}
+  else if(/max_tokens|max_completion_tokens/i.test(msg)&&next.max_tokens!=null){next.max_completion_tokens=next.max_tokens;delete next.max_tokens;changed=true}
+  if(!changed&&/unsupported (?:parameter|value|argument)|unknown argument|unrecognized request argument|extra fields not permitted/i.test(msg)){
+    const slim:any={model:payload.model,messages:payload.messages};
+    if(payload.max_completion_tokens)slim.max_completion_tokens=payload.max_completion_tokens;else if(payload.max_tokens)slim.max_tokens=payload.max_tokens;
+    return slim;
+  }
+  return changed?next:null;
+}
+function isBatchOnlyError(status:number,message:string){return(status===404||status===400||status===403)&&/batch api|\/api\/beta\/batches/i.test(message)}
 function batchApiUrl(chatEndpoint:string){const url=new URL(chatEndpoint);url.pathname='/api/beta/batches';url.search='';url.hash='';return url.toString()}
 function sleep(ms:number){return new Promise(resolve=>setTimeout(resolve,Math.max(0,ms)))}
 async function batchChatCall(provider:Provider,model:string,prompt:string,chatPayload:any,network:Network,started:number,timeoutMs:number|undefined,reasoning:boolean,existingId=''){

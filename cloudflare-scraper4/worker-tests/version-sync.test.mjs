@@ -791,8 +791,7 @@ test('the Node runtime reports a real AI test run instead of a queued stub', asy
     'the current-run endpoint must not be a hardcoded null stub'
   );
   assert.match(server, /test-runs\/current'[\s\S]{0,120}getCurrentAiRun\(\)/, 'current must return the real run');
-  assert.match(server, /startAiTestRun\(\s*\{\s*\.\.\.body/, 'starting a test must create a run');
-  assert.match(server, /skipTimeoutMs/, 'the Node twin must forward the per-model watchdog budget too');
+  assert.match(server, /startAiTestRun\(body\)/, 'starting a test must create a run');
   const startRoute = server.slice(server.indexOf("app.post('/api/ai/test-runs',"), server.indexOf("app.post('/api/ai/test-runs/control'"));
   assert.match(startRoute, /c\.json\(\{[^)]*?\brun\s*[,:}]/, 'the start response body itself must carry the run the dashboard renders');
   assert.match(server, /controlAiTestRun\(/, 'stop/resume must reach the run');

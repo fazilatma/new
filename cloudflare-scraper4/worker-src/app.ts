@@ -1,9 +1,7 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import readXlsxFile from 'read-excel-file/web-worker';
-import { aiCall, aiCategoryModelRows, aiChat, aiChatModelRows, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
-import { CATEGORY_CORRECTION_LAST_KEY, CATEGORY_CORRECTION_SETTINGS_KEY, categoryCorrectionView, normalizeCategoryCorrection } from './category-correction.js';
-import { normalizeCategoryMode } from './destination-core.js';
+import { aiCall, aiChat, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
 import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, agentModelSetupHint, controlAgentRun, createOrUpdateAgentPrompt, currentAgentRun, getAgentRunPublic, listAgentRunsPublic, publicAgentRun, removeAgentPrompt, resetAgentRun, startAgentRun } from './agent.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
@@ -26,6 +24,7 @@ import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, re
 import { fontFile, fontStylesheet } from './fonts.js';
 import { DEFAULT_REPO, githubApiHeaders, normalizeRepo, pickGithubToken, scanDeployerBranches } from './deployer-branches.js';
 import { fetchBranchBackupFile, listBranchBackupFiles, pushBranchBackupFile, scheduledBranchPushTick } from './branch-backup.js';
+import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from './destination-core.js';
 
 type Variables={requestId:string};
 export const app=new Hono<{Bindings:Env;Variables:Variables}>();
@@ -149,11 +148,12 @@ app.post('/api/profiles/:id/ai-descriptions',async c=>{
   return c.json({ok:true,profileId:profile.id,model:picked.model,provider:picked.provider.id,candidates:targets.length,filled,failed:failures.length,failures:failures.slice(0,5)});
 });
 // ─── AI chat with capability-filtered model picker ───────────────────────────
-// The rows come from the shared capability builder (worker-src/ai-model-capabilities.ts) so the
-// picker of «چت با مدل‌ها» is identical on Cloudflare and on every Node install (Termux/VPS/Render).
 app.get('/api/ai/chat-models',async c=>{
+  const providers=(await aiProviders()).filter(p=>p.enabled!==false);
   const toolIds=new Set(AGENT_TOOL_MODELS.filter(m=>m.id!=='*configured').map(m=>m.id));
-  return c.json({ok:true,models:aiChatModelRows(await aiProviders(),toolIds)});
+  const models:any[]=[];
+  for(const p of providers)for(const model of p.models||[])models.push({providerId:p.id,providerName:p.name,model,chat:isChatCompatibleAiModel(p,model),toolCalling:toolIds.has(model),reasoning:isReasoningAiModel(p,model),keyCount:Math.max(1,providerKeys(p).length)});
+  return c.json({ok:true,models:models.sort((a,b)=>String(a.providerName).localeCompare(String(b.providerName))||a.model.localeCompare(b.model))});
 });
 app.post('/api/ai/chat',async c=>{
   const b=await jsonBody(c),provider=(await aiProviders()).find(p=>p.id===String(b.providerId||''));
@@ -233,25 +233,9 @@ app.get('/api/destination/basalam/category-tried',async c=>{const shopId=String(
 app.post('/api/destination/basalam/category-tried',async c=>{const b=await jsonBody(c);return c.json({ok:true,tried:await markBasalamCategoriesTried(String(b.shopId||''),Number(b.id),Array.isArray(b.ids)?b.ids:[])})});
 app.post('/api/destination/basalam/category-runs',async c=>{const started=await startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise),await jsonBody(c));return c.json({ok:true,...started},started.existing?200:202)});
 app.get('/api/destination/basalam/category-runs/current',async c=>c.json({ok:true,run:await getPublicBackgroundRun('category-all')}));
-// Periodic bulk category correction: the card needs the saved plan, the schedule (next
-// run, last result) and the pool of models the user can add or remove for consensus voting.
-app.get('/api/destination/basalam/category-correction',async c=>{
-  const [settings,last,providers,tests]=await Promise.all([getState<any>('settings',{}),getState<any>(CATEGORY_CORRECTION_LAST_KEY,null),aiProviders(),getLastAiTestResults()]);
-  const green=new Set<string>(((Array.isArray((tests as any)?.results)?(tests as any).results:[]) as any[]).filter((row:any)=>row?.ok===true).map((row:any)=>`${row.provider}::${row.model}`));
-  return c.json(categoryCorrectionView(settings,last,aiCategoryModelRows(providers,green)));
-});
-// Run the periodic plan right now (the card's ▶ button): same settings the schedule uses,
-// and the schedule anchor moves so the cron does not start a second pass minutes later.
-app.post('/api/destination/basalam/category-correction/run-now',async c=>{
-  const settings=await getState<any>('settings',{}),cfg=normalizeCategoryCorrection(settings?.[CATEGORY_CORRECTION_SETTINGS_KEY]),b=await jsonBody(c);
-  const mode=b?.mode?normalizeCategoryMode(b.mode):cfg.mode,models=Array.isArray(b?.models)?b.models:cfg.models;
-  try{const started=await startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise),{mode,models});
-    if(!started.existing)await setState(CATEGORY_CORRECTION_LAST_KEY,{at:new Date().toISOString(),status:'started',runId:started.run?.id||null,mode,models,intervalHours:cfg.intervalHours});
-    return c.json({ok:true,...started,settings:cfg},started.existing?200:202)}
-  catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
-});
 app.post('/api/destination/basalam/category-runs/control',async c=>{const b=await jsonBody(c),action=String(b.action)==='resume'?'resume':'stop';return c.json({ok:true,run:await controlBackgroundRun('category-all',action,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise))})});
 app.post('/api/destination/basalam/category-runs/reset',async c=>{await resetBackgroundRun('category-all');return c.json({ok:true,run:await getPublicBackgroundRun('category-all')})});
+app.get('/api/category-fix-status',async c=>c.json({ok:true,last:await getState<any>(CATEGORY_FIX_LAST_KEY,null)}));
 app.post('/api/destination/:target/:id/update',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await destinationUpdate(target,Number(c.req.param('id')),b,b.confirm==='APPLY',String(b.shopId||'')))});
 app.post('/api/destination/:target/:id/status',async c=>{const b=await jsonBody(c);if(b.confirm!=='APPLY')return c.json({ok:false,error:'برای اعمال واقعی عبارت APPLY لازم است.'},400);return c.json(await destinationChangeStatus(validDestination(c.req.param('target')),Number(c.req.param('id')),String(b.status||''),String(b.shopId||'')))});
 app.delete('/api/destination/:target/:id',async c=>{if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'برای حذف یا بایگانی، تأیید DELETE لازم است.'},400);return c.json(await destinationDelete(validDestination(c.req.param('target')),Number(c.req.param('id')),c.req.query('force')==='true',c.req.query('shop')||''))});
@@ -677,6 +661,7 @@ export async function scheduledTasks(env:Env,waitUntil:(promise:Promise<unknown>
     waitUntil(agentCronTick((promise:Promise<unknown>)=>waitUntil(promise)));
     waitUntil(automationTick());
     waitUntil(scheduledBranchPushTick({settings,envToken:env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),log:m=>console.log('[scheduled-push]',m)}));
+    waitUntil(categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>waitUntil(promise),input),log:m=>console.log('[category-fix]',m)}));
     waitUntil(maybeCronPing(settings));
   }finally{await releaseCronLock()}
 }
@@ -702,3 +687,4 @@ async function maybeCronPing(settings:any){
   for(const channel of ['bale','rubika','webhook'] as const)try{delivery.push({channel,...await sendNotification(channel,text)})}catch(error){delivery.push({channel,skipped:true,error:error instanceof Error?error.message:String(error)})}
   if(delivery.some(item=>item.ok))await setState('cron_ping',{at:new Date().toISOString(),delivery});
 }
+

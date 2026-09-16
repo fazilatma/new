@@ -20,4 +20,4 @@ export async function saveConnections(input:unknown): Promise<ConnectionVault> {
   return value;
 }
 
-export function connectionStatus(value:ConnectionVault){return{woo:Boolean(value.woo.url&&value.woo.key&&value.woo.secret),basalam:Boolean(value.basalam.token&&value.basalam.vendorId),ai:Boolean((value.ai.baseUrl&&value.ai.apiKey&&value.ai.model)||value.ai.providers.some(p=>p.enabled&&p.baseUrl&&p.apiKey&&p.models.length)),notifications:Boolean(value.notifications.url||value.notifications.baleToken||value.notifications.rubikaToken)}}
+export function connectionStatus(value:ConnectionVault){return{woo:Boolean(value.woo.url&&value.woo.key&&value.woo.secret),basalam:Boolean(value.basalam.token&&value.basalam.vendorId),ai:Boolean(value.ai.baseUrl&&value.ai.apiKey&&value.ai.model),notifications:Boolean(value.notifications.url)}}

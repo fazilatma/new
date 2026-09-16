@@ -64,19 +64,18 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
 }
 
 /**
- * The guard for AI provider base URLs — deliberately looser than `assertPublicUrl`.
+ * The guard for AI provider base URLs — deliberately looser than assertPublicUrl.
  *
- * `assertPublicUrl` exists so an untrusted scrape target can never make this server
- * knock on an internal port. An AI base URL is not untrusted input: the person who
- * owns the dashboard typed it, and the documented Termux / VPS setup points at
- * Ollama on `127.0.0.1:11434` (or LM Studio, llama.cpp and vLLM on the LAN).
- * Applying the scrape-site guard to it made every model row fail with
- * "Private hosts are not allowed" on Linux and Termux, while the exact same
+ * assertPublicUrl exists so an untrusted scrape target can never make this server knock on an
+ * internal port. An AI base URL is not untrusted input: the person who owns the dashboard typed
+ * it, and the documented Termux / VPS setup points at Ollama on 127.0.0.1:11434 (or LM Studio,
+ * llama.cpp and vLLM on the LAN). Applying the scrape-site guard to it made every model row fail
+ * with "Private or unresolved destination is not allowed" on Linux and Termux, while the same
  * configuration worked on Cloudflare — where the Worker has no such guard.
  *
- * Still enforced: http/https only, no credentials smuggled into the URL, and the
- * link-local range that carries cloud metadata (`169.254.0.0/16`) stays closed, so
- * a saved provider row cannot be turned into a metadata-service hop.
+ * Still enforced: http/https only, no credentials smuggled into the URL, and the link-local range
+ * that carries cloud metadata (169.254.0.0/16) stays closed, so a saved provider row cannot be
+ * turned into a metadata-service hop.
  */
 export async function assertAiEndpointUrl(raw: string): Promise<URL> {
   const url = new URL(String(raw || ''));
@@ -84,12 +83,12 @@ export async function assertAiEndpointUrl(raw: string): Promise<URL> {
   if (url.username || url.password) throw new Error('نام کاربری/رمز در آدرس ارائه‌دهنده مجاز نیست؛ کلید API را در فیلد خودش وارد کنید.');
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   const metadata = (ip: string) => ip.startsWith('169.254.') || ip.toLowerCase() === 'fe80::1';
-  if (net.isIP(host)) { if (metadata(host)) throw new Error('آدرس IP مقولهٔ ابر (metadata) مجاز نیست.'); return url; }
+  if (net.isIP(host)) { if (metadata(host)) throw new Error('آدرس IP سرویس ابر (metadata) مجاز نیست.'); return url; }
   if (host === 'localhost' || host.endsWith('.localhost') || host === 'host.docker.internal') return url;
   let addresses: Array<{ address: string }> = [];
-  try { addresses = await dns.lookup(host, { all: true }); } catch { throw new Error(`آدرس ارائه‌دهنده «${host}» resolve نشد؛ سرور AI را روشن کنید یا آدرس را بررسی کنید.`); }
-  if (!addresses.length) throw new Error(`آدرس ارائه‌دهنده «${host}» هیچ IP‌ای ندارد.`);
-  if (addresses.every(item => metadata(item.address))) throw new Error('آدرس ارائه‌دهنده به محدودهٔ metadata ابر می‌رسد و اجازه ندارد.');
+  try { addresses = await dns.lookup(host, { all: true }); } catch { throw new Error('آدرس ارائه‌دهنده «' + host + '» resolve نشد؛ سرور AI را روشن کنید یا آدرس را درست کنید.'); }
+  if (!addresses.length) throw new Error('آدرس ارائه‌دهنده «' + host + '» هیچ IP‌ای ندارد.');
+  if (addresses.every(item => metadata(item.address))) throw new Error('آدرس ارائه‌دهنده به محدودهٔ metadata سرویس ابر می‌رسد و اجازه ندارد.');
   return url;
 }
 
@@ -111,10 +110,9 @@ export type ApiRequestInit = RequestInit & {
    */
   directRoute?: boolean;
   /**
-   * Validate with `assertAiEndpointUrl` instead of `assertPublicUrl`: an AI provider
-   * base URL is typed by the dashboard owner and may legitimately point at Ollama,
-   * llama.cpp or vLLM on this machine or the LAN (the normal Termux / self-hosted
-   * setup). Never set this for a URL that came from scraped content.
+   * Validate with assertAiEndpointUrl instead of assertPublicUrl: an AI provider base URL is typed
+   * by the dashboard owner and may legitimately point at Ollama / llama.cpp / vLLM on this machine
+   * or the LAN (the normal Termux and self-hosted setup). Never set this for a URL from scraped content.
    */
   aiEndpoint?: boolean;
 };
