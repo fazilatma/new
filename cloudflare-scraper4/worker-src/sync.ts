@@ -5,7 +5,7 @@ import { basicAuth, toRemoteId } from './utils.js';
 import type { Product, Profile, VariationGroup } from './types.js';
 
 export async function syncWoo(product:Product,profile:Profile):Promise<'created'|'updated'> {
-  const c=(await loadConnections()).woo;
+  const c=(await loadConnections(true)).woo;
   if(!c.url||!c.key||!c.secret)throw new Error('تنظیمات ووکامرس کامل نیست');
   const base=c.url.replace(/\/$/,'')+'/wp-json/wc/v3/products',auth=basicAuth(c.key,c.secret);
   let id=await getRemoteId(profile.id,product.sourceKey,'woo');

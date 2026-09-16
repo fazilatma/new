@@ -128,7 +128,7 @@ test('node extraction paths pass the per-profile indirect flag', async () => {
     'diagnostic network stage must route like the profile asks');
   assert.ok(scraper.includes('route: sourceRoute(Boolean(profile.networkIndirect))'),
     'diagnostic must report the route taken');
-  assert.ok(scraper.includes("profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect))"),
+  assert.ok(scraper.includes("profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),"),
     'diagnostic list extraction must route like the profile asks');
   assert.ok(scraper.includes('scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect))'),
     'diagnostic detail extraction must route like the profile asks');

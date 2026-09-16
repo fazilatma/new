@@ -1,3 +1,5 @@
+import { saveConnectionsAndReprice, drainWooReprice } from './woo-reprice.js';
+import { mergeConnections } from './vault.js';
 import { activityMiddleware, monitored } from './activity-monitor.js';
 import { listActiveJobs, listLiveActivities, deleteState } from './db.js';
 import { saveBenchmarkProfile } from './db.js';
@@ -40,7 +42,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.195.0+',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.196.0+',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -67,7 +69,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.195.0+'),listActiveJobs(),listLiveActivities()
+    Promise.resolve(c.env.WORKER_VERSION||'1.196.0+'),listActiveJobs(),listLiveActivities()
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=allActive.sort((a,b)=>{
@@ -102,11 +104,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.195.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.196.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.195.0+',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.196.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});
@@ -131,7 +133,7 @@ app.get('/api/runtime/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 app.get('/api/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 
 app.get('/api/connections',async c=>c.json({ok:true,connections:await loadConnections(true)}));
-app.post('/api/connections',async c=>c.json({ok:true,connections:await saveConnections(await c.req.json())}));
+app.post('/api/connections',async c=>c.json({ok:true,...await saveConnectionsAndReprice(await c.req.json(),wooRepriceIO(job=>enqueueJob(job,p=>c.executionCtx.waitUntil(p))))}));
 app.get('/api/ai/providers',async c=>c.json({ok:true,providers:await aiProviders(),leaderboard:await getLeaderboard()}));
 app.post('/api/ai/test-all',async c=>{const b=await jsonBody(c),started=Date.now(),categoryTitle=String(b.categoryTitle||'').trim();let categories:any[]=[];if(categoryTitle)try{categories=(await destinationCategories(Boolean(b.refreshCategories))).items}catch{/* پیام و مدل‌ها حتی بدون اتصال باسلام تست می‌شوند */}const result=await testModelBatch(String(b.prompt||'Reply with exactly: SCRAPER4_OK'),{onlyCandidates:Boolean(b.onlyCandidates),cursor:Number(b.cursor)||0,runId:String(b.runId||''),categoryTitle,categories,skipCurrent:Boolean(b.skipCurrent),skipReason:String(b.skipReason||'')});return c.json({...result,durationMs:Date.now()-started,categoryListAvailable:categories.length>0,invocationPolicy:'در هر invocation مدل هم‌ردیف همهٔ ارائه‌دهنده‌ها همزمان آزمایش می‌شود (حداکثر یکی از هر ارائه‌دهنده) تا فهرست سریع‌تر تمام شود و محدودیت نرخ رخ ندهد'})});
 app.post('/api/ai/test-runs',async c=>{const started=await startAiTestRun(await jsonBody(c),(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise));return c.json({ok:true,...started},started.existing?200:202)});
@@ -466,11 +468,11 @@ async function applyInlineSelectorSuggestions(profile:Profile,url:string,mode:'l
 async function runProfileApi(c:any,id:string){
   const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);
   const body=await jsonBody(c),target=validTarget(body.target||(body.sync?'both':'none')),persist=body.persist!==false||target!=='none',withDetails=body.details!==false,extract=body.extract!==false&&!profile.noExtract;
-  const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(1000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||500));
+  const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=['none','scroll'].includes(profile.pagination)?1:requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(1000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||500));
   const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0,listSelectorUpdate:any=null,detailSelectorUpdate:any=null,autoSelectorsAllowed=false;const engineDiscovered:Record<string,string>={};
   if(extract){
     for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{
-      const url=pageUrl(profile,pageNo),page=await scrapeListPage(url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+      const url=pageUrl(profile,pageNo),page=await scrapeListPage(url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll');
       pagesScanned++;usedEngine=page.usedEngine||usedEngine;engineMs+=page.elapsedMs||0;
       if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}
       if(page.discoveredSelectors&&Object.keys(page.discoveredSelectors).length){profile.selectors={...profile.selectors,...page.discoveredSelectors};await saveProfile({...profile,updatedAt:new Date().toISOString()});Object.assign(engineDiscovered,page.discoveredSelectors)}if(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine)){autoSelectorsAllowed=true;listSelectorUpdate=await applyInlineSelectorSuggestions(profile,page.url,'list',errors,true)}
@@ -665,7 +667,7 @@ export function normalizeProfile(raw:any):Profile {
   return {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(0,Number(raw.pages)||0)),
-    pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
+    pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none','scroll'].includes(pagination)?pagination:'query_page',
     extractionEngine:['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','structural','playwright','puppeteer','crawlee_playwright','network_api'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
@@ -725,6 +727,7 @@ export async function scheduledTasks(env:Env,waitUntil:(promise:Promise<unknown>
   try{
     if(settings.watchdog?.enabled!==false){const stallMin=Math.max(0.5,Number(settings.watchdog?.stallAfter||300)/60);if(settings.watchdog?.autoContinue!==false)await recoverFailedAndStalledJobs(stallMin);else await reapStalledJobs(stallMin)}
     await pruneFinishedJobs(clampNumber(settings.general?.keepReports,20,1,200));
+    await drainWooReprice(wooRepriceIO(job=>enqueueJob(job,waitUntil)));
     const due=await enqueueDueProfiles(),queued=await listQueuedJobs(200),seen=new Set<string>();
     for(const job of [...due,...queued])if(!seen.has(job.id)){seen.add(job.id);await enqueueJob(job,waitUntil)}
     await recoverBackgroundRuns(waitUntil);
@@ -765,3 +768,5 @@ function automationTick(...args:Parameters<typeof rawautomationTick>):ReturnType
 function aiEnrichTick(...args:Parameters<typeof rawaiEnrichTick>):ReturnType<typeof rawaiEnrichTick>{return monitored({setState,deleteState},'تکمیل دوره‌ای محتوای محصولات با هوش مصنوعی',()=>rawaiEnrichTick(...args))}
 
 function scheduledBranchPushTick(...args:Parameters<typeof rawscheduledBranchPushTick>):ReturnType<typeof rawscheduledBranchPushTick>{return monitored({setState,deleteState},'پشتیبان‌گیری دوره‌ای شاخه',()=>rawscheduledBranchPushTick(...args))}
+
+function wooRepriceIO(dispatch:(job:any)=>Promise<void>){return {loadConnections,saveConnections,mergeConnections,listProfiles,getState,setState,createJob,dispatch}}

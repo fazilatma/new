@@ -10,7 +10,7 @@ export function visualDriver(engine:string): 'playwright'|'puppeteer' {
  * Native browser networking is sent to a closed proxy so WebSockets/extra workers cannot
  * bypass URL guards. This is a public-page snapshot, not an authenticated browser session.
  */
-export async function renderBrowserSnapshot(url:string,engine:string,indirect=false) {
+export async function renderBrowserSnapshot(url:string,engine:string,indirect=false,session?:{prepare(page:any):void;collect(page:any):Promise<any>}) {
   const driver=visualDriver(engine);
   await assertPublicUrl(url);
   return withBrowserSlot(async()=>{
@@ -27,8 +27,10 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
     try{
       const page=driver==='playwright'?await browser.newPage({locale:'fa-IR',serviceWorkers:'block',acceptDownloads:false}):await browser.newPage();
       page.on('popup',(popup:any)=>{void popup.close()});
+      session?.prepare(page);
       const resource=async(request:any)=>{
-        if(expired||++requests>200)throw Error('Visual resource budget exceeded');
+        if(expired||++requests>(session?2000:200))throw Error('Visual resource budget exceeded');
+        if(session&&['image','media','font'].includes(request.resourceType()))throw Error('Unneeded scroll resource');
         const target=request.url(),method=request.method();
         if(!['GET','HEAD','POST'].includes(method))throw Error('Read-only visual snapshot');
         await assertPublicUrl(target);
@@ -38,7 +40,7 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
         // Never copy dashboard credentials, browser cookies or bearer tokens into another hop.
         const response=await safeFetch(target,{method,headers,body:method==='POST'?request.postData():undefined,indirect},6_000_000);
         const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
-        if(reader){let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>undefined)},10_000);try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;bytes+=chunk.value.length;if(size>6_000_000||bytes>40_000_000||expired)throw Error('Visual resource budget exceeded');chunks.push(chunk.value)}if(timedOut)throw Error('Visual resource timed out')}finally{clearTimeout(timer);void reader.cancel().catch(()=>undefined)}}
+        if(reader){let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>undefined)},10_000);try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;bytes+=chunk.value.length;if(size>6_000_000||bytes>(session?128_000_000:40_000_000)||expired)throw Error('Visual resource budget exceeded');chunks.push(chunk.value)}if(timedOut)throw Error('Visual resource timed out')}finally{clearTimeout(timer);void reader.cancel().catch(()=>undefined)}}
         const out:Record<string,string>={};response.headers.forEach((value,name)=>{if(!['content-encoding','content-length','transfer-encoding','set-cookie'].includes(name))out[name]=value});
         return {status:response.status,headers:out,body:Buffer.concat(chunks)};
       };
@@ -53,11 +55,12 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
         await page.goto(initial.url,{waitUntil:'domcontentloaded',timeout:30_000});
         if(driver==='playwright')await page.waitForLoadState('networkidle',{timeout:5000}).catch(()=>undefined);
         else await page.waitForNetworkIdle({timeout:5000}).catch(()=>undefined);
+        const collected=session?await session.collect(page):undefined;
         const finalUrl=page.url();await assertPublicUrl(finalUrl);
         const text=await page.content();if(Buffer.byteLength(text)>6_000_000)throw Error('Rendered HTML exceeds visual limit');
-        return {text,url:finalUrl,engine,driver,blockedResources:blocked};
+        return {text,url:finalUrl,engine,driver,blockedResources:blocked,...(session?{collected}:{})};
       };
-      return await Promise.race([run(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{expired=true;reject(Error('مهلت رندر انتخاب بصری تمام شد.'))},45_000)})]);
+      return await Promise.race([run(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{expired=true;reject(Error('مهلت رندر انتخاب بصری تمام شد.'))},session?240_000:45_000)})]);
     }finally{expired=true;clearTimeout(timeout);await browser.close().catch(()=>undefined)}
   });
 }

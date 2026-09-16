@@ -1,3 +1,4 @@
+import { collectScrollProducts } from '../worker-src/scroll-collector.js';
 import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import * as cheerio from 'cheerio';
@@ -321,7 +322,7 @@ function productLink($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selecto
 export function pageUrl(profile: Profile, page: number): string {
   const url = new URL(profile.url);
   // next_selector follows a link found in the page, so the URL never changes here.
-  if (page <= 1 || profile.pagination === 'none' || profile.pagination === 'next_selector') return url.href;
+  if (page <= 1 || profile.pagination === 'scroll' || profile.pagination === 'none' || profile.pagination === 'next_selector') return url.href;
   const pageNumber = (base: number) => Math.max(1, base) + (page - 1);
   if (profile.pagination === 'full_pattern') return String(profile.paginationValue || '').split('{page}').join(String(pageNumber(1)));
   if (profile.pagination === 'path_page' || profile.pagination === 'path_pattern') {
@@ -350,7 +351,7 @@ export function pageUrl(profile: Profile, page: number): string {
 export function benchmarkProbeUrl(profile: Profile): string {
   try {
     const pagination = String((profile as any)?.pagination || 'query');
-    if (pagination === 'none' || pagination === 'next_selector' || pagination === 'full_pattern') return profile.url;
+    if (pagination === 'scroll' || pagination === 'none' || pagination === 'next_selector' || pagination === 'full_pattern') return profile.url;
     const url = new URL(profile.url);
     url.hash = '';
     if (pagination === 'path_page' || pagination === 'path_pattern') {
@@ -471,10 +472,19 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
+  if(scrollToEnd){
+    if(!browserEngineAvailable())throw Error('اسکرول تا انتها به Chromium نیاز دارد؛ npm run browsers:install را اجرا کنید.');
+    const driver=engine==='puppeteer'?'puppeteer':'playwright';
+    const {renderBrowserSnapshot}=await import('./visual-browser.js');
+    let tracker:ReturnType<typeof trackScrollRequests>;
+    const snapshot=await renderBrowserSnapshot(url,driver,indirect,{prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker)});
+    const products=snapshot.collected as Product[];
+    return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union'};
+  }
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url,8_000_000,{indirect});
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
@@ -921,6 +931,32 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
     if (failedEndpoints.length) console.log(`[scraper4] network_api failed (${failedEndpoints.length}): ${failedEndpoints.join(' | ')}`);
     return products;
   } finally { await browser.close(); }
+}
+
+function trackScrollRequests(page:any){
+ const pending=new Set<any>();let failed=false;
+ const started=(r:any)=>{if(['xhr','fetch'].includes(r.resourceType()))pending.add(r)};
+ const finished=(r:any)=>pending.delete(r);
+ const failure=(r:any)=>{if(pending.has(r))failed=true;pending.delete(r)};
+ const response=(r:any)=>{if(pending.has(r.request())&&r.status()>=400)failed=true};
+ page.on('request',started);page.on('requestfinished',finished);page.on('requestfailed',failure);page.on('response',response);
+ return {pending,failed:()=>failed,close(){page.off('request',started);page.off('requestfinished',finished);page.off('requestfailed',failure);page.off('response',response)}};
+}
+async function collectRenderedScroll(page:any,selectors:Selectors,stopped?:()=>Promise<boolean>,tracker=trackScrollRequests(page)):Promise<Product[]>{
+ try{return await collectScrollProducts<Product>({
+  snapshot:async()=>{if(tracker.failed())throw Error('درخواست شبکه هنگام اسکرول ناموفق بود؛ کامل بودن فهرست تأیید نشد.');const html=await page.content(),url=page.url();return rescueRenderedProducts(html,url,parseProductsFromHtml(html,url,selectors)).products},
+  key:p=>p.sourceKey||p.url||p.sku||p.title,
+  step:async()=>{const result=await page.evaluate((selector:string)=>{
+   let root=document.scrollingElement||document.documentElement;
+   // Virtualized shops often scroll an inner list, not the document itself.
+   try{let el=document.querySelector(selector)?.parentElement;while(el){const style=getComputedStyle(el);if(/auto|scroll/.test(style.overflowY)&&el.scrollHeight>el.clientHeight+5){root=el;break}el=el.parentElement}}catch{}
+   const bottom=root.scrollTop+root.clientHeight>=root.scrollHeight-3;
+   if(bottom){const more=Array.from(document.querySelectorAll('button')).find(b=>!b.disabled&&b.getClientRects().length>0&&/^(?:نمایش بیشتر|بارگذاری بیشتر|محصولات بیشتر|load more|show more)$/i.test((b.textContent||'').trim()));more?.click()}
+   root.scrollTop=Math.min(root.scrollHeight,root.scrollTop+Math.max(240,root.clientHeight*.8));
+   return {height:root.scrollHeight,top:root.scrollTop,atEnd:root.scrollTop+root.clientHeight>=root.scrollHeight-3};
+  },xpathToCss(selectors.container)||selectors.container||'body');return {...result,pending:tracker.pending.size>0}},
+  wait:ms=>new Promise(resolve=>setTimeout(resolve,ms)),now:()=>Date.now(),stopped
+ })}finally{tracker.close()}
 }
 
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
@@ -2258,7 +2294,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
     progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto')));
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).

@@ -53,7 +53,7 @@ async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'
   }catch(error){if(job)append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning');return 0}
 }
 type JobLog=Job['log'][number];
-function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,price:Number(product.price)||undefined,...extra}}
+function reportItem(product:Product,extra:Partial<NonNullable<JobLog['item']>>={}):NonNullable<JobLog['item']>{return{sourceKey:product.sourceKey,title:product.title,url:product.url,price:Number(product.price)||undefined, basePrice:(product as any).resultBase?.price,basePriceText:(product as any).resultBase?.priceText,...extra}}
 function append(job:Job,text:string,level='info',event?:JobLog['event'],item?:JobLog['item']){job.log.push({at:new Date().toISOString(),level,message:text,event,item});if(job.log.length>1500)job.log=job.log.slice(-1500)}
 async function save(job:Job){const lastStage=[...job.log].reverse().find(row=>row.level==='stage');if(lastStage?.message!==job.phase)append(job,job.phase,'stage');const current=await getJob(job.id);if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return;if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')}await updateJob(job.id,{status:job.status,phase:job.phase,total:job.total,processed:job.processed,added:job.added,updated:job.updated,failed:job.failed,error:job.error,log:job.log,finishedAt:job.finishedAt});if(['done','failed','stopped'].includes(job.status))await deleteState('job_ai:'+job.id);}
 
@@ -113,7 +113,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       checkpoint.listSelectorsFilled=true;
     }
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
-    let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+    let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll');
     // 1.129.0 — persist engine-discovered selectors once: later pages of
     // this run (and every later run) then extract with the selector engine
     // instead of re-discovering.
@@ -144,7 +144,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       append(job,'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…','warning');
       const filled=await applySelectorSuggestions(profile,page.url,'list',job,false);
       if(filled){
-        const retry=await scrapeListPage(page.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+        const retry=await scrapeListPage(page.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll');
         if(retry.products.length){append(job,`پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);page=retry}
         else append(job,'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.','warning');
       }
@@ -257,7 +257,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   checkpoint.seen=[...new Set(checkpoint.seen)];
   if(checkpoint.index<checkpoint.products.length){await setState(key,checkpoint);await save(job);return true}
   const pageLimit=profile.pages>0?profile.pages:100;
-  const hasNext=checkpoint.page<pageLimit&&(profile.pagination==='next_selector'?Boolean(checkpoint.nextUrl):profile.pagination!=='none');
+  const hasNext=checkpoint.page<pageLimit&&(profile.pagination==='next_selector'?Boolean(checkpoint.nextUrl):profile.pagination!=='none'&&profile.pagination!=='scroll');
   if(hasNext){checkpoint.page++;checkpoint.url=profile.pagination==='next_selector'?checkpoint.nextUrl:pageUrl(profile,checkpoint.page);checkpoint.nextUrl='';checkpoint.index=0;delete checkpoint.products;await setState(key,checkpoint);await save(job);return true}
   await finishScrape(job,profile,checkpoint);return false;
 }

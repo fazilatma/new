@@ -8,7 +8,7 @@ import { safeBasalamFetch, safeFetch } from './network.js';
 import type { Product, Profile } from './types.js';
 
 export async function syncWoo(product: Product, profile: Profile): Promise<'created'|'updated'> {
-  const c = (await loadConnections()).woo; if (!c.url || !c.key || !c.secret) throw new Error('تنظیمات ووکامرس در منوی همبرگری کامل نیست');
+  const c = (await loadConnections(true)).woo; if (!c.url || !c.key || !c.secret) throw new Error('تنظیمات ووکامرس در منوی همبرگری کامل نیست');
   const base = c.url.replace(/\/$/, '') + '/wp-json/wc/v3/products';
   const auth = `Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`;
   let id = await getRemoteId(profile.id, product.sourceKey, 'woo');

@@ -33,4 +33,12 @@ test('failed navigation closes the browser; private initial destinations never l
   await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright'),/timeout/);assert.equal(closed,1);
   await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','invented'),/Unknown/);
 });
+test('guarded scroll session prepares before navigation, keeps browser open during collection, and closes on failure',async()=>{
+ let closed=0,prepared=false,collected=false;
+ const page={on:()=>{},context:()=>({route:async()=>{}}),url:()=> 'https://shop.test/list',content:async()=>fixture,waitForLoadState:async()=>{},goto:async()=>{assert.equal(prepared,true)}};
+ globalThis.__visualLaunch=async()=>({newPage:async()=>page,close:async()=>{closed++}});
+ const result=await driver.renderBrowserSnapshot('https://shop.test/list','playwright',true,{prepare:()=>{prepared=true},collect:async()=>{assert.equal(closed,0);collected=true;return [{id:'all-products'}]}});
+ assert.equal(collected,true);assert.equal(closed,1);assert.deepEqual(result.collected,[{id:'all-products'}]);
+ await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',false,{prepare:()=>{},collect:async()=>{throw Error('incomplete scroll')}}),/incomplete scroll/);assert.equal(closed,2);
+});
 test.after(async()=>{delete globalThis.__visualFixture;delete globalThis.__visualLaunch;await rm(temp,{recursive:true,force:true})});

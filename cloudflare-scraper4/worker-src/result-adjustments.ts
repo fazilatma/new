@@ -1,6 +1,6 @@
 /** Results-stage pricing. Reapplying settings always uses the saved baseline. */
 export function applyResultAdjustments<T extends {title:string;price:number;priceText:string}>(product:T, profile:{titleSuffix:string;priceMode:string;priceValue:number;roundPrice:number}, suffixFormats?:string):T {
-  const row=product as T & {sku?:string;sourceKey?:string;variationPrices?:Record<string,number>;variationGroups?:Array<{prices?:Record<string,number>}>;resultBase?:{title:string;price:number;priceText:string;variationPrices?:Record<string,number>;groupPrices?:Array<Record<string,number>|undefined>};resultApplied?:{title:string;price:number}};
+  const row=product as T & {sku?:string;sourceKey?:string;variationPrices?:Record<string,number>;variationGroups?:Array<{prices?:Record<string,number>}>;resultBase?:{title:string;price:number;priceText:string;variationPrices?:Record<string,number>;groupPrices?:Array<Record<string,number>|undefined>};resultApplied?:{title:string;price:number;priceMode?:string;priceValue?:number;roundPrice?:number}};
   row.resultBase ||= {title:row.title,price:Number(row.price)||0,priceText:row.priceText};
   const base=row.resultBase;
   const adjust=(input:number)=>{
@@ -26,7 +26,7 @@ export function applyResultAdjustments<T extends {title:string;price:number;pric
     if(code)suffix=' '+format.replace(/[xX]+/,code);
   }
   row.title=(base.title+suffix).replace(/[\u200c\u200d\u200e\u200f\ufeff]/g,' ').replace(/\s+/g,' ').trim().slice(0,300);
-  row.resultApplied={title:row.title,price:row.price};
+  row.resultApplied={title:row.title,price:row.price,priceMode:profile.priceMode,priceValue:Number(profile.priceValue)||0,roundPrice:Number(profile.roundPrice)||0};
   return product;
 }
 

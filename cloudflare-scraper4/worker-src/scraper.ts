@@ -631,7 +631,8 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true,scrollToEnd=false):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
+  if(scrollToEnd)throw Error('اسکرول تا انتها به مرورگر Node روی VPS/Termux/Render نیاز دارد؛ Worker فقط HTML اولیه را می‌خواند.');
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
   // 1.129.0 — PROACTIVE AUTO-DISCOVERY (Worker parity with 1.128.0 on
@@ -880,6 +881,7 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
     let selectorCheckOk=true;
     try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{selectorCheckOk=false;/* best-effort; extraction below uses the profile selectors */}
     progress.finish({name:'selector-verification',ok:selectorCheckOk,summary:selectorCheckOk?'بررسی اولیه پایان یافت؛ موتور با سلکتورهای موجود یا کشف‌شده اجرا می‌شود.':'بررسی خودکار سلکتورها کامل نشد؛ موتور با سلکتورهای موجود ادامه می‌دهد.'});
+    if(profile.pagination==='scroll')throw Error('اسکرول تا انتها به اجراگر Node و مرورگر Chromium نیاز دارد؛ HTML اولیه فهرست کامل نیست.');
     const engineResult=await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
@@ -928,7 +930,7 @@ export function transformProduct(product: Product, profile: Profile): Product {
   return applyResultAdjustments(product, profile);
 }
 export function pageUrl(profile:Profile,page:number):string{
-  const url=new URL(profile.url);if(page<=1||profile.pagination==='none'||profile.pagination==='next_selector')return url.href;
+  const url=new URL(profile.url);if(page<=1||profile.pagination==='scroll'||profile.pagination==='none'||profile.pagination==='next_selector')return url.href;
   const pageNumber=(base:number)=>Math.max(1,base)+(page-1);
   if(profile.pagination==='full_pattern')return profile.paginationValue.split('{page}').join(String(pageNumber(1)));
   if(profile.pagination==='path_page'||profile.pagination==='path_pattern'){
@@ -942,7 +944,7 @@ export function pageUrl(profile:Profile,page:number):string{
 export function benchmarkProbeUrl(profile:Profile):string{
   try{
     const pagination=String((profile as any)?.pagination||'query');
-    if(pagination==='none'||pagination==='next_selector'||pagination==='full_pattern')return profile.url;
+    if(pagination==='scroll'||pagination==='none'||pagination==='next_selector'||pagination==='full_pattern')return profile.url;
     const url=new URL(profile.url);url.hash='';
     if(pagination==='path_page'||pagination==='path_pattern'){url.pathname=url.pathname.replace(/\/page\/\d+\/?$/i,'')||'/';return url.href}
     const custom=pagination==='query_custom'?String((profile as any)?.paginationValue||'paged'):'page';

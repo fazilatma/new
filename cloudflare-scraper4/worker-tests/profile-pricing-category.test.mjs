@@ -43,7 +43,7 @@ for(const runtime of ['render','worker']){
   const outfile=join(temp,runtime+'.cjs');
   await build({entryPoints:[new URL(`../${runtime}-src/scraper.ts`,import.meta.url).pathname],outfile,bundle:true,format:'cjs',platform:'node',packages:'external',plugins:[{name:'offline-fixture',setup(b){
     b.onResolve({filter:/^\.\/(network|db|connections)\.js$/},args=>({path:args.path,namespace:'fixture'}));
-    b.onLoad({filter:/.*/,namespace:'fixture'},args=>({contents:args.path.includes('network')?`export const safeText=async url=>globalThis.__pricingPage(url); export const safeTextViaWorker=safeText; export const sourceRoute=async()=>({mode:'direct'});`:args.path.includes('db')?`export const getState=async(k,f)=>f;`:`export const loadConnections=async()=>({ai:{network:{mode:'direct'}}});`}));
+    b.onLoad({filter:/.*/,namespace:'fixture'},args=>({contents:args.path.includes('network')?`export const safeText=async url=>globalThis.__pricingPage(url); export const safeTextViaWorker=safeText; export const assertPublicUrl=async()=>{throw Error("Unexpected browser network in static fixture")}; export const safeFetch=assertPublicUrl; export const sourceRoute=async()=>({mode:'direct'});`:args.path.includes('db')?`export const getState=async(k,f)=>f;`:`export const loadConnections=async()=>({ai:{network:{mode:'direct'}}});`}));
   }}]});
   twins[runtime]=createRequire(import.meta.url)(outfile);
 }

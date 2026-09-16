@@ -1,3 +1,7 @@
+import { drainWooReprice } from '../worker-src/woo-reprice.js';
+import { loadConnections, saveConnections } from './connections.js';
+import { mergeConnections } from './vault.js';
+import { createJob } from './db.js';
 import { monitored } from '../worker-src/activity-monitor.js';
 import { deleteState } from './db.js';
 import { scheduledBranchPushTick as rawscheduledBranchPushTick } from '../worker-src/branch-backup.js';
@@ -14,6 +18,7 @@ import { generateProductDescription, preferredAiChatModel } from './ai.js';
 
 assertConfig();
 await migrate();
+await drainWooReprice({loadConnections,saveConnections,mergeConnections,listProfiles,getState,setState,createJob,dispatch:async()=>{}});
 await scheduledBranchPushTick({settings:await getState<any>('settings',{}),envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:async()=>{const snap=await snapshotSqliteDatabase().catch(()=>({skipped:'unavailable'}));return 'b64' in snap?{b64:(snap as {b64:string}).b64}:{skipped:'unavailable'}},log:m=>console.log('[scheduled-push]',m)});
 await categoryFixTick({settings:await getState<any>('settings',{}),loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});
 await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settings',{enabled:true}))?.enabled!==false,modelReady:async()=>Boolean(await preferredAiChatModel()),listProfileIds:async()=>(await listProfiles()).map(p=>p.id),profileEnabled:async id=>(await getProfile(id))?.aiDescriptions!==false,loadCursor:()=>getState<any>(AI_ENRICH_LAST_KEY,null),saveCursor:rec=>setState(AI_ENRICH_LAST_KEY,rec),listStalest:(profileId,limit)=>listStalestProducts(profileId,limit),categories:async()=>{try{return(await destinationCategories()).items}catch{return[]}},enrich:(product,cats)=>generateProductDescription(product,{categories:cats}),saveProduct:(profileId,product)=>upsertProduct(profileId,product as any),log:m=>console.log('[ai-enrich]',m)});

@@ -74,6 +74,14 @@ test('real Node HTTP extraction and sync buttons drain SQLite with continuous wo
     for(let i=0;i<100;i++){({job}=await api('/api/jobs/'+delta.priceSyncJob.id));if(!['queued','running'].includes(job.status))break;await delay(50)}
     assert.equal(job.status,'done',JSON.stringify(job));assert.equal(JSON.parse(await readFile(sentFile,'utf8')).price,Math.round(base*1.4));
 
+    await api('/api/profiles',{id:profile.id,_autosavePatch:{enabled:true}});
+    const inactive=await api('/api/profiles',{...profile,id:'disabled-profile',url:'https://disabled.example/',name:'Disabled',enabled:false});
+    const globalReprice=await api('/api/connections',{woo:{pricePercent:25}});
+    assert.equal(globalReprice.priceSyncJobs.length,1);assert.equal(globalReprice.priceSyncJobs[0].profileId,profile.id);assert.equal(globalReprice.priceSyncJobs[0].target,'woo');
+    for(let i=0;i<100;i++){({job}=await api('/api/jobs/'+globalReprice.priceSyncJobs[0].id));if(!['queued','running'].includes(job.status))break;await delay(50)}
+    assert.equal(job.status,'done',JSON.stringify(job));assert.ok(job.log.some(row=>row.event==='sync-updated'&&row.item.basePrice===base));
+    const unchanged=await api('/api/connections',{woo:{pricePercent:25}});assert.equal(unchanged.priceSyncJobs.length,0);
+    assert.notEqual(inactive.profile.id,profile.id);
 
   }finally{
     child.kill('SIGTERM');

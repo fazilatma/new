@@ -20,7 +20,7 @@ function append(job: Job, message: string, level = 'info', event?: Job['log'][nu
   if (job.log.length > 1500) job.log = job.log.slice(-1500);
 }
 function reportItem(product: Product, extra: Partial<NonNullable<Job['log'][number]['item']>> = {}): NonNullable<Job['log'][number]['item']> {
-  return { sourceKey: product.sourceKey, title: product.title, url: product.url, price: Number(product.price) || undefined, ...extra };
+  return { sourceKey: product.sourceKey, title: product.title, url: product.url, price: Number(product.price) || undefined, basePrice:(product as any).resultBase?.price,basePriceText:(product as any).resultBase?.priceText, ...extra };
 }
 async function save(job: Job): Promise<void> { const lastStage=[...job.log].reverse().find(row=>row.level==='stage');if(lastStage?.message!==job.phase)append(job,job.phase,'stage');const current=await getJob(job.id); if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return; if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')} await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); if(['done','failed','stopped'].includes(job.status))await deleteState('job_ai:'+job.id);}
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
@@ -74,7 +74,7 @@ export async function processOneJob(): Promise<boolean> {
       for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = followUrl || pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
-        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector, true, Boolean(profile.networkIndirect));
+        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector, true, Boolean(profile.networkIndirect), profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine)),()=>stopRequested(job.id));
         if (nextSelector) {
           followUrl = scraped.nextUrl || '';
           if (!followUrl && page < pageLimit) append(job, `لینک «صفحهٔ بعد» با سلکتور «${nextSelector}» پیدا نشد؛ صفحه‌بندی همین‌جا تمام شد.`, 'warning');
@@ -116,7 +116,7 @@ export async function processOneJob(): Promise<boolean> {
             append(job, 'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
             const filled = await applySelectorSuggestions(profile, url, 'list', job, false);
             if (filled) {
-              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
+              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect), profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine)),()=>stopRequested(job.id));
               if (retry.products.length) {
                 append(job, `پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);
                 if (retry.usedEngine) { profile.extractionEngineMaster = retry.usedEngine; await saveProfile({ ...profile, updatedAt: new Date().toISOString() }); }
@@ -141,6 +141,7 @@ export async function processOneJob(): Promise<boolean> {
         // Auto paging (pages = 0) stops as soon as a page adds nothing new.
         // Misconfigured pagination often returns page 1 forever, which would
         // otherwise re-scan the same page up to the safety cap.
+        if (profile.pagination === 'none' || profile.pagination === 'scroll') break;
         if (nextSelector && !followUrl) { job.total = found.size; job.processed = found.size; await save(job); break; }
         if (found.size === before) repeatedPages++; else repeatedPages = 0;
         if (repeatedPages >= 2) { append(job, `صفحهٔ ${page} و صفحهٔ قبل هیچ محصول تازه‌ای نداشتند؛ احتمالاً صفحه‌بندی کار نمی‌کند و همان صفحهٔ اول تکرار می‌شود. استخراج همین‌جا پایان یافت.`, 'warning'); break; }
@@ -256,7 +257,7 @@ export async function processOneJob(): Promise<boolean> {
           const result = await upsertProduct(profile.id, product, {source:true}); result === 'added' ? job.added++ : job.updated++;
         }
         if (job.skippedNoPrice) append(job, `${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`, 'warning');
-        const retired=await markMissingProducts(profile.id,products.map(p=>p.sourceKey));if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
+        const retired=profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine))?0:await markMissingProducts(profile.id,products.map(p=>p.sourceKey));if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
         await markProfileRun(profile.id);
         if (job.target !== 'none') await runSync(job, profile, await allProducts(profile.id));
       }
