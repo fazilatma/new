@@ -8,7 +8,7 @@ const script=source.slice(source.indexOf('const diagnosticLabels='),source.index
 const {document}=parseHTML('<html><body></body></html>');
 const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const timers=new Map();let tick=0;
-const context=vm.createContext({document,TextDecoder,Uint8Array,Map,Date,JSON,Error,console,esc:escape,pretty:x=>JSON.stringify(x,null,2),fa:String,$:id=>document.getElementById(id),notice:()=>{},setInterval:fn=>{timers.set(++tick,fn);return tick},clearInterval:id=>timers.delete(id),modalShell:(_title,html)=>{let root=document.getElementById('resultModal');if(!root){root=document.createElement('div');root.id='resultModal';document.body.appendChild(root)}root.innerHTML='<div class="result-body">'+html+'</div>'}});
+const context=vm.createContext({localTasks:new Map(),responseActivities:new WeakMap(),activityResponseResult:()=>{},document,TextDecoder,Uint8Array,Map,Date,JSON,Error,console,esc:escape,pretty:x=>JSON.stringify(x,null,2),fa:String,$:id=>document.getElementById(id),notice:()=>{},setInterval:fn=>{timers.set(++tick,fn);return tick},clearInterval:id=>timers.delete(id),modalShell:(_title,html)=>{let root=document.getElementById('resultModal');if(!root){root=document.createElement('div');root.id='resultModal';document.body.appendChild(root)}root.innerHTML='<div class="result-body">'+html+'</div>'}});
 vm.runInContext(script,context);
 const encode=rows=>new TextEncoder().encode(rows.map(x=>JSON.stringify(x)).join('\n')+'\n');
 

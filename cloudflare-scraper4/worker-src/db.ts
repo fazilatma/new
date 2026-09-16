@@ -452,3 +452,9 @@ export async function applyStoredResultSettings(profile:Profile,after='',previou
 export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
  for(let attempt=0;attempt<3;attempt++){const row=await statement('SELECT data FROM profiles WHERE id=?',[original.id]).first<{data:string}>();if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=await run('UPDATE profiles SET data=?,updated_at=? WHERE id=? AND data=?',[JSON.stringify(merged),now(),original.id,raw]);if(changed)return true;}return false;
 }
+
+export async function listActiveJobs():Promise<Job[]>{return(await rows("SELECT id,profile_id,kind,target,status,phase,total,processed,added,updated,failed,stop_requested,error,created_at,started_at,finished_at,updated_at FROM jobs WHERE status IN ('queued','running') ORDER BY created_at")).map(jobFromRow)}
+export async function listLiveActivities():Promise<any[]>{
+ const cutoff=new Date(Date.now()-3600000).toISOString();await run("DELETE FROM app_state WHERE substr(key,1,14)='activity_live:' AND updated_at<?",[cutoff]).catch(()=>{});
+ return(await rows<{value:string}>("SELECT value FROM app_state WHERE substr(key,1,14)='activity_live:' ORDER BY updated_at DESC")).map(r=>json<any>(r.value,{})).filter(r=>r.id).map(r=>({...r,...(Date.now()-Date.parse(r.updatedAt)>90000?{status:'unknown',phase:'آخرین وضعیت قدیمی است؛ اجرا تأیید نشده'}:{})}));
+}

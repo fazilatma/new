@@ -1,9 +1,11 @@
-import { scheduledBranchPushTick } from '../worker-src/branch-backup.js';
+import { monitored } from '../worker-src/activity-monitor.js';
+import { deleteState } from './db.js';
+import { scheduledBranchPushTick as rawscheduledBranchPushTick } from '../worker-src/branch-backup.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from '../worker-src/destination-core.js';
-import { AI_ENRICH_LAST_KEY, aiEnrichTick } from '../worker-src/ai-enrich.js';
+import { AI_ENRICH_LAST_KEY, aiEnrichTick as rawaiEnrichTick } from '../worker-src/ai-enrich.js';
 import { startCategoryRun } from './category-run.js';
 import { assertConfig } from './config.js';
-import { automationTick } from './automation.js';
+import { automationTick as rawautomationTick } from './automation.js';
 import { enqueueDueProfiles, getProfile, getState, listProfiles, listStalestProducts, migrate, pool, setState, snapshotSqliteDatabase, upsertProduct } from './db.js';
 import { githubApiFetch, githubApiPut } from './github-client.js';
 import { destinationCategories } from './maintenance.js';
@@ -18,3 +20,6 @@ await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settin
 const count=await enqueueDueProfiles(),automation=await automationTick();
 console.log(JSON.stringify({ok:true,enqueued:count,automation,at:new Date().toISOString()}));
 await pool.end();
+function automationTick(...args:Parameters<typeof rawautomationTick>):ReturnType<typeof rawautomationTick>{return monitored({setState,deleteState},'پاسخ خودکار و گزارش دوره‌ای',()=>rawautomationTick(...args))}
+function aiEnrichTick(...args:Parameters<typeof rawaiEnrichTick>):ReturnType<typeof rawaiEnrichTick>{return monitored({setState,deleteState},'تکمیل دوره‌ای محتوای محصولات با هوش مصنوعی',()=>rawaiEnrichTick(...args))}
+function scheduledBranchPushTick(...args:Parameters<typeof rawscheduledBranchPushTick>):ReturnType<typeof rawscheduledBranchPushTick>{return monitored({setState,deleteState},'پشتیبان‌گیری دوره‌ای شاخه',()=>rawscheduledBranchPushTick(...args))}

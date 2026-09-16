@@ -179,7 +179,7 @@ test('both runtime entrypoints and dashboard use saved source settings and profi
   }
   const dashboard=await read('worker-src/dashboard.ts');
   assert.ok(dashboard.includes("if(action==='source-test'){await saveSettings({silent:true});"));
-  assert.ok(dashboard.includes("try{await saveSettings({silent:true});const response=await fetch(U('/api/profiles/'+encodeURIComponent(id)+'/extraction-diagnostic?live=1'"));
+  assert.ok(dashboard.includes("try{await saveSettings({silent:true});const response=await activityFetch(U('/api/profiles/'+encodeURIComponent(id)+'/extraction-diagnostic?live=1'"));
 });
 
 test.after(async()=>{await rm(dir,{recursive:true,force:true});});

@@ -706,10 +706,10 @@ test('dashboard: the sync preview reports progress and registers a task', async 
 
 test('dashboard: local tasks are merged into the activity list', async () => {
   const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
-  assert.match(dashboard, /const runs2=\[\.\.\.Array\.from\(localTasks\.values\(\)\),\.\.\.runs\]/,
+  assert.match(dashboard, /const runs2=mergeActivityRuns\(Array.from\(localTasks.values\(\)\),runs\)/,
     'renderActivity must include client-side tasks');
   assert.match(dashboard, /const runsHtml=runs2\.length\?\(/, 'the empty check must consider local tasks too');
-  assert.match(dashboard, /const del=r\.local\?''/, 'a local task has no server run to delete');
+  assert.match(dashboard, /const del=r\.local\|\|r\.readOnly\?''/, 'a local task has no server run to delete');
 });
 
 test('dashboard: an empty sync preview explains which precondition is missing', async () => {

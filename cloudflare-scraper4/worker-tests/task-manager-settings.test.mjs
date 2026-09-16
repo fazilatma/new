@@ -22,7 +22,7 @@ test('reopening Task Manager prefers pending and in-flight settings over an old 
 test('live activity refreshes do not replace controls or reset edited settings',async()=>{
  const ui=await settingsUI(),{document}=parseHTML('<main>'+ui.activitySettingsHtml()+'<div id="activityBody"></div></main>'),input=document.querySelector('#maxConcurrentProfiles');input.value='6';document.querySelector('#activitySettings').scrollTop=80;
  const a=source.indexOf('function renderActivity(d)'),b=source.indexOf('\n}\n',a)+2;
- const {renderActivity}=await compile(source.slice(a,b),['renderActivity'],{$:id=>document.getElementById(id),activityDragging:false,localTasks:new Map(),renderQuotaBar:()=>'<div id="testQuota">quota</div>',d1QuotaHtml:()=>{throw Error('do not duplicate quota summaries')},fa:String,esc:String});
+ const {renderActivity}=await compile(source.slice(a,b),['renderActivity'],{$:id=>document.getElementById(id),activityDragging:false,localTasks:new Map(),mergeActivityRuns:(local,remote)=>[...local,...remote],renderQuotaBar:()=>'<div id="testQuota">quota</div>',d1QuotaHtml:()=>{throw Error('do not duplicate quota summaries')},fa:String,esc:String});
  renderActivity({counts:{}});renderActivity({counts:{jobs:3}});assert.equal(document.querySelector('#maxConcurrentProfiles'),input);assert.equal(input.value,'6');assert.equal(document.querySelectorAll('#testQuota').length,1);assert.equal(document.querySelector('#activitySettings').scrollTop,80);
 });
 test('Task Manager bindings autosave while preserving settings from unmounted panels',async()=>{

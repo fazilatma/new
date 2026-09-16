@@ -1,3 +1,5 @@
+import { activityMiddleware, monitored } from '../worker-src/activity-monitor.js';
+import { listActiveJobs, listLiveActivities, deleteState } from './db.js';
 import { saveBenchmarkProfile } from './db.js';
 import { applyStoredResultSettings } from './db.js';
 import { PUSH_SERVICE_WORKER, PUSH_MANIFEST, PUSH_ICON, pushIconPng } from '../worker-src/push-assets.js';
@@ -11,14 +13,14 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { assignProductBasalamCategory, aiCall, aiChatWithMessages, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
-import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
+import { automationTick as rawautomationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
 import { DEFAULT_REPO, normalizeInstallBranch, normalizeRepo, pickGithubToken, scanDeployerBranches } from '../worker-src/deployer-branches.js';
-import { fetchBranchBackupFile, fetchBranchBackupSplit, listBranchBackupFiles, pushBranchBackupSplit, scheduledBranchPushTick, type SplitDatabaseInput } from '../worker-src/branch-backup.js';
+import { fetchBranchBackupFile, fetchBranchBackupSplit, listBranchBackupFiles, pushBranchBackupSplit, scheduledBranchPushTick as rawscheduledBranchPushTick, type SplitDatabaseInput } from '../worker-src/branch-backup.js';
 import { AGENT_TOOL_MODELS } from '../worker-src/ai-catalog.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from '../worker-src/destination-core.js';
-import { AI_ENRICH_LAST_KEY, aiEnrichTick } from '../worker-src/ai-enrich.js';
+import { AI_ENRICH_LAST_KEY, aiEnrichTick as rawaiEnrichTick } from '../worker-src/ai-enrich.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
@@ -39,7 +41,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.194.0+'; } catch { return process.env.npm_package_version || '1.194.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.195.0+'; } catch { return process.env.npm_package_version || '1.195.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -236,7 +238,7 @@ const dashboardHeaders = secureHeaders({
   }
 });
 app.use('*', async (c, next) => c.req.path === '/visual' ? next() : dashboardHeaders(c, next));
-app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization','content-type'], allowMethods: ['GET','POST','PUT','DELETE'] }));
+app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization','content-type','x-scraper-activity'], allowMethods: ['GET','POST','PUT','DELETE'] }));
 app.onError((error, c) => { console.error(error); return c.json({ ok: false, error: error.message }, 500); });
 app.get('/sw.js',c=>c.body(PUSH_SERVICE_WORKER,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','service-worker-allowed':'/'}));
 app.get('/manifest.webmanifest',c=>c.json(PUSH_MANIFEST,200,{'content-type':'application/manifest+json'}));
@@ -290,6 +292,7 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
+app.use('/api/*',activityMiddleware({setState,deleteState}));
 app.get('/api/web-push/config',c=>c.json({ok:true,...pushConfiguration()}));
 app.post('/api/web-push/subscribe',async c=>c.json(await subscribePush(await c.req.json())));
 app.post('/api/web-push/unsubscribe',async c=>{const b=await c.req.json() as any;return c.json(await unsubscribePush(String(b.id||'')))});
@@ -432,10 +435,13 @@ app.get('/api/github/token-status', async c => { const settings = await getState
 app.get('/api/runtime/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/libraries', c => c.json(nodeLibraryProbe()));
 app.get('/api/activity', async c => {
-  const [profiles, jobs] = await Promise.all([listProfiles(), listJobs(Math.min(30, Number(c.req.query('limit')) || 15))]);
-  const active = jobs.filter((j: any) => ['queued', 'running'].includes(j.status));
-  return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: runtimeVersion(), counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
+ const [profiles,jobs,active,ai,category,dedup,operations,priorities,runPriorities]=await Promise.all([listProfiles(),listJobs(Math.min(30,Number(c.req.query('limit'))||15)),listActiveJobs(),getCurrentAiRun(),getPublicCategoryRun(),getPublicDedupRun(),listLiveActivities(),getJobPriorities(),getRunPriorities()]);
+ active.sort((a,b)=>a.status!==b.status?(a.status==='queued'?-1:1):(Number(priorities[b.id])||0)-(Number(priorities[a.id])||0)||a.createdAt.localeCompare(b.createdAt));
+ const runs=[ai&&{...ai,kind:'ai-test',name:'تست مدل‌های هوش مصنوعی'},category&&{...category,kind:'category-all',name:'دسته‌بندی باسلام'},dedup&&{...dedup,kind:'dedup',name:'حذف تکراری‌های مقصد'}].filter(Boolean).map((r:any)=>({id:r.id,kind:r.kind,name:r.name,status:r.status,phase:r.phase,scope:'server',progress:r.total?Math.min(100,Math.round(Number(r.processed??r.cursor??0)/r.total*100)):null,detail:r.total?`${r.processed??r.cursor??0}/${r.total}`:'',updatedAt:r.updatedAt}));
+ runs.sort((a,b)=>a.status!==b.status?(a.status==='queued'?-1:1):(Number(runPriorities[b.kind])||0)-(Number(runPriorities[a.kind])||0));runs.push(...operations);
+ return c.json({ok:true,ts:new Date().toISOString(),queue:true,version:runtimeVersion(),counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},activeJobs:active.map(j=>({...j,log:undefined,progress:j.total?Math.min(100,Math.round(j.processed/j.total*100)):null,detail:`${j.processed}/${j.total}`})),runs,lastJobs:jobs.filter(j=>!['queued','running'].includes(j.status)).slice(0,8).map(j=>({id:j.id,kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt})),quota:{writeExceeded:false}});
 });
+
 // Runtime parity: the real per-model chat list. The dashboard's chat picker reads
 // d.models, so the old hardcoded `models: []` left the dropdown empty on every
 // Node runtime (Termux / VPS / Render / local). Shape mirrors worker-src/app.ts.
@@ -885,3 +891,9 @@ function normalizeProfile(raw: any): Profile {
     basalamCategoryId: Number(raw.basalamCategoryId ?? raw.bslCategoryId)||0, basalamFallbackCategoryIds: Array.isArray(raw.basalamFallbackCategoryIds ?? raw.bslFallbackCatIds) ? (raw.basalamFallbackCategoryIds ?? raw.bslFallbackCatIds).map(Number).filter(Boolean) : [], networkIndirect: Boolean(raw.networkIndirect ?? raw.net_indirect), noExtract: Boolean(raw.noExtract ?? (raw.syncConfig as any)?.noExtract), syncWoo: Boolean(raw.syncWoo), syncBasalam: Boolean(raw.syncBasalam), aiDescriptions: raw.aiDescriptions!==false,
     intervalMinutes: Math.max(0,Number(raw.intervalMinutes)||0), lastRunAt: raw.lastRunAt || null, createdAt: raw.createdAt || now, updatedAt: now };
 }
+
+function automationTick(...args:Parameters<typeof rawautomationTick>):ReturnType<typeof rawautomationTick>{return monitored({setState,deleteState},'پاسخ خودکار و گزارش دوره‌ای',()=>rawautomationTick(...args))}
+
+function aiEnrichTick(...args:Parameters<typeof rawaiEnrichTick>):ReturnType<typeof rawaiEnrichTick>{return monitored({setState,deleteState},'تکمیل دوره‌ای محتوای محصولات با هوش مصنوعی',()=>rawaiEnrichTick(...args))}
+
+function scheduledBranchPushTick(...args:Parameters<typeof rawscheduledBranchPushTick>):ReturnType<typeof rawscheduledBranchPushTick>{return monitored({setState,deleteState},'پشتیبان‌گیری دوره‌ای شاخه',()=>rawscheduledBranchPushTick(...args))}
