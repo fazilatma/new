@@ -301,14 +301,11 @@ export async function listJobs(limit = 50): Promise<Job[]> {
 
 export async function claimJob(): Promise<Job | null> {
   if (useSqlite) {
-    await query('BEGIN IMMEDIATE');
-    try {
-      const { rows } = await query(`SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1`);
-      if (!rows[0]) { await query('COMMIT'); return null; }
-      const result = await query(`UPDATE jobs SET status='running',phase='starting',started_at=datetime('now'),updated_at=datetime('now') WHERE id=$1 AND status='queued' RETURNING *`, [rows[0].id]);
-      await query('COMMIT');
-      return result.rows[0] ? jobFromRow(result.rows[0]) : null;
-    } catch (error) { await query('ROLLBACK'); throw error; }
+    // A single UPDATE is atomic across processes and does not leave a shared
+    // SQLite connection in an open transaction across JavaScript awaits.
+    const result = await query(`UPDATE jobs SET status='running',phase='starting',started_at=datetime('now'),updated_at=datetime('now')
+      WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY created_at,id LIMIT 1) AND status='queued' RETURNING *`);
+    return result.rows[0] ? jobFromRow(result.rows[0]) : null;
   }
   const client = await pool.connect();
   try {
@@ -365,7 +362,9 @@ export async function listProducts(profileId: string, limit = 100, offset = 0, q
 }
 
 export async function allProducts(profileId: string): Promise<Product[]> {
-  const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND data::text<>'null' ORDER BY updated_at`, [profileId]);
+  // The sync queue also runs on SQLite; PostgreSQL's ::text cast is invalid there.
+  const dataText = useSqlite ? 'data' : 'data::text';
+  const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND ${dataText}<>'null' ORDER BY updated_at`, [profileId]);
   return rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow);
 }
 export async function listStalestProducts(profileId: string, limit = 5): Promise<Product[]> {

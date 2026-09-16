@@ -34,9 +34,10 @@ import { runDiagnostics } from './diagnostics.js';
 import { basalamSdkBridgePath, basalamSdkStatus, describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSelector } from './visual.js';
-import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
+import { requestWorkerStop, processOneJob } from './processor.js';
+import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.189.0+'; } catch { return process.env.npm_package_version || '1.189.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.190.0+'; } catch { return process.env.npm_package_version || '1.190.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -677,15 +678,15 @@ app.post('/api/profiles/:id/scrape', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any; const target = validTarget(body.target || 'none');
   const job=await createJob(profile.id, 'scrape', target);
-  if(job.kind==='scrape'&&job.status==='queued')triggerLocalJobDrain();
-  return c.json({ ok: true, job, processor:job.kind==='scrape'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
+  if(job.status==='queued')triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor:job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 app.post('/api/profiles/:id/sync', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any;
   const job=await createJob(profile.id, 'sync', validTarget(body.target || 'both'));
-  if(job.kind==='sync'&&job.status==='queued')triggerLocalJobDrain();
-  return c.json({ ok: true, job, processor:job.kind==='sync'&&job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
+  if(job.status==='queued')triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor:job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 
 // A 3-page scan that yields a single product means the engine matched a stray
@@ -742,7 +743,20 @@ app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await get
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/extract/:id',async c=>runProfileApi(c,c.req.param('id')));
-app.get('/api/jobs', async c => c.json({ ok: true, jobs: await listJobs(Math.min(200, Number(c.req.query('limit')) || 50)) }));
+app.get('/api/jobs', async c => {
+  const jobs = await listJobs(Math.min(200, Number(c.req.query('limit')) || 50));
+  // Recover persisted/manual queued work after a web restart, including when
+  // continuous processing is disabled. This does not change or duplicate jobs.
+  if (jobs.some(job => job.status === 'queued')) triggerLocalJobDrain();
+  return c.json({ ok: true, jobs, processor: jobDispatcher.status() });
+});
+app.post('/api/jobs/:id/start', async c => {
+  const job = await getJob(c.req.param('id'));
+  if (!job) return c.json({ ok: false, error: 'Job not found' }, 404);
+  if (job.status !== 'queued') return c.json({ ok: false, error: 'Only queued jobs can be started' }, 409);
+  triggerLocalJobDrain();
+  return c.json({ ok: true, job, processor: 'triggered' }, 202);
+});
 app.get('/api/jobs/:id', async c => { const job = await getJob(c.req.param('id')); return job ? c.json({ ok: true, job }) : c.json({ ok: false, error: 'Job not found' }, 404); });
 app.post('/api/jobs/:id/stop', async c => { const job=await stopJob(c.req.param('id')); if(job)return c.json({ok:true,job,forced:true}); await updateJob(c.req.param('id'), { stopRequested: true }); return c.json({ ok: true, forced:false }); });
 app.post('/api/jobs/:id/retry',async c=>{const job=await retryJob(c.req.param('id'));if(job)triggerLocalJobDrain();return job?c.json({ok:true,job,processor:'triggered'}):c.json({ok:false,error:'Job cannot be retried'},409)});
@@ -770,20 +784,12 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 let aiEnrichRunning=false;
 let scheduler: NodeJS.Timeout | undefined;
 let backgroundStarted = false;
-let localDrainRunning = false;
-function triggerLocalJobDrain(): void {
-  if (localDrainRunning) return;
-  localDrainRunning = true;
-  setImmediate(async () => {
-    try { for (let i = 0; i < 25; i++) if (!await processOneJob()) break; }
-    catch (error) { console.error('Manual job drain error', error); }
-    finally { localDrainRunning = false; }
-  });
-}
+const jobDispatcher = createJobDispatcher({ processOneJob, pollMs: config.workerPollMs, onError: error => console.error('Job dispatcher error', error) });
+function triggerLocalJobDrain(): void { jobDispatcher.wake(); }
 function startBackground(): void {
   if (!config.runWorkerInWeb || !databaseReady || backgroundStarted) return;
   backgroundStarted = true;
-  void workerLoop(config.workerPollMs);
+  jobDispatcher.start();
   const schedule = async () => { try { const settings=await getState<any>('settings',{}),stallMin=Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));if(settings.watchdog?.enabled!==false){const recovered=settings.watchdog?.autoContinue!==false?await recoverFailedAndStalledJobs(stallMin):await reapStalledJobs(stallMin);if(recovered)console.log(`Recovered ${recovered} stalled/failed job(s)`)}const count=await enqueueDueProfiles();if(count)console.log(`Scheduled ${count} profile(s)`);await scheduledBranchPushTick({settings,envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:nodeSnapshotDatabase,log:m=>console.log('[scheduled-push]',m)});await recoverCategoryRun();await categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});if(!aiEnrichRunning){aiEnrichRunning=true;try{await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settings',{enabled:true}))?.enabled!==false,modelReady:async()=>Boolean(await preferredAiChatModel()),listProfileIds:async()=>(await listProfiles()).map(p=>p.id),profileEnabled:async id=>(await getProfile(id))?.aiDescriptions!==false,loadCursor:()=>getState<any>(AI_ENRICH_LAST_KEY,null),saveCursor:rec=>setState(AI_ENRICH_LAST_KEY,rec),listStalest:(profileId,limit)=>listStalestProducts(profileId,limit),categories:async()=>{try{return(await destinationCategories()).items}catch{return[]}},enrich:(product,cats)=>generateProductDescription(product,{categories:cats}),saveProduct:(profileId,product)=>upsertProduct(profileId,product as any),log:m=>console.log('[ai-enrich]',m)});}finally{aiEnrichRunning=false;}}const automation=await automationTick();if(Object.keys(automation).length)console.log('Automation',JSON.stringify(automation)); } catch (error) { console.error('Scheduler error', error); } };
   void schedule(); scheduler = setInterval(schedule, 60_000); scheduler.unref();
 }
@@ -795,7 +801,7 @@ if (localScraperAutoUpdate) {
 }
 const databaseRetry = setInterval(async () => { if (!databaseReady && config.databaseUrl && await initializeDatabase()) startBackground(); }, 30_000);
 databaseRetry.unref();
-const shutdown = async () => { requestWorkerStop(); clearInterval(databaseRetry); if (scheduler) clearInterval(scheduler); server.close(); await pool.end(); process.exit(0); };
+const shutdown = async () => { jobDispatcher.stop(); requestWorkerStop(); clearInterval(databaseRetry); if (scheduler) clearInterval(scheduler); server.close(); await pool.end(); process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 
 function csvCell(value:unknown){return `"${String(value??'').replace(/"/g,'""')}"`}
