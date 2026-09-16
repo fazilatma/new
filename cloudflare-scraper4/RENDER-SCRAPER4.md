@@ -784,3 +784,40 @@ deltas in the shared dashboard besides the changelog — your `combo-list` dropd
   cards when narrow, a sticky snapping tab rail, 2.85rem tap targets, a pinned bottom dock with
   safe-area padding, collapsible explanations, and dark/light palettes with a persisted switch.
   Same ids, same handlers, same routes.
+
+## 1.181.0+ — deployer round two: a live status rail, a text-size step, badges, filters, and behaviour tests
+
+Only `scripts/local-deployer-ui.mjs` and its tests change. Every `/api/*` route, id, handler and
+the token flow (`?token=` plus `x-local-deployer-token`) stay as they were, and the tab order that
+`tabByIndex()` and the `#branches` deep link depend on is untouched. The worker bundle picks up
+nothing but the changelog lines.
+
+- **Status rail in the header**: database / local scraper / git / newest branch, filled from the
+  existing `status()` payload, with an `updated Ns ago` stamp. A stale build served on localhost
+  reads `warn` there, so you see it before opening the tab. The rail is deliberately not an ARIA
+  live region; the toast (`<output>` at the bottom) is the only announced thing.
+- **Text zoom**: four steps 100 / 112.5 / 125 / 137.5 percent on the root font size. Because the
+  whole page is rem/em — type, padding, tap targets and every media query — this is real zoom, not
+  a text-only hack that breaks the grid. Persisted under `scraper4-deployer-text`; both buttons
+  carry `aria-label` and take `min-height:var(--tap)`.
+- **Tab badges**: counts for the branch list and the command guides, `running` while a job polls,
+  and `!` plus a red dot when the scraper serves a stale build. The dot is added and removed by the
+  same `badge()` call that writes the text, so it cannot outlive the condition.
+- **Loading, empty and error states**: skeleton metric tiles and library cards (shimmer, stilled
+  under `prefers-reduced-motion`) with no interactive markup inside them, and toasts in place of
+  `alert()`, including one that mirrors a copied command. An empty filter result says so.
+- **Filters and folds**: `#branchFilter` re-renders from the cached payload (no extra request),
+  `#guideFilter` hides non-matching environment cards, and every long script folds behind
+  `toggleCmd` while keeping its `#cmdN` id for the copy/download handlers.
+- **Phone manners**: the 5 second poll is skipped while `document.hidden` and resumes on `focus`;
+  the job log only auto-scrolls while `#logFollow` is ticked, while the scraper log follows while
+  its process is running.
+- **Found in the same review**: the environment filter existed but was never wired to
+  `filterGuides()`; `updateRail` labelled the third state `bad` while the stylesheet only knew `err`,
+  so a stopped scraper rendered a grey dot; and a status payload without `package` threw inside the
+  refresh loop instead of falling back.
+
+Guards: `worker-tests/deployer-ui-mobile.test.mjs` pins the markup and stylesheet contract (no px
+type, every queried id present, restated `[hidden]` rules), and the new
+`worker-tests/deployer-ui-live.test.mjs` executes the page script itself against a parsed DOM so the
+rail, badges, zoom steps, filters, toast and follow-up are checked as behaviour, not as strings.
