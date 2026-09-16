@@ -1,7 +1,8 @@
 import { normalizePersianText } from '../worker-src/utils.js';
 import pg from 'pg';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { config } from './config.js';
 import type { Job, Product, Profile } from './types.js';
 
@@ -78,6 +79,30 @@ async function getSqliteDb(): Promise<any> {
   sqliteDb = new mod.DatabaseSync(file);
   sqliteDb.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   return sqliteDb;
+}
+/**
+ * Snapshot the live SQLite database into a clean standalone file and return
+ * it base64-encoded for the branch backup. VACUUM INTO (not a raw file copy)
+ * because the live database runs in WAL mode, so the .sqlite file alone is
+ * incomplete. Never throws: anything unexpected becomes an honest skip note
+ * and the JSON backup parts still go up.
+ */
+export async function snapshotSqliteDatabase(): Promise<{ b64: string; bytes: number } | { skipped: string }> {
+  if (!useSqlite) return { skipped: 'not-sqlite' };
+  let dir = '';
+  try {
+    const db = await getSqliteDb();
+    dir = mkdtempSync(join(tmpdir(), 'scraper4-dbsnap-'));
+    const file = join(dir, 'database.sqlite');
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    const bytes = readFileSync(file);
+    if (bytes.length > 48 * 1024 * 1024) return { skipped: 'too-large' };
+    return { b64: bytes.toString('base64'), bytes: bytes.length };
+  } catch {
+    return { skipped: 'unavailable' };
+  } finally {
+    try { if (dir) rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
 }
 function normalizeSqliteParam(value: unknown): unknown {
   if (typeof value === 'boolean') return value ? 1 : 0;

@@ -670,39 +670,32 @@ Worker عبور می‌کردند — و آن Worker هدر `Authorization` را
 `pkg install chromium`). روی Cloudflare Workers و هاست اشتراکی cPanel اجرای مرورگر ممکن نیست و باید
 از موتورهای HTML استفاده کرد.
 
-## نسخهٔ ۱.۱۷۶.۰ — نمایش نتایج استخراج + اتصال ارائه‌دهندهٔ محلی روی Node
+## نسخهٔ ۱.۱۷۷.۰ — نمایش نتایج استخراج، ارائه‌دهندهٔ محلی، و چت با تاریخچهٔ کامل
 
 این نسخه از برنچ `arena/01a0a647-new` ساخته و دیپلوی می‌شود (برنچ مرجع همین انتشار).
 
-
-### خالی ماندن بخش نتایج (رگرسیون ۱.۱۷۴.۰)
+### خالی ماندن بخش نتایج (رگرسیون ۱.۱۷۴.۰ که در ۱.۱۷۵.۰ و ۱.۱۷۶.۰ هم باقی بود)
 
 در پیشخوان، `productSuffixFormats` به‌صورت `async` تعریف شده بود در حالی که تنها فراخوانش،
 `productCodeSuffix`، نتیجه را هم‌زمان می‌خواند. برای هر محصولی که `sku` یا `sourceKey` داشت
 عبارت `formats[0].replace(...)` روی یک Promise خطا می‌داد و چون این خطا داخل
-`rows.map(productRowHtml)` در `loadProducts` بود، کل فهرست دور ریخته می‌شد؛ شمارش products و
-badge درست بود اما `#products` همان پیام «محصولی یافت نشد» را نگه می‌داشت و
-`openProductModal` هم از همان تابع استفاده می‌کرد، پس هیچ نتیجه‌ای باز نمی‌شد.
+`rows.map(productRowHtml)` در `loadProducts` بود، کل فهرست دور ریخته می‌شد؛ شمارش و badge درست
+بودند و `openProductModal` هم از همان تابع استفاده می‌کرد. حالا:
 
-- `productSuffixFormats` دوباره هم‌زمان است؛ چیزی که می‌خواند فقط `#dedupSuffix` و
-  `settings.dedup.suffixFormats` است.
+- `productSuffixFormats` هم‌زمان است (فقط `#dedupSuffix` و `settings.dedup.suffixFormats` را می‌خواند).
 - `productCodeSuffix` نتیجه را اعتبارسنجی می‌کند و اگر آرایهٔ معتبر نبود به `(کد:x)` برمی‌گردد.
-- `loadProducts` هر کارت را داخل `try` خودش می‌سازد؛ خطای یک نتیجه فقط همان یک نتیجه را به کارت
-  هشدار با متن خطا تبدیل می‌کند.
-- `worker-tests/results-products-ui.test.mjs` همین سناریو را با DOM واقعی و همان JSON که Node
-  برمی‌گرداند می‌سنجد؛ با برگرداندن `async`، تست رفتاری fail می‌شود (هر دو جهت بررسی شد).
+- `loadProducts` هر کارت را داخل `try` خودش می‌سازد؛ خطای یک نتیجه فقط همان را به کارت هشدار با متن
+  خطا تبدیل می‌کند.
+- `worker-tests/results-products-ui.test.mjs` با DOM واقعی و همان JSON که Node برمی‌گرداند
+  بررسی می‌کند؛ با برگرداندن `async`، تست رفتاری fail می‌شود.
 
-چون پیشخوان یک فایل مشترک است، این رفع روی Worker کلودفلر و همهٔ اجراگرهای Node یکی است.
+### اجرای زمان‌بندی‌شدهٔ تصحیح دسته‌بندی
 
-### اتصال ارائه‌دهندهٔ هوش مصنوعی روی خودِ دستگاه
-
-در `render-src/network.ts` قاعدهٔ `assertAiEndpointUrl` اضافه شد: آدرس پایهٔ ارائه‌دهندهٔ هوش
-مصنوعی که خودِ کاربر در پیشخوان تایپ کرده با `aiEndpoint: true` از همین قاعده عبور می‌کند، پس
-Ollama روی `127.0.0.1:11434`، llama.cpp/vLLM روی LAN و `host.docker.internal` کار می‌کنند؛ پروتکل
-فقط http/https، نام کاربری/رمز در URL مجاز نیست، و `169.254.0.0/16` (metadata سرویس ابر) بسته می‌ماند. مسیر استخراج و بقیهٔ درخواست‌ها همچنان `assertPublicUrl` هستند.
+همان پیاده‌سازی ۱.۱۷۵.۰ باقی می‌ماند و هیچ نسخهٔ دومی اضافه نشده است:
+`settings.categoryFix.periodic` (پیش‌فرض هر ۶ ساعت، کران ۱ تا ۱۶۸)، `categoryFixTick` در
+`worker-src/destination-core.ts` که از `worker-src/app.ts` (کرون کلودفلر) و `render-src/cron.ts` و
+`render-src/server.ts` (نود) صدا زده می‌شود، و لنگر زمان‌بندی در `app_state[category_fix_last]`.
 
 ### LOCAL_SCRAPER_AUTO_UPDATE
 
-برای خاموش کردن به‌روزرسانی خودکار روی دستگاه محلی، علاوه بر `false` حالا `0`، `no` و `off` هم
-کار می‌کنند؛ قبلاً فقط رشتهٔ دقیق `false` معنا داشت و یک سرور Termux که قصدش محافظت از کار
-نکردی بود، هر ده دقیقه `git reset --hard` را امتحان می‌کرد.
+علاوه بر `false`، حالا `0`، `no` و `off` هم سرور محلی را از `git reset --hard` دوره‌ای نگه می‌دارند.

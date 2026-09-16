@@ -74,11 +74,11 @@ export async function aiCall(provider:Provider,model:string,prompt:string,maxTok
 /**
  * Chat with the whole conversation instead of a flattened transcript.
  *
- * The shared dashboard posts {messages:[{role,content}…]}. Joining those lines into one
- * prompt made the model read a log file rather than answer the last turn, and the system
- * prompt got buried in the middle of it. The Worker sends the list as-is, so Node now
- * sends the same payload; the request shape (endpoint, guard, timeout, response parsing)
- * stays identical to aiCall so the AI-endpoint URL rule keeps applying.
+ * The shared dashboard posts {messages:[{role,content}…]}. Joining those lines into one prompt
+ * made the model read a log file rather than answer the last turn, and the system prompt got
+ * buried in the middle of it. The Worker sends the list as-is, so Node now sends the same
+ * payload; the request shape (endpoint, guard, timeout, response parsing) stays identical to
+ * aiCall so the AI-endpoint URL rule keeps applying.
  */
 export async function aiChatWithMessages(provider:Provider,model:string,messages:{role:string;content:string}[],maxTokens=1200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages,max_tokens:Math.max(1,Number(maxTokens)||1200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
 export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),runId:randomUUID(),prompt,categoryTitle:'',onlyCandidates,results});return results}

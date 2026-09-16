@@ -753,31 +753,32 @@ go green.
 
 Same update path: pull, restart the deployer process, re-run the diagnostic.
 
-## 1.176.0 — the results section renders again, and local AI providers connect
+## 1.177.0 — results list renders again, local AI providers connect, chat keeps its history
 
-Two fixes on top of 1.175.0, both reproduced against a live Node server before being changed:
+On top of 1.176.0 (split branch backups). All three were reproduced against a live Node server
+with SQLite before anything was changed:
 
-- **`بخش نتایج استخراج` was empty while the counter was right.** Since 1.174.0 the shared dashboard
-  declared `productSuffixFormats` as `async` while `productCodeSuffix` still read it synchronously, so
-  `formats[0]` was `undefined` on a Promise. Every row with a `sku`/`sourceKey` threw, and because the
-  throw happened inside `rows.map(productRowHtml)` inside `loadProducts`’ `try`, the whole list was
-  discarded and `openProductModal` could not open a row either. `productSuffixFormats` is synchronous
-  again, `productCodeSuffix` validates the list and falls back to `(کد:x)`, `loadProducts` renders each
-  row in its own guard (a failure becomes one warning card with the error text, never a blank section),
-  and `openProductModal` names the reason instead of returning silently. Covered by
-  `worker-tests/results-products-ui.test.mjs`, which fails if the stray `async` comes back.
-- **AI base URLs on the machine itself.** `render-src/network.ts` gained `assertAiEndpointUrl`, and AI
-  calls pass `aiEndpoint: true`, so Ollama on `127.0.0.1:11434`, llama.cpp/vLLM on the LAN and
-  `host.docker.internal` work for model tests, the model list and chat on Termux/VPS. http/https only,
-  no credentials in the URL, `169.254.0.0/16` still refused; scraping and every other route keep
+- **`بخش نتایج استخراج` was empty while the counter was right.** Since 1.174.0 the shared
+  dashboard declared `productSuffixFormats` as `async` while `productCodeSuffix` read it
+  synchronously, so `formats[0]` was `undefined` on a Promise: every row with a `sku`/`sourceKey`
+  threw inside `rows.map(productRowHtml)` and the whole list was discarded, and `openProductModal`
+  could not open a row either. The helper is synchronous again, `productCodeSuffix` validates the
+  formats and falls back to `(کد:x)`, `loadProducts` renders each row in its own guard (a failure
+  becomes one warning card with the error text, never a blank section), and the modal names the
+  reason it cannot open. Covered by `worker-tests/results-products-ui.test.mjs`, which fails when
+  the stray `async` is restored.
+- **AI base URLs on the machine itself.** `render-src/network.ts` gained `assertAiEndpointUrl` and
+  `safeFetch` honours an explicit `aiEndpoint` opt-in (redirect hops included); every AI call in
+  `render-src/ai.ts` validates and routes with it. Ollama on `127.0.0.1:11434`, llama.cpp/vLLM on
+  the LAN and `host.docker.internal` now work for the model list, model tests and chat. http/https
+  only, no credentials in the URL, `169.254.0.0/16` refused (verified live), and scraping still uses
   `assertPublicUrl`.
-- **`چت با مدل‌ها` kept its history.** The Node chat route joined the message list into one `role: content` string, so the system prompt was
-  buried and the model answered a transcript; it now posts the messages with their roles (and honours the `::k2` key
-  pick, reporting `keyIndex` back), matching the Worker. Verified live: a two-message chat reaches the provider as two
+- **Chat stopped flattening the conversation.** The Node chat route joined the message list into one
+  `role: content` prompt, burying the system prompt; it now posts the messages with their roles and
+  reports the `keyIndex` the `::k2` pick selected. Verified live: a two-message chat arrives as two
   messages.
-- `LOCAL_SCRAPER_AUTO_UPDATE` now also accepts `0` / `no` / `off`, so a phone that was told not to
-  auto-update stops running `git reset --hard` on a timer.
+- `LOCAL_SCRAPER_AUTO_UPDATE` also accepts `0` / `no` / `off`, so a Termux box that was told not to
+  auto-update stops attempting `git reset --hard` on a timer.
 
-Deliberately unchanged: the periodic `categoryFix` schedule that shipped in 1.175.0 stays the single
-implementation (`settings.categoryFix.periodic` + `app_state[category_fix_last]` + `categoryFixTick`
-wired in both runtimes); this release does not add a second one.
+The periodic `categoryFix` schedule from 1.175.0 is untouched and stays the only implementation
+(`settings.categoryFix.periodic` + `app_state[category_fix_last]` + `categoryFixTick` in both runtimes).

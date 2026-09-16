@@ -4,10 +4,11 @@ import worker from '../scraper4.worker.js';
 
 // Branch backup files through the real production bundle with GitHub stubbed
 // out: the branch scan honors ?repo= and reports the latest-version branch,
-// the file listing returns newest-first JSON only, downloads are parsed
-// JSON with a size cap, and push writes through the Contents API (create or
-// update by pre-read sha). Failures are staged; only bad params and a
-// missing token are HTTP 400.
+// the file listing returns newest-first JSON only plus backup folders,
+// downloads are parsed JSON with a size cap, and push writes one JSON file
+// per section plus a manifest through the Contents API (create or update by
+// pre-read sha). Failures are staged; only bad params and a missing token
+// are HTTP 400.
 const ctx = { waitUntil() {}, passThroughOnException() {} };
 const db = { prepare: sql => ({ sql, first: async () => ({ name: 'profiles' }) }), batch: async () => [] };
 const realFetch = globalThis.fetch;
@@ -18,6 +19,8 @@ async function withGitHub(stub, fn) {
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const call = (path, env = {}) => worker.fetch(new Request(`https://worker.test${path}`), { DB: db, VAULT_SECRET: 'vault-secret', ...env }, ctx);
 const callPost = (path, body, env = {}) => worker.fetch(new Request(`https://worker.test${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), { DB: db, VAULT_SECRET: 'vault-secret', ...env }, ctx);
+const part = text => ({ size: text.length, b64: Buffer.from(text).toString('base64') });
+const tinyBundle = { files: { 'profiles.json': part('{}') } };
 
 test('branch scan: ?repo= is honored and the latest-version branch is reported', async () => {
   const calls = [];
@@ -72,7 +75,8 @@ test('branch files: JSON only, newest name first, branch safely encoded', async 
     files: [
       { name: 'b.json', path: 'backups/b.json', size: 20, sha: 'b' },
       { name: 'a.json', path: 'backups/a.json', size: 10, sha: 'a' }
-    ]
+    ],
+    folders: [{ name: 'sub', path: 'backups/sub' }]
   });
   assert.equal(calls.length, 1);
 });
@@ -142,7 +146,7 @@ test('branch file: a bad token is reported, not hidden', async () => {
   assert.ok(body.error.includes('Bad credentials'));
 });
 
-test('branch push: a new file is created without a sha', async () => {
+test('branch push: a new folder is created part by part without shas', async () => {
   const puts = [];
   const stub = async (url, init) => {
     const href = String(url);
@@ -150,43 +154,49 @@ test('branch push: a new file is created without a sha', async () => {
       puts.push({ href, auth: new Headers(init.headers).get('authorization'), body: JSON.parse(init.body) });
       return json({ content: { sha: 'newsha' }, commit: { sha: 'commitsha' } }, 201);
     }
-    assert.match(href, /\/repos\/acme\/widgets\/contents\/backups\/b\.json\?ref=main$/);
+    assert.match(href, /\/repos\/acme\/widgets\/contents\/backups\/b\/[^?]+\?ref=main$/);
     return json({ message: 'Not Found' }, 404);
   };
-  const push = { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { a: 1 } };
+  const push = { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { files: { 'profiles.json': part('{"a":1}') } } };
   const response = await withGitHub(stub, () => callPost('/api/branch-push', push, { GH_BACKUP_TOKEN: 'tok' }));
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.ok, true);
-  assert.equal(body.path, 'backups/b.json');
+  assert.equal(body.path, 'backups/b');
   assert.equal(body.sha, 'newsha');
   assert.equal(body.commit, 'commitsha');
   assert.equal(body.updated, false);
-  assert.equal(puts.length, 1);
-  assert.match(puts[0].href, /\/repos\/acme\/widgets\/contents\/backups\/b\.json$/);
+  assert.equal(body.parts, 1);
+  assert.equal(body.database, 'skipped:d1');
+  assert.equal(puts.length, 2, 'one part plus the manifest');
+  assert.match(puts[0].href, /\/repos\/acme\/widgets\/contents\/backups\/b\/profiles\.json$/);
   assert.equal(puts[0].auth, 'Bearer tok');
   assert.equal(puts[0].body.branch, 'main');
   assert.equal(puts[0].body.sha, undefined, 'a create sends no sha');
-  assert.match(puts[0].body.message, /scraper4 backup b\.json/);
-  assert.equal(Buffer.from(puts[0].body.content, 'base64').toString('utf8'), JSON.stringify({ a: 1 }, null, 2));
+  assert.match(puts[0].body.message, /scraper4 backup backups\/b\/profiles\.json/);
+  assert.equal(Buffer.from(puts[0].body.content, 'base64').toString('utf8'), '{"a":1}');
+  assert.match(puts[1].href, /\/repos\/acme\/widgets\/contents\/backups\/b\/manifest\.json$/);
+  assert.deepEqual(JSON.parse(Buffer.from(puts[1].body.content, 'base64').toString('utf8')).parts, ['profiles.json']);
 });
 
-test('branch push: an existing file is updated with its sha', async () => {
+test('branch push: an existing folder is updated with pre-read shas', async () => {
   const puts = [];
   const stub = async (url, init) => {
     if (init?.method === 'PUT') {
       puts.push(JSON.parse(init.body));
       return json({ content: { sha: 'newersha' }, commit: { sha: 'commit2' } }, 200);
     }
-    return json({ name: 'b.json', sha: 'oldsha', size: 10 });
+    return json({ name: 'profiles.json', sha: 'oldsha', size: 10 });
   };
-  const push = { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { a: 2 } };
+  const push = { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { files: { 'profiles.json': part('{"a":2}') } } };
   const body = await withGitHub(stub, async () => (await callPost('/api/branch-push', push, { GH_BACKUP_TOKEN: 'tok' })).json());
   assert.equal(body.ok, true);
   assert.equal(body.updated, true);
   assert.equal(body.sha, 'newersha');
-  assert.equal(puts.length, 1);
-  assert.equal(puts[0].sha, 'oldsha', 'an update must carry the pre-read sha');
+  assert.equal(body.path, 'backups/b');
+  assert.equal(puts.length, 2);
+  assert.equal(puts[0].sha, 'oldsha', 'a part update must carry the pre-read sha');
+  assert.equal(puts[1].sha, 'oldsha', 'the manifest update must carry the pre-read sha');
 });
 
 test('branch push: without a token it is a 400 without touching the network', async () => {
@@ -209,7 +219,8 @@ test('branch push: invalid params are a 400 without touching the network', async
     [{ repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'evil.txt', bundle: {} }, /\.json/],
     [{ repo: 'acme/widgets', branch: 'main', path: 'backups', name: '../x.json', bundle: {} }, /\.json/],
     [{ repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: [1] }, /object/],
-    [{ repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { big: 'x'.repeat(6 * 1024 * 1024) } }, /5 MB/],
+    [{ repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { files: {} } }, /no files/],
+    [{ repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { files: { 'big.json': part('"' + 'x'.repeat(6 * 1024 * 1024) + '"') } } }, /5 MB/],
   ];
   for (const [push, pattern] of bad) {
     const response = await withGitHub(stub, () => callPost('/api/branch-push', push, { GH_BACKUP_TOKEN: 'tok' }));
@@ -222,20 +233,20 @@ test('branch push: invalid params are a 400 without touching the network', async
 });
 
 test('branch push: a bad token is reported, not hidden', async () => {
-  const body = await withGitHub(async () => json({ message: 'Bad credentials' }, 401), async () => (await callPost('/api/branch-push', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: {} }, { GH_BACKUP_TOKEN: 'bogus' })).json());
+  const body = await withGitHub(async () => json({ message: 'Bad credentials' }, 401), async () => (await callPost('/api/branch-push', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: tinyBundle }, { GH_BACKUP_TOKEN: 'bogus' })).json());
   assert.equal(body.ok, false);
   assert.equal(body.stage, 'push');
   assert.ok(body.error.includes('Bad credentials'));
 });
 
 test('branch push: a forbidden write and a refused write stay honest', async () => {
-  const denied = await withGitHub(async () => json({ message: 'Resource not accessible by integration' }, 403), async () => (await callPost('/api/branch-push', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: {} }, { GH_BACKUP_TOKEN: 'tok' })).json());
+  const denied = await withGitHub(async () => json({ message: 'Resource not accessible by integration' }, 403), async () => (await callPost('/api/branch-push', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: tinyBundle }, { GH_BACKUP_TOKEN: 'tok' })).json());
   assert.equal(denied.ok, false);
   assert.ok(denied.error.includes('Resource not accessible'));
   assert.ok(!denied.error.toLowerCase().includes('rate limit'), 'must not be mislabeled as a rate limit');
   const refused = await withGitHub(async (url, init) => init?.method === 'PUT'
     ? json({ message: 'Invalid request.\n\n"sha" wasn\u2019t supplied.' }, 422)
-    : json({ message: 'Not Found' }, 404), async () => (await callPost('/api/branch-push', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: {} }, { GH_BACKUP_TOKEN: 'tok' })).json());
+    : json({ message: 'Not Found' }, 404), async () => (await callPost('/api/branch-push', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: tinyBundle }, { GH_BACKUP_TOKEN: 'tok' })).json());
   assert.equal(refused.ok, false);
   assert.equal(refused.stage, 'push');
   assert.ok(refused.error.includes('refused'));
