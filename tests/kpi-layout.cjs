@@ -9,6 +9,6 @@ for (const value of ['۱۲۳٬۴۵۶٬۷۸۹٬۰۰۰ تومان', '−۹۸۷٬۶
   assert(!/truncate|overflow-hidden|whitespace-nowrap/.test(rendered));
   assert.match(rendered, /<\/div>\s*<div class="kpi-value/);
 }
-assert.match(html, /#kpis, #r-kpis, #orders-summary \{ grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 15rem\), 1fr\)\);/);
+assert.match(html, /#r-kpis, #orders-summary \{ grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 15rem\), 1fr\)\);/);
 assert.match(html, /\.kpi-value \{ white-space: normal; overflow-wrap: anywhere; line-height: 1.7;/);
 console.log('KPI layout regression checks passed');

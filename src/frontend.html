@@ -89,7 +89,22 @@ tailwind.config = {
   .leg-chip.leg-off { opacity: .35; text-decoration: line-through; } .chart-box.tall { height: 320px; }
   .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
   /* Reflow at browser zoom; never truncate financial values. */
-  #kpis, #r-kpis, #orders-summary { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
+  #r-kpis, #orders-summary { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
+  .dashboard-summary { position: relative; margin-bottom: 1rem; }
+  #dashboard-range { position: sticky; top: var(--app-header-height, 76px); z-index: 30; background: rgba(248,250,255,.97); box-shadow: 0 5px 18px rgba(30,41,59,.08); }
+  .dark #dashboard-range { background: rgba(17,24,39,.97); }
+  .summary-table { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: right; }
+  .summary-table caption { text-align: right; padding: 1rem; font-weight: 900; }
+  .summary-table th, .summary-table td { padding: .85rem 1rem; border-top: 1px solid rgba(148,163,184,.2); overflow-wrap: anywhere; white-space: normal; }
+  .summary-table thead { background: rgba(99,102,241,.08); font-size: .75rem; }
+  .summary-table tbody th { font-size: .85rem; font-weight: 700; }
+  .summary-table tbody tr:nth-child(even) { background: rgba(148,163,184,.06); }
+  .summary-table tbody tr:hover { background: rgba(99,102,241,.09); }
+  .summary-table .summary-value { font-weight: 900; font-size: 1.05rem; line-height: 1.8; }
+  .summary-note { font-size: .75rem; color: #64748b; }
+  .dark .summary-note { color: #94a3b8; }
+  @media (max-width: 480px) { .summary-table th, .summary-table td { padding: .7rem .45rem; } }
+  @media print { #dashboard-range { position: static; } }
   .kpi-value { white-space: normal; overflow-wrap: anywhere; line-height: 1.7; }
   .kpi-title, .kpi-sub { overflow-wrap: anywhere; }
   .kpi-icon { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; flex-shrink: 0; }
@@ -155,7 +170,8 @@ tailwind.config = {
 
     <!-- داشبورد -->
     <section id="view-dashboard" class="view">
-      <div class="glass card p-4 mb-4 flex flex-wrap items-center gap-2 no-print">
+      <div class="dashboard-summary">
+      <div id="dashboard-range" class="glass card p-4 mb-4 flex flex-wrap items-center gap-2 no-print">
         <span class="font-black text-sm ml-1">📅 بازه زمانی:</span>
         <div id="rng-btns" class="flex flex-wrap gap-2"></div>
         <div id="rng-custom" class="hidden flex-wrap items-center gap-2 w-full mt-2 pt-2 border-t border-slate-200 dark:border-white/10">
@@ -168,7 +184,15 @@ tailwind.config = {
           احتساب مرجوعی به‌عنوان زیان
         </label>
       </div>
-      <div id="kpis" class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-4"></div>
+      <div class="glass card">
+        <table class="summary-table">
+          <caption>📊 خلاصه عملکرد در بازه انتخاب‌شده</caption>
+          <colgroup><col style="width:30%"><col style="width:40%"><col style="width:30%"></colgroup>
+          <thead><tr><th scope="col">شاخص</th><th scope="col">مقدار</th><th scope="col">توضیحات</th></tr></thead>
+          <tbody id="kpis"></tbody>
+        </table>
+      </div>
+      </div>
       <div class="grid lg:grid-cols-3 gap-4 mb-4">
         <div class="glass card card-hover p-4 lg:col-span-2 anim anim-1">
           <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
@@ -548,7 +572,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.18.1';
+const APP_VER = '1.19.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1126,6 +1150,10 @@ function bindPan() {
     el.addEventListener('click', (e) => { if (moved) { moved = false; e.stopPropagation(); e.preventDefault(); } }, true);
   });
 }
+function dashboardSummaryRow(title, value, sub, grad) {
+  const tone = grad === 'grad-green' ? 'text-emerald-600 dark:text-emerald-400' : grad === 'grad-rose' ? 'text-rose-600 dark:text-rose-400' : '';
+  return `<tr><th scope="row">${title}</th><td class="summary-value num ${tone}">${value}</td><td class="summary-note">${sub}</td></tr>`;
+}
 function renderDashboard() {
   const incR = $('#inc-ret').checked;
   $('#rng-btns').innerHTML = RANGES.map((r) =>
@@ -1135,12 +1163,12 @@ function renderDashboard() {
   const s = summarize(list, incR);
   const pm = s.margin;
   $('#kpis').innerHTML =
-    kpiCard('💰 فروش کل', fmtMoney(s.revenue), `${fmtN(s.count)} سفارش در بازه`, 'grad-bg', '💵', 'anim-1') +
-    kpiCard('🧾 هزینه کل', fmtMoney(s.cost), 'خرید + ارسال + کمیسیون و…', 'grad-amber', '🧮', 'anim-2') +
-    kpiCard('✅ سود خالص', fmtMoney(s.profit), `حاشیه سود ${toFa(pm.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', s.profit >= 0 ? '📈' : '📉', 'anim-3') +
-    kpiCard('🧺 میانگین سبد', fmtMoney(s.avg), 'میانگین فروش هر سفارش', 'grad-sky', '🛒', 'anim-4') +
-    kpiCard('📦 سفارش‌ها', fmtN(s.count), `از ${fmtJ(from, state.range !== 'today')} تا ${fmtJ(to, state.range !== 'today')}`, 'grad-bg', '📦', 'anim-2') +
-    kpiCard('⚖️ نسبت هزینه', toFa(s.revenue ? ((s.cost / s.revenue) * 100).toFixed(1) : 0) + '٪', 'سهم هزینه از فروش', 'grad-amber', '⚖️', 'anim-3');
+    dashboardSummaryRow('💰 فروش کل', fmtMoney(s.revenue), `${fmtN(s.count)} سفارش در بازه`, 'grad-bg', '💵', 'anim-1') +
+    dashboardSummaryRow('🧾 هزینه کل', fmtMoney(s.cost), 'خرید + ارسال + کمیسیون و…', 'grad-amber', '🧮', 'anim-2') +
+    dashboardSummaryRow('✅ سود خالص', fmtMoney(s.profit), `حاشیه سود ${toFa(pm.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', s.profit >= 0 ? '📈' : '📉', 'anim-3') +
+    dashboardSummaryRow('🧺 میانگین سبد', fmtMoney(s.avg), 'میانگین فروش هر سفارش', 'grad-sky', '🛒', 'anim-4') +
+    dashboardSummaryRow('📦 سفارش‌ها', fmtN(s.count), `از ${fmtJ(from, state.range !== 'today')} تا ${fmtJ(to, state.range !== 'today')}`, 'grad-bg', '📦', 'anim-2') +
+    dashboardSummaryRow('⚖️ نسبت هزینه', toFa(s.revenue ? ((s.cost / s.revenue) * 100).toFixed(1) : 0) + '٪', 'سهم هزینه از فروش', 'grad-amber', '⚖️', 'anim-3');
 
   /* روند */
   const groups = [['daily', 'روزانه'], ['weekly', 'هفتگی'], ['monthly', 'ماهانه']];
@@ -2261,6 +2289,10 @@ async function cloudDisconnect(p) {
 
 /* ═══════════════ شروع ═══════════════ */
 async function init() {
+  const header = document.querySelector('header');
+  const syncHeaderHeight = () => document.documentElement.style.setProperty('--app-header-height', header.getBoundingClientRect().height + 'px');
+  syncHeaderHeight();
+  new ResizeObserver(syncHeaderHeight).observe(header);
   if (localStorage.getItem('hd_theme') !== 'light') document.documentElement.classList.add('dark');
   else document.documentElement.classList.remove('dark');
   $('#theme-ico').textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
