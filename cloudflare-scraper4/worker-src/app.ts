@@ -1,3 +1,4 @@
+import { PUSH_MANIFEST, PUSH_ICON, pushIconPng } from './push-assets.js';
 import { diagnosticStream, type DiagnosticObserver } from './diagnostic-progress.js';
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
@@ -35,14 +36,19 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.187.0+',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.188.0+',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
+app.get('/manifest.webmanifest',c=>c.json(PUSH_MANIFEST,200,{'content-type':'application/manifest+json'}));
+app.get('/app-icon-192.png',c=>c.body(pushIconPng('192'),200,{'content-type':'image/png'}));
+app.get('/app-icon-512.png',c=>c.body(pushIconPng('512'),200,{'content-type':'image/png'}));
+app.get('/app-icon.svg',c=>c.body(PUSH_ICON,200,{'content-type':'image/svg+xml'}));
 app.get('/visual',async c=>renderVisualSelector(c.req.query('ticket')||'',c.req.query('context')==='detail'?'detail':'list'));
 app.use('/api/*',async(c,next)=>{if(c.req.path==='/api/runtime/libraries'||c.req.path==='/api/libraries')return next();if(!c.env.DB)return c.json({ok:false,error:'D1 binding DB is not configured'},503);await ensureSchema(c.env.DB);await next()});
 
-app.post('/api/visual-ticket',async c=>{const body=await c.req.json() as any,url=new URL(String(body.url||''));if(!['http:','https:'].includes(url.protocol))return c.json({ok:false,error:'Invalid visual selector URL'},400);return c.json({ok:true,ticket:await createVisualTicket(url.href),expiresIn:300})});
+app.get('/api/web-push/config',c=>c.json({ok:true,supported:false,configured:false,reason:'Web Push در این انتشار به نسخهٔ VPS/Node نیاز دارد.'}));
+app.post('/api/visual-ticket',async c=>{const body=await c.req.json() as any,url=new URL(String(body.url||''));if(!['http:','https:'].includes(url.protocol))return c.json({ok:false,error:'Invalid visual selector URL'},400);if(['playwright','puppeteer','crawlee_playwright','network_api'].includes(String(body.engine||'')))return c.json({ok:false,error:'نمایش DOM با موتور مرورگری به نسخهٔ VPS/Node نیاز دارد؛ Cloudflare این مرورگر را اجرا نمی‌کند.'},400);const ticket=await createVisualTicket(url.href,Boolean(body.indirect));return c.json({ok:true,ticket,channel:ticket,engine:'html',expiresIn:300})});
 app.get('/api/status',async c=>{const connections=await loadConnections();return c.json({ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections),queue:Boolean(c.env.JOBS),storage:{d1:true,r2:Boolean(c.env.BACKUPS)}})});
 // ─── Task-manager style live activity (lightweight) ──────────────────────────
 app.get('/api/activity',async c=>{
@@ -56,7 +62,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.187.0+')
+    Promise.resolve(c.env.WORKER_VERSION||'1.188.0+')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -90,11 +96,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.187.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.188.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.187.0+',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.188.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});

@@ -1,3 +1,4 @@
+import { pushJobFinished } from './web-push.js';
 import { allProducts, claimJob, getJob, getProfile, getState, markMissingProducts, markProfileRun, saveProfile, stopRequested, updateJob, upsertProduct } from './db.js';
 import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError, listSelectorsStatus } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
@@ -266,7 +267,7 @@ export async function processOneJob(): Promise<boolean> {
     if (job.status !== 'stopped') job.status = 'done';
     append(job, job.status === 'done' ? 'عملیات با موفقیت تمام شد' : 'عملیات متوقف شد');
   } catch (error) { job.status = 'failed'; job.error = message(error); append(job, job.error, 'error'); }
-  job.finishedAt = new Date().toISOString(); job.phase = 'finished'; await save(job); return true;
+  job.finishedAt = new Date().toISOString(); job.phase = 'finished'; await save(job); void pushJobFinished(job).catch(()=>undefined); return true;
 }
 
 async function runSync(job: Job, profile: Awaited<ReturnType<typeof getProfile>> & {}, products: Product[]): Promise<void> {

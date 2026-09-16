@@ -1,3 +1,5 @@
+import { PUSH_SERVICE_WORKER, PUSH_MANIFEST, PUSH_ICON, pushIconPng } from '../worker-src/push-assets.js';
+import { pushConfiguration, subscribePush, unsubscribePush, deliverPush, pushDeployerNotices } from './web-push.js';
 import { diagnosticStream, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import { serve } from '@hono/node-server';
 import { timingSafeEqual } from 'node:crypto';
@@ -31,10 +33,10 @@ import { benchmarkProbeUrl, browserEngineAvailable, diagnoseBenchmarkEngine, dia
 import { runDiagnostics } from './diagnostics.js';
 import { basalamSdkBridgePath, basalamSdkStatus, describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
-import { createVisualTicket, renderVisualSelector } from './visual.js';
+import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.187.0+'; } catch { return process.env.npm_package_version || '1.187.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.188.0+'; } catch { return process.env.npm_package_version || '1.188.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -233,6 +235,11 @@ const dashboardHeaders = secureHeaders({
 app.use('*', async (c, next) => c.req.path === '/visual' ? next() : dashboardHeaders(c, next));
 app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization','content-type'], allowMethods: ['GET','POST','PUT','DELETE'] }));
 app.onError((error, c) => { console.error(error); return c.json({ ok: false, error: error.message }, 500); });
+app.get('/sw.js',c=>c.body(PUSH_SERVICE_WORKER,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','service-worker-allowed':'/'}));
+app.get('/manifest.webmanifest',c=>c.json(PUSH_MANIFEST,200,{'content-type':'application/manifest+json'}));
+app.get('/app-icon-192.png',c=>c.body(pushIconPng('192'),200,{'content-type':'image/png'}));
+app.get('/app-icon-512.png',c=>c.body(pushIconPng('512'),200,{'content-type':'image/png'}));
+app.get('/app-icon.svg',c=>c.body(PUSH_ICON,200,{'content-type':'image/svg+xml'}));
 app.get('/health', c => c.json({
   ok: true,
   app: 'scraper4',
@@ -263,7 +270,7 @@ app.get('/visual', async c => {
     const content = await renderVisualSelector(c.req.query('ticket') || '');
     return c.html(content, 200, {
       'cache-control': 'no-store',
-      'content-security-policy': "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:; script-src 'unsafe-inline'; frame-ancestors 'self';",
+      'content-security-policy': visualSelectorCsp(c.req.query('ticket') || ''),
       'referrer-policy': 'no-referrer'
     });
   } catch (error) {
@@ -280,11 +287,18 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
+app.get('/api/web-push/config',c=>c.json({ok:true,...pushConfiguration()}));
+app.post('/api/web-push/subscribe',async c=>c.json(await subscribePush(await c.req.json())));
+app.post('/api/web-push/unsubscribe',async c=>{const b=await c.req.json() as any;return c.json(await unsubscribePush(String(b.id||'')))});
+app.post('/api/web-push/test',async c=>{const b=await c.req.json() as any;if(!/^[a-f0-9]{64}$/.test(String(b.id||'')))return c.json({ok:false,error:'Subscribe this browser first.'},400);return c.json(await deliverPush({title:'Scraper4',body:'اعلان آزمایشی از سرور دریافت شد.',tag:'scraper4-test'},b.id))});
 app.post('/api/visual-ticket', async c => {
-  const body = await c.req.json() as { url?: string };
+  const body = await c.req.json() as { url?: string; profileId?: string; engine?: string; indirect?: boolean };
   const url = new URL(String(body.url || ''));
   if (!['http:', 'https:'].includes(url.protocol)) return c.json({ ok: false, error: 'Invalid visual selector URL' }, 400);
-  return c.json({ ok: true, ticket: createVisualTicket(url.href), expiresIn: 300 });
+  const profile=body.profileId?await getProfile(String(body.profileId)):null;
+  const engine=String(body.engine||profile?.extractionEngine||'auto'),indirect=body.indirect??Boolean(profile?.networkIndirect);
+  const ticket=createVisualTicket(url.href,{engine,indirect});
+  return c.json({ ok:true,ticket,channel:readVisualTicket(ticket).channel,engine,expiresIn:300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
 app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
@@ -774,6 +788,7 @@ function startBackground(): void {
   void schedule(); scheduler = setInterval(schedule, 60_000); scheduler.unref();
 }
 startBackground();
+const pushNoticeTimer=setInterval(()=>{if(!databaseReady)return;void pushDeployerNotices(async()=>{const {base,token}=deployerLocalHandshake();const response=await fetch(base+'/api/notifications',{headers:{'x-local-deployer-token':token},signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error('Deployer notices unavailable');return response.json()}).catch(()=>undefined)},60_000);pushNoticeTimer.unref();
 if (localScraperAutoUpdate) {
   setTimeout(() => maybeAutoUpdateLocalScraper('startup'), 10_000).unref();
   setInterval(() => maybeAutoUpdateLocalScraper('timer'), localScraperAutoUpdateMs).unref();

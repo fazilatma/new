@@ -1,11 +1,12 @@
 import { getState, setState } from './db.js';
-import { assertPublicUrl, safeFetch } from './network.js';
+import { assertPublicUrl } from './network.js';
+import { sourceText } from './scraper.js';
 
 const TICKET_TTL_MS=10*60*1000;
 type VisualContext='list'|'detail';
-type Ticket={url:string;createdAt:number};
+type Ticket={url:string;createdAt:number;indirect?:boolean};
 const ticketKey=(id:string)=>`visual_ticket:${id}`;
-export async function createVisualTicket(url:string):Promise<string>{assertPublicUrl(url);const id=crypto.randomUUID();await setState(ticketKey(id),{url,createdAt:Date.now()});return id}
+export async function createVisualTicket(url:string,indirect=false):Promise<string>{assertPublicUrl(url);const id=crypto.randomUUID();await setState(ticketKey(id),{url,createdAt:Date.now(),indirect});return id}
 async function consumeTicket(id:string):Promise<Ticket>{const ticket=await getState<Ticket|null>(ticketKey(id),null);if(!ticket||Date.now()-ticket.createdAt>TICKET_TTL_MS)throw new Error('لینک انتخاب بصری منقضی یا نامعتبر است.');await setState(ticketKey(id),null);return ticket}
 
 const LIST_OPTIONS=`<option value="container">📦 کانتینر محصول</option><option value="title">📝 عنوان</option><option value="price">💰 قیمت</option><option value="link">🔗 لینک</option><option value="image">🖼 تصویر فهرست</option>`;
@@ -41,7 +42,7 @@ function preview(el,mode){if(!el)return'';if(mode==='link'){const link=el.closes
 function updateProgress(){progressText.textContent=Object.keys(selections).filter(key=>selections[key]?.selector).length.toLocaleString('fa-IR')+' از '+fields.length.toLocaleString('fa-IR')+' فیلد ثبت‌شده'}
 function paint(el){if(!el||el===bar||el.closest('#__s4bar'))return;const mode=modeSelect.value,target=targetFor(el,mode);if(selected)selected.classList.remove('__s4picked');selected=target;selected.classList.add('__s4picked');const value=selector(target),count=matches(value),sample=preview(target,mode);selections[mode]={selector:value,count,preview:sample};selectorText.textContent=value;countText.textContent=count.toLocaleString('fa-IR')+' مورد';previewText.textContent=sample||'پیش‌نمایشی پیدا نشد.';fieldText.textContent=labels[mode]||mode;updateProgress()}
 function restoreMode(){const mode=modeSelect.value,stored=selections[mode];fieldText.textContent=labels[mode]||mode;if(selected)selected.classList.remove('__s4picked');selected=null;if(stored?.selector){try{selected=document.querySelector(stored.selector);selected?.classList.add('__s4picked')}catch{}selectorText.textContent=stored.selector;countText.textContent=matches(stored.selector).toLocaleString('fa-IR')+' مورد';previewText.textContent=stored.preview||'ثبت شده است.'}else{selectorText.textContent='روی عنصر مربوط به «'+(labels[mode]||mode)+'» کلیک کنید';countText.textContent='۰ مورد';previewText.textContent='هنوز عنصری برای این فیلد انتخاب نشده است.'}updateProgress()}
-function sendOne(){const mode=modeSelect.value,item=selections[mode];if(!item?.selector){previewText.textContent='ابتدا یک عنصر را انتخاب کنید.';return}parent.postMessage({type:'scraper4-selector',mode,...item},location.origin);const index=fields.indexOf(mode),empty=fields.find((field,position)=>position>index&&!selections[field]);if(empty){modeSelect.value=empty;restoreMode()}}
+function sendOne(){const mode=modeSelect.value,item=selections[mode];if(!item?.selector){previewText.textContent='ابتدا یک عنصر را انتخاب کنید.';return}parent.postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode,...item},'*');const index=fields.indexOf(mode),empty=fields.find((field,position)=>position>index&&!selections[field]);if(empty){modeSelect.value=empty;restoreMode()}}
 function move(direction){if(!selected)return;let next=direction==='up'?selected.parentElement:direction==='down'?selected.firstElementChild:direction==='prev'?selected.previousElementSibling:selected.nextElementSibling;if(next&&!next.closest('#__s4bar'))paint(next)}
 document.addEventListener('mouseover',event=>{if(!picking)return;const target=event.target;if(!(target instanceof Element)||target.closest('#__s4bar'))return;if(hovered&&hovered!==selected)hovered.classList.remove('__s4hover');hovered=target;if(target!==selected)target.classList.add('__s4hover')},true);
 document.addEventListener('mouseout',event=>{if(!picking)return;const target=event.target;if(target instanceof Element&&target!==selected)target.classList.remove('__s4hover')},true);
@@ -53,21 +54,22 @@ pauseButton.onclick=()=>setPicking(!picking);
 // opened so their contents become selectable once picking is resumed.
 document.addEventListener('click',event=>{const target=event.target;if(!(target instanceof Element)||target.closest('#__s4bar'))return;if(!picking)return;event.preventDefault();event.stopPropagation();paint(target)},true);
 modeSelect.addEventListener('change',restoreMode);document.getElementById('__s4up').onclick=()=>move('up');document.getElementById('__s4down').onclick=()=>move('down');document.getElementById('__s4prev').onclick=()=>move('prev');document.getElementById('__s4next').onclick=()=>move('next');document.getElementById('__s4save').onclick=sendOne;
-const done=document.getElementById('__s4done');if(done)done.onclick=()=>parent.postMessage({type:'scraper4-detail-selectors',selections},location.origin);
+const done=document.getElementById('__s4done');if(done)done.onclick=()=>parent.postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');
 document.addEventListener('keydown',event=>{if(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement||event.target instanceof HTMLSelectElement)return;if(event.key==='ArrowUp'){event.preventDefault();move('up')}else if(event.key==='ArrowDown'){event.preventDefault();move('down')}else if(event.key==='ArrowRight'){event.preventDefault();move('prev')}else if(event.key==='ArrowLeft'){event.preventDefault();move('next')}else if(event.key==='Enter'){event.preventDefault();done?done.click():sendOne()}},true);restoreMode();
 })();</script>`;
-function pickerScript(context:VisualContext){return PICKER_JS.replace('__S4_CONTEXT__',context)}
+function pickerScript(context:VisualContext,channel:string){return PICKER_JS.replace('__S4_CONTEXT__',context).replaceAll('__S4_CHANNEL__',channel.replace(/[^a-z0-9-]/gi,''))}
 function escapeAttr(value:string):string{return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!))}
 function absolutize(value:string,base:string):string{try{return new URL(value,base).href}catch{return value}}
 
 export async function renderVisualSelector(ticketId:string,context:VisualContext='list'):Promise<Response>{
-  const ticket=await consumeTicket(ticketId),response=await safeFetch(ticket.url,{headers:{accept:'text/html'}},5_000_000),finalUrl=response.headers.get('x-scraper-final-url')||ticket.url,contentType=response.headers.get('content-type')||'';
+  const ticket=await consumeTicket(ticketId),page=await sourceText(ticket.url,Boolean(ticket.indirect),5_000_000),finalUrl=page.url,contentType=page.contentType||'';
   if(!contentType.includes('text/html'))throw new Error('صفحهٔ انتخاب‌شده HTML نیست.');
-  let html=await response.text(),baseTag=`<base href="${escapeAttr(finalUrl)}">`;
+  let html=page.text,baseTag=`<base href="${escapeAttr(finalUrl)}">`;
   html=html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'').replace(/<script\b[^>]*\/?>/gi,'').replace(/<base\b[^>]*>/gi,'').replace(/<meta\b[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi,'').replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi,'').replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,'').replace(/\s+(href|src|action)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi,'');
   html=html.replace(/<(img|source)\b([^>]*?)\s(?:data-src|data-lazy-src|data-original)=(['"])(.*?)\3([^>]*)>/gi,(all,tag,before,_quote,url,after)=>new RegExp('\\ssrc\\s*=','i').test(`${before}${after}`)?all:`<${tag}${before} src="${escapeAttr(absolutize(url,finalUrl))}"${after}>`);
-  const head=`${baseTag}${STYLE}`,body=`${toolbar(context)}${pickerScript(context)}`;
+  const head=`${baseTag}${STYLE}`,body=`${toolbar(context)}${pickerScript(context,ticketId)}`;
   html=/<head\b[^>]*>/i.test(html)?html.replace(/<head\b[^>]*>/i,match=>match+head):`<head>${head}</head>${html}`;
   html=/<\/body\s*>/i.test(html)?html.replace(/<\/body\s*>/i,body+'</body>'):html+body;
-  return new Response(html,{headers:{'content-type':'text/html; charset=UTF-8','cache-control':'no-store','content-security-policy':"default-src 'self' data: blob: https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; script-src 'unsafe-inline'; connect-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri *",'x-content-type-options':'nosniff','referrer-policy':'no-referrer'}})
+  const trusted=pickerScript(context,ticketId).replace(/^<script>/,'').replace(/<\/script>$/,'');const hash=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(trusted)))));
+  return new Response(html,{headers:{'content-type':'text/html; charset=UTF-8','cache-control':'no-store','content-security-policy':`sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; script-src 'sha256-${hash}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:`,'x-content-type-options':'nosniff','referrer-policy':'no-referrer'}})
 }

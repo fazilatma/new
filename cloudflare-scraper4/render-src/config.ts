@@ -32,7 +32,7 @@ function envToken(value: string | undefined): string {
 
 export const config = {
   port: Math.max(1, Number(process.env.PORT || 3000)),
-  host: '0.0.0.0',
+  host: process.env.SCRAPER_BIND_HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || '',
   adminToken: process.env.ADMIN_TOKEN || '',
   runWorkerInWeb: process.env.RUN_WORKER_IN_WEB !== 'false',

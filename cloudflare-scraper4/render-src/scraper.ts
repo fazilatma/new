@@ -589,7 +589,7 @@ function systemBrowser(): string | undefined {
   }
   return cachedSystemBrowser || undefined;
 }
-function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined {
+export function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined {
   const env = process.env;
   return env.BROWSER_EXECUTABLE_PATH
     || (driver === 'playwright' ? env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH : env.PUPPETEER_EXECUTABLE_PATH)
@@ -643,7 +643,7 @@ export async function withBrowserSlot<T>(task: () => Promise<T>): Promise<T> {
   await previous;
   try { return await task(); } finally { release(); }
 }
-function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
+export function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
 /** A goto interrupted by the page's own redirect/reload rejects with net::ERR_ABORTED even though the follow-up page loads fine — survivable. */
 function isAbortedNavigation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
