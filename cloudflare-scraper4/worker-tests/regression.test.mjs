@@ -152,9 +152,13 @@ test('cloudflare multi-account keys: each account = accountId+token and provider
   assert.equal(p.apiKeys.length,2,'two accounts kept');
   assert.equal(p.apiKeys[1].accountId,'acc2');assert.equal(p.apiKeys[1].token,'tok-2');
   const source=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8');
-  assert.match(source,/export function providerWithKey\(provider:Provider,index=0\)/,'providerWithKey exported');
-  assert.match(source,/chosen as CfAccountKey\)\.accountId\|\|cloudflareAccountId/,'providerWithKey rebuilds the account baseUrl');
-  assert.match(source,/apiKeys\?:Array<string\|CfAccountKey>/,'provider type supports string|account keys');
+  // The implementation moved to the shared capability module (both twins need it);
+  // worker-src/ai.ts keeps re-exporting it so every existing import site is unchanged.
+  const caps=await readFile(new URL('../worker-src/ai-model-capabilities.ts',import.meta.url),'utf8');
+  assert.match(caps,/export function providerWithKey<T extends AiCapableProvider>\(provider: T, index = 0\)/,'providerWithKey exported');
+  assert.match(caps,/chosen as CfAccountKey\)\.accountId\|\|cloudflareAccountId/,'providerWithKey rebuilds the account baseUrl');
+  assert.match(source,/export \{[\s\S]{0,400}?providerWithKey[\s\S]{0,200}?\} from '\.\/ai-model-capabilities\.js';/,'the Worker must keep serving providerWithKey');
+  assert.match(caps,/apiKeys\?:Array<string\|CfAccountKey>/,'provider type supports string|account keys');
 });
 
 test('cloudflare provider keeps accountId/cfToken through the vault',async()=>{

@@ -1,12 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
-import { assertPublicUrl, privateIp, safeFetch, viaWorkerUrl } from './network.js';
+import { assertAiEndpointUrl, privateIp, safeFetch, viaWorkerUrl } from './network.js';
+import {
+  adjustChatPayload, aiKeySuffixLabel, aiModelEndpoint, canonicalAiModel, isChatCompatibleAiModel, isCreditAiStatus,
+  isPayloadShapeError, isReasoningAiModel, openAiEndpoint, parseModelKeySuffix, providerKeys, providerWithKey,
+} from '../worker-src/ai-model-capabilities.js';
 import { loadConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { categoryPrompt, parseCategoryId } from '../worker-src/destination-core.js';
 import type { AiCategoryOption } from '../worker-src/destination-core.js';
 
-type Provider={id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean};
+type CfAccountKey={accountId:string;token:string};
+/**
+ * Same shape as the Worker's Provider: `apiKeys` / `reasoningModels` / `nonChatModels`
+ * come straight from the vault, and the shared capability helpers (which both twins now
+ * use for chat compatibility, reasoning budgets and per-key selection) read them.
+ */
+type Provider={id:string;name:string;baseUrl:string;apiKey:string;apiKeys?:Array<string|CfAccountKey>;models:string[];reasoningModels?:string[];nonChatModels?:string[];enabled:boolean};
 type Network={mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string};
 
 /**
@@ -50,8 +60,110 @@ export function aiConfigProblem(provider:Provider,model:string):string{
   return '';
 }
 
-export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
+/**
+ * Builds the request for one AI call and enforces the caller's watchdog budget.
+ *
+ * `ai.skipTimeoutMs` (the «مهلت رد مدل گیرکرده» field) already gates the Worker's test
+ * queue; on Node it was accepted and silently ignored, so one hung local model could
+ * stall the whole pass. An abort is translated into an honest Persian message that says
+ * what to raise instead of a bare TimeoutError.
+ */
+function aiRequestInit(provider:Provider,payload:any,timeoutMs?:number):RequestInit{
+  const init:any={method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)};
+  const budget=Math.round(Number(timeoutMs)||0);
+  if(budget>0&&typeof (globalThis as any).AbortSignal?.timeout==='function')init.signal=(globalThis as any).AbortSignal.timeout(Math.max(1000,budget));
+  return init;
+}
+function aiTimeoutError(error:unknown):Error{
+  const name=error instanceof Error?error.name:'';
+  if(name==='TimeoutError'||name==='AbortError')return Error(`مهلت پاسخ این مدل تمام شد؛ اگر مدل محلی یا استدلالی است، «مهلت رد مدل گیرکرده» را در بخش تست مدل‌ها زیاد کنید.`);
+  return error instanceof Error?error:Error(String(error));
+}
+function isAiTimeout(error:unknown):boolean{const name=error instanceof Error?error.name:'';return name==='TimeoutError'||name==='AbortError'}
+
+/**
+ * One chat-completions call against any OpenAI-compatible provider.
+ *
+ * 1.175.0 parity with the Worker twin: the endpoint comes from the shared
+ * `openAiEndpoint()` (it appends `/v1` for Ollama on :11434 — without it every local
+ * model install got a 404), a `~model` preview prefix is canonicalised, reasoning
+ * models get the bigger token budget, and a provider that rejects `temperature` or
+ * `max_tokens` gets its payload rewritten and retried instead of failing the row.
+ * The result also carries `providerName`, which the shared dashboard table shows.
+ */
+export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200,networkOverride?:Network,timeoutMs?:number){
+  const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}
+  const network=networkOverride||ai.network,endpoint=openAiEndpoint(provider.baseUrl),reasoning=isReasoningAiModel(provider,model);
+  const payload:any={model:canonicalAiModel(model),messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||(reasoning?1600:200))};
+  if(!reasoning)payload.temperature=.2;
+  const started=Date.now();
+  let used=payload,response:Response|null=null,body:any=null;
+  for(let attempt=0;attempt<4;attempt++){
+    let raw:Response;
+    try{raw=await networkFetch(endpoint,aiRequestInit(provider,used,timeoutMs),network)}catch(error){throw isAiTimeout(error)?aiTimeoutError(error):error}
+    response=raw;
+    body=parseAiBody(await response.text().catch(()=>''));
+    if(response.ok)break;
+    const errorText=aiErrorText(body)||response.statusText||'AI error';
+    if(!isPayloadShapeError(response.status,errorText)||isCreditAiStatus(response.status,errorText))break;
+    const adapted=adjustChatPayload(used,errorText);if(!adapted)break;used=adapted;
+  }
+  const latencyMs=Date.now()-started;
+  if(!response!.ok)throw Object.assign(Error(`HTTP ${response!.status}: ${aiErrorText(body)||response!.statusText||'AI error'}`),{detail:{ok:false,phase:'http',httpStatus:response!.status,endpoint:reportedEndpoint(endpoint),provider:provider.id,providerName:provider.name,model,prompt,latencyMs,raw:body}});
+  const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';
+  if(!String(text).trim())throw Object.assign(Error('مدل با وجود پاسخ HTTP موفق، هیچ متن یا پاسخ نهایی برنگرداند.'),{detail:{ok:false,phase:'validation',endpoint:reportedEndpoint(endpoint),provider:provider.id,providerName:provider.name,model,prompt,latencyMs,raw:body}});
+  return{ok:true,text:String(text),latencyMs,provider:provider.id,providerName:provider.name,model:canonicalAiModel(model),endpoint:reportedEndpoint(endpoint),endpointType:'chat-completions',chatCompatible:isChatCompatibleAiModel(provider,model),reasoning,prompt}
+}
+function parseAiBody(rawText:string):any{try{return JSON.parse(rawText)}catch{return null}}
+function aiErrorText(body:any):string{return String(body?.error?.message||body?.error||body?.message||body?.detail||'').slice(0,600)}
+/** Never echo a key or a query string back through a diagnostic panel. */
+function reportedEndpoint(endpoint:string):string{try{const url=new URL(endpoint);return `${url.protocol}//${url.host}${url.pathname}`}catch{return ''}}
 export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),results});return results}
+/**
+ * Chat with a full conversation history — the twin of the Worker's `aiChat`.
+ *
+ * The «چت با مدل‌ها» tab is shared by every environment, but the Node route used to
+ * flatten the whole thread into one prompt string (`user: ...\nassistant: ...`), so the
+ * model saw a transcript instead of a conversation, the last-turn rule was not enforced,
+ * and a picker choice like `provider::model::k2` (the 2nd API key) silently used key 1.
+ * This keeps the roles, honours the key suffix and answers with the same
+ * `{ok,text,provider,providerName,model,latencyMs}` payload plus `AiResponseError`-style
+ * `detail`, so the bubble footer and the error panel behave identically everywhere.
+ */
+export async function aiChatWithMessages(provider:Provider,rawModel:string,messages:any[],options:{maxTokens?:number;timeoutMs?:number;keyIndex?:number}={}){
+  const parsed=parseModelKeySuffix(String(rawModel||'')),keyIndex=Number.isInteger(Number(options.keyIndex))&&Number(options.keyIndex)>=0?Number(options.keyIndex):parsed.keyIndex;
+  const providerUsed=providerWithKey(provider,keyIndex) as Provider,model=String(parsed.model||'').trim();
+  const chatMessages=(Array.isArray(messages)?messages:[]).slice(-40).map(m=>({role:String(m?.role||'user'),content:String(m?.content??'')})).filter(m=>m.content);
+  if(!chatMessages.length||chatMessages[chatMessages.length-1].role!=='user')throw Error('آخرین پیام باید از سمت کاربر باشد.');
+  {const problem=aiConfigProblem(providerUsed,model);if(problem)throw Error(problem);}
+  const ai=(await loadConnections()).ai,reasoning=isReasoningAiModel(providerUsed,model),maxTokens=Math.max(64,Number(options.maxTokens)||1200);
+  const endpoint=openAiEndpoint(providerUsed.baseUrl),payload:any={model:canonicalAiModel(model),messages:chatMessages,max_tokens:reasoning?maxTokens:Math.min(maxTokens,800)};
+  if(!reasoning)payload.temperature=.7;
+  const started=Date.now();
+  let used=payload,response:Response|null=null,body:any=null;
+  for(let attempt=0;attempt<4;attempt++){
+    try{response=await networkFetch(endpoint,aiRequestInit(providerUsed,used,options.timeoutMs),ai.network)}catch(error){throw isAiTimeout(error)?aiTimeoutError(error):error}
+    body=parseAiBody(await response.text().catch(()=>''));
+    if(response.ok)break;
+    const errorText=aiErrorText(body)||response.statusText||'AI error';
+    if(!isPayloadShapeError(response.status,errorText)||isCreditAiStatus(response.status,errorText))break;
+    const adapted=adjustChatPayload(used,errorText);if(!adapted)break;used=adapted;
+  }
+  const latencyMs=Date.now()-started,last=chatMessages[chatMessages.length-1].content;
+  if(!response!.ok)throw Object.assign(Error(`HTTP ${response!.status}: ${aiErrorText(body)||response!.statusText||'AI error'}`),{detail:{ok:false,phase:'http',httpStatus:response!.status,provider:providerUsed.id,providerName:providerUsed.name,model,prompt:last,endpoint:reportedEndpoint(endpoint),latencyMs,raw:body}});
+  const text=String(body?.choices?.[0]?.message?.content||body?.result?.response||'').trim();
+  if(!text)throw Object.assign(Error('مدل پاسخی برنگرداند.'),{detail:{ok:false,phase:'validation',provider:providerUsed.id,providerName:providerUsed.name,model,prompt:last,endpoint:reportedEndpoint(endpoint),latencyMs,raw:body}});
+  return{ok:true,text,provider:providerUsed.id,providerName:providerUsed.name,model:canonicalAiModel(model),latencyMs,keyIndex,keyLabel:aiKeySuffixLabel(keyIndex)};
+}
+
+/** Rows for the shared dashboard's model pickers (chat tab and the curated model list). */
+export async function aiChatModelRowsFor():Promise<any[]>{
+  const { AGENT_TOOL_MODELS } = await import('../worker-src/agent.js');
+  const toolIds=new Set(AGENT_TOOL_MODELS.filter(m=>m.id!=='*configured').map(m=>m.id));
+  const { aiChatModelRows } = await import('../worker-src/ai-model-capabilities.js');
+  return aiChatModelRows(await aiProviders(),toolIds);
+}
+
 /**
  * Server-side AI test run for the Node runtime.
  *
@@ -67,6 +179,8 @@ export type AiTestRunState = {
   id:string; kind:'ai-test'; status:'queued'|'running'|'done'|'failed'|'paused'; phase:string;
   stopRequested:boolean; createdAt:string; updatedAt:string; startedAt:string|null; finishedAt:string|null;
   attempts:number; error:string|null; prompt:string; categoryTitle:string; onlyCandidates:boolean; delayMs:number;
+  /** Watchdog budget per model call (ms) — the same `ai.skipTimeoutMs` setting the Worker uses. */
+  skipTimeoutMs?:number;
   cursor:number; currentStartedAt:string|null;
   result:{ runId:string; total:number; nextCursor:number; results:any[] };
 };
@@ -86,18 +200,86 @@ export async function getCurrentAiRun():Promise<AiTestRunState|null>{
   return null;
 }
 
+/**
+ * Tasks for one test pass — the Node mirror of the Worker's `aiTestTasks`.
+ *
+ * Two rules matter for the shared dashboard: one task per provider *and* per API
+ * key (models of the 2nd+ key get the visible `[K۲]` suffix), and the columns are
+ * interleaved so a round never hits the same provider twice at once. Without the
+ * key expansion, a Termux/VPS install with several OpenRouter keys tested one key
+ * and the results table silently showed a third of the models.
+ */
+export type AiTestTask={p:Provider;model:string;key:string;keyIndex:number;keyLabel:string};
+export function aiTestTasks(ai:any,providers:Provider[],onlyCandidates=false):AiTestTask[]{
+  const wanted=new Set<string>(Array.isArray(ai?.candidates)?ai.candidates.map(String):[]),columns:AiTestTask[][]=[];
+  for(const p of providers){
+    if((p as any).enabled===false)continue;
+    const column:AiTestTask[]=[],keyCount=Math.max(1,providerKeys(p).length);
+    for(const rawModel of p.models||[]){
+      const model=String(rawModel||'').trim();if(!model)continue;
+      const primaryKey=`${p.id}::${model}`;
+      if(onlyCandidates&&(!wanted.has(primaryKey)||!isChatCompatibleAiModel(p,model)))continue;
+      for(let ki=0;ki<keyCount;ki++)column.push({p:providerWithKey(p,ki) as Provider,model,key:ki===0?primaryKey:`${p.id}::${model}::k${ki+1}`,keyIndex:ki,keyLabel:aiKeySuffixLabel(ki)});
+    }
+    if(column.length)columns.push(column);
+  }
+  const tasks:AiTestTask[]=[],max=columns.reduce((n,column)=>Math.max(n,column.length),0);
+  for(let i=0;i<max;i++)for(const column of columns)if(column[i])tasks.push(column[i]);
+  return tasks;
+}
+
+/**
+ * Runs one model through both probes the dashboard's table shows: the plain
+ * message answer and (when a category title is set) a real Basalam category
+ * suggestion. The Worker already reported `categoryResult` per row; Node answered
+ * with none, so the «دسته‌بندی: موفق / ناموفق» counters stayed at zero, the
+ * category column was empty for every model, and the ensemble gate of the bulk
+ * category correction had nothing to rank — on Termux and Linux servers only.
+ */
+async function runAiTestTask(task:AiTestTask,prompt:string,categoryTitle:string,categories:any[],timeoutMs?:number):Promise<any>{
+  const base={key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel,provider:task.p.id,providerName:task.p.name,model:task.model};
+  const configProblem=aiConfigProblem(task.p,task.model);
+  if(configProblem)return{...base,ok:false,phase:'configuration',prompt,latencyMs:0,error:configProblem,raw:{reason:'config'},categoryTitle,categoryResult:categoryTitle?{ok:false,skipped:true,phase:'configuration',...base,error:configProblem}:null,catResponse:''};
+  let message:any;
+  try{message={...await aiCall(task.p,task.model,prompt,200,undefined,timeoutMs),key:task.key}}
+  catch(error){message={ok:false,...base,prompt,latencyMs:0,error:error instanceof Error?error.message:String(error),raw:(error as any)?.detail?.raw??null,phase:(error as any)?.detail?.phase||'unknown'}}
+  let categoryResult:any=null;
+  if(!isChatCompatibleAiModel(task.p,task.model))categoryResult={ok:false,skipped:true,...base,phase:'unsupported-task',endpointType:aiModelEndpoint(task.p,task.model),chatCompatible:false,latencyMs:0,error:'این مدل endpoint اختصاصی دارد و برای دسته‌بندی گفت‌وگویی مناسب نیست.'};
+  else if(!categoryTitle)categoryResult=null;
+  else if(!categories.length)categoryResult={ok:false,...base,phase:'configuration',prompt:categoryTitle,latencyMs:0,error:'فهرست دسته‌بندی در دسترس نیست',raw:{reason:'no-categories'}};
+  else try{
+    const prepared=categoryPrompt(categoryTitle,categories),started=Date.now(),answer=await aiCall(task.p,task.model,prepared.prompt,200,undefined,timeoutMs),categoryId=parseCategoryId(answer.text,prepared.allowed),row=prepared.allowed.find((item:any)=>Number(item.id)===categoryId);
+    categoryResult=row?{ok:true,...base,text:answer.text,latencyMs:Date.now()-started,categoryTitle,categoryId,categoryName:String(row.name),categoryPath:String(row.path||row.name),allowedCategoryCount:prepared.allowed.length}
+      :{ok:false,...base,text:answer.text,latencyMs:Date.now()-started,categoryTitle,categoryId:0,allowedCategoryCount:prepared.allowed.length,error:'مدل هیچ شناسهٔ معتبر از فهرست دسته‌بندی باسلام برنگرداند.'};
+  }catch(error){categoryResult={ok:false,...base,phase:'network',prompt:categoryTitle,latencyMs:0,error:error instanceof Error?error.message:String(error)}}
+  const row:any={...base,...message,categoryTitle,categoryResult,catResponse:categoryResult&&!categoryResult.ok?String(categoryResult.error||''):''};
+  row.retryable=!row.ok;
+  return row;
+}
+
+const aiTestCounters=(stored:any,tasks:number,results:any[])=>{
+  const messageSucceeded=results.filter(x=>x.ok).length,messageFailed=results.filter(x=>!x.ok).length;
+  const attempted=Boolean(stored?.categoryTitle),categorySucceeded=attempted?results.filter(x=>x.categoryResult?.ok).length:0,categorySkipped=attempted?results.filter(x=>x.categoryResult?.skipped).length:0;
+  return{ok:messageSucceeded>0,prompt:stored?.prompt||'',categoryTitle:stored?.categoryTitle||'',total:tasks,nextCursor:results.length,done:true,succeeded:messageSucceeded,failed:messageFailed,messageSucceeded,messageFailed,categorySucceeded,categoryFailed:attempted?Math.max(0,results.length-categorySucceeded-categorySkipped):0,categorySkipped,startedAt:stored?.at||null,updatedAt:stored?.at||null};
+};
+
+/** Loads the Basalam category list, tolerating a destination that is not configured. */
+async function aiTestCategories():Promise<any[]>{
+  try{const { destinationCategories } = await import('./maintenance.js');return (await destinationCategories()).items||[]}catch{return[]}
+}
+
 /** Start a run, or return the live one so a double click cannot fork two runs. */
-export async function startAiTestRun(input:{prompt?:string;categoryTitle?:string;onlyCandidates?:boolean;delayMs?:number}):Promise<{run:AiTestRunState;existing:boolean}>{
+export async function startAiTestRun(input:{prompt?:string;categoryTitle?:string;onlyCandidates?:boolean;delayMs?:number;skipTimeoutMs?:number}={}):Promise<{run:AiTestRunState;existing:boolean}>{
   const current=await getCurrentAiRun();
   if(current&&(current.status==='queued'||current.status==='running')) return {run:current,existing:true};
   const id=randomUUID(),timestamp=nowIso();
-  const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates);
-  const onlyCandidates=Boolean(input?.onlyCandidates);
-  const tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));
+  const ai=(await loadConnections()).ai,providers=await aiProviders(),onlyCandidates=Boolean(input?.onlyCandidates);
+  const tasks=aiTestTasks(ai,providers,onlyCandidates);
   aiRun={ id,kind:'ai-test',status:'queued',phase:'waiting',stopRequested:false,createdAt:timestamp,updatedAt:timestamp,
     startedAt:null,finishedAt:null,attempts:0,error:null,
     prompt:String(input?.prompt||'Reply with exactly: SCRAPER4_OK'),categoryTitle:String(input?.categoryTitle||'').trim(),
-    onlyCandidates,delayMs:Math.max(0,Math.min(60_000,Number(input?.delayMs)||0)),cursor:0,currentStartedAt:null,
+    onlyCandidates,delayMs:Math.max(0,Math.min(60_000,Number(input?.delayMs)||0)),skipTimeoutMs:Math.max(0,Number(input?.skipTimeoutMs)||0),
+    cursor:0,currentStartedAt:null,
     result:{runId:id,total:tasks.length,nextCursor:0,results:[]} };
   await persistAiRun();
   // Deliberately not awaited: the HTTP response returns immediately so the UI
@@ -108,35 +290,67 @@ export async function startAiTestRun(input:{prompt?:string;categoryTitle?:string
   return {run:aiRun,existing:false};
 }
 
-async function runAiTests(tasks:Array<{p:Provider;model:string;key:string}>):Promise<void>{
+async function runAiTests(tasks:AiTestTask[],startIndex=0):Promise<void>{
   if(!aiRun) return;
-  aiRun.status='running'; aiRun.phase='testing'; aiRun.startedAt=nowIso(); await persistAiRun();
+  aiRun.status='running'; aiRun.phase='testing'; aiRun.startedAt||=nowIso(); await persistAiRun();
+  const ai=(await loadConnections()).ai,timeoutMs=aiRun.skipTimeoutMs?Math.max(2000,aiRun.skipTimeoutMs):undefined;
+  const categories=aiRun.categoryTitle?await aiTestCategories():[];
   for(let index=0;index<tasks.length;index++){
     if(!aiRun) return;
     if(aiRun.stopRequested){ aiRun.status='paused'; aiRun.phase='stopped'; await persistAiRun(); return; }
     const task=tasks[index];
-    aiRun.cursor=aiRun.result.results.length; aiRun.currentStartedAt=nowIso();
-    aiRun.phase=`testing ${task.p.id}::${task.model}`;
+    aiRun.cursor=index+startIndex; aiRun.currentStartedAt=nowIso();
+    aiRun.phase=`testing ${task.p.id}::${task.model}${task.keyLabel}`;
     await persistAiRun();
-    try{ aiRun.result.results.push({...await aiCall(task.p,task.model,aiRun.prompt),key:task.key}); }
-    catch(error){ aiRun.result.results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)}); }
+    aiRun.result.results.push(await runAiTestTask(task,aiRun.prompt,aiRun.categoryTitle,categories,timeoutMs));
     aiRun.result.nextCursor=aiRun.result.results.length;
+    aiRun.attempts=0;
     await persistAiRun();
     if(aiRun.delayMs&&index<tasks.length-1) await sleepMs(aiRun.delayMs);
   }
   if(!aiRun) return;
   aiRun.status='done'; aiRun.phase='finished'; aiRun.currentStartedAt=null; aiRun.finishedAt=nowIso();
   await persistAiRun();
-  try{ await setState('ai_test_results',{at:nowIso(),results:aiRun.result.results}); }catch{/* results still live on the run */}
+  try{ await setState('ai_test_results',{at:nowIso(),runId:aiRun.id,prompt:aiRun.prompt,categoryTitle:aiRun.categoryTitle,onlyCandidates:aiRun.onlyCandidates,total:aiRun.result.total,results:aiRun.result.results}); }catch{/* results still live on the run */}
 }
+
+/**
+ * Retries ONE part (message or category) of one model, mirroring the Worker's
+ * `retryAiTestPart`. The dashboard's ↻ buttons per table row and per detail row
+ * used to answer 501 on every Node install, so a model that timed out once could
+ * only be re-proved by re-testing the whole list — hours on a Termux box.
+ */
+export async function retryAiTestPart(key:string,part:'message'|'category'='message'):Promise<any>{
+  const retryKey=String(key||'').trim();
+  if(!retryKey)throw Error('شناسه مدل برای تلاش مجدد لازم است.');
+  const stored=await getState<any>('ai_test_results',null),results=Array.isArray(stored?.results)?[...stored.results]:[];
+  if(!results.length)throw Error('نتیجهٔ ذخیره‌شده‌ای برای تلاش مجدد نیست؛ ابتدا تست مدل‌ها را اجرا کنید.');
+  const ai=(await loadConnections()).ai,providers=await aiProviders(),task=aiTestTasks(ai,providers,false).find(item=>item.key===retryKey);
+  if(!task)throw Error('مدل برای تلاش مجدد در ارائه‌دهنده‌های فعال پیدا نشد.');
+  const existing=results.find((row:any)=>row.key===retryKey)||{key:retryKey},categoryTitle=String(stored.categoryTitle||'').trim();
+  if(part==='message'){
+    const row=await runAiTestTask({p:task.p,model:task.model,key:task.key,keyIndex:task.keyIndex,keyLabel:task.keyLabel},String(stored.prompt||'Reply with exactly: SCRAPER4_OK'),'',[],undefined);
+    const merged={...existing,...row,categoryResult:existing.categoryResult??row.categoryResult,catResponse:existing.catResponse||row.catResponse||'',messageRetryCount:Number(existing.messageRetryCount||0)+1};
+    replaceAiResult(results,merged);
+  }else if(part==='category'){
+    const categories=categoryTitle?await aiTestCategories():[];
+    const row=await runAiTestTask(task,categoryTitle||String(stored.prompt||''),categoryTitle,categories,undefined);
+    replaceAiResult(results,{...existing,categoryResult:row.categoryResult,catResponse:row.categoryResult&&!row.categoryResult.ok?String(row.categoryResult.error||''):'' ,categoryRetryCount:Number(existing.categoryRetryCount||0)+1});
+  }
+  const at=nowIso();
+  await setState('ai_test_results',{...stored,at,results});
+  if(aiRun&&aiRun.kind==='ai-test'){aiRun.result={...aiRun.result,results,nextCursor:results.length};await persistAiRun();}
+  return {...aiTestCounters({...stored,at},Number(stored.total||results.length),results),runId:stored.runId||aiRun?.id||'',batchResults:[],replayed:false,results};
+}
+function replaceAiResult(results:any[],row:any){const index=results.findIndex((item:any)=>item.key===row.key);if(index>=0)results[index]=row;else results.push(row)}
 
 export async function controlAiTestRun(action:string):Promise<AiTestRunState|null>{
   const run=await getCurrentAiRun(); if(!run) return null;
   if(action==='stop'){ run.stopRequested=true; }
   else if(action==='resume'&&run.status==='paused'){
     run.stopRequested=false;
-    const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates);
-    const all=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!run.onlyCandidates||wanted.has(x.key));
+    const ai=(await loadConnections()).ai,providers=await aiProviders();
+    const all=aiTestTasks(ai,providers,run.onlyCandidates);
     const done=new Set(run.result.results.map((r:any)=>r.key));
     aiRun=run; aiRunTask=runAiTests(all.filter(t=>!done.has(t.key))).catch(()=>{});
   }
@@ -153,7 +367,7 @@ export async function resetAiTestRun():Promise<void>{
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}
 export async function getLeaderboard(){return leaderboard(await getState<any>('ai_votes',{scores:{},history:[]}))}
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
-async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertPublicUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=viaWorkerUrl(net.workerUrl,url);return safeFetch(target,{...init,directRoute:true},3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(privateIp(ip))throw Error('IP خصوصی برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,init,3_000_000)}
+async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertAiEndpointUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=viaWorkerUrl(net.workerUrl,url);return safeFetch(target,{...init,directRoute:true},3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(String(ip).startsWith('169.254.'))throw Error('IP مقولهٔ ابر (metadata) برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,{...init,aiEndpoint:true},3_000_000)}
 async function doh(host:string,url:string){const endpoint=url+(url.includes('?')?'&':'?')+'name='+encodeURIComponent(host)+'&type=A',r=await safeFetch(endpoint,{headers:{accept:'application/dns-json'}},500_000),j=await r.json() as any,ip=(j.Answer||[]).find((x:any)=>x.type===1)?.data;if(!ip)throw Error('DoH پاسخی برای دامنه نداد');return String(ip)}
 
 /**

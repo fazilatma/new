@@ -332,8 +332,11 @@ test('importing the real provider file keeps per-model flags, vendor and every e
 });
 
 test('a model flagged non-chat in the imported file is not treated as a chat model', async () => {
-  const ai = await read('../worker-src/ai.ts');
-  assert.match(ai, /if\(provider\.nonChatModels\?\.includes\(model\)\)return false/, 'isChatCompatibleAiModel must honour the imported flag');
+  // 1.175.0: the capability rules moved to worker-src/ai-model-capabilities.ts so the Node
+  // twin (Termux / VPS / Render / local) resolves them exactly like the Worker does.
+  const ai = await read('../worker-src/ai.ts'), capabilities = await read('../worker-src/ai-model-capabilities.ts');
+  assert.match(capabilities, /if\(provider\.nonChatModels\?\.includes\(model\)\)return false/, 'isChatCompatibleAiModel must honour the imported flag');
+  assert.match(ai, /isChatCompatibleAiModel/, 'worker ai.ts must keep serving the shared rule');
   // Both vaults have to persist the fields, otherwise they are lost on save.
   const workerVault = await read('../worker-src/vault.ts');
   const renderVault = await read('../render-src/vault.ts');

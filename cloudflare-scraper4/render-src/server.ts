@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, preferredAiChatModel, productNeedsEnrichment, recordVote, resetAiTestRun, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
+import { aiCall, aiChatModelRowsFor, aiChatWithMessages, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, preferredAiChatModel, productNeedsEnrichment, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
@@ -21,7 +21,9 @@ import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
-import { controlCategoryRun, getPublicCategoryRun, recoverCategoryRun, resetCategoryRun, startCategoryRun } from './category-run.js';
+import { categoryCorrectionViewFor, controlCategoryRun, getPublicCategoryRun, recoverCategoryRun, resetCategoryRun, startCategoryRun } from './category-run.js';
+import { CATEGORY_CORRECTION_LAST_KEY, CATEGORY_CORRECTION_SETTINGS_KEY, normalizeCategoryCorrection } from '../worker-src/category-correction.js';
+import { normalizeCategoryMode } from '../worker-src/destination-core.js';
 import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { benchmarkProbeUrl, browserEngineAvailable, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector, transformProduct } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
@@ -30,7 +32,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.174.0'; } catch { return process.env.npm_package_version || '1.174.0'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.175.0'; } catch { return process.env.npm_package_version || '1.175.0'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -282,25 +284,50 @@ app.get('/api/activity', async c => {
   const active = jobs.filter((j: any) => ['queued', 'running'].includes(j.status));
   return c.json({ ok: true, ts: new Date().toISOString(), queue: true, version: runtimeVersion(), counts: { profiles: profiles.length, jobs: jobs.length, active: active.length, runningRuns: 0 }, activeJobs: active.slice(0, 15), runs: [], quota: { writeExceeded: false } });
 });
-app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: [] }));
+app.get('/api/ai/chat-models', async c => c.json({ ok: true, providers: await aiProviders(), models: await aiChatModelRowsFor() }));
 app.get('/api/ai/test-results', async c => { const stored = await getState<any>('ai_test_results', null), rows = Array.isArray(stored?.results) ? stored.results : []; return c.json({ ok: true, at: stored?.at || stored?.updatedAt || null, prompt: stored?.prompt || '', categoryTitle: stored?.categoryTitle || '', total: rows.length, results: rows, leaderboard: await getLeaderboard() }); });
 app.get('/api/ai/test-runs/current', async c => c.json({ ok: true, run: await getCurrentAiRun() }));
-app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; const { run, existing } = await startAiTestRun(body); return c.json({ ok: true, run, existing, results: run.result.results }); });
+app.post('/api/ai/test-runs', async c => { const body = await c.req.json().catch(() => ({})) as any; const settings = await getState<any>('settings', {}).catch(() => ({})); const { run, existing } = await startAiTestRun({ ...body, skipTimeoutMs: Number(body?.skipTimeoutMs) || Number(settings?.ai?.skipTimeoutMs) || 0 }); return c.json({ ok: true, run, existing, results: run.result.results }); });
 app.post('/api/ai/test-runs/control', async c => { const body = await c.req.json().catch(() => ({})) as any; const run = await controlAiTestRun(String(body.action || '')); return c.json({ ok: true, status: run?.status || 'idle', run }); });
 app.post('/api/ai/test-runs/reset', async c => { await resetAiTestRun(); return c.json({ ok: true }); });
-app.post('/api/ai/test-runs/retry', c => c.json({ ok: false, error: 'Retry individual AI test parts is only available on Cloudflare Worker runtime.' }, 501));
-app.post('/api/ai/chat', async c => { const body = await c.req.json().catch(() => ({})) as any, providers = await aiProviders(); const key = String(body.providerId || body.provider || '').split('::')[0]; const provider = providers.find((p: any) => p.id === key) || providers[0]; if (!provider) return c.json({ ok: false, error: 'No AI provider configured' }, 400); const messages = Array.isArray(body.messages) ? body.messages : []; const prompt = messages.map((m: any) => `${m.role || 'user'}: ${m.content || ''}`).join('\n') || String(body.prompt || 'Reply with exactly: SCRAPER4_OK'); return c.json(await aiCall(provider, String(body.model || provider.models?.[0] || ''), prompt)); });
-app.get('/api/agent/templates', c => c.json({ ok: true, templates: [] }));
+// Retry one part (message or category) of one model. The Worker has had this since
+// 1.106; Node answered 501, so a single hung model meant re-testing every model —
+// hours of calls on a Termux phone.
+app.post('/api/ai/test-runs/retry', async c => { const body = await c.req.json().catch(() => ({})) as any; try { return c.json({ ok: true, ...(await retryAiTestPart(String(body.key || ''), body.part === 'category' ? 'category' : 'message')) }); } catch (error) { return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400); } });
+// Chat with full history. The shared dashboard sends {providerId, model, messages[]};
+// flattening that into one prompt string (the old behaviour) made the model read a
+// transcript instead of a conversation and ignored the [K۲] key suffix of the picker.
+app.post('/api/ai/chat', async c => {
+  const body = await c.req.json().catch(() => ({})) as any, providers = await aiProviders();
+  const provider = providers.find((p: any) => p.id === String(body.providerId || body.provider || '').split('::')[0]);
+  if (!provider) return c.json({ ok: false, error: 'ارائه‌دهنده پیدا نشد.' }, 404);
+  const model = String(body.model || '').trim();
+  if (!model) return c.json({ ok: false, error: 'نام مدل لازم است.' }, 400);
+  const messages = (Array.isArray(body.messages) ? body.messages : []).slice(-40).map((m: any) => ({ role: String(m?.role || 'user'), content: String(m?.content ?? '') })).filter((m: any) => m.content);
+  if (!messages.length || messages[messages.length - 1].role !== 'user') return c.json({ ok: false, error: 'آخرین پیام باید از سمت کاربر باشد.' }, 400);
+  try { return c.json(await aiChatWithMessages(provider, model, messages)); }
+  catch (error) { const detail = (error as any)?.detail || {}; return c.json({ ok: false, error: error instanceof Error ? error.message : String(error), ...detail }, 400); }
+});
+app.get('/api/agent/templates', async c => { const { AGENT_PROMPT_TEMPLATES } = await import('../worker-src/agent.js'); return c.json({ ok: true, templates: AGENT_PROMPT_TEMPLATES }); });
 app.get('/api/agent/tools', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
 app.get('/api/agent/tasks', async c => { const { AGENT_TOOLS } = await import('../worker-src/agent.js'); return c.json({ ok: true, tools: AGENT_TOOLS }); });
 app.get('/api/ai/workers-catalog', async c => { const catalog = await import('../worker-src/workers-ai-catalog.js'); return c.json({ ok: true, groups: catalog.workersAiTaskGroups(), total: catalog.WORKERS_AI_MODELS.length }); });
-app.get('/api/agent/models', c => c.json({ ok: true, models: [] }));
-app.get('/api/agent/prompts', c => c.json({ ok: true, prompts: [] }));
-app.post('/api/agent/prompts', c => c.json({ ok: false, error: 'Agent prompts are only available on Cloudflare Worker runtime.' }, 501));
-app.delete('/api/agent/prompts/:id', c => c.json({ ok: true }));
-app.get('/api/agent/runs', c => c.json({ ok: true, runs: [] }));
+// The agent tab reads `configured` (your own providers) plus the curated tool-calling
+// catalogue and `setupHint`. Node returned two empty arrays, so the picker stayed
+// blank and the guide explained nothing on Termux / VPS installs.
+app.get('/api/agent/models', async c => { const { AGENT_TOOL_MODELS } = await import('../worker-src/agent.js'); const providers = (await aiProviders()).filter((p: any) => p.enabled !== false); const rows = await aiChatModelRowsFor(); const configured = rows.map((row: any) => ({ providerId: row.providerId, providerName: row.providerName, model: row.model, keyCount: row.keyCount })); return c.json({ ok: true, models: AGENT_TOOL_MODELS, configured, setupHint: providers.length ? '' : 'هیچ ارائه‌دهندهٔ فعالی تنظیم نشده است؛ در تب «ارائه‌دهنده‌ها» یک ارائه‌دهنده با حداقل یک مدل بسازید.' }); });
+app.get('/api/agent/prompts', async c => { const items = await getState<any[]>('agent_prompts', []); return c.json({ ok: true, items: Array.isArray(items) ? items : [], prompts: Array.isArray(items) ? items : [] }); });
+// Prompt records are stored per runtime (app_state on Node, D1 on the Worker) so the
+// schedule tab can be filled in everywhere; only the queue-backed *execution* of an
+// agent run stays Cloudflare-specific (see the honest error below).
+app.post('/api/agent/prompts', async c => { const body = await c.req.json().catch(() => ({})) as any, items = (await getState<any[]>('agent_prompts', [])) || [], id = String(body?.id || `prompt-${Date.now().toString(36)}`), record = { ...body, id, updatedAt: new Date().toISOString(), createdAt: (items.find((row: any) => row.id === id)?.createdAt) || new Date().toISOString() }; const next = [...items.filter((row: any) => row.id !== id), record]; await setState('agent_prompts', next); return c.json({ ok: true, prompt: record }); });
+app.delete('/api/agent/prompts/:id', async c => { const items = (await getState<any[]>('agent_prompts', [])) || [], id = c.req.param('id'); await setState('agent_prompts', items.filter((row: any) => String(row.id) !== id)); return c.json({ ok: true }); });
+
+app.get('/api/agent/runs', async c => { const items = await getState<any[]>('agent_runs', []); const runs = Array.isArray(items) ? items : []; return c.json({ ok: true, items: runs.slice().reverse(), runs: runs.slice().reverse() }); });
 app.get('/api/agent/runs/current', c => c.json({ ok: true, run: null }));
-app.post('/api/agent/runs', c => c.json({ ok: false, error: 'Agent runs are only available on Cloudflare Worker runtime.' }, 501));
+app.post('/api/agent/runs', c => c.json({ ok: false, unsupported: true, runtime: 'node',
+  error: 'اجرای ایجنتیک (حلقهٔ ابزارها روی سرور) فقط در نسخهٔ Cloudflare Worker پیاده شده است.',
+  recommendations: ['فهرست مدل‌ها، ابزارها، کاتالوگ و پرامپت‌های زمان‌بندی‌شده در همین محیط کار می‌کنند؛ فقط خودِ اجرا صف Worker لازم دارد.', 'برای اجرای خودکار عامل، ورکر Cloudflare را با همین کد مستقر کنید.'] }, 501));
 app.post('/api/agent/runs/control', c => c.json({ ok: true, status: 'noop' }));
 app.post('/api/agent/runs/reset', c => c.json({ ok: true }));
 
@@ -316,6 +343,10 @@ const nodeUnsupported = (feature: string) => ({ ok: false, unsupported: true, ru
 app.get('/api/destination/basalam/category-runs/current',async c=>{try{await recoverCategoryRun();return c.json({ok:true,run:await getPublicCategoryRun()})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
 app.post('/api/destination/basalam/category-runs',async c=>{try{const b=await c.req.json().catch(()=>({}))as any,started=await startCategoryRun(b);return c.json({ok:true,...started},started.existing?200:202)}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
 app.post('/api/destination/basalam/category-runs/control',async c=>{try{const b=await c.req.json().catch(()=>({}))as any;return c.json({ok:true,run:await controlCategoryRun(String(b.action)==='resume'?'resume':'stop')})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
+app.get('/api/destination/basalam/category-correction',async c=>{try{return c.json(await categoryCorrectionViewFor())}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
+// Run the periodic plan right now (the card's ▶ button): same mode and curated list
+// the schedule uses, and the schedule anchor moves so the next tick does not stack.
+app.post('/api/destination/basalam/category-correction/run-now',async c=>{const settings=await getState<any>('settings',{}),cfg=normalizeCategoryCorrection(settings?.[CATEGORY_CORRECTION_SETTINGS_KEY]),body=await c.req.json().catch(()=>({}))as any,mode=body?.mode?normalizeCategoryMode(body.mode):cfg.mode,models=Array.isArray(body?.models)?body.models:cfg.models;try{const started=await startCategoryRun({mode,models});if(!started.existing)await setState(CATEGORY_CORRECTION_LAST_KEY,{at:new Date().toISOString(),status:'started',runId:started.run?.id||null,mode,models,intervalHours:cfg.intervalHours});return c.json({ok:true,...started,settings:cfg},started.existing?200:202)}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
 app.post('/api/destination/basalam/category-runs/reset',async c=>{try{await resetCategoryRun();return c.json({ok:true,run:await getPublicCategoryRun()})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
 app.post('/api/destination/basalam/category/suggest',async c=>{try{const b=await c.req.json().catch(()=>({}))as any,title=String(b.title||'').trim(),mode=String(b.mode||'learned');if(!title)return c.json({ok:false,error:'عنوان محصول خالی است.'},400);if(mode==='learned')return c.json({ok:true,mode,result:await findLearnedCategory(title,Number(b.maxWords)||5)});if(mode!=='ai')return c.json({ok:false,error:'روش پیشنهاد دسته‌بندی نامعتبر است.'},400);const categories=(await destinationCategories(Boolean(b.refreshCategories))).items,result=await suggestCategoryWithModel(title,String(b.modelKey||''),categories);return c.json({mode,categories:categories.length,...result})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
 app.get('/api/destination/basalam/category-tried',async c=>{try{const shopId=String(c.req.query('shopId')||''),id=Number(c.req.query('id'));return c.json({ok:true,tried:await getTriedBasalamCategories(shopId,id)})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}});
@@ -502,7 +533,19 @@ app.post('/api/test-connection/:target', async c => {
         vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId,
         tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null,autofill}});
   }
-  if(target==='ai') { const ai=connections.ai;if(!ai.baseUrl||!ai.apiKey||!ai.model)return c.json({ok:false,error:'تنظیمات هوش مصنوعی کامل نیست'},400);const endpoint=ai.baseUrl+(ai.baseUrl.includes('/chat/completions')?'':'/chat/completions'),r=await safeFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${ai.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:ai.model,messages:[{role:'user',content:'Reply with exactly: SCRAPER4_OK'}],max_tokens:20})},2_000_000);return c.json({ok:r.ok,code:r.status,body:await r.json().catch(()=>null)}); }
+  if(target==='ai'){
+    // Parity with the Worker's connectionDiagnostic('ai'): the provider and model the
+    // dashboard picked are the thing under test — not the legacy shared triple, which most
+    // installs never fill in at all (they configure provider rows). A transient
+    // {baseUrl,apiKey,model} triple is honoured too, so «تست کلید» works before saving.
+    const startedAt=new Date().toISOString(),started=Date.now(),body=await c.req.json().catch(()=>({}))as any,providers=await aiProviders();
+    const transient=String(body?.baseUrl||'')&&String(body?.apiKey||'')?{id:String(body?.providerId||'test'),name:'تست موقت',baseUrl:String(body.baseUrl),apiKey:String(body.apiKey),models:body.model?[String(body.model)]:[],enabled:true}:null;
+    const provider=transient||providers.find((x:any)=>x.id===String(body?.provider||''))||providers.find((x:any)=>x.enabled&&x.models.length);
+    const model=String(body?.model||'').trim()||String((provider as any)?.models?.[0]||'');
+    if(!provider||!model)return c.json({ok:false,target,startedAt,durationMs:Date.now()-started,phase:'configuration',error:'ارائه‌دهنده و مدل هوش مصنوعی تنظیم نشده است.',recommendations:['در رابط بصری یک ارائه‌دهنده اضافه کنید.','Base URL، API Key و حداقل یک مدل را وارد و ذخیره کنید.']},400);
+    try{const result=await aiCall(provider,model,String(body?.prompt||'Reply with exactly: SCRAPER4_OK'));return c.json({ok:true,target,service:'AI Chat Completions',startedAt,durationMs:Date.now()-started,request:{method:'POST',endpoint:result.endpoint||'',authentication:'Bearer Token (کلید در گزارش نمایش داده نمی‌شود)'},http:{status:200,statusText:'OK'},summary:{provider:provider.id,providerName:provider.name,model,latencyMs:result.latencyMs},recommendations:['مدل پاسخ معتبر برگرداند. برای مشاهدهٔ پاسخ خام، بخش پایین مودال را بازبینی کنید.'],provider:provider.id,providerName:provider.name,model,text:result.text,latencyMs:result.latencyMs});}
+    catch(error){const detail=(error as any)?.detail||{};return c.json({ok:false,target,service:'AI Chat Completions',startedAt,durationMs:Date.now()-started,provider:provider.id,providerName:provider.name,model,prompt:String(body?.prompt||''),error:error instanceof Error?error.message:String(error),...detail,recommendations:['آدرس پایه، کلید API و نام دقیق مدل را بررسی کنید.','اگر خطا ۴۲۹ است کمی صبر کنید یا سقف تست همزمان را کم کنید.','اگر خطای شبکه است روش Worker/Gateway سازگار با HTTP را انتخاب کنید.']},200);}
+  }
   return c.json({ok:false,error:'Unknown connection'},404);
 });
 app.get('/api/categories/:target',async c=>{const target=c.req.param('target'),connections=await loadConnections();if(target==='woo'){const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'اتصال ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,items:any[]=[];for(let page=1;page<=20;page++){const r=await safeFetch(`${x.url}/wp-json/wc/v3/products/categories?per_page=100&page=${page}`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},3_000_000),rows=await r.json() as any[];if(!r.ok)return c.json({ok:false,error:`Woo HTTP ${r.status}`},502);items.push(...rows);if(rows.length<100)break}return c.json({ok:true,items})}if(target==='basalam'){try{const result=await destinationCategories(c.req.query('refresh')==='1');return c.json({ok:true,...result,total:result.items.length})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}}return c.json({ok:false,error:'Invalid target'},400)});
