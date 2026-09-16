@@ -1,0 +1,14 @@
+# Installed dependencies and build output are machine-local, never committed.
+# Without this at the repository root, `git status` reports them as untracked
+# noise and the deployer's auto-update used to treat that as "local work".
+node_modules/
+dist/
+build/
+coverage/
+*.log
+
+# Runtime scratch written by the scraper itself.
+data/
+storage/
+.env
+.env.*

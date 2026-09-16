@@ -1,0 +1,105 @@
+// NOTE: normalizePersianText must stay the LAST export in this file:
+// worker-tests/php-10170-parity.test.mjs slices utils.ts from
+// PERSIAN_FOLD_MAP to EOF and strips only that block's annotations.
+/**
+ * Remote marketplace IDs (Basalam/Woo) can exceed 2^53, where a JS number can
+ * no longer hold them exactly (real case: Basalam id 3838404244461599744).
+ * Worse, node:sqlite THROWS `RangeError: Value is too large to be represented
+ * as a JavaScript number` when it reads such an INTEGER, failing the whole
+ * operation, while D1 silently rounds it and pg returns bigint columns as
+ * strings. This helper is the single rule every environment applies at the
+ * database boundary: safe integers stay numbers (zero behavior change for
+ * the 99.9%), anything bigger keeps its exact digits as a string, and
+ * missing/garbage values become null (falsy, like the old Number() path).
+ */
+export function toRemoteId(value: unknown): number | string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : value.toString();
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return Number.isSafeInteger(value) ? value : String(value);
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text === '') return null;
+    if (/^-?\d+$/.test(text)) {
+      const n = Number(text);
+      return Number.isSafeInteger(n) && String(n) === text ? n : text;
+    }
+    return null;
+  }
+  return null;
+}
+/**
+ * Row-value normalizer for SELECT results: node:sqlite with `readBigInts`
+ * returns EVERY integer as a BigInt (which JSON.stringify would reject),
+ * so safe ones become numbers and huge ones exact strings. Plain values
+ * pass through untouched, which also makes it a safe no-op for D1/pg rows.
+ */
+export function normalizeDbValue(value: unknown): unknown {
+  return typeof value === 'bigint' ? toRemoteId(value) : value;
+}
+
+export const textEncoder = new TextEncoder();
+export const textDecoder = new TextDecoder();
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let out=''; for(let i=0;i<bytes.length;i+=0x8000) out+=String.fromCharCode(...bytes.subarray(i,i+0x8000)); return btoa(out);
+}
+export function base64ToBytes(value:string):Uint8Array { const raw=atob(value),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);return bytes; }
+export function utf8ToBase64(value:string):string{return bytesToBase64(textEncoder.encode(value));}
+export function base64ToUtf8(value:string):string{return textDecoder.decode(base64ToBytes(value));}
+export function basicAuth(username:string,password:string):string{return `Basic ${utf8ToBase64(`${username}:${password}`)}`;}
+export function byteLength(value:string):number{return textEncoder.encode(value).byteLength;}
+export function escapeHtml(value:unknown):string{return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]!));}
+export function message(error:unknown):string{return error instanceof Error?error.message:String(error);}
+/**
+ * Normalizes a database timestamp to ISO-8601 UTC. PostgreSQL drivers hand
+ * back Date objects, but SQLite hands back naive 'YYYY-MM-DD HH:MM:SS' strings
+ * (UTC, no suffix) that browsers parse as LOCAL time — in Tehran (UTC+3:30)
+ * that puts every job timer 210 minutes in the past and corrupts all speed
+ * statistics. Already-ISO strings and Dates pass through untouched.
+ */
+export function isoDateTime(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const iso = (value as { toISOString?: unknown })?.toISOString;
+  if (typeof iso === 'function') return (value as Date).toISOString();
+  const text = String(value).trim();
+  const naive = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/);
+  if (naive) return `${naive[1]}T${naive[2].length === 5 ? naive[2] + ':00' : naive[2]}Z`;
+  return text;
+}
+/** True when the error is Cloudflare D1's daily write-quota limit (free plan: 100k rows/day, reset 00:00 UTC). */
+export function isWriteQuotaError(error:unknown):boolean{return /exceeded .{0,20}write|write operations quota|rows written|d1.{0,20}quota|quota.{0,20}(exceeded|reached)|write.{0,20}limit/i.test(message(error));}
+export async function sha256(value:string):Promise<string>{const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',textEncoder.encode(value)));return [...bytes].map(x=>x.toString(16).padStart(2,'0')).join('');}
+export function safeEqual(a:string,b:string):boolean {const length=Math.max(a.length,b.length),aa=a.padEnd(length,'\0'),bb=b.padEnd(length,'\0');let diff=a.length^b.length;for(let i=0;i<length;i++)diff|=aa.charCodeAt(i)^bb.charCodeAt(i);return diff===0;}
+
+/**
+ * PHP scraper4 v10.170 parity (suffixTextNormalize).
+ * Folds the Arabic letter forms that Persian shops mix into their titles so the
+ * same product does not look like two different products to category learning,
+ * duplicate detection and suffix matching. Previously only ي/ى/ك were folded,
+ * which left "مانتو نسويّة"-style titles unmatched.
+ */
+const PERSIAN_FOLD_MAP: Record<string,string> = {
+  'ي':'ی','ى':'ی','ك':'ک','ة':'ه','ۀ':'ه','أ':'ا','إ':'ا','ؤ':'و','：':':'
+};
+const PERSIAN_FOLD_RE = new RegExp(`[${Object.keys(PERSIAN_FOLD_MAP).join('')}]`,'g');
+/** Arabic harakat/tatweel carry no meaning for matching and are dropped. */
+const ARABIC_DIACRITICS_RE = /[\u064B-\u065F\u0670\u0640]/g;
+/** Zero-width joiners, bidi marks, NBSP and BOM all collapse to a plain space. */
+const INVISIBLE_SPACE_RE = /[\u200b-\u200f\u00a0\ufeff\u2060]/g;
+export function normalizePersianText(value: unknown): string {
+  return String(value ?? '')
+    .replace(PERSIAN_FOLD_RE, ch => PERSIAN_FOLD_MAP[ch] ?? ch)
+    .replace(ARABIC_DIACRITICS_RE, '')
+    .replace(INVISIBLE_SPACE_RE, ' ')
+    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
