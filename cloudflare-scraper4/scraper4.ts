@@ -31,13 +31,13 @@
  *   npm install --no-audit --prefer-online
  *   node scripts/esbuild-check.mjs
  *   grep version package.json | head -1
- *   # Expected: 1.188.0+
+ *   # Expected: 1.189.0+
  *
  * Cloudflare Worker update from Dashboard:
  *   1) Push/pull this branch: arena/01a09468-new.
  *   2) Cloudflare Dashboard → Workers & Pages → your Worker → Deployments.
  *   3) Click Redeploy / Retry deployment, or let Workers Builds deploy the latest commit.
- *   4) Open /health and verify version is 1.188.0+.
+ *   4) Open /health and verify version is 1.189.0+.
  *
  * VS Code / local desktop, no Cloudflare dependency:
  *   cd new/cloudflare-scraper4

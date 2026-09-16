@@ -1,7 +1,7 @@
 import { claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
-import { generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
-import { destinationCategories, type DestinationCategory } from './maintenance.js';
+import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
+import { destinationCategories } from './maintenance.js';
 import { listSelectorsStatus, mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors, transformProduct } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
@@ -9,7 +9,7 @@ import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean;engineSelectorsSaved?:boolean};
+type ScrapeCheckpoint={rawPricing?:boolean;page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean;engineSelectorsSaved?:boolean};
 type SyncCheckpoint={offset:number};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Ten products keep detail + Woo + Basalam requests below the Free-plan subrequest ceiling.
@@ -17,7 +17,10 @@ function chunkSize():number{return Math.min(50,Math.max(1,Number(getEnv().JOB_CH
 function preserveExisting(fresh:Product,previous:Product|null):Product{
   if(!previous)return fresh;
   return {...fresh,
-    title:fresh.title||previous.title,price:fresh.price>0?fresh.price:previous.price,priceText:fresh.priceText||previous.priceText,url:fresh.url||previous.url,
+    title:fresh.title||previous.title,price:fresh.price,priceText:fresh.priceText,url:fresh.url||previous.url,
+    basalamCategoryId:fresh.basalamCategoryId||previous.basalamCategoryId,
+    basalamCategoryName:fresh.basalamCategoryId?fresh.basalamCategoryName:previous.basalamCategoryName,
+    basalamCategoryPath:fresh.basalamCategoryId?fresh.basalamCategoryPath:previous.basalamCategoryPath,
     image:fresh.image||previous.image,images:[...new Set([fresh.image,...(previous.images||[]),...(fresh.images||[])].filter(Boolean))],
     shortDesc:fresh.shortDesc||previous.shortDesc,longDesc:fresh.longDesc||previous.longDesc,sku:fresh.sku||previous.sku,brand:fresh.brand||previous.brand,
     stock:fresh.stock??previous.stock,weight:fresh.weight??previous.weight,category:fresh.category||previous.category,tags:fresh.tags||previous.tags,
@@ -89,6 +92,9 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   const key=stateKey(job.id);
   const checkpoint=await getState<ScrapeCheckpoint>(key,{page:1,url:pageUrl(profile,1),nextUrl:'',index:0,seen:[],retireSafe:true});
   checkpoint.retireSafe ??= true;
+  // Old releases checkpointed adjusted prices. Re-fetch pending source data on upgrade.
+  if(checkpoint.products&&!checkpoint.rawPricing){delete checkpoint.products;checkpoint.index=0;append(job,'قالب قیمت نقطهٔ بازیابی قدیمی است؛ دادهٔ خام این صفحه دوباره استخراج می‌شود.')}
+
   if(await stopRequested(job.id)){job.status='stopped';return false}
   if(!checkpoint.products){
     job.phase='list';
@@ -145,7 +151,8 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     checkpoint.autoSelectorsAllowed=!!(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine));
     if(checkpoint.autoSelectorsAllowed&&!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,page.url,'list',job,true);checkpoint.listSelectorsFilled=true}
     checkpoint.url=page.url;checkpoint.nextUrl=page.nextUrl;checkpoint.index=0;
-    const pageProducts=page.products.map(raw=>transformProduct(raw,profile)).filter(product=>!profile.minPrice||product.price>=profile.minPrice);
+    checkpoint.rawPricing=true;
+    const pageProducts=page.products;
     checkpoint.products=pageProducts.filter(product=>!checkpoint.seen.includes(product.sourceKey));
     if(!pageProducts.length){
       checkpoint.retireSafe=false;
@@ -172,7 +179,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       await setState(key,checkpoint);
     }
   }
-  const start=checkpoint.index,end=Math.min(checkpoint.products.length,start+chunkSize()),batch=checkpoint.products.slice(start,end),previousByKey=new Map<string,Product|null>(),rawPriceByKey=new Map<string,number>();
+  const start=checkpoint.index,end=Math.min(checkpoint.products.length,start+chunkSize()),batch=checkpoint.products.slice(start,end).map(product=>({...product})),previousByKey=new Map<string,Product|null>(),rawPriceByKey=new Map<string,number>();
   await mapLimit(batch,Math.min(4,Math.max(1,Number(getEnv().DETAIL_CONCURRENCY)||2)),async product=>{
     const previous=await getProduct(profile.id,product.sourceKey);previousByKey.set(product.sourceKey,previous);rawPriceByKey.set(product.sourceKey,product.price);Object.assign(product,preserveExisting(product,previous));
     if(!hasDetailSelectors(profile.selectors))return;
@@ -203,19 +210,24 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     }
     await setState(key,checkpoint);
   }
+  // Work on copies: checkpoints retain unadjusted source prices across retries.
+  for (const product of batch) {
+    rawPriceByKey.set(product.sourceKey, product.price);
+    transformProduct(product, profile);
+  }
+  await categorizeExtractedProducts(job, profile, batch);
   // AI enrichment FALLBACK: fill only what the page itself could not provide,
   // using the pinned master model. Runs after the scraper-first rescue above
   // and before save/sync, and can never fail the scrape.
   const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
   if(aiSettings?.enabled!==false&&profile?.aiDescriptions!==false){
-    const pending=batch.filter(product=>productNeedsEnrichment(product).any||productNeedsBasalamCategory(product));
+    const pending=batch.filter(product=>product.price>0&&(!profile.minPrice||product.price>=profile.minPrice)&&productNeedsEnrichment(product).any);
     if(pending.length){
       const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
-      let enrichCategories:DestinationCategory[]|undefined;if(pending.some(product=>productNeedsBasalamCategory(product))){try{enrichCategories=(await destinationCategories()).items}catch{enrichCategories=[]}}
       let filled=0,failed=0,reported='';
       await mapLimit(pending,Math.max(1,Number(getEnv().AI_DESCRIPTION_CONCURRENCY)||2),async product=>{
         if(await stopRequested(job.id))return;
-        try{const result=await generateProductDescription(product,{categories:enrichCategories});if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
+        try{const result=await generateProductDescription(product,{skipCategory:true});if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
         catch(error){failed++;if(!reported)reported=message(error)}
       });
       if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
@@ -225,19 +237,21 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   }
   for(const product of batch){
     if(await stopRequested(job.id)){job.status='stopped';await setState(key,checkpoint);return false}
+    checkpoint.index++;job.processed++;
     const previous=previousByKey.get(product.sourceKey)||null,rawPrice=rawPriceByKey.get(product.sourceKey)??product.price;
-    if(rawPrice<=0){
+    if(rawPrice<=0||product.price<=0){
+      checkpoint.retireSafe=false;
       job.skippedNoPrice=(job.skippedNoPrice||0)+1;
       append(job,`${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
       continue;
     }
+    if(profile.minPrice&&product.price<profile.minPrice)continue;
     if(product.stock===0)append(job,`${product.title}: موجودی مبدأ به صفر رسیده است.`,'warning','out-of-stock',reportItem(product));
     if(previous&&previous.price>0&&product.price>0&&previous.price!==product.price){const delta=product.price-previous.price,percent=Number((delta/previous.price*100).toFixed(2));append(job,`${product.title}: قیمت ${delta>0?'افزایش':'کاهش'} یافت (${percent}٪).`,delta>0?'warning':'info',delta>0?'price-increased':'price-decreased',reportItem(product,{oldPrice:previous.price,newPrice:product.price,delta,percent}))}
     let saved=false;
     try{const result=await upsertProduct(profile.id,product);result==='added'?job.added++:job.updated++;append(job,`${product.title}: ${result==='added'?'محصول جدید ثبت شد':'اطلاعات محصول به‌روزرسانی شد'}`,'info',result,reportItem(product));saved=true}
     catch(error){const errorText=message(error);checkpoint.retireSafe=false;job.failed++;append(job,`${product.title}: ذخیره: ${errorText}`,'error','failed',reportItem(product,{error:errorText}))}
     if(saved){await syncProduct(job,profile,product);checkpoint.seen.push(product.sourceKey)}
-    checkpoint.index++;job.processed++;
   }
   checkpoint.seen=[...new Set(checkpoint.seen)];
   if(checkpoint.index<checkpoint.products.length){await setState(key,checkpoint);await save(job);return true}
@@ -309,4 +323,26 @@ export async function retryAndEnqueue(id:string,waitUntil?:(promise:Promise<unkn
   await deleteState(stateKey(id));
   await updateJob(id,{status:'queued',phase:'waiting',stopRequested:false,error:null,finishedAt:null,processed:0,added:0,updated:0,failed:0,log:[]});
   const queued=await getJob(id);if(queued)await enqueueJob(queued,waitUntil);return queued;
+}
+
+/** Category assignment is a separate post-extraction stage, not a description toggle. */
+async function categorizeExtractedProducts(job: Job, profile: { basalamCategoryId: number; minPrice: number }, products: Product[]): Promise<void> {
+  const pending = products.filter(product => product.price > 0 && (!profile.minPrice || product.price >= profile.minPrice) && productNeedsBasalamCategory(product));
+  if (!pending.length) return;
+  const previousPhase = job.phase;
+  job.phase = 'basalam-categories'; await save(job);
+  let enrichCategories: any[] = [];
+  try { enrichCategories = (await destinationCategories()).items; } catch { /* manual/learned categories still work offline */ }
+  let filled = 0, failed = 0, reported = '';
+  await mapLimit(pending, 2, async product => {
+    if (await stopRequested(job.id)) return;
+    try {
+      const result = await assignProductBasalamCategory(product, { categories: enrichCategories, profileCategoryId: profile.basalamCategoryId });
+      if (result.changed) filled++;
+      if (!result.ok) { failed++; if (!reported) reported = result.error || ''; }
+    } catch (error) { failed++; if (!reported) reported = message(error); }
+  });
+  if (filled) append(job, `دسته‌بندی باسلام ${filled} محصول پیش از تولید توضیحات تعیین شد.`);
+  if (failed) append(job, `دسته‌بندی باسلام ${failed} محصول تعیین نشد${reported ? ': ' + reported : ''}؛ استخراج ادامه دارد.`, 'warning');
+  job.phase = previousPhase; await save(job);
 }

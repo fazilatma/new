@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
-import { aiCall, aiChatWithMessages, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
+import { assignProductBasalamCategory, aiCall, aiChatWithMessages, aiConnectionDiagnostic, aiProviders, controlAiTestRun, generateProductDescription, getCurrentAiRun, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, resetAiTestRun, retryAiTestPart, startAiTestRun, suggestCategoryWithModel, testAllModels } from './ai.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChats, basalamOrders, digest, generateReply } from './automation.js';
 import { config, assertConfig, runtimeEnvironment } from './config.js';
 import { BOOTSTRAP_MARKER_KEY, bootstrapCandidates, maybeRestoreBootstrap, shouldAutoRestoreBootstrap } from './bootstrap.js';
@@ -36,7 +36,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.188.0+'; } catch { return process.env.npm_package_version || '1.188.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.189.0+'; } catch { return process.env.npm_package_version || '1.189.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -511,7 +511,7 @@ app.post('/api/profiles/:id/ai-descriptions',async c=>{
   let filled=0;const failures:any[]=[];
   for(const row of targets){
     const product=(row as any).data||row;
-    const result=await generateProductDescription(product,{force,categories:enrichCategories});
+    const result=await generateProductDescription(product,{force,categories:enrichCategories,profileCategoryId:profile.basalamCategoryId});
     if(result.changed){await upsertProduct(profile.id,product);filled++}
     else if(!result.ok)failures.push({title:product.title,error:result.error});
   }
@@ -819,9 +819,19 @@ async function runProfileApi(c:any,id:string){
   const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(2000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||1000));
   const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0,listSelectorUpdate:any=null,detailSelectorUpdate:any=null,autoSelectorsAllowed=false;const engineDiscovered:Record<string,string>={};
   if(extract){
-    for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,profile.extractionEngine,profile.extractionEngineMaster,true,'',true,Boolean(profile.networkIndirect));pagesScanned++;usedEngine=scraped.usedEngine||usedEngine;engineMs+=scraped.elapsedMs||0;if(scraped.usedEngine&&scraped.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==scraped.usedEngine)){profile.extractionEngineMaster=scraped.usedEngine;profile.extractionEngineHost=new URL(pageUrl(profile,pageNo)).hostname;profile.extractionEngineMs=scraped.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}if(scraped.discoveredSelectors&&Object.keys(scraped.discoveredSelectors).length){profile.selectors={...profile.selectors,...scraped.discoveredSelectors};await saveProfile({...profile,updatedAt:new Date().toISOString()});Object.assign(engineDiscovered,scraped.discoveredSelectors)}if(scraped.usedEngine&&scraped.products.length&&!isManualListEngine(scraped.usedEngine)){autoSelectorsAllowed=true;listSelectorUpdate=await applyInlineSelectorSuggestions(profile,pageUrl(profile,pageNo),'list',errors,true)}const before=products.length;for(const raw of scraped.products){const product=transformProduct(raw,profile);if((profile.minPrice&&product.price<profile.minPrice)||seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}if(products.length===before){if(pageNo===1)throw new Error('در صفحهٔ اول هیچ محصول تازه‌ای استخراج نشد؛ این اجرا موفقِ صفرمحصول محسوب نمی‌شود. سلکتورها، موتور استخراج و محدودیت دسترسی/ضدربات سایت را بررسی کنید.');break}}catch(error){errors.push(`page ${pageNo}: ${error instanceof Error?error.message:String(error)}`);if(pageNo===1)break}
+    for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{const scraped=await scrapeListWithMeta(pageUrl(profile,pageNo),profile.selectors,profile.extractionEngine,profile.extractionEngineMaster,true,'',true,Boolean(profile.networkIndirect));pagesScanned++;usedEngine=scraped.usedEngine||usedEngine;engineMs+=scraped.elapsedMs||0;if(scraped.usedEngine&&scraped.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==scraped.usedEngine)){profile.extractionEngineMaster=scraped.usedEngine;profile.extractionEngineHost=new URL(pageUrl(profile,pageNo)).hostname;profile.extractionEngineMs=scraped.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}if(scraped.discoveredSelectors&&Object.keys(scraped.discoveredSelectors).length){profile.selectors={...profile.selectors,...scraped.discoveredSelectors};await saveProfile({...profile,updatedAt:new Date().toISOString()});Object.assign(engineDiscovered,scraped.discoveredSelectors)}if(scraped.usedEngine&&scraped.products.length&&!isManualListEngine(scraped.usedEngine)){autoSelectorsAllowed=true;listSelectorUpdate=await applyInlineSelectorSuggestions(profile,pageUrl(profile,pageNo),'list',errors,true)}const before=products.length;for(const raw of scraped.products){const product=raw;if(seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}if(products.length===before){if(pageNo===1)throw new Error('در صفحهٔ اول هیچ محصول تازه‌ای استخراج نشد؛ این اجرا موفقِ صفرمحصول محسوب نمی‌شود. سلکتورها، موتور استخراج و محدودیت دسترسی/ضدربات سایت را بررسی کنید.');break}}catch(error){errors.push(`page ${pageNo}: ${error instanceof Error?error.message:String(error)}`);if(pageNo===1)break}
     if(!products.length&&errors.length)throw new Error(errors[0]);
     if(withDetails&&products.length){const sample=products.find(p=>p.url);if(sample?.url&&autoSelectorsAllowed)detailSelectorUpdate=await applyInlineSelectorSuggestions(profile,sample.url,'detail',errors,true);await mapLimit(products,Math.min(4,Math.max(1,Number(process.env.DETAIL_CONCURRENCY||2))),async product=>{try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch(error){errors.push(`${product.title}: details: ${error instanceof Error?error.message:String(error)}`)}});}
+    for(const product of products)transformProduct(product,profile);
+    products.splice(0,products.length,...products.filter(product=>!profile.minPrice||product.price>=profile.minPrice));
+    const categoryPending=products.filter(product=>product.price>0&&productNeedsBasalamCategory(product));
+    if(categoryPending.length){
+      let enrichCategories:any[]=[];try{enrichCategories=(await destinationCategories()).items}catch{/* manual and learned categories remain available */}
+      await mapLimit(categoryPending,2,async product=>{
+        try{const result=await assignProductBasalamCategory(product,{categories:enrichCategories,profileCategoryId:profile.basalamCategoryId});if(!result.ok)errors.push(`${product.title}: category: ${result.error||'unresolved'}`)}
+        catch(error){errors.push(`${product.title}: category: ${error instanceof Error?error.message:String(error)}`)}
+      });
+    }
     if(persist)for(const product of products)try{(await upsertProduct(profile.id,product))==='added'?added++:updated++}catch(error){errors.push(`${product?.title||'?'}: save: ${error instanceof Error?error.message:String(error)}`)}
     if(persist)await markProfileRun(profile.id);
   }else products.push(...(await listProducts(profile.id,limit,0,String(body.q||''))).products);

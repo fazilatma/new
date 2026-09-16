@@ -1554,7 +1554,7 @@ test('product identity keeps identifying query parameters', async () => {
 test('products with no price are skipped everywhere', async () => {
   const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
   assert.ok(worker.includes('job.skippedNoPrice=(job.skippedNoPrice||0)+1;'), 'worker must count the skip');
-  assert.ok(/rawPrice<=0\)\{[\s\S]{0,300}continue;/.test(worker), 'worker must skip before saving');
+  assert.ok(/rawPrice<=0\|\|product\.price<=0\)\{[\s\S]{0,400}continue;/.test(worker), 'worker must skip before saving');
 
   const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
   assert.ok(node.includes('if (!(Number(product.price) > 0))'), 'node must skip before saving');

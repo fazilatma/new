@@ -923,10 +923,21 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
   const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail,selectorsToSave};
 }
 
-export function transformProduct(product:Product,profile:Profile):Product{
-  product.title=cleanText(product.title+profile.titleSuffix).slice(0,300);const value=profile.priceValue;
-  if(profile.priceMode==='add')product.price+=value;if(profile.priceMode==='percent')product.price*=1+value/100;if(profile.priceMode==='multiply')product.price*=value;
-  if(profile.roundPrice>0)product.price=Math.ceil(product.price/profile.roundPrice)*profile.roundPrice;product.price=Math.max(0,Math.round(product.price));return product;
+export function transformProduct(product: Product, profile: Profile): Product {
+  // Call once, AFTER detail extraction/rescue, never on stored sync products.
+  product.title = cleanText(product.title + (profile.titleSuffix || '')).slice(0,300);
+  const sourcePrice = Number(product.price), value = Number(profile.priceValue) || 0;
+  let price = Number.isFinite(sourcePrice) && sourcePrice > 0 ? sourcePrice : 0;
+  // A markup must not turn an unavailable/missing source price into a sale price.
+  if (price > 0) {
+    if (profile.priceMode === 'add') price += value;
+    if (profile.priceMode === 'percent') price *= 1 + value / 100;
+    if (profile.priceMode === 'multiply') price *= value;
+    if (profile.roundPrice > 0) price = Math.ceil(price / profile.roundPrice) * profile.roundPrice;
+  }
+  product.price = Number.isFinite(price) ? Math.max(0, Math.round(price)) : 0;
+  if (product.price !== sourcePrice) product.priceText = product.price.toLocaleString('fa-IR') + (/(?:ریال|rial|irr)/i.test(product.priceText || '') ? ' ریال' : ' تومان');
+  return product;
 }
 export function pageUrl(profile:Profile,page:number):string{
   const url=new URL(profile.url);if(page<=1||profile.pagination==='none'||profile.pagination==='next_selector')return url.href;

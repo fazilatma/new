@@ -3,7 +3,7 @@ import { allProducts, claimJob, getJob, getProfile, getState, markMissingProduct
 import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, transformProduct, browserEngineAvailable, lastBrowserEngineError, listSelectorsStatus } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
-import { generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
+import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
 import { destinationCategories } from './maintenance.js';
 import type { Job, Product } from './types.js';
 
@@ -134,7 +134,7 @@ export async function processOneJob(): Promise<boolean> {
           append(job, 'محصولی پیدا نشد', 'warning'); break;
         }
         const before = found.size;
-        for (const raw of list) { const p = transformProduct(raw, profile); if (!profile.minPrice || p.price >= profile.minPrice) found.set(p.sourceKey, p); }
+        for (const raw of list) found.set(raw.sourceKey, raw);
         job.total = found.size; job.processed = found.size; await save(job);
         // Auto paging (pages = 0) stops as soon as a page adds nothing new.
         // Misconfigured pagination often returns page 1 forever, which would
@@ -221,23 +221,22 @@ export async function processOneJob(): Promise<boolean> {
               recovered ? 'info' : 'warning');
           }
         }
+        for (const product of products) transformProduct(product, profile);
+        products.splice(0, products.length, ...products.filter(product => !profile.minPrice || product.price >= profile.minPrice));
+        await categorizeExtractedProducts(job, profile, products);
         // AI enrichment FALLBACK: fill only what the page itself could not
         // provide, using the pinned master model. A failure here must never
         // fail the scrape, so each product is guarded.
         const aiSettings = await getState<any>('ai_description_settings', { enabled: true });
         if (aiSettings?.enabled !== false && profile?.aiDescriptions !== false) {
-          const pending = products.filter(product => productNeedsEnrichment(product).any || productNeedsBasalamCategory(product));
+          const pending = products.filter(product => product.price > 0 && productNeedsEnrichment(product).any);
           if (pending.length) {
             job.phase = 'ai-descriptions'; await save(job);
-            let enrichCategories: any[] | undefined;
-            if (pending.some(product => productNeedsBasalamCategory(product))) {
-              try { enrichCategories = (await destinationCategories()).items; } catch { enrichCategories = []; }
-            }
             let filled = 0, failed = 0; let reported = '';
             await mapLimit(pending, Math.max(1, Number(process.env.AI_DESCRIPTION_CONCURRENCY || 2)), async product => {
               if (await stopRequested(job.id)) return;
               try {
-                const result = await generateProductDescription(product, { categories: enrichCategories });
+                const result = await generateProductDescription(product, { skipCategory: true });
                 if (result.changed) filled++;
                 else if (!result.ok) { failed++; if (!reported && result.error) reported = result.error; }
               } catch (error) { failed++; if (!reported) reported = message(error); }
@@ -324,3 +323,25 @@ export async function workerLoop(pollMs: number): Promise<void> {
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+/** Category assignment is a separate post-extraction stage, not a description toggle. */
+async function categorizeExtractedProducts(job: Job, profile: { basalamCategoryId: number; minPrice: number }, products: Product[]): Promise<void> {
+  const pending = products.filter(product => product.price > 0 && (!profile.minPrice || product.price >= profile.minPrice) && productNeedsBasalamCategory(product));
+  if (!pending.length) return;
+  const previousPhase = job.phase;
+  job.phase = 'basalam-categories'; await save(job);
+  let enrichCategories: any[] = [];
+  try { enrichCategories = (await destinationCategories()).items; } catch { /* manual/learned categories still work offline */ }
+  let filled = 0, failed = 0, reported = '';
+  await mapLimit(pending, 2, async product => {
+    if (await stopRequested(job.id)) return;
+    try {
+      const result = await assignProductBasalamCategory(product, { categories: enrichCategories, profileCategoryId: profile.basalamCategoryId });
+      if (result.changed) filled++;
+      if (!result.ok) { failed++; if (!reported) reported = result.error || ''; }
+    } catch (error) { failed++; if (!reported) reported = message(error); }
+  });
+  if (filled) append(job, `دسته‌بندی باسلام ${filled} محصول پیش از تولید توضیحات تعیین شد.`);
+  if (failed) append(job, `دسته‌بندی باسلام ${failed} محصول تعیین نشد${reported ? ': ' + reported : ''}؛ استخراج ادامه دارد.`, 'warning');
+  job.phase = previousPhase; await save(job);
+}
