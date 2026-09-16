@@ -1,6 +1,6 @@
 import { getEnv, type D1Database, type D1PreparedStatement } from './env.js';
 import { SCHEMA } from './schema.js';
-import { isWriteQuotaError, normalizePersianText } from './utils.js';
+import { isWriteQuotaError, normalizeDbValue, normalizePersianText, toRemoteId } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 const ready = new WeakMap<object, Promise<void>>();
@@ -176,7 +176,9 @@ async function rows<T = any>(sql: string, values: unknown[] = []): Promise<T[]> 
   const result = await statement(sql, values).all<T>();
   meter(result.meta);
   if (!result.success) throw new Error(result.error || 'D1 query failed');
-  return result.results || [];
+  const found = result.results || [];
+  for (const row of found as Record<string, unknown>[]) for (const key of Object.keys(row)) row[key] = normalizeDbValue(row[key]);
+  return found;
 }
 async function run(sql: string, values: unknown[] = []): Promise<number> {
   const result = await statement(sql, values).run();
@@ -341,10 +343,10 @@ export async function maintenanceRows(profileId=''):Promise<any[]>{
   for(const map of maps){const key=`${map.profile_id}\u0000${map.source_key}`,items=by.get(key)||[];items.push(map);by.set(key,items)}
   return productRows.map(row=>({...row,data:json(row.data,{}),active:Boolean(row.active),maps:by.get(`${row.profile_id}\u0000${row.source_key}`)||[]}));
 }
-export async function setRemoteId(profileId:string,sourceKey:string,target:'woo'|'basalam',id:number):Promise<void>{const column=target==='woo'?'remote_woo_id':'remote_basalam_id';await run(`UPDATE products SET ${column}=?,updated_at=? WHERE profile_id=? AND source_key=?`,[id,now(),profileId,sourceKey]);}
-export async function getRemoteId(profileId:string,sourceKey:string,target:'woo'|'basalam'):Promise<number|null>{const column=target==='woo'?'remote_woo_id':'remote_basalam_id',row=await statement(`SELECT ${column} AS id FROM products WHERE profile_id=? AND source_key=?`,[profileId,sourceKey]).first<{id:number|null}>();return row?.id?Number(row.id):null;}
-export async function getDestinationId(profileId:string,sourceKey:string,target:string,accountKey='default'):Promise<number|null>{const row=await statement('SELECT remote_id FROM destination_map WHERE profile_id=? AND source_key=? AND target=? AND account_key=?',[profileId,sourceKey,target,accountKey]).first<{remote_id:number}>();return row?.remote_id?Number(row.remote_id):null;}
-export async function setDestinationId(profileId:string,sourceKey:string,target:string,accountKey:string,remoteId:number):Promise<void>{await run(`INSERT INTO destination_map(profile_id,source_key,target,account_key,remote_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,source_key,target,account_key) DO UPDATE SET remote_id=excluded.remote_id,updated_at=excluded.updated_at`,[profileId,sourceKey,target,accountKey,remoteId,now()]);}
+export async function setRemoteId(profileId:string,sourceKey:string,target:'woo'|'basalam',id:number|string):Promise<void>{const column=target==='woo'?'remote_woo_id':'remote_basalam_id';await run(`UPDATE products SET ${column}=?,updated_at=? WHERE profile_id=? AND source_key=?`,[id,now(),profileId,sourceKey]);}
+export async function getRemoteId(profileId:string,sourceKey:string,target:'woo'|'basalam'):Promise<number|string|null>{const column=target==='woo'?'remote_woo_id':'remote_basalam_id',row=await statement(`SELECT CAST(${column} AS TEXT) AS id FROM products WHERE profile_id=? AND source_key=?`,[profileId,sourceKey]).first<{id:unknown}>();return toRemoteId(row?.id);}
+export async function getDestinationId(profileId:string,sourceKey:string,target:string,accountKey='default'):Promise<number|string|null>{const row=await statement('SELECT CAST(remote_id AS TEXT) AS remote_id FROM destination_map WHERE profile_id=? AND source_key=? AND target=? AND account_key=?',[profileId,sourceKey,target,accountKey]).first<{remote_id:unknown}>();return toRemoteId(row?.remote_id);}
+export async function setDestinationId(profileId:string,sourceKey:string,target:string,accountKey:string,remoteId:number|string):Promise<void>{await run(`INSERT INTO destination_map(profile_id,source_key,target,account_key,remote_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,source_key,target,account_key) DO UPDATE SET remote_id=excluded.remote_id,updated_at=excluded.updated_at`,[profileId,sourceKey,target,accountKey,remoteId,now()]);}
 export async function markProfileRun(id:string):Promise<void>{await run('UPDATE profiles SET last_run_at=?,updated_at=? WHERE id=?',[now(),now(),id]);}
 
 const normalizeLearning=(value:string)=>normalizePersianText(value).replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim();
@@ -353,7 +355,7 @@ export async function findLearnedCategory(title:string,maxWords=5):Promise<{cate
 export async function importCategoryLearning(raw:any):Promise<number>{const items=Array.isArray(raw)?raw:Object.entries(raw||{}).map(([phrase,value]:any)=>({phrase,...(typeof value==='object'?value:{category_id:value})}));let count=0;for(const item of items){const phrase=normalizeLearning(String(item.phrase||item.key||'')),categoryId=Number(item.category_id||item.categoryId||item.cat_id||item.id);if(!phrase||!categoryId)continue;await run(`INSERT INTO category_learning(phrase,category_id,category_name,hits,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(phrase,category_id) DO UPDATE SET category_name=excluded.category_name,hits=MAX(category_learning.hits,excluded.hits),updated_at=excluded.updated_at`,[phrase,categoryId,String(item.category_name||item.categoryName||item.cat_name||item.name||''),Math.max(1,Number(item.hits||item.count||1)),now()]);count++}return count;}
 export async function listCategoryLearning(limit=1000):Promise<any[]>{return rows('SELECT * FROM category_learning ORDER BY hits DESC,updated_at DESC LIMIT ?',[limit]);}
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await run('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES(?,?,?,?,?)',[row.chatId||null,row.customer,row.input,row.output,row.source]);}
-export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){await run('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES(?,?,?,?,?,?)',[Number(row.chat_id||0)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),row.created_at||row.at?new Date(row.created_at||Number(row.at)*1000).toISOString():now()]);count++}return count;}
+export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){await run('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES(?,?,?,?,?,?)',[toRemoteId(row.chat_id)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),row.created_at||row.at?new Date(row.created_at||Number(row.at)*1000).toISOString():now()]);count++}return count;}
 export async function listAutoreplyLog(limit=100):Promise<any[]>{return rows('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT ?',[limit]);}
 
 // ─── Basalam category bulk-fix: tried-category memory ─────────────────────────
@@ -399,8 +401,8 @@ export async function createBackup():Promise<Record<string,unknown>>{const [prof
 export async function restoreBackup(bundle:any):Promise<{profiles:number;products:number;states:number}>{
   if(!bundle||!['scraper4-cloudflare','scraper4-backup','scraper4-render'].includes(bundle.app)||bundle.version!==1)throw new Error('Invalid Scraper 4 backup');let profiles=0,products=0,states=0;
   for(const row of bundle.profiles||[]){const data=json<any>(row.data,row.data||{});await saveProfile({...data,id:row.id,enabled:Boolean(row.enabled),intervalMinutes:Number(row.interval_minutes||0),lastRunAt:row.last_run_at||null,createdAt:row.created_at||now(),updatedAt:now()});profiles++;}
-  for(const row of bundle.products||[]){const product=json<Product>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id)await setRemoteId(row.profile_id,row.source_key,'woo',Number(row.remote_woo_id));if(row.remote_basalam_id)await setRemoteId(row.profile_id,row.source_key,'basalam',Number(row.remote_basalam_id));products++;}
-  for(const row of bundle.destinationMap||[])await setDestinationId(row.profile_id,row.source_key,row.target,row.account_key,Number(row.remote_id));
+  for(const row of bundle.products||[]){const product=json<Product>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id){const wooId=toRemoteId(row.remote_woo_id);if(wooId!=null)await setRemoteId(row.profile_id,row.source_key,'woo',wooId);}if(row.remote_basalam_id){const basalamId=toRemoteId(row.remote_basalam_id);if(basalamId!=null)await setRemoteId(row.profile_id,row.source_key,'basalam',basalamId);}products++;}
+  for(const row of bundle.destinationMap||[]){const mapId=toRemoteId(row.remote_id);if(mapId!=null)await setDestinationId(row.profile_id,row.source_key,row.target,row.account_key,mapId);}
   await importCategoryLearning(bundle.categoryLearning||[]);await importAutoreplyLog(bundle.autoreplyLog||[]);
   for(const row of bundle.states||[]){await setState(row.key,json(row.value,row.value));states++;}return{profiles,products,states};
 }

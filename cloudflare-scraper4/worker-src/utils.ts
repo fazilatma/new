@@ -1,3 +1,48 @@
+// NOTE: normalizePersianText must stay the LAST export in this file:
+// worker-tests/php-10170-parity.test.mjs slices utils.ts from
+// PERSIAN_FOLD_MAP to EOF and strips only that block's annotations.
+/**
+ * Remote marketplace IDs (Basalam/Woo) can exceed 2^53, where a JS number can
+ * no longer hold them exactly (real case: Basalam id 3838404244461599744).
+ * Worse, node:sqlite THROWS `RangeError: Value is too large to be represented
+ * as a JavaScript number` when it reads such an INTEGER, failing the whole
+ * operation, while D1 silently rounds it and pg returns bigint columns as
+ * strings. This helper is the single rule every environment applies at the
+ * database boundary: safe integers stay numbers (zero behavior change for
+ * the 99.9%), anything bigger keeps its exact digits as a string, and
+ * missing/garbage values become null (falsy, like the old Number() path).
+ */
+export function toRemoteId(value: unknown): number | string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : value.toString();
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return Number.isSafeInteger(value) ? value : String(value);
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text === '') return null;
+    if (/^-?\d+$/.test(text)) {
+      const n = Number(text);
+      return Number.isSafeInteger(n) && String(n) === text ? n : text;
+    }
+    return null;
+  }
+  return null;
+}
+/**
+ * Row-value normalizer for SELECT results: node:sqlite with `readBigInts`
+ * returns EVERY integer as a BigInt (which JSON.stringify would reject),
+ * so safe ones become numbers and huge ones exact strings. Plain values
+ * pass through untouched, which also makes it a safe no-op for D1/pg rows.
+ */
+export function normalizeDbValue(value: unknown): unknown {
+  return typeof value === 'bigint' ? toRemoteId(value) : value;
+}
+
 export const textEncoder = new TextEncoder();
 export const textDecoder = new TextDecoder();
 

@@ -863,14 +863,17 @@ No route, id or handler changed, and the rail is deliberately not an ARIA live r
 `worker-tests/deployer-ui-live.test.mjs` (behaviour, executing the page script itself against a parsed
 DOM with the real `/api/status` shape).
 
-## 1.183.0+ — a version notice that leaves the process, and the deployer inside the hamburger menu
+## 1.184.0+ — a version notice that leaves the process, and the deployer inside the hamburger menu
+
+**Renumbered to `1.184.0+`.** You released `1.183.0` (`386a9ce`, exact big-int remote ids) while this branch was already published as `1.183.0+`; the deployer compares the numeric core and ignores the `+`, so two releases with the same number would make "newest branch" and the version stamp ambiguous — the same reason `1.182.0+` existed. Your big-int work is kept untouched (`worker-src/utils.ts`, `render-src/db.ts`, `sync.ts`, `maintenance.ts`, and the 222-line `bigint-ids.test.mjs`).
 
 **Rebased onto your `1.182.0`** (`7f6160b`: the three-tab backup/version panel, the Basalam SDK install on
 Node, the new library groups and install commands). Their panel, their `productCodeSuffix`, their library
 cards and their tests are kept as-is; this branch re-applies on top of them the new drawer section, the
 proxy, the notification module, and the per-row guard around the results list — which is defense in depth,
 not a duplicate of your fix: yours makes the suffix helper stop throwing, this one keeps one unrenderable
-row from blanking the whole list. Because your release number was already `1.182.0`, mine is `1.183.0+`.
+row from blanking the whole list. Your number was `1.182.0`, so mine went to `1.183.0+`; you then
+released `1.183.0` and this branch moved again — see the note above.
 
 - **The scan now tells the operating system.** `scripts/deployer-notify.mjs` picks whichever notifier the
   platform already has (`termux-notification` → `notify-send` → `osascript` → PowerShell toast, or
