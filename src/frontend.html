@@ -88,6 +88,10 @@ tailwind.config = {
   .leg-chip i { width: 10px; height: 10px; border-radius: 99px; display: inline-block; }
   .leg-chip.leg-off { opacity: .35; text-decoration: line-through; } .chart-box.tall { height: 320px; }
   .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  /* Reflow at browser zoom; never truncate financial values. */
+  #kpis, #r-kpis, #orders-summary { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
+  .kpi-value { white-space: normal; overflow-wrap: anywhere; line-height: 1.7; }
+  .kpi-title, .kpi-sub { overflow-wrap: anywhere; }
   .kpi-icon { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; flex-shrink: 0; }
   details.coll { border: 1px dashed rgba(148,163,184,.45); border-radius: .9rem; overflow: hidden; background: rgba(148,163,184,.05); }
   details.coll summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: .5rem; padding: .7rem .9rem; font-weight: 800; font-size: .8rem; user-select: none; }
@@ -544,7 +548,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.18.0';
+const APP_VER = '1.18.1';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1069,9 +1073,10 @@ function kpiCard(title, value, sub, grad, icon, delay) {
   return `<div class="glass card card-hover p-3.5 anim ${delay}">
     <div class="flex items-center gap-2.5">
       <div class="kpi-icon ${grad}">${icon}</div>
-      <div class="min-w-0"><div class="text-[11px] text-slate-500 dark:text-slate-400 font-bold">${title}</div>
-      <div class="font-black text-base num truncate">${value}</div></div>
-    </div><div class="text-[11px] mt-1.5 text-slate-500 dark:text-slate-400">${sub}</div></div>`;
+      <div class="kpi-title min-w-0 text-[11px] text-slate-500 dark:text-slate-400 font-bold">${title}</div>
+    </div>
+    <div class="kpi-value font-black text-base num mt-2">${value}</div>
+    <div class="kpi-sub text-[11px] mt-1.5 text-slate-500 dark:text-slate-400">${sub}</div></div>`;
 }
 /* جدول تفکیک سود: نام | سفارش | فروش | هزینه | سود | حاشیه | سهم — ورودی: [{name,count,revenue,cost,profit}] */
 function breakdownTableHTML(rows, firstCol) {
