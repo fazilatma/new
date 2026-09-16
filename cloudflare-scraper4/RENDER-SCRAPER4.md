@@ -782,3 +782,44 @@ with SQLite before anything was changed:
 
 The periodic `categoryFix` schedule from 1.175.0 is untouched and stays the only implementation
 (`settings.categoryFix.periodic` + `app_state[category_fix_last]` + `categoryFixTick` in both runtimes).
+
+## 1.178.0+ — the `+` release marker, and a deployer page built for a zoomed phone
+
+### Version marker
+
+Agent-published releases now carry a trailing `+` (`1.178.0+`). `package.json` stays the single
+source and `npm run version:sync` propagates the exact string — Latin and Persian digits — into
+the dashboard badge, the changelog footers, `WORKER_VERSION` in `wrangler.toml`, the runtime
+fallbacks, the install guides and the lockfile. The marker is display-only: `numericCore` in
+`worker-src/deployer-branches.ts` still compares the numeric core, so branch ranking and the
+deployer's stale-serving check behave exactly as before, and `npm ci` / `npm install` still work
+(verified on this package). `worker-tests/runtime.test.mjs` no longer embeds the version in a
+regular expression — inside a regex source a trailing `+` is a quantifier, which would have made
+that pin pass vacuously — it reads `packageJson.version` instead.
+
+### Deployer UI
+
+`scripts/local-deployer-ui.mjs` was re-styled end to end for the way it is really used: opened on
+a phone that forwards the port, with the OS font slider maxed out and browser zoom past 300%.
+
+- Every font size, gap and radius is `rem`/`em`, and every breakpoint is in `em`, so text zoom
+  rescales the whole page and the layout switches to the narrow form while zooming (px media
+  queries only ever looked at the window). Only hairline borders and shadows keep px.
+- No grid can overflow: `minmax(min(100%,X),1fr)` columns and `min-width:0` children, plus
+  `overflow-wrap:anywhere` in code blocks. At narrow widths the branch table and the Python
+  extract result table turn into stacked cards that label each value with its column name, instead
+  of asking for a sideways scroll, and `.scrollx` stops being a nested scroller.
+- The tab strip is sticky, snaps sideways, and centres the tab you chose; buttons are at least
+  `2.85rem` tall and go full-width in a row on a phone; the three primary actions also live in a
+  pinned bottom dock with `env(safe-area-inset-bottom)` so they are reachable without scrolling.
+- Long explanatory copy moved into collapsible notes; the actions stayed outside them.
+- Dark and light palettes both follow the system, with an explicit switch in the header persisted
+  in `localStorage`; `:focus-visible` rings, `prefers-reduced-motion` and `prefers-contrast`,
+  a skip link and a `<noscript>` explanation round it out.
+- Nothing about behaviour changed: same ids, same handlers, same `/api/*` routes.
+
+`worker-tests/deployer-ui-mobile.test.mjs` pins the parts that are easy to undo by accident —
+that the markup still contains every id the client script queries, the tab order the positional
+`tabByIndex`/`#branches` deep link depends on, the absence of px in type and breakpoints, the
+stacked-table labels, the dock, and the palette rules. Seven of its eight tests fail against the
+previous stylesheet, so the redesign cannot quietly regress.
