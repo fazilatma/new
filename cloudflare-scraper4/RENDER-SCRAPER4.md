@@ -783,3 +783,25 @@ Fixes in the AI sections on Linux / Termux / VPS / Render / local (they were Wor
   scraping untrusted shop URLs keeps the old SSRF guard and cloud metadata stays closed.
 - `connectionStatus` now accepts provider rows, so the AI tabs are no longer greyed out on an
   install that configures providers instead of the single shared endpoint.
+
+## 1.176.0 — the results section is populated again (regression fix from 1.174.0)
+
+Reported as “after extraction the products are not shown in the results section, at least on Node”.
+It is not a Node storage bug: `GET /api/profiles/:id/products` returns the rows and the counter in the
+dashboard updates, but `#products` keeps its empty placeholder. The shared dashboard had been broken
+since 1.174.0, where `productSuffixFormats` was made `async` while its only caller still read the value
+synchronously — `formats[0]` was `undefined` on a Promise, so the first card threw and the whole
+`rows.map(productRowHtml)` was discarded inside a `catch` that only showed a toast. Products with a
+`sku` or `sourceKey` always hit it, which is why Node/VPS/Termux installs (where scraped rows carry
+codes, and where CSV/import rows carry only a few fields) noticed first.
+
+- `productSuffixFormats()` is synchronous again — it reads the `#dedupSuffix` field and
+  `settings.dedup.suffixFormats`, nothing asynchronous about it.
+- `productCodeSuffix()` validates the result and falls back to the `(کد:x)` format, so a future shape
+  change cannot blank a list again.
+- `loadProducts()` builds each row inside its own guard: one unrenderable result is shown as a warning
+  card carrying the error text instead of hiding every other product; `openProductModal` now says why
+  it cannot open instead of returning silently.
+
+Reproduced in the lab by booting the real dashboard JS in a DOM against a live Node server with SQLite,
+then covered by `worker-tests/results-products-ui.test.mjs` (real DOM, same JSON contract Node returns).
