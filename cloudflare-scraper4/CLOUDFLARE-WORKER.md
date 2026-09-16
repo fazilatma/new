@@ -769,6 +769,7 @@ em، جدول‌ها در عرض باریک کارت‌شونده با `data-lab
 - `productRowFailureHtml`: خطای یک نتیجه فقط همان کارت را هشدار می‌کند؛ `openProductModal` اگر ردیف را
   پیدا نکند دلیل را می‌گوید. اصلاح ریشه‌ای شما (تابع هم‌زمان قالب کد) دست‌نخورده مانده است.
 - `LOCAL_SCRAPER_AUTO_UPDATE` و `LOCAL_DEPLOYER_AUTO_UPDATE` با `0` / `no` / `off` خاموش می‌شوند.
+- `LOCAL_DEPLOYER_NOTIFY` (خاموش با `0` / `no` / `off`) و `LOCAL_DEPLOYER_NOTIFY_CMD` (برنامهٔ اعلان دلخواه، با آرگومان) اعلان سیستمی نسخهٔ تازه را کنترل می‌کنند.
 
 ### دیپلویر (`scripts/local-deployer-ui.mjs`)
 
@@ -779,3 +780,25 @@ em، جدول‌ها در عرض باریک کارت‌شونده با `data-lab
 یا دستوری عوض نشده؛ نوار وضعیت عمداً live region نیست. نگهبان‌ها:
 `worker-tests/deployer-ui-mobile.test.mjs` (مارک‌آپ/استایل) و
 `worker-tests/deployer-ui-live.test.mjs` (رفتار، با اجرای اسکریپت خود صفحه روی DOM).
+
+**اعلان سیستمی برای نسخهٔ تازه‌تر** (`scripts/deployer-notify.mjs`): هر اسکن برنچ‌ها
+اگر نسخه‌ای بالاتر از نسخهٔ در حال اجرا ببیند، یک اعلان واقعی به سیستم‌عامل می‌فرستد —Termux →
+`termux-notification`، لینوکس → `notify-send`، مک → `osascript`، ویندوز → toast پاورشل، و
+`LOCAL_DEPLOYER_NOTIFY_CMD` برای هر برنامهٔ دیگری. پیام‌ها با کلید `kind:name:version:sha12` یک‌بار
+ارسال می‌شوند (دفترش `data/.deployer-notices.json` است، با ری‌استارت پاک نمی‌شود و با
+`LOCAL_DEPLOYER_NOTIFY_STATE` جابه‌جا می‌شود؛ `GET /api/notifications` هم `restored` و هم مسیر فایل را
+برمی‌گرداند)، ارسال هیچ‌وقت اسکن را بلوکه یا شکسته نمی‌کند، و
+`LOCAL_DEPLOYER_NOTIFY=0/no/off` آن را خاموش می‌کند. فرمان سفارشی می‌تواند آرگومان داشته باشد
+(`sh /data/…/hook.sh`)؛ عنوان و متن به‌صورت argv اضافه می‌شوند و هرگز به shell داده نمی‌شوند. سه مسیر
+`GET /api/notifications`، `POST /api/notifications/test`، `POST /api/notifications/scan` وضعیت و آخرین
+اعلان‌ها را می‌دهند؛ اگر دستگاه برنامهٔ اعلان نداشته باشد، صفحهٔ دیپلویر با Notifications API خودِ
+مرورگر اعلام می‌کند و کلید دیدن در `localStorage` نگه داشته می‌شود.
+
+**بخش «🚀 دیپلویر محلی» در منوی همبرگری**: همان کارهای دیپلویر (وضعیت، بررسی نسخهٔ جدید، نصب
+تازه‌ترین برنچ، build/توقف اسکریپر، `npm install`، دیتابیس، به‌روزرسانی از git، تست اعلان، باز کردن
+صفحهٔ دیپلویر) از مسیر `POST|GET /api/deployer/local/:action` روی سرور نود به `127.0.0.1` دیپلویر
+فرستاده می‌شود. نشانی از `DEPLOYER_UI_TOKEN` + `DEPLOYER_UI_PORT` یا فایل `data/.deployer-token` خوانده
+می‌شود و توکن هیچ‌وقت در پاسخ یا صفحه ظاهر نمی‌شود؛ فهرست فرمان‌ها ثابت است (SSRF نیست)، نام برنچ
+سخت‌تر اعتبارسنجی می‌شود، از `/api/job` فقط `install|test|build|localBuild|databaseInstall` مجاز است،
+مهلت ۲۰ ثانیه دارد، و دیپلویر خاموش پاسخ ۵۰۳ با دلیل می‌دهد. روی Worker/Render همین مسیر ۵۰۱
+`NO_DEPLOYER` است. نگهبان: `worker-tests/deployer-local-panel.test.mjs`.

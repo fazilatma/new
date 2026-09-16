@@ -862,3 +862,41 @@ No route, id or handler changed, and the rail is deliberately not an ARIA live r
 `worker-tests/deployer-ui-mobile.test.mjs` (markup and stylesheet contract) and
 `worker-tests/deployer-ui-live.test.mjs` (behaviour, executing the page script itself against a parsed
 DOM with the real `/api/status` shape).
+
+## 1.183.0+ — a version notice that leaves the process, and the deployer inside the hamburger menu
+
+- **The scan now tells the operating system.** `scripts/deployer-notify.mjs` picks whichever notifier the
+  platform already has (`termux-notification` → `notify-send` → `osascript` → PowerShell toast, or
+  `LOCAL_DEPLOYER_NOTIFY_CMD`), and `announceVersions()` fires it whenever a branch is found whose version
+  beats the running one, or the current branch moved. Deduplication is per event (`kind:name:version:sha12`
+  in `data/.deployer-notices.json`, read back on boot so a watchdog restart cannot re-announce a release the
+  user already saw, and movable with `LOCAL_DEPLOYER_NOTIFY_STATE`), so a scanner that runs every minute
+  cannot spam the same notice, and a
+  failing notifier is recorded rather than thrown — `scanAllBranches()` stays synchronous and never blocks
+  on a desktop binary that does not exist. Version comparison ignores the `+` marker on purpose: it is the
+  same numeric core `numericCore()` in `worker-src/deployer-branches.ts` uses, so a notice cannot call a
+  version new while the branch table calls it equal. Three routes expose it (`GET /api/notifications`,
+  `POST /api/notifications/test`, `POST /api/notifications/scan`); when the machine has no notifier the
+  deployer page falls back to the browser Notifications API, with a bell in the header that explains the
+  permission state instead of failing silently. A custom command may carry its own arguments
+  (`sh hook.sh`); the title and body are appended as argv and never handed to a shell.
+- **`🚀 دیپلویر محلی` is now a hamburger section.** The dashboard offers the same jobs as the deployer
+  page — status read, immediate scan (which announces), install newest, scraper build/restart/stop,
+  `npm install`, database, update from git, test notification, open the deployer page — through
+  `GET|POST /api/deployer/local/:action` on the Node server, which forwards to `127.0.0.1` so the browser
+  never handles a token or a CORS problem. The address comes from `DEPLOYER_UI_TOKEN` + `DEPLOYER_UI_PORT`
+  (the pair the deployer already gives an installed scraper) or from `data/.deployer-token`, and replies
+  carry `{ deployer: { base, source } }` with the secret stripped. It is an allow-list, not a proxy: only
+  the sixteen named calls exist, the branch name is re-validated more strictly than
+  `normalizeInstallBranch()` (which accepts `../../../etc` and `-x`), `/api/job` is limited to
+  `install|test|build|localBuild|databaseInstall`, a wedged deployer is cut off at 20s, and an unreachable
+  one answers 503 with the reason plus the command to run. On Cloudflare and Render the same route answers
+  an honest 501 `NO_DEPLOYER`, because those runtimes cannot see a local process. The GitHub branch table
+  stays in the version panel (`worker-tests/version-section.test.mjs` pins it there) and the new section
+  cross-references it; adding a section also renumbered the positional `menuGroupAt` headings.
+- **Guards.** `worker-tests/deployer-notify.test.mjs` (11 tests) spawns the real deployer against a fake
+  notifier in a throwaway git repo — 401 without a token, handshake file contents, dedupe, the ledger
+  surviving a restart, the no-origin scan returning `sent: []` (the test grabs a free port, so two suites
+  can run at once); `worker-tests/deployer-local-panel.test.mjs` (8 tests) checks the
+  allow-list, the argument guards, token leakage, and that every button in the new section maps to a handler
+  and to a proxied action. `extraction.test.mjs` gained the new drawer title in its ordered list.

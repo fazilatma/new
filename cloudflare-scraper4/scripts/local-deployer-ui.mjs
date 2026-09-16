@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFi
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { pyExtract, pyStatus } from './py-extract-run.mjs';
+import { notifyEnabledFor, pendingNotices, pickNotifyChannel, pushNotice, sendNotification } from './deployer-notify.mjs';
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`Scraper4 Local Deployer UI
@@ -147,6 +148,40 @@ let autoUpdateRunning = false;
 let lastAutoUpdate = null;
 let lastDirtySkipLogged = -1;
 let lastUnpushedSkipLogged = -1;
+// A background deployer has to reach the operating system, not only its own log: every scan that
+// finds a newer version announces it once, through whichever notifier this platform has (see
+// scripts/deployer-notify.mjs). LOCAL_DEPLOYER_NOTIFY=0 turns that off; the page keeps announcing
+// through the browser Notifications API, which lands in the same OS notification centre.
+const notifyEnabled = notifyEnabledFor(startupEnv.LOCAL_DEPLOYER_NOTIFY);
+const notifyChannel = pickNotifyChannel({ env: startupEnv });
+// Which events were already announced, so a one-minute scanner cannot spam the same notice. The
+// ledger is a file, not a Set that dies with the process: a watchdog that restarts the deployer must
+// not wake the phone for a release that was already announced, and «the last notices» should still be
+// there after an update. LOCAL_DEPLOYER_NOTIFY_STATE moves it (tests, or a read-only checkout).
+const notifyStateFile = resolve(startupEnv.LOCAL_DEPLOYER_NOTIFY_STATE || join(projectDir, 'data', '.deployer-notices.json'));
+function readNotifyState() {
+  try {
+    const raw = JSON.parse(readFileSync(notifyStateFile, 'utf8'));
+    return {
+      seen: Array.isArray(raw.seen) ? raw.seen.map(String).filter(Boolean) : [],
+      recent: Array.isArray(raw.recent) ? raw.recent.filter(entry => entry && entry.key) : []
+    };
+  } catch {
+    return { seen: [], recent: [] };
+  }
+}
+const notifyStored = readNotifyState();
+const notifySeen = new Set(notifyStored.seen.slice(-200));
+const notifyLog = notifyStored.recent.slice(0, 20);
+function saveNotifyState() {
+  if (!notifyEnabled) return;
+  try {
+    mkdirSync(resolve(notifyStateFile, '..'), { recursive: true });
+    writeFileSync(notifyStateFile, JSON.stringify({ seen: [...notifySeen].slice(-200), recent: notifyLog }, null, 2) + '\n', { mode: 0o600 });
+  } catch (error) {
+    console.log('[deployer] could not store the notice ledger: ' + (error && error.message ? error.message : error));
+  }
+}
 let branchScannerTimer = null;
 const branchMetaCache = new Map(); // branch name -> { sha, version, hasCode }
 const branchState = { scanning: false, lastScanAt: null, lastScanMs: null, lastScanError: null, lastAction: null, branches: [], latest: null, current: null, origin: null };
@@ -535,6 +570,9 @@ function scanAllBranches(reason = 'manual') {
     branchState.lastScanAt = new Date().toISOString();
     branchState.lastScanMs = Date.now() - startedAt;
     branchState.lastScanError = null;
+    // Announcing is a side quest of the scan: it must not change what the scan reports, and a slow
+    // or missing notifier must not delay the table or the auto-install.
+    announceVersions({ reason }).catch(error => console.log('[deployer] notification pass failed: ' + (error?.message || error)));
     if (reason !== 'timer') console.log(`[deployer] branch scan (${reason}): ${branches.length} branch(es), newest ${latest ? latest.name + ' v' + latest.version : '-'}`);
     return branchCatalogPayload();
   } catch (error) {
@@ -543,6 +581,38 @@ function scanAllBranches(reason = 'manual') {
   } finally {
     branchState.scanning = false;
   }
+}
+
+// Sends one notification per newly noticed event. Fire-and-forget by design: a machine without a
+// notifier, or one where notify-send hangs, must never stall a scan or an auto-install.
+async function announceVersions({ reason = 'scan' } = {}) {
+  if (!notifyEnabled) return { ok: false, skipped: 'disabled', sent: [] };
+  const pending = pendingNotices({
+    branchState,
+    code: staleCode(),
+    installedVersion: (branchState.current && branchState.current.version) || pkg.version || '',
+    seen: notifySeen
+  });
+  const sent = [];
+  for (const notice of pending) {
+    notifySeen.add(notice.key);
+    const result = await sendNotification(notifyChannel, notice.title, notice.body);
+    pushNotice(notifyLog, { at: new Date().toISOString(), reason, key: notice.key, kind: notice.kind, title: notice.title, body: notice.body, ...result });
+    console.log('[deployer] new version noticed (' + notice.kind + ') via ' + (notifyChannel ? notifyChannel.id : 'no notifier') + ': ' + notice.title + (result.ok ? '' : ' [' + result.error + ']'));
+    sent.push({ key: notice.key, kind: notice.kind, ok: Boolean(result.ok), channel: result.channel, error: result.error || '' });
+  }
+  if (sent.length) saveNotifyState();
+  return { ok: true, sent, announced: sent.length, restored: notifyStored.seen.length };
+}
+function notifyPayload() {
+  return {
+    enabled: notifyEnabled,
+    channel: notifyChannel ? { id: notifyChannel.id, label: notifyChannel.label } : null,
+    seen: notifySeen.size,
+    restored: notifyStored.seen.length,
+    file: notifyStateFile.startsWith(projectDir + '/') ? notifyStateFile.slice(projectDir.length + 1) : notifyStateFile,
+    recent: notifyLog.slice(0, 10)
+  };
 }
 
 function maybeAutoInstallNewest() {
@@ -1038,6 +1108,7 @@ function status() {
       packageLock: existsSync(join(projectDir, 'package-lock.json')),
       staticHtmlDeployer: existsSync(join(projectDir, 'deploy-setup/static-universal-deployer.html'))
     },
+    notify: notifyPayload(),
     jobs: [...jobs.values()].map(({ child, ...j }) => j),
     scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort, command: scraper.command || scraperCommand, serving: servingState() } : { running: false, port: scraperPort, command: scraperCommand, serving: servingState() }
   };
@@ -1097,6 +1168,20 @@ const server = http.createServer(async (req, res) => {
       const result = updateFromGit({ branch: name, force: true, install: true });
       if (result.ok) restartUiSoon();
       return send(res, 200, { ...result, restarting: Boolean(result.ok), message: result.ok ? 'Branch ' + name + ' installed. This UI restarts in a few seconds.' : 'Install failed. See step output below.' });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/notifications') return send(res, 200, { ok: true, ...notifyPayload() });
+    if (req.method === 'POST' && url.pathname === '/api/notifications/test') {
+      if (!notifyEnabled) return send(res, 200, { ok: false, channel: 'off', error: 'Announcements are off (LOCAL_DEPLOYER_NOTIFY=0/no/off).' });
+      const result = await sendNotification(notifyChannel, 'Scraper4 deployer', 'This is your machine talking to itself: system notifications work.');
+      pushNotice(notifyLog, { at: new Date().toISOString(), reason: 'test', key: 'test:' + Date.now(), kind: 'test', title: 'Test notification', body: 'sent from the deployer page', ...result });
+      saveNotifyState();
+      console.log('[deployer] test notification ' + (result.ok ? 'sent via ' + result.channel : 'failed: ' + result.error));
+      return send(res, 200, { ok: Boolean(result.ok), ...result, label: notifyChannel ? notifyChannel.label : '' });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/notifications/scan') {
+      const catalog = scanAllBranches('notify');
+      const announce = await announceVersions({ reason: 'notify' });
+      return send(res, 200, { ok: true, ...catalog, announce, notify: notifyPayload() });
     }
     if (req.method === 'GET' && url.pathname === '/api/libraries') return send(res, 200, installedLibraryProbe(url.searchParams.get('env') || 'vscode'));
     if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, { ok: true, jobs: [...jobs.values()].map(({ child, ...j }) => j) });
@@ -1197,6 +1282,11 @@ Codespaces: open forwarded ports ${port} and ${scraperPort}; keep the token in t
 `);
     const bootCode = staleCode();
     if (bootCode.stale) console.log(`[deployer] WARNING: this process is running v${bootCode.running} but v${bootCode.onDisk} is on disk. Restart the deployer (Ctrl+C, then npm run deployer:ui) to pick up the update.\n`);
+    // The scraper dashboard proxies this server (see /api/deployer/local/* in render-src/server.ts)
+    // and needs the port - which listenWithRetry may have moved - plus the token. A file in the
+    // gitignored data/ dir, readable only by this user, is how two local processes hand that over
+    // without anyone copying a secret by hand.
+    writeDeployerHandshake({ port, host, token, pid: process.pid, version: pkg.version || '' });
     autoStartScraper();
   });
 }
@@ -1204,6 +1294,20 @@ Codespaces: open forwarded ports ${port} and ${scraperPort}; keep the token in t
 // The scraper must come up on its own address as soon as the deployer is
 // installed or updated, so opening it never depends on the deployer page
 // (which used to be the only way to trigger startScraper()).
+// Where the port and token are published for the scraper dashboard to pick up (it proxies this
+// server through /api/deployer/local/*). DEPLOYER_HANDSHAKE_FILE lets a test or a second install
+// point it somewhere else, so a scratch run cannot overwrite the handshake of the real one.
+export const DEPLOYER_HANDSHAKE_FILE = startupEnv.DEPLOYER_HANDSHAKE_FILE || join(projectDir, 'data', '.deployer-token');
+function writeDeployerHandshake(info) {
+  try {
+    mkdirSync(resolve(DEPLOYER_HANDSHAKE_FILE, '..'), { recursive: true });
+    writeFileSync(DEPLOYER_HANDSHAKE_FILE, JSON.stringify({ ...info, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+  } catch (error) {
+    // Nothing downstream is security-critical enough to justify killing the UI over a scratch file.
+    console.log('[deployer] could not write ' + DEPLOYER_HANDSHAKE_FILE + ': ' + (error?.message || error));
+  }
+}
+
 function autoStartScraper() {
   if (String(process.env.LOCAL_SCRAPER_AUTOSTART || '').toLowerCase() === 'false') {
     console.log('[deployer] scraper autostart disabled (LOCAL_SCRAPER_AUTOSTART=false).');
@@ -1288,7 +1392,7 @@ process.on('SIGINT', shutdownUi);
 process.on('SIGTERM', shutdownUi);
 
 function page(token) {
-  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.182.0+\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.182.0+\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.182.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.182.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\npip install -q beautifulsoup4 lxml requests  # deps for the deployer Python extract tab\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.182.0+\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# No ADMIN_TOKEN needed locally: the vault key is generated at data/vault.key on first save.\n# Keep that file - deleting it makes already-saved API keys unreadable.\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.182.0+", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.182.0+\nCheck daily D1 usage: https://YOUR-WORKER.workers.dev/api/quota\n  Free plan: 5,000,000 rows read + 100,000 rows written per day, reset 00:00 UTC.\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.182.0+"};
+  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.183.0+\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.183.0+\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.183.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.183.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\npip install -q beautifulsoup4 lxml requests  # deps for the deployer Python extract tab\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.183.0+\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# No ADMIN_TOKEN needed locally: the vault key is generated at data/vault.key on first save.\n# Keep that file - deleting it makes already-saved API keys unreadable.\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.183.0+", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.183.0+\nCheck daily D1 usage: https://YOUR-WORKER.workers.dev/api/quota\n  Free plan: 5,000,000 rows read + 100,000 rows written per day, reset 00:00 UTC.\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.183.0+"};
   return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark light"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#04070f"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f6fd"><title>Scraper4 Local Deployer</title>
 <style>
 *,*::before,*::after{box-sizing:border-box}
@@ -1453,6 +1557,7 @@ details.note>div{padding-bottom:.55rem;max-width:74ch}
 <div class="controls">
 <span class="stepper" role="group" aria-label="Text size"><button type="button" onclick="bumpFont(-1)" title="Smaller text" aria-label="Smaller text">A−</button><span class="val" id="fontVal" role="status">100%</span><button type="button" onclick="bumpFont(1)" title="Larger text" aria-label="Larger text">A+</button></span>
 <button class="chip" id="themeBtn" onclick="toggleTheme()" type="button" title="Switch between the dark and light palette">Light palette</button>
+<button class="chip" id="notifyBtn" onclick="armNotify()" type="button" title="Let the browser raise new-version notices in your OS notification centre">🔔 arm notifications</button>
 <button class="chip" onclick="refresh()" type="button">Refresh now</button>
 </div>
 </div>
@@ -1462,6 +1567,7 @@ details.note>div{padding-bottom:.55rem;max-width:74ch}
 <span class="stat" id="railScraper"><span class="dot"></span>scraper <b>checking…</b></span>
 <span class="stat" id="railGit"><span class="dot"></span>git <b>checking…</b></span>
 <span class="stat" id="railBranch"><span class="dot"></span>newest branch <b>checking…</b></span>
+<span class="stat" id="railNotify"><span class="dot"></span>notify <b>checking…</b></span>
 <span class="upd" id="updated">not updated yet</span>
 </div>
 </header>
@@ -1507,7 +1613,7 @@ details.note>div{padding-bottom:.55rem;max-width:74ch}
 <div id="branches" class="panel" role="tabpanel">
 <div class="card">
 <div class="card-head"><div class="head-in"><h2><span class="ico" aria-hidden="true">⌥</span> Repo branches — newest version tracking</h2><span class="pill" id="branchPill">last scan: never</span></div><p class="muted">Every <b id="branchIntervalLabel">1 minute</b> the deployer lists all branches of <span class="kbd">fazilatma/new</span>, reads the Scraper4 version of each one and - when enabled - installs the branch with the <b>newest version</b>. A row button installs a specific branch.</p></div>
-<div class="row"><label class="check"><input type="checkbox" id="autoInstallLatest" checked> Auto-install newest version</label><select id="branchInterval" class="auto" aria-label="Scan interval"><option value="1">every 1 minute</option><option value="5">every 5 minutes</option><option value="10">every 10 minutes</option><option value="30">every 30 minutes</option><option value="0">never (manual only)</option></select><button class="secondary" onclick="scanNow()" type="button">Scan now</button><button class="secondary" onclick="renderBranches(true)" type="button">Refresh table</button></div>
+<div class="row"><label class="check"><input type="checkbox" id="autoInstallLatest" checked> Auto-install newest version</label><select id="branchInterval" class="auto" aria-label="Scan interval"><option value="1">every 1 minute</option><option value="5">every 5 minutes</option><option value="10">every 10 minutes</option><option value="30">every 30 minutes</option><option value="0">never (manual only)</option></select><button class="secondary" onclick="scanNow()" type="button">Scan now</button><button class="secondary" onclick="renderBranches(true)" type="button">Refresh table</button><button class="secondary" onclick="testNotify()" type="button" title="Send one notification through whichever channel this machine has">Test system notification</button></div>
 <div id="branchSummary" class="banner" aria-live="polite"></div>
 <div class="filter"><input id="branchFilter" type="text" placeholder="Filter branches" dir="ltr" autocomplete="off" aria-label="Filter branches"><span class="small" id="branchCount"></span></div>
 <div class="scrollx"><table class="tbl"><caption class="small muted" style="caption-side:bottom;text-align:left;padding:.5rem 0">On a narrow screen every row turns into a card, so nothing needs sideways scrolling.</caption><thead><tr><th scope="col">Branch</th><th scope="col">Version on branch</th><th scope="col">Installed</th><th scope="col">Last commit</th><th scope="col">Status</th><th scope="col">Action</th></tr></thead><tbody id="branchRows"><tr><td colspan="6" class="muted">Loading branches…</td></tr></tbody></table></div>
@@ -1625,6 +1731,67 @@ function followLog(el, force) {
   }
   el.scrollTop = el.scrollHeight;
 }
+
+// The browser half of the announcement. The server fires the OS notifier; this covers a machine
+// with no CLI notifier, or a headless VPS where somebody is nevertheless watching the page. The
+// "already told you" memory is kept per version key in localStorage, so the five-second poll
+// cannot nag about the same release.
+const NOTIFY_SEEN_KEY = 'scraper4-deployer-notified';
+function notifySeenKeys() {
+  try { return String(localStorage.getItem(NOTIFY_SEEN_KEY) || '').split('|').filter(Boolean); } catch (err) { return []; }
+}
+function notifySeenBefore(key) { return notifySeenKeys().includes(key); }
+function markNotifySeen(key) {
+  try { localStorage.setItem(NOTIFY_SEEN_KEY, notifySeenKeys().concat(key).slice(-12).join('|')); } catch (err) { /* private mode */ }
+}
+function notifyPermission() { return (window.Notification && Notification.permission) || 'unsupported'; }
+function paintNotifyButton(state) {
+  const btn = $('notifyBtn');
+  if (!btn) return;
+  const value = state || notifyPermission();
+  btn.textContent = value === 'granted' ? '🔔 notifications armed' : value === 'denied' ? '🔕 notifications blocked' : value === 'unsupported' ? '🔕 no browser notifications' : '🔔 arm notifications';
+  btn.title = value === 'granted' ? 'The browser raises new-version notices in your OS notification centre'
+    : value === 'denied' ? 'Your browser is blocking notifications for this site; unblock it in site settings'
+    : 'Let the browser raise new-version notices in your OS notification centre';
+  btn.dataset.state = value;
+}
+function armNotify() {
+  if (!window.Notification) { toast('This browser has no Notification API — the deployer still notifies through your system notifier', 'bad'); return; }
+  if (Notification.permission === 'granted') { try { new Notification('Scraper4 deployer', { body: 'Notifications are armed from this page.', tag: 'scraper4-arm' }); } catch (err) { /* ignored */ } toast('Browser notifications armed', 'ok'); paintNotifyButton('granted'); return; }
+  Promise.resolve(Notification.requestPermission()).then(function (state) {
+    paintNotifyButton(state);
+    toast(state === 'granted' ? 'Browser notifications armed' : 'Permission not granted — notices stay with the system channel', state === 'granted' ? 'ok' : 'bad');
+  }).catch(function (error) { logError(error); });
+}
+function announceBrowserNotice(d) {
+  const notify = (d && d.notify) || {};
+  const chip = $('railNotify');
+  const recent = notify.recent || [];
+  if (chip) {
+    const label = notify.channel ? notify.channel.label : (notify.enabled === false ? 'off' : 'no notifier');
+    const delivered = recent.some(function (entry) { return entry.ok; });
+    chip.className = 'stat' + (delivered ? ' ok' : ' warn');
+    chip.innerHTML = '<span class="dot"></span>notify <b>' + escHtml(label) + (recent.length ? ' · ' + recent.length + ' noticed' : '') + '</b>';
+  }
+  const latest = recent[0];
+  if (!latest || notifySeenBefore(latest.key)) return;
+  markNotifySeen(latest.key);
+  if (window.Notification && Notification.permission === 'granted') {
+    try { new Notification(latest.title, { body: latest.body, tag: 'scraper4-' + latest.kind, requireInteraction: latest.kind === 'newer-branch' }); } catch (err) { /* some platforms need a service worker */ }
+  }
+  toast(latest.title, 'ok');
+  badge('branches', '!');
+}
+async function testNotify() {
+  try {
+    const d = await api('/api/notifications/test', { method: 'POST', body: '{}' });
+    toast(d.ok ? 'Test notification sent via ' + (d.label || d.channel) : 'No system notification: ' + (d.error || 'unknown'), d.ok ? 'ok' : 'bad');
+    refresh();
+  } catch (error) { logError(error); }
+}
+window.armNotify = armNotify;
+window.testNotify = testNotify;
+paintNotifyButton();
 
 let lastRefreshAt = 0;
 function tickUpdated() {
@@ -2097,6 +2264,7 @@ async function refresh() {
     const statusEl = $('status');
     if (statusEl) statusEl.innerHTML = '<div class="metric"><small>Package</small><b>' + d.package.name + '</b></div><div class="metric"><small>Version</small><b>' + (d.package.version || '-') + '</b></div><div class="metric"><small>Database</small><b>' + dbLabel + '</b><small>' + (db.maskedUrl || db.methodLabel || 'Use Database tab') + '</small></div><div class="metric"><small>Scraper</small><b>' + servingLabel(scraper) + '</b></div><div class="metric"><small>Git</small><b class="small">' + (d.git?.commit || '-') + '</b></div><div class="metric"><small>Project</small><b class="small">' + d.projectDir + '</b></div>';
     updateRail(d);
+    announceBrowserNotice(d);
     lastRefreshAt = Date.now();
     tickUpdated();
   } catch (err) { logError(err); }
@@ -2141,5 +2309,7 @@ setInterval(tickUpdated, 1000);
 // difference between "live" and "frozen at whatever I last looked at", so it resumes on focus.
 setInterval(function () { if (!document.hidden) refresh(); }, 5000);
 window.addEventListener('focus', function () { refresh(); });
+// The bell label is a fact about the browser, not the server: repaint it whenever the page is seen.
+window.addEventListener('focus', function () { paintNotifyButton(); });
 </script></body></html>`;
 }

@@ -130,8 +130,8 @@ test('deployer markup: the status rail is part of the page, not of a tab', () =>
   assert.match(css, /\.stat\.warn\{border-color:color-mix\(in srgb,var\(--warn\)/);
   assert.match(css, /\.dot\.bad\{background:var\(--bad\)/, 'updateRail calls the third state "bad", the rest of the page "err" — both must be red');
   assert.match(script, /function updateRail\(d\) \{[\s\S]*?statChip\('railDb'/, 'the rail is filled from the /api/status payload');
-  assert.match(script, /updateRail\(d\);\n\s*lastRefreshAt = Date\.now\(\);\n\s*tickUpdated\(\);/,
-    'refresh() must update the rail and its age stamp together, or "updated 3s ago" is a lie');
+  assert.match(script, /updateRail\(d\);\n\s*announceBrowserNotice\(d\);\n\s*lastRefreshAt = Date\.now\(\);\n\s*tickUpdated\(\);/,
+    'refresh() must fill the rail, raise the OS notice, and only then stamp its own age');
   assert.match(script, /code\.running \|\| \(d\.package && d\.package\.version\)/,
     'a thin status payload must degrade, not throw inside the poll loop');
 });
