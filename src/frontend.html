@@ -330,7 +330,7 @@ tailwind.config = {
           </div>
           <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-2 gap-3">
             <div><label class="text-xs font-bold">تاریخ سفارش</label><div id="pk-date"></div></div>
-            <div><label class="text-xs font-bold">وضعیت سفارش</label><select id="o-status" class="inp"></select></div>
+            <div><label class="text-xs font-bold">وضعیت سفارش</label><select id="o-status" class="inp" onchange="liveCalc()"></select></div>
           </div>
           <details class="coll" id="det-notes">
             <summary><span class="chev">▾</span> 📝 توضیحات</summary>
@@ -572,7 +572,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.19.0';
+const APP_VER = '1.19.1';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -583,9 +583,18 @@ const parseMoney = (v) => {
   const s = String(v ?? '').replace(/[۰-۹]/g, (d) => FA_D.indexOf(d)).replace(/[^0-9]/g, '');
   return s ? parseInt(s, 10) : 0;
 };
-const M = (id) => parseMoney(document.getElementById(id).value);
-const setMoney = (id, v) => { document.getElementById(id).value = fmtN(Math.round(Number(v) || 0)); };
-const fmtInp = (el) => { el.value = fmtN(parseMoney(el.value)); };
+// Preserve stored precision until the user actually edits the displayed amount.
+const M = (id) => {
+  const el = document.getElementById(id);
+  return el.dataset.moneyDisplay === el.value && el.dataset.moneyRaw !== undefined
+    ? Number(el.dataset.moneyRaw) : parseMoney(el.value);
+};
+const setMoney = (id, v) => {
+  const el = document.getElementById(id), n = Number(v) || 0;
+  el.value = fmtN(Math.round(n));
+  el.dataset.moneyRaw = String(n); el.dataset.moneyDisplay = el.value;
+};
+const fmtInp = (el) => { delete el.dataset.moneyRaw; delete el.dataset.moneyDisplay; el.value = fmtN(parseMoney(el.value)); };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -1477,6 +1486,7 @@ const BOOTH_COMM_CATS = [
 /* پیشنهاد خودکار کمیسیون/ارسال با حفظ ویرایش دستی (AUTO.* آخرین پیشنهاد ماست) */
 const AUTO = { comm: null, ship: null, commT: false, shipT: false };
 function refreshAuto() {
+  if ($('#o-id').value) return; // Editing must never replace saved amounts (including zero).
   const src = $('#o-source').value;
   const b = src === 'basalam' ? (state.booths.find((x) => String(x.id) === String($('#o-booth').value)) || {}) : {};
   const qty = N($('#o-qty').value) || 1;
@@ -1526,9 +1536,9 @@ function liveCalc() {
       row('💰 فروش (پس از تخفیف)', fmtMoney(c.revenue)) +
       row('🧾 هزینه کل', fmtMoney(c.cost)) +
       `<div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-2 flex justify-between text-base">
-        <span class="font-black">${c.profit >= 0 ? '✅ سود' : '🔻 زیان'}</span>
-        <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${fmtMoney(c.profit)}</span></div>` +
-      row('حاشیه سود', toFa(c.margin.toFixed(1)) + '٪') +
+        <span class="font-black">${o.status === 'cancelled' ? 'سفارش لغوشده — خارج از محاسبات' : c.profit >= 0 ? '✅ سود' : '🔻 زیان'}</span>
+        <span class="font-black num ${c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}">${o.status === 'cancelled' ? '—' : fmtMoney(c.profit)}</span></div>` +
+      row('حاشیه سود', o.status === 'cancelled' ? '—' : toFa(c.margin.toFixed(1)) + '٪') +
       `<div class="text-[11px] text-slate-400 leading-5 mt-1">${costMode() === 'total' ? 'مبلغ فروش − تخفیف + ارسال دریافتی = فروش کل<br>خرید کل + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل' : 'فروش واحد × تعداد − تخفیف + ارسال دریافتی = فروش کل<br>خرید + ارسال + بسته‌بندی + کمیسیون + تبلیغات + سایر = هزینه کل'}</div>`;
     const extra = N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
     const eb = document.getElementById('extra-total');
