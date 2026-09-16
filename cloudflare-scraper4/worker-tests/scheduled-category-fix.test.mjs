@@ -46,7 +46,7 @@ async function seedConnections(db, connections) {
 async function runScheduled(db, netStub, extra = {}) {
   const pending = [];
   const localCtx = { waitUntil(promise) { pending.push(promise); }, passThroughOnException() {} };
-  const env = { DB: db, VAULT_SECRET: 'vault-secret', JOBS: { send: async () => {} }, JOBS_DLQ: { send: async () => {} }, WORKER_VERSION: '1.175.0', ...extra };
+  const env = { DB: db, VAULT_SECRET: 'vault-secret', JOBS: { send: async () => {} }, JOBS_DLQ: { send: async () => {} }, WORKER_VERSION: '1.176.0', ...extra };
   await withNet(netStub, async () => {
     await worker.scheduled({ cron: '* * * * *', scheduledTime: Date.now() }, env, localCtx);
     await Promise.allSettled(pending);

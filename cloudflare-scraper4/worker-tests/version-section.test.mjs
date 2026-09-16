@@ -29,7 +29,7 @@ function extractFns(src, names) {
 function loadBranchTable(src, stubs) {
   const factory = new Function('$', 'api', 'fetch', 'esc', 'escAttr', 'location', 'window', 'navigator', 'document', 'notice', 'localStorage', 'fa', 'confirm', 'openResultModal',
     `${extractFns(src, ['deployerEnvKind', 'deployerBranchChip', 'deployerBranchErrorText', 'scanDeployerBranches', 'deployerBranchAction', 'currentBranchRepo', 'syncBranchDropdown', 'refreshBranchFiles', 'loadBranchBackup', 'saveBranchBackup', 'installBranchVersion', 'branchInstallSnippet', 'copyTextToClipboard'])}
-     return { deployerEnvKind, deployerBranchChip, deployerBranchErrorText, scanDeployerBranches, deployerBranchAction, installBranchVersion, branchInstallSnippet };`);
+     return { deployerEnvKind, deployerBranchChip, deployerBranchErrorText, scanDeployerBranches, deployerBranchAction, installBranchVersion, branchInstallSnippet, refreshBranchFiles };`);
   return factory(stubs.$, stubs.api, stubs.fetch, stubs.esc, stubs.escAttr, stubs.location,
     stubs.window, stubs.navigator, stubs.document, stubs.notice, stubs.localStorage, stubs.fa, stubs.confirm, stubs.openResultModal);
 }
@@ -254,4 +254,51 @@ test('version install: servers without a deployer fall back to the install comma
     assert.ok(notices.some(([m, k]) => k === 'info' && m.includes('دیپلویر محلی در دسترس نیست')), `[${hostname}] the fallback must say why`);
     assert.ok(notices.some(([m]) => m.includes('Build & start')), `[${hostname}] the fallback must say how to get one-click install`);
   }
+});
+
+test('version tab: retired controls are gone and the schedule collapses', async () => {
+  const text = await dashboard();
+  assert.equal(text.split("'version-info'").length - 1, 2, 'one version-info button plus its handler');
+  assert.ok(!text.includes('راهنمای نصب نسخهٔ جدید'), 'the misleading duplicate button is gone');
+  assert.ok(!text.includes('vcOnLoad') && !text.includes('checkOnLoad'), 'the dead auto-check setting is gone');
+  assert.ok(!text.includes('href="/api/version"'), 'the deployed-version link is gone (the modal covers it)');
+  assert.ok(text.includes('<details class="sched-push"><summary>⏰ پوش خودکار دوره‌ای</summary>'), 'the schedule collapses into one row');
+});
+
+test('branch tab: split folders list first with a folder glyph', async () => {
+  const src = await dashboard();
+  const sel = { innerHTML: '', value: '' }, status = { textContent: '' };
+  const stubs = {
+    ...TRIVIAL,
+    $: id => ({ vcRepo: { value: 'fazilatma/new' }, vcBranch: { value: 'main' }, vcPath: { value: 'backups' }, vcFile: sel, vcFileStatus: status }[id] || null),
+    api: async path => {
+      assert.ok(path.startsWith('/api/branch-files?'), 'the refresh hits the file listing');
+      return { ok: true, files: [{ name: 'legacy.json', path: 'backups/legacy.json', size: 10 }], folders: [{ name: 'scheduled-backup', path: 'backups/scheduled-backup' }] };
+    }
+  };
+  const { refreshBranchFiles } = loadBranchTable(src, stubs);
+  await refreshBranchFiles();
+  assert.ok(sel.innerHTML.includes('📁'), 'folders get the folder glyph');
+  assert.ok(sel.innerHTML.indexOf('📁') < sel.innerHTML.indexOf('legacy.json'), 'folders render before legacy files');
+  assert.equal(sel.value, 'backups/scheduled-backup', 'the newest entry stays pre-selected');
+  assert.match(status.textContent, /2 بکاپ/, 'the count covers folders and files');
+});
+
+test('notification tests send what their labels promise', async () => {
+  const src = await dashboard();
+  const factory = new Function(`${extractFns(src, ['notifyTestPayload', 'splitDatabaseNote'])} return { notifyTestPayload, splitDatabaseNote };`);
+  const { notifyTestPayload, splitDatabaseNote } = factory();
+  const products = notifyTestPayload('notify-bale-products');
+  assert.equal(products.channel, 'bale');
+  assert.ok(products.text.includes('محصول') && products.text.includes('منتشر شد'));
+  const source = notifyTestPayload('notify-bale-source');
+  assert.equal(source.channel, 'bale');
+  assert.ok(source.text.includes('قیمت') && source.text.includes('تومان'));
+  assert.equal(notifyTestPayload('notify-bale'), null, 'the generic tests keep the generic text');
+  assert.equal(notifyTestPayload('notify-rubika'), null);
+  assert.equal(splitDatabaseNote('pushed'), 'دیتابیس: ذخیره شد.');
+  assert.ok(splitDatabaseNote('skipped:too-large').includes('۴۸'));
+  assert.ok(splitDatabaseNote('skipped:not-sqlite').includes('SQLite'));
+  assert.ok(splitDatabaseNote('skipped:d1').includes('D1'));
+  assert.ok(splitDatabaseNote(undefined).includes('در دسترس نبود'));
 });

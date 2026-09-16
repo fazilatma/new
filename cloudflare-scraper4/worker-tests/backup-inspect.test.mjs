@@ -80,7 +80,7 @@ const mockFetch = async (input, init = {}) => {
   }
   if (url.pathname === '/api/branch-push' && method === 'POST') {
     try { postedPushes.push(JSON.parse(init.body || '{}')); } catch {}
-    const final = { ok: true, repo: 'fazilatma/new', branch: 'arena/01a09468-new', path: 'backups/pushed.json', sha: 'abc123', commit: 'def456', updated: false };
+    const final = { ok: true, repo: 'fazilatma/new', branch: 'arena/01a09468-new', path: 'backups/pushed', sha: 'abc123', commit: 'def456', updated: false, parts: 3, database: 'pushed' };
     if (url.searchParams.get('live') !== '1') return json(final);
     const frames = [JSON.stringify({ stage: 'reading' }), JSON.stringify({ stage: 'uploading', bytes: 1234 }), JSON.stringify(final)];
     if (!livePushDelay) return new Response(frames.map(frame => frame + '\n').join(''), { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
@@ -254,7 +254,7 @@ test('branch files fill newest-first and the newest is pre-selected', async () =
   await waitFor(() => document.getElementById('vcFile').value === 'backups/nightly-new.json', 'branch file list');
   const options = [...document.getElementById('vcFile').querySelectorAll('option')];
   assert.deepEqual(options.map(o => o.getAttribute('value')), ['backups/nightly-new.json', 'backups/nightly-old.json']);
-  assert.match(document.getElementById('vcFileStatus').textContent, /۲ فایل/);
+  assert.match(document.getElementById('vcFileStatus').textContent, /۲ بکاپ/);
 });
 
 test('branch restore downloads the file and opens the section picker', async () => {
@@ -372,11 +372,14 @@ test('branch push uploads the full bundle and refreshes the file list', async ()
   assert.match(sent.name, /^backup_push_.*\.json$/);
   assert.equal(sent.bundle.kind, 'settings-export', 'the full unfiltered bundle is pushed');
   assert.match(document.getElementById('transferStatus').textContent, /پوش شد/);
+  assert.match(document.getElementById('transferStatus').textContent, /backups\/pushed/);
   assert.match(document.querySelector('#resultModal .result-head').textContent, /پوش به برنچ/);
   assert.match(document.querySelector('#resultModal .result-body').textContent, /abc123/);
+  assert.match(document.querySelector('#resultModal .result-body').textContent, /3 بخش/);
+  assert.match(document.querySelector('#resultModal .result-body').textContent, /دیتابیس: ذخیره شد/);
   await waitFor(() => document.getElementById('vcFile').value === 'backups/nightly-new.json', 'file list refresh after push');
   const remembered = JSON.parse(store.get('scraper4:last-backup'));
-  assert.match(remembered.name, /^backup_push_.*\.json$/);
+  assert.equal(remembered.name, 'backups/pushed', 'the remembered backup is the pushed folder');
   assert.equal(failures.length, 0, 'no late failures: ' + failures.map(error => error?.stack || String(error)).join('\n'));
 });
 

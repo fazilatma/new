@@ -3,11 +3,12 @@ import test from 'node:test';
 import worker from '../scraper4.worker.js';
 
 // Scheduled settings push to a GitHub branch, through the real production
-// bundle with GitHub stubbed out: the manual push streams live NDJSON
-// progress (reading -> uploading+bytes -> final result, always HTTP 200 in
-// live mode), the status endpoint exposes the last recorded run, and the
-// Worker cron tick pushes scheduled-backup.json only when enabled, due,
-// tokened and targeted — recording every outcome for the dashboard.
+// bundle with GitHub stubbed out: the manual push writes the split layout
+// (one readable .json per section plus manifest.json) and streams live NDJSON
+// progress (reading -> uploading+bytes per part -> final result, always HTTP
+// 200 in live mode), the status endpoint exposes the last recorded run, and
+// the Worker cron tick pushes the scheduled-backup folder only when enabled,
+// due, tokened and targeted — recording every outcome for the dashboard.
 const ctx = { waitUntil() {}, passThroughOnException() {} };
 class MemoryD1 {
   constructor() { this.states = new Map(); }
@@ -55,23 +56,41 @@ test('live push streams reading, uploading with bytes, then the final result', a
       puts.push({ href, body: JSON.parse(init.body) });
       return json({ content: { sha: 'newsha' }, commit: { sha: 'commitsha' } }, 201);
     }
-    assert.match(href, /\/repos\/acme\/widgets\/contents\/backups\/b\.json\?ref=main$/);
+    assert.match(href, /\/repos\/acme\/widgets\/contents\/backups\/b\/(profiles|connections|manifest)\.json\?ref=main$/);
     return json({ message: 'Not Found' }, 404);
   };
-  const response = await withGitHub(stub, () => callPost(db, '/api/branch-push?live=1', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle: { a: 1 } }, { GH_BACKUP_TOKEN: 'tok' }));
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get('content-type') || '', /ndjson/);
-  const frames = await framesOf(response);
+  const part = obj => ({ size: JSON.stringify(obj).length, b64: Buffer.from(JSON.stringify(obj)).toString('base64') });
+  const bundle = { a: 1, files: { 'profiles.json': part({ x: 1 }), 'connections.json': part({ y: 2 }) } };
+  // The live route streams: the body must be drained while the stub is
+  // installed, otherwise later parts race the restored real fetch.
+  const drained = await withGitHub(stub, async () => {
+    const response = await callPost(db, '/api/branch-push?live=1', { repo: 'acme/widgets', branch: 'main', path: 'backups', name: 'b.json', bundle }, { GH_BACKUP_TOKEN: 'tok' });
+    return { status: response.status, contentType: response.headers.get('content-type') || '', text: await response.text() };
+  });
+  assert.equal(drained.status, 200);
+  assert.match(drained.contentType, /ndjson/);
+  const frames = drained.text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
   assert.deepEqual(frames[0], { stage: 'reading' });
   assert.equal(frames[1].stage, 'uploading');
-  assert.equal(frames[1].bytes, JSON.stringify({ a: 1 }, null, 2).length);
-  assert.equal(frames[2].ok, true);
-  assert.equal(frames[2].path, 'backups/b.json');
-  assert.equal(frames[2].updated, false);
-  assert.equal(frames.length, 3);
-  assert.equal(puts.length, 1);
+  assert.equal(frames[2].stage, 'uploading');
+  assert.equal(frames[3].stage, 'uploading');
+  assert.ok(frames[3].bytes > frames[2].bytes && frames[2].bytes > frames[1].bytes, 'byte counts climb as parts go up');
+  assert.equal(frames[4].ok, true);
+  assert.equal(frames[4].path, 'backups/b');
+  assert.equal(frames[4].parts, 2);
+  assert.equal(frames[4].database, 'skipped:d1', 'the Worker has no database file to push');
+  assert.equal(frames[4].updated, false);
+  assert.equal(frames.length, 5);
+  assert.equal(puts.length, 3, 'two parts plus the manifest');
   assert.equal(puts[0].body.sha, undefined, 'a create sends no sha');
-  assert.equal(Buffer.from(puts[0].body.content, 'base64').toString('utf8'), JSON.stringify({ a: 1 }, null, 2));
+  assert.match(puts[0].href, /\/contents\/backups\/b\/connections\.json$/, 'parts go up alphabetically');
+  assert.deepEqual(JSON.parse(Buffer.from(puts[0].body.content, 'base64').toString('utf8')), { y: 2 }, 'parts stay readable JSON on the branch');
+  assert.match(puts[2].href, /\/contents\/backups\/b\/manifest\.json$/, 'the manifest goes last');
+  const manifest = JSON.parse(Buffer.from(puts[2].body.content, 'base64').toString('utf8'));
+  assert.equal(manifest.kind, 'split-backup');
+  assert.equal(manifest.format, 'scraper4-split-1');
+  assert.deepEqual(manifest.parts, ['connections.json', 'profiles.json']);
+  assert.equal(manifest.database, null);
 });
 
 test('live push without a token is HTTP 200 with a single auth frame', async () => {
@@ -106,7 +125,7 @@ test('push status exposes the recorded run, or null before the first run', async
   assert.deepEqual(await (await call(empty, '/api/branch-push-status')).json(), { ok: true, last: null });
   const seeded = new MemoryD1();
   seedSettings(seeded, {});
-  const last = { at: '2026-09-15T10:00:00.000Z', ok: true, path: 'main/backups/scheduled-backup.json', sha: 'newsha', updated: true };
+  const last = { at: '2026-09-15T10:00:00.000Z', ok: true, path: 'main/backups/scheduled-backup', sha: 'newsha', updated: true, parts: 5, database: 'skipped:d1' };
   seeded.states.set('branch_push_last', JSON.stringify(last));
   assert.deepEqual(await (await call(seeded, '/api/branch-push-status')).json(), { ok: true, last });
 });
@@ -121,7 +140,7 @@ async function runScheduled(db, githubStub, extra = {}) {
   });
 }
 
-test('scheduled push writes scheduled-backup.json to the default repo and records it', async () => {
+test('scheduled push writes the scheduled-backup split folder to the default repo and records it', async () => {
   const db = new MemoryD1();
   seedSettings(db, { watchdog: { enabled: false }, githubBackupToken: 'tok', branchPush: { enabled: true, intervalMin: 360, branch: 'main' } });
   const calls = [], puts = [];
@@ -134,16 +153,20 @@ test('scheduled push writes scheduled-backup.json to the default repo and record
     return json({ message: 'Not Found' }, 404);
   };
   await runScheduled(db, stub);
-  assert.match(calls[0], /\/repos\/fazilatma\/new\/contents\/backups\/scheduled-backup\.json\?ref=main$/, 'empty repo falls back to the default, empty folder to backups');
-  assert.equal(puts.length, 1);
+  assert.match(calls[0], /\/repos\/fazilatma\/new\/contents\/backups\/scheduled-backup\/autoreply_log\.json\?ref=main$/, 'empty repo falls back to the default, empty folder to backups');
+  assert.equal(puts.length, 6, 'five parts plus the manifest');
   assert.equal(puts[0].body.branch, 'main');
-  assert.match(puts[0].body.message, /scraper4 backup scheduled-backup\.json/);
-  const pushed = JSON.parse(Buffer.from(puts[0].body.content, 'base64').toString('utf8'));
-  assert.equal(pushed.format, 'scraper4-php-compatible', 'the scheduler pushes a real settings bundle');
-  assert.ok(pushed.files['profiles.json'], 'the bundle carries the settings files');
+  assert.match(puts[0].body.message, /scraper4 backup backups\/scheduled-backup\//);
+  assert.match(puts[puts.length - 1].href, /\/manifest\.json$/, 'the manifest goes last');
+  const manifest = JSON.parse(Buffer.from(puts[puts.length - 1].body.content, 'base64').toString('utf8'));
+  assert.equal(manifest.kind, 'split-backup');
+  assert.ok(manifest.parts.includes('profiles.json'), 'the scheduler pushes the real settings parts');
+  assert.equal(manifest.database, null, 'the Worker scheduler has no database file');
   const recorded = JSON.parse(db.states.get('branch_push_last'));
   assert.equal(recorded.ok, true);
-  assert.equal(recorded.path, 'main/backups/scheduled-backup.json');
+  assert.equal(recorded.path, 'main/backups/scheduled-backup');
+  assert.equal(recorded.parts, 5);
+  assert.equal(recorded.database, 'skipped:d1');
   assert.equal(recorded.updated, false);
   assert.equal(recorded.sha, 'schedsha');
   assert.ok(Date.parse(recorded.at) > 0);
@@ -161,7 +184,7 @@ test('scheduled push stays quiet when disabled', async () => {
 test('scheduled push stays quiet when the last run is still fresh', async () => {
   const db = new MemoryD1();
   seedSettings(db, { watchdog: { enabled: false }, githubBackupToken: 'tok', branchPush: { enabled: true, intervalMin: 360, branch: 'main' } });
-  const last = { at: new Date().toISOString(), ok: true, path: 'main/backups/scheduled-backup.json', sha: 'old', updated: true };
+  const last = { at: new Date().toISOString(), ok: true, path: 'main/backups/scheduled-backup', sha: 'old', updated: true, parts: 5, database: 'skipped:d1' };
   db.states.set('branch_push_last', JSON.stringify(last));
   let fetches = 0;
   await runScheduled(db, async () => { fetches++; throw Error('must not fetch'); });
