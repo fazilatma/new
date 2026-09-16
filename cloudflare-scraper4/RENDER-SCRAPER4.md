@@ -823,3 +823,34 @@ that the markup still contains every id the client script queries, the tab order
 `tabByIndex`/`#branches` deep link depends on, the absence of px in type and breakpoints, the
 stacked-table labels, the dock, and the palette rules. Seven of its eight tests fail against the
 previous stylesheet, so the redesign cannot quietly regress.
+
+## 1.179.0+ — merged onto your 1.178.0: results list, local AI providers, the `+` marker, redesigned deployer
+
+This release has your `1.178.0` (210-minute extraction timer, always-on background description
+enricher, chat/category test switch) and your `1.177.0` (auto-candidates, searchable
+green-marked model dropdowns, auto-refresh results) as ancestors; none of that is changed here.
+The four fixes below were still missing on the production branch, and all of them are the only
+deltas in the shared dashboard besides the changelog — your `combo-list` dropdowns and your
+`loadProducts({noActivate:true})` auto-refresh survived the merge (pinned in the tests).
+
+- **Results section renders rows again.** `productSuffixFormats` was `async` while
+  `productCodeSuffix` read it synchronously, so `formats[0]` was `undefined` on a Promise and any
+  row with a `sku`/`sourceKey` threw inside `rows.map(productRowHtml)`, discarding the whole list
+  and breaking `openProductModal` too. The helper is synchronous, the formats result is validated
+  with the `(کد:x)` fallback, each row is guarded (a failure becomes one warning card naming the
+  error) and the modal says when a row is missing. `worker-tests/results-products-ui.test.mjs`
+  drives the real bundle and fails if the stray `async` returns.
+- **Local/LAN AI providers on Linux and Termux.** `assertAiEndpointUrl` in
+  `render-src/network.ts` plus an explicit `aiEndpoint` opt-in in `safeFetch` (redirect hops and
+  the `/models` probe included), used by every Node AI call. http/https only, no URL credentials,
+  `169.254.0.0/16` refused; scrape targets keep `assertPublicUrl`.
+- **Chat keeps its history** on Node (messages posted with roles, `keyIndex` reported), and
+  `LOCAL_SCRAPER_AUTO_UPDATE` also accepts `0` / `no` / `off`.
+- **Version marker.** Agent releases are `x.y.z+` (`1.179.0+`); `sync-version` accepts and
+  propagates it, the branch comparator still uses the numeric core, and the runtime pin reads
+  `packageJson.version` instead of embedding it in a regex.
+- **Deployer page rebuilt for a zoomed phone**: rem/em type and em breakpoints everywhere, no
+  px layout lengths, overflow-safe `minmax(min(100%,X),1fr)` grids, tables that become labelled
+  cards when narrow, a sticky snapping tab rail, 2.85rem tap targets, a pinned bottom dock with
+  safe-area padding, collapsible explanations, and dark/light palettes with a persisted switch.
+  Same ids, same handlers, same routes.

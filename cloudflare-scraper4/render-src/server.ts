@@ -13,11 +13,12 @@ import { DEFAULT_REPO, normalizeInstallBranch, normalizeRepo, pickGithubToken, s
 import { fetchBranchBackupFile, fetchBranchBackupSplit, listBranchBackupFiles, pushBranchBackupSplit, scheduledBranchPushTick, type SplitDatabaseInput } from '../worker-src/branch-backup.js';
 import { AGENT_TOOL_MODELS } from '../worker-src/ai-catalog.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from '../worker-src/destination-core.js';
+import { AI_ENRICH_LAST_KEY, aiEnrichTick } from '../worker-src/ai-enrich.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
 import { githubApiFetch, githubApiPut } from './github-client.js';
-import { fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, importAutoreplyLog, importCategoryLearning, isFreshDatabase, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, markBasalamCategoriesTried, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, snapshotSqliteDatabase, stopJob, updateJob, upsertProduct } from './db.js';
+import { fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, listStalestProducts, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, importAutoreplyLog, importCategoryLearning, isFreshDatabase, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, markBasalamCategoriesTried, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, snapshotSqliteDatabase, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
 import { safeFetch, safeText } from './network.js';
 import { sendNotification } from './notifications.js';
@@ -32,7 +33,7 @@ import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } fro
 import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { workerLoop, requestWorkerStop, processOneJob } from './processor.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.178.0+'; } catch { return process.env.npm_package_version || '1.178.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.179.0+'; } catch { return process.env.npm_package_version || '1.179.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 function nodeLibraryProbe(){
   const root=new URL('..',import.meta.url),pkgJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
@@ -345,7 +346,8 @@ app.post('/api/ai/diagnose',async c=>c.json(await aiConnectionDiagnostic()));
 app.get('/api/ai/description-settings',async c=>{
   const settings=await getState<any>('ai_description_settings',{enabled:true});
   const picked=await preferredAiChatModel();
-  return c.json({ok:true,settings:{enabled:settings?.enabled!==false},master:picked?{provider:picked.provider.id,model:picked.model}:null});
+  const last=await getState<any>(AI_ENRICH_LAST_KEY,null);
+  return c.json({ok:true,settings:{enabled:settings?.enabled!==false},master:picked?{provider:picked.provider.id,model:picked.model}:null,last});
 });
 app.post('/api/ai/description-settings',async c=>{
   const body=await c.req.json().catch(()=>({}))as any;
@@ -622,6 +624,7 @@ app.post('/api/import-php', async c => {
 });
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, info => console.log(`Scraper4 (${runtimeEnvironment.label}) listening on http://${info.address}:${info.port}`));
+let aiEnrichRunning=false;
 let scheduler: NodeJS.Timeout | undefined;
 let backgroundStarted = false;
 let localDrainRunning = false;
@@ -638,7 +641,7 @@ function startBackground(): void {
   if (!config.runWorkerInWeb || !databaseReady || backgroundStarted) return;
   backgroundStarted = true;
   void workerLoop(config.workerPollMs);
-  const schedule = async () => { try { const settings=await getState<any>('settings',{}),stallMin=Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));if(settings.watchdog?.enabled!==false){const recovered=settings.watchdog?.autoContinue!==false?await recoverFailedAndStalledJobs(stallMin):await reapStalledJobs(stallMin);if(recovered)console.log(`Recovered ${recovered} stalled/failed job(s)`)}const count=await enqueueDueProfiles();if(count)console.log(`Scheduled ${count} profile(s)`);await scheduledBranchPushTick({settings,envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:nodeSnapshotDatabase,log:m=>console.log('[scheduled-push]',m)});await recoverCategoryRun();await categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});const automation=await automationTick();if(Object.keys(automation).length)console.log('Automation',JSON.stringify(automation)); } catch (error) { console.error('Scheduler error', error); } };
+  const schedule = async () => { try { const settings=await getState<any>('settings',{}),stallMin=Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));if(settings.watchdog?.enabled!==false){const recovered=settings.watchdog?.autoContinue!==false?await recoverFailedAndStalledJobs(stallMin):await reapStalledJobs(stallMin);if(recovered)console.log(`Recovered ${recovered} stalled/failed job(s)`)}const count=await enqueueDueProfiles();if(count)console.log(`Scheduled ${count} profile(s)`);await scheduledBranchPushTick({settings,envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:nodeSnapshotDatabase,log:m=>console.log('[scheduled-push]',m)});await recoverCategoryRun();await categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});if(!aiEnrichRunning){aiEnrichRunning=true;try{await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settings',{enabled:true}))?.enabled!==false,modelReady:async()=>Boolean(await preferredAiChatModel()),listProfileIds:async()=>(await listProfiles()).map(p=>p.id),loadCursor:()=>getState<any>(AI_ENRICH_LAST_KEY,null),saveCursor:rec=>setState(AI_ENRICH_LAST_KEY,rec),listStalest:(profileId,limit)=>listStalestProducts(profileId,limit),enrich:product=>generateProductDescription(product),saveProduct:(profileId,product)=>upsertProduct(profileId,product as any),log:m=>console.log('[ai-enrich]',m)});}finally{aiEnrichRunning=false;}}const automation=await automationTick();if(Object.keys(automation).length)console.log('Automation',JSON.stringify(automation)); } catch (error) { console.error('Scheduler error', error); } };
   void schedule(); scheduler = setInterval(schedule, 60_000); scheduler.unref();
 }
 startBackground();

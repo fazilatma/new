@@ -3,7 +3,8 @@ import { isWriteQuotaError } from './utils.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixPinnedModels, normalizeCategoryFixPinned, normalizeCategoryMode, selectCategoryModels } from './destination-core.js';
 import { getEnv } from './env.js';
 import { getLastAiTestResults, isChatCompatibleAiModel, isRetryableAiResult, nextAiTestBatch, suggestCategoryWithModel, testModelBatch } from './ai.js';
-import { loadConnections } from './connections.js';
+import { loadConnections, saveConnections } from './connections.js';
+import { greenTestedCandidateKeys } from './ai-catalog.js';
 import { applyBasalamCategory, destinationCatalog, destinationCategories, destinationChangeStatus } from './maintenance.js';
 import { buildDedupGroups, normalizeDedupKeep, parseSuffixFormats, type DedupCandidate, type DedupGroup, type DedupKeep } from './dedup.js';
 import { currentAgentRun, processAgentRunMessage, recoverAgentRun } from './agent.js';
@@ -124,6 +125,7 @@ export async function retryAiTestPart(key:string,part:'message'|'category'){
   const result=await testModelBatch(String(stored.prompt||'Reply with exactly: SCRAPER4_OK'),{runId:String(stored.runId),retryKey,retryPart:part,onlyCandidates:Boolean(stored.onlyCandidates),categoryTitle:String(stored.categoryTitle||''),categories,timeoutMs:aiSkipTimeoutMs(await getState('settings',{}))});
   const run=await currentBackgroundRun('ai-test');
   if(run&&run.kind==='ai-test'&&(run.id===stored.runId||run.result?.runId===stored.runId)){run.result={...(run.result||{}),...result,results:result.results};await writeRun(run)}
+  try{(result as any).autoCandidatesAdded=await autoAddGreenTestCandidates(result.results)}catch{(result as any).autoCandidatesAdded=[]}
   return result;
 }
 
@@ -227,6 +229,19 @@ function withAiTimings(run:AiTestRun,result:any,startedMs:number,skippedStuck:bo
   return{...result,serverSide:true,lastModelAt:now(),lastModelMs:ms,avgMs:avg,timingSamples:samples,skippedStuck:Number(run.result?.skippedStuck||0)+(skippedStuck?1:0),currentKey:null,currentStartedAt:null,lastModelName:names.join(' · ')||run.result?.lastModelName||''};
 }
 function queueRetryJobs(results:any[]){return (Array.isArray(results)?results:[]).filter(isRetryableAiResult).map((row:any)=>({key:String(row.key),left:3}))}
+/**
+ * After every finished model test, green-light models become candidates — unless
+ * the user turned the `ai.autoCandidates` setting off. Additive only: models the
+ * user removed by hand are never resurrected, and red models never join.
+ */
+async function autoAddGreenTestCandidates(results:any):Promise<string[]>{
+  const settings=await getState<any>('settings',{});
+  if(settings?.ai?.autoCandidates===false)return [];
+  const vault=await loadConnections(),keys=greenTestedCandidateKeys(results,vault.ai.providers||[]),have=new Set((vault.ai.candidates||[]).map(String)),fresh=keys.filter(key=>!have.has(key));
+  if(!fresh.length)return [];
+  await saveConnections({ai:{...vault.ai,candidates:[...(vault.ai.candidates||[]).map(String),...fresh]}});
+  return fresh;
+}
 async function processAiTest(run:AiTestRun):Promise<BackgroundOutcome>{
   if(run.stopRequested||run.status==='paused')return{outcome:'complete'};
   const settings=await getState<any>('settings',{}),callTimeout=aiSkipTimeoutMs(settings),envBudget=Number(getEnv().AI_TEST_MODEL_BUDGET_MS);
@@ -258,6 +273,7 @@ async function processAiTest(run:AiTestRun):Promise<BackgroundOutcome>{
   else if((run.retryJobs||[]).length){run.status='queued';run.phase='retrying'}
   else if(result.done||retrying){run.status='done';run.phase='finished';run.finishedAt=now();run.retryJobs=[]}
   else{run.status='queued';run.phase='waiting'}
+  if(run.status==='done'){try{run.result.autoCandidatesAdded=await autoAddGreenTestCandidates(run.result?.results)}catch{run.result.autoCandidatesAdded=[]}}
   await writeRun(run);return{outcome:run.status==='queued'?'continue':'complete',delaySeconds:run.delayMs?Math.max(1,Math.ceil(run.delayMs/1000)):1};
 }
 

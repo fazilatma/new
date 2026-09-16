@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { assertAiEndpointUrl, assertPublicUrl, privateIp, safeFetch, viaWorkerUrl } from './network.js';
-import { loadConnections } from './connections.js';
+import { loadConnections, saveConnections } from './connections.js';
 import { getState, setState } from './db.js';
 import { categoryPrompt, parseCategoryId } from '../worker-src/destination-core.js';
 import type { AiCategoryOption } from '../worker-src/destination-core.js';
-import { isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix } from '../worker-src/ai-catalog.js';
+import { greenTestedCandidateKeys, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix } from '../worker-src/ai-catalog.js';
 import { destinationCategories } from './maintenance.js';
 
 type Provider={id:string;name:string;baseUrl:string;apiKey:string;models:string[];enabled:boolean;apiKeys?:any[];nonChatModels?:string[];reasoningModels?:string[]};
@@ -138,6 +138,19 @@ export async function startAiTestRun(input:{prompt?:string;categoryTitle?:string
   return {run:aiRun,existing:false};
 }
 
+/**
+ * After every finished model test, green-light models become candidates — unless
+ * the user turned the `ai.autoCandidates` setting off. Additive only: models the
+ * user removed by hand are never resurrected, and red models never join.
+ */
+async function autoAddGreenTestCandidates(results:any):Promise<string[]>{
+  const settings=await getState<any>('settings',{});
+  if(settings?.ai?.autoCandidates===false)return [];
+  const vault=await loadConnections(),keys=greenTestedCandidateKeys(results,vault.ai.providers||[]),have=new Set((vault.ai.candidates||[]).map(String)),fresh=keys.filter(key=>!have.has(key));
+  if(!fresh.length)return [];
+  await saveConnections({ai:{...vault.ai,candidates:[...(vault.ai.candidates||[]).map(String),...fresh]}});
+  return fresh;
+}
 async function runAiTests(tasks:Array<{p:Provider;model:string;key:string}>):Promise<void>{
   if(!aiRun) return;
   aiRun.status='running'; aiRun.phase='testing'; aiRun.startedAt=nowIso(); await persistAiRun();
@@ -156,6 +169,7 @@ async function runAiTests(tasks:Array<{p:Provider;model:string;key:string}>):Pro
   }
   if(!aiRun) return;
   aiRun.status='done'; aiRun.phase='finished'; aiRun.currentStartedAt=null; aiRun.finishedAt=nowIso();
+  try{ (aiRun.result as any).autoCandidatesAdded=await autoAddGreenTestCandidates(aiRun.result.results); }catch{ (aiRun.result as any).autoCandidatesAdded=[]; }
   await persistAiRun();
   try{ await setState('ai_test_results',{at:nowIso(),runId:aiRun.id,prompt:aiRun.prompt,categoryTitle:aiRun.categoryTitle,onlyCandidates:aiRun.onlyCandidates,results:aiRun.result.results}); }catch{/* results still live on the run */}
 }
@@ -186,7 +200,7 @@ export async function resetAiTestRun():Promise<void>{
  * the retry tests exactly what the run tested, the live run row is patched
  * too, and the full results array is returned for the dashboard table.
  */
-export async function retryAiTestPart(key:string,part:string):Promise<{runId:string;results:any[]}>{
+export async function retryAiTestPart(key:string,part:string):Promise<{runId:string;results:any[];autoCandidatesAdded?:string[]}>{
   const modelKey=String(key||'').trim();
   if(!modelKey)throw new Error('کلید مدل خالی است.');
   if(part!=='message'&&part!=='category')throw new Error('بخش نامعتبر است.');
@@ -209,7 +223,8 @@ export async function retryAiTestPart(key:string,part:string):Promise<{runId:str
   const live=await getCurrentAiRun();
   if(live){const at=live.result.results.findIndex((r:any)=>String(r?.key||'')===modelKey||`${r?.provider}::${r?.model}`===modelKey);if(at>=0){live.result.results[at]=results[index];await persistAiRun()}}
   await setState('ai_test_results',{...(stored||{}),at:nowIso(),results});
-  return{runId:String(stored?.runId||live?.id||randomUUID()),results};
+  let autoCandidatesAdded:string[]=[];try{autoCandidatesAdded=await autoAddGreenTestCandidates(results)}catch{/* stored results already updated */}
+  return{runId:String(stored?.runId||live?.id||randomUUID()),results,autoCandidatesAdded};
 }
 
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}

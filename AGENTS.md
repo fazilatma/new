@@ -28,6 +28,11 @@ npm test                                            # full gate (must be green)
   set. After bumping it, run `npm run version:sync` (rewrites wrangler,
   dashboard badges/footers, install guides, lockfile, test anchors) and keep
   `npm run version:check` green. Never hand-edit version strings elsewhere.
+- **Release marker.** A version published by the agent carries a trailing `+` on the number
+  (`1.178.0+`), including the changelog heading and its Persian digits (`۱.۱۷۸.۰+`).
+  `version:sync` accepts and propagates the marker; it is display-only. Never splice a raw
+  version string into a regular-expression source (a trailing `+` there is a quantifier) -
+  compare against `packageJson.version` instead.
 - **Changelog card.** Every release adds one featured Persian changelog card
   in `worker-src/dashboard.ts` (`📜 گزارش تغییرات کد`): the new card goes
   first with `<time>… · نسخهٔ X.Y.Z</time>` (Persian digits), the previous

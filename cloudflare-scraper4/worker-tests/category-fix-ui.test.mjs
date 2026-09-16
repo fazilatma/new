@@ -20,7 +20,7 @@ function extractFns(src, names) {
 
 function loadModal(src, stubs) {
   const factory = new Function('state', '$', 'api', 'modalShell', 'notice', 'openResultModal', 'renderCategoryAllRun', 'refreshCurrentCategoryRun', 'esc', 'escAttr', 'fa',
-    `let categoryFixConsensus=[],categoryFixChatModels=[],categoryAllVisible=false,categoryAllTimer=0;\n${extractFns(src, ['categoryVoteModeLabel', 'categoryFixLastText', 'categoryFixConsensusOptions', 'renderCategoryConsensusEditor', 'saveCategoryFixSchedule', 'startCategoryAllRun', 'beginCategoryAllRun'])}\nreturn {startCategoryAllRun,beginCategoryAllRun,saveCategoryFixSchedule,renderCategoryConsensusEditor,categoryFixLastText,categoryVoteModeLabel,getConsensus:()=>categoryFixConsensus,setChatModels:m=>{categoryFixChatModels=m}};`);
+    `let categoryFixConsensus=[],categoryFixChatModels=[],categoryAllVisible=false,categoryAllTimer=0;\nconst modelComboProvider={aiCandModelSel:'aiCandProvSel',aiSingleModelSel:'aiProviderSel'};\nlet aiGreenKeys=new Set(),aiGreenCacheAt=0,aiGreenPromise=null;\n${extractFns(src, ['categoryVoteModeLabel', 'categoryFixLastText', 'categoryFixConsensusOptions', 'renderCategoryConsensusEditor', 'saveCategoryFixSchedule', 'startCategoryAllRun', 'beginCategoryAllRun', 'masterComboOptions', 'renderMasterList', 'modelComboItems', 'renderModelComboList', 'closeModelCombo', 'pickModelComboValue', 'syncModelCombo', 'initModelCombo', 'ensureAiGreenModels', 'aiGreenMatch', 'refreshOpenModelCombos'])}\nreturn {startCategoryAllRun,beginCategoryAllRun,saveCategoryFixSchedule,renderCategoryConsensusEditor,categoryFixLastText,categoryVoteModeLabel,getConsensus:()=>categoryFixConsensus,setChatModels:m=>{categoryFixChatModels=m}};`);
   return factory(stubs.state, stubs.$, stubs.api, stubs.modalShell, stubs.notice, stubs.openResultModal,
     stubs.renderCategoryAllRun, stubs.refreshCurrentCategoryRun, stubs.esc, stubs.escAttr, stubs.fa);
 }
@@ -29,13 +29,15 @@ function makeStubs({ settings = {}, chatModels = [], last = null } = {}) {
   const calls = { settings: [], runs: [] };
   const state = { settings: JSON.parse(JSON.stringify(settings)), connections: { ai: { master: '', candidates: [] } } };
   const elements = {};
-  const el = id => (elements[id] ||= { innerHTML: '', disabled: false, value: '', checked: false });
+  const el = id => (elements[id] ||= { innerHTML: '', disabled: false, value: '', checked: false, hidden: false, dataset: {}, options: [], children: [], parentNode: { insertBefore() {} }, nextSibling: null, addEventListener() {} });
+  if (!globalThis.document) globalThis.document = { createElement: () => ({ appendChild() {}, addEventListener() {} }), addEventListener() {} };
   const root = { innerHTML: '', onclick: null, onchange: null, querySelectorAll: () => [{ checked: true, value: 'ensemble' }] };
   elements.resultModal = root;
   let shell = null;
   const api = async (path, opts = {}) => {
     const body = opts.body ? JSON.parse(String(opts.body)) : null;
     if (path === '/api/ai/chat-models') return { ok: true, models: chatModels };
+    if (path === '/api/ai/test-results') return { ok: true, results: [] };
     if (path === '/api/category-fix-status') return { ok: true, last };
     if (path === '/api/settings' && opts.method === 'POST') { calls.settings.push(body); return { ok: true }; }
     if (path === '/api/destination/basalam/category-runs' && opts.method === 'POST') {

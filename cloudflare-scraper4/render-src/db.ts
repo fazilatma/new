@@ -1,4 +1,4 @@
-import { normalizePersianText } from '../worker-src/utils.js';
+import { isoDateTime, normalizePersianText } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -231,10 +231,10 @@ export async function migrate(): Promise<void> {
   `);
 }
 
-function dateValue(value: any): string { return value?.toISOString?.() || String(value || now()); }
+function dateValue(value: any): string { return isoDateTime(value) || now(); }
 function profileFromRow(row: any): Profile {
   const data = parseJson<Partial<Profile>>(row.data, row.data || {});
-  return { ...data, lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at || null, createdAt: dateValue(row.created_at), updatedAt: dateValue(row.updated_at) } as Profile;
+  return { ...data, lastRunAt: isoDateTime(row.last_run_at), createdAt: dateValue(row.created_at), updatedAt: dateValue(row.updated_at) } as Profile;
 }
 
 export async function listProfiles(): Promise<Profile[]> {
@@ -357,6 +357,15 @@ export async function listProducts(profileId: string, limit = 100, offset = 0, q
 
 export async function allProducts(profileId: string): Promise<Product[]> {
   const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND data::text<>'null' ORDER BY updated_at`, [profileId]);
+  return rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow);
+}
+export async function listStalestProducts(profileId: string, limit = 5): Promise<Product[]> {
+  const n = Math.max(1, Math.min(20, limit));
+  if (useSqlite) {
+    const { rows } = await query(`SELECT data FROM products WHERE profile_id=? AND data IS NOT NULL AND data<>'null' ORDER BY updated_at ASC LIMIT ?`, [profileId, n]);
+    return rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow);
+  }
+  const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND data::text<>'null' ORDER BY updated_at ASC LIMIT $2`, [profileId, n]);
   return rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow);
 }
 export async function getProduct(profileId:string,sourceKey:string):Promise<Product|null>{const {rows}=await pool.query('SELECT data FROM products WHERE profile_id=$1 AND source_key=$2',[profileId,sourceKey]);return rows[0]?.data ? parseJson<Product>(rows[0].data, rows[0].data) : null}
@@ -491,7 +500,7 @@ function jobFromRow(row: any): Job {
   return { id: row.id, profileId: row.profile_id, kind: row.kind, target: row.target, status: row.status, phase: row.phase,
     total: Number(row.total || 0), processed: Number(row.processed || 0), added: Number(row.added || 0), updated: Number(row.updated || 0), failed: Number(row.failed || 0),
     stopRequested: Boolean(row.stop_requested), error: row.error, log: parseJson(row.log, row.log || []), createdAt: dateValue(row.created_at),
-    startedAt: row.started_at?.toISOString?.() || row.started_at || null, finishedAt: row.finished_at?.toISOString?.() || row.finished_at || null, updatedAt: dateValue(row.updated_at) };
+    startedAt: isoDateTime(row.started_at), finishedAt: isoDateTime(row.finished_at), updatedAt: dateValue(row.updated_at) };
 }
 
 // Queue/run ordering, ported from the Worker so the dashboard's drag-to-reorder

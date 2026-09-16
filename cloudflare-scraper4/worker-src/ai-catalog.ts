@@ -140,3 +140,30 @@ export type AiEndpointProvider={id:string;name?:string;baseUrl?:string;nonChatMo
 function isMistralProvider(provider:AiEndpointProvider):boolean{return provider.id==='mistral'||/api\.mistral\.ai/i.test(String(provider.baseUrl||''))}
 export function aiModelEndpoint(provider:AiEndpointProvider,model:string):AiModelEndpoint{return isMistralProvider(provider)?MISTRAL_MODEL_ENDPOINTS[model]||'chat-completions':'chat-completions'}
 export function isChatCompatibleAiModel(provider:AiEndpointProvider,model:string):boolean{if(provider.nonChatModels?.includes(model))return false;if(isOpenRouter(provider)&&OPENROUTER_NON_CHAT_MODELS.includes(model as any))return false;return aiModelEndpoint(provider,model)==='chat-completions'}
+/**
+ * Candidate keys (`providerId::model`) for test rows that earned a green light.
+ * Shared by the Worker and Node runtimes so both auto-select the same models
+ * after a test run: only `ok===true` rows whose model is still configured on
+ * an enabled provider and is chat-compatible (OCR/Embedding specialists never
+ * become candidates). Multi-key `::k<n>` suffixes collapse to the base key.
+ */
+export function greenTestedCandidateKeys(results:any,providers:Array<{id:string;models?:string[]} & AiEndpointProvider>):string[]{
+  const rows=Array.isArray(results)?results:[],byId=new Map<string,{models?:string[]} & AiEndpointProvider>();
+  for(const provider of Array.isArray(providers)?providers:[])byId.set(String(provider?.id||''),provider);
+  const out:string[]=[];
+  for(const row of rows){
+    if(!row||row.ok!==true)continue;
+    const rawKey=String(row.key||'');
+    let pid='',model='';
+    if(rawKey.includes('::')){const parts=rawKey.split('::');pid=parts[0];model=parts.slice(1).join('::')}
+    else{pid=String(row.provider||'');model=String(row.model||'')}
+    model=parseModelKeySuffix(model).model.trim();
+    if(!pid||!model)continue;
+    const provider=byId.get(pid);
+    if(!provider||!(provider.models||[]).includes(model))continue;
+    if(!isChatCompatibleAiModel(provider,model))continue;
+    const key=pid+'::'+model;
+    if(!out.includes(key))out.push(key);
+  }
+  return out;
+}
