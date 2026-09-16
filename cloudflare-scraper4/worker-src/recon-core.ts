@@ -147,7 +147,7 @@ export function unreachableAccountRows(local: ReconLocal[], account: ReconAccoun
       profileId: row.profile_id || '', profileName: profileNames[row.profile_id || ''] || '',
       sourceKey: row.source_key || '', title: row.title || '', remoteTitle: '',
       remoteId: null,
-      sourcePrice: Number.isFinite(Number(row.price)) ? Number(row.price) : null,
+      sourcePrice: asPrice(row.price),
       expectedPrice: null, remotePrice: null, delta: null,
       pricePercent: Number(account.pricePercent) || 0,
       matchedBy: 'none' as MatchedBy, status: 'unreachable',
@@ -244,8 +244,10 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
 
 export function summarize(rows: UnifiedReconRow[]) {
   const count = (bucket: ReconBucket) => rows.filter(r => r.bucket === bucket).length;
-  const summary = { matched: count('matched'), priceDiff: count('priceDiff'), extra: count('extra'), missing: count('missing'), noPrice: count('noPrice') };
-  return { ...summary, total: rows.length, inSync: summary.priceDiff === 0 && summary.extra === 0 && summary.missing === 0 };
+  const summary = { matched: count('matched'), priceDiff: count('priceDiff'), extra: count('extra'), missing: count('missing'), noPrice: count('noPrice'), unreachable: count('unreachable') };
+  // An unreadable destination is "unknown", never "in sync": without the last
+  // term the table could show a green all-clear above unreachable rows.
+  return { ...summary, total: rows.length, inSync: summary.priceDiff === 0 && summary.extra === 0 && summary.missing === 0 && summary.unreachable === 0 };
 }
 
 /** Per-destination breakdown, so the UI can show one line per stall/site. */

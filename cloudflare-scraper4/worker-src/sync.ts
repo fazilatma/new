@@ -273,7 +273,7 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
   const c=(await loadConnections()).basalam;
   if(!c.token||!c.vendorId)throw new Error('تنظیمات باسلام کامل نیست');
   const learned=c.autoCategory?await findLearnedCategory(product.title):null;
-  const categories=[profile.basalamCategoryId,learned?.categoryId,c.categoryId,...(profile.basalamFallbackCategoryIds||[]),...c.fallbackCategoryIds].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index);
+  const categories=[product.basalamCategoryId,profile.basalamCategoryId,learned?.categoryId,c.categoryId,...(profile.basalamFallbackCategoryIds||[]),...c.fallbackCategoryIds].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index);
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
   const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0},...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
   for(const account of accounts){

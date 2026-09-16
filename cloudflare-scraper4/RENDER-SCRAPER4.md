@@ -753,82 +753,12 @@ go green.
 
 Same update path: pull, restart the deployer process, re-run the diagnostic.
 
-## 1.177.0 — results list renders again, local AI providers connect, chat keeps its history
+## 1.180.0+ — merged onto your 1.179.0: results list, local AI providers, the `+` marker, redesigned deployer
 
-On top of 1.176.0 (split branch backups). All three were reproduced against a live Node server
-with SQLite before anything was changed:
-
-- **`بخش نتایج استخراج` was empty while the counter was right.** Since 1.174.0 the shared
-  dashboard declared `productSuffixFormats` as `async` while `productCodeSuffix` read it
-  synchronously, so `formats[0]` was `undefined` on a Promise: every row with a `sku`/`sourceKey`
-  threw inside `rows.map(productRowHtml)` and the whole list was discarded, and `openProductModal`
-  could not open a row either. The helper is synchronous again, `productCodeSuffix` validates the
-  formats and falls back to `(کد:x)`, `loadProducts` renders each row in its own guard (a failure
-  becomes one warning card with the error text, never a blank section), and the modal names the
-  reason it cannot open. Covered by `worker-tests/results-products-ui.test.mjs`, which fails when
-  the stray `async` is restored.
-- **AI base URLs on the machine itself.** `render-src/network.ts` gained `assertAiEndpointUrl` and
-  `safeFetch` honours an explicit `aiEndpoint` opt-in (redirect hops included); every AI call in
-  `render-src/ai.ts` validates and routes with it. Ollama on `127.0.0.1:11434`, llama.cpp/vLLM on
-  the LAN and `host.docker.internal` now work for the model list, model tests and chat. http/https
-  only, no credentials in the URL, `169.254.0.0/16` refused (verified live), and scraping still uses
-  `assertPublicUrl`.
-- **Chat stopped flattening the conversation.** The Node chat route joined the message list into one
-  `role: content` prompt, burying the system prompt; it now posts the messages with their roles and
-  reports the `keyIndex` the `::k2` pick selected. Verified live: a two-message chat arrives as two
-  messages.
-- `LOCAL_SCRAPER_AUTO_UPDATE` also accepts `0` / `no` / `off`, so a Termux box that was told not to
-  auto-update stops attempting `git reset --hard` on a timer.
-
-The periodic `categoryFix` schedule from 1.175.0 is untouched and stays the only implementation
-(`settings.categoryFix.periodic` + `app_state[category_fix_last]` + `categoryFixTick` in both runtimes).
-
-## 1.178.0+ — the `+` release marker, and a deployer page built for a zoomed phone
-
-### Version marker
-
-Agent-published releases now carry a trailing `+` (`1.178.0+`). `package.json` stays the single
-source and `npm run version:sync` propagates the exact string — Latin and Persian digits — into
-the dashboard badge, the changelog footers, `WORKER_VERSION` in `wrangler.toml`, the runtime
-fallbacks, the install guides and the lockfile. The marker is display-only: `numericCore` in
-`worker-src/deployer-branches.ts` still compares the numeric core, so branch ranking and the
-deployer's stale-serving check behave exactly as before, and `npm ci` / `npm install` still work
-(verified on this package). `worker-tests/runtime.test.mjs` no longer embeds the version in a
-regular expression — inside a regex source a trailing `+` is a quantifier, which would have made
-that pin pass vacuously — it reads `packageJson.version` instead.
-
-### Deployer UI
-
-`scripts/local-deployer-ui.mjs` was re-styled end to end for the way it is really used: opened on
-a phone that forwards the port, with the OS font slider maxed out and browser zoom past 300%.
-
-- Every font size, gap and radius is `rem`/`em`, and every breakpoint is in `em`, so text zoom
-  rescales the whole page and the layout switches to the narrow form while zooming (px media
-  queries only ever looked at the window). Only hairline borders and shadows keep px.
-- No grid can overflow: `minmax(min(100%,X),1fr)` columns and `min-width:0` children, plus
-  `overflow-wrap:anywhere` in code blocks. At narrow widths the branch table and the Python
-  extract result table turn into stacked cards that label each value with its column name, instead
-  of asking for a sideways scroll, and `.scrollx` stops being a nested scroller.
-- The tab strip is sticky, snaps sideways, and centres the tab you chose; buttons are at least
-  `2.85rem` tall and go full-width in a row on a phone; the three primary actions also live in a
-  pinned bottom dock with `env(safe-area-inset-bottom)` so they are reachable without scrolling.
-- Long explanatory copy moved into collapsible notes; the actions stayed outside them.
-- Dark and light palettes both follow the system, with an explicit switch in the header persisted
-  in `localStorage`; `:focus-visible` rings, `prefers-reduced-motion` and `prefers-contrast`,
-  a skip link and a `<noscript>` explanation round it out.
-- Nothing about behaviour changed: same ids, same handlers, same `/api/*` routes.
-
-`worker-tests/deployer-ui-mobile.test.mjs` pins the parts that are easy to undo by accident —
-that the markup still contains every id the client script queries, the tab order the positional
-`tabByIndex`/`#branches` deep link depends on, the absence of px in type and breakpoints, the
-stacked-table labels, the dock, and the palette rules. Seven of its eight tests fail against the
-previous stylesheet, so the redesign cannot quietly regress.
-
-## 1.179.0+ — merged onto your 1.178.0: results list, local AI providers, the `+` marker, redesigned deployer
-
-This release has your `1.178.0` (210-minute extraction timer, always-on background description
-enricher, chat/category test switch) and your `1.177.0` (auto-candidates, searchable
-green-marked model dropdowns, auto-refresh results) as ancestors; none of that is changed here.
+This release has your `1.179.0` (per-profile enricher switch, Basalam categories inside enrichment,
+recon audit) plus your `1.178.0` (extraction timer, background enricher, chat/category test switch)
+and `1.177.0` (auto-candidates, searchable green-marked dropdowns, auto-refresh results) as
+ancestors; none of that is changed here.
 The four fixes below were still missing on the production branch, and all of them are the only
 deltas in the shared dashboard besides the changelog — your `combo-list` dropdowns and your
 `loadProducts({noActivate:true})` auto-refresh survived the merge (pinned in the tests).
@@ -846,7 +776,7 @@ deltas in the shared dashboard besides the changelog — your `combo-list` dropd
   `169.254.0.0/16` refused; scrape targets keep `assertPublicUrl`.
 - **Chat keeps its history** on Node (messages posted with roles, `keyIndex` reported), and
   `LOCAL_SCRAPER_AUTO_UPDATE` also accepts `0` / `no` / `off`.
-- **Version marker.** Agent releases are `x.y.z+` (`1.179.0+`); `sync-version` accepts and
+- **Version marker.** Agent releases are `x.y.z+` (`1.180.0+`); `sync-version` accepts and
   propagates it, the branch comparator still uses the numeric core, and the runtime pin reads
   `packageJson.version` instead of embedding it in a regex.
 - **Deployer page rebuilt for a zoomed phone**: rem/em type and em breakpoints everywhere, no
