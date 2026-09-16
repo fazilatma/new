@@ -1,4 +1,5 @@
-import { applyResultAdjustments } from './result-adjustments.js';
+import { mergeBenchmarkProfile } from './benchmark-profile.js';
+import { applyResultAdjustments, sameResultData } from './result-adjustments.js';
 import { getEnv, type D1Database, type D1PreparedStatement } from './env.js';
 import { SCHEMA } from './schema.js';
 import { isWriteQuotaError, normalizeDbValue, normalizePersianText, toRemoteId } from './utils.js';
@@ -437,12 +438,17 @@ export async function applyStoredResultSettings(profile:Profile,after='',previou
   let changed=0,conflicts=0;
   for(const row of batch){
     const product=json<any>(row.data,row.data);
-    if(!validProductRow(product))continue;
+    if(!validProductRow(product)||typeof product.title!=='string')continue;
     const originalData=typeof row.data==='string'?row.data:JSON.stringify(row.data);
     if(!(product as any).resultBase&&previousSuffix&&product.title.endsWith(previousSuffix.trim())){(product as any).resultBase={title:product.title.slice(0,-previousSuffix.trim().length).trimEnd(),price:product.price,priceText:product.priceText};}
     applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));
+    if(sameResultData(product,JSON.parse(originalData)))continue;
     const result=await run('UPDATE products SET data=?,title=?,price=?,updated_at=? WHERE profile_id=? AND source_key=? AND data=?',[JSON.stringify(product),product.title,product.price,now(),profile.id,row.source_key,originalData]);
-    if(result)changed++;else conflicts++;
+    if(result)changed++;else {const current=await getProduct(profile.id,row.source_key);if(!sameResultData(current,product))conflicts++;}
   }
   return{changed,conflicts,next:batch.length===20?String(batch[batch.length-1].source_key):null};
+}
+
+export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
+ for(let attempt=0;attempt<3;attempt++){const row=await statement('SELECT data FROM profiles WHERE id=?',[original.id]).first<{data:string}>();if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=await run('UPDATE profiles SET data=?,updated_at=? WHERE id=? AND data=?',[JSON.stringify(merged),now(),original.id,raw]);if(changed)return true;}return false;
 }

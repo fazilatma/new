@@ -29,3 +29,10 @@ export function applyResultAdjustments<T extends {title:string;price:number;pric
   row.resultApplied={title:row.title,price:row.price};
   return product;
 }
+
+/** PostgreSQL jsonb normalizes key order; equivalent concurrent applications
+ * are not edit conflicts merely because their serialization order differs. */
+export function sameResultData(a:unknown,b:unknown):boolean{
+ const stable=(value:any):any=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
+ return JSON.stringify(stable(a))===JSON.stringify(stable(b));
+}

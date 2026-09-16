@@ -68,6 +68,12 @@ test('real Node HTTP extraction and sync buttons drain SQLite with continuous wo
     const updated=await api(`/api/profiles/${profile.id}/products`),autoSent=JSON.parse(await readFile(sentFile,'utf8'));
     assert.equal(updated.products[0].price,Math.round(base*1.3));assert.equal(autoSent.price,updated.products[0].price);assert.equal(autoSent.title,updated.products[0].title);
     assert.ok(job.log.some(row=>row.level==='stage'&&row.message==='apply-results'));assert.ok(job.log.some(row=>row.level==='stage'&&row.message==='sync'));
+    const delta=await api('/api/profiles',{id:profile.id,name:'stale name',extractionEngine:'stale engine',_autosavePatch:{priceValue:40}});
+    assert.equal(delta.profile.name,profile.name);assert.equal(delta.profile.extractionEngine,profile.extractionEngine);assert.equal(delta.profile.priceValue,40);
+    await Promise.all([api(`/api/profiles/${profile.id}/results/apply`,{}),api(`/api/profiles/${profile.id}/results/apply`,{})]);
+    for(let i=0;i<100;i++){({job}=await api('/api/jobs/'+delta.priceSyncJob.id));if(!['queued','running'].includes(job.status))break;await delay(50)}
+    assert.equal(job.status,'done',JSON.stringify(job));assert.equal(JSON.parse(await readFile(sentFile,'utf8')).price,Math.round(base*1.4));
+
 
   }finally{
     child.kill('SIGTERM');

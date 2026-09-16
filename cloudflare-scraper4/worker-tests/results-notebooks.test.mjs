@@ -8,7 +8,7 @@ async function functions(source,names,io={}){
  const js=(await transform(source.replace(/\bexport /g,''),{loader:'ts'})).code;
  return new Function(...Object.keys(io),js+';return {'+names.join(',')+'};')(...Object.values(io));
 }
-const {applyResultAdjustments}=await functions(await read('worker-src/result-adjustments.ts'),['applyResultAdjustments']);
+const {applyResultAdjustments,sameResultData}=await functions(await read('worker-src/result-adjustments.ts'),['applyResultAdjustments','sameResultData']);
 const profile={titleSuffix:' (کد:20)',priceMode:'percent',priceValue:10,roundPrice:0};
 test('stored Results settings replace previous settings instead of compounding them',()=>{
  const p={title:'Shoe',price:100000,priceText:'100000 تومان',sourceKey:'shoe'};
@@ -75,7 +75,7 @@ for(const runtime of ['render','worker'])test(`${runtime}: stored Results apply 
   if(conflict&&key==='007')return{rowCount:0};
   assert.equal(old,records.get(key),'optimistic compare uses the original JSON, including on PostgreSQL');records.set(key,params[0]);return{rowCount:1};
  };
- const io={pool:{query},rows:async(q,p)=>(await query(q,p)).rows,run:async(q,p)=>(await query(q,p)).rowCount,getState:async()=>({}),now:()=>new Date().toISOString(),parseJson:(x)=>typeof x==='string'?JSON.parse(x):x,json:x=>JSON.parse(x),validProductRow:p=>p&&typeof p==='object',applyResultAdjustments};
+ const io={getProduct:async(id,key)=>JSON.parse(records.get(key)),pool:{query},rows:async(q,p)=>(await query(q,p)).rows,run:async(q,p)=>(await query(q,p)).rowCount,getState:async()=>({}),now:()=>new Date().toISOString(),parseJson:(x)=>typeof x==='string'?JSON.parse(x):x,json:x=>JSON.parse(x),validProductRow:p=>p&&typeof p==='object',applyResultAdjustments,sameResultData};
  const {applyStoredResultSettings}=await functions(source.slice(a),['applyStoredResultSettings'],io);
  const apply=async(p)=>{let after='',changed=0,conflicts=0;do{const result=await applyStoredResultSettings(p,after);changed+=result.changed;conflicts+=result.conflicts;after=result.next}while(after);return{changed,conflicts}};
  assert.deepEqual(await apply({...profile,id:'p'}),{changed:45,conflicts:0});assert.ok([...records.values()].every(raw=>JSON.parse(raw).price===110000));

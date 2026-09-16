@@ -1,4 +1,5 @@
-import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
+import { mergeBenchmarkProfile } from '../worker-src/benchmark-profile.js';
+import { applyResultAdjustments, sameResultData } from '../worker-src/result-adjustments.js';
 import { isoDateTime, normalizeDbValue, normalizePersianText, toRemoteId } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -563,12 +564,17 @@ export async function applyStoredResultSettings(profile:Profile,after='',previou
   let changed=0,conflicts=0;
   for(const row of batch){
     const product=parseJson<Product>(row.data,row.data);
-    if(!validProductRow(product))continue;
+    if(!validProductRow(product)||typeof product.title!=='string')continue;
     const originalData=typeof row.data==='string'?row.data:JSON.stringify(row.data);
     if(!(product as any).resultBase&&previousSuffix&&product.title.endsWith(previousSuffix.trim())){(product as any).resultBase={title:product.title.slice(0,-previousSuffix.trim().length).trimEnd(),price:product.price,priceText:product.priceText};}
     applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));
+    if(sameResultData(product,JSON.parse(originalData)))continue;
     const result=await pool.query('UPDATE products SET data=$1,title=$2,price=$3,updated_at=now() WHERE profile_id=$4 AND source_key=$5 AND data=$6',[JSON.stringify(product),product.title,product.price,profile.id,row.source_key,originalData]);
-    if(result.rowCount)changed++;else conflicts++;
+    if(result.rowCount)changed++;else {const current=await getProduct(profile.id,row.source_key);if(!sameResultData(current,product))conflicts++;}
   }
   return{changed,conflicts,next:batch.length===20?String(batch[batch.length-1].source_key):null};
+}
+
+export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
+ for(let attempt=0;attempt<3;attempt++){const row=(await pool.query('SELECT data FROM profiles WHERE id=$1',[original.id])).rows[0];if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=(await pool.query('UPDATE profiles SET data=$1,updated_at=now() WHERE id=$2 AND data=$3',[JSON.stringify(merged),original.id,raw])).rowCount;if(changed)return true;}return false;
 }

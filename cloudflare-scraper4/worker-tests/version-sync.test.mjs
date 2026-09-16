@@ -423,8 +423,8 @@ test('the engine benchmark never saves a near-empty engine as the profile defaul
   const start = server.indexOf('const usable=results.filter');
   const end = server.indexOf('(profile as any).extractionEngineBenchmarks', start);
   const body = server.slice(start, end).replace(/const MIN_BENCHMARK_PRODUCTS[^\n]*\n/, '');
-  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS',
-    `${body}; return { fastest, bestCount };`)(results, 2);
+  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS', 'emit',
+    `${body}; return { fastest, bestCount };`)(results, 2, ()=>{});
 
   // The user's real Termux numbers.
   const termux = [
@@ -603,7 +603,7 @@ test('dashboard URLs are relative so the deployer proxy at /scraper/ works', asy
   assert.equal(at('/scraper/')('https://x.test/a'), 'https://x.test/a', 'external URLs stay absolute');
 
   // api() funnels 100+ call sites, so it is the one that must be wrapped.
-  assert.match(dash, /async function api\(path,options=\{\}\)\{const response=await fetch\(U\(path\)/, 'api() must route through U()');
+  assert.match(dash, /async function apiRequest\(path,options=\{\}\)\{const response=await fetch\(U\(path\)/, 'api() must route through U()');
   // The bootstrap script tag must be relative too, or nothing loads at all.
   assert.ok(!/<script src="\/dashboard\.js"/.test(dash), 'the script tag must not be root-absolute');
   assert.match(dash, /<script src="dashboard\.js" defer><\/script>/);
