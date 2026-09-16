@@ -21,6 +21,18 @@ export function configureSourceNetwork(value: Partial<SourceNetwork> | null | un
   sourceNetwork = { mode: String(value?.mode || 'direct'), proxyUrl: String(value?.proxyUrl || ''), workerUrl: String(value?.workerUrl || '') };
 }
 export function sourceNetworkConfig(): SourceNetwork { return sourceNetwork; }
+/**
+ * Which route a source fetch would take. Reported by the extraction
+ * diagnostic, so a site block can be traced to direct device egress instead
+ * of guessing. Twin of the routing decision in worker-src/scraper.ts
+ * sourceText(): per-profile indirect or global worker mode wins, then the
+ * global proxy, otherwise direct.
+ */
+export function sourceRoute(indirect = false): 'worker' | 'proxy' | 'direct' {
+  if ((indirect || sourceNetwork.mode === 'worker') && sourceNetwork.workerUrl) return 'worker';
+  if (sourceNetwork.mode === 'proxy' && sourceNetwork.proxyUrl) return 'proxy';
+  return 'direct';
+}
 /** Wraps a target URL in the configured Worker/gateway URL. */
 /**
  * Normalises a user-entered proxy/Worker address.
@@ -115,6 +127,15 @@ export type ApiRequestInit = RequestInit & {
    * or the LAN (the normal Termux and self-hosted setup). Never set this for a URL from scraped content.
    */
   aiEndpoint?: boolean;
+  /**
+   * Per-profile «اتصال غیرمستقیم» for SOURCE extraction. Forces this request
+   * through the configured Worker gateway even when the global mode is
+   * direct. Without a gateway (and no global proxy) the request fails with
+   * the missing-gateway error instead of silently going direct — a silent
+   * direct fetch is exactly how a sanction-blocked shop answers 403 while
+   * the same profile works on the Worker.
+   */
+  indirect?: boolean;
 };
 
 export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
@@ -155,8 +176,11 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
       // gateway fetches the target for us); `proxy` keeps the URL and sends the
       // request through an HTTP(S) proxy via undici.
       const routed = init.directRoute !== true;
-      const useWorker = routed && sourceNetwork.mode === 'worker' && sourceNetwork.workerUrl;
+      const forceWorker = (init as ApiRequestInit).indirect === true;
       const useProxy = routed && sourceNetwork.mode === 'proxy' && sourceNetwork.proxyUrl;
+      if (routed && forceWorker && !sourceNetwork.workerUrl && !useProxy)
+        throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');
+      const useWorker = routed && (sourceNetwork.mode === 'worker' || forceWorker) && sourceNetwork.workerUrl;
       const requestUrl = useWorker ? viaWorkerUrl(sourceNetwork.workerUrl, url.href) : url.href;
       const doFetch: typeof fetch = useProxy
         ? ((input: any, options: any) => undiciFetch(input, { ...options, dispatcher: new ProxyAgent(sourceNetwork.proxyUrl) }) as any)
@@ -171,12 +195,17 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
         // 401 "invalid authorization header" / 522 before reading the token.
         // scraper4.php sends only Accept, Authorization and Content-Type.
         headers: (init as ApiRequestInit).apiMode
-          ? { ...init.headers }
+          ? { ...(useWorker ? { 'x-scraper-target': url.href, 'x-target-url': url.href } : null), ...init.headers }
           : {
             'user-agent': config.userAgent,
             accept: 'text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5',
             'accept-language': 'fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6',
             'cache-control': 'no-cache',
+            // The gateway contract (scripts/ai-proxy-worker.js): the target
+            // travels in ?url= AND these headers, like the Worker's
+            // safeTextViaWorker. A gateway that reads only headers would
+            // otherwise answer 400 for every Node-routed request.
+            ...(useWorker ? { 'x-scraper-target': url.href, 'x-target-url': url.href } : null),
             ...init.headers
           }
       });
@@ -215,8 +244,8 @@ export function ensureTextResponse(text: string, contentType: string, url: strin
   if (/(?:cf-chl-|challenge-platform|cdn-cgi\/challenge-platform|g-recaptcha|hcaptcha)/i.test(sample) || /<title[^>]*>\s*(?:Just a moment|Attention Required|Access denied)/i.test(sample)) throw new Error(`صفحهٔ ضدربات/چالش به‌جای محتوای محصول از ${url} دریافت شد. روش اتصال غیرمستقیم را بررسی کنید.`);
 }
 
-export async function safeText(raw: string, maxBytes = 8_000_000): Promise<{ text: string; url: string }> {
-  const response = await safeFetch(raw, {}, maxBytes);
+export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiRequestInit = {}): Promise<{ text: string; url: string }> {
+  const response = await safeFetch(raw, init, maxBytes);
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${raw}`);
   const buffer = await response.arrayBuffer();
   if (buffer.byteLength > maxBytes) throw new Error(`Response exceeds ${maxBytes} bytes`);

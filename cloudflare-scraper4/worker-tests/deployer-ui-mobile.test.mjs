@@ -226,3 +226,16 @@ test('deployer markup: polling is polite about the phone it runs on', () => {
   assert.match(script, /followLog\(\$\('scraperLog'\), Boolean\(d\.scraper\?\.running\)\);/,
     'the scraper log forces follow while the process is running, because a live tail is the point');
 });
+
+test('deployer markup: the off switches accept the words people actually type', async () => {
+  // Both auto-updaters rewrite files in the working tree, so "I turned them off" has to mean 0, no,
+  // off as well as false. Only `false` used to work in each of them, and neither was pinned — which
+  // is how the Node one quietly reverted during the 1.182.0+ rebase onto the production branch.
+  const serverSource = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  const pair = "const localScraperAutoUpdate = !/^(?:false|0|no|off)$/i.test(String(process.env.LOCAL_SCRAPER_AUTO_UPDATE ?? 'true').trim()) && process.env.RENDER !== 'true';";
+  assert.ok(serverSource.includes(pair), 'the Node scraper auto-update must honour 0 / no / off');
+  assert.ok(source.includes("const autoUpdateEnabled = !/^(?:false|0|no|off)$/i.test(String(startupEnv.LOCAL_DEPLOYER_AUTO_UPDATE ?? 'true').trim());"),
+    'the deployer branch scanner must honour the same words');
+  assert.match(source, /LOCAL_DEPLOYER_AUTO_UPDATE=false\s+disable the automatic branch scanner/,
+    'and the documented value has to stay what the printed guide shows');
+});

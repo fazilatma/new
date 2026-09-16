@@ -821,3 +821,44 @@ Guards: `worker-tests/deployer-ui-mobile.test.mjs` pins the markup and styleshee
 type, every queried id present, restated `[hidden]` rules), and the new
 `worker-tests/deployer-ui-live.test.mjs` executes the page script itself against a parsed DOM so the
 rail, badges, zoom steps, filters, toast and follow-up are checked as behaviour, not as strings.
+
+## 1.182.0+ — rebased onto your 1.180.0 + 1.181.0: the redesigned deployer page, plus four Node deltas
+
+Your tree is the base and stays untouched: per-profile indirect routing on Node with route
+reporting and the `reconTable` fix (1.180.0), the results-tab render fix, one-at-a-time browsers and
+honest browser availability (1.181.0). Your new tests (`results-tab`, `results-suffix`,
+`node-source-route`, `browser-slot`) run on this merge as-is.
+
+### Why the number moved
+
+The deployer redesign was first pushed on this branch as `1.181.0+`, and you then released
+`1.180.0`/`1.181.0` on the production branch. `numericCore` in `worker-src/deployer-branches.ts`,
+which decides "newest branch" in the deployer, compares the numeric core and ignores the `+`, so both
+releases read as the same version. Mine is `1.182.0+` now and carries the same content; the `+`
+marker on every agent release stays, propagated by `npm run version:sync`.
+
+### Node deltas this branch adds
+
+- `assertAiEndpointUrl` in `render-src/network.ts` and the `aiEndpoint` opt-in in `ApiRequestInit`
+  (both `safeFetch` hops and the `/models` probe): an AI base URL you typed yourself may point at
+  Ollama on `127.0.0.1:11434`, `host.docker.internal` or a LAN host, while scrape targets keep
+  `assertPublicUrl`; http/https only, no URL credentials, `169.254.0.0/16` refused.
+- `/api/ai/chat` on Node posts the messages with their roles instead of one flattened prompt, and
+  reports the `keyIndex` the `[K۲]` picker selected.
+- `productRowFailureHtml` keeps a single broken result in its own warning card instead of dropping
+  the whole list, and `openProductModal` says why it cannot open. Your synchronous
+  `productSuffixFormats` fix is the base and is untouched; `worker-tests/results-products-ui.test.mjs
+  and your `results-tab.test.mjs` both pass against it.
+- `LOCAL_SCRAPER_AUTO_UPDATE` and `LOCAL_DEPLOYER_AUTO_UPDATE` also accept `0` / `no` / `off`.
+
+### Deployer page (`scripts/local-deployer-ui.mjs`)
+
+The second round of the redesign, additive on top of the mobile-first 1.178.0+ work: a header status
+rail fed from the existing `status()` payload with an `updated Ns ago` stamp, a four-notch text-size
+step (100 to 137.5 percent on the root font size, persisted), per-tab count badges with a red
+attention dot, shimmer skeletons for loading state, toasts instead of `alert()`, filters for the branch
+and environment lists, foldable command scripts, and polling that stops while the tab is hidden.
+No route, id or handler changed, and the rail is deliberately not an ARIA live region. Guards:
+`worker-tests/deployer-ui-mobile.test.mjs` (markup and stylesheet contract) and
+`worker-tests/deployer-ui-live.test.mjs` (behaviour, executing the page script itself against a parsed
+DOM with the real `/api/status` shape).

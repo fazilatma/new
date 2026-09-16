@@ -1,9 +1,9 @@
 import * as cheerio from 'cheerio';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { safeText } from './network.js';
+import { safeText, sourceRoute } from './network.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile, type Selectors } from './types.js';
 
 // Playwright resolves its browser-registry directory at IMPORT time and only
@@ -469,12 +469,12 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
-  const source=()=>sourcePromise ||= safeText(url);
+  const source=()=>sourcePromise ||= safeText(url,8_000_000,{indirect});
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
   // carry the WooCommerce DEFAULT_SELECTORS (empty list selectors are rejected),
   // so "selectors not configured" never looked empty and the engines ran blind:
@@ -524,10 +524,10 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if (engine !== 'auto' && name === engine) throw new Error('مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.');
       return [] as Product[];
     }
-    if (name === 'playwright') return scrapeListWithPlaywright(url, activeSelectors);
-    if (name === 'puppeteer') return scrapeListWithPuppeteer(url, activeSelectors);
-    if (name === 'crawlee_playwright') return scrapeListWithCrawleePlaywright(url, activeSelectors);
-    if (name === 'network_api') return scrapeListWithNetworkApi(url);
+    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors));
+    if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors));
+    if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors));
+    if (name === 'network_api') return withBrowserSlot(() => scrapeListWithNetworkApi(url));
     const { text, url: finalUrl } = await source();
     if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
     if (name === 'jsonld') return jsonLdProducts(text, finalUrl);
@@ -562,7 +562,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
   const engineError=explicitError instanceof Error?explicitError.message:explicitError?String(explicitError):undefined;
   return{products:[],usedEngine:engine,elapsedMs:Date.now()-started,nextUrl:await nextLink(),selectorsUsed:activeSelectors,discoveredSelectors,discoveryMethod,engineError,...(BROWSER_ENGINES.has(engine)&&lastBrowserLayer?{browserLayer:lastBrowserLayer}:{}),...(engine==='network_api'&&lastNetworkApiStats?{networkApiStats:lastNetworkApiStats}:{}),...(BROWSER_ENGINES.has(engine)&&lastRenderedSnapshot?{renderedSnapshot:lastRenderedSnapshot}:{})};
 }
-export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover)).products; }
+export async function scrapeList(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', autoDiscover = true, indirect = false): Promise<Product[]> { return (await scrapeListWithMeta(url, selectors, engine, undefined, true, '', autoDiscover, indirect)).products; }
 
 /**
  * Finds a Chromium to drive. `.npmrc` deliberately skips the bundled browser
@@ -596,14 +596,51 @@ function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined
     // Fall back to a browser already installed on the machine before giving up.
     || systemBrowser();
 }
+/** A cache directory only counts when it holds a real browser binary: a stale
+ * ms-playwright folder from a failed/interrupted download used to report
+ * "available", so every browser probe died in launch with the giant
+ * "Executable doesn't exist" error instead of skipping cleanly. */
+function cacheHasBrowserBinary(root: string): boolean {
+  const names = new Set(['chrome', 'headless_shell', 'chromium', 'firefox', 'webkit']);
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+  while (stack.length) {
+    const { dir, depth } = stack.pop()!;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (names.has(entry.name)) return true;
+      if (entry.isDirectory() && depth < 4) stack.push({ dir: join(dir, entry.name), depth: depth + 1 });
+    }
+  }
+  return false;
+}
 /** True when some Chromium is reachable, so the engine list can say why not. */
 export function browserEngineAvailable(): boolean {
   if (browserExecutable('playwright')) return true;
-  // Playwright downloads into a predictable cache; treat its presence as usable.
+  // Playwright downloads into a predictable cache; treat it as usable only
+  // when a browser binary is actually inside.
   try {
     const home = process.env.HOME || process.env.USERPROFILE || '';
-    return Boolean(home) && existsSync(`${home}/.cache/ms-playwright`);
+    if (!home) return false;
+    return cacheHasBrowserBinary(join(home, '.cache', 'ms-playwright'))
+      || cacheHasBrowserBinary(join(home, '.cache', 'puppeteer'));
   } catch { return false; }
+}
+/**
+ * Browser launch mutex: at most ONE Chromium runs at a time per process.
+ * Without it, two simultaneous operations (diagnostic + benchmark, a retry
+ * on top of a slow run, two open tabs) pile up full browsers until a small
+ * VPS runs out of memory and the kernel kills the server mid-request — the
+ * "crash" that only happens where browsers actually launch. Every browser
+ * engine funnels through pick(), so gating there covers all callers.
+ */
+let browserLaunchChain: Promise<void> = Promise.resolve();
+export async function withBrowserSlot<T>(task: () => Promise<T>): Promise<T> {
+  const previous = browserLaunchChain;
+  let release: () => void = () => undefined;
+  browserLaunchChain = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try { return await task(); } finally { release(); }
 }
 function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
 /** A goto interrupted by the page's own redirect/reload rejects with net::ERR_ABORTED even though the follow-up page loads fine — survivable. */
@@ -963,8 +1000,11 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
 async function scrapeListWithPlaywright(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright'); }
 async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer'); }
 async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors): Promise<Product[]> {
-  const { PlaywrightCrawler, Dataset } = await import('crawlee');
-  const dataset = await Dataset.open(`scraper4-${Date.now()}`);
+  const { PlaywrightCrawler } = await import('crawlee');
+  // The crawl covers exactly one page, so the products ride home in a closure
+  // variable — the old per-run Dataset left a scraper4-<timestamp> storage
+  // directory behind on every benchmark/diagnostic page, forever.
+  let found: Product[] = [];
   // Same browser resolution as the Playwright/Puppeteer engines: drive the
   // detected system Chromium (Termux/VPS/desktop) with sandbox-free flags.
   // Crawlee's default launch looks for Playwright's bundled browsers, which
@@ -979,11 +1019,10 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
     const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
-    await dataset.pushData(rescued.products);
+    found = rescued.products;
   }});
   await crawler.run([url]);
-  const data = await dataset.getData();
-  return dedupe(data.items.flat() as Product[]);
+  return dedupe(found);
 }
 function parseProductsFromHtml(html: string, baseUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(html); const products: Product[] = [];
@@ -1490,9 +1529,9 @@ export function heuristicProducts(html: string, baseUrl: string): Product[] {
   // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
   for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' ')))); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
-export async function scrapeDetails(product: Product, selectors: Selectors): Promise<Product> {
+export async function scrapeDetails(product: Product, selectors: Selectors, indirect = false): Promise<Product> {
   if (!product.url) return product;
-  const { text, url } = await safeText(product.url); const $ = cheerio.load(text); const body = $.root();
+  const { text, url } = await safeText(product.url, 8_000_000, { indirect }); const $ = cheerio.load(text); const body = $.root();
   const css = (selector?: string) => selector ? (xpathToCss(selector) ?? selector) : '';
   const textField = (selector?: string) => selector ? normalize(body.find(css(selector)).first().text()) : '';
   product.shortDesc = textField(selectors.shortDesc) || product.shortDesc;
@@ -2197,13 +2236,13 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   }
   let page: { text: string; url: string };
   try {
-    page = await safeText(url, 4_000_000);
+    page = await safeText(url, 4_000_000, { indirect: Boolean(profile.networkIndirect) });
     const bytes = Buffer.byteLength(page.text, 'utf8');
     const title = normalize(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ') || '');
-    add('network', true, `صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`, { requestedUrl: url, finalUrl: page.url, bytes, title, runtime: 'node' });
+    add('network', true, `صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`, { requestedUrl: url, finalUrl: page.url, bytes, title, runtime: 'node', indirect: Boolean(profile.networkIndirect), route: sourceRoute(Boolean(profile.networkIndirect)) });
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
-    add('network', false, text, { requestedUrl: url, runtime: 'node' });
+    add('network', false, text, { requestedUrl: url, runtime: 'node', indirect: Boolean(profile.networkIndirect), route: sourceRoute(Boolean(profile.networkIndirect)) });
     recommendations.push(/ضدربات|چالش|challenge|403/i.test(text)
       ? 'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی این دستگاه را در مبدأ مجاز کنید یا از روش اتصال غیرمستقیم استفاده کنید.'
       : 'آدرس، دسترسی اینترنت دستگاه و تنظیمات روش اتصال مبدأ را بررسی کنید.');
@@ -2217,7 +2256,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const selectorsToSave: Record<string, string> = {};
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster);
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).
@@ -2301,7 +2340,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const wantsDetail = detailKeys.some(key => String((profile.selectors as any)?.[key] || '').trim().length > 0);
   if (candidate && wantsDetail) {
     try {
-      const extracted = await scrapeDetails(candidate, profile.selectors);
+      const extracted = await scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect));
       detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || '').length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images?.length || 0, variations: extracted.variations?.slice(0, 20) };
       add('detail-extraction', true, 'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.', { sample: detail });
     } catch (error) { add('detail-extraction', false, error instanceof Error ? error.message : String(error), { url: candidate.url }); }

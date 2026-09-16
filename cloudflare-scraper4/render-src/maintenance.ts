@@ -18,7 +18,8 @@ type Remote={id:number;name:string;sku:string;images:any[];status:string;price:n
    its own); only the data access below is runtime-specific. Re-exporting the
    Worker's reconTable used to drag its D1 helpers into the Node runtime, so the
    button failed with "D1 binding DB is not configured" on Termux/VPS/Render. */
-export { reconNormTitle } from '../worker-src/recon-core.js';
+import { reconNormTitle } from '../worker-src/recon-core.js';
+export { reconNormTitle };
 
 /** Every destination account: the WooCommerce site plus each Basalam stall. */
 export async function reconAccounts(): Promise<ReconAccount[]> {
