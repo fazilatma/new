@@ -1,3 +1,4 @@
+import { sourceWorkerUrl, fetchSourceGateway, sourceGatewayAttempts } from '../worker-src/source-network.js';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
@@ -17,6 +18,8 @@ import { config } from './config.js';
  */
 type SourceNetwork = { mode: string; proxyUrl: string; workerUrl: string };
 let sourceNetwork: SourceNetwork = { mode: 'direct', proxyUrl: '', workerUrl: '' };
+let sourceNetworkLoader: ((url: string) => Promise<SourceNetwork>) | undefined;
+export function registerSourceNetworkLoader(loader: (url: string) => Promise<SourceNetwork>): void { sourceNetworkLoader = loader; }
 export function configureSourceNetwork(value: Partial<SourceNetwork> | null | undefined): void {
   sourceNetwork = { mode: String(value?.mode || 'direct'), proxyUrl: String(value?.proxyUrl || ''), workerUrl: String(value?.workerUrl || '') };
 }
@@ -76,6 +79,35 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
 }
 
 /**
+ * The guard for AI provider base URLs — deliberately looser than assertPublicUrl.
+ *
+ * assertPublicUrl exists so an untrusted scrape target can never make this server knock on an
+ * internal port. An AI base URL is not untrusted input: the person who owns the dashboard typed
+ * it, and the documented Termux / VPS setup points at Ollama on 127.0.0.1:11434 (or LM Studio,
+ * llama.cpp and vLLM on the LAN). Applying the scrape-site guard to it made every model row fail
+ * with "Private or unresolved destination is not allowed" on Linux and Termux, while the same
+ * configuration worked on Cloudflare — where the Worker has no such guard.
+ *
+ * Still enforced: http/https only, no credentials smuggled into the URL, and the link-local range
+ * that carries cloud metadata (169.254.0.0/16) stays closed, so a saved provider row cannot be
+ * turned into a metadata-service hop.
+ */
+export async function assertAiEndpointUrl(raw: string): Promise<URL> {
+  const url = new URL(String(raw || ''));
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('آدرس ارائه‌دهنده باید با http:// یا https:// شروع شود.');
+  if (url.username || url.password) throw new Error('نام کاربری/رمز در آدرس ارائه‌دهنده مجاز نیست؛ کلید API را در فیلد خودش وارد کنید.');
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const metadata = (ip: string) => ip.startsWith('169.254.') || ip.toLowerCase() === 'fe80::1';
+  if (net.isIP(host)) { if (metadata(host)) throw new Error('آدرس IP سرویس ابر (metadata) مجاز نیست.'); return url; }
+  if (host === 'localhost' || host.endsWith('.localhost') || host === 'host.docker.internal') return url;
+  let addresses: Array<{ address: string }> = [];
+  try { addresses = await dns.lookup(host, { all: true }); } catch { throw new Error('آدرس ارائه‌دهنده «' + host + '» resolve نشد؛ سرور AI را روشن کنید یا آدرس را درست کنید.'); }
+  if (!addresses.length) throw new Error('آدرس ارائه‌دهنده «' + host + '» هیچ IP‌ای ندارد.');
+  if (addresses.every(item => metadata(item.address))) throw new Error('آدرس ارائه‌دهنده به محدودهٔ metadata سرویس ابر می‌رسد و اجازه ندارد.');
+  return url;
+}
+
+/**
  * Basalam-aware request path. The «اتصال غیرمستقیم» checkbox was stored but never
  * read, so enabling it changed nothing. When it is on, Basalam calls are routed
  * through the configured reverse Worker so they do not leave from a datacenter
@@ -92,6 +124,12 @@ export type ApiRequestInit = RequestInit & {
    * valid (all four doctor probes return 200 on a direct request).
    */
   directRoute?: boolean;
+  /**
+   * Validate with assertAiEndpointUrl instead of assertPublicUrl: an AI provider base URL is typed
+   * by the dashboard owner and may legitimately point at Ollama / llama.cpp / vLLM on this machine
+   * or the LAN (the normal Termux and self-hosted setup). Never set this for a URL from scraped content.
+   */
+  aiEndpoint?: boolean;
   /**
    * Per-profile «اتصال غیرمستقیم» for SOURCE extraction. Forces this request
    * through the configured Worker gateway even when the global mode is
@@ -119,6 +157,7 @@ export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, m
   return safeFetch(raw, { ...init, apiMode: true, directRoute: true }, maxBytes);
 }
 
+const sourceResponses = new WeakMap<Response, { url: string; route: string }>();
 function sleepMs(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, Math.max(0, ms))); }
 /**
  * Retry-After in milliseconds: a seconds value (capped at 10s so one rude
@@ -132,7 +171,9 @@ function retryAfterMs(response: Response): number {
   return 2_000;
 }
 export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
-  let url = await assertPublicUrl(raw), throttleRetries = 0;
+  const network = init.directRoute !== true && init.aiEndpoint !== true && sourceNetworkLoader ? await sourceNetworkLoader(raw) : sourceNetwork;
+  if (init.directRoute !== true) configureSourceNetwork(network);
+  let url = await (init.aiEndpoint === true ? assertAiEndpointUrl(raw) : assertPublicUrl(raw)), throttleRetries = 0;
   for (let redirects = 0; redirects < 5; redirects++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
@@ -140,17 +181,18 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
       // Honour the configured indirect route. `worker` rewrites the URL (the
       // gateway fetches the target for us); `proxy` keeps the URL and sends the
       // request through an HTTP(S) proxy via undici.
-      const routed = init.directRoute !== true;
+      const routed = init.directRoute !== true && init.aiEndpoint !== true;
       const forceWorker = (init as ApiRequestInit).indirect === true;
-      const useProxy = routed && sourceNetwork.mode === 'proxy' && sourceNetwork.proxyUrl;
-      if (routed && forceWorker && !sourceNetwork.workerUrl && !useProxy)
+      const useProxy = routed && network.mode === 'proxy' && network.proxyUrl && !(forceWorker && network.workerUrl);
+      if (routed && network.mode === 'worker' && !network.workerUrl) throw new Error('Worker URL در تنظیمات اتصال مبدأ خالی است.');
+      if (routed && forceWorker && !network.workerUrl && !useProxy)
         throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');
-      const useWorker = routed && (sourceNetwork.mode === 'worker' || forceWorker) && sourceNetwork.workerUrl;
-      const requestUrl = useWorker ? viaWorkerUrl(sourceNetwork.workerUrl, url.href) : url.href;
+      const useWorker = routed && (network.mode === 'worker' || forceWorker) && network.workerUrl;
+      const requestUrl = useWorker ? sourceWorkerUrl(network.workerUrl, url.href) : url.href;
       const doFetch: typeof fetch = useProxy
-        ? ((input: any, options: any) => undiciFetch(input, { ...options, dispatcher: new ProxyAgent(sourceNetwork.proxyUrl) }) as any)
+        ? ((input: any, options: any) => undiciFetch(input, { ...options, dispatcher: new ProxyAgent(network.proxyUrl) }) as any)
         : fetch;
-      const response = await doFetch(requestUrl, {
+      const requestInit: RequestInit = {
         ...init,
         redirect: 'manual',
         signal: controller.signal,
@@ -173,11 +215,15 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
             ...(useWorker ? { 'x-scraper-target': url.href, 'x-target-url': url.href } : null),
             ...init.headers
           }
-      });
+      };
+      const send = (options: RequestInit) => doFetch(requestUrl, options);
+      const response = useWorker && !init.apiMode
+        ? await fetchSourceGateway(url.href, requestUrl, requestInit, send)
+        : await send(requestInit);
       if ([301,302,303,307,308].includes(response.status)) {
         const location = response.headers.get('location');
         if (!location) throw new Error('Redirect without location');
-        url = await assertPublicUrl(new URL(location, url).href);
+        url = await (init.aiEndpoint === true ? assertAiEndpointUrl(new URL(location, url).href) : assertPublicUrl(new URL(location, url).href));
         continue;
       }
       // 1.141.0 — one bounded retry on 429 (rate-limit). Shops throttle bursts
@@ -192,6 +238,7 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
       }
       const length = Number(response.headers.get('content-length') || 0);
       if (length > maxBytes) throw new Error(`Response exceeds ${maxBytes} bytes`);
+      sourceResponses.set(response, { url: url.href, route: useWorker ? 'worker' : useProxy ? 'proxy' : 'direct' });
       return response;
     } finally { clearTimeout(timeout); }
   }
@@ -209,12 +256,12 @@ export function ensureTextResponse(text: string, contentType: string, url: strin
   if (/(?:cf-chl-|challenge-platform|cdn-cgi\/challenge-platform|g-recaptcha|hcaptcha)/i.test(sample) || /<title[^>]*>\s*(?:Just a moment|Attention Required|Access denied)/i.test(sample)) throw new Error(`صفحهٔ ضدربات/چالش به‌جای محتوای محصول از ${url} دریافت شد. روش اتصال غیرمستقیم را بررسی کنید.`);
 }
 
-export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiRequestInit = {}): Promise<{ text: string; url: string }> {
+export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiRequestInit = {}): Promise<{ text: string; url: string; route: string }> {
   const response = await safeFetch(raw, init, maxBytes);
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${raw}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status} from ${raw} (route: ${sourceResponses.get(response)?.route || 'direct'}, attempts: ${sourceGatewayAttempts(response).join(' → ')}); در مسیر worker، این وضعیت می‌تواند از پراکسی یا سایت مبدأ باشد. قرارداد مسیر /https://site یا الگوی ?url={url} و مجوز دامنه در پراکسی را بررسی کنید.`);
   const buffer = await response.arrayBuffer();
   if (buffer.byteLength > maxBytes) throw new Error(`Response exceeds ${maxBytes} bytes`);
   const text = new TextDecoder().decode(buffer);
   ensureTextResponse(text, response.headers.get('content-type') || '', raw);
-  return { text, url: response.url || raw };
+  return { text, url: sourceResponses.get(response)?.url || raw, route: sourceResponses.get(response)?.route || 'direct' };
 }

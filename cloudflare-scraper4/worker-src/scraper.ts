@@ -1,3 +1,5 @@
+import { getState } from './db.js';
+import { resolveSourceNetwork } from './source-network.js';
 import { loadConnections } from './connections.js';
 import { safeText, safeTextViaWorker } from './network.js';
 import { escapeHtml, sha256 } from './utils.js';
@@ -58,15 +60,17 @@ const VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','li
 function hasEndTag(element:HtmlElement):boolean{return !VOID_TAGS.has(String(element.tagName||'').toLowerCase())}
 async function sourceKey(value:string):Promise<string>{return (await sha256(value)).slice(0,32)}
 export async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
-  const network=(await loadConnections()).ai.network;
+  const network=resolveSourceNetwork((await getState<any>('settings',{}))?.source,(await loadConnections()).ai.network,url);
   // A Worker URL saved in «روش اتصال» now applies to source pages too, not only
   // to AI calls. Previously it was used only when a profile had ticked the
   // per-profile «اتصال غیرمستقیم» box, so users who configured the gateway to
   // bypass a sanction block still hit the block on every extraction.
   const useWorker=Boolean(network.workerUrl)&&(indirect||network.mode==='worker');
-  if(useWorker)return safeTextViaWorker(url,network.workerUrl,maxBytes);
+  if(useWorker){try{return {...await safeTextViaWorker(url,network.workerUrl,maxBytes),route:'worker'}}catch(error){throw new Error(`${error instanceof Error?error.message:String(error)} (route: worker)؛ قرارداد آدرس پراکسی و مجوز دامنهٔ مبدأ را بررسی کنید.`)}}
+  if(network.mode==='worker'&&!network.workerUrl)throw new Error('Worker URL در تنظیمات اتصال مبدأ خالی است.');
+  if(network.mode==='proxy')throw new Error('پروکسی CONNECT در Cloudflare پشتیبانی نمی‌شود؛ روش Worker / پروکسی معکوس را انتخاب کنید.');
   if(indirect&&network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود. (در محیط Cloudflare پروکسی HTTP در دسترس نیست؛ آدرس Worker واسط را وارد کنید.)');
-  return safeText(url,maxBytes);
+  return {...await safeText(url,maxBytes),route:'direct'};
 }
 function toAbsoluteUrl(value:string,base:string):string{try{return new URL(value,base).href}catch{return ''}}
 
@@ -853,11 +857,11 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
   const add=(name:string,ok:boolean,summary:string,details:any={})=>stages.push({name,ok,summary,...details});
   if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,selectorsToSave:{},recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
-  let page:{text:string;url:string;contentType:string};
+  let page:{text:string;url:string;contentType:string;route?:string};
   try{
     page=await sourceText(url,Boolean(profile.networkIndirect));
     const bytes=new TextEncoder().encode(page.text).byteLength,title=cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g,' ')||'');
-    add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,indirect:Boolean(profile.networkIndirect)});
+    add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,route:page.route,indirect:Boolean(profile.networkIndirect)});
   }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,selectorsToSave:{},recommendations}}
   let products:Product[]=[];
   // 1.135.0 — verified discoveries the route persists when the profile's

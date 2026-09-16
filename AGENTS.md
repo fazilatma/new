@@ -28,6 +28,11 @@ npm test                                            # full gate (must be green)
   set. After bumping it, run `npm run version:sync` (rewrites wrangler,
   dashboard badges/footers, install guides, lockfile, test anchors) and keep
   `npm run version:check` green. Never hand-edit version strings elsewhere.
+- **Release marker.** A version published by the agent carries a trailing `+` on the number
+  (`1.178.0+`), including the changelog heading and its Persian digits (`۱.۱۷۸.۰+`).
+  `version:sync` accepts and propagates the marker; it is display-only. Never splice a raw
+  version string into a regular-expression source (a trailing `+` there is a quantifier) -
+  compare against `packageJson.version` instead.
 - **Changelog card.** Every release adds one featured Persian changelog card
   in `worker-src/dashboard.ts` (`📜 گزارش تغییرات کد`): the new card goes
   first with `<time>… · نسخهٔ X.Y.Z</time>` (Persian digits), the previous
@@ -45,6 +50,14 @@ npm test                                            # full gate (must be green)
   render twin blocks even localhost (SSRF guard). Save the page HTML as a
   fixture under `worker-tests/fixtures/` and keep it — it becomes a permanent
   regression asset.
+- **Deployer page contract.** `scripts/local-deployer-ui.mjs` serves its CSS
+  and HTML from a single `String.raw` template (no backticks inside, `${}` only
+  for real interpolation), sizes everything in rem/em with em breakpoints so
+  text zoom actually scales the layout, and keeps its ids, `/api/*` routes and
+  the token flow stable — redesigns are additive.
+  `worker-tests/deployer-ui-mobile.test.mjs` pins the markup and stylesheet,
+  `worker-tests/deployer-ui-live.test.mjs` runs the page's own script against a
+  parsed DOM to pin behaviour. Add a capability, add a pin.
 - **Brownfield discipline.** Small diffs, count-asserted patches, no renames
   of public behavior; run the gate before every commit and push.
 - **Replies in English.** Chat answers to the user are entirely in English

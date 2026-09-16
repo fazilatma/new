@@ -38,7 +38,7 @@ R2 عمداً در تنظیمات production تعریف نشده است، زیر
 1. در Cloudflare Dashboard به **Workers & Pages** بروید.
 2. **Create application / Import a repository** را انتخاب کنید و repository را از GitHub متصل کنید.
 3. نام Worker را `scraper4-cloudflare` قرار دهید.
-4. شاخهٔ production را `arena/01a09468-new` انتخاب کنید.
+4. شاخهٔ production را `arena/01a0aa17-new` انتخاب کنید.
 5. Root directory را `cloudflare-scraper4` بگذارید.
 6. در **Build variables and secrets** متغیر build زیر را اضافه کنید تا فایل Python قدیمی repository نصب نشود:
 
@@ -68,7 +68,7 @@ Git integration پس از هر push جدید به شاخهٔ production، reposi
 نسخهٔ داشبورد (نشان بالای صفحه یا `/api/version`) باید با آخرین نسخهٔ همین شاخه یکی باشد. اگر عقب است، شاخهٔ production در Workers Builds روی شاخهٔ قدیمی قفل شده:
 
 1. در Cloudflare Dashboard به **Workers & Pages → scraper4-cloudflare → Settings → Builds** بروید.
-2. **Production branch** را `arena/01a09468-new` بگذارید و **Save** بزنید.
+2. **Production branch** را `arena/01a0aa17-new` بگذارید و **Save** بزنید.
 3. یک کامیت تازه به همین شاخه push کنید تا بیلد جدید شروع شود (ساده‌ترین راه بدون ترمینال: ویرایش یک غلط املایی در همین فایل از داخل سایت GitHub و Commit). دکمهٔ Retry deployment فقط همان کامیت قبلی را دوباره می‌سازد و شاخهٔ جدید را نمی‌گیرد.
 4. بعد از سبز شدن بیلد، `/api/version` را باز کنید و نسخه را با `package.json` همین شاخه مقایسه کنید. اگر بیلد سبز شد ولی نسخه عوض نشد، هش کامیت نمایش‌داده‌شده در صفحهٔ Deployments را با آخرین کامیت شاخه مقایسه کنید.
 
@@ -669,3 +669,149 @@ Worker عبور می‌کردند — و آن Worker هدر `Authorization` را
 برای فروشگاه‌های کاملاً جاوااسکریپتی یک‌بار `npm run browsers:install` را اجرا کنید (یا روی ترموکس
 `pkg install chromium`). روی Cloudflare Workers و هاست اشتراکی cPanel اجرای مرورگر ممکن نیست و باید
 از موتورهای HTML استفاده کرد.
+
+## نسخهٔ ۱.۱۸۰.۰+ — روی ۱.۱۷۹.۰ شما: نتایج، ارائه‌دهندهٔ محلی، علامت نسخه، و دیپلویر تازه
+
+این نسخه از برنچ `arena/01a0a647-new` ساخته و دیپلوی می‌شود (برنچ مرجع همین انتشار) و
+سوییچ غنی‌ساز هر پروفایل، دسته‌بندی باسلام در غنی‌سازی و ممیزی شناسایی را از ۱.۱۷۹.۰ نگه می‌دارد.
+
+### چه چیزی روی ۱.۱۷۹.۰ اضافه شد
+
+- `productSuffixFormats` دیگر `async` نیست و `productCodeSuffix` نتیجه را اعتبارسنجی می‌کند؛
+  هر کارت نتیجه داخل `try` خودش ساخته می‌شود تا خطای یک ردیف، کل بخش «بررسی نتایج استخراج»
+  را خالی نکند (رگرسیون ۱.۱۷۴.۰ که در ۱.۱۷۵.۰ تا ۱.۱۷۹.۰ باقی بود). `openProductModal` هم اگر
+  ردیف را پیدا نکند دلیل را می‌گوید. تابع `loadProducts(opts)` با `noActivate` (نسخهٔ ۱.۱۷۷.۰
+  شما برای تازه‌سازی خودکار) دست‌نخورده ماند و تست DOM آن را می‌پیند.
+- `worker-src/dashboard.ts` تغییر دیگری از من ندارد؛ فهرست جست‌وجوشوندهٔ مدل‌های سبز شما
+  (`combo-list`) سر جایش است.
+- روی نود: `assertAiEndpointUrl` + `aiEndpoint` در `safeFetch` (آدرس ارائه‌دهندهٔ محلی/LAN)،
+  چت با تاریخچهٔ کامل پیام‌ها و `keyIndex`، و `LOCAL_SCRAPER_AUTO_UPDATE` با ۰/no/off.
+
+### علامت `+` روی شمارهٔ نسخه
+
+هر نسخه‌ای که ایجنت منتشر می‌کند `x.y.z+` است (`۱.۱۸۰.۰+`). `package.json` منبع واحد می‌ماند و
+`npm run version:sync` همان رشته را می‌برد؛ `+` اختیاری در الگوهای جست‌وجو یعنی هم از نسخهٔ
+بی‌علامت به علامت‌دار می‌رسیم و هم برعکس. `runtime.test.mjs` شمارهٔ نسخه را داخل regex نمی‌گذارد
+(علامت `+` در عبارت باقاعده «تکرار» است) و از `packageJson.version` می‌خواند. `numericCore` در
+`worker-src/deployer-branches.ts` هستهٔ عددی را مقایسه می‌کند، پس رتبه‌بندی برنچ‌ها عوض نمی‌شود.
+
+### دیپلویر (`scripts/local-deployer-ui.mjs`)
+
+بازطراحی کامل برای موبایل با زوم بسیار بالا: تایپوگرافی و فاصله‌ها فقط rem/em، رسانه‌پرس‌ها با
+em، جدول‌ها در عرض باریک کارت‌شونده با `data-label`، نوار زبانهٔ چسبان با snap، هدف لمسی
+حداقل ۲.۸۵rem، نوار کنش پایین با safe-area، توضیح‌ها داخل `details`، پالت روشن/تیره با سوییچ
+مانتقل، focus-visible، prefers-reduced-motion و prefers-contrast. هیچ route، id یا دستوری عوض
+نشده است. نگهبان: `worker-tests/deployer-ui-mobile.test.mjs`.
+
+## نسخهٔ ۱.۱۸۱.۰+ — دیپلویر: نوار وضعیت زنده، زوم متنی، بَج‌ها، فیلتر، و تست رفتاری
+
+این نسخه فقط `scripts/local-deployer-ui.mjs` (و تست‌هایش) را عوض می‌کند. هیچ مسیر `/api/*`، هیچ id،
+هیچ دستوری، و هیچ بخشی از منطق دیپلوی جابه‌جا نشده است؛ جریان توکن (`?token=` و
+`x-local-deployer-token`) و ترتیب زبانه‌ها که `tabByIndex()` و لینک `#branches` به آن وابسته‌اند
+دست‌نخورده‌اند. داخل باندل worker تنها خطوط changelog تغییر کرده‌اند (`npm run worker:build`).
+
+### چه اضافه شد
+
+- **نوار وضعیت در هدر**: چهار چیپ (دیتابیس، اسکریپر محلی، git، تازه‌ترین برنچ) که از همان
+  `status()` موجود پر می‌شوند، به‌همراه «updated Ns ago». نوار عمداً live region نیست — چهار
+  مقدارِ بازنویسی‌شده هر ۵ ثانیه برای صفحه‌خوان خبر نیست؛ توستِ پایین صفحه (`role=status` روی
+  `<output>`) تنها چیزی است که اعلام می‌شود.
+- **زوم متن**: چهار پله ۱۰۰ / ۱۱۲٫۵ / ۱۲۵ / ۱۳۷٫۵ درصد روی `font-size` ریشه. چون تایپوگرافی،
+  فاصله‌ها، هدف‌های لمسی و نقطه‌شکست‌ها همه rem/em هستند این زوم واقعی است. کلید
+  `scraper4-deployer-text` در `localStorage`. هر دو دکمه `aria-label` دارند و `min-height:var(--tap)`
+  می‌گیرند.
+- **بَج روی زبانه‌ها**: شمارش برنچ‌ها و راهنماها، «running» برای job در حال اجرا، و «!» با نقطهٔ قرمز
+  وقتی اسکریپر build کهنه سرو می‌کند. نقطه با همان فراخوانی `badge()` پاک می‌شود، پس نمی‌تواند
+  بیش از وضعیت زنده بماند.
+- **حالت‌های بارگذاری/خالی/خطا**: کاشی‌ها و کارت‌های کتابخانه با اسکلتون shimmer (در
+  `prefers-reduced-motion` بی‌حرکت) شروع می‌شوند و هیچ کنترلی داخلشان نیست؛ فیلترِ بی‌نتیجه
+  صراحتاً «پیدا نشد» می‌نویسد.
+- **فیلتر و تاشو**: `#branchFilter` از کشیدهٔ همین‌جا باز رندر می‌کند (بدون درخواست تازه) و
+  `#guideFilter` روی کارت محیط‌ها؛ هر اسکریپت بلند با `toggleCmd` جمع می‌شود.
+- **احترام به گوشی**: پولینگ ۵ ثانیه‌ای وقتی `document.hidden` است انجام نمی‌شود و روی `focus` برمی‌گردد؛
+  `#logFollow` تصمیم می‌گیرد لاگ پایین برود یا نه، و لاگ اسکرپر تا فرآیند زنده است مجبوراً follow می‌شود.
+
+### سه رفعِ پیدا‌شده در همان بازبینی
+
+- جعبهٔ جست‌وجوی محیط‌ها ساخته شده بود ولی به `filterGuides()` وصل نبود؛ حالا listener دارد.
+- `updateRail` حالت سوم را `bad` صدا می‌زند و بقیهٔ صفحه `err` می‌گویند؛ `.dot.bad` اضافه شد تا
+  اسکرپرِ متوقف خاکستری دیده نشود.
+- اگر بستهٔ پاسخِ `/api/status` غایب باشد، چیپ «serving» خطا می‌داد و حلقهٔ رفرش می‌شکست؛ حالا
+  fallback امن دارد.
+
+### نگهبان‌ها
+
+- `worker-tests/deployer-ui-mobile.test.mjs`: هر id که اسکریپت می‌خواند در مارک‌آپ وجود دارد، هیچ
+  `font-size` پیکسلی در صفحه نیست، ریل یک live region نیست، و قواعد `[hidden]` دوباره نوشته شده‌اند.
+- `worker-tests/deployer-ui-live.test.mjs`: اسکریپت خودِ صفحه روی یک DOM پارس‌شده اجرا می‌شود و
+  نوار، بَج‌ها، زوم، فیلترها، توست و follow رفتاری را ثابت می‌کنند — با همان شکل پاسخ `/api/status`.
+
+## نسخهٔ ۱.۱۸۲.۰+ — روی ۱.۱۸۱.۰ شما: دیپلویر بازطراحی‌شده و چهار افزوده روی نود
+
+این برنچ `arena/01a0a647-new` رفرنس این انتشار است. درخت شما (۱.۱۸۰.۰: اتصال غیرمستقیم هر پروفایل روی
+نود، گزارش مسیر، اصلاح reconTable — و ۱.۱۸۱.۰: اصلاح رندر تب نتایج، مرورگرها یکی‌یکی، اعلام صادقانهٔ
+دسترس‌بودن مرورگر) بدون هیچ تغییری در همین نسخه است و تست‌های تازهٔ شما هم روی همین درخت اجرا می‌شوند.
+
+### چرا شماره جابه‌جا شد
+
+بازطراحی دیپلویر اول با شمارهٔ `۱.۱۸۱.۰+` روی همین برنچ منتشر شد و همان عدد را شما روی برنچ اصلی با
+`۱.۱۸۰.۰`/`۱.۱۸۱.۰` منتشر کردید. `numericCore` در `worker-src/deployer-branches.ts` هستهٔ عددی را
+می‌خواند و `+` را نمی‌بیند، پس «تازه‌ترین برنچ» دو نامزد هم‌عدد داشت. انتشار من حالا `۱.۱۸۲.۰+` است و
+همان محتوا را حمل می‌کند؛ علامت `+` روی همهٔ نسخه‌های من می‌ماند و `version:sync` آن را پخش می‌کند.
+
+### افزوده‌های روی نود
+
+- `assertAiEndpointUrl` در `render-src/network.ts` و گزینهٔ `aiEndpoint` در `ApiRequestInit` (هر دو
+  پرش `safeFetch` و پروب `/models`): آدرس ارائه‌دهندهٔ AI که خودتان نوشته‌اید می‌تواند به
+  `127.0.0.1:11434` (Ollama)، `host.docker.internal` یا یک میزبان LAN اشاره کند؛ http/https الزامی،
+  نام‌کاربری/رمز در URL ممنوع، و `169.254.0.0/16` بسته. مقصد استخراج همچنان `assertPublicUrl`.
+- چت (`/api/ai/chat` روی نود) پیام‌ها را با نقش‌هایشان می‌فرستد و `keyIndex` را برمی‌گرداند.
+- `productRowFailureHtml`: خطای یک نتیجه فقط همان کارت را هشدار می‌کند؛ `openProductModal` اگر ردیف را
+  پیدا نکند دلیل را می‌گوید. اصلاح ریشه‌ای شما (تابع هم‌زمان قالب کد) دست‌نخورده مانده است.
+- `LOCAL_SCRAPER_AUTO_UPDATE` و `LOCAL_DEPLOYER_AUTO_UPDATE` با `0` / `no` / `off` خاموش می‌شوند.
+- `LOCAL_DEPLOYER_NOTIFY` (خاموش با `0` / `no` / `off`) و `LOCAL_DEPLOYER_NOTIFY_CMD` (برنامهٔ اعلان دلخواه، با آرگومان) اعلان سیستمی نسخهٔ تازه را کنترل می‌کنند.
+
+### دیپلویر (`scripts/local-deployer-ui.mjs`)
+
+نوار وضعیت در هدر (دیتابیس، اسکریپر محلی، git با شمارش فایل تغییریافته، تازه‌ترین برنچ) با مُهر
+«updated Ns ago»، کنترل اندازهٔ متن A−/A+ (۱۰۰ تا ۱۳۷٫۵٪ روی `font-size` ریشه، حافظه در
+`localStorage`)، بَج شمارش روی زبانه‌ها با نقطهٔ هشدار، کاشی‌های اسکلتون، توست به‌جای `alert()`، فیلتر
+فهرست برنچ‌ها و محیط‌ها، جمع‌شدن اسکریپت‌های بلند، و پولینگِ متوقف‌شده وقتی تب مخفی است. هیچ مسیر، id
+یا دستوری عوض نشده؛ نوار وضعیت عمداً live region نیست. نگهبان‌ها:
+`worker-tests/deployer-ui-mobile.test.mjs` (مارک‌آپ/استایل) و
+`worker-tests/deployer-ui-live.test.mjs` (رفتار، با اجرای اسکریپت خود صفحه روی DOM).
+
+**اعلان سیستمی برای نسخهٔ تازه‌تر** (`scripts/deployer-notify.mjs`): هر اسکن برنچ‌ها
+اگر نسخه‌ای بالاتر از نسخهٔ در حال اجرا ببیند، یک اعلان واقعی به سیستم‌عامل می‌فرستد —Termux →
+`termux-notification`، لینوکس → `notify-send`، مک → `osascript`، ویندوز → toast پاورشل، و
+`LOCAL_DEPLOYER_NOTIFY_CMD` برای هر برنامهٔ دیگری. پیام‌ها با کلید `kind:name:version:sha12` یک‌بار
+ارسال می‌شوند (دفترش `data/.deployer-notices.json` است، با ری‌استارت پاک نمی‌شود و با
+`LOCAL_DEPLOYER_NOTIFY_STATE` جابه‌جا می‌شود؛ `GET /api/notifications` هم `restored` و هم مسیر فایل را
+برمی‌گرداند)، ارسال هیچ‌وقت اسکن را بلوکه یا شکسته نمی‌کند، و
+`LOCAL_DEPLOYER_NOTIFY=0/no/off` آن را خاموش می‌کند. فرمان سفارشی می‌تواند آرگومان داشته باشد
+(`sh /data/…/hook.sh`)؛ عنوان و متن به‌صورت argv اضافه می‌شوند و هرگز به shell داده نمی‌شوند. سه مسیر
+`GET /api/notifications`، `POST /api/notifications/test`، `POST /api/notifications/scan` وضعیت و آخرین
+اعلان‌ها را می‌دهند؛ اگر دستگاه برنامهٔ اعلان نداشته باشد، صفحهٔ دیپلویر با Notifications API خودِ
+مرورگر اعلام می‌کند و کلید دیدن در `localStorage` نگه داشته می‌شود.
+
+**بخش «🚀 دیپلویر محلی» در منوی همبرگری**: همان کارهای دیپلویر (وضعیت، بررسی نسخهٔ جدید، نصب
+تازه‌ترین برنچ، build/توقف اسکریپر، `npm install`، دیتابیس، به‌روزرسانی از git، تست اعلان، باز کردن
+صفحهٔ دیپلویر) از مسیر `POST|GET /api/deployer/local/:action` روی سرور نود به `127.0.0.1` دیپلویر
+فرستاده می‌شود. نشانی از `DEPLOYER_UI_TOKEN` + `DEPLOYER_UI_PORT` یا فایل `data/.deployer-token` خوانده
+می‌شود و توکن هیچ‌وقت در پاسخ یا صفحه ظاهر نمی‌شود؛ فهرست فرمان‌ها ثابت است (SSRF نیست)، نام برنچ
+سخت‌تر اعتبارسنجی می‌شود، از `/api/job` فقط `install|test|build|localBuild|databaseInstall` مجاز است،
+مهلت ۲۰ ثانیه دارد، و دیپلویر خاموش پاسخ ۵۰۳ با دلیل می‌دهد. روی Worker/Render همین مسیر ۵۰۱
+`NO_DEPLOYER` است. نگهبان: `worker-tests/deployer-local-panel.test.mjs`.
+
+
+## Source gateway routing on VPS (2026-09-16)
+
+This session continues `arena/01a0a647-new` on `arena/01a0aa17-new`.
+Set source connection mode to **Worker / reverse proxy** and Worker URL to
+`https://proxy.fazilat-ma.workers.dev`. The default source contract is
+`/https://emalls.ir/...`, matching the Worker runtime. For query-based gateways,
+use `https://proxy.fazilat-ma.workers.dev/?url={url}` instead. The target is encoded
+once in the placeholder. An existing explicit direct source setting wins over AI settings.
+The proxy must allow `emalls.ir`; a 403 can originate at either hop.
+After rebuilding/restarting the VPS web and queue processes, run source access test
+and extraction diagnosis again. Tests run offline; live Emalls access is not certified.

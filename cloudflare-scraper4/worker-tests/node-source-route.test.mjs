@@ -42,7 +42,7 @@ test('indirect fetches go through the gateway with the target headers', async ()
     const page = await network.safeText('https://example.com/shop', 8_000_000, { indirect: true });
     assert.ok(page.text.includes('via gateway'));
     assert.equal(stub.calls.length, 1);
-    assert.equal(stub.calls[0].url, 'https://gw.example.com/fetch?url=https%3A%2F%2Fexample.com%2Fshop');
+    assert.equal(stub.calls[0].url, 'https://gw.example.com/fetch/https://example.com/shop');
     assert.equal(stub.calls[0].headers.get('x-scraper-target'), 'https://example.com/shop');
     assert.equal(stub.calls[0].headers.get('x-target-url'), 'https://example.com/shop');
   } finally {
