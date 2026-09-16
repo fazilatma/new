@@ -15,7 +15,7 @@ type BaseRun={id:string;kind:'ai-test'|'category-all'|'dedup';status:RunStatus;p
 type AiTestRun=BaseRun&{kind:'ai-test';prompt:string;categoryTitle:string;onlyCandidates:boolean;delayMs:number;cursor:number;result:any;skipNext?:boolean;currentStartedAt?:string|null;currentKey?:string|null;retryJobs?:{key:string;left:number}[]};
 type CategoryProduct={id:number;shopId:string;title:string;categoryId?:number};
 type CategoryRunItem={id:number;shopId:string;title:string;ok:boolean;categoryId?:number;categoryName?:string;source?:string;confidence?:number;error?:string};
-type CategoryRun=BaseRun&{kind:'category-all';modelKeys:string[];mode:string;page:number;totalPages:number;products:CategoryProduct[];cursor:number;total:number;processed:number;changed:number;failed:number;items:CategoryRunItem[]};
+type CategoryRun=BaseRun&{kind:'category-all';modelKeys:string[];mode:string;trigger?:'manual'|'scheduled';page:number;totalPages:number;products:CategoryProduct[];cursor:number;total:number;processed:number;changed:number;failed:number;items:CategoryRunItem[]};
 type DedupTarget='woo'|'basalam';
 type DedupItemLog={id:number;shopId:string;name:string;ok:boolean;action:string;error?:string};
 type DedupRun=BaseRun&{kind:'dedup';target:DedupTarget;keep:DedupKeep;suffixFormats:string[];apply:boolean;page:number;totalPages:number;listingDone:boolean;grouped:boolean;products:DedupCandidate[];groups:DedupGroup[];groupCursor:number;removeCursor:number;scanned:number;groupsFound:number;duplicates:number;removed:number;failed:number;items:DedupItemLog[]};
@@ -173,17 +173,19 @@ export async function startAiTestRun(input:any,waitUntil?:(promise:Promise<unkno
   await writeRun(run);await setState(pointerKey('ai-test'),id);await enqueue({task:'ai-test',runId:id},waitUntil);return{run:publicRun(run),existing:false};
 }
 
-async function successfulCategoryModels(mode?:any):Promise<string[]>{
+async function successfulCategoryModels(mode?:any,explicit?:string[]):Promise<string[]>{
   const[tests,connections]=await Promise.all([getLastAiTestResults(),loadConnections()]),green=new Set<string>((Array.isArray(tests?.results)?tests.results:[]).filter((row:any)=>row?.ok===true).map((row:any)=>`${row.provider}::${row.model}`)),ai=connections.ai,candidates=Array.isArray(ai.candidates)?ai.candidates.map(String):[],providers=ai.providers.length?ai.providers:[{id:'default',models:ai.model?[ai.model]:[],enabled:true}],configured:string[]=[];
   for(const provider of providers)if(provider.enabled!==false)for(const model of provider.models||[]){const key=`${provider.id}::${model}`;if(model&&isChatCompatibleAiModel(provider,model))configured.push(key)}
-  return selectCategoryModels({mode,master:(ai as any).master,candidates,configured,green});
+  return selectCategoryModels({mode,master:(ai as any).master,candidates,configured,green,explicit});
 }
 export async function startAllUnapprovedCategoryRun(waitUntil?:(promise:Promise<unknown>)=>void,input?:any):Promise<{run:any;existing:boolean}>{
   const previous=await currentBackgroundRun('category-all');if(active(previous))return{run:publicRun(previous),existing:true};
-  const mode=normalizeCategoryMode(input?.mode),modelKeys=await successfulCategoryModels(mode);if(!modelKeys.length)throw new Error('هیچ مدل موفقی برای دسته‌بندی پیدا نشد؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.');
+  // `models` is the user-curated consensus list (bulk dialog and the periodic schedule);
+  // an empty list keeps the automatic behaviour of voting with every green model.
+  const mode=normalizeCategoryMode(input?.mode),modelKeys=await successfulCategoryModels(mode,Array.isArray(input?.models)?input.models:[]);if(!modelKeys.length)throw new Error('هیچ مدل موفقی برای دسته‌بندی پیدا نشد؛ ابتدا تست سرورساید مدل‌ها را کامل کنید.');
   // Fail fast before queueing a long job when the category connection is incomplete.
   await destinationCategories();
-  const timestamp=now(),id=crypto.randomUUID(),run:CategoryRun={id,kind:'category-all',status:'queued',phase:'listing',stopRequested:false,createdAt:timestamp,updatedAt:timestamp,startedAt:null,finishedAt:null,attempts:0,error:null,modelKeys,mode,page:1,totalPages:1,products:[],cursor:0,total:0,processed:0,changed:0,failed:0,items:[]};
+  const timestamp=now(),id=crypto.randomUUID(),run:CategoryRun={id,kind:'category-all',status:'queued',phase:'listing',stopRequested:false,createdAt:timestamp,updatedAt:timestamp,startedAt:null,finishedAt:null,attempts:0,error:null,modelKeys,mode,trigger:input?.scheduled?'scheduled':'manual',page:1,totalPages:1,products:[],cursor:0,total:0,processed:0,changed:0,failed:0,items:[]};
   await writeRun(run);await setState(pointerKey('category-all'),id);await enqueue({task:'category-all',runId:id},waitUntil);return{run:publicRun(run),existing:false};
 }
 

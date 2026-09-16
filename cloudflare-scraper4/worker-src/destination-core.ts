@@ -220,9 +220,14 @@ export function resolveMasterKey(configured: string[], master: any): string | nu
   if (raw.includes('::')) return configured.includes(raw) ? raw : null;
   return configured.find(key => key.split('::').slice(1).join('::') === raw) || null;
 }
-export function selectCategoryModels(input: { mode?: any; master?: any; candidates?: any; configured?: string[]; green?: Set<string> | string[] }): string[] {
+/** A voter is always addressed as `provider::model`; a `::k<n>` key suffix (the
+ *  chat picker's per-key rows) is folded back onto the model itself. */
+export function categoryVoterKey(raw: any): string {
+  return String(raw ?? '').trim().replace(/::k\d+$/i, '');
+}
+export function selectCategoryModels(input: { mode?: any; master?: any; candidates?: any; configured?: string[]; green?: Set<string> | string[]; explicit?: string[] }): string[] {
   const mode = normalizeCategoryMode(input.mode), configured = Array.isArray(input.configured) ? input.configured : [], green = new Set<string>(input.green || []);
-  const usable = configured.filter(key => green.has(key)), wanted = (Array.isArray(input.candidates) ? input.candidates : []).map(String);
+  const usable = configured.filter(key => green.has(key)), wanted = (Array.isArray(input.candidates) ? input.candidates : []).map(categoryVoterKey);
   if (mode === 'master' || mode === 'master-candidates') {
     const pinned = String(input.master ?? '').trim();
     if (!pinned) throw new Error('مدل مستر انتخاب نشده است؛ ابتدا در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل را مستر کنید.');
@@ -233,6 +238,17 @@ export function selectCategoryModels(input: { mode?: any; master?: any; candidat
     if (!masterKey) throw new Error(`مدل مستر (${pinned}) دیگر در میان مدل‌های پیکربندی‌شده نیست؛ در بخش «هوش مصنوعی ← کاندیدها و مدل مستر» یک مدل معتبر را مستر کنید.`);
     if (mode === 'master') return [masterKey];
     return [masterKey, ...wanted.filter(key => key !== masterKey && configured.includes(key))].slice(0, 5);
+  }
+  // Ensemble with a curated list: the user added/removed models themselves (bulk
+  // category correction and its periodic schedule). Like the two master modes, a
+  // hand-picked list is used as-is and is NOT gated on the last AI test — but keys
+  // that no longer exist in any enabled provider are dropped, because a voter that
+  // cannot be called would only fail on every single product.
+  const explicit = [...new Set((Array.isArray(input.explicit) ? input.explicit : []).map(categoryVoterKey).filter(Boolean))];
+  if (explicit.length) {
+    const chosen = explicit.filter(key => configured.includes(key));
+    if (!chosen.length) throw new Error(`هیچ‌یک از ${explicit.length} مدل انتخابی اجماعی دیگر در ارائه‌دهنده‌های فعال نیست؛ در بخش «تصحیح دوره‌ای دسته‌بندی باسلام» فهرست مدل‌ها را به‌روز کنید.`);
+    return chosen.slice(0, 5);
   }
   return [...new Set([...wanted.filter(key => usable.includes(key)), ...usable])].slice(0, 5);
 }

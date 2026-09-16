@@ -752,3 +752,34 @@ way. Re-run the diagnostic after a save and the list/detail stages should
 go green.
 
 Same update path: pull, restart the deployer process, re-run the diagnostic.
+
+## 1.175.0 — periodic Basalam category correction, and the AI sections finally work here
+
+The bulk category fix can now run by itself: `⏰ تصحیح دوره‌ای دسته‌بندی باسلام` inside the
+Basalam destination section. Default interval is 6 hours (1..168), the same three vote modes as
+the manual dialog (master only / master + candidates / consensus) and, for consensus, a model list
+you can add to and remove from (max 5; empty = every model that passed the last server-side test).
+The plan is saved in `settings`, the schedule bookkeeping in its own app_state key.
+
+This runtime drives it from `automationTick()`, which the Node build calls once a minute from the
+in-process scheduler (`startBackground`, i.e. `RUN_WORKER_IN_WEB=true` — Render and the Termux /
+VPS / deployer installs) and from `npm run render:cron` when you prefer an external crontab. A
+started pass runs in-process here (no Cloudflare Queue), checkpoints into the same state record the
+dashboard already reads, and a second pass is never started while one is still running.
+
+Fixes in the AI sections on Linux / Termux / VPS / Render / local (they were Worker-only):
+
+- `بخش مدل‌ها`: the provider+model picker and «🔗 تست جامع این مدل» now test the model you
+  selected (multi-provider setups, per-key `[K۲]` rows, and a transient
+  `{baseUrl,apiKey,model}` probe) instead of demanding the legacy shared triple.
+- `چت با مدل‌ها`: `GET /api/ai/chat-models` returns the real capability rows (it answered an
+  empty array, so the picker was blank), the chat endpoint sends the whole message list with its
+  roles instead of flattening it into one prompt, and a `::k2` pick now really uses key 2.
+- `تست مدل‌ها`: every model is tested per API key, each row also carries the Basalam category
+  probe (`categoryResult`), so the دسته‌بندی column and the ensemble gate work; the per-row
+  ↻ retry button works instead of answering 501.
+- Local model servers: `http://127.0.0.1:11434` (Ollama), LAN llama.cpp / vLLM and
+  `host.docker.internal` are allowed for AI providers — with the `/v1` path Ollama needs — while
+  scraping untrusted shop URLs keeps the old SSRF guard and cloud metadata stays closed.
+- `connectionStatus` now accepts provider rows, so the AI tabs are no longer greyed out on an
+  install that configures providers instead of the single shared endpoint.

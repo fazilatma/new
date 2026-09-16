@@ -1,9 +1,11 @@
 import { normalizePersianText } from './utils.js';
 import { aiCall, preferredAiChatModel } from './ai.js';
+import { getPublicBackgroundRun, startAllUnapprovedCategoryRun } from './background.js';
 import { loadConnections } from './connections.js';
 import { addAutoreplyLog, getState, listAutoreplyLog, maintenanceRows, setState } from './db.js';
 import { safeFetch } from './network.js';
 import { sendNotification } from './notifications.js';
+import { CATEGORY_CORRECTION_LAST_KEY, categoryCorrectionTick } from './category-correction.js';
 
 type Rule={id?:string;on?:boolean;match?:'contains'|'exact'|'starts'|'regex'|'always';triggers?:string;reply?:string;priority?:number;daily_max?:number};
 const norm=(v:string)=>normalizePersianText(v);
@@ -38,4 +40,14 @@ function messageTime(m:any){const value=m.created_at||m.createdAt||m.date||m.tim
 function offHours(from:number,to:number){const hour=new Date().getHours();if(from===to)return false;return from<to?!(hour>=from&&hour<to):!(hour>=from||hour<to)}
 export async function digest(preview=true){const rows=await maintenanceRows(''),previous=await getState<Record<string,any>>('digest_snapshot',{}),current:Record<string,any>={};for(const row of rows)current[`${row.profile_id}:${row.source_key}`]={title:row.title,price:Number(row.price),active:row.active};const added=[],removed=[],changed=[];for(const [key,value] of Object.entries(current)){if(!previous[key])added.push(value);else if(previous[key].price!==value.price)changed.push({...value,oldPrice:previous[key].price})}for(const [key,value] of Object.entries(previous))if(!current[key]||!current[key].active)removed.push(value);const text=`🌙 گزارش محصولات\n➕ جدید: ${added.length}\n💰 تغییر قیمت: ${changed.length}\n🗑 حذف/ناموجود: ${removed.length}`;const delivery:any[]=[];if(!preview){await setState('digest_snapshot',current);const n=(await loadConnections()).notifications;for(const [channel,on] of [['bale',n.baleToken&&n.baleChatId],['rubika',n.rubikaToken&&n.rubikaChatId],['webhook',n.url]] as const)if(on)try{delivery.push({channel,...await sendNotification(channel as any,text)})}catch(error){delivery.push({channel,error:error instanceof Error?error.message:String(error)})}}return{ok:true,preview,text,added:added.slice(0,100),removed:removed.slice(0,100),changed:changed.slice(0,100),counts:{added:added.length,removed:removed.length,changed:changed.length},delivery}}
 export async function autoreplyLogs(){return listAutoreplyLog(100)}
-export async function automationTick(){const settings=await getState<any>('settings',{}),result:any={};if(settings.autoreply?.enabled)try{result.autoreply=await autoreplyRun(false)}catch(error){result.autoreply={error:error instanceof Error?error.message:String(error)}}const d=settings.digest||{},timezone=String(d.timezone||'Asia/Tehran'),parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date()),part=(name:string)=>parts.find(x=>x.type===name)?.value||'',today=`${part('year')}-${part('month')}-${part('day')}`,hour=Number(part('hour')),state=await getState<any>('digest_run',{});if(d.enabled&&hour===Number(d.hour??23)&&state.day!==today)try{result.digest=await digest(false);await setState('digest_run',{day:today,at:new Date().toISOString()})}catch(error){result.digest={error:error instanceof Error?error.message:String(error)}}return result}
+export async function automationTick(waitUntil?:(promise:Promise<unknown>)=>void){const settings=await getState<any>('settings',{}),result:any={};if(settings.autoreply?.enabled)try{result.autoreply=await autoreplyRun(false)}catch(error){result.autoreply={error:error instanceof Error?error.message:String(error)}}const d=settings.digest||{},timezone=String(d.timezone||'Asia/Tehran'),parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date()),part=(name:string)=>parts.find(x=>x.type===name)?.value||'',today=`${part('year')}-${part('month')}-${part('day')}`,hour=Number(part('hour')),state=await getState<any>('digest_run',{});if(d.enabled&&hour===Number(d.hour??23)&&state.day!==today)try{result.digest=await digest(false);await setState('digest_run',{day:today,at:new Date().toISOString()})}catch(error){result.digest={error:error instanceof Error?error.message:String(error)}}  // Periodic Basalam bulk category correction (default every 6 hours, three voter
+  // modes, curated consensus model list). The shared tick owns the schedule so the
+  // Worker cron and the Node scheduler cannot drift apart; the `waitUntil` it gets is
+  // the cron context, which lets a started run hop onto the Queue right away.
+  try{result.categoryCorrection=await categoryCorrectionTick({settings,
+    readLast:()=>getState<any>(CATEGORY_CORRECTION_LAST_KEY,null),
+    writeLast:record=>setState(CATEGORY_CORRECTION_LAST_KEY,record),
+    startRun:plan=>startAllUnapprovedCategoryRun(waitUntil,plan),
+    currentRun:()=>getPublicBackgroundRun('category-all'),
+    log:message=>console.log('[category-correction]',message)})}catch(error){result.categoryCorrection={error:error instanceof Error?error.message:String(error)}}
+  return result}

@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import readXlsxFile from 'read-excel-file/web-worker';
-import { aiCall, aiChat, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
+import { aiCall, aiCategoryModelRows, aiChat, aiChatModelRows, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, parseModelKeySuffix, preferredAiChatModel, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
+import { CATEGORY_CORRECTION_LAST_KEY, CATEGORY_CORRECTION_SETTINGS_KEY, categoryCorrectionView, normalizeCategoryCorrection } from './category-correction.js';
+import { normalizeCategoryMode } from './destination-core.js';
 import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, agentModelSetupHint, controlAgentRun, createOrUpdateAgentPrompt, currentAgentRun, getAgentRunPublic, listAgentRunsPublic, publicAgentRun, removeAgentPrompt, resetAgentRun, startAgentRun } from './agent.js';
 import { automationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
@@ -32,7 +34,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.174.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.175.0',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -53,7 +55,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.174.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.175.0')
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
@@ -87,11 +89,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.174.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.175.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.174.0',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.175.0',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const r=await fetchBranchBackupFile(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupFile(githubApiFetch(token),githubApiPut(token),b?.repo,b?.branch,b?.path,b?.name,b?.bundle,(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupFile(githubApiFetch(token),githubApiPut(token),b?.repo,b?.branch,b?.path,b?.name,b?.bundle);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
@@ -147,12 +149,11 @@ app.post('/api/profiles/:id/ai-descriptions',async c=>{
   return c.json({ok:true,profileId:profile.id,model:picked.model,provider:picked.provider.id,candidates:targets.length,filled,failed:failures.length,failures:failures.slice(0,5)});
 });
 // ─── AI chat with capability-filtered model picker ───────────────────────────
+// The rows come from the shared capability builder (worker-src/ai-model-capabilities.ts) so the
+// picker of «چت با مدل‌ها» is identical on Cloudflare and on every Node install (Termux/VPS/Render).
 app.get('/api/ai/chat-models',async c=>{
-  const providers=(await aiProviders()).filter(p=>p.enabled!==false);
   const toolIds=new Set(AGENT_TOOL_MODELS.filter(m=>m.id!=='*configured').map(m=>m.id));
-  const models:any[]=[];
-  for(const p of providers)for(const model of p.models||[])models.push({providerId:p.id,providerName:p.name,model,chat:isChatCompatibleAiModel(p,model),toolCalling:toolIds.has(model),reasoning:isReasoningAiModel(p,model),keyCount:Math.max(1,providerKeys(p).length)});
-  return c.json({ok:true,models:models.sort((a,b)=>String(a.providerName).localeCompare(String(b.providerName))||a.model.localeCompare(b.model))});
+  return c.json({ok:true,models:aiChatModelRows(await aiProviders(),toolIds)});
 });
 app.post('/api/ai/chat',async c=>{
   const b=await jsonBody(c),provider=(await aiProviders()).find(p=>p.id===String(b.providerId||''));
@@ -232,6 +233,23 @@ app.get('/api/destination/basalam/category-tried',async c=>{const shopId=String(
 app.post('/api/destination/basalam/category-tried',async c=>{const b=await jsonBody(c);return c.json({ok:true,tried:await markBasalamCategoriesTried(String(b.shopId||''),Number(b.id),Array.isArray(b.ids)?b.ids:[])})});
 app.post('/api/destination/basalam/category-runs',async c=>{const started=await startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise),await jsonBody(c));return c.json({ok:true,...started},started.existing?200:202)});
 app.get('/api/destination/basalam/category-runs/current',async c=>c.json({ok:true,run:await getPublicBackgroundRun('category-all')}));
+// Periodic bulk category correction: the card needs the saved plan, the schedule (next
+// run, last result) and the pool of models the user can add or remove for consensus voting.
+app.get('/api/destination/basalam/category-correction',async c=>{
+  const [settings,last,providers,tests]=await Promise.all([getState<any>('settings',{}),getState<any>(CATEGORY_CORRECTION_LAST_KEY,null),aiProviders(),getLastAiTestResults()]);
+  const green=new Set<string>(((Array.isArray((tests as any)?.results)?(tests as any).results:[]) as any[]).filter((row:any)=>row?.ok===true).map((row:any)=>`${row.provider}::${row.model}`));
+  return c.json(categoryCorrectionView(settings,last,aiCategoryModelRows(providers,green)));
+});
+// Run the periodic plan right now (the card's ▶ button): same settings the schedule uses,
+// and the schedule anchor moves so the cron does not start a second pass minutes later.
+app.post('/api/destination/basalam/category-correction/run-now',async c=>{
+  const settings=await getState<any>('settings',{}),cfg=normalizeCategoryCorrection(settings?.[CATEGORY_CORRECTION_SETTINGS_KEY]),b=await jsonBody(c);
+  const mode=b?.mode?normalizeCategoryMode(b.mode):cfg.mode,models=Array.isArray(b?.models)?b.models:cfg.models;
+  try{const started=await startAllUnapprovedCategoryRun((promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise),{mode,models});
+    if(!started.existing)await setState(CATEGORY_CORRECTION_LAST_KEY,{at:new Date().toISOString(),status:'started',runId:started.run?.id||null,mode,models,intervalHours:cfg.intervalHours});
+    return c.json({ok:true,...started,settings:cfg},started.existing?200:202)}
+  catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
 app.post('/api/destination/basalam/category-runs/control',async c=>{const b=await jsonBody(c),action=String(b.action)==='resume'?'resume':'stop';return c.json({ok:true,run:await controlBackgroundRun('category-all',action,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise))})});
 app.post('/api/destination/basalam/category-runs/reset',async c=>{await resetBackgroundRun('category-all');return c.json({ok:true,run:await getPublicBackgroundRun('category-all')})});
 app.post('/api/destination/:target/:id/update',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await destinationUpdate(target,Number(c.req.param('id')),b,b.confirm==='APPLY',String(b.shopId||'')))});
