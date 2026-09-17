@@ -1,0 +1,16 @@
+{
+  "name": "new-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deployer:ui": "npm --prefix cloudflare-scraper4 run deployer:ui --",
+    "deploy:universal": "npm --prefix cloudflare-scraper4 run deploy:universal --",
+    "worker:dev": "npm --prefix cloudflare-scraper4 run worker:dev --",
+    "worker:test": "npm --prefix cloudflare-scraper4 run worker:test --",
+    "worker:build": "npm --prefix cloudflare-scraper4 run worker:build --",
+    "worker:deploy": "npm --prefix cloudflare-scraper4 run worker:deploy --",
+    "start": "npm run deployer:ui",
+    "local": "npm run deployer:ui",
+    "scraper:local": "npm --prefix cloudflare-scraper4 run scraper:local --"
+  }
+}

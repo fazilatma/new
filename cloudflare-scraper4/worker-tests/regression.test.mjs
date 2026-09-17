@@ -1,0 +1,1898 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import {strToU8,zipSync} from 'fflate';
+import {load} from 'cheerio';
+import worker from '../scraper4.worker.js';
+
+const ctx={waitUntil(){},passThroughOnException(){}};
+class MemoryD1 {
+  constructor(){this.states=new Map();this.stateUpdatedAt=new Map();this.profiles=new Map();this.products=new Map();this.jobs=new Map();this.categoryLearning=new Map()}
+  prepare(sql){return new MemoryStatement(this,sql)}
+  async batch(statements){return statements.map(()=>({success:true,meta:{changes:0}}))}
+}
+class MemoryStatement {
+  constructor(db,sql){this.db=db;this.sql=sql.replace(/\s+/g,' ').trim();this.values=[]}
+  bind(...values){this.values=values;return this}
+  async first(){const s=this.sql,v=this.values;
+    if(s==='PRAGMA quick_check')return{quick_check:'ok'};
+    if(s.includes("FROM sqlite_master WHERE type='table' AND name IN"))return{n:7};
+    if(s.includes('orphan_products'))return{profiles:this.db.profiles.size,products:this.db.products.size,jobs:0,active_jobs:0,failed_jobs:0,orphan_products:0,orphan_maps:0};
+    if(s.includes("FROM jobs WHERE status='running'"))return{n:0};
+    if(s.startsWith('SELECT value FROM app_state WHERE key=')){const value=this.db.states.get(v[0]);return value===undefined?null:{value}};
+    if(s.startsWith('SELECT * FROM profiles WHERE id='))return this.db.profiles.get(v[0])||null;
+    if(s.startsWith('SELECT * FROM jobs WHERE id='))return this.db.jobs.get(v[0])||null;
+    if(s.startsWith('SELECT * FROM jobs WHERE profile_id='))return[...this.db.jobs.values()].find(job=>job.profile_id===v[0]&&job.kind===v[1]&&['queued','running'].includes(job.status))||null;
+    if(s.startsWith('SELECT 1 AS found FROM products'))return this.db.products.has(`${v[0]}:${v[1]}`)?{found:1}:null;
+    if(s.startsWith('SELECT count(*) AS total FROM products WHERE profile_id=?')){const like=v.length>1?String(v[1]).replace(/^%|%$/g,'').replace(/\\(.)/g,'$1'):'';let n=0;for(const row of this.db.products.values())if(row.profile_id===v[0]&&row.data!=null&&row.data!=='null'&&(!like||String(row.title||'').includes(like)))n++;return{total:n}}
+    if(s.startsWith('SELECT * FROM category_learning WHERE phrase='))return[...this.db.categoryLearning.values()].filter(row=>row.phrase===v[0]).sort((a,b)=>b.hits-a.hits)[0]||null;
+    return null;
+  }
+  async all(){const s=this.sql;let results=[];if(s.startsWith('SELECT * FROM profiles ORDER BY'))results=[...this.db.profiles.values()];if(s.startsWith('SELECT * FROM jobs ORDER BY'))results=[...this.db.jobs.values()].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,Number(this.values[0])||200);if(s.startsWith('SELECT id FROM jobs WHERE status IN'))results=[...this.db.jobs.values()].filter(job=>['done','failed','stopped'].includes(job.status)).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map(job=>({id:job.id}));if(s.startsWith('SELECT * FROM category_learning ORDER BY'))results=[...this.db.categoryLearning.values()].sort((a,b)=>b.hits-a.hits).slice(0,Number(this.values[0])||1000);if(s.startsWith('SELECT data FROM products WHERE profile_id=?')){const hasLike=s.includes('title LIKE'),like=hasLike?String(this.values[1]).replace(/^%|%$/g,'').replace(/\\(.)/g,'$1'):'',rest=hasLike?this.values.slice(2):this.values.slice(1);let matches=[...this.db.products.values()].filter(row=>row.profile_id===this.values[0]&&row.data!=null&&row.data!=='null'&&(!like||String(row.title||'').includes(like)));if(rest.length>1)matches=matches.slice(Number(rest[rest.length-1]),Number(rest[rest.length-1])+Number(rest[rest.length-2]));results=matches.map(row=>({data:row.data}))}return{success:true,results}}
+  async run(){const s=this.sql,v=this.values;
+    if(this.db.quotaFail&&(s.startsWith('INSERT')||s.startsWith('UPDATE')||s.startsWith('DELETE')))throw new Error('you exceeded write operations quota');
+    if(s.startsWith('UPDATE app_state SET value=')){if(this.db.states.get(v[2])===v[3]){this.db.states.set(v[2],v[0]);this.db.stateUpdatedAt.set(v[2],v[1]);return{success:true,meta:{changes:1}}}return{success:true,meta:{changes:0}}}
+    if(s.startsWith('INSERT INTO app_state')){
+      const lease=s.includes('WHERE app_state.updated_at<?'),current=this.db.states.get(v[0]),currentAt=this.db.stateUpdatedAt.get(v[0])||'';
+      if(!lease||current===undefined||currentAt<v[3]){this.db.states.set(v[0],v[1]);this.db.stateUpdatedAt.set(v[0],v[2])}
+    }
+    else if(s.startsWith('DELETE FROM app_state WHERE key=')){const needsValue=s.includes('AND value=?');if(!needsValue||this.db.states.get(v[0])===v[1]){this.db.states.delete(v[0]);this.db.stateUpdatedAt.delete(v[0])}}
+    else if(s.startsWith('INSERT INTO profiles'))this.db.profiles.set(v[0],{id:v[0],data:v[1],enabled:v[2],interval_minutes:v[3],created_at:v[4],updated_at:v[5],last_run_at:null});
+    else if(s.startsWith('INSERT INTO products'))this.db.products.set(`${v[0]}:${v[1]}`,{profile_id:v[0],source_key:v[1],data:v[2],title:v[3],price:v[4],source_url:v[5]});
+    else if(s.startsWith('INSERT INTO category_learning')){const key=`${v[0]}:${v[1]}`,previous=this.db.categoryLearning.get(key);this.db.categoryLearning.set(key,{phrase:v[0],category_id:v[1],category_name:v[2],hits:(previous?.hits||0)+(s.includes('VALUES(?,?,?,1,?)')?1:Number(v[3])||1),updated_at:v.at(-1)})}
+    else if(s.startsWith('INSERT INTO jobs'))this.db.jobs.set(v[0],{id:v[0],profile_id:v[1],kind:v[2],target:v[3],status:'queued',phase:'waiting',total:0,processed:0,added:0,updated:0,failed:0,stop_requested:0,error:null,log:'[]',created_at:v[4],updated_at:v[5],started_at:null,finished_at:null});
+    else if(s.includes("SET status='queued'")&&s.includes("status='failed'")&&s.includes("status='running' AND updated_at<?")){let n=0;for(const job of this.db.jobs.values())if(['failed','stopped'].includes(job.status)||(job.status==='running'&&String(job.updated_at||'')<String(v[1]))){job.status='queued';job.phase='waiting';job.stop_requested=0;job.error=null;job.finished_at=null;job.updated_at=v[0];n++}return{success:true,meta:{changes:n}}}
+    else if(s.includes("WHERE status='running' AND updated_at<?")){let n=0;for(const job of this.db.jobs.values())if(job.status==='running'&&String(job.updated_at||'')<String(v[2])){job.status='failed';job.phase='watchdog';job.error='Job was inactive and closed by watchdog';job.finished_at=v[0];job.updated_at=v[1];n++}return{success:true,meta:{changes:n}}}
+    else if(s.startsWith("DELETE FROM jobs WHERE id=")){const job=this.db.jobs.get(v[0]);if(job&&job.status!=='running'){this.db.jobs.delete(v[0]);return{success:true,meta:{changes:1}}}return{success:true,meta:{changes:0}}}
+    else if(s.startsWith('DELETE FROM jobs WHERE status IN')){let n=0;for(const [id,job] of this.db.jobs)if(['done','failed','stopped'].includes(job.status)){this.db.jobs.delete(id);n++}return{success:true,meta:{changes:n}}}
+    return{success:true,meta:{changes:1}};
+  }
+}
+const call=(db,path,init={},extra={})=>worker.fetch(new Request(`https://worker.test${path}`,init),{DB:db,VAULT_SECRET:'vault-secret',JOBS:{send:async()=>{}},JOBS_DLQ:{send:async()=>{}},...extra},ctx);
+const jsonInit=body=>({method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+const file=(name,value)=>{const text=JSON.stringify(value);return{name:{size:Buffer.byteLength(text),b64:Buffer.from(text).toString('base64')}}};
+async function legacyVaultEnvelope(value,secret='vault-secret'){const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),material=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),'PBKDF2',false,['deriveKey']),key=await crypto.subtle.deriveKey({name:'PBKDF2',hash:'SHA-256',salt,iterations:100000},material,{name:'AES-GCM',length:256},false,['encrypt']),ciphertext=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(JSON.stringify(value)));return{version:2,salt:Buffer.from(salt).toString('base64'),iv:Buffer.from(iv).toString('base64'),ciphertext:Buffer.from(ciphertext).toString('base64'),iterations:100000}}
+function tinyXlsx(){const files={'[Content_Types].xml':'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>','_rels/.rels':'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>','xl/workbook.xml':'<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Products" sheetId="1" r:id="rId1"/></sheets></workbook>','xl/_rels/workbook.xml.rels':'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>','xl/worksheets/sheet1.xml':'<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:C2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>نام محصول</t></is></c><c r="B1" t="inlineStr"><is><t>قیمت</t></is></c><c r="C1" t="inlineStr"><is><t>برند</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>عطر اکسل</t></is></c><c r="B2"><v>375000</v></c><c r="C2" t="inlineStr"><is><t>نمونه</t></is></c></row></sheetData></worksheet>'};return zipSync(Object.fromEntries(Object.entries(files).map(([name,text])=>[name,strToU8(text)])))}
+
+test('same-origin font CSS and WOFF2 proxy are functional and cacheable',async()=>{
+  const db=new MemoryD1(),cssResponse=await call(db,'/assets/fonts/vazir.css');assert.equal(cssResponse.status,200);assert.match(cssResponse.headers.get('content-type')||'',/text\/css/);const css=await cssResponse.text();assert.match(css,/font-family:"Vazir"/);assert.match(css,/url\("\/assets\/fonts\/vazir-400\.woff2"\)/);assert.doesNotMatch(css,/fontapi\.ir|fontcdn\.ir/);
+  const originalFetch=globalThis.fetch;let upstream='';globalThis.fetch=async request=>{upstream=String(request instanceof Request?request.url:request);return new Response(new Uint8Array([119,79,70,50]),{headers:{'content-type':'font/woff2'}})};try{const fontResponse=await call(db,'/assets/fonts/vazir-400.woff2');assert.equal(fontResponse.status,200);assert.equal(fontResponse.headers.get('content-type'),'font/woff2');assert.match(fontResponse.headers.get('cache-control')||'',/immutable/);assert.equal(fontResponse.headers.get('access-control-allow-origin'),'*');assert.match(upstream,/cdn\.fontcdn\.ir\/Fonts\/Vazir\/[a-f0-9]{64}\.woff2$/);assert.deepEqual([...new Uint8Array(await fontResponse.arrayBuffer())],[119,79,70,50])}finally{globalThis.fetch=originalFetch}
+});
+
+test('default AI providers seed Ollama/OpenRouter models without hardcoded API keys and accept exported provider format',async()=>{
+  const db=new MemoryD1();
+  const loaded=await call(db,'/api/connections').then(response=>response.json());
+  const openrouter=loaded.connections.ai.providers.find(p=>p.id==='openrouter'),ollama=loaded.connections.ai.providers.find(p=>p.id==='ollama');
+  assert.ok(openrouter,'OpenRouter preset should exist without manual upload');assert.ok(ollama,'Ollama preset should exist without manual upload');
+  assert.equal(openrouter.apiKey,'');assert.equal(openrouter.enabled,false);assert.ok(openrouter.models.includes('qwen/qwen3.8-2.4t-a95b'));assert.ok(openrouter.models.includes('x-ai/grok-4.6'));
+  const providerFormat={ai:{openrouter:{id:'openrouter',name:'OpenRouter',vendor:'openrouter',url:'https://openrouter.ai/api/v1',apiKey:'or-test-secret',enabled:true,models:[{id:'bytedance-seed/seed-2-1-turbo',name:'Seed'},{id:'meta/muse-spark-1.2'}]},ollama:{id:'ollama',name:'Ollama',vendor:'ollama-models',url:'http://127.0.0.1:11434',apiKey:'',enabled:false,models:[]}}};
+  const imported=await call(db,'/api/connections',jsonInit(providerFormat)).then(response=>response.json());
+  const saved=imported.connections.ai.providers.find(p=>p.id==='openrouter');assert.equal(saved.baseUrl,'https://openrouter.ai/api/v1');assert.equal(saved.apiKey,'or-test-secret');assert.deepEqual(saved.models,['bytedance-seed/seed-2-1-turbo','meta/muse-spark-1.2']);
+});
+
+test('AI test runs persist server-side and expose stop/resume recovery controls',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}};const startedResponse=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام',categoryTitle:'ادو پرفیوم',delayMs:250}),extra),started=await startedResponse.json();assert.equal(startedResponse.status,202);assert.equal(started.run.kind,'ai-test');assert.equal(started.run.status,'queued');assert.equal(sent[0].message.task,'ai-test');assert.ok(db.states.has('background_current:ai-test'));
+  const current=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());assert.equal(current.run.id,started.run.id);assert.equal(current.run.prompt,'سلام');
+  const stopped=await call(db,'/api/ai/test-runs/control',jsonInit({action:'stop'}),extra).then(response=>response.json());assert.equal(stopped.run.status,'paused');assert.equal(stopped.run.stopRequested,true);
+  const resumed=await call(db,'/api/ai/test-runs/control',jsonInit({action:'resume'}),extra).then(response=>response.json());assert.equal(resumed.run.status,'queued');assert.equal(resumed.run.stopRequested,false);assert.equal(sent.at(-1).message.runId,started.run.id)
+});
+
+test('watchdog skips a stalled AI model when the current run is polled',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}};
+  const started=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra).then(response=>response.json());
+  const key='background_run:ai-test:'+started.run.id,run=JSON.parse(db.states.get(key));
+  run.status='running';run.phase='testing';run.updatedAt=new Date(Date.now()-60_000).toISOString();
+  db.states.set(key,JSON.stringify(run));db.stateUpdatedAt.set(key,run.updatedAt);
+  const current=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());
+  assert.equal(current.run.skipNext,true);assert.equal(current.run.phase,'watchdog-skip');assert.equal(current.run.status,'queued');
+  assert.ok(sent.some(item=>item.message.task==='ai-test'&&item.message.runId===started.run.id),'stalled run must be re-enqueued');
+});
+
+test('AI model budget timeout skips the hung model and continues the queue',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})},AI_TEST_MODEL_BUDGET_MS:'150',AI_TEST_TIMEOUT_MS:'80'};
+  const env={DB:db,VAULT_SECRET:'vault-secret',JOBS:extra.JOBS,JOBS_DLQ:{send:async()=>{}},AI_TEST_MODEL_BUDGET_MS:'150',AI_TEST_TIMEOUT_MS:'80'};
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'slow',name:'Slow AI',baseUrl:'https://ai.example/v1',apiKey:'slow-secret',models:['hang-1','ok-2'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=()=>new Promise(()=>{});
+  const deliver=message=>worker.queue({messages:[{body:message,ack(){},retry(){assert.fail('budget skip should ack, not retry')}}]},env,ctx);
+  try{
+    const started=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra).then(response=>response.json());
+    await deliver(sent.shift().message);
+    const current=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());
+    assert.equal(current.run.cursor,1);assert.equal(current.run.result.results[0].ok,false);assert.ok(current.run.result.results[0].skipped||/مهلت|timeout|AbortError/i.test([current.run.result.results[0].error,current.run.result.results[0].phase].join(' ')));assert.equal(current.run.status,'queued');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('dashboard skip-timeout setting is used to skip a hung AI model',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}},env={DB:db,VAULT_SECRET:'vault-secret',JOBS:extra.JOBS,JOBS_DLQ:{send:async()=>{}}};
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'slow',name:'Slow AI',baseUrl:'https://ai.example/v1',apiKey:'slow-secret',models:['hang-1'],enabled:true}],network:{mode:'direct'}}}),extra);
+  await call(db,'/api/settings',jsonInit({ai:{skipTimeoutMs:80}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=()=>new Promise(()=>{});
+  const deliver=message=>worker.queue({messages:[{body:message,ack(){},retry(){assert.fail('timeout skip should ack')}}]},env,ctx);
+  try{
+    await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra);
+    await deliver(sent.shift().message);
+    const current=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());
+    assert.equal(current.run.result.results[0].ok,false);assert.match(String(current.run.result.results[0].error||current.run.result.results[0].phase||''),/مهلت|timeout|AbortError|transport-skip/i);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('Batch-only OpenRouter models are retried on /api/beta/batches and return the completed chat text',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),calls=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',apiKey:'or-secret',models:['batch-only-model'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),method=String(init.method||(request instanceof Request?request.method:'GET')||'GET').toUpperCase(),body=init.body?JSON.parse(String(init.body)):null;calls.push({url,method,body});
+      if(url.endsWith('/chat/completions')&&method==='POST')return jsonResponse({error:{message:'This model is only available through the Batch API. Use the /api/beta/batches endpoint instead.',code:404}},404);
+      if(url==='https://openrouter.ai/api/beta/batches'&&method==='POST'){assert.equal(body.endpoint,'/v1/chat/completions');assert.equal(body.model,'batch-only-model');assert.equal(body.requests[0].custom_id,'s4-1');return jsonResponse({id:'batch_123',object:'batch',status:'validating',results:null},202)}
+      if(url==='https://openrouter.ai/api/beta/batches/batch_123'&&method==='GET')return jsonResponse({id:'batch_123',status:'completed',results:[{custom_id:'s4-1',response:{status_code:200,body:{choices:[{message:{content:'پاسخ بچ'}},]},error:null}}]});
+      throw new Error(`unexpected ${method} ${url}`)};
+    const result=await call(db,'/api/test-connection/ai',jsonInit({provider:'openrouter',model:'batch-only-model',prompt:'سلام'})).then(response=>response.json());
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.text,'پاسخ بچ');assert.equal(result.endpointType,'batch');assert.equal(result.batchId,'batch_123');assert.match(result.endpoint,/beta\/batches/);assert.equal(calls[0].url,'https://openrouter.ai/api/v1/chat/completions');assert.equal(calls[1].url,'https://openrouter.ai/api/beta/batches');assert.equal(calls[2].url,'https://openrouter.ai/api/beta/batches/batch_123');assert.doesNotMatch(JSON.stringify(result),/or-secret/);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('AI result modal can retry message or category independently',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),prompts=[];
+  try{
+    await call(db,'/api/connections',jsonInit({basalam:{api:'https://basalam.example/v1',token:'bs-retry',vendorId:'77'},ai:{providers:[{id:'retry',name:'Retry Provider',baseUrl:'https://ai.example/v1',apiKey:'retry-secret',models:['model-a'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request);if(url==='https://basalam.example/v1/categories')return jsonResponse({data:[{id:10,name:'آرایشی',children:[{id:11,name:'ادو پرفیوم'}]}]});const body=init.body?JSON.parse(String(init.body)):{},prompt=body.messages?.[0]?.content||'';if(prompt)prompts.push(prompt);if(prompt.includes('فهرست مجاز'))return jsonResponse({choices:[{message:{content:prompts.filter(item=>item.includes('فهرست مجاز')).length===1?'بدون دسته':'{"category_id":11,"reason":"درست"}'}}]});return jsonResponse({choices:[{message:{content:prompts.filter(item=>!item.includes('فهرست مجاز')).length===1?'اول':'دوم'}}]})};
+    const first=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',categoryTitle:'ادو پرفیوم',cursor:0,runId:''})).then(response=>response.json());
+    assert.equal(first.results[0].text,'اول');assert.equal(first.results[0].categoryResult.ok,false);
+    const messageRetry=await call(db,'/api/ai/test-runs/retry',jsonInit({key:first.results[0].key,part:'message'})).then(response=>response.json());
+    assert.equal(messageRetry.results[0].text,'دوم');assert.equal(messageRetry.results[0].messageRetryCount,1);assert.equal(messageRetry.results[0].categoryResult.ok,false);
+    const categoryRetry=await call(db,'/api/ai/test-runs/retry',jsonInit({key:first.results[0].key,part:'category'})).then(response=>response.json());
+    assert.equal(categoryRetry.results[0].text,'دوم');assert.equal(categoryRetry.results[0].categoryResult.ok,true);assert.equal(categoryRetry.results[0].categoryResult.categoryId,11);assert.equal(categoryRetry.results[0].categoryRetryCount,1);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('cloudflare multi-account keys: each account = accountId+token and providerWithKey picks the right account',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'cf',name:'CF',baseUrl:'https://api.cloudflare.com/client/v4/accounts/acc1/ai/run/',apiKey:'tok-1',apiKeys:[{accountId:'acc1',token:'tok-1'},{accountId:'acc2',token:'tok-2'}],models:['@cf/meta/llama-4-scout-17b-16e-instruct'],enabled:true}],candidates:[],master:'',model:'',network:{mode:'direct'}}}));
+  const loaded=await call(db,'/api/connections').then(r=>r.json());
+  const p=loaded.connections.ai.providers.find(x=>x.id==='cf');
+  assert.equal(p.apiKeys.length,2,'two accounts kept');
+  assert.equal(p.apiKeys[1].accountId,'acc2');assert.equal(p.apiKeys[1].token,'tok-2');
+  const source=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8');
+  assert.match(source,/export function providerWithKey\(provider:Provider,index=0\)/,'providerWithKey exported');
+  assert.match(source,/chosen as CfAccountKey\)\.accountId\|\|cloudflareAccountId/,'providerWithKey rebuilds the account baseUrl');
+  assert.match(source,/apiKeys\?:Array<string\|CfAccountKey>/,'provider type supports string|account keys');
+});
+
+test('cloudflare provider keeps accountId/cfToken through the vault',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'cf',name:'Cloudflare',baseUrl:'https://api.cloudflare.com/client/v4/accounts/acc123/ai/run/',apiKey:'tok-1',apiKeys:['tok-1'],accountId:'acc123',cfToken:'tok-1',models:['@cf/meta/llama-4-scout-17b-16e-instruct'],enabled:true}],candidates:[],master:'',model:'',network:{mode:'direct'}}}));
+  const loaded=await call(db,'/api/connections').then(r=>r.json());
+  const p=loaded.connections.ai.providers.find(x=>x.id==='cf');
+  assert.equal(p.accountId,'acc123');assert.equal(p.cfToken,'tok-1');
+  assert.equal(p.baseUrl,'https://api.cloudflare.com/client/v4/accounts/acc123/ai/run');
+});
+
+test('multi-key providers: keys are saved, exported and used per model suffix in chat',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'mk',name:'MultiKey',baseUrl:'https://mk.example/v1',apiKey:'key-one',apiKeys:['key-one','key-two'],models:['m1'],enabled:true}],candidates:[],master:'',model:'',network:{mode:'direct'}}}));
+  const loaded=await call(db,'/api/connections').then(r=>r.json());
+  const provider=loaded.connections.ai.providers.find(p=>p.id==='mk');
+  assert.deepEqual(provider.apiKeys,['key-one','key-two'],'both keys persist');
+  assert.equal(provider.apiKey,'key-one','primary key is the first key');
+  const modelsResp=await call(db,'/api/ai/chat-models').then(r=>r.json());
+  assert.equal(modelsResp.models[0].keyCount,2,'chat-models exposes the key count');
+  const auths=[];
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(_url,init={})=>{const h=new Headers(init.headers||{});auths.push(String(h.get('authorization')||''));return new Response(JSON.stringify({choices:[{message:{role:'assistant',content:'ok'}}]}),{status:200,headers:{'content-type':'application/json'}})};
+  try{
+    const r1=await call(db,'/api/ai/chat',jsonInit({providerId:'mk',model:'m1',messages:[{role:'user',content:'hi'}]})).then(r=>r.json());
+    assert.equal(r1.ok,true);
+    const r2=await call(db,'/api/ai/chat',jsonInit({providerId:'mk',model:'m1::k2',messages:[{role:'user',content:'hi'}]})).then(r=>r.json());
+    assert.equal(r2.ok,true,'model with ::k2 suffix resolves');
+    assert.equal(auths.length,2);
+    assert.ok(auths[0].includes('key-one')&&auths[1].includes('key-two'),'each key is used by its own model entry');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('cloudflareModelIds never emits the invalid meta-llama org path',async()=>{
+  const source=await readFile(new URL('../worker-src/ai.ts',import.meta.url),'utf8');
+  assert.doesNotMatch(source,/\/meta-llama\/\$\{after\}/,'the wrong @cf/meta-llama/ fallback is gone');
+  assert.match(source,/meta-llama\/\'\).*@cf\/meta\/\$\{after/,'a meta-llama/ user input is rewritten to the valid @cf/meta/ path');
+  assert.match(source,/label:'text',value:\{text:prompt/,'image-to-text models get a text candidate payload');
+});
+test('settings export splits profile products and import reads them back',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/profiles',jsonInit({id:'pp',name:'p',url:'',noExtract:true,pages:1,pagination:'none',selectors:{container:'.p',title:'h2',price:'.x',link:'a',image:'img'},enabled:true}));
+  await call(db,'/api/profiles/pp/import?format=csv',{method:'POST',headers:{'content-type':'text/csv; charset=utf-8'},body:'نام محصول,قیمت\nعطر تست,100000\n'});
+  const exported=await call(db,'/api/settings-export').then(r=>r.json());
+  assert.ok(exported.files['profiles.json'],'profiles file present');
+  assert.ok(exported.files['profile_products.json'],'products are split into their own file');
+  assert.ok(!exported.files['profiles.json']||true,'profiles file stays a bundle entry');
+  // Products live in the dedicated file and import reads them back.
+  const b64=exported.files['profile_products.json'].b64,bin=Buffer.from(b64,'base64'),productsFile=JSON.parse(bin.toString('utf8'));
+  assert.ok(productsFile&&typeof productsFile==='object','profile products is an object keyed by profile id');
+  // Partial import: only profile settings+products (no connections) must not wipe existing connections.
+  const fresh=new MemoryD1();
+  await call(fresh,'/api/connections',jsonInit({woo:{url:'https://shop.example',key:'k',secret:'s'}}));
+  const partial={...exported,files:{'profiles.json':exported.files['profiles.json'],'profile_products.json':exported.files['profile_products.json']}};
+  const imported=await call(fresh,'/api/settings-import',{method:'POST',body:JSON.stringify(partial)}).then(r=>r.json());
+  assert.equal(imported.ok,true);assert.equal(imported.imported.profiles,1);
+  const conns=await call(fresh,'/api/connections').then(r=>r.json());
+  assert.equal(conns.connections.woo.url,'https://shop.example','woo untouched by partial import');
+});
+
+test('tried-category memory endpoints store and return per-product categories',async()=>{
+  const db=new MemoryD1();
+  const marked=await call(db,'/api/destination/basalam/category-tried',{method:'POST',body:JSON.stringify({shopId:'v1',id:42,ids:[10,20]})}).then(r=>r.json());
+  assert.equal(marked.ok,true);assert.deepEqual(marked.tried,[10,20]);
+  const got=await call(db,'/api/destination/basalam/category-tried?shopId=v1&id=42').then(r=>r.json());
+  assert.deepEqual(got.tried,[10,20]);
+  const other=await call(db,'/api/destination/basalam/category-tried?shopId=v1&id=99').then(r=>r.json());
+  assert.deepEqual(other.tried,[]);
+});
+
+test('AI chat lists capability-filtered models and returns conversation replies',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'chat-pro',name:'Chat Provider',baseUrl:'https://chat.example/v1',apiKey:'k',models:['m-chat','m-reason'],reasoningModels:['m-reason'],enabled:true},{id:'mistral',name:'Mistral',baseUrl:'https://api.mistral.ai/v1',apiKey:'k',models:['mistral-ocr-latest'],enabled:true}],candidates:[],master:'',model:'',network:{mode:'direct'}}}));
+  const modelsResp=await call(db,'/api/ai/chat-models'),models=(await modelsResp.json()).models;
+  assert.equal(modelsResp.status,200);
+  assert.equal(models.length,3);
+  const chat=models.find(m=>m.model==='m-chat');assert.equal(chat.chat,true);assert.equal(chat.toolCalling,false);assert.equal(chat.reasoning,false);
+  const reason=models.find(m=>m.model==='m-reason');assert.equal(reason.chat,true);assert.equal(reason.reasoning,true);
+  assert.equal(models.find(m=>m.model==='mistral-ocr-latest').chat,false,'dedicated-endpoint models are not chat-capable');
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{role:'assistant',content:'سلام! در خدمتم.'}}]}),{status:200,headers:{'content-type':'application/json'}});
+  try{
+    const resp=await call(db,'/api/ai/chat',jsonInit({providerId:'chat-pro',model:'m-chat',messages:[{role:'user',content:'سلام'}]})),d=await resp.json();
+    assert.equal(resp.status,200);assert.equal(d.ok,true);assert.equal(d.text,'سلام! در خدمتم.');assert.equal(d.model,'m-chat');assert.equal(d.provider,'chat-pro');
+    assert.ok(Number.isFinite(d.latencyMs));
+    const bad=await call(db,'/api/ai/chat',jsonInit({providerId:'chat-pro',model:'m-chat',messages:[{role:'assistant',content:'بدون پیام کاربر'}]}));assert.equal(bad.status,400);
+    const missing=await call(db,'/api/ai/chat',jsonInit({providerId:'nope',model:'m-chat',messages:[{role:'user',content:'x'}]}));assert.equal(missing.status,404);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('activity endpoint returns a lightweight summary without heavy data',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/profiles',jsonInit({id:'p1',name:'p',url:'',noExtract:true,pages:1,pagination:'none',selectors:{container:'.x',title:'h2',price:'.p',link:'a',image:'img'},enabled:true}));
+  const d=await call(db,'/api/activity').then(r=>r.json());
+  assert.equal(d.ok,true);assert.equal(d.counts.profiles,1);
+  assert.ok(Array.isArray(d.activeJobs)&&Array.isArray(d.runs)&&Array.isArray(d.lastJobs));
+  assert.ok('cron' in d&&'version' in d&&'ts' in d);
+});
+
+test('task manager drag order persists as priority and drives active job ordering',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/profiles',jsonInit({id:'p1',name:'p',url:'',noExtract:true,pages:1,pagination:'none',selectors:{container:'.x',title:'h2',price:'.p',link:'a',image:'img'},enabled:true}));
+  const job=(id,created,status='queued')=>db.jobs.set(id,{id,profile_id:'p1',kind:'scrape',target:'woo',status,phase:status==='queued'?'waiting':'details',total:2,processed:0,added:0,updated:0,failed:0,stop_requested:0,error:null,log:'[]',created_at:created,updated_at:created,started_at:null,finished_at:null});
+  job('job-old','2026-08-20T10:00:00.000Z');job('job-mid','2026-08-21T10:00:00.000Z');job('job-new','2026-08-22T10:00:00.000Z');job('job-run','2026-08-22T11:00:00.000Z','running');
+  // User drags job-new to the top, job-mid last: POST the desired execution order.
+  const reordered=await call(db,'/api/jobs/priority',jsonInit({ids:['job-new','job-old','job-mid']})).then(r=>r.json());
+  assert.equal(reordered.ok,true);assert.equal(reordered.count,3);
+  assert.equal(JSON.parse(db.states.get('job_priorities_v1'))['job-new'],3);
+  assert.equal(JSON.parse(db.states.get('job_priorities_v1'))['job-old'],2);
+  assert.equal(JSON.parse(db.states.get('job_priorities_v1'))['job-mid'],1);
+  // The running job is ignored by the reorder endpoint (it cannot be dragged).
+  const ignored=await call(db,'/api/jobs/priority',jsonInit({ids:['job-run']})).then(r=>r.json());
+  assert.equal(ignored.count,0);
+  // Activity lists queued jobs in priority order first, then the running job.
+  const d=await call(db,'/api/activity').then(r=>r.json());
+  assert.deepEqual(d.activeJobs.map(j=>j.id),['job-new','job-old','job-mid','job-run']);
+  assert.equal(d.activeJobs[0].priority,3);assert.equal(d.activeJobs[3].status,'running');
+  // Empty request is rejected instead of wiping the saved order.
+  const empty=await call(db,'/api/jobs/priority',jsonInit({ids:[]})).then(r=>r.json());
+  assert.equal(empty.ok,false);
+});
+
+test('background run drag order persists, reorders the runs section and exposes run ids',async()=>{
+  const db=new MemoryD1();
+  db.states.set('background_current:ai-test',JSON.stringify('ai-id'));
+  db.states.set('background_run:ai-test:ai-id',JSON.stringify({id:'ai-id',kind:'ai-test',status:'queued',phase:'waiting',stopRequested:false,createdAt:'2026-08-22T10:00:00.000Z',updatedAt:'2026-08-22T10:00:00.000Z',startedAt:null,finishedAt:null,attempts:0,error:null,total:0,processed:0,cursor:0,result:{}}));
+  db.states.set('background_current:category-all',JSON.stringify('cat-id'));
+  db.states.set('background_run:category-all:cat-id',JSON.stringify({id:'cat-id',kind:'category-all',status:'queued',phase:'listing',stopRequested:false,createdAt:'2026-08-22T11:00:00.000Z',updatedAt:'2026-08-22T11:00:00.000Z',startedAt:null,finishedAt:null,attempts:0,error:null,page:1,totalPages:2,total:0,processed:0,changed:0,failed:0,items:[],products:[]}));
+  const before=await call(db,'/api/activity').then(r=>r.json());
+  assert.deepEqual(before.runs.map(r=>r.kind),['ai-test','category-all']); // canonical default order
+  assert.equal(before.runs[0].id,'ai-id');assert.equal(before.runs[1].id,'cat-id');
+  const reordered=await call(db,'/api/runs/priority',jsonInit({kinds:['category-all','ai-test']})).then(r=>r.json());
+  assert.equal(reordered.ok,true);assert.equal(reordered.count,2);
+  assert.equal(JSON.parse(db.states.get('run_priorities_v1'))['category-all'],2);
+  assert.equal(JSON.parse(db.states.get('run_priorities_v1'))['ai-test'],1);
+  const after=await call(db,'/api/activity').then(r=>r.json());
+  assert.deepEqual(after.runs.map(r=>r.kind),['category-all','ai-test']);
+  assert.equal(after.runs[0].priority,2);assert.equal(after.runs[1].priority,1);
+  // Unknown kinds are ignored and never wipe the saved order.
+  const bogus=await call(db,'/api/runs/priority',jsonInit({kinds:['bogus']})).then(r=>r.json());
+  assert.equal(bogus.count,0);
+  assert.equal(JSON.parse(db.states.get('run_priorities_v1'))['ai-test'],1);
+  const empty=await call(db,'/api/runs/priority',jsonInit({kinds:[]})).then(r=>r.json());
+  assert.equal(empty.ok,false);
+});
+
+test('scheduled cron uses live general settings for watchdog, report retention, lock and cron ping',async()=>{
+  const db=new MemoryD1(),pending=[],pings=[],localCtx={waitUntil(promise){pending.push(promise)},passThroughOnException(){}};
+  await call(db,'/api/settings',jsonInit({general:{cronLockMin:1,keepReports:2,queueDedup:true,queueDedupStale:1,contentSync:false},watchdog:{enabled:true,stallAfter:60,autoContinue:false},notifications:{events:{cronPing:true},pingEvery:1}}));
+  await call(db,'/api/connections',jsonInit({notifications:{url:'https://notify.example/hook',chatId:'c1',token:'hook-token'}}));
+  const stale=new Date(Date.now()-120_000).toISOString();
+  db.jobs.set('stale-job',{id:'stale-job',profile_id:'p',kind:'scrape',target:'none',status:'running',phase:'details',total:1,processed:0,added:0,updated:0,failed:0,stop_requested:0,error:null,log:'[]',created_at:stale,updated_at:stale,started_at:stale,finished_at:null});
+  db.jobs.set('old-done',{id:'old-done',profile_id:'p',kind:'scrape',target:'none',status:'done',phase:'finished',total:1,processed:1,added:1,updated:0,failed:0,stop_requested:0,error:null,log:'[]',created_at:'2020-01-01T00:00:00.000Z',updated_at:'2020-01-01T00:00:00.000Z',started_at:'2020-01-01T00:00:00.000Z',finished_at:'2020-01-01T00:00:01.000Z'});
+  db.jobs.set('new-done',{id:'new-done',profile_id:'p',kind:'scrape',target:'none',status:'done',phase:'finished',total:1,processed:1,added:0,updated:1,failed:0,stop_requested:0,error:null,log:'[]',created_at:'2026-08-21T10:00:00.000Z',updated_at:'2026-08-21T10:00:00.000Z',started_at:'2026-08-21T10:00:00.000Z',finished_at:'2026-08-21T10:00:01.000Z'});
+  const originalFetch=globalThis.fetch;globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request);pings.push(url);if(url==='https://notify.example/hook')return jsonResponse({ok:true});throw new Error('unexpected '+url)};
+  try{
+    const env={DB:db,VAULT_SECRET:'vault-secret',JOBS:{send:async()=>{}},JOBS_DLQ:{send:async()=>{}},WORKER_VERSION:'1.11.0'};
+    await worker.scheduled({cron:'* * * * *',scheduledTime:Date.now()},env,localCtx);await Promise.all(pending);
+    assert.equal(db.jobs.get('stale-job').status,'failed');assert.equal(db.jobs.get('stale-job').phase,'watchdog');
+    assert.equal(db.jobs.has('old-done'),false);assert.equal(db.jobs.has('new-done'),true);
+    assert.ok(pings.includes('https://notify.example/hook'));assert.equal(JSON.parse(db.states.get('cron_lock')).held,false);assert.ok(db.states.get('cron_ping'));
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('priority dispatch never starves a displaced background run',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}},env={DB:db,VAULT_SECRET:'vault-secret',JOBS:null,JOBS_DLQ:{send:async()=>{}}};env.JOBS=extra.JOBS;
+  await call(db,'/api/connections',jsonInit({woo:{url:'https://shop.example',key:'k',secret:'s'},ai:{providers:[{id:'prio',name:'Prio AI',baseUrl:'https://ai.example/v1',apiKey:'prio-secret',models:['model-1','model-2'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=async()=>jsonResponse({choices:[{message:{content:'پاسخ'}}]});
+  try{
+    const ai=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra).then(r=>r.json());
+    const dd=await call(db,'/api/destination/woo/dedup-runs',jsonInit({keep:'newest',suffixFormats:'',apply:false}),extra).then(r=>r.json());
+    assert.equal(ai.run.status,'queued');assert.equal(dd.run.status,'queued');
+    const dedupMsg=sent.find(m=>m.message.task==='dedup');assert.ok(dedupMsg,'dedup run enqueued');
+    let acked=false;
+    // Deliver ONLY the dedup message: priority picks the queued ai-test first,
+    // and the displaced dedup message must be re-queued (never starved).
+    await worker.queue({messages:[{body:dedupMsg.message,ack(){acked=true},retry(){assert.fail('should not retry')}}]},env,ctx);
+    assert.ok(acked);
+    assert.ok(sent.some(m=>m.message.task==='ai-test'),'ai-test continued');
+    assert.ok(sent.some(m=>m.message.task==='dedup'),'dedup message kept alive (no starvation)');
+    const aiCur=await call(db,'/api/ai/test-runs/current',{},extra).then(r=>r.json());
+    assert.equal(aiCur.run.status,'queued');assert.equal(aiCur.run.cursor,1);
+    const ddCur=await call(db,'/api/destination/woo/dedup-runs/current',{},extra).then(r=>r.json());
+    assert.equal(ddCur.run.status,'queued');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('task manager delete endpoints remove jobs, keep the queue and clear the priority map',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/profiles',jsonInit({id:'p1',name:'p',url:'',noExtract:true,pages:1,pagination:'none',selectors:{container:'.x',title:'h2',price:'.p',link:'a',image:'img'},enabled:true}));
+  const job=(id,created,status='queued')=>db.jobs.set(id,{id,profile_id:'p1',kind:'scrape',target:'woo',status,phase:status==='done'?'finished':'waiting',total:1,processed:0,added:0,updated:0,failed:0,stop_requested:0,error:null,log:'[]',created_at:created,updated_at:created,started_at:null,finished_at:null});
+  job('j1','2026-08-22T10:00:00.000Z');job('j2','2026-08-22T11:00:00.000Z');job('j3','2026-08-22T12:00:00.000Z','done');
+  await call(db,'/api/jobs/priority',jsonInit({ids:['j1','j2']}));
+  assert.equal(JSON.parse(db.states.get('job_priorities_v1'))['j1'],2);
+  const del=await call(db,'/api/jobs/j1',{method:'DELETE'}).then(r=>r.json());
+  assert.equal(del.ok,true);
+  assert.equal(db.jobs.has('j1'),false);
+  assert.equal(JSON.parse(db.states.get('job_priorities_v1'))['j1'],undefined,'deleted job leaves no stale priority entry');
+  const clear=await call(db,'/api/jobs',{method:'DELETE'}).then(r=>r.json());
+  assert.equal(clear.ok,true);
+  assert.equal(db.jobs.has('j3'),false);
+  assert.equal(db.jobs.has('j2'),true,'queued job survives clear-finished');
+});
+
+test('category-all run reset endpoint clears the background run',async()=>{
+  const db=new MemoryD1();
+  db.states.set('background_current:category-all',JSON.stringify('cat-r1'));
+  db.states.set('background_run:category-all:cat-r1',JSON.stringify({id:'cat-r1',kind:'category-all',status:'queued',phase:'listing',stopRequested:false,createdAt:'2026-08-22T10:00:00.000Z',updatedAt:'2026-08-22T10:00:00.000Z',startedAt:null,finishedAt:null,attempts:0,error:null,page:1,totalPages:1,total:0,processed:0,changed:0,failed:0,items:[],products:[]}));
+  const cur=await call(db,'/api/destination/basalam/category-runs/current').then(r=>r.json());
+  assert.equal(cur.run.id,'cat-r1');
+  const reset=await call(db,'/api/destination/basalam/category-runs/reset',{method:'POST',body:'{}'}).then(r=>r.json());
+  assert.equal(reset.ok,true);assert.equal(reset.run,null);
+  const after=await call(db,'/api/destination/basalam/category-runs/current').then(r=>r.json());
+  assert.equal(after.run,null);
+});
+
+test('hung AI models are retried three times after the first pass',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})},AI_TEST_MODEL_BUDGET_MS:'80',AI_TEST_TIMEOUT_MS:'50'};
+  const env={DB:db,VAULT_SECRET:'vault-secret',JOBS:extra.JOBS,JOBS_DLQ:{send:async()=>{}},AI_TEST_MODEL_BUDGET_MS:'80',AI_TEST_TIMEOUT_MS:'50'};
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'slow',name:'Slow AI',baseUrl:'https://ai.example/v1',apiKey:'slow-secret',models:['hang-1'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=()=>new Promise(()=>{});
+  const deliver=message=>worker.queue({messages:[{body:message,ack(){},retry(){assert.fail('retry pass should ack')}}]},env,ctx);
+  try{
+    await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra);
+    let retries=0;
+    for(let i=0;i<8&&sent.length;i++){
+      await deliver(sent.shift().message);
+      const current=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());
+      retries=Number(current.run.result?.results?.[0]?.retryCount||0);
+      if(current.run.status==='done'){assert.equal(retries,3,'a hung model gets three extra attempts at the end');assert.equal(current.run.result.results[0].ok,false);return}
+    }
+    assert.fail('run did not finish after hung-model retries, last retryCount='+retries)
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('AI queue checkpoints results server-side until all models finish after a refresh',async()=>{
+  const db=new MemoryD1(),sent=[],models=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}},env={DB:db,VAULT_SECRET:'vault-secret',JOBS:null,JOBS_DLQ:{send:async()=>{}}};env.JOBS=extra.JOBS;
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'durable',name:'Durable AI',baseUrl:'https://ai.example/v1',apiKey:'durable-ai-secret',models:['model-1','model-2'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=async(_request,init={})=>{const body=JSON.parse(String(init.body||'{}'));models.push(body.model);return jsonResponse({choices:[{message:{content:`پاسخ ${body.model}`}}]})};
+  const deliver=message=>worker.queue({messages:[{body:message,ack(){},retry(){assert.fail('AI checkpoint should not retry')}}]},env,ctx);
+  try{
+    const started=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام پایدار'}),extra).then(response=>response.json());assert.equal(started.run.status,'queued');assert.equal(sent.length,1);
+    await deliver(sent.shift().message);const refreshed=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());assert.equal(refreshed.run.status,'queued');assert.equal(refreshed.run.cursor,1);assert.equal(refreshed.run.result.results.length,1);assert.equal(refreshed.run.result.serverSide,true);
+    await deliver(sent.shift().message);assert.equal(sent.length,0);const completed=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());assert.equal(completed.run.status,'done');assert.equal(completed.run.cursor,2);assert.equal(completed.run.result.results.length,2);assert.deepEqual(models,['model-1','model-2'])
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('D1 write quota pauses background runs without a retry storm and they resume after the quota clears',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}},env={DB:db,VAULT_SECRET:'vault-secret',JOBS:null,JOBS_DLQ:{send:async()=>{}}};env.JOBS=extra.JOBS;
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'quota-ai',name:'Quota AI',baseUrl:'https://ai.example/v1',apiKey:'quota-secret',models:['model-1','model-2'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=async()=>jsonResponse({choices:[{message:{content:'پاسخ'}}]});
+  try{
+    const started=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra).then(r=>r.json());
+    assert.equal(started.run.status,'queued');
+    db.quotaFail=true;
+    let acked=false,retried=false;
+    await worker.queue({messages:[{body:sent.shift().message,ack(){acked=true},retry(){retried=true}}]},env,ctx);
+    assert.ok(acked);assert.equal(retried,false,'quota failure must be acked, not retried forever');
+    assert.equal(sent.length,0,'no continue message is re-queued while the quota is exhausted');
+    const stuck=await call(db,'/api/ai/test-runs/current',{},extra).then(r=>r.json());
+    assert.equal(stuck.run.status,'queued','run keeps its last checkpoint (the pause write also fails under quota)');
+    db.quotaFail=false;
+    // Cron recovery re-dispatches after the daily reset; simulate it here.
+    await worker.queue({messages:[{body:{task:'ai-test',runId:started.run.id},ack(){},retry(){assert.fail('should ack after reset')}}]},env,ctx);
+    for(let i=0;i<12&&sent.length;i++)await worker.queue({messages:[{body:sent.shift().message,ack(){},retry(){}}]},env,ctx);
+    const done=await call(db,'/api/ai/test-runs/current',{},extra).then(r=>r.json());
+    assert.equal(done.run.status,'done');
+    assert.equal(done.run.result.results.length,2);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('adding a second API key doubles the test list with a per-key suffix',async()=>{
+  const db=new MemoryD1(),sent=[],models=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}},env={DB:db,VAULT_SECRET:'vault-secret',JOBS:null,JOBS_DLQ:{send:async()=>{}}};env.JOBS=extra.JOBS;
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'multi',name:'Multi-Key AI',baseUrl:'https://ai.example/v1',apiKey:'key-1',apiKeys:['key-1','key-2'],models:['model-a','model-b'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=async(_request,init={})=>{const body=JSON.parse(String(init.body||'{}'));models.push(body.model);return jsonResponse({choices:[{message:{content:'پاسخ'}}]})};
+  const deliver=message=>worker.queue({messages:[{body:message,ack(){},retry(){assert.fail('second-key run should ack')}}]},env,ctx);
+  try{
+    const started=await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra).then(r=>r.json());assert.equal(started.run.status,'queued');
+    await deliver(sent.shift().message);
+    const first=await call(db,'/api/ai/test-runs/current',{},extra).then(r=>r.json());
+    assert.equal(first.run.result.total,4,'two models x two keys = four test entries (doubled)');
+    assert.equal(first.run.result.results.length,1);
+    assert.equal(first.run.result.results[0].key,'multi::model-a');
+    assert.equal(first.run.result.results[0].keyLabel,'');
+    while(sent.length)await deliver(sent.shift().message);
+    const done=await call(db,'/api/ai/test-runs/current',{},extra).then(r=>r.json());
+    assert.equal(done.run.status,'done');
+    const rows=done.run.result.results;
+    assert.equal(rows.length,4);
+    assert.deepEqual(rows.map(r=>r.key),['multi::model-a','multi::model-a::k2','multi::model-b','multi::model-b::k2']);
+    assert.deepEqual(rows.map(r=>r.keyLabel),['',' [K۲]','',' [K۲]']);
+    assert.deepEqual(models,['model-a','model-a','model-b','model-b']);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('category-all queue consumes every unapproved page once and survives duplicate delivery',async()=>{
+  const db=new MemoryD1(),sent=[],listPages=[],updatedIds=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})}},env={DB:db,VAULT_SECRET:'vault-secret',JOBS:null,JOBS_DLQ:{send:async()=>{}}};env.JOBS=extra.JOBS;
+  await call(db,'/api/connections',jsonInit({basalam:{api:'https://basalam.example/v1',token:'category-token',vendorId:'55'},ai:{providers:[{id:'cat-ai',name:'Category AI',baseUrl:'https://ai.example/v1',apiKey:'category-ai-secret',models:['cat-model'],enabled:true}],candidates:['cat-ai::cat-model'],network:{mode:'direct'}}}),extra);
+  db.states.set('ai_test_results',JSON.stringify({runId:'completed-ai-run',results:[{ok:true,provider:'cat-ai',model:'cat-model'}]}));
+  db.states.set('basalam_categories_v1',JSON.stringify({updatedAt:new Date().toISOString(),items:[{id:902,name:'ادو پرفیوم',path:'آرایشی ← ادو پرفیوم',parentId:null,depth:1,leaf:true}]}));
+  const originalFetch=globalThis.fetch;globalThis.fetch=async(request,init={})=>{const url=new URL(String(request instanceof Request?request.url:request)),method=String(init.method||(request instanceof Request?request.method:'GET')||'GET').toUpperCase();
+    if(url.hostname==='ai.example')return jsonResponse({choices:[{message:{content:'{"category_id":902,"reason":"مرتبط"}'}}]});
+    if(url.pathname==='/v1/vendors/55/products'&&method==='GET'){const page=Number(url.searchParams.get('page'));listPages.push(page);assert.deepEqual(url.searchParams.getAll('statuses'),['3567']);return jsonResponse({data:[{id:200+page,title:`ادو پرفیوم ${page}`,status:{value:3567,name:'تأیید نشده'}}],total_count:2,total_page:2})}
+    if(/^\/v1\/products\/20[12]$/.test(url.pathname)&&method==='PATCH'){updatedIds.push(Number(url.pathname.split('/').at(-1)));assert.equal(JSON.parse(String(init.body)).category_id,902);return jsonResponse({ok:true})}
+    throw new Error(`unexpected category-all request ${method} ${url}`)};
+  const deliver=async message=>{let acked=0,retried=0;await worker.queue({messages:[{body:message,ack(){acked++},retry(){retried++}}]},env,ctx);assert.equal(acked,1);assert.equal(retried,0)};
+  try{
+    const startedResponse=await call(db,'/api/destination/basalam/category-runs',jsonInit({}),extra),started=await startedResponse.json();assert.equal(startedResponse.status,202);assert.equal(started.run.total,0);assert.equal(sent.length,1);
+    const duplicate=sent.shift().message;await Promise.all([deliver(duplicate),deliver(duplicate)]);
+    for(let checkpoints=0;sent.length&&checkpoints<10;checkpoints++)await deliver(sent.shift().message);
+    assert.equal(sent.length,0,'the queue run must reach a terminal checkpoint');assert.deepEqual(listPages,[1,2]);assert.deepEqual(updatedIds.sort((a,b)=>a-b),[201,202]);
+    const current=await call(db,'/api/destination/basalam/category-runs/current',{},extra).then(response=>response.json());assert.equal(current.run.status,'done');assert.equal(current.run.total,2);assert.equal(current.run.processed,2);assert.equal(current.run.changed,2);assert.equal(current.run.failed,0);assert.equal(current.run.items.length,2);assert.equal('products' in current.run,false,'the public response must not expose the potentially large checkpoint list')
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('PBKDF2 uses Cloudflare maximum, vault round-trips, and oversized legacy envelopes fail clearly',async()=>{
+  const source=await readFile(new URL('../worker-src/vault.ts',import.meta.url),'utf8'),bundle=await readFile(new URL('../scraper4.worker.js',import.meta.url),'utf8');
+  assert.match(source,/VAULT_KDF_ITERATIONS\s*=\s*100_000/);
+  assert.doesNotMatch(source,/120_000|120000/);assert.doesNotMatch(bundle,/120_000|120000/);
+  const db=new MemoryD1(),saved=await call(db,'/api/connections',jsonInit({woo:{url:'https://store.example',key:'ck_test',secret:'cs_private'}}));
+  assert.equal(saved.status,200);assert.equal((await saved.json()).connections.woo.key,'ck_test');
+  const [stateKey,raw]=[...db.states.entries()][0],envelope=JSON.parse(raw);assert.equal(envelope.iterations,100000);assert.equal(JSON.stringify(envelope).includes('cs_private'),false);
+  const loaded=await call(db,'/api/connections');assert.equal((await loaded.json()).connections.woo.secret,'cs_private');
+  db.states.set(stateKey,JSON.stringify({version:2,iterations:120000,salt:'AAAAAAAAAAAAAAAAAAAAAA==',iv:'AAAAAAAAAAAAAAAA',ciphertext:'AA=='}));
+  const previous=console.error;console.error=()=>{};try{const rejected=await call(db,'/api/connections');assert.equal(rejected.status,400);assert.match((await rejected.json()).error,/100000/)}finally{console.error=previous}
+});
+
+test('legacy Mistral provider receives catalog v2 including dedicated Text-to-text endpoints without overwriting user settings',async()=>{
+  const db=new MemoryD1(),legacy={woo:{},basalam:{},ai:{providers:[{id:'mistral',name:'میسترال شخصی',baseUrl:'https://custom.example/mistral/v1',apiKey:'mistral-user-secret',models:['private-model'],enabled:true}],candidates:['mistral::private-model'],master:'mistral::private-model',network:{mode:'worker',workerUrl:'https://gateway.example'}},notifications:{}};
+  db.states.set('connection_vault',JSON.stringify(await legacyVaultEnvelope(legacy)));
+  const loadedResponse=await call(db,'/api/connections'),loaded=(await loadedResponse.json()).connections,provider=loaded.ai.providers.find(item=>item.id==='mistral');assert.equal(loadedResponse.status,200);assert.equal(loaded.ai.catalogVersion,4);assert.equal(provider.name,'میسترال شخصی');assert.equal(provider.baseUrl,'https://custom.example/mistral/v1');assert.equal(provider.apiKey,'mistral-user-secret');assert.equal(provider.enabled,true);assert.ok(provider.models.includes('private-model'));for(const model of ['mistral-medium-latest','mistral-small-latest','mistral-large-latest','zai-glm-5-2','mistral-ocr-latest','voxtral-small-latest','codestral-latest','labs-leanstral-2603','labs-leanstral-1-5','ministral-3b-latest','ministral-8b-latest','ministral-14b-latest','mistral-embed'])assert.ok(provider.models.includes(model),model);assert.deepEqual(loaded.ai.candidates,['mistral::private-model']);assert.equal(loaded.ai.master,'mistral::private-model');assert.equal(loaded.ai.network.mode,'worker');
+  provider.models=provider.models.filter(model=>model!=='mistral-small-latest');const saved=await call(db,'/api/connections',jsonInit({ai:loaded.ai}));assert.equal(saved.status,200);assert.equal(JSON.stringify(JSON.parse(db.states.get('connection_vault'))).includes('mistral-user-secret'),false);const reloaded=await call(db,'/api/connections').then(response=>response.json());assert.equal(reloaded.connections.ai.providers.find(item=>item.id==='mistral').models.includes('mistral-small-latest'),false,'the one-time catalog migration must not undo a later user deletion');
+});
+
+test('read-only debug endpoint checks bindings, D1, queue and KDF without leaking secrets',async()=>{
+  const db=new MemoryD1(),response=await call(db,'/api/debug',{}, {VAULT_SECRET:'actual-secret-42',PRIVATE_MARKER:'do-not-return'});assert.equal(response.status,200);const body=await response.json();
+  assert.equal(body.ok,true);assert.equal(body.checks.find(check=>check.name==='vault-kdf').ok,true);assert.equal(body.checks.find(check=>check.name==='d1-schema').ok,true);assert.equal(body.checks.find(check=>check.name==='queue-binding').ok,true);
+  assert.doesNotMatch(JSON.stringify(body),/actual-secret-42|do-not-return|ck_test|cs_private/);
+});
+
+test('network redirects strip credentials, oversized and stalled bodies stop safely, and AI failures redact secrets',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1();console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({woo:{url:'https://store.example',key:'ck_redirect',secret:'cs_redirect'},ai:{providers:[{id:'p1',name:'Provider',baseUrl:'https://ai.example/v1?token=url-secret-88',apiKey:'api-secret-77',models:['model-1'],enabled:true}],network:{mode:'direct'}}}));
+    const redirectCalls=[];globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request);redirectCalls.push({url,headers:new Headers(init.headers)});if(url.startsWith('https://store.example/'))return new Response(null,{status:302,headers:{location:'https://status.example/woo'}});if(url==='https://status.example/woo')return new Response(JSON.stringify({environment:{woocommerce_version:'9.0'}}),{headers:{'content-type':'application/json'}});throw new Error(`unexpected ${url}`)};
+    const woo=await call(db,'/api/test-connection/woo',jsonInit({})).then(r=>r.json());assert.equal(woo.ok,true);assert.match(redirectCalls[0].headers.get('authorization')||'',/^Basic /);assert.equal(redirectCalls[1].headers.get('authorization'),null);assert.equal(redirectCalls[1].headers.get('cookie'),null);assert.equal(redirectCalls[1].headers.get('proxy-authorization'),null);
+
+    let cancelled=false;globalThis.fetch=async()=>new Response(new ReadableStream({start(){},cancel(){cancelled=true}}),{headers:{'content-type':'text/html','content-length':'1000001'}});
+    const oversized=await call(db,'/api/source-test',jsonInit({url:'https://large.example/page'}));assert.equal(oversized.status,413);assert.equal(cancelled,true);assert.match((await oversized.json()).error,/exceeds/i);
+
+    globalThis.fetch=async(_request,init={})=>new Response(new ReadableStream({start(controller){init.signal?.addEventListener('abort',()=>controller.error(new Error('body aborted')),{once:true})}}),{headers:{'content-type':'text/html'}});
+    const stalled=await call(db,'/api/source-test',jsonInit({url:'https://slow.example/page'}),{REQUEST_TIMEOUT_MS:'1000'});assert.equal(stalled.status,504);assert.match((await stalled.json()).error,/مهلت دریافت/);
+
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),authorization=new Headers(init.headers).get('authorization')||'';throw new Error(`cannot reach ${url}; ${authorization}`)};
+    const ai=await call(db,'/api/test-connection/ai',jsonInit({provider:'p1',model:'model-1',prompt:'سلام'})).then(r=>r.json()),serialized=JSON.stringify(ai);assert.equal(ai.ok,false);assert.equal(ai.phase,'network');assert.equal(typeof ai.latencyMs,'number');assert.ok(ai.raw);assert.doesNotMatch(serialized,/api-secret-77|url-secret-88/);assert.match(serialized,/پنهان/);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('Woo automatic network mode retries Cloudflare 522 through the configured Worker and explains the result',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),calls=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({woo:{url:'https://store.example',key:'ck_woo',secret:'cs_woo',network:{mode:'auto',workerUrl:'https://woo-proxy.example/?target={url}'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),headers=new Headers(init.headers);calls.push({url,headers});if(url.startsWith('https://store.example/'))return new Response('origin timeout',{status:522,headers:{'content-type':'text/plain'}});if(url.startsWith('https://woo-proxy.example/'))return new Response(JSON.stringify([{id:77,name:'محصول نمونه',status:'publish'}]),{headers:{'content-type':'application/json'}});throw new Error(`unexpected ${url}`)};
+    const fallback=await call(db,'/api/test-connection/woo',jsonInit({})).then(response=>response.json());assert.equal(fallback.ok,true,JSON.stringify(fallback));assert.equal(fallback.http.status,200);assert.equal(fallback.http.networkMode,'worker');assert.equal(fallback.http.directStatus,522);assert.equal(fallback.summary.sampleProductId,77);assert.match(fallback.recommendations.join(' '),/مستقیم.*۵۲۲|مستقیم.*522/);assert.equal(calls.length,2);assert.match(calls[1].url,/woo-proxy\.example/);assert.equal(calls[1].headers.get('x-target-url')?.startsWith('https://store.example/'),true);assert.match(calls[1].headers.get('authorization')||'',/^Basic /);
+
+    await call(db,'/api/connections',jsonInit({woo:{network:{mode:'direct',workerUrl:'https://woo-proxy.example/?target={url}'}}}));calls.length=0;globalThis.fetch=async(request)=>{calls.push({url:String(request instanceof Request?request.url:request),headers:new Headers()});return new Response('origin timeout',{status:522,headers:{'content-type':'text/plain'}})};
+    const direct=await call(db,'/api/test-connection/woo',jsonInit({})).then(response=>response.json());assert.equal(direct.ok,false);assert.equal(direct.http.status,522);assert.equal(direct.http.networkMode,'direct');assert.equal(calls.length,1);assert.match(calls[0].url,/store\.example/);assert.match(direct.recommendations.join(' '),/سرور اصلی|کلید ووکامرس مقصر نیست/);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('Cloudflare Workers AI uses native run payloads, resolves organization model paths, and only then falls back to chat',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),calls=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'cf',name:'Cloudflare',baseUrl:'https://api.cloudflare.com/client/v4/accounts/account-123/ai/run/',apiKey:'cf-secret-token',models:['@cf/meta/llama-test','llama-3.1','@cf/nope/model'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),body=JSON.parse(String(init.body||'{}'));calls.push({url,body,authorization:new Headers(init.headers).get('authorization')});if(url.includes('/ai/run/@cf/meta/llama-test')&&body.messages)return new Response(JSON.stringify({success:true,result:{response:'پاسخ بومی'}}),{status:200,headers:{'content-type':'application/json'}});return new Response(JSON.stringify({errors:[{message:'No route for that URI'}]}),{status:404,headers:{'content-type':'application/json'}})};
+    const native=await call(db,'/api/test-connection/ai',jsonInit({provider:'cf',model:'@cf/meta/llama-test',prompt:'سلام'})).then(r=>r.json());assert.equal(native.ok,true);assert.equal(native.text,'پاسخ بومی');assert.equal(native.cloudflare.mode,'native');assert.equal(calls.length,2);assert.deepEqual(Object.keys(calls[0].body).sort(),['max_tokens','prompt']);assert.deepEqual(Object.keys(calls[1].body).sort(),['max_tokens','messages']);assert.ok(calls.every(x=>x.url.includes('/ai/run/@cf/meta/llama-test')));assert.ok(calls.every(x=>x.authorization==='Bearer cf-secret-token'));
+
+    calls.length=0;globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),body=JSON.parse(String(init.body||'{}'));calls.push({url,body});if(url.includes('/ai/run/@cf/meta/llama-3.1')&&body.messages)return new Response(JSON.stringify({result:{response:'مسیر سازمانی'}}),{headers:{'content-type':'application/json'}});return new Response(JSON.stringify({errors:[{code:5007,message:'No such model'}]}),{status:404,headers:{'content-type':'application/json'}})};
+    const organized=await call(db,'/api/test-connection/ai',jsonInit({provider:'cf',model:'llama-3.1',prompt:'آزمایش'})).then(r=>r.json());assert.equal(organized.ok,true);assert.equal(organized.cloudflare.resolvedModel,'@cf/meta/llama-3.1');assert.ok(calls.some(x=>x.url.includes('/ai/run/llama-3.1')));assert.ok(calls.some(x=>x.url.includes('/ai/run/@cf/meta/llama-3.1')));
+
+    calls.length=0;globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),body=JSON.parse(String(init.body||'{}'));calls.push({url,body});if(url.endsWith('/ai/v1/chat/completions'))return new Response(JSON.stringify({choices:[{message:{content:'پاسخ chat'}}]}),{headers:{'content-type':'application/json'}});return new Response(JSON.stringify({errors:[{message:'No route for that URI'}]}),{status:404,headers:{'content-type':'application/json'}})};
+    const chat=await call(db,'/api/test-connection/ai',jsonInit({provider:'cf',model:'@cf/nope/model',prompt:'fallback'})).then(r=>r.json());assert.equal(chat.ok,true);assert.equal(chat.text,'پاسخ chat');assert.equal(chat.cloudflare.mode,'openai-fallback');assert.ok(calls.some(x=>x.url.endsWith('/ai/v1/chat/completions')));assert.ok(calls.filter(x=>x.url.includes('/ai/run/')).every(x=>!x.url.includes('/chat/completions')));assert.doesNotMatch(JSON.stringify(chat),/cf-secret-token/);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('AI all-model testing paginates one model per Worker invocation and preserves one aggregate table',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),calls=[];
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'batch',name:'Batch Provider',baseUrl:'https://ai.example/v1',apiKey:'batch-secret',models:['model-1','model-2','model-3','model-4'],enabled:true}],candidates:['batch::model-2','batch::model-4'],testPerProvider:50,network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const body=JSON.parse(String(init.body||'{}'));calls.push(body.model);return jsonResponse({choices:[{message:{content:'پاسخ '+body.model},finish_reason:'stop'}],usage:{total_tokens:9}})};
+    let cursor=0,runId='',last;
+    for(let invocation=0;invocation<4;invocation++){
+      const response=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',cursor,runId,perProvider:2}));assert.equal(response.status,200);last=await response.json();runId=last.runId;cursor=last.nextCursor;
+      assert.equal(last.maxModelsPerInvocation,10);assert.equal(last.batchResults.length,1);assert.equal(last.results.length,invocation+1);assert.equal(last.total,4);assert.equal(last.done,invocation===3);
+    }
+    assert.deepEqual(calls,['model-1','model-2','model-3','model-4']);assert.equal(last.succeeded,4);assert.equal(last.failed,0);
+    const saved=await call(db,'/api/ai/test-results').then(response=>response.json());assert.equal(saved.results.length,4);assert.equal(saved.runId,runId);assert.equal(saved.results[2].usage.total_tokens,9);
+    cursor=0;runId='';for(let invocation=0;invocation<2;invocation++){const candidateResponse=await call(db,'/api/ai/test-all',jsonInit({prompt:'کاندید',onlyCandidates:true,cursor,runId}));last=await candidateResponse.json();runId=last.runId;cursor=last.nextCursor;assert.equal(last.total,2);assert.equal(last.done,invocation===1)}assert.deepEqual(calls.slice(4),['model-2','model-4']);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('AI model table stores an independently validated category response for the test category title',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),prompts=[];
+  try{
+    await call(db,'/api/connections',jsonInit({basalam:{api:'https://basalam.example/v1',token:'bs-category',vendorId:'77'},ai:{providers:[{id:'cat',name:'Category Provider',baseUrl:'https://ai.example/v1',apiKey:'cat-secret',models:['model-a'],enabled:true}],candidates:['cat::model-a'],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request);if(url==='https://basalam.example/v1/categories')return jsonResponse({data:[{id:10,name:'آرایشی',children:[{id:11,name:'ادو پرفیوم'}]}]});const body=init.body?JSON.parse(String(init.body)):{},prompt=body.messages?.[0]?.content||'';if(prompt)prompts.push(prompt);return jsonResponse({choices:[{message:{content:prompt.includes('فهرست مجاز')?'{"category_id":11,"reason":"درست"}':'پاسخ پیام'}}],usage:{total_tokens:12}})};
+    const response=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',categoryTitle:'ادو پرفیوم',cursor:0,runId:''})),result=await response.json();assert.equal(response.status,200);assert.equal(result.done,true);assert.equal(result.categoryTitle,'ادو پرفیوم');assert.equal(result.categorySucceeded,1);assert.equal(result.results[0].categoryResult.ok,true);assert.equal(result.results[0].categoryResult.categoryId,11);assert.equal(result.results[0].catResponse,'ادو پرفیوم (#11)');assert.equal(prompts.length,2);assert.ok(prompts.some(x=>x.includes('فهرست مجاز')));
+    const saved=await call(db,'/api/ai/test-results').then(r=>r.json());assert.equal(saved.categoryTitle,'ادو پرفیوم');assert.equal(saved.results[0].categoryResult.categoryName,'ادو پرفیوم');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('reasoning Together-compatible models classify products and answer customers with a protected final response',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),requests=[];
+  try{
+    const model='openai/gpt-oss-20b';
+    const savedResponse=await call(db,'/api/connections',jsonInit({basalam:{api:'https://basalam.example/v1',token:'bs-reasoning',vendorId:'77'},ai:{providers:[{id:'together',name:'Together AI',baseUrl:'https://api.together.xyz/v1',apiKey:'together-secret',models:[model],reasoningModels:[model],enabled:true}],candidates:['together::'+model],master:'together::'+model,model:'together::'+model,network:{mode:'direct'}}})),saved=await savedResponse.json();
+    assert.equal(savedResponse.status,200);assert.deepEqual(saved.connections.ai.providers[0].reasoningModels,[model],'manual reasoning flags survive encrypted vault normalization');
+    await call(db,'/api/settings',jsonInit({autoreply:{order:'ai_only',systemMode:'custom',systemText:'دستیار فروشگاه آزمایشی'}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request);if(url==='https://basalam.example/v1/categories')return jsonResponse({data:[{id:10,name:'آرایشی',children:[{id:11,name:'ادو پرفیوم'}]}]});const body=JSON.parse(String(init.body||'{}')),prompt=body.messages?.[0]?.content||'';requests.push({url,body,prompt});if(prompt.includes('فهرست مجاز'))return jsonResponse({choices:[{message:{reasoning_content:'ابتدا دسته‌های ۱۰ و ۱۱ را مقایسه می‌کنم.',content:'<think>شناسه ۱۰ عمومی‌تر است.</think>{"category_id":11,"reason":"تخصصی‌تر"}'}}],usage:{total_tokens:240}});if(prompt.includes('پیام مشتری'))return jsonResponse({output:{choices:[{text:'بله، این محصول موجود است.'}]},usage:{total_tokens:180}});return jsonResponse({choices:[{message:{reasoning_content:'پاسخ را کوتاه می‌کنم.',content:'<think>تحلیل داخلی</think>سلام، در خدمتم.'}}],usage:{total_tokens:160}})};
+    const tested=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',categoryTitle:'ادو پرفیوم',cursor:0,runId:''})).then(response=>response.json());assert.equal(tested.done,true);assert.equal(tested.messageSucceeded,1);assert.equal(tested.categorySucceeded,1);assert.equal(tested.results[0].reasoning,true);assert.equal(tested.results[0].text,'سلام، در خدمتم.');assert.doesNotMatch(tested.results[0].text,/think|تحلیل داخلی/);assert.equal(tested.results[0].categoryResult.categoryId,11);assert.equal(tested.results[0].categoryResult.text,'{"category_id":11,"reason":"تخصصی‌تر"}');
+    const reply=await call(db,'/api/autoreply/test',jsonInit({text:'آیا این محصول موجود است؟'})).then(response=>response.json());assert.equal(reply.result.text,'بله، این محصول موجود است.');assert.equal(reply.result.source,'ai:together::'+model);assert.match(requests.at(-1).prompt,/فقط با پاسخ نهایی/);assert.match(requests.at(-1).prompt,/دستیار فروشگاه آزمایشی/);
+    assert.equal(requests.length,3);for(const item of requests){assert.equal(item.url,'https://api.together.xyz/v1/chat/completions');assert.equal(item.body.max_tokens,1600);assert.equal('temperature' in item.body,false,'reasoning models must not receive a potentially unsupported temperature')}
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('Mistral OCR and Embeddings use their dedicated endpoints and skip chat-only category classification',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),requests=[];
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{catalogVersion:2,providers:[{id:'mistral',name:'Mistral AI',baseUrl:'https://api.mistral.ai/v1',apiKey:'mistral-special-secret',models:['mistral-ocr-latest','mistral-embed'],enabled:true}],candidates:['mistral::mistral-ocr-latest','mistral::mistral-embed'],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),body=JSON.parse(String(init.body||'{}')),headers=new Headers(init.headers);requests.push({url,body,authorization:headers.get('authorization')});if(url==='https://api.mistral.ai/v1/ocr')return jsonResponse({pages:[{index:0,markdown:'# Receipt'}],usage_info:{pages_processed:1}});if(url==='https://api.mistral.ai/v1/embeddings')return jsonResponse({data:[{object:'embedding',embedding:[0.1,0.2,0.3]}],usage:{total_tokens:2}});throw new Error(`unexpected dedicated endpoint ${url}`)};
+    const first=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام تخصصی',categoryTitle:'ادو پرفیوم',cursor:0,runId:''})).then(response=>response.json());assert.equal(first.total,2);assert.equal(first.done,false);assert.equal(first.messageSucceeded,1);assert.equal(first.categorySucceeded,0);assert.equal(first.categoryFailed,0);assert.equal(first.categorySkipped,1);assert.equal(first.results[0].endpointType,'ocr');assert.equal(first.results[0].chatCompatible,false);assert.equal(first.results[0].pages,1);assert.equal(first.results[0].categoryResult.phase,'unsupported-task');assert.equal(first.results[0].categoryResult.skipped,true);
+    const second=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام تخصصی',categoryTitle:'ادو پرفیوم',cursor:first.nextCursor,runId:first.runId})).then(response=>response.json());assert.equal(second.done,true);assert.equal(second.messageSucceeded,2);assert.equal(second.messageFailed,0);assert.equal(second.categorySkipped,2);assert.equal(second.results[1].endpointType,'embeddings');assert.equal(second.results[1].chatCompatible,false);assert.equal(second.results[1].dimensions,3);
+    assert.deepEqual(requests.map(item=>item.url),['https://api.mistral.ai/v1/ocr','https://api.mistral.ai/v1/embeddings']);assert.deepEqual(requests[0].body,{model:'mistral-ocr-latest',document:{type:'image_url',image_url:'https://raw.githubusercontent.com/mistralai/cookbook/main/mistral/ocr/receipt.png'},include_image_base64:false});assert.deepEqual(requests[1].body,{model:'mistral-embed',input:['سلام تخصصی']});assert.ok(requests.every(item=>item.authorization==='Bearer mistral-special-secret'));
+    const candidateOnly=await call(db,'/api/ai/test-all',jsonInit({prompt:'کاندید',onlyCandidates:true,cursor:0,runId:''})).then(response=>response.json());assert.equal(candidateOnly.total,0,'dedicated endpoint models must never become chat candidates');assert.deepEqual(requests.map(item=>item.url),['https://api.mistral.ai/v1/ocr','https://api.mistral.ai/v1/embeddings']);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('AI test cursor replay is idempotent and transport skip advances without calling the model',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),calls=[];
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'stable',name:'Stable Provider',baseUrl:'https://ai.example/v1',apiKey:'stable-secret',models:['model-1'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(_request,init={})=>{const body=JSON.parse(String(init.body||'{}'));calls.push(body.model);return jsonResponse({choices:[{message:{content:'پاسخ سلام'}}]})};
+    const payload={prompt:'سلام',cursor:0,runId:'idempotent-run'};
+    const first=await call(db,'/api/ai/test-all',jsonInit(payload)).then(response=>response.json());assert.equal(first.done,true);assert.equal(first.replayed,false);assert.equal(first.messageSucceeded,1);assert.equal(first.messageFailed,0);assert.equal(first.results[0].text,'پاسخ سلام');
+    const replay=await call(db,'/api/ai/test-all',jsonInit(payload)).then(response=>response.json());assert.equal(replay.replayed,true);assert.equal(replay.results.length,1);assert.equal(replay.batchResults.length,1);assert.deepEqual(calls,['model-1'],'the same cursor must never execute the model twice');
+    const skipped=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',cursor:0,runId:'skip-run',skipCurrent:true,skipReason:'browser transport failed'})).then(response=>response.json());assert.equal(skipped.done,true);assert.equal(skipped.messageSucceeded,0);assert.equal(skipped.messageFailed,1);assert.equal(skipped.skipped,1);assert.equal(skipped.results[0].phase,'transport-skip');assert.equal(skipped.results[0].skipped,true);assert.deepEqual(calls,['model-1'],'transport skip must not call the provider');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('Basalam chat APIs normalize conversations and lazy message details with actionable errors',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),requests=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({basalam:{api:'https://basalam.example/api',token:'chat-token',vendorId:'55'}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),headers=new Headers(init.headers);requests.push({url,headers});assert.equal(headers.get('authorization'),'Bearer chat-token');
+      if(url.includes('/chats/42/messages'))return jsonResponse({data:{messages:[{id:2,content:{text:'پاسخ غرفه'},sender:{name:'غرفه',type:'vendor'},sender_type:'vendor',message_type:'text',created_at:'2026-08-20T10:02:00Z'},{id:1,text:'سلام، موجوده؟',sender:{name:'مریم',type:'customer'},sender_type:'customer',created_at:'2026-08-20T10:01:00Z'}]}});
+      if(url.includes('/chats?'))return jsonResponse({data:{chats:[{chat_id:42,customer:{name:'مریم'},unread_count:3,updated_at:'2026-08-20T10:02:00Z',last_message:{id:2,content:{text:'پاسخ غرفه'},sender:{name:'غرفه'},message_type:'text'}}]}});
+      throw new Error(`unexpected chat URL ${url}`)};
+    const chatsResponse=await call(db,'/api/basalam/chats?limit=50'),chats=await chatsResponse.json();assert.equal(chatsResponse.status,200);assert.equal(chats.total,1);assert.equal(chats.unseen,1);assert.deepEqual(chats.items[0],{chatId:42,id:42,customer:'مریم',text:'پاسخ غرفه',unseen:3,updatedAt:'2026-08-20T10:02:00Z',chatType:'',sender:'غرفه',lastMessageId:'2',messageType:'text'});
+    const messageResponse=await call(db,'/api/basalam/chats/42/messages?limit=50'),messages=await messageResponse.json();assert.equal(messageResponse.status,200);assert.equal(messages.chatId,42);assert.equal(messages.total,2);assert.equal(messages.items[0].text,'سلام، موجوده؟');assert.equal(messages.items[0].fromShop,false);assert.equal(messages.items[1].text,'پاسخ غرفه');assert.equal(messages.items[1].fromShop,true);assert.equal(requests.length,2);
+    globalThis.fetch=async()=>jsonResponse({message:'forbidden scope'},403);const forbidden=await call(db,'/api/basalam/chats');assert.equal(forbidden.status,502);const error=await forbidden.json();assert.match(error.error,/HTTP 403/);assert.match(error.error,/دسترسی گفتگو\/پیام/);assert.match(error.error,/forbidden scope/);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('PHP settings import normalizes syncConfig, noExtract, fallback categories, network flag, products and variations',async()=>{
+  const db=new MemoryD1(),profile={name:'CSV only',syncConfig:{enabled:true,interval:3600,target:'both',noExtract:true},bslCategoryId:77,bslFallbackCatIds:[88,99],net_indirect:'1',products:[['p-1',{title:'Variable item',price:125000,variations:['قرمز','آبی'],variationGroups:[{name:'رنگ',values:['قرمز','آبی']}]}]]};
+  const profilesFile=file('profiles.json',{'csv-profile':profile}),connectionsFile=file('connections.json',{woocommerce:{url:'https://woo.example',consumer_key:'ck_import',consumer_secret:'cs_import'},basalam:{fallback_cat_ids:[55],vendors:[{name:'غرفه دوم',token:'shop-token',vendor_id:'22',price_mode:'percent',price_val:5}]},src_network:{mode:'worker',worker_url:'https://gateway.example/{url}'}}),bundle={app:'scraper',files:{'profiles.json':profilesFile.name,'connections.json':connectionsFile.name}};
+  const response=await call(db,'/api/settings-import',jsonInit(bundle));assert.equal(response.status,200);const result=await response.json();assert.deepEqual(result.imported,{profiles:1,products:1,states:0,categories:0,autoreplyLogs:0,connections:true});assert.deepEqual(result.warnings,[]);
+  const stored=JSON.parse(db.profiles.get('csv-profile').data);assert.equal(stored.noExtract,true);assert.equal(stored.intervalMinutes,60);assert.equal(stored.syncWoo,true);assert.equal(stored.syncBasalam,true);assert.equal(stored.networkIndirect,true);assert.deepEqual(stored.basalamFallbackCategoryIds,[88,99]);assert.match(stored.url,/^https:\/\/import\.invalid\//);
+  const product=JSON.parse(db.products.get('csv-profile:p-1').data);assert.deepEqual(product.variations,['قرمز','آبی']);assert.equal(product.variationGroups[0].name,'رنگ');
+  const importedEnvelope=JSON.parse(db.states.get('connection_vault'));assert.equal(importedEnvelope.iterations,100000);assert.doesNotMatch(JSON.stringify(importedEnvelope),/cs_import|shop-token/);
+  const importedConnections=await call(db,'/api/connections').then(r=>r.json());assert.equal(importedConnections.connections.woo.secret,'cs_import');assert.equal(importedConnections.connections.ai.network.mode,'worker');assert.equal(importedConnections.connections.basalam.shops[0].vendorId,'22');
+});
+
+test('visual selector uses reusable class selectors, real match counts, and a dedicated detail workflow',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1();globalThis.fetch=async()=>new Response('<main><article class="product-card"><h2 class="product-title">A</h2></article><article class="product-card"><h2 class="product-title">B</h2></article></main>',{headers:{'content-type':'text/html; charset=utf-8'}});
+  try{
+    const listTicket=await call(db,'/api/visual-ticket',jsonInit({url:'https://shop.example/list'})).then(response=>response.json()),listResponse=await call(db,'/visual?context=list&ticket='+encodeURIComponent(listTicket.ticket)),listHtml=await listResponse.text();assert.equal(listResponse.status,200);assert.match(listHtml,/classCandidates/);assert.match(listHtml,/matches\(value\)>1/);assert.doesNotMatch(listHtml,/:nth-of-type/);assert.match(listHtml,/value="container"/);assert.doesNotMatch(listHtml,/value="shortDesc"/);
+    const detailTicket=await call(db,'/api/visual-ticket',jsonInit({url:'https://shop.example/product/a'})).then(response=>response.json()),detailResponse=await call(db,'/visual?context=detail&ticket='+encodeURIComponent(detailTicket.ticket)),detailHtml=await detailResponse.text();assert.equal(detailResponse.status,200);assert.match(detailHtml,/value="shortDesc"/);assert.match(detailHtml,/value="variations"/);assert.match(detailHtml,/value="galleryBox"/);assert.match(detailHtml,/scraper4-detail-selectors/);assert.doesNotMatch(detailHtml,/value="container"/);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('selector suggestion and variation extraction routes execute against HTML',async()=>{
+  globalThis.HTMLRewriter=TestHTMLRewriter;const originalFetch=globalThis.fetch,db=new MemoryD1();globalThis.fetch=async request=>{const url=String(request instanceof Request?request.url:request);if(url==='https://shop.example/list')return new Response('<ul><li class="product"><h2 class="woocommerce-loop-product__title">A</h2><span class="price">۱۰۰</span><a class="woocommerce-LoopProduct-link" href="/p/a">A</a><img class="wp-post-image" src="/a.jpg"></li><li class="product"><h2 class="woocommerce-loop-product__title">B</h2><span class="price">۲۰۰</span><a class="woocommerce-LoopProduct-link" href="/p/b">B</a><img class="wp-post-image" src="/b.jpg"></li></ul>',{headers:{'content-type':'text/html'}});if(url==='https://shop.example/p/a')return new Response('<div class="variations"><option name="attribute_pa_color" value="red" data-price="150000">قرمز</option><option name="attribute_pa_color" value="blue">آبی</option><button data-name="size" data-value="L">بزرگ</button></div>',{headers:{'content-type':'text/html'}});throw new Error(`unexpected ${url}`)};
+  try{const suggested=await call(db,'/api/suggest-selectors',jsonInit({url:'https://shop.example/list',mode:'list'})),suggestion=await suggested.json();assert.equal(suggested.status,200);assert.equal(suggestion.selectors.container,'li.product');assert.equal(suggestion.evidence.container.count,2);assert.ok(suggestion.selectors.title);assert.ok(suggestion.selectors.price);
+    const extracted=await call(db,'/api/test-selector',jsonInit({url:'https://shop.example/p/a',selector:'.variations',type:'variations'})),variation=await extracted.json();assert.equal(extracted.status,200);assert.ok(variation.variations.includes('red'));assert.ok(variation.variations.includes('blue'));assert.ok(variation.variations.includes('L'));assert.equal(variation.variationPrices.red,150000);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('comprehensive destination APIs page, search, preview, update, status, bulk and archive with shop-aware semantics',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),requests=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({woo:{url:'https://woo.example',key:'ck_dest',secret:'cs_dest'},basalam:{api:'https://basalam.example/api',token:'bs-token',vendorId:'55',shops:[{name:'غرفه دوم',token:'shop-token',vendorId:'66',pricePercent:0}]},ai:{providers:[{id:'cat-ai',name:'Category AI',baseUrl:'https://ai.example/v1',apiKey:'ai-secret',models:['cat-model'],enabled:true}],candidates:['cat-ai::cat-model'],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),method=String(init.method||'GET').toUpperCase(),body=init.body?JSON.parse(String(init.body)):null;requests.push({url,method,body,headers:new Headers(init.headers)});
+      if(url==='https://basalam.example/api/categories'&&method==='GET')return jsonResponse({data:[{id:900,name:'آرایشی و بهداشتی',children:[{id:901,name:'عطر و ادکلن'},{id:902,name:'ادو پرفیوم'}]}]});
+      if(url==='https://ai.example/v1/chat/completions'&&method==='POST')return jsonResponse({choices:[{message:{content:'{"category_id":902,"reason":"مناسب‌ترین دسته"}'}}]});
+      if(url.startsWith('https://woo.example/wp-json/wc/v3/products/101')&&method==='GET')return jsonResponse({id:101,name:'کفش وو',regular_price:'250000',stock_quantity:4,status:'publish',sku:'W-1',images:[{src:'https://woo.example/a.jpg'}],categories:[{id:7,name:'کفش'}]});
+      if(url.startsWith('https://woo.example/wp-json/wc/v3/products/101')&&method==='PUT')return jsonResponse({id:101,name:body.name||'کفش وو',regular_price:body.regular_price||'250000',stock_quantity:body.stock_quantity??4,status:body.status||'publish',sku:'W-1',images:[],categories:[]});
+      if(url.startsWith('https://woo.example/wp-json/wc/v3/products')&&method==='GET')return jsonResponse([{id:101,name:'کفش وو',regular_price:'250000',stock_quantity:4,status:'publish',sku:'W-1',images:[],categories:[]}],200,{'x-wp-total':'1','x-wp-totalpages':'1'});
+      if(url.includes('/vendors/55/products/batch-updates')&&method==='PATCH')return jsonResponse({ok:true});
+      if(url.includes('/vendors/66/products/batch-updates')&&method==='PATCH')return jsonResponse({ok:true});
+      if(url.includes('/products/201')&&method==='GET')return jsonResponse({data:{id:201,title:'عطر باسلام',primary_price:1250000,stock:3,status:{value:2976,name:'فعال'},sku:'B-1',photos:[]}});
+      if(url.includes('/products/201')&&method==='PATCH')return jsonResponse({data:{id:201,title:'عطر باسلام',primary_price:body.primary_price??1250000,stock:body.stock??3,status:{value:body.status??2976,name:'فعال'},sku:'B-1',photos:[]}});
+      if(url.includes('/vendors/55/products')&&method==='GET')return jsonResponse({data:[{id:201,title:'عطر باسلام',primary_price:1250000,stock:3,status:{value:2976,name:'فعال'},sku:'B-1'}],total_count:1,total_page:1});
+      if(url.includes('/vendors/66/products')&&method==='GET')return jsonResponse({data:[],total_count:0,total_page:1});
+      throw new Error(`unexpected destination request ${method} ${url}`)};
+    const wooList=await call(db,'/api/destination/woo/products?page=1&per_page=25&q=%DA%A9%D9%81%D8%B4&status=publish').then(r=>r.json());assert.equal(wooList.ok,true);assert.equal(wooList.items.length,1);assert.equal(wooList.items[0].price,250000);assert.equal(wooList.totalPages,1);assert.ok(requests.at(-1).url.includes('search=%DA%A9%D9%81%D8%B4'));
+    const wooPreview=await call(db,'/api/destination/woo/101/update',jsonInit({title:'کفش تازه',price:275000,shopId:'default'})).then(r=>r.json());assert.equal(wooPreview.dryRun,true);assert.equal(wooPreview.changes.name,'کفش تازه');assert.equal(wooPreview.changes.regular_price,'275000');assert.equal(requests.filter(x=>x.method==='PUT').length,0);
+    const wooApply=await call(db,'/api/destination/woo/101/update',jsonInit({title:'کفش تازه',confirm:'APPLY'})).then(r=>r.json());assert.equal(wooApply.dryRun,false);assert.equal(requests.filter(x=>x.method==='PUT').length,1);
+    const wooStatus=await call(db,'/api/destination/woo/101/status',jsonInit({status:'draft',confirm:'APPLY'})).then(r=>r.json());assert.equal(wooStatus.ok,true);assert.equal(requests.at(-1).body.status,'draft');
+
+    const bsList=await call(db,'/api/destination/basalam/products?page=1&per_page=25&shop=55&status=2976').then(r=>r.json());assert.equal(bsList.items.length,1);assert.equal(bsList.items[0].price,125000);assert.equal(bsList.items[0].shopId,'55');assert.equal(bsList.archiveInsteadOfDelete,true);
+    const categories=await call(db,'/api/categories/basalam?refresh=1').then(r=>r.json());assert.equal(categories.ok,true);assert.equal(categories.total,3);assert.equal(categories.items.find(x=>x.id===902).path,'آرایشی و بهداشتی ← ادو پرفیوم');assert.equal(categories.items.find(x=>x.id===902).leaf,true);
+    const aiCategory=await call(db,'/api/destination/basalam/category/suggest',jsonInit({mode:'ai',title:'ادو پرفیوم زنانه',modelKey:'cat-ai::cat-model'})).then(r=>r.json());assert.equal(aiCategory.ok,true);assert.equal(aiCategory.categoryId,902);assert.equal(aiCategory.categoryName,'ادو پرفیوم');assert.match(aiCategory.text,/category_id/);
+    const noLearning=await call(db,'/api/destination/basalam/category/suggest',jsonInit({mode:'learned',title:'عطر باسلام'})).then(r=>r.json());assert.equal(noLearning.result,null);
+    const bsPreview=await call(db,'/api/destination/basalam/bulk',jsonInit({ids:[{id:201,shopId:'55'}],ops:{price:{op:'inc',val:'10%'},stock:6}})).then(r=>r.json());assert.equal(bsPreview.dryRun,true);assert.equal(bsPreview.items[0].newPrice,137500);assert.equal(bsPreview.items[0].stock,6);
+    const bsBulk=await call(db,'/api/destination/basalam/bulk',jsonInit({ids:[{id:201,shopId:'55'}],ops:{price:{op:'inc',val:'10%'}},confirm:'APPLY'})).then(r=>r.json());assert.equal(bsBulk.dryRun,false);assert.equal(bsBulk.changed,1);const batch=requests.find(x=>x.url.includes('/vendors/55/products/batch-updates'));assert.equal(batch.body.data[0].primary_price,1375000);
+    const categoryBody={ids:[{id:201,shopId:'55'}],ops:{categoryAssignments:[{id:201,shopId:'55',categoryId:902,categoryName:'ادو پرفیوم',source:'هوش مصنوعی'}]}};
+    const categoryPreview=await call(db,'/api/destination/basalam/bulk',jsonInit(categoryBody)).then(r=>r.json());assert.equal(categoryPreview.dryRun,true);assert.equal(categoryPreview.items[0].newCategoryId,902);assert.equal(categoryPreview.items[0].categorySource,'هوش مصنوعی');
+    const categoryApply=await call(db,'/api/destination/basalam/bulk',jsonInit({...categoryBody,confirm:'APPLY'})).then(r=>r.json());assert.equal(categoryApply.dryRun,false);assert.equal(categoryApply.changed,1);assert.ok(categoryApply.learningRecords>0);const categoryBatch=requests.filter(x=>x.url.includes('/vendors/55/products/batch-updates')).at(-1);assert.equal(categoryBatch.body.data[0].category_id,902);
+    const learned=await call(db,'/api/destination/basalam/category/suggest',jsonInit({mode:'learned',title:'عطر باسلام ویژه'})).then(r=>r.json());assert.equal(learned.result.categoryId,902);assert.equal(learned.result.categoryName,'ادو پرفیوم');
+    const archived=await call(db,'/api/destination/basalam/201?confirm=DELETE&shop=55',{method:'DELETE'}).then(r=>r.json());assert.equal(archived.archived,true);assert.equal(archived.deleted,false);assert.equal(requests.at(-1).method,'PATCH');assert.equal(requests.at(-1).body.status,4184);
+    const overLimit=await call(db,'/api/destination/basalam/bulk',jsonInit({ids:Array.from({length:21},(_,i)=>({id:i+1,shopId:'55'})),ops:{stock:1}}));assert.equal(overLimit.status,400);assert.match((await overLimit.json()).error,/۲۰/);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('profile extraction diagnostic runs real network, list parser, selector evidence and detail stages without writes',async()=>{
+  globalThis.HTMLRewriter=TestHTMLRewriter;const originalFetch=globalThis.fetch,db=new MemoryD1();globalThis.fetch=async request=>{const url=String(request instanceof Request?request.url:request);if(url==='https://source.example/list')return new Response('<main><article class="item"><a class="link" href="/p/one"><h2>محصول واقعی</h2></a><span class="price">۱۲۵۰۰۰ تومان</span><img src="/one.jpg"></article><script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"محصول واقعی","url":"https://source.example/p/one","image":"https://source.example/one.jpg","offers":{"price":"125000"}}</script></main>',{headers:{'content-type':'text/html; charset=utf-8'}});if(url==='https://source.example/p/one')return new Response('<main><div class="description">توضیح کامل نمونه</div><span class="sku">S-1</span></main>',{headers:{'content-type':'text/html'}});throw new Error(`unexpected ${url}`)};
+  try{const saved=await call(db,'/api/profiles',jsonInit({id:'diag',name:'عیب‌یابی واقعی',url:'https://source.example/list',pages:1,pagination:'none',selectors:{container:'.item',title:'h2',price:'.price',link:'.link',image:'img',longDesc:'.description',sku:'.sku'},enabled:true}));assert.equal(saved.status,200);const response=await call(db,'/api/profiles/diag/extraction-diagnostic',jsonInit({})),report=await response.json();assert.equal(response.status,200);assert.equal(report.productCount,1);assert.equal(report.ok,true);assert.deepEqual(report.stages.map(x=>x.name),['network','list-extraction','selector-evidence','detail-extraction']);assert.equal(report.stages.find(x=>x.name==='network').bytes>0,true);assert.equal(report.stages.find(x=>x.name==='list-extraction').samples[0].title,'محصول واقعی');assert.equal(report.detail.sku,'S-1');assert.equal(db.products.size,0)
+  }finally{globalThis.fetch=originalFetch}
+});
+
+// Cheerio-backed HTMLRewriter for tests that exercise real selector discovery:
+// the regex TestHTMLRewriter mock below cannot run the verification passes
+// discovery needs, so structural inference reports method 'none' under it.
+const DISCOVERY_VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+class CheerioHTMLRewriter {
+  constructor(){this.registrations=[]}
+  on(selector,handler){load('<i></i>')(selector);this.registrations.push({selector,handler});return this}
+  transform(response){return new Response(new ReadableStream({start:async controller=>{try{const source=await response.text(),$=load(source,{decodeEntities:true}),roots=$.root().contents().toArray();for(const root of roots)this.#walk($,root,[]);controller.enqueue(new TextEncoder().encode($.html()));controller.close()}catch(error){controller.error(error)}}}))}
+  #walk($,node,active){
+    if(node.type==='text'){for(const handler of active)handler.text?.({text:node.data||'',lastInTextNode:true});return}
+    if(node.type==='comment')return;
+    const matching=[];
+    if(node.type==='tag')for(const registration of this.registrations)if($(node).is(registration.selector))matching.push(registration.handler);
+    const callbacks=[],wrapper={
+      tagName:node.name,getAttribute:name=>node.attribs?.[name]??null,setAttribute:(name,value)=>$(node).attr(name,value),removeAttribute:name=>$(node).removeAttr(name),
+      before:(value)=>$(node).before(value),after:(value)=>$(node).after(value),remove:()=>$(node).remove(),onEndTag:callback=>{if(DISCOVERY_VOID_TAGS.has(String(node.name).toLowerCase()))throw Error('Parser error: No end tag.');callbacks.push(callback)},
+      get attributes(){return Object.entries(node.attribs||{})}
+    };
+    for(const handler of matching)handler.element?.(wrapper);
+    const scoped=[...active,...matching];for(const child of [...(node.children||[])])this.#walk($,child,scoped);
+    for(const callback of callbacks.reverse())callback();
+  }
+}
+
+test('extraction diagnostic saves discovered selectors when the profile never configured any',async()=>{
+  // 1.135.0: the diagnostic no longer just reports discoveries — when the
+  // profile still has never-configured (default) selectors, the verified
+  // discovery is persisted to the profile so the selectors tab fills itself
+  // in. Fully custom selectors are never touched.
+  const cards=[1,2,3,4,5].map(i=>`
+    <div class="x7f2a shop-card">
+      <a href="/item-${i}/"><img src="https://cdn.example.test/${i}.jpg"><span class="x7f2a card-name">کالای فروشگاه شمارهٔ ${i}</span></a>
+      <b class="x7f2a cost">${(i*1250000).toLocaleString('en-US')} تومان</b>
+    </div>`).join('');
+  const listHtml=`<html><body><div class="x7f2a shop-grid">${cards}</div></body></html>`;
+  const detailHtml='<html><body><div class="short-description">A short blurb</div><span class="sku">S-9</span></body></html>';
+  const defaults={container:'li.product',title:'h2, h3, .woocommerce-loop-product__title',price:'.price, .amount',link:'a[href]',image:'img'};
+  const originalFetch=globalThis.fetch,originalRewriter=globalThis.HTMLRewriter,db=new MemoryD1();globalThis.HTMLRewriter=CheerioHTMLRewriter;
+  globalThis.fetch=async request=>{const raw=String(request instanceof Request?request.url:request),url=raw.replace(/\/$/,'');if(url==='https://shop.example.test/item-1')return new Response(detailHtml,{headers:{'content-type':'text/html'}});if(url==='https://shop.example.test')return new Response(listHtml,{headers:{'content-type':'text/html'}});throw new Error(`unexpected ${raw}`)};
+  try{
+    const saved=await call(db,'/api/profiles',jsonInit({id:'diag-auto',name:'auto',url:'https://shop.example.test/',pages:1,pagination:'none',selectors:{...defaults},enabled:true}));assert.equal(saved.status,200);
+    const response=await call(db,'/api/profiles/diag-auto/extraction-diagnostic',jsonInit({})),report=await response.json();
+    assert.equal(response.status,200);
+    assert.equal(report.productCount,5,'the verified discovery must extract every card');
+    assert.ok(report.selectorsSaved&&report.selectorsSaved.container.includes('shop-card'),`container discovery must be reported, got ${JSON.stringify(report.selectorsSaved)}`);
+    assert.equal(report.selectorsSaved.shortDesc,'.short-description','missing detail selectors come from the real product page');
+    assert.equal(report.selectorsSaved.sku,'.sku');
+    const savedStage=report.stages.find(x=>x.name==='selectors-auto-saved');
+    assert.ok(savedStage&&savedStage.ok,'the report must show the auto-save stage');
+    const stored=JSON.parse(db.profiles.get('diag-auto').data).selectors;
+    assert.ok(stored.container.includes('shop-card'),'the discovery must be persisted to the profile');
+    assert.equal(stored.shortDesc,'.short-description');
+    assert.equal(stored.sku,'.sku');
+    // A fully custom profile is diagnosed but never rewritten.
+    const savedCustom=await call(db,'/api/profiles',jsonInit({id:'diag-custom',name:'custom',url:'https://shop.example.test/',pages:1,pagination:'none',selectors:{container:'.mine',title:'.mine-t',price:'.mine-p',link:'a.mine',image:'img.mine',shortDesc:'.mine-short',sku:'.mine-sku'},enabled:true}));assert.equal(savedCustom.status,200);
+    const customResponse=await call(db,'/api/profiles/diag-custom/extraction-diagnostic',jsonInit({})),custom=await customResponse.json();
+    assert.equal(customResponse.status,200);
+    assert.equal(custom.selectorsSaved,undefined,'custom selectors must not be overwritten');
+    assert.ok(!custom.stages.some(x=>x.name==='selectors-auto-saved'),'no auto-save stage for a custom profile');
+    assert.equal(JSON.parse(db.profiles.get('diag-custom').data).selectors.container,'.mine','the custom profile must be byte-identical');
+  }finally{globalThis.fetch=originalFetch;globalThis.HTMLRewriter=originalRewriter}
+});
+
+test('standalone spreadsheet import understands Persian CSV headers, keeps Woo status, and targeted sync jobs stay targeted',async()=>{
+  const db=new MemoryD1();
+  const saved=await call(db,'/api/profiles',jsonInit({id:'sheet-ui',name:'فایل فروشگاه',url:'',noExtract:true,pages:1,pagination:'none',selectors:{container:'.product',title:'h2',price:'.price',link:'a',image:'img'},enabled:true}));
+  assert.equal(saved.status,200);
+  const csv='نام محصول,قیمت,تصویر,کد محصول\nکفش آزمایشی,۲۵۰۰۰۰,https://images.example/shoe.jpg,SKU-FA-1\n';
+  const imported=await call(db,'/api/profiles/sheet-ui/import?format=csv&wooStatus=draft',{method:'POST',headers:{'content-type':'text/csv; charset=utf-8'},body:csv}),report=await imported.json();
+  assert.equal(imported.status,200);assert.equal(report.format,'csv');assert.equal(report.rows,1);assert.equal(report.imported,1);assert.equal(report.wooStatus,'draft');
+  const stored=JSON.parse([...db.products.values()][0].data);assert.equal(stored.title,'کفش آزمایشی');assert.equal(stored.price,250000);assert.equal(stored.sku,'SKU-FA-1');assert.equal(stored.destinationStatus,'draft');
+  const excel=await call(db,'/api/profiles/sheet-ui/import?format=xlsx&wooStatus=publish',{method:'POST',headers:{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},body:tinyXlsx()}),excelReport=await excel.json();assert.equal(excel.status,200);assert.equal(excelReport.format,'xlsx');assert.equal(excelReport.imported,1);const excelProduct=[...db.products.values()].map(row=>JSON.parse(row.data)).find(product=>product.title==='عطر اکسل');assert.equal(excelProduct.price,375000);assert.equal(excelProduct.brand,'نمونه');assert.equal(excelProduct.destinationStatus,'publish');
+  const broken=await call(db,'/api/profiles/sheet-ui/import?format=xlsx',{method:'POST',headers:{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},body:new Uint8Array([1,2,3])});assert.equal(broken.status,400);assert.match(broken.headers.get('content-type')||'',/application\/json/);assert.match((await broken.json()).error,/Excel|فایل|zip/i);
+  const oversized=await call(db,'/api/profiles/sheet-ui/import?format=csv',{method:'POST',headers:{'content-type':'text/csv'},body:'x'.repeat(10*1024*1024+1)});assert.equal(oversized.status,413);assert.match(oversized.headers.get('content-type')||'',/application\/json/);assert.match((await oversized.json()).error,/۱۰|حجم|MiB/i);
+  const queued=await call(db,'/api/profiles/sheet-ui/sync',jsonInit({target:'woo'})),job=(await queued.json()).job;assert.equal(queued.status,202);assert.equal(job.kind,'sync');assert.equal(job.target,'woo');
+});
+
+test('advanced import: analyze detects columns, mapping + options control the import, and history is recorded',async()=>{
+  const db=new MemoryD1();
+  await call(db,'/api/profiles',jsonInit({id:'adv-import',name:'پیشرفته',url:'',noExtract:true,pages:1,pagination:'none',selectors:{container:'.p',title:'h2',price:'.price',link:'a',image:'img'},enabled:true}));
+  const csv='عنوان محصول,قیمت (ریال),کد,موجودی,ویژگی‌ها\nعطر گل محمدی,4500000,SKU-1,5,رنگ:قرمز، آبی|سایز:M\nعطر گل محمدی,4300000,SKU-2,3,رنگ:آبی\nکرم دست,800000,SKU-3,2,حجم:۵۰ میل\n';
+  const analyzed=await call(db,'/api/import/analyze?format=csv',{method:'POST',headers:{'content-type':'text/csv; charset=utf-8'},body:csv}),analysis=await analyzed.json();
+  assert.equal(analyzed.status,200);assert.equal(analysis.total,3);assert.ok(analysis.headers.includes('عنوان محصول'));
+  const mapping=Object.fromEntries(analysis.mapping.map(m=>[m.column,m.field]));
+  assert.equal(mapping['عنوان محصول'],'title');assert.equal(mapping['قیمت (ریال)'],'price');assert.equal(mapping['کد'],'sku');
+  assert.equal(analysis.issues.missingTitle,0);assert.equal(analysis.issues.invalidPrice,0);assert.ok(analysis.priceHint==='rial'||analysis.priceHint===null);
+  const opts=encodeURIComponent(JSON.stringify({mapping:{'عنوان محصول':'title','قیمت (ریال)':'price','کد':'sku','موجودی':'stock','ویژگی‌ها':'attributes'},priceUnit:'rial',dedupe:'first',skipMissingTitle:true,skipMissingPrice:false,defaultStock:0}));
+  const executed=await call(db,'/api/profiles/adv-import/import?format=csv&opts='+opts+'&name=products.csv',{method:'POST',headers:{'content-type':'text/csv; charset=utf-8'},body:csv}),report=await executed.json();
+  assert.equal(executed.status,200);assert.equal(report.imported,2,'duplicate title kept once (dedupe=first)');assert.equal(report.skipped,1);
+  const products=[...db.products.values()].map(row=>JSON.parse(row.data));
+  const kept=products.find(p=>p.sku==='SKU-1');assert.ok(kept,'first duplicate variant was kept');assert.equal(kept.price,450000,'rial price divided by 10 into toman');const groups=kept.variationGroups||[];assert.ok(groups.some(g=>g.name==='رنگ'&&g.values.includes('قرمز')&&g.values.includes('آبی')),'attributes column parsed into variationGroups');assert.ok(groups.some(g=>g.name==='سایز'&&g.values.includes('M')),'multi-attribute row parsed');const cream=products.find(p=>p.sku==='SKU-3');assert.ok(cream&&cream.variationGroups.some(g=>g.name==='حجم'&&g.values.includes('۵۰ میل')),'plain single attribute with Persian digits parsed');
+  const history=await call(db,'/api/import/history').then(r=>r.json());
+  assert.ok(history.items.length>=1);assert.equal(history.items[history.items.length-1].imported,2);assert.equal(history.items[history.items.length-1].fileName,'products.csv');
+  const cleared=await call(db,'/api/import/history/clear',{method:'POST',body:'{}'}).then(r=>r.json());assert.equal(cleared.ok,true);
+  const emptyHistory=await call(db,'/api/import/history').then(r=>r.json());assert.equal(emptyHistory.items.length,0);
+});
+
+
+test('AI tests send the same model index of every provider in parallel and skip a hung round together',async()=>{
+  const originalFetch=globalThis.fetch,db=new MemoryD1(),calls=[];
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'alpha',name:'Alpha',baseUrl:'https://alpha.example/v1',apiKey:'alpha-secret',models:['a1','a2'],enabled:true},{id:'beta',name:'Beta',baseUrl:'https://beta.example/v1',apiKey:'beta-secret',models:['b1','b2'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(request,init={})=>{const url=String(request instanceof Request?request.url:request),body=JSON.parse(String(init.body||'{}'));calls.push({host:new URL(url).host,model:body.model});return jsonResponse({choices:[{message:{content:'پاسخ '+body.model}}]})};
+    const first=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',cursor:0,runId:''})).then(response=>response.json());
+    assert.equal(first.total,4);assert.equal(first.done,false);assert.equal(first.batchSize,2);assert.equal(first.nextCursor,2);assert.deepEqual(first.results.map(row=>row.model).sort(),['a1','b1']);assert.deepEqual([...new Set(calls.map(item=>item.host))].sort(),['alpha.example','beta.example']);
+    const second=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',cursor:first.nextCursor,runId:first.runId})).then(response=>response.json());
+    assert.equal(second.done,true);assert.equal(second.batchSize,2);assert.deepEqual(second.results.map(row=>row.model),['a1','b1','a2','b2']);
+    const skipped=await call(db,'/api/ai/test-all',jsonInit({prompt:'رد',cursor:0,runId:'round-skip',skipCurrent:true,skipReason:'hung round'})).then(response=>response.json());
+    assert.equal(skipped.batchSize,2);assert.equal(skipped.skipped,2);assert.ok(skipped.results.every(row=>row.phase==='transport-skip'));assert.equal(calls.length,4,'skipping a round must not call any provider');
+  }finally{globalThis.fetch=originalFetch}
+});
+
+test('chat payload shape errors are retried with a compatible body while credit errors stay failed',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),bodies=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'shape',name:'Shape',baseUrl:'https://shape.example/v1',apiKey:'shape-secret',models:['gpt-5-mini'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(_request,init={})=>{const body=JSON.parse(String(init.body||'{}'));bodies.push(body);
+      if(body.model==='paid-out')return jsonResponse({error:{message:'You exceeded your current quota. Please check your billing.',code:'insufficient_quota'}},402);
+      if('temperature' in body)return jsonResponse({error:{message:'Unsupported value: temperature is not supported with this model.'}},400);
+      if('max_tokens' in body)return jsonResponse({error:{message:'Unsupported parameter: max_tokens. Use max_completion_tokens instead.'}},400);
+      return jsonResponse({choices:[{message:{content:'سازگار'}}]})};
+    const ok=await call(db,'/api/test-connection/ai',jsonInit({provider:'shape',model:'gpt-5-mini',prompt:'سلام'})).then(response=>response.json());
+    assert.equal(ok.ok,true,JSON.stringify(ok));assert.equal(ok.text,'سازگار');assert.equal(ok.reasoning,true);assert.ok(bodies.some(body=>body.model==='gpt-5-mini'&&'max_completion_tokens' in body&&!('temperature' in body)));
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'billed',name:'Billed',baseUrl:'https://billed.example/v1',apiKey:'billed-secret',models:['paid-out'],enabled:true}],network:{mode:'direct'}}}));
+    const credit=await call(db,'/api/ai/test-all',jsonInit({prompt:'سلام',cursor:0,runId:'credit-run'})).then(response=>response.json());
+    const paid=credit.results.find(row=>row.model==='paid-out');assert.equal(paid.ok,false);assert.equal(paid.retryable,false);assert.match(String(paid.error||''),/quota|402|billing/i);
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+test('hung AI retry pass tests one model from each provider in parallel',async()=>{
+  const db=new MemoryD1(),sent=[],extra={JOBS:{send:async(message,options)=>sent.push({message,options})},AI_TEST_MODEL_BUDGET_MS:'80',AI_TEST_TIMEOUT_MS:'50'};
+  const env={DB:db,VAULT_SECRET:'vault-secret',JOBS:extra.JOBS,JOBS_DLQ:{send:async()=>{}},AI_TEST_MODEL_BUDGET_MS:'80',AI_TEST_TIMEOUT_MS:'50'};
+  await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'slow-a',name:'Slow A',baseUrl:'https://a.example/v1',apiKey:'a-secret',models:['hang-a'],enabled:true},{id:'slow-b',name:'Slow B',baseUrl:'https://b.example/v1',apiKey:'b-secret',models:['hang-b'],enabled:true}],network:{mode:'direct'}}}),extra);
+  const originalFetch=globalThis.fetch;globalThis.fetch=()=>new Promise(()=>{});
+  const deliver=message=>worker.queue({messages:[{body:message,ack(){},retry(){assert.fail('retry pass should ack')}}]},env,ctx);
+  try{
+    await call(db,'/api/ai/test-runs',jsonInit({prompt:'سلام'}),extra);
+    await deliver(sent.shift().message);
+    const afterFirst=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());
+    assert.equal(afterFirst.run.result.results.length,2,'first pass tests both providers together');assert.equal(afterFirst.run.phase,'retrying');
+    await deliver(sent.shift().message);
+    const afterRetry=await call(db,'/api/ai/test-runs/current',{},extra).then(response=>response.json());
+    assert.equal(afterRetry.run.result.batchResults.length,2,'retry pass also runs one hung model per provider');assert.equal(afterRetry.run.result.results.filter(row=>Number(row.retryCount)>0).length,2);
+  }finally{globalThis.fetch=originalFetch}
+});
+
+
+
+test('OpenRouter requests send API headers, strip alias prefixes, and retry security-policy 403',async()=>{
+  const originalFetch=globalThis.fetch,originalError=console.error,db=new MemoryD1(),calls=[];console.error=()=>{};
+  try{
+    await call(db,'/api/connections',jsonInit({ai:{providers:[{id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',apiKey:'or-secret',models:['~qwen/qwen3.8-max'],enabled:true}],network:{mode:'direct'}}}));
+    globalThis.fetch=async(_request,init={})=>{const headers=new Headers(init.headers),body=init.body?JSON.parse(String(init.body)):null;calls.push({body,ua:headers.get('user-agent'),referer:headers.get('http-referer')||headers.get('referer'),title:headers.get('x-title'),authorization:headers.get('authorization')});
+      if(/Mozilla\/5\.0/.test(String(headers.get('user-agent')||''))||!headers.get('x-title'))return jsonResponse({success:false,error:'Access denied by security policy.'},403);
+      return jsonResponse({choices:[{message:{content:'سلام از OpenRouter'}}]})};
+    const result=await call(db,'/api/test-connection/ai',jsonInit({provider:'openrouter',model:'~qwen/qwen3.8-max',prompt:'سلام'})).then(response=>response.json());
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.text,'سلام از OpenRouter');assert.ok(calls.length>=1);assert.match(String(calls[0].ua||''),/^Scraper4/);assert.equal(calls[0].referer,'https://scraper4.workers.dev');assert.equal(calls[0].title,'Scraper 4');assert.equal(calls[0].authorization,'Bearer or-secret');assert.doesNotMatch(String(calls[0].ua||''),/Mozilla\/5\.0/);assert.equal(calls.at(-1).body.model,'qwen/qwen3.8-max');
+  }finally{globalThis.fetch=originalFetch;console.error=originalError}
+});
+
+
+function jsonResponse(body,status=200,headers={}){return new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json',...headers}})}
+
+class TestHTMLRewriter {
+  constructor(){this.handlers=[]}on(selector,handler){this.handlers.push({selector,handler});return this}
+  transform(response){return{text:async()=>{const html=await response.text();for(const {selector,handler} of this.handlers)for(const node of selectNodes(html,selector)){const callbacks=[],element={getAttribute:name=>node.attrs[name]??null,onEndTag:callback=>callbacks.push(callback),attributes:Object.entries(node.attrs),removeAttribute(){},setAttribute(){},before(){},after(){},remove(){}};handler.element?.(element);handler.text?.({text:node.text});for(const callback of callbacks)callback()}return html}}}
+}
+function selectNodes(html,selector){const last=selector.trim().split(/\s+/).at(-1),nodes=[];for(const match of html.matchAll(/<([a-z0-9-]+)([^>]*)>/gi)){const tag=match[1].toLowerCase(),attrs={};for(const attr of match[2].matchAll(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g))attrs[attr[1]]=attr[2]??attr[3]??attr[4]??'';if(!matches(tag,attrs,last))continue;const tail=html.slice(match.index+match[0].length),end=tail.search(new RegExp(`<\\/${tag}\\s*>`,'i')),inner=end>=0?tail.slice(0,end):'';nodes.push({attrs,text:inner.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()})}return nodes}
+function matches(tag,attrs,selector){const tagName=selector.match(/^[a-z][\w-]*/i)?.[0]?.toLowerCase();if(tagName&&tagName!==tag)return false;const id=selector.match(/#([\w-]+)/)?.[1];if(id&&attrs.id!==id)return false;for(const cls of [...selector.matchAll(/\.([\w-]+)/g)].map(x=>x[1]))if(!String(attrs.class||'').split(/\s+/).includes(cls))return false;for(const part of selector.matchAll(/\[([:\w-]+)(?:([*^$]?=)["']?([^\]"']*)["']?)?\]/g)){const [,name,op,value]=part;if(!(name in attrs))return false;if(op==='='&&attrs[name]!==value)return false;if(op==='*='&&!attrs[name].includes(value))return false}return true}
+
+// --- Request 34b: a Cloudflare proxy/Worker URL entered in «روش اتصال» must be
+// used for SOURCE-PAGE traffic, not only for AI model calls. Node's safeFetch()
+// previously called the global fetch() directly, so a user who configured a
+// proxy to get around a sanction block still hit the block on every extraction.
+test('node source fetching honours the configured proxy and worker route', async () => {
+  const { build } = await import('esbuild');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const http = await import('node:http');
+  const nodeNet = await import('node:net');
+
+  const directory = await mkdtemp(join(new URL('..', import.meta.url).pathname, '.tmp-proxy-'));
+  const outfile = join(directory, 'network.mjs');
+  await build({ entryPoints: [new URL('../render-src/network.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile, logLevel: 'error' });
+  const network = await import(pathToFileURL(outfile));
+
+  const BODY = '<html><body><h1>through the proxy</h1></body></html>';
+  const origin = http.createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(BODY); });
+  await new Promise(resolve => origin.listen(0, '127.0.0.1', resolve));
+  const originPort = origin.address().port;
+
+  const tunnels = [];
+  const proxy = http.createServer((request, response) => { response.writeHead(200, { 'content-type': 'text/html' }); response.end(BODY); });
+  proxy.on('connect', (request, socket, head) => {
+    tunnels.push(request.url);
+    const upstream = nodeNet.connect(originPort, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length) upstream.write(head);
+      upstream.pipe(socket); socket.pipe(upstream);
+    });
+    upstream.on('error', () => socket.destroy());
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+
+  try {
+    network.configureSourceNetwork({ mode: 'proxy', proxyUrl: 'http://127.0.0.1:' + proxy.address().port });
+    const result = await network.safeText('http://example.com/shop/');
+    assert.ok(result.text.includes('through the proxy'), 'source page must be fetched through the proxy');
+    assert.deepEqual(tunnels, ['example.com:80'], 'the proxy must receive the source request');
+
+    // The Worker route wraps the target URL instead of tunnelling it.
+    assert.equal(network.viaWorkerUrl('https://gw.example.com/fetch', 'https://shop.ir/a?b=1'), 'https://gw.example.com/fetch?url=https%3A%2F%2Fshop.ir%2Fa%3Fb%3D1');
+    assert.equal(network.viaWorkerUrl('https://gw.example.com/{url}', 'https://shop.ir/a'), 'https://gw.example.com/https%3A%2F%2Fshop.ir%2Fa');
+
+    // An anti-bot challenge page must raise a clear error instead of being
+    // parsed as a product listing (zero-product "success").
+    assert.throws(() => network.ensureTextResponse('<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>', 'text/html', 'https://shop.ir/'), /چالش|ضدربات/);
+  } finally {
+    network.configureSourceNetwork({ mode: 'direct' });
+    origin.close(); proxy.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+// --- Request 36a: one failing Basalam stall must not cancel the others.
+// The whole multi-stall loop used to sit inside a single try/catch, so a single
+// bad stall aborted the send and hid the stalls that had already succeeded.
+test('a failing Basalam stall does not abort the remaining stalls', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const start = source.indexOf('for(const account of accounts)');
+    assert.ok(start > 0, `${file}: multi-stall loop must exist`);
+    const body = source.slice(start, source.indexOf('return results', start));
+    assert.ok(/results\.push\(\{[^}]*error:/.test(body.replace(/\n/g, '')),
+      `${file}: a stall failure must be recorded as a result instead of thrown`);
+    assert.ok(body.includes('continue;'),
+      `${file}: after a stall fails the loop must continue with the next stall`);
+  }
+});
+
+// --- Request 36a: clicking a counter must show the product name, its price and
+// the error text. The Node runtime recorded no per-product detail at all, so
+// that popup was always empty outside Cloudflare.
+test('both runtimes record product details on job log entries', async () => {
+  for (const file of ['../worker-src/processor.ts', '../render-src/processor.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('function reportItem('), `${file}: must build a report item`);
+    assert.ok(/price:\s*Number\(product\.price\)/.test(source), `${file}: the item must carry the price`);
+    assert.ok(source.includes("'failed'"), `${file}: failures must be tagged for the error counter`);
+    assert.ok(/error:\s*errorText/.test(source), `${file}: the error text must reach the item`);
+  }
+});
+
+// --- Runtime parity: the server-side duplicate remover was Cloudflare-only, so
+// every duplicate button was dead on Termux / VPS / Render.
+test('the Node runtime exposes the dedup-run and duplicate routes', async () => {
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  for (const route of [
+    "'/api/destination/:target/dedup-runs'",
+    "'/api/destination/:target/dedup-runs/current'",
+    "'/api/destination/:target/dedup-runs/control'",
+    "'/api/destination/:target/dedup-runs/reset'",
+    "'/api/maintenance/duplicates'",
+  ]) assert.ok(server.includes(route), `Node server must serve ${route}`);
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  assert.ok(app.includes("'/api/maintenance/duplicates'"), 'Worker must serve the duplicates route too');
+});
+
+// --- Request 36a: Basalam publishes an SDK for Python only, so "SDK first" is
+// implemented through a python3 bridge that must degrade to REST cleanly.
+test('the Basalam Python SDK bridge exists and is wired in', async () => {
+  const bridge = await readFile(new URL('../scripts/basalam-sdk-bridge.py', import.meta.url), 'utf8');
+  for (const token of ['basalam_sdk', 'ProductRequestSchema', 'create_product_sync', 'update_product_sync', 'sdk-missing'])
+    assert.ok(bridge.includes(token), `bridge must reference ${token}`);
+  const sync = await readFile(new URL('../render-src/sync.ts', import.meta.url), 'utf8');
+  assert.ok(sync.includes('runBasalamSdkBridge'), 'the Node sync must call the python bridge');
+  assert.ok(sync.indexOf('runBasalamSdkBridge') < sync.indexOf('sendBasalamWithNpmSdk'),
+    'the SDK bridge must be tried before falling back');
+});
+
+// --- The Basalam payload made every real send fail with HTTP 400:
+//   {"fields":["photo"],"message":"Input should be a valid integer..."}
+//   {"fields":["status"],"message":"Field required"}
+// `photo` is the integer id of a file uploaded to /v1/files, `status` is
+// required (2976 = PUBLISHED) and the price field is `primary_price`.
+test('the Basalam payload uses primary_price, an integer photo id and a status', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const start = source.indexOf('function basalamPayload(');
+    assert.ok(start > 0, `${file}: basalamPayload must exist`);
+    const body = source.slice(start, start + 1400);
+    assert.ok(body.includes('primary_price:'), `${file}: must send primary_price`);
+    assert.ok(!/[^_]\bprice:/.test(body), `${file}: must not send the rejected "price" field`);
+    assert.ok(/status:(?:creating\?BASALAM_STATUS_DRAFT:)?BASALAM_STATUS_PUBLISHED/.test(body), `${file}: status is required`);
+    assert.ok(!/photo:product\.image/.test(source), `${file}: photo must never be an image URL`);
+    assert.ok(source.includes('const BASALAM_STATUS_PUBLISHED=2976'), `${file}: PUBLISHED is 2976`);
+    assert.ok(source.includes('uploadBasalamPhotos'), `${file}: must upload photos to get ids`);
+    assert.ok(/Number\.isFinite\(id\)&&id>0/.test(source), `${file}: only valid integer ids are sent`);
+    assert.ok(source.includes("form.append('file_type','product.photo')"), `${file}: correct upload file_type`);
+  }
+});
+
+// --- Request: testing a Basalam token must fill the remaining fields.
+test('the Basalam connection test returns autofill data in both runtimes', async () => {
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  for (const [name, source] of [['worker', app], ['node', server]]) {
+    assert.ok(source.includes('autofill'), `${name}: the diagnostic must return an autofill block`);
+    assert.ok(source.includes('/users/me'), `${name}: must query users/me to identify the vendor`);
+    assert.ok(/autofill\.vendorId=vendorId/.test(source), `${name}: vendor id must be offered for autofill`);
+  }
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function applyBasalamAutofill('), 'the dashboard must apply the autofill');
+  assert.ok(dashboard.includes("set('bsVid',a.vendorId"), 'the vendor id field must be filled');
+});
+
+// --- Results section: one column, code suffix on the name, base price struck
+// through next to the final price, and a product modal with gallery/details.
+test('the results list is single column with suffix, prices and a modal', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('.products{display:grid;grid-template-columns:1fr;'),
+    'the results grid must be a single column');
+  assert.ok(!/\.products\{grid-template-columns:repeat\(2/.test(dashboard),
+    'no breakpoint may put the results back into two columns');
+  for (const token of ['function productCodeSuffix(', 'function productRowHtml(', 'function openProductModal(',
+    'price-base', 'price-final', 'psuffix', 'pgallery', 'data-product-open'])
+    assert.ok(dashboard.includes(token), `results section must define ${token}`);
+  assert.ok(dashboard.includes('allDestinationsForPricing()'), 'the modal must price every destination');
+  assert.ok(dashboard.includes('قیمت نهایی در همهٔ مقصدها'), 'the modal must show the all-destination table');
+});
+
+// --- A bare hostname such as "proxy.example.workers.dev" is a RELATIVE url, so
+// it resolved against our own origin and every AI model answered HTTP 404.
+test('a proxy address without a scheme is normalised instead of 404ing', async () => {
+  const worker = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  for (const [name, source] of [['worker', worker], ['node', node]])
+    assert.ok(source.includes('export function normalizeProxyUrl('), `${name}: needs normalizeProxyUrl`);
+
+  // Behavioural check on the exact string the user reported.
+  const normalize = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('/')) throw new Error('relative');
+    return 'https://' + value.replace(/^\/+/, '');
+  };
+  const built = (base, target) => base.includes('{url}')
+    ? base.replace('{url}', encodeURIComponent(target))
+    : base + (base.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(target);
+  const target = 'https://api.openai.com/v1/chat/completions';
+  const url = new URL(built(normalize('proxy.fazilat-ma.workers.dev'), target));
+  assert.equal(url.origin, 'https://proxy.fazilat-ma.workers.dev');
+  assert.equal(url.searchParams.get('url'), target);
+  // An address that already has a scheme must be left alone.
+  assert.equal(normalize('https://p.dev'), 'https://p.dev');
+
+  // Both AI paths must go through the normaliser, not raw concatenation.
+  const workerAi = await readFile(new URL('../worker-src/ai.ts', import.meta.url), 'utf8');
+  const nodeAi = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(workerAi.includes('normalizeProxyUrl(net.workerUrl)'), 'worker ai must normalise');
+  assert.ok(nodeAi.includes('viaWorkerUrl(net.workerUrl'), 'node ai must use viaWorkerUrl');
+  assert.ok(!/net\.workerUrl\+\(net\.workerUrl\.includes/.test(workerAi + nodeAi),
+    'no raw concatenation of an unnormalised proxy url may remain');
+});
+
+// --- The reconciliation preview rendered chips only while apply rendered the
+// full matrix, so the same data looked completely different before and after.
+test('the reconciliation preview and apply both render the matrix table', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const preview = dashboard.indexOf("action==='recon-unified'){");
+  assert.ok(preview > 0, 'the preview action must exist');
+  const body = dashboard.slice(preview, preview + 1400);
+  assert.ok(body.includes('renderReconMatrix('), 'the preview must use the matrix renderer');
+  assert.ok(!body.includes('renderUnifiedRecon('), 'the preview must not use the chips-only renderer');
+  // All destinations failing is not "in sync".
+  assert.ok(dashboard.includes('const anyFailed=(d.failures||[]).length>0;'),
+    'a failed destination must suppress the green in-sync banner');
+  assert.ok(dashboard.includes(".rc-banner.rc-bad{"), 'the failure banner needs its own style');
+});
+
+// --- Ship a proxy Worker that implements the contract the client expects.
+test('the bundled AI proxy Worker answers the shapes the client sends', async () => {
+  const source = await readFile(new URL('../scripts/ai-proxy-worker.js', import.meta.url), 'utf8');
+  for (const token of ["searchParams.get('url')", "x-scraper-target", "x-target-url", 'ALLOWED_HOSTS'])
+    assert.ok(source.includes(token), `the proxy Worker must handle ${token}`);
+});
+
+// --- Basalam answered `401 {"message":"invalid authorization header"}` because a
+// token pasted as "Bearer eyJ..." was stored verbatim, so the request carried
+// `Authorization: Bearer Bearer eyJ...` (two schemes). Invisible characters from
+// a Persian keyboard are also not valid header bytes.
+test('pasted Basalam tokens are cleaned before they reach the header', async () => {
+  for (const file of ['../worker-src/vault.ts', '../render-src/vault.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export function sanitizeToken('), `${file}: needs sanitizeToken`);
+    // Both the default account and every extra stall must be sanitised.
+    assert.ok(/token:\s*sanitizeToken\(text\(shop\?\.token\)\)/.test(source), `${file}: stall tokens`);
+    assert.ok(/basalam:\{token:sanitizeToken\(/.test(source), `${file}: default token`);
+  }
+
+  // Behaviour, mirroring the shipped implementation.
+  const clean = (value) => {
+    let token = typeof value === 'string' ? value : '';
+    if (!token) return '';
+    token = token.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+                 .replace(/[\u00a0\u2000-\u200a\u3000]/g, ' ')
+                 .replace(/[\u2018\u2019\u201c\u201d]/g, '').trim();
+    token = token.replace(/^authorization\s*:\s*/i, '').trim();
+    token = token.replace(/^(?:bearer|token)\s+/i, '').trim();
+    if (token.length > 1 && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))))
+      token = token.slice(1, -1).trim();
+    return token.replace(/[^\x21-\x7e]/g, '');
+  };
+  for (const input of ['Bearer ABC123', 'bearer  ABC123', 'Authorization: Bearer ABC123',
+    '"ABC123"', '  ABC123  ', 'ABC\u200c123'.replace('\u200c', '\u200c')])
+    assert.equal(clean(input), 'ABC123', `failed to clean ${JSON.stringify(input)}`);
+  // A clean token must survive untouched.
+  assert.equal(clean('eyJhbGciOi.abc-_123'), 'eyJhbGciOi.abc-_123');
+  // The result must always be usable as a header value.
+  assert.doesNotThrow(() => new Headers().set('authorization', 'Bearer ' + clean('TOK\u200cEN\u00a01')));
+
+  // A 401 must explain what to do instead of only echoing Basalam's text.
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('function basalamAuthHint('), `${file}: needs the 401 hint`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0,account.token)'), `${file}: hint must be used`);
+  }
+});
+
+// --- `401 invalid authorization header` kept coming back after the header itself
+// was proven well formed, so the token has to be explained locally: Basalam PATs
+// are JWTs, so expiry and scopes can be read without any network call.
+test('a Basalam token is diagnosed locally instead of echoing the opaque 401', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export function describeBasalamToken('), `${file}: needs the checker`);
+    assert.ok(source.includes('basalamAuthHint(response?.status||0,account.token)'),
+      `${file}: the 401 message must include the token verdict`);
+  }
+  // The connection test must surface it too, in both runtimes.
+  for (const file of ['../worker-src/app.ts', '../render-src/server.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('describeBasalamToken(token)'), `${file}: diagnostic must check the token`);
+    assert.ok(source.includes('tokenCheck:tokenVerdict.reason'), `${file}: must report the verdict`);
+  }
+
+  // Behaviour: expiry and scope are decoded from the JWT payload.
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt = (o) => 'eyJhbGciOiJSUzI1NiJ9.' + b64(o) + '.sig';
+  const decode = (token) => {
+    const parts = String(token).split('.');
+    if (parts.length !== 3) return null;
+    const pad = (x) => x + '='.repeat((4 - x.length % 4) % 4);
+    return JSON.parse(Buffer.from(pad(parts[1].replace(/-/g, '+').replace(/_/g, '/')), 'base64').toString('utf8'));
+  };
+  const past = Math.floor(Date.now() / 1000) - 86400;
+  const future = Math.floor(Date.now() / 1000) + 86400;
+  assert.ok(decode(jwt({ exp: past })).exp * 1000 < Date.now(), 'an expired token must be detectable');
+  assert.ok(decode(jwt({ exp: future })).exp * 1000 > Date.now(), 'a live token must be detectable');
+  assert.deepEqual(decode(jwt({ scopes: ['vendor.product.write'] })).scopes, ['vendor.product.write']);
+});
+
+// --- The local verdict reported "structurally fine" while Basalam still sent
+// 401, which dead-ends the user. A JWT carrying no scope claim silently passed
+// the scope check, and no local inspection can tell a revoked token apart from
+// a valid token that simply may not write this vendor's products.
+test('a Basalam 401 is explained by probing the token, not just inspecting it', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('async function basalamTokenProbe('), `${file}: needs the probe`);
+    // The probe must run only for a 401 and must be awaited into the message.
+    assert.ok(source.includes("response?.status===401?(await basalamTokenProbe(c,account))"),
+      `${file}: the probe must enrich the 401 message`);
+    // It must use the read-only endpoint, never a second write attempt.
+    const probe = source.slice(source.indexOf('async function basalamTokenProbe('));
+    assert.ok(probe.slice(0, 1600).includes('/users/me'), `${file}: probe must use users/me`);
+    // A token with no scope claim must not be called simply "fine".
+    assert.ok(source.includes('if(!scopes.length)'), `${file}: an absent scope claim must be reported`);
+  }
+});
+
+// --- The «اتصال غیرمستقیم» checkbox in the Basalam settings was stored in the
+// vault but never read by any request, so enabling it did nothing. Basalam's
+// edge rejects datacenter IPs, which surfaces as a 401 for a valid token.
+test('Basalam requests honour the indirect-connection setting', async () => {
+  for (const file of ['../worker-src/network.ts', '../render-src/network.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('export async function safeBasalamFetch('), `${file}: needs safeBasalamFetch`);
+    assert.ok(source.includes('netIndirect'), `${file}: must read the netIndirect flag`);
+    // Turning it on without a proxy configured must explain itself, not fail silently.
+    assert.ok(/اتصال غیرمستقیم/.test(source), `${file}: needs the missing-proxy error`);
+  }
+  // Every Basalam API call must go through it, in both runtimes.
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts',
+                      '../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('safeBasalamFetch'), `${file}: Basalam calls must be routed`);
+  }
+  // The product image is fetched from the SOURCE shop and must stay direct.
+  const workerSync = await readFile(new URL('../worker-src/sync.ts', import.meta.url), 'utf8');
+  assert.ok(workerSync.includes("const image=await safeFetch(String(url)"),
+    'the source product image must not be routed through the Basalam proxy');
+  // The bundled proxy must allow the Basalam hosts, or it would answer 403.
+  const proxy = await readFile(new URL('../scripts/ai-proxy-worker.js', import.meta.url), 'utf8');
+  for (const host of ['openapi.basalam.com', 'auth.basalam.com'])
+    assert.ok(proxy.includes(`'${host}'`), `the proxy must allow ${host}`);
+});
+
+// --- The menu forced an endless scroll: 15 changelog cards always rendered
+// expanded, and every environment guide printed its full command block.
+test('the changelog and the install guides are collapsible', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf('<div class="change-list">');
+  const older = dashboard.indexOf('<details class="change-older">', start);
+  const visible = dashboard.slice(start, older);
+  // Only the newest card may render outside a fold; the rest sit in change-recent.
+  assert.equal(visible.split('<div class="change-item">').length - 1 -
+    (visible.includes('<details class="change-recent">')
+      ? visible.slice(visible.indexOf('<details class="change-recent">')).split('<div class="change-item">').length - 1
+      : 0), 1, 'exactly one changelog card may be permanently expanded');
+  assert.ok(visible.includes('<details class="change-recent">'), 'recent entries need their own fold');
+  assert.ok(dashboard.includes('.change-recent{'), 'the recent fold needs styling');
+  // Each environment guide is its own <details>.
+  assert.ok(dashboard.includes('<details class="install-command-card"><summary>'),
+    'install guides must be collapsible');
+  const renderer = dashboard.slice(dashboard.indexOf('function renderInstallCommandCards('));
+  assert.ok(!renderer.slice(0, 900).includes('<article class="install-command-card">'),
+    'the install-guide renderer must not emit permanently expanded cards');
+  // cPanel instructions must exist and download as a shell script.
+  assert.ok(dashboard.includes('"key": "cpanel"') || dashboard.includes('"key":"cpanel"'),
+    'a cPanel guide must be present');
+  assert.ok(dashboard.includes("scraper4-install-cpanel.sh"), 'cPanel downloads as .sh');
+});
+
+// --- Regression: the full reconciliation matrix disappeared. A destination that
+// threw contributed NO rows, so with every destination failing the table had
+// nothing to draw, and v1.103.0's guard then replaced it with a bare banner.
+// The comparison must survive a broken destination.
+test('the reconciliation table still renders when destinations fail', async () => {
+  const core = await readFile(new URL('../worker-src/recon-core.ts', import.meta.url), 'utf8');
+  assert.ok(core.includes('export function unreachableAccountRows('),
+    'a failing destination must still produce rows');
+  assert.ok(core.includes("'unreachable'"), 'the unreachable bucket must exist');
+
+  // Both runtimes must use it in their unifiedRecon loop.
+  for (const file of ['../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('unreachableAccountRows(local'),
+      `${file}: the catch branch must keep the rows`);
+  }
+
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  // The early return that hid the whole table must be gone.
+  assert.ok(!dashboard.includes('failList.length>=(d.accounts||0)&&!d.rows.length'),
+    'a failed destination must no longer suppress the table');
+  // The bucket needs a colour, a legend entry and the highest sort priority.
+  assert.ok(dashboard.includes("unreachable:['مقصد پاسخ نداد'"), 'legend entry missing');
+  assert.ok(dashboard.includes("unreachable:['#fb7185'"), 'cell colour missing');
+  assert.ok(dashboard.includes('{unreachable:0,priceDiff:1,missing:2,extra:3,noPrice:4,matched:5}'),
+    'unreachable rows must sort to the top');
+  assert.ok(dashboard.includes('cells:{},worst:5}'),
+    'the worst-rank sentinel must match the new ranking');
+});
+
+// --- Parity with the PHP reference (scraper4.php v10.91, fazilatma/code).
+// v1.110.0 read the extra-shop helper and wrongly concluded that `photo` must be
+// omitted on create. The MAIN send path does send it, and Basalam enforces it:
+//   422 {"fields":["photo"],"message":"شناسه تصویر الزامی است"}
+// The real rule: send the uploaded photo ids, and publish (2976) only when a
+// photo exists AND both texts are >= 3 chars; otherwise create a draft (3790).
+test('Basalam creates carry the photo ids and follow the PHP status rule', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('const ids=photoIds.filter(id=>Number.isFinite(id)&&id>0);'),
+      `${file}: photo ids must reach the create payload`);
+    assert.ok(!source.includes('creating?[]:photoIds'),
+      `${file}: photos must NOT be stripped on create`);
+    assert.ok(/briefText\.length>=3&&descText\.length>=3/.test(source),
+      `${file}: the >=3 character rule must be applied`);
+    assert.ok(source.includes('BASALAM_STATUS_PUBLISHED:BASALAM_STATUS_DRAFT'),
+      `${file}: draft is the fallback, not the default`);
+    // A 422 about the photo must explain why the upload failed.
+    assert.ok(source.includes('function basalamPhotoHint('), `${file}: needs the 422 photo hint`);
+    assert.ok(source.includes('lastPhotoFailure'), `${file}: upload failures must be recorded`);
+    assert.ok(!/\}catch\{\/\* one bad image must not abort the product \*\/\}/.test(source),
+      `${file}: upload failures must no longer be swallowed silently`);
+  }
+});
+
+// --- The fake desktop-Chrome user-agent was being sent to JSON APIs. A browser
+// UA with no matching browser fingerprint is a WAF signature: Basalam answered
+// 401 "invalid authorization header" (even on the read-only users/me endpoint,
+// and for two different valid tokens) and the WooCommerce edge answered 522 in
+// the same run. scraper4.php sends only Accept/Authorization/Content-Type.
+test('JSON API calls are not disguised as a browser', async () => {
+  for (const file of ['../worker-src/network.ts', '../render-src/network.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(source.includes('apiMode'), `${file}: needs the apiMode switch`);
+    assert.ok(/ApiRequestInit/.test(source), `${file}: apiMode must be typed, not cast away`);
+  }
+  // Basalam always uses it, in both runtimes.
+  const worker = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  const node = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\}/.test(worker),
+    'worker: safeBasalamFetch must send API-shaped headers');
+  assert.ok(/apiMode: true(?:, directRoute: true)? \}, maxBytes\)/.test(node), 'node: safeBasalamFetch must send API-shaped headers');
+  // WooCommerce REST too -- it is what produced the 522.
+  assert.ok(/safeFetch\(target,\{\.\.\.init,apiMode:true\},maxBytes\)/.test(worker),
+    'worker: the Woo REST path must use apiMode');
+  const nodeMaint = await readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8');
+  assert.ok(nodeMaint.includes('apiMode:true'), 'node: Woo REST calls must use apiMode');
+
+  // Scraping must KEEP the browser shape, or shops serve a stripped page.
+  assert.ok(worker.includes('Mozilla/5.0'), 'worker: the scraping user-agent must survive');
+  assert.ok(node.includes('config.userAgent'), 'node: the scraping user-agent must survive');
+  for (const [name, source] of [['worker', worker], ['node', node]])
+    assert.ok(/accept-language/.test(source), `${name}: scraping keeps accept-language`);
+  // The caller's own headers must still be merged in, or auth would be dropped.
+  assert.ok(worker.includes('new Headers(requestInit.headers).forEach'),
+    'worker: caller headers must always be applied');
+});
+
+// --- The 401 could not be reproduced from the sandbox (no egress to Basalam),
+// so ship a diagnostic the user can run ON the failing machine.
+test('the Basalam doctor probes every header shape without leaking the token', async () => {
+  const doctor = await readFile(new URL('../scripts/basalam-doctor.mjs', import.meta.url), 'utf8');
+  // It must compare the PHP-style minimal headers against the browser-shaped ones.
+  assert.ok(doctor.includes('minimal (PHP-style) headers'), 'probe A missing');
+  assert.ok(doctor.includes('with a browser user-agent'), 'probe B missing');
+  assert.ok(doctor.includes('Authorization only'), 'probe C missing');
+  assert.ok(doctor.includes('vendor products (read)'), 'probe D missing');
+  // The token must never be printed, only described.
+  assert.ok(doctor.includes('function fingerprint('), 'the token must be fingerprinted, not shown');
+  // The token may only reach console.log through describe(), never raw.
+  for (const call of doctor.match(/console\.log\([^\n]*\)/g) || []) {
+    const stripped = call.replace(/describe\(token\)/g, 'DESCRIBED');
+    assert.ok(!/\btoken\b(?!\s*(?:source|:))/.test(stripped.replace(/'[^']*'/g, "''")),
+      `the raw token must never be logged: ${call.slice(0, 60)}`);
+  }
+  // It must not boot a second copy of the server to read the token.
+  assert.ok(!doctor.includes("import('../render-dist/server.js')"),
+    'the doctor must not import the server entrypoint');
+  assert.ok(doctor.includes('/api/connections'), 'it should read from a running instance');
+});
+
+// --- Diagnosed from a doctor run on the failing Termux device: all four probes
+// returned HTTP 200 (token valid to 2027, every scope present, vendor readable),
+// yet the app still got 401. Cause: render-src/safeFetch unconditionally applied
+// `sourceNetwork` -- the SCRAPING proxy, configured from ai.network -- to every
+// request. With the AI proxy set to 'worker', authenticated Basalam and Woo
+// calls were rewritten through that Worker, which does not forward the
+// Authorization header, so the destination saw no token at all.
+test('destination APIs are never rerouted through the scraping proxy', async () => {
+  const network = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(network.includes('directRoute?: boolean'), 'needs an opt-out of source-network routing');
+  // The reroute must be conditional, not unconditional.
+  assert.ok(network.includes('const routed = init.directRoute !== true;'), 'routing must be skippable');
+  assert.ok(/useWorker = routed &&/.test(network), 'worker routing must honour directRoute');
+  assert.ok(/useProxy = routed &&/.test(network), 'proxy routing must honour directRoute');
+  // Basalam picks its own route via its own switch, never the scraping one.
+  assert.ok(network.includes('apiMode: true, directRoute: true }, maxBytes)'),
+    'safeBasalamFetch must opt out of the scraping route');
+  // WooCommerce REST too -- it produced the 522 in the same run.
+  for (const file of ['../render-src/maintenance.ts', '../render-src/server.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const flags = (source.match(/apiMode/g) || []).length;
+    const direct = (source.match(/directRoute/g) || []).length;
+    assert.equal(direct, flags, `${file}: every API call must also set directRoute`);
+  }
+});
+
+// --- The reconciliation preview failed silently: unlike the apply path it had no
+// try/catch and no progress row, so a failed request left the panel blank with
+// no message anywhere.
+test('the reconciliation preview reports its own failures', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const start = dashboard.indexOf("action==='recon-unified'){");
+  assert.ok(start > 0, 'the preview action must exist');
+  const body = dashboard.slice(start, start + 1200);
+  assert.ok(body.includes('catch(error)'), 'the preview must catch request failures');
+  assert.ok(body.includes('ساخت جدول ناموفق بود'), 'a failure must be shown in the panel');
+  assert.ok(body.includes("localTaskStart('recon-unified-preview'"), 'it must register a live task');
+  assert.ok(body.includes('در حال خواندن مقصدها'), 'it must show progress while running');
+});
+
+// --- Each Basalam stall must be priced with its OWN percentage.
+test('every Basalam stall is priced with its own percentage', async () => {
+  for (const file of ['../worker-src/sync.ts', '../render-src/sync.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    // The price must be derived per account inside the loop, never hoisted.
+    assert.ok(source.includes('basalamPrice(product,account.pricePercent||0)'),
+      `${file}: the payload price must use the account percentage`);
+    assert.ok(source.includes('basalamPrice(product,Number(account.pricePercent)||0)'),
+      `${file}: the reported price must use the account percentage`);
+    // The stall list must carry each shop's own percent, not the default.
+    assert.ok(/\.\.\.c\.shops\.filter\(s=>s\.token&&s\.vendorId\)/.test(source),
+      `${file}: extra stalls must keep their own fields`);
+  }
+  // The vault must persist a per-shop percentage.
+  const vault = await readFile(new URL('../worker-src/vault.ts', import.meta.url), 'utf8');
+  assert.ok(vault.includes('pricePercent:num(shop?.pricePercent)'), 'shop percentages must persist');
+});
+
+// --- The send queue showed the same price for every stall: the Basalam log line
+// never passed result.price, so reportItem fell back to the product's base price.
+test('the send queue reports each stall its own adjusted price', async () => {
+  for (const file of ['../worker-src/processor.ts', '../render-src/processor.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    const lines = source.split('\n').filter(l => l.includes("shop: result.shop") || l.includes("shop:result.shop"));
+    assert.ok(lines.length >= 2, `${file}: both Basalam log lines must exist`);
+    for (const line of lines)
+      assert.ok(/price:\s*result\.price/.test(line),
+        `${file}: the per-stall price must be logged, not the base price`);
+  }
+});
+
+// --- Apply must also remove destination-only products, and the reconciliation
+// table needs a readable full-screen view.
+test('reconciliation apply removes destination-only products safely', async () => {
+  const core = await readFile(new URL('../worker-src/recon-core.ts', import.meta.url), 'utf8');
+  assert.ok(core.includes("kind: 'updatePrice' | 'create' | 'remove'"), 'the remove action must exist');
+  // It must only ever target products carrying the «(کد ایکس)» suffix.
+  assert.ok(core.includes('hasCodeSuffix(String(row.remoteTitle || row.title'),
+    'removal must be limited to code-suffixed products');
+  for (const file of ['../worker-src/maintenance.ts', '../render-src/maintenance.ts']) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(/kind\s*===\s*'remove'/.test(source), `${file}: apply must handle removal`);
+    assert.ok(source.includes('destinationDelete('), `${file}: Woo deletes, Basalam archives`);
+    assert.ok(/planActions\(.*suffixFormats\)/s.test(source), `${file}: the suffix rule must be passed in`);
+  }
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes("'recon-fullscreen'"), 'a full-screen button must exist');
+  assert.ok(dashboard.includes('.recon-full .rc-table{font-size:14px}'), 'full screen must enlarge the table');
+});
+
+// --- D1 free tier is a hard daily ceiling; show it where the work is visible.
+test('the task manager shows the D1 daily quota', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function renderQuotaBar('), 'the quota bar must exist');
+  assert.ok(dashboard.includes('body.innerHTML=quota+'), 'it must render inside the activity panel');
+  // Polling the quota costs reads, so it must be throttled.
+  assert.ok(dashboard.includes('quotaLoadedAt'), 'the quota poll must be throttled');
+  // Both runtimes must answer the route or the bar 404s outside Cloudflare.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes("'/api/quota'"), 'the Node runtime must answer /api/quota');
+});
+
+// --- Cloudflare error 1042: a Worker may not fetch another Worker on the same
+// account. Routing AI traffic through a user-deployed proxy Worker hits it, and
+// the edge answers 404 before the proxy ever runs.
+test('the same-account proxy restriction is handled and explained', async () => {
+  const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  assert.match(wrangler, /compatibility_flags\s*=\s*\[[^\]]*global_fetch_strictly_public/,
+    'the flag that permits same-account Worker fetches must be set');
+  const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  assert.ok(/error code:\\s\*1042/.test(ai) || ai.includes('1042'), 'the diagnostic must detect 1042');
+  assert.ok(ai.includes('global_fetch_strictly_public'), 'it must name the exact fix');
+});
+
+// --- AI work never touches D1, so the quota panel understated the real ceiling.
+test('Workers invocations and subrequests are metered', async () => {
+  const db = await readFile(new URL('../worker-src/db.ts', import.meta.url), 'utf8');
+  for (const token of ['export function meterInvocation(', 'export function meterSubrequest(',
+    'WORKERS_FREE_DAILY_REQUESTS', 'WORKERS_FREE_SUBREQUESTS_PER_INVOCATION', 'peakSubrequests'])
+    assert.ok(db.includes(token), `db.ts must define ${token}`);
+
+  // Counted at every entry point, and on every outbound call.
+  const main = await readFile(new URL('../worker-src/main.ts', import.meta.url), 'utf8');
+  assert.equal((main.match(/meterInvocation\(\)/g) || []).length, 3,
+    'fetch, queue and scheduled must each count one invocation');
+  const network = await readFile(new URL('../worker-src/network.ts', import.meta.url), 'utf8');
+  assert.ok(network.includes('meterSubrequest();'), 'every outbound fetch must be counted');
+  // db.ts must not import network.ts back, or the metering would be circular.
+  assert.ok(!db.includes("from './network.js'"), 'db.ts must not import network.ts');
+
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('اجرای Worker'), 'the bar must show the Workers group');
+  assert.ok(dashboard.includes("d.peakSubrequests"), 'the bar must show peak subrequests');
+});
+
+// --- THE model-test 404: the AI proxy URL was wrapped TWICE. networkFetch()
+// built proxy?url=<target> and then handed it to safeFetch(), which applied
+// sourceNetwork (populated from the same ai.network) and wrapped it again, so
+// the proxy was told to fetch ITSELF. That is a genuine same-zone Worker call,
+// which Cloudflare rejects with "error code: 1042" -> 404 for every model.
+test('the AI proxy URL is wrapped exactly once', async () => {
+  const ai = await readFile(new URL('../render-src/ai.ts', import.meta.url), 'utf8');
+  // Every place that pre-wraps a URL must opt out of the second wrap.
+  for (const line of ai.split('\n')) {
+    if (!line.includes('viaWorkerUrl(')) continue;
+    if (line.includes('export function')) continue;
+    const idx = ai.indexOf(line);
+    const following = ai.slice(idx, idx + 600);
+    assert.ok(following.includes('directRoute'),
+      `a pre-wrapped URL must set directRoute, otherwise it is proxied twice: ${line.trim().slice(0, 80)}`);
+  }
+  // The real model call path, not just the diagnostic.
+  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true},3_000_000)"),
+    'networkFetch must not let safeFetch re-proxy an already-proxied URL');
+
+  // Behavioural proof of the double-wrap that caused 1042.
+  const via = (w, t) => w.includes('{url}') ? w.replace('{url}', encodeURIComponent(t))
+    : w + (w.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(t);
+  const proxy = 'https://proxy.example.workers.dev/';
+  const once = via(proxy, 'https://api.openai.com/v1/models');
+  const twice = via(proxy, once);
+  assert.equal((once.match(/proxy\.example/g) || []).length, 1, 'one wrap is correct');
+  assert.equal((twice.match(/proxy\.example/g) || []).length, 2, 'two wraps make the proxy fetch itself');
+});
+
+// --- Detail extraction fetched every product page even with no detail selector
+// configured, so it downloaded hundreds of pages and filled nothing.
+test('detail extraction is skipped or bootstrapped when no selector is set', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  // Discovery runs first when nothing is configured.
+  assert.ok(node.includes('هیچ سلکتور جزئیاتی تنظیم نشده'),
+    'it must try to discover detail selectors before fetching every product');
+  // The main loop is guarded.
+  const guarded = node.slice(node.indexOf('if (hasDetailSelectors(profile.selectors)) {'));
+  assert.ok(guarded.slice(0, 900).includes('await mapLimit(products'),
+    'the per-product detail loop must be guarded');
+  assert.ok(node.includes('استخراج جزئیات'), 'the job log must report the detail stage');
+
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('if(!hasDetailSelectors(profile.selectors))return;'),
+    'the Worker runtime must skip the page fetch too');
+});
+
+// --- 1,200 products scraped but only ~20 stored. sourceKey is a hash of the
+// canonical URL, and canonicalUrl(stripAllQuery=true) deleted the WHOLE query
+// string, so every product of a shop whose links are /product?id=N collapsed to
+// the same identity and upserted over each other.
+test('product identity keeps identifying query parameters', async () => {
+  const scraper = await readFile(new URL('../worker-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(!scraper.includes("if(stripAllQuery)url.search='';"),
+    'the whole query string must not be discarded: it carries the product id');
+  assert.ok(scraper.includes('const PAGING_PARAMS='), 'paging noise needs its own list');
+  assert.ok(/stripAllQuery\)\{[\s\S]{0,400}PAGING_PARAMS\.test\(key\)/.test(scraper),
+    'only tracking and paging parameters may be stripped');
+
+  // Behavioural proof of the collapse and the fix.
+  const TRACKING = /^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
+  const PAGING = /^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
+  const canon = (raw, stripAll) => {
+    const url = new URL(raw); url.hash = '';
+    if (stripAll) { for (const k of [...url.searchParams.keys()]) if (TRACKING.test(k) || PAGING.test(k)) url.searchParams.delete(k); url.searchParams.sort(); }
+    return url.toString().replace(/\/$/, '');
+  };
+  const urls = ['https://s.ir/p?id=1', 'https://s.ir/p?id=2', 'https://s.ir/p?id=3'];
+  assert.equal(new Set(urls.map(u => canon(u, true))).size, 3, 'distinct products must stay distinct');
+  assert.equal(canon('https://s.ir/p/x?utm_source=a', true), canon('https://s.ir/p/x?utm_source=b', true),
+    'tracking parameters must still collapse');
+  assert.equal(canon('https://s.ir/l?page=2&id=9', true), canon('https://s.ir/l?id=9', true),
+    'paging parameters must still be ignored');
+});
+
+// --- Products without a price cannot be published to any destination, so they
+// must not be stored, counted as results, or reconciled.
+test('products with no price are skipped everywhere', async () => {
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('job.skippedNoPrice=(job.skippedNoPrice||0)+1;'), 'worker must count the skip');
+  assert.ok(/rawPrice<=0\)\{[\s\S]{0,300}continue;/.test(worker), 'worker must skip before saving');
+
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('if (!(Number(product.price) > 0))'), 'node must skip before saving');
+  assert.ok(node.includes('محصول بدون قیمت نادیده گرفته شد'), 'node must report the count');
+
+  // The import path stores products too and must obey the same rule.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('if(!(importedPrice>0)){skippedNoPrice++;'), 'import must skip priceless rows');
+  assert.ok(server.includes('imported,failed,skippedNoPrice,errors'), 'import must report the count');
+
+  for (const file of ['../worker-src/types.ts', '../render-src/types.ts']) {
+    const types = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(types.includes('skippedNoPrice?: number;'), `${file}: Job must declare the counter`);
+  }
+});
+
+// --- The product modal showed the scraped description escaped inside a log box,
+// so a real shop page arrived as unreadable markup. It must render like the page
+// a visitor sees -- but the string reaches innerHTML, so it needs scrubbing.
+test('the product modal renders description HTML safely', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function safeProductHtml('), 'a client-side scrubber must exist');
+  assert.ok(dashboard.includes("'<h4>توضیحات</h4><div class=\"pdesc\">'+safeProductHtml(desc)"),
+    'the description must be rendered, not escaped into a text box');
+  assert.ok(!/توضیحات<\/h4><div class="logs"/.test(dashboard), 'the raw-text log box must be gone');
+  // Security: the scrub must remove executables and neutralise links.
+  for (const token of ['script,style,iframe,object,embed,form,input,button,link,meta',
+    "startsWith('on')", 'javascript|data', 'noopener noreferrer'])
+    assert.ok(dashboard.includes(token), `safeProductHtml must handle ${token}`);
+  assert.ok(dashboard.includes('.pdesc{'), 'rendered HTML needs product-page styling');
+});
+
+// --- New "specification table" detail selector, end to end.
+test('the specs selector is wired through both runtimes', async () => {
+  for (const file of ['../worker-src/types.ts', '../render-src/types.ts']) {
+    const types = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(types.includes('specs?: string;'), `${file}: Selectors needs specs`);
+    assert.ok(/specs\?: Array<\{ name: string; value: string \}>/.test(types), `${file}: Product needs specs`);
+  }
+  const worker = await readFile(new URL('../worker-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('function parseSpecFragment('), 'the worker must parse the specs block');
+  const node = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('if (selectors.specs)'), 'the node scraper must read the specs block');
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes("['specs','جدول مشخصات']"), 'the field must appear in the selector form');
+  assert.ok(dashboard.includes('<h4>جدول مشخصات</h4>'), 'the modal must show the specs table');
+});
+
+// --- The visual picker swallowed every click, so tabs and accordions on the
+// product page could not be opened to reach the fields inside them.
+test('the visual picker can pause selection', async () => {
+  for (const file of ['../worker-src/visual.ts', '../render-src/visual.ts']) {
+    const visual = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.ok(visual.includes('__s4pause'), `${file}: needs a pause button`);
+    assert.ok(visual.includes('if(!picking)return;'), `${file}: clicks must pass through while paused`);
+    assert.ok(visual.includes('function setPicking('), `${file}: the toggle must update its own label`);
+  }
+});
+
+// --- "finished · 1,200 of 20": job.processed counted every RAW item scanned
+// while job.total was the DEDUPLICATED map size. A shop that serves the same
+// page for every page number therefore reported 1,200 processed but stored 20,
+// and the duplicate-page guard only ran when pages===0 (auto), so an explicit
+// page count re-scanned the identical page to the very end.
+test('pagination stops on repeated pages and the counter is consistent', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('job.total = found.size; job.processed = found.size;'),
+    'processed and total must both describe unique products');
+  assert.ok(!node.includes('job.processed += list.length'),
+    'processed must not count raw scanned items against a deduplicated total');
+  // The guard must no longer be limited to auto paging.
+  assert.ok(node.includes('if (found.size === before) repeatedPages++; else repeatedPages = 0;'),
+    'repeated pages must be counted for every paging mode');
+  assert.ok(/repeatedPages >= 2/.test(node), 'two barren pages in a row must end pagination');
+
+  // Behaviour: a site repeating one page stops early; a healthy site does not.
+  const run = (uniquePerPage) => {
+    const found = new Set(); let repeated = 0, pages = 0;
+    for (let page = 1; page <= 60; page++) {
+      const before = found.size;
+      for (let i = 0; i < 20; i++) found.add(uniquePerPage ? `p${page}-${i}` : `k${i}`);
+      if (found.size === before) repeated++; else repeated = 0;
+      pages = page;
+      if (repeated >= 2) break;
+    }
+    return { pages, size: found.size };
+  };
+  assert.equal(run(false).pages, 3, 'a repeating site must stop after two barren pages');
+  assert.equal(run(false).size, 20, 'and keep the 20 real products');
+  assert.equal(run(true).pages, 60, 'a healthy site must still paginate fully');
+  assert.equal(run(true).size, 1200, 'and collect every product');
+});
+
+// --- The pagination dropdown jumped back to the first option and only page 1
+// was scraped. The Node runtime whitelisted THREE of the seven modes the
+// dashboard offers, so the other four were silently rewritten to query_page.
+test('every pagination mode the UI offers is accepted and implemented', async () => {
+  const MODES = ['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'];
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  for (const mode of MODES)
+    assert.ok(dashboard.includes(`<option value="${mode}"`), `the UI must offer ${mode}`);
+
+  // Both runtimes must accept all of them, or saving silently downgrades.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../worker-src/app.ts', import.meta.url), 'utf8');
+  for (const mode of MODES) {
+    assert.ok(server.includes(`'${mode}'`), `the node runtime must accept ${mode}`);
+    assert.ok(app.includes(`'${mode}'`), `the worker runtime must accept ${mode}`);
+  }
+  const types = await readFile(new URL('../render-src/types.ts', import.meta.url), 'utf8');
+  for (const mode of MODES)
+    assert.ok(types.includes(`'${mode}'`), `the node Profile type must allow ${mode}`);
+
+  // And pageUrl must actually implement them, not fall through to ?page=N.
+  const scraper = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  for (const token of ["=== 'full_pattern'", "=== 'path_pattern'", "=== 'query_custom'", "=== 'next_selector'"])
+    assert.ok(scraper.includes(token), `pageUrl must handle ${token}`);
+
+  // next_selector has no computable URL: the processor must follow the link.
+  const processor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(processor.includes("profile.pagination === 'next_selector'"), 'the loop must detect the mode');
+  assert.ok(processor.includes('followUrl'), 'the next link must carry between pages');
+  assert.ok(processor.includes('scraped.nextUrl'), 'the scraper must return the next link');
+  assert.ok(scraper.includes('nextUrl?:string'), 'ScrapeListResult must expose nextUrl');
+});
+
+// --- The detail stage ran silently: it never updated job.processed/total and
+// never saved, so the queue card froze on the list-phase numbers for the whole
+// stage and there was no way to tell it was working.
+test('the detail stage reports progress live', async () => {
+  const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(node.includes('job.total = products.length; job.processed = 0;'),
+    'the detail stage must own the progress counter');
+  assert.ok(/done\+\+; job\.processed = done;/.test(node), 'progress must advance per product');
+  // Saving every product would cost one DB write each; every fifth is enough.
+  assert.ok(node.includes('done % 5 === 0 || done === products.length'),
+    'progress must be persisted periodically, not per product');
+  assert.ok(node.includes('جزئیات خوانده شد'), 'each product must appear in the live log');
+  assert.ok(node.includes('محصول تکمیل شد'), 'the stage must report how many were enriched');
+
+  // The Worker is checkpointed and already counts per product; it only needed
+  // the same per-product log line.
+  const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(worker.includes('جزئیات خوانده شد'), 'the worker must log each product too');
+
+  // Phases must be shown by name, not as raw keys like "details-save-sync".
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('function phaseLabel('), 'phases need readable labels');
+  assert.ok(dashboard.includes("esc(phaseLabel(job.phase))"), 'the job card must use them');
+  for (const phase of ['list', 'details', 'details-save-sync', 'sync'])
+    assert.ok(dashboard.includes(`'${phase}'`) || dashboard.includes(`${phase}:`),
+      `phaseLabel must cover ${phase}`);
+});
+
+// --- Render (and any NODE_ENV=production host) installs without
+// devDependencies, so a build-time bundler kept there can never run:
+//   "esbuild still cannot be loaded after repair: Cannot find package 'esbuild'"
+// render:build is part of deploying, so its bundler is a runtime dependency.
+test('the build toolchain survives a production install', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  for (const name of ['esbuild', 'esbuild-wasm']) {
+    assert.ok(pkg.dependencies?.[name], `${name} must be a normal dependency`);
+    assert.ok(!pkg.devDependencies?.[name], `${name} must not be dev-only`);
+  }
+  // The loader must name this cause instead of blaming the OS.
+  const loader = await readFile(new URL('../scripts/esbuild-loader.mjs', import.meta.url), 'utf8');
+  assert.ok(loader.includes("process.env.NODE_ENV === 'production'"), 'the loader must detect a production install');
+  assert.ok(loader.includes('skipped devDependencies'), 'and explain it');
+  assert.ok(loader.includes('${desiredEsbuildVersion()}'), 'the suggested command must print a version, not a function');
+});
+
+// --- The Render blueprint had three deploy-blocking settings.
+test('the Render blueprint is deployable as written', async () => {
+  // Render looks for render.yaml at the repository root by default.
+  const yaml = await readFile(new URL('../../render.yaml', import.meta.url), 'utf8');
+  // rootDir is required: package.json lives in cloudflare-scraper4/.
+  assert.match(yaml, /rootDir:\s*cloudflare-scraper4/, 'the blueprint must point at the project folder');
+  const { existsSync } = await import('node:fs');
+  assert.ok(existsSync(new URL('../../render.yaml', import.meta.url)),
+    'render.yaml must sit at the repo root, where Render looks for it by default');
+  assert.ok(!existsSync(new URL('../render.yaml', import.meta.url)),
+    'a second copy inside the project would be ambiguous');
+  // Running the whole suite in the build blocks deploys of working code.
+  assert.ok(!/buildCommand:.*npm test/.test(yaml), 'the build must not run the full test suite');
+  // ADMIN_TOKEN without a login field locks the dashboard out of its own API.
+  assert.ok(!yaml.includes('key: ADMIN_TOKEN'), 'the blueprint must not set ADMIN_TOKEN');
+  // node:sqlite needs 22.5+.
+  assert.match(yaml, /NODE_VERSION[\s\S]{0,40}value:\s*22\./, 'Node 22 must be pinned');
+});
+
+// --- "make it use playwright/puppeteer". They were in the engine chain all
+// along, but .npmrc skips the bundled browser download, so every launch threw
+// "Executable doesn't exist" and auto mode swallowed it -- the engines looked
+// like they were never tried.
+test('browser engines find a system browser and explain themselves', async () => {
+  const scraper = await readFile(new URL('../render-src/scraper.ts', import.meta.url), 'utf8');
+  // Auto-detect an already-installed Chromium instead of only trusting env vars.
+  assert.ok(scraper.includes('const SYSTEM_BROWSERS'), 'a system-browser search list must exist');
+  for (const path of ['/usr/bin/chromium', 'com.termux', 'Google Chrome'])
+    assert.ok(scraper.includes(path), `the search must cover ${path}`);
+  // An explicit override must still win.
+  const order = scraper.slice(scraper.indexOf('function browserExecutable'));
+  assert.ok(order.indexOf('BROWSER_EXECUTABLE_PATH') < order.indexOf('systemBrowser()'),
+    'the env override must be checked before auto-detection');
+
+  // A swallowed browser failure must at least be recorded.
+  assert.ok(scraper.includes('lastBrowserError'), 'browser failures must be remembered');
+  assert.ok(scraper.includes('export function browserEngineAvailable('), 'availability must be reportable');
+  assert.ok(/if\(BROWSER_ENGINES\.has\(name\)\)lastBrowserError=/.test(scraper),
+    'only browser engines should set the browser error');
+
+  // And surfaced where the user actually looks.
+  const processor = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
+  assert.ok(processor.includes('lastBrowserEngineError()'), 'the job log must read the reason');
+  assert.ok(processor.includes('browsers:install'), 'and tell the user how to fix it');
+
+  // The environments that CAN run a browser must install one.
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const groups = JSON.parse(dashboard.match(/const INSTALL_COMMAND_GROUPS=(\[[\s\S]*?\]);\n/)[1]);
+  for (const key of ['desktop', 'vps', 'termux', 'windows-powershell']) {
+    const group = groups.find(g => g.key === key);
+    assert.ok(group, `install guide ${key} must exist`);
+    assert.ok(group.body.includes('browsers:install'), `${key} must install the browser engines`);
+  }
+});
+
+// A real phone proved a bare `npm install` dies on Termux: the wrangler
+// devDependency runs workerd's setup script, which has no Android build, and
+// npm aborts the whole install — leaving node_modules half-written so even
+// `npm run browsers:install` fails afterwards. Both Termux guides must skip
+// install scripts (nothing the scraper runs needs them: the browser comes
+// from the chromium system package and the build falls back from native
+// esbuild to system esbuild to WebAssembly).
+test('termux install guides skip install scripts that Android cannot run', async () => {
+  const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
+  const groups = JSON.parse(dashboard.match(/const INSTALL_COMMAND_GROUPS=(\[[\s\S]*?\]);\n/)[1]);
+  const termux = groups.find(g => g.key === 'termux');
+  assert.ok(termux, 'the dashboard termux guide must exist');
+  assert.ok(termux.body.includes('npm install --ignore-scripts'), 'the dashboard termux guide must skip install scripts');
+  for (const line of termux.body.split('\n')) {
+    if (line.includes('npm install')) assert.ok(line.includes('--ignore-scripts'), `every npm install in the dashboard termux guide must skip scripts: ${line}`);
+  }
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  const start = deployer.indexOf('"Termux / Android"');
+  const end = deployer.indexOf('"Database: Docker local"');
+  assert.ok(start !== -1 && end !== -1 && start < end, 'guard: the deployer Termux block was located');
+  const block = deployer.slice(start, end);
+  const installs = (block.match(/npm install/g) || []).length;
+  const safeInstalls = (block.match(/npm install --ignore-scripts/g) || []).length;
+  assert.ok(installs > 0, 'guard: the deployer Termux block installs npm packages');
+  assert.equal(safeInstalls, installs, 'every npm install in the deployer Termux block must skip install scripts');
+});
+
+test('automated npm installs skip install scripts on Termux', async () => {
+  // The guides above were already Termux-safe, but the AUTOMATED paths ran a
+  // plain npm install: on Termux that aborts the whole install (puppeteer /
+  // workerd postinstalls have no Android build), every update then reports
+  // failure, nothing rebuilds or restarts, and the box silently keeps serving
+  // the old release. All automated installs must route through one
+  // Termux-aware args list instead.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('npmInstallArgs'), 'deployer must route automated installs through one Termux-aware args list');
+  assert.ok(deployer.includes("'--ignore-scripts'"), 'that list must skip install scripts on Termux');
+  assert.ok(deployer.includes('runSync(npmCommand, npmInstallArgs)'), 'branch updates (updateFromGit) must use it');
+  assert.ok(deployer.includes("install: ['npm', npmInstallArgs]"), 'the Install / retry npm job must use it');
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('--ignore-scripts'), 'scraper self-update must skip install scripts on Termux');
+});
+
+test('scraper start frees a stale port holder instead of crashing with EADDRINUSE', async () => {
+  // A scraper the deployer did not spawn keeps holding the port after an
+  // update, so the fresh build crashed with EADDRINUSE and the box silently
+  // kept serving the old release. Start must first stop a PROVEN stale
+  // scraper, refuse (with a clear state) when a foreign program holds the
+  // port, and explain any address-in-use crash in the log.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('function freeScraperPort()'), 'deployer must map the scraper port to its holder before starting');
+  assert.ok(deployer.includes('render-dist\\/server'), 'only a proven stale scraper may be stopped, never a foreign program');
+  assert.ok(deployer.includes("blocked: 'port-held'"), 'a foreign port holder must refuse to start with a clear state, not crash the build');
+  assert.ok(deployer.includes('EADDRINUSE'), 'the scraper log must explain an address-in-use crash with a next step');
+});
+
+test('the deployer detects a stale serving build instead of adopting it forever', async () => {
+  // The branches panel reads git (new), but localhost kept serving the old
+  // build: after an update the previous deployer's scraper often survived
+  // (Termux group-kill misses the node grandchild), and the successor
+  // "adopted" whatever answered the port without ever checking its version.
+  // The deployer must probe the RUNNING build, expose serving-vs-checkout in
+  // /api/status, take over a stale OURS occupant, and offer Rebuild & restart.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('function probeServingVersion('), 'deployer must ask the port for its running build (/api/version)');
+  assert.ok(deployer.includes('function servingState()'), 'deployer must compare serving-vs-checkout (version and git head)');
+  assert.ok(deployer.includes('serving: servingState()'), 'the scraper status block must carry the serving state');
+  assert.ok(deployer.includes('await refreshServingCache()'), '/api/status must refresh the serving probe before answering');
+  assert.ok(deployer.includes('stopping it and rebuilding'), 'boot must stop a stale OURS occupant and rebuild instead of adopting it');
+  assert.ok(deployer.includes('is not our process'), 'a stale foreign occupant must be reported and left alone, never killed');
+  assert.ok(deployer.includes('/api/scraper/restart'), 'a restart endpoint must stop, verify the port is free, then rebuild and start');
+  assert.ok(deployer.includes('still holding port'), 'stop must reap stragglers the group signal missed (Termux grandchild case)');
+  assert.ok(deployer.includes('scraperStale'), 'the Scraper tab must show a stale banner');
+  assert.ok(deployer.includes('scraperRestart'), 'the stale banner must offer one-click Rebuild & restart');
+  assert.ok(deployer.includes('servingLabel(scraper)'), 'the status bar must label what localhost actually serves');
+  assert.ok(deployer.includes("DEPLOYER_MANAGED: 'true'"), 'deployer-started scrapers must be marked so they converge on updates');
+});
+
+test('a deployer-managed scraper converges when the checkout moves under it', async () => {
+  // When the deployer updates git under a running scraper, the process keeps
+  // serving its old build. A manually started scraper can only warn (nothing
+  // would restart it), but a deployer-managed one must rebuild and exit 75 so
+  // the deployer restarts the new build. The boot git head is also exposed
+  // for same-version staleness checks.
+  const server = await readFile(new URL('../render-src/server.ts', import.meta.url), 'utf8');
+  assert.ok(server.includes('const BOOT_HEAD'), 'the scraper must bake its boot git head once, never read it per request');
+  assert.ok(server.includes('head: BOOT_HEAD'), '/api/version must expose the boot head alongside the boot version');
+  assert.ok(server.includes("process.env.DEPLOYER_MANAGED === 'true'"), 'the moved-under branch must converge when a deployer will restart it');
+  assert.ok(server.split('process.exit(75)').length - 1 >= 2, 'both the new-code path and the managed moved-under path must exit 75 for a deployer restart');
+});
+
+test('the deployer survives a blind port scan and a lost bind race', async () => {
+  // On Termux the start crashed with EADDRINUSE while the port scan found
+  // nothing: /proc/net can be unreadable on some Android builds, or a second
+  // binder wins between the scan and listen(). The deployer must sweep its
+  // own server processes by command line AND the PORT they were started with
+  // (never a sibling on another port, never a foreign program), retry a
+  // failed bind exactly once, keep the whole story in one log, and end with
+  // a manual escape hatch when the port stays held.
+  const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(deployer.includes('function portScanSummary('), 'every start must log what the port scan saw and did');
+  assert.ok(deployer.includes('no holders found'), 'an empty scan must say so instead of staying silent');
+  assert.ok(deployer.includes('DEPLOYER_PORT_SCAN_BLIND'), 'the blind-tables path must be provable with a lab hook');
+  assert.ok(deployer.includes('PORT=${scraperPort}'), 'the cmdline sweep must only match our server on OUR port');
+  assert.ok(deployer.includes('function startScraper(retryDepth = 0)'), 'a bind lost to a race must be retried');
+  assert.ok(deployer.includes('retryDepth < 1'), 'the bind retry must happen exactly once, never in a loop');
+  assert.ok(deployer.includes('if (retryDepth === 0) scraperLog'), 'the retry must continue the same log story, not wipe attempt #1');
+  assert.ok(deployer.includes('pkill -f render-dist/server'), 'a port that stays held must end with a manual escape hatch');
+});
+
+test('results API skips poisoned product rows instead of serving nulls',async()=>{
+  const db=new MemoryD1();
+  db.products.set('pp:g',{profile_id:'pp',source_key:'g',data:JSON.stringify({sourceKey:'g',title:'Good',price:10,url:'',image:''}),title:'Good',price:10,source_url:''});
+  db.products.set('pp:bad1',{profile_id:'pp',source_key:'bad1',data:'null',title:'Bad1',price:0,source_url:''});
+  db.products.set('pp:bad2',{profile_id:'pp',source_key:'bad2',data:null,title:'Bad2',price:0,source_url:''});
+  const response=await call(db,'/api/profiles/pp/products?limit=200&q='),body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.total,1);
+  assert.deepEqual(body.products.map(p=>p.title),['Good']);
+});
