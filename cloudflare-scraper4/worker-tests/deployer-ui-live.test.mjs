@@ -104,7 +104,7 @@ function boot() {
     .replace(/\$\{JSON\.stringify\(commands\)\}/g, 'COMMANDS_FIXTURE')
     .replace(/\$\{JSON\.stringify\([^)]*\)\}/g, '{}')
     .replace(/\$\{[^}]*\}/g, '0');
-  const exports_ = '{ updateRail, tickUpdated, refresh, renderGuides, renderBranchesData, filterGuides, toggleCmd, followLog, badge, toast, bumpFont, applyTextSize, logError, escHtml }';
+  const exports_ = '{ updateRail, tickUpdated, refresh, renderGuides, renderBranchesData, filterGuides, toggleCmd, followLog, badge, toast, bumpFont, applyTextSize, logError, escHtml, renderResources, resourcePath, toggleResources }';
   const keys = Object.keys(sandbox);
   const api = new Function(...keys, script + '\nreturn ' + exports_ + ';')(...keys.map(key => sandbox[key]));
   return { window, document, api, store };
@@ -261,4 +261,15 @@ test('log: it follows its tail only while asked to', () => {
   assert.equal(scrolls, 2, 'the forced path (just ticked, or a running job) scrolls it back down anyway');
   api.followLog(null, true);
   assert.equal(scrolls, 2, 'a missing box must be a no-op, not a thrown error inside the poll loop');
+});
+
+test('resource charts render real percentages, preserve gaps and label host/process scope',()=>{
+ const {document,api}=boot();
+ api.renderResources({platform:'linux',termux:true,samples:[{at:Date.now()-2000,cpuPercent:null,memory:null},{at:Date.now(),cpuPercent:25,memory:{percent:60,used:600,total:1000,source:'MemAvailable'},rss:100,processCpuPercent:150,containerMemory:null}]});
+ assert.equal(text(document,'resourceCpu'),'25.0%');assert.equal(text(document,'resourceMemory'),'60.0%');
+ assert.match(text(document,'resourceStatus'),/Termux/);assert.match(text(document,'resourceProcess'),/process only.*150.0%/);
+ assert.equal(document.getElementById('resourceCpuPath').getAttribute('d').trim(),'M600.0 75.0');
+ api.renderResources({samples:[{at:Date.now(),cpuPercent:null,memory:null,rss:123}]});
+ assert.equal(text(document,'resourceCpu'),'Unavailable');assert.equal(document.getElementById('resourceCpuPath').getAttribute('d'),'');
+ api.toggleResources();assert.equal(document.getElementById('resourcePause').getAttribute('aria-pressed'),'true');assert.equal(text(document,'resourceStatus'),'Charts paused');
 });

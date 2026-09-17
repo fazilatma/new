@@ -604,3 +604,27 @@ though they were never used.
 For a JavaScript-only shop, run `npm run browsers:install` once (or `pkg install chromium` on
 Termux). Cloudflare Workers and shared cPanel cannot run a browser at all — use the HTML engines
 there.
+
+## Live environment resources (1.208.0+)
+
+Open **Overview → Live environment resources** in the local deployer. No extra
+package, root access, external chart library or monitoring service is needed.
+
+- Host CPU is the interval utilization across all cores, not load average.
+- Host RAM uses Linux `MemAvailable` when readable; otherwise the label explains
+  that OS free-memory accounting includes cache in used memory.
+- Deployer RSS and CPU are separate numeric readings. They exclude child
+  processes such as the scraper and Chromium; process CPU uses 100% per core.
+- A readable cgroup v2 memory limit/current usage is shown separately from host
+  RAM. Host CPU is not a container CPU-quota metric.
+- Android/Termux can deny host counters. Such samples are unavailable/gaps, not
+  zero; deployer process readings remain useful.
+- The authenticated `GET /api/resources` uses the existing deployer token and
+  `no-store` responses. A single sampler retains at most 180 two-second samples
+  in RAM (about six minutes); history resets when the deployer restarts.
+- Pause/resume affects chart updates; hidden browser tabs stop polling. The
+  lightweight server sampler continues collecting the bounded history.
+
+Update and restart the **deployer process** to load this feature, not only the
+scraper. The measurements belong to the machine running the deployer, which
+can differ from the phone/PC viewing it or a separately hosted scraper.

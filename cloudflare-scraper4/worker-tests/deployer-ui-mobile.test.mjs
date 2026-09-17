@@ -251,3 +251,10 @@ test('deployer markup: nothing on the first paint claims a state it has not read
   }
   assert.match(script, /if \(autoPill\) autoPill\.textContent = 'Auto-update: '/, 'and one line owns that text afterwards');
 });
+
+test('resource monitor is responsive, authenticated and pauses hidden-tab polling',()=>{
+ assert.match(css,/@media\(max-width:42em\)\{.resource-grid\{grid-template-columns:1fr/);
+ assert.match(script,/api\('\/api\/resources',\{signal:controller.signal\}\)/);
+ assert.match(script,/resourcesBusy\|\|resourcesPaused\|\|document.hidden/);
+ assert.ok(source.indexOf("if (!requireAuth(req, res)) return;")<source.indexOf("url.pathname === '/api/resources'"));
+});
