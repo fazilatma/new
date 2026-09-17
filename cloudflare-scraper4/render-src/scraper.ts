@@ -2272,6 +2272,7 @@ export async function diagnoseBenchmarkEngine(
 export async function diagnoseExtraction(profile: Profile, urlOverride = '', onProgress?: DiagnosticObserver) {
   const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
   const stages: any[] = [], recommendations: string[] = [];
+  if(profile.pagination==='none'&&profile.networkIndirect&&['auto','playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto'))recommendations.push('حالت بدون صفحه‌بندی از مسیر قدیمی موتور استفاده می‌کند؛ در موتورهای مرورگر، عبور ترافیک مرورگر از Worker تضمین نشده است. گزینهٔ اسکرول تا انتها همچنان مسیر محافظت‌شدهٔ جداگانه دارد.');
   const progress = diagnosticProgress(onProgress);
   const add = (name: string, ok: boolean, summary: string, details: any = {}) => { const stage = { name, ok, summary, ...details }; stages.push(stage); progress.finish(stage); };
   if (!url) {
@@ -2302,7 +2303,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
     progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto')),undefined,page);
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll',undefined,page);
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).

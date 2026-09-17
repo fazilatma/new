@@ -69,6 +69,7 @@ export async function processOneJob(): Promise<boolean> {
           append(job, `سلکتورهای فهرست هنوز برای این فروشگاه تنظیم نشده (${selectorStatus === 'empty' ? 'خالی' : selectorStatus === 'partial' ? 'ناقص' : 'پیش‌فرض'})؛ موتور استخراج ابتدا آن‌ها را از صفحهٔ اول پیدا می‌کند…`);
         }
       }
+      if(profile.pagination==='none'&&profile.networkIndirect&&['auto','playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine))append(job,'حالت بدون صفحه‌بندی از مسیر قدیمی موتور استفاده می‌کند؛ در موتورهای مرورگر، عبور ترافیک مرورگر از Worker تضمین نشده است. گزینهٔ اسکرول تا انتها همچنان مسیر محافظت‌شدهٔ جداگانه دارد.','warning');
       let engineSelectorsSaved = false;
       let repeatedPages = 0;
       const nextSelector = profile.pagination === 'next_selector' ? (profile.paginationValue || '') : '';
@@ -76,7 +77,7 @@ export async function processOneJob(): Promise<boolean> {
       for (let page = 1; page <= pageLimit; page++) {
         if (await stopRequested(job.id)) { job.status = 'stopped'; break; }
         const url = followUrl || pageUrl(profile, page); append(job, `صفحه ${page}: ${url}`);
-        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector, true, Boolean(profile.networkIndirect), profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine)),()=>stopRequested(job.id));
+        const scraped = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, nextSelector, true, Boolean(profile.networkIndirect), profile.pagination==='scroll',()=>stopRequested(job.id));
         if (nextSelector) {
           followUrl = scraped.nextUrl || '';
           if (!followUrl && page < pageLimit) append(job, `لینک «صفحهٔ بعد» با سلکتور «${nextSelector}» پیدا نشد؛ صفحه‌بندی همین‌جا تمام شد.`, 'warning');
@@ -118,7 +119,7 @@ export async function processOneJob(): Promise<boolean> {
             append(job, 'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
             const filled = await applySelectorSuggestions(profile, url, 'list', job, false);
             if (filled) {
-              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect), profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine)),()=>stopRequested(job.id));
+              const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect), profile.pagination==='scroll',()=>stopRequested(job.id));
               if (retry.products.length) {
                 append(job, `پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);
                 if (retry.usedEngine) { profile.extractionEngineMaster = retry.usedEngine; await saveProfile({ ...profile, updatedAt: new Date().toISOString() }); }
@@ -143,7 +144,9 @@ export async function processOneJob(): Promise<boolean> {
         // Auto paging (pages = 0) stops as soon as a page adds nothing new.
         // Misconfigured pagination often returns page 1 forever, which would
         // otherwise re-scan the same page up to the safety cap.
-        if (profile.pagination === 'none' || profile.pagination === 'scroll') {sourceComplete=profile.pagination==='none'&&!['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine);break;}
+        // 1.180 compatibility: none keeps the same URL and normal stop rules.
+        // Re-reading a URL is not proof that every source product was seen.
+        if (profile.pagination === 'scroll') {sourceComplete=false;break;}
         if (nextSelector && !followUrl) {sourceComplete=true; job.total = found.size; job.processed = found.size; await save(job); break; }
         if (found.size === before) repeatedPages++; else repeatedPages = 0;
         if (repeatedPages >= 2) { append(job, `صفحهٔ ${page} و صفحهٔ قبل هیچ محصول تازه‌ای نداشتند؛ احتمالاً صفحه‌بندی کار نمی‌کند و همان صفحهٔ اول تکرار می‌شود. استخراج همین‌جا پایان یافت.`, 'warning'); break; }

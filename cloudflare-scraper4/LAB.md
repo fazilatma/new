@@ -120,3 +120,16 @@ npm test
 - اگر سناریوی جدیدی لازم شد، اول فیکسچرش را به همین پوشه اضافه کن تا برای
   همیشه بخشی از آزمایشگاه بماند.
 - جزئیات بیشتر قراردادهای ایجنت در فایل `AGENTS.md` در ریشهٔ repository است.
+
+## No-pagination compatibility (1.207.0+)
+
+Compared against release 1.180.0, commit `42e7fd6`. Node uses its normal
+engine pipeline with an unchanged URL, the configured page limit and the
+existing empty/no-new-products stopping rules. Worker retains its original
+single-URL behavior. Explicit `scroll` remains separate. This is not proof
+of infinite-scroll completeness; no missing-product retirement is enabled
+for Node same-URL repetitions. The legacy browser pipeline does not guarantee
+Worker-proxied browser traffic; diagnostics and job logs warn when relevant.
+`worker-tests/no-pagination-180.test.mjs` exercises the production Node loop
+with five fresh batches of 100, followed by a duplicate batch, and pins the
+Worker/UI behavior. The visual-selector blank-page issue is not fixed here.
