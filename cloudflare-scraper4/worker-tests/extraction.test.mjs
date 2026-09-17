@@ -145,7 +145,7 @@ test('response decoding honors declared legacy encodings and BOMs',()=>{
 });
 
 test('hamburger menu preserves PHP order, count, dimensions and moves CSV transfer into products',async()=>{
-  const source=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),expected=['💾 ذخیره و بازیابی همهٔ تنظیمات','📜 گزارش تغییرات کد','🔄 نسخهٔ کد','🛒 ووکامرس','🏪 باسلام','🤖 هوش مصنوعی','🔔 اعلان‌ها','🗂 محصولات رفته از مبدأ','⚙️ تنظیمات عمومی','🩺 نگهبان صف ارسال','🌐 اتصال به سایت مبدأ','🔍 مغایرت‌گیری با مقصد','🧠 یادگیری دسته‌بندی','✏️ مدیریت جامع محصولات مقصد','🧬 حذف تکراری‌های مقصد (سرورساید)','🖼 عکس‌دار کردن محصولات ووکامرس','🤖 پاسخ خودکار به مشتریان','🌙 گزارش شبانهٔ محصولات','📊 آمار محصولات هر پروفایل'];
+  const source=await readFile(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),expected=['💾 ذخیره و بازیابی همهٔ تنظیمات','📜 گزارش تغییرات کد','🔄 نسخهٔ کد','🚀 دیپلویر محلی','🛒 ووکامرس','🏪 باسلام','🤖 هوش مصنوعی','🔔 اعلان‌ها','🗂 محصولات رفته از مبدأ','⚙️ تنظیمات عمومی','🩺 نگهبان صف ارسال','🌐 اتصال به سایت مبدأ','🔍 مغایرت‌گیری با مقصد','🧠 یادگیری دسته‌بندی','✏️ مدیریت جامع محصولات مقصد','🧬 حذف تکراری‌های مقصد (سرورساید)','🖼 عکس‌دار کردن محصولات ووکامرس','🤖 پاسخ خودکار به مشتریان','🌙 گزارش شبانهٔ محصولات','📊 آمار محصولات هر پروفایل'];
   const block=source.slice(source.indexOf('const menuDefs='),source.indexOf('];',source.indexOf('const menuDefs='))),titles=[...block.matchAll(/^ \['([^']+)'/gm)].map(match=>match[1]);assert.deepEqual(titles,expected);assert.doesNotMatch(block,/product-transfer|درون‌ریزی و برون‌ریزی محصولات/);
   assert.match(source,/\.hamburger\{[^}]*width:44px;height:44px/);assert.match(source,/\.drawer\{[^}]*width:400px;max-width:90vw/);assert.match(source,/id="pane-products"[\s\S]*id="transferProfile"/);
 });
@@ -706,10 +706,10 @@ test('dashboard: the sync preview reports progress and registers a task', async 
 
 test('dashboard: local tasks are merged into the activity list', async () => {
   const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
-  assert.match(dashboard, /const runs2=\[\.\.\.Array\.from\(localTasks\.values\(\)\),\.\.\.runs\]/,
+  assert.match(dashboard, /const runs2=mergeActivityRuns\(Array.from\(localTasks.values\(\)\),runs\)/,
     'renderActivity must include client-side tasks');
   assert.match(dashboard, /const runsHtml=runs2\.length\?\(/, 'the empty check must consider local tasks too');
-  assert.match(dashboard, /const del=r\.local\?''/, 'a local task has no server run to delete');
+  assert.match(dashboard, /const del=r\.local\|\|r\.readOnly\?''/, 'a local task has no server run to delete');
 });
 
 test('dashboard: an empty sync preview explains which precondition is missing', async () => {
@@ -721,20 +721,23 @@ test('dashboard: an empty sync preview explains which precondition is missing', 
   assert.match(branch, /همه‌چیز هماهنگ است/, 'genuinely in-sync must not look like a failure');
 });
 
-test('dashboard: only recent changelog entries render expanded', async () => {
+test('dashboard: only the featured changelog entry renders expanded', async () => {
   const dashboard = await readFile(new URL('../worker-src/dashboard.ts', import.meta.url), 'utf8');
   const start = dashboard.indexOf('<div class="change-list">');
   const end = dashboard.indexOf('<div id="changesResult"', start);
-  const section = dashboard.slice(start, end);
-  const older = section.indexOf('<details class="change-older">');
-  assert.ok(older > 0, 'older entries must live in a collapsed <details>');
-  const expanded = section.slice(0, older).split('<div class="change-item">').length - 1;
-  const collapsed = section.slice(older).split('<div class="change-item">').length - 1;
-  assert.ok(expanded > 0 && expanded <= 15, `expected a short expanded list, got ${expanded}`);
-  assert.ok(collapsed > 50, `the bulk of the history must be collapsed, got ${collapsed}`);
-  const total = section.split('<div class="change-item">').length - 1;
-  assert.equal(expanded + collapsed, total, 'no changelog entry may be lost by the split');
-  assert.ok(total > 100, `the full history must still be present, got ${total}`);
+  const $ = load(dashboard.slice(start, end));
+  const list = $('.change-list'), featured = list.children('.change-item');
+  const recent = list.children('details.change-recent'), older = list.children('details.change-older');
+  assert.equal(featured.length, 1, 'exactly one release must be visible without expanding');
+  assert.equal(recent.length, 1); assert.equal(older.length, 1);
+  assert.equal(recent.attr('open'), undefined, 'recent history must start collapsed');
+  assert.equal(older.attr('open'), undefined, 'older history must start collapsed');
+  const recentCount = recent.find('.change-item').length, olderCount = older.find('.change-item').length;
+  assert.equal(Number(recent.children('summary').text().match(/\d+/)?.[0]), recentCount, 'recent count must track each new release');
+  assert.ok(olderCount > 50, 'the bulk of history must remain archived');
+  const total = list.find('.change-item').length;
+  assert.equal(1 + recentCount + olderCount, total, 'no entry may be lost or left outside a fold');
+  assert.ok(total > 100, 'the full history must still be present');
 });
 
 test('dashboard: the newest changelog entry stays visible without expanding', async () => {
@@ -787,8 +790,7 @@ test('the default basalam shop has its own price percentage', async () => {
     assert.match(sync, /name:'پیش‌فرض',token:c\.token,vendorId:c\.vendorId,pricePercent:Number\(c\.pricePercent\)\|\|0/,
       `${name} sync must stop hardcoding the default shop to 0%`);
   }
-  assert.match(workerMaint, /غرفهٔ پیش‌فرض',pricePercent:Number\(c\.basalam\.pricePercent\)\|\|0/);
-  assert.match(nodeMaint, /pricePercent:\s*Number\(c\.basalam\.pricePercent\)\s*\|\|\s*0/);
+  for(const source of [workerMaint,nodeMaint]){assert.match(source,/\.\.\.c\.basalam,name:'غرفهٔ پیش‌فرض'/);assert.match(source,/pricePercent:Number\(shop.pricePercent\)\|\|0/)}
 });
 
 // --- Request 36b: duplicates at the DESTINATIONS must be planned for deletion,

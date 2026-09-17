@@ -28,7 +28,7 @@ class MemoryStatement {
     if(s.startsWith('SELECT * FROM category_learning WHERE phrase='))return[...this.db.categoryLearning.values()].filter(row=>row.phrase===v[0]).sort((a,b)=>b.hits-a.hits)[0]||null;
     return null;
   }
-  async all(){const s=this.sql;let results=[];if(s.startsWith('SELECT * FROM profiles ORDER BY'))results=[...this.db.profiles.values()];if(s.startsWith('SELECT * FROM jobs ORDER BY'))results=[...this.db.jobs.values()].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,Number(this.values[0])||200);if(s.startsWith('SELECT id FROM jobs WHERE status IN'))results=[...this.db.jobs.values()].filter(job=>['done','failed','stopped'].includes(job.status)).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map(job=>({id:job.id}));if(s.startsWith('SELECT * FROM category_learning ORDER BY'))results=[...this.db.categoryLearning.values()].sort((a,b)=>b.hits-a.hits).slice(0,Number(this.values[0])||1000);if(s.startsWith('SELECT data FROM products WHERE profile_id=?')){const hasLike=s.includes('title LIKE'),like=hasLike?String(this.values[1]).replace(/^%|%$/g,'').replace(/\\(.)/g,'$1'):'',rest=hasLike?this.values.slice(2):this.values.slice(1);let matches=[...this.db.products.values()].filter(row=>row.profile_id===this.values[0]&&row.data!=null&&row.data!=='null'&&(!like||String(row.title||'').includes(like)));if(rest.length>1)matches=matches.slice(Number(rest[rest.length-1]),Number(rest[rest.length-1])+Number(rest[rest.length-2]));results=matches.map(row=>({data:row.data}))}return{success:true,results}}
+  async all(){const s=this.sql;let results=[];if(s.startsWith('SELECT id,profile_id,kind,target,status'))results=[...this.db.jobs.values()].filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));if(s.startsWith("SELECT value FROM app_state WHERE substr(key,1,14)='activity_live:'"))results=[...this.db.states].filter(([k])=>k.startsWith('activity_live:')).map(([,value])=>({value}));if(s.startsWith('SELECT * FROM profiles ORDER BY'))results=[...this.db.profiles.values()];if(s.startsWith('SELECT * FROM jobs ORDER BY'))results=[...this.db.jobs.values()].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,Number(this.values[0])||200);if(s.startsWith('SELECT id FROM jobs WHERE status IN'))results=[...this.db.jobs.values()].filter(job=>['done','failed','stopped'].includes(job.status)).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map(job=>({id:job.id}));if(s.startsWith('SELECT * FROM category_learning ORDER BY'))results=[...this.db.categoryLearning.values()].sort((a,b)=>b.hits-a.hits).slice(0,Number(this.values[0])||1000);if(s.startsWith('SELECT data FROM products WHERE profile_id=?')){const hasLike=s.includes('title LIKE'),like=hasLike?String(this.values[1]).replace(/^%|%$/g,'').replace(/\\(.)/g,'$1'):'',rest=hasLike?this.values.slice(2):this.values.slice(1);let matches=[...this.db.products.values()].filter(row=>row.profile_id===this.values[0]&&row.data!=null&&row.data!=='null'&&(!like||String(row.title||'').includes(like)));if(rest.length>1)matches=matches.slice(Number(rest[rest.length-1]),Number(rest[rest.length-1])+Number(rest[rest.length-2]));results=matches.map(row=>({data:row.data}))}return{success:true,results}}
   async run(){const s=this.sql,v=this.values;
     if(this.db.quotaFail&&(s.startsWith('INSERT')||s.startsWith('UPDATE')||s.startsWith('DELETE')))throw new Error('you exceeded write operations quota');
     if(s.startsWith('UPDATE app_state SET value=')){if(this.db.states.get(v[2])===v[3]){this.db.states.set(v[2],v[0]);this.db.stateUpdatedAt.set(v[2],v[1]);return{success:true,meta:{changes:1}}}return{success:true,meta:{changes:0}}}
@@ -756,8 +756,8 @@ test('standalone spreadsheet import understands Persian CSV headers, keeps Woo s
   const csv='نام محصول,قیمت,تصویر,کد محصول\nکفش آزمایشی,۲۵۰۰۰۰,https://images.example/shoe.jpg,SKU-FA-1\n';
   const imported=await call(db,'/api/profiles/sheet-ui/import?format=csv&wooStatus=draft',{method:'POST',headers:{'content-type':'text/csv; charset=utf-8'},body:csv}),report=await imported.json();
   assert.equal(imported.status,200);assert.equal(report.format,'csv');assert.equal(report.rows,1);assert.equal(report.imported,1);assert.equal(report.wooStatus,'draft');
-  const stored=JSON.parse([...db.products.values()][0].data);assert.equal(stored.title,'کفش آزمایشی');assert.equal(stored.price,250000);assert.equal(stored.sku,'SKU-FA-1');assert.equal(stored.destinationStatus,'draft');
-  const excel=await call(db,'/api/profiles/sheet-ui/import?format=xlsx&wooStatus=publish',{method:'POST',headers:{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},body:tinyXlsx()}),excelReport=await excel.json();assert.equal(excel.status,200);assert.equal(excelReport.format,'xlsx');assert.equal(excelReport.imported,1);const excelProduct=[...db.products.values()].map(row=>JSON.parse(row.data)).find(product=>product.title==='عطر اکسل');assert.equal(excelProduct.price,375000);assert.equal(excelProduct.brand,'نمونه');assert.equal(excelProduct.destinationStatus,'publish');
+  const stored=JSON.parse([...db.products.values()][0].data);assert.equal(stored.title,'کفش آزمایشی (کد:SKU-FA-1)');assert.equal(stored.price,250000);assert.equal(stored.sku,'SKU-FA-1');assert.equal(stored.destinationStatus,'draft');
+  const excel=await call(db,'/api/profiles/sheet-ui/import?format=xlsx&wooStatus=publish',{method:'POST',headers:{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},body:tinyXlsx()}),excelReport=await excel.json();assert.equal(excel.status,200);assert.equal(excelReport.format,'xlsx');assert.equal(excelReport.imported,1);const excelProduct=[...db.products.values()].map(row=>JSON.parse(row.data)).find(product=>product.title.startsWith('عطر اکسل'));assert.equal(excelProduct.price,375000);assert.equal(excelProduct.brand,'نمونه');assert.equal(excelProduct.destinationStatus,'publish');
   const broken=await call(db,'/api/profiles/sheet-ui/import?format=xlsx',{method:'POST',headers:{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},body:new Uint8Array([1,2,3])});assert.equal(broken.status,400);assert.match(broken.headers.get('content-type')||'',/application\/json/);assert.match((await broken.json()).error,/Excel|فایل|zip/i);
   const oversized=await call(db,'/api/profiles/sheet-ui/import?format=csv',{method:'POST',headers:{'content-type':'text/csv'},body:'x'.repeat(10*1024*1024+1)});assert.equal(oversized.status,413);assert.match(oversized.headers.get('content-type')||'',/application\/json/);assert.match((await oversized.json()).error,/۱۰|حجم|MiB/i);
   const queued=await call(db,'/api/profiles/sheet-ui/sync',jsonInit({target:'woo'})),job=(await queued.json()).job;assert.equal(queued.status,202);assert.equal(job.kind,'sync');assert.equal(job.target,'woo');
@@ -1344,7 +1344,7 @@ test('destination APIs are never rerouted through the scraping proxy', async () 
   const network = await readFile(new URL('../render-src/network.ts', import.meta.url), 'utf8');
   assert.ok(network.includes('directRoute?: boolean'), 'needs an opt-out of source-network routing');
   // The reroute must be conditional, not unconditional.
-  assert.ok(network.includes('const routed = init.directRoute !== true;'), 'routing must be skippable');
+  assert.ok(network.includes('const routed = init.directRoute !== true && init.aiEndpoint !== true;'), 'routing must be skippable');
   assert.ok(/useWorker = routed &&/.test(network), 'worker routing must honour directRoute');
   assert.ok(/useProxy = routed &&/.test(network), 'proxy routing must honour directRoute');
   // Basalam picks its own route via its own switch, never the scraping one.
@@ -1485,8 +1485,13 @@ test('the AI proxy URL is wrapped exactly once', async () => {
       `a pre-wrapped URL must set directRoute, otherwise it is proxied twice: ${line.trim().slice(0, 80)}`);
   }
   // The real model call path, not just the diagnostic.
-  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true},3_000_000)"),
+  // The real model call path, not just the diagnostic. The proxy hop is wrapped exactly once and
+  // still opts out of the second wrap; the AI exemption rides along because the configured proxy
+  // Worker is itself a user-typed address (the lab proxy answers on 127.0.0.1:8787).
+  assert.ok(ai.includes("safeFetch(target,{...init,directRoute:true,aiEndpoint:true},3_000_000)"),
     'networkFetch must not let safeFetch re-proxy an already-proxied URL');
+  assert.ok(ai.includes('await assertAiEndpointUrl(url)'),
+    'networkFetch must validate provider URLs with the AI guard, not the scrape-site guard');
 
   // Behavioural proof of the double-wrap that caused 1042.
   const via = (w, t) => w.includes('{url}') ? w.replace('{url}', encodeURIComponent(t))
@@ -1507,12 +1512,12 @@ test('detail extraction is skipped or bootstrapped when no selector is set', asy
     'it must try to discover detail selectors before fetching every product');
   // The main loop is guarded.
   const guarded = node.slice(node.indexOf('if (hasDetailSelectors(profile.selectors)) {'));
-  assert.ok(guarded.slice(0, 900).includes('await mapLimit(products'),
+  assert.ok(guarded.slice(0, 900).includes('await mapLimit(workProducts'),
     'the per-product detail loop must be guarded');
   assert.ok(node.includes('استخراج جزئیات'), 'the job log must report the detail stage');
 
   const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
-  assert.ok(worker.includes('if(!hasDetailSelectors(profile.selectors))return;'),
+  assert.ok(worker.includes('if((product as any)._reuseDetails||!hasDetailSelectors(profile.selectors))return;'),
     'the Worker runtime must skip the page fetch too');
 });
 
@@ -1549,7 +1554,7 @@ test('product identity keeps identifying query parameters', async () => {
 test('products with no price are skipped everywhere', async () => {
   const worker = await readFile(new URL('../worker-src/processor.ts', import.meta.url), 'utf8');
   assert.ok(worker.includes('job.skippedNoPrice=(job.skippedNoPrice||0)+1;'), 'worker must count the skip');
-  assert.ok(/rawPrice<=0\)\{[\s\S]{0,300}continue;/.test(worker), 'worker must skip before saving');
+  assert.ok(/rawPrice<=0\|\|product\.price<=0\)\{[\s\S]{0,400}continue;/.test(worker), 'worker must skip before saving');
 
   const node = await readFile(new URL('../render-src/processor.ts', import.meta.url), 'utf8');
   assert.ok(node.includes('if (!(Number(product.price) > 0))'), 'node must skip before saving');

@@ -30,8 +30,9 @@ const readRenderBundle = () => (renderBundlePromise ??= (async () => {
 const version = pkg.version;
 const faVersion = String(version).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
 
-test('package.json exposes a concrete semver as the single source of truth', () => {
-  assert.match(version, /^\d+\.\d+\.\d+$/);
+test('package.json exposes a concrete version as the single source of truth', () => {
+  // x.y.z with the optional + release marker; the marker is display-only, the numeric core sorts.
+  assert.match(version, /^\d+\.\d+\.\d+\+?$/);
 });
 
 test('sync-version --check passes, so no version reference has drifted', () => {
@@ -56,7 +57,7 @@ test('changelog documents the current version and its footer matches it', async 
   assert.ok(firstEntry, 'the change list must start with a dated entry');
   assert.ok(firstEntry[1].includes(faVersion), `newest changelog entry should mention ${faVersion}, got ${firstEntry[1]}`);
   for (const label of ['نسخهٔ فعلی Worker: ', 'نسخهٔ فعلی: ']) {
-    const footer = dashboard.match(new RegExp(label + '([۰-۹.]+)'));
+    const footer = dashboard.match(new RegExp(label + '([۰-۹.+]+)'));
     assert.ok(footer, `footer "${label}" must exist`);
     assert.equal(footer[1], faVersion);
   }
@@ -64,13 +65,13 @@ test('changelog documents the current version and its footer matches it', async 
 
 test('version fallbacks used before /health responds are current', async () => {
   const dashboard = await readProjectFile('worker-src/dashboard.ts');
-  for (const match of dashboard.matchAll(/faVersion\((?:value|health\.version)\s*\|\|\s*'(\d+\.\d+\.\d+)'/g)) {
+  for (const match of dashboard.matchAll(/faVersion\((?:value|health\.version)\s*\|\|\s*'(\d+\.\d+\.\d+\+?)'/g)) {
     assert.equal(match[1], version);
   }
   const server = await readProjectFile('render-src/server.ts');
-  for (const match of server.matchAll(/\|\|\s*'(\d+\.\d+\.\d+)'/g)) assert.equal(match[1], version);
+  for (const match of server.matchAll(/\|\|\s*'(\d+\.\d+\.\d+\+?)'/g)) assert.equal(match[1], version);
   const app = await readProjectFile('worker-src/app.ts');
-  for (const match of app.matchAll(/WORKER_VERSION\|\|'(\d+\.\d+\.\d+)'/g)) assert.equal(match[1], version);
+  for (const match of app.matchAll(/WORKER_VERSION\|\|'(\d+\.\d+\.\d+\+?)'/g)) assert.equal(match[1], version);
 });
 
 test('every environment install guide carries a version verification step', async () => {
@@ -85,7 +86,7 @@ test('every environment install guide carries a version verification step', asyn
   }
   // The guides must not advertise a version other than the current one.
   for (const group of groups) {
-    for (const match of group.body.matchAll(/(?:# Expected: |REM Expected: |Expected version: )(\d+\.\d+\.\d+)/g)) {
+    for (const match of group.body.matchAll(/(?:# Expected: |REM Expected: |Expected version: )(\d+\.\d+\.\d+\+?)/g)) {
       assert.equal(match[1], version, `guide "${group.key}" mentions a stale version`);
     }
   }
@@ -95,7 +96,7 @@ test('deployer guides stay aligned with the dashboard guides', async () => {
   const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
   const commands = JSON.parse(deployer.match(/const commands = (\{[\s\S]*?\});\n/)[1]);
   for (const [name, body] of Object.entries(commands)) {
-    for (const match of body.matchAll(/(?:# Expected: |REM Expected: |expected version: )(\d+\.\d+\.\d+)/g)) {
+    for (const match of body.matchAll(/(?:# Expected: |REM Expected: |expected version: )(\d+\.\d+\.\d+\+?)/g)) {
       assert.equal(match[1], version, `deployer guide "${name}" mentions a stale version`);
     }
   }
@@ -422,8 +423,8 @@ test('the engine benchmark never saves a near-empty engine as the profile defaul
   const start = server.indexOf('const usable=results.filter');
   const end = server.indexOf('(profile as any).extractionEngineBenchmarks', start);
   const body = server.slice(start, end).replace(/const MIN_BENCHMARK_PRODUCTS[^\n]*\n/, '');
-  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS',
-    `${body}; return { fastest, bestCount };`)(results, 2);
+  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS', 'emit',
+    `${body}; return { fastest, bestCount };`)(results, 2, ()=>{});
 
   // The user's real Termux numbers.
   const termux = [
@@ -602,7 +603,7 @@ test('dashboard URLs are relative so the deployer proxy at /scraper/ works', asy
   assert.equal(at('/scraper/')('https://x.test/a'), 'https://x.test/a', 'external URLs stay absolute');
 
   // api() funnels 100+ call sites, so it is the one that must be wrapped.
-  assert.match(dash, /async function api\(path,options=\{\}\)\{const response=await fetch\(U\(path\)/, 'api() must route through U()');
+  assert.match(dash, /async function apiRequest\(path,options=\{\}\)\{const response=await activityFetch\(U\(path\)/, 'api() must route through U()');
   // The bootstrap script tag must be relative too, or nothing loads at all.
   assert.ok(!/<script src="\/dashboard\.js"/.test(dash), 'the script tag must not be root-absolute');
   assert.match(dash, /<script src="dashboard\.js" defer><\/script>/);
@@ -1327,7 +1328,7 @@ test('manual sync runs list, details and delivery in one click', async () => {
   const proc = await readProjectFile('render-src/processor.ts');
   const details = proc.indexOf("job.phase = 'details'");
   const save = proc.indexOf("job.phase = 'save'");
-  const sync = proc.indexOf('await runSync(job, profile, products)');
+  const sync = proc.indexOf('await runSync(job, profile, await allProducts(profile.id))');
   assert.ok(details > 0 && save > details && sync > save, 'details must run before save, and delivery last');
   assert.match(proc, /if \(job\.target !== 'none'\) await runSync/, 'delivery must run whenever a destination is set');
 });

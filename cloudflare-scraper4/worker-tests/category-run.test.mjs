@@ -30,6 +30,7 @@ const stubs = {
     export async function getState(key,fallback){return h.states.has(key)?JSON.parse(h.states.get(key)):fallback}
     export async function setState(key,value){h.states.set(key,JSON.stringify(value))}
     export async function deleteState(key){h.states.delete(key)}
+    export async function pruneBasalamCategoryNotebooks(){return 0}
     export async function getTriedBasalamCategories(shopId,id){return h.tried.get(shopId+':'+id)||[]}
     export async function markBasalamCategoriesTried(shopId,id,ids){const key=shopId+':'+id,set=new Set([...(h.tried.get(key)||[]),...ids.map(Number).filter(n=>Number.isInteger(n)&&n>0)]),rows=[...set].slice(-50);h.tried.set(key,rows);return rows}`,
   './ai.js': `const h=globalThis.__categoryHarness;
@@ -171,7 +172,7 @@ test('a full run lists every page, votes with early stop and applies winners', a
   assert.ok(!('products' in done), 'the public run strips the heavy product list');
 });
 
-test('a majority matching the stored category confirms it without a PATCH', async () => {
+test('a currently unapproved category is excluded, not confirmed again', async () => {
   reset();
   harness.providers = [greenProvider('p1', ['m1'])];
   setTestResults([{ ok: true, provider: 'p1', model: 'm1' }]);
@@ -183,8 +184,8 @@ test('a majority matching the stored category confirms it without a PATCH', asyn
   assert.equal(done.processed, 1);
   assert.equal(done.changed, 0);
   assert.equal(harness.applyCalls.length, 0);
-  assert.equal(done.items[0].ok, true);
-  assert.match(done.items[0].source, /تأیید شد/);
+  assert.equal(done.items[0].ok, false);
+  assert.match(done.items[0].error, /قبلاً/);
 });
 
 test('a failed PATCH marks the category tried so the next run skips it', async () => {

@@ -1,17 +1,25 @@
+import { destinationLedger, destinationScope } from './ledger.js';
+import { desiredProduct } from './destination-ledger.js';
 import { loadConnections } from './connections.js';
 import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId } from './db.js';
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, toRemoteId } from './utils.js';
 import type { Product, Profile, VariationGroup } from './types.js';
 
-export async function syncWoo(product:Product,profile:Profile):Promise<'created'|'updated'> {
-  const c=(await loadConnections()).woo;
+export async function syncWoo(product:Product,profile:Profile):Promise<'created'|'updated'|'unchanged'> {
+  const c=(await loadConnections(true)).woo;
   if(!c.url||!c.key||!c.secret)throw new Error('تنظیمات ووکامرس کامل نیست');
   const base=c.url.replace(/\/$/,'')+'/wp-json/wc/v3/products',auth=basicAuth(c.key,c.secret);
   let id=await getRemoteId(profile.id,product.sourceKey,'woo');
   const sku=product.sku||`s4-${profile.id}-${product.sourceKey}`.slice(0,100);
+  const scope=await destinationScope('woo'),desired=desiredProduct(product,profile,{...c,target:'woo',contentSync:(await getState<any>('settings',{}))?.general?.contentSync!==false});
+  let ledgerEntry=await destinationLedger.find(scope,id,sku);
+  if(ledgerEntry?.remote?.sku&&ledgerEntry.remote.sku!==sku){id=null;ledgerEntry=await destinationLedger.find(scope,null,sku)}
+  if(!ledgerEntry||ledgerEntry.invalid||ledgerEntry.deleted)id=null;else if(!ledgerEntry.invalid&&!ledgerEntry.deleted)id=toRemoteId(ledgerEntry.remote.id);
+  if(await destinationLedger.matches(ledgerEntry,desired)){if(!ledgerEntry?.desiredHash)await destinationLedger.confirm(scope,ledgerEntry!.remote,desired,profile.id,product.sourceKey,ledgerEntry!.at);return 'unchanged';}
   if(!id){
     const search=await safeWooFetch(`${base}?sku=${encodeURIComponent(sku)}`,{headers:{authorization:auth,accept:'application/json'}},2_000_000);
+    if(!search.ok)throw Error('WooCommerce SKU lookup HTTP '+search.status);
     if(search.ok){const found=await search.json() as any[];id=toRemoteId(found[0]?.id)}
   }
   const groups=(product.variationGroups||[]).filter(group=>group.name&&group.values?.length);
@@ -27,6 +35,7 @@ export async function syncWoo(product:Product,profile:Profile):Promise<'created'
   if(product.weight)payload.weight=String(product.weight);
   if(groups.length)payload.attributes=groups.map(group=>({name:group.name,visible:true,variation:true,options:group.values.slice(0,100)}));
   const category=profile.wooCategoryId||c.categoryId;if(category)payload.categories=[{id:category}];
+  await destinationLedger.invalidate(scope,id);
   const response=await safeWooFetch(id?`${base}/${id}`:base,{method:'POST',headers:{authorization:auth,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000),body=await response.json().catch(()=>({})) as any;
   if(!response.ok)throw new Error(`WooCommerce HTTP ${response.status}: ${body.message||JSON.stringify(body).slice(0,300)}`);
   const remoteId=toRemoteId(body.id||id) ?? 0;
@@ -35,6 +44,7 @@ export async function syncWoo(product:Product,profile:Profile):Promise<'created'
     await setDestinationId(profile.id,product.sourceKey,'woo','default',remoteId);
     if(groups.length)await syncWooVariations(base,remoteId,sku,groups,product,auth,wooPercent);
   }
+  await destinationLedger.confirm(scope,{id:remoteId,name:body.name||product.title,sku,price:Number(body.price??body.regular_price??payload.regular_price),status:String(body.status||product.destinationStatus||'publish'),raw:body},desired,profile.id,product.sourceKey);
   return id?'updated':'created';
 }
 
@@ -66,7 +76,7 @@ function basalamPrice(product:Product,percent=0):number{
 }
 
 type BasalamAccount={name:string;token:string;vendorId:string;pricePercent?:number};
-type BasalamSyncResult={shop:string;action:'created'|'updated';id:number|string;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
+type BasalamSyncResult={shop:string;action:'created'|'updated'|'unchanged';id:number|string;transport:'sdk'|'api';fallback?:string;error?:string;price?:number};
 /**
  * Basalam's product schema (openapi.basalam.com/v1). Three fields were wrong and
  * made every real send fail with HTTP 400:
@@ -271,18 +281,22 @@ async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:
 
 export async function syncBasalam(product:Product,profile:Profile):Promise<BasalamSyncResult[]>{
   const c=(await loadConnections()).basalam;
-  if(!c.token||!c.vendorId)throw new Error('تنظیمات باسلام کامل نیست');
+  if(!(c.token&&c.vendorId)&&!c.shops.some(s=>s.token&&s.vendorId))throw new Error('تنظیمات باسلام کامل نیست');
   const learned=c.autoCategory?await findLearnedCategory(product.title):null;
   const categories=[product.basalamCategoryId,profile.basalamCategoryId,learned?.categoryId,c.categoryId,...(profile.basalamFallbackCategoryIds||[]),...c.fallbackCategoryIds].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index);
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
-  const accounts=[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0},...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
+  const accounts=[...(c.token&&c.vendorId?[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0}]:[]),...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
   for(const account of accounts){
-    const accountKey=String(account.vendorId),legacy=account===accounts[0]?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
+    const accountKey=String(account.vendorId),legacy=String(account.vendorId)===String(c.vendorId)?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;
     const action=existing?'updated':'created';
     const price=basalamPrice(product,Number(account.pricePercent)||0);
+    const scope=await destinationScope('basalam',accountKey),desired=desiredProduct(product,profile,{...c,...account,target:'basalam',categoryId:categories[0]});
+    const ledgerEntry=await destinationLedger.find(scope,existing);
+    if(await destinationLedger.matches(ledgerEntry,desired)){if(!ledgerEntry?.desiredHash)await destinationLedger.confirm(scope,ledgerEntry!.remote,desired,profile.id,product.sourceKey,ledgerEntry!.at);results.push({shop:account.name,action:'unchanged',id:existing||0,transport:'api',price});continue}
     let remoteId:number|string=0,transport:BasalamSyncResult['transport']='sdk',fallback='';
     try{
+      await destinationLedger.invalidate(scope,existing);
       // Photos are uploaded once per stall and reused by both transports, because
       // Basalam wants integer file ids in `photo`/`photos`, not image URLs.
       const photoIds=await uploadBasalamPhotos(product,c,account);
@@ -301,7 +315,8 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
       results.push({shop:account.name,action,id:0,transport:'api',price,error:error instanceof Error?error.message:String(error),fallback:fallback||undefined});
       continue;
     }
-    if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(account===accounts[0])await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
+    if(remoteId){await setDestinationId(profile.id,product.sourceKey,'basalam',accountKey,remoteId);if(String(account.vendorId)===String(c.vendorId))await setRemoteId(profile.id,product.sourceKey,'basalam',remoteId)}
+    await destinationLedger.confirm(scope,{id:remoteId,name:product.title,sku:product.sku||'',price,status:'2976',raw:{stock:product.stock??c.stock,description:product.longDesc||product.shortDesc||'',category_id:categories[0],weight:product.weight||c.weight}},desired,profile.id,product.sourceKey);
     results.push({shop:account.name,action,id:remoteId,transport,price,fallback:transport==='api'?fallback:undefined});
   }
   return results;

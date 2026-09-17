@@ -69,7 +69,7 @@ test('stored destination_map ids win over the legacy columns', () => {
 test('worker unified comparison reads Rial prices on both targets', async () => {
   const src = await read('../worker-src/maintenance.ts');
   assert.ok(src.includes('price:x.priceRaw,status:x.status,shopId:'), 'basalam leg must use priceRaw (Rial)');
-  assert.ok(src.includes('price:x.priceRaw,status:x.status}'), 'woo leg must use priceRaw');
+  assert.ok(src.includes('destinationCatalog(account.target,'), 'both destinations share the complete ledger scan and use priceRaw');
   assert.doesNotMatch(src, /remoteForAccount[\s\S]{0,400}price:x\.price,/);
 });
 

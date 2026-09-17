@@ -33,9 +33,9 @@ test('results suffix: the format lookup is synchronous, not a Promise', () => {
   assert.ok(formats.length > 0 && formats.every((f) => /[xX]/.test(f)), 'every format needs an x placeholder');
 });
 
-test('results suffix: a plain product gets a suffix instead of throwing', () => {
+test('results suffix: a plain product remains identical to its saved title', () => {
   const { productCodeSuffix } = loadSuffixFns();
-  assert.equal(productCodeSuffix({ title: 'Shoe A', sourceKey: 'a1', price: 120000 }), '(کد:a1)');
+  assert.equal(productCodeSuffix({ title: 'Shoe A', sourceKey: 'a1', price: 120000 }), '');
   assert.equal(productCodeSuffix({ title: 'Shoe A (کد 5)', sourceKey: 'a1' }), '(کد 5)', 'an existing title suffix wins');
   assert.equal(productCodeSuffix({ title: 'No code anywhere' }), '', 'a product with no code stays suffix-free');
 });

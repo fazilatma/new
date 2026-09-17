@@ -1,3 +1,5 @@
+import { mergeBenchmarkProfile } from './benchmark-profile.js';
+import { applyResultAdjustments, sameResultData } from './result-adjustments.js';
 import { getEnv, type D1Database, type D1PreparedStatement } from './env.js';
 import { SCHEMA } from './schema.js';
 import { isWriteQuotaError, normalizeDbValue, normalizePersianText, toRemoteId } from './utils.js';
@@ -239,10 +241,11 @@ export async function deleteProfile(id: string): Promise<boolean> {
   ]); return true;
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean } = {}): Promise<Job> {
   const settings = await getState<any>('settings', {}), dedup = settings?.general?.queueDedup !== false;
   const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
-  if (active && dedup) {
+  if(_options.priceSync){const queued=await statement("SELECT * FROM jobs WHERE profile_id=? AND kind='sync' AND target=? AND status='queued' AND started_at IS NULL ORDER BY created_at LIMIT 1",[profileId,target]).first();if(queued)return jobFromRow(queued);}
+  if (active && dedup && !_options.priceSync) {
     const job = jobFromRow(active), staleMin = Math.max(1, Number(settings?.general?.queueDedupStale) || 120), age = Date.now() - new Date(job.updatedAt).getTime();
     if (age >= staleMin * 60_000) await updateJob(job.id, {status:'failed', phase:'stale-replaced', error:'کار قبلی همین پروفایل به‌خاطر گیرکردن طولانی بسته شد تا کار تازه جایگزین شود.', finishedAt: now(), stopRequested:true});
     else return job;
@@ -271,9 +274,9 @@ export async function setJobPriorities(ids:string[]):Promise<Record<string,numbe
 }
 function jobPriority(map:Record<string,number>,job:Job):number{return Number(map[job.id])||0;}
 export async function listQueuedJobs(limit=200):Promise<Job[]>{
-  const jobs=(await rows(`SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT ?`,[Math.max(1,limit)])).map(jobFromRow);
+  const jobs=(await rows(`SELECT * FROM jobs WHERE status='queued' ORDER BY started_at IS NULL,created_at LIMIT ?`,[Math.max(1,limit)])).map(jobFromRow);
   const map=await getJobPriorities();
-  return jobs.sort((a,b)=>jobPriority(map,b)-jobPriority(map,a)||a.createdAt.localeCompare(b.createdAt));
+  return jobs.sort((a,b)=>Number(Boolean(b.startedAt))-Number(Boolean(a.startedAt))||jobPriority(map,b)-jobPriority(map,a)||a.createdAt.localeCompare(b.createdAt));
 }
 // ─── Background-run priority map (task-manager drag order) ───────────────────
 // Ranks run kinds ('ai-test' | 'dedup' | 'category-all' | 'agent'): the first
@@ -288,10 +291,13 @@ export async function setRunPriorities(kinds:string[]):Promise<Record<string,num
   return map;
 }
 export async function claimJob(id?:string):Promise<Job|null>{
-  const candidate=id?await statement("SELECT id FROM jobs WHERE id=? AND status='queued'",[id]).first<{id:string}>():await statement("SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1").first<{id:string}>();
-  if(!candidate)return null;const timestamp=now();const changed=await run("UPDATE jobs SET status='running',phase='starting',started_at=?,updated_at=? WHERE id=? AND status='queued'",[timestamp,timestamp,candidate.id]);
+  const settings=await getState<any>('settings',{}),limit=Math.max(1,Math.min(8,Math.trunc(Number(settings?.general?.maxConcurrentProfiles)||2)));
+  const candidate=id?await statement("SELECT id FROM jobs WHERE id=? AND status='queued'",[id]).first<{id:string}>():await statement("SELECT id FROM jobs WHERE status='queued' ORDER BY started_at IS NULL,created_at LIMIT 1").first<{id:string}>();
+  if(!candidate)return null;const timestamp=now();
+  const changed=await run(`UPDATE jobs SET status='running',phase=CASE WHEN started_at IS NULL THEN 'starting' ELSE phase END,started_at=COALESCE(started_at,?),updated_at=? WHERE id=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM jobs busy WHERE busy.profile_id=jobs.profile_id AND busy.id<>jobs.id AND (busy.status='running' OR (busy.status='queued' AND busy.started_at IS NOT NULL AND (busy.created_at<jobs.created_at OR (busy.created_at=jobs.created_at AND busy.id<jobs.id))))) AND (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running') < ${limit} AND (started_at IS NOT NULL OR (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running' OR (status='queued' AND started_at IS NOT NULL)) < ${limit})`,[timestamp,timestamp,candidate.id]);
   return changed?getJob(candidate.id):null;
 }
+
 export async function updateJob(id:string,patch:Partial<Job>):Promise<void>{
   const allowed:Record<string,string>={status:'status',phase:'phase',total:'total',processed:'processed',added:'added',updated:'updated',failed:'failed',stopRequested:'stop_requested',error:'error',log:'log',finishedAt:'finished_at'};
   const entries=Object.entries(patch).filter(([key])=>allowed[key]);if(!entries.length)return;
@@ -316,9 +322,10 @@ export async function pruneFinishedJobs(keep=20):Promise<number>{
   let deleted=0;for(const row of finished.slice(limit))if(await deleteJob(row.id))deleted++;return deleted;
 }
 
-export async function upsertProduct(profileId:string,product:Product):Promise<'added'|'updated'>{
+export async function upsertProduct(profileId:string,product:Product,options:{source?:boolean}={}):Promise<'added'|'updated'>{
   if(!validProductRow(product))throw new Error('upsertProduct refused a non-object product');
   const existing=await statement('SELECT 1 AS found FROM products WHERE profile_id=? AND source_key=?',[profileId,product.sourceKey]).first();const timestamp=now();
+  if(options.source||(product as any).resultBase){const profile=await getProfile(profileId);if(profile){if(options.source)delete (product as any).resultBase;const settings=await getState<any>('settings',{});applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));}}
   await run(`INSERT INTO products(profile_id,source_key,data,title,price,source_url,active,missing_since,created_at,updated_at) VALUES(?,?,?,?,?,?,1,NULL,?,?)
     ON CONFLICT(profile_id,source_key) DO UPDATE SET data=excluded.data,title=excluded.title,price=excluded.price,source_url=excluded.source_url,active=1,missing_since=NULL,updated_at=excluded.updated_at`,
     [profileId,product.sourceKey,JSON.stringify(product),product.title,product.price,product.url,timestamp,timestamp]);return existing?'updated':'added';
@@ -359,16 +366,30 @@ export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isAr
 export async function listAutoreplyLog(limit=100):Promise<any[]>{return rows('SELECT * FROM autoreply_log ORDER BY created_at DESC LIMIT ?',[limit]);}
 
 // ─── Basalam category bulk-fix: tried-category memory ─────────────────────────
+const CATEGORY_NOTEBOOK_PREFIX='basalam_category_notebook_v2:';
+const categoryNotebookKey=(shopId:string,id:number)=>CATEGORY_NOTEBOOK_PREFIX+encodeURIComponent(shopId)+':'+String(id);
 export async function getTriedBasalamCategories(shopId:string,id:number):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
-  return Array.isArray(data[`${shopId}:${id}`])?data[`${shopId}:${id}`]:[];
+  const entry=await getState<{ids:number[]}|null>(categoryNotebookKey(shopId,id),null);
+  if(entry)return entry.ids||[];
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
+  return legacy[`${shopId}:${id}`]||[];
 }
 export async function markBasalamCategoriesTried(shopId:string,id:number,ids:Array<number|string>):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),key=`${shopId}:${id}`,set=new Set(Array.isArray(data[key])?data[key]:[]);
-  for(const raw of ids||[]){const n=Number(raw);if(Number.isInteger(n)&&n>0)set.add(n)}
-  data[key]=[...set].slice(-50);
-  await setState('basalam_tried_categories_v1',data);
-  return data[key];
+  const tried=new Set(await getTriedBasalamCategories(shopId,id));
+  for(const raw of ids){const value=Number(raw);if(Number.isInteger(value)&&value>0)tried.add(value)}
+  const values=[...tried];
+  await setState(categoryNotebookKey(shopId,id),{ids:values,updatedAt:new Date().toISOString()});
+  return values;
+}
+/** Only call after a complete, successful inventory of ALL unapproved pages/shops. */
+export async function pruneBasalamCategoryNotebooks(products:Array<{shopId:string;id:number}>):Promise<number>{
+  const keep=new Set(products.map(p=>categoryNotebookKey(p.shopId,p.id)));
+  const removed=await run(`DELETE FROM app_state WHERE substr(key,1,${CATEGORY_NOTEBOOK_PREFIX.length})='${CATEGORY_NOTEBOOK_PREFIX}' AND key NOT IN (SELECT value FROM json_each(?))`,[JSON.stringify([...keep])]);
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),legacyKeep=new Set(products.map(p=>`${p.shopId}:${p.id}`));
+  const filtered=Object.fromEntries(Object.entries(legacy).filter(([key])=>legacyKeep.has(key)));
+  if(Object.keys(filtered).length)await setState('basalam_tried_categories_v1',filtered);
+  else await deleteState('basalam_tried_categories_v1');
+  return removed;
 }
 export async function getState<T>(key:string,fallback:T):Promise<T>{const row=await statement('SELECT value FROM app_state WHERE key=?',[key]).first<{value:string}>();return row?json(row.value,fallback):fallback;}
 export async function setState(key:string,value:unknown):Promise<void>{await run(`INSERT INTO app_state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,[key,JSON.stringify(value),now()]);}
@@ -401,7 +422,7 @@ export async function createBackup():Promise<Record<string,unknown>>{const [prof
 export async function restoreBackup(bundle:any):Promise<{profiles:number;products:number;states:number}>{
   if(!bundle||!['scraper4-cloudflare','scraper4-backup','scraper4-render'].includes(bundle.app)||bundle.version!==1)throw new Error('Invalid Scraper 4 backup');let profiles=0,products=0,states=0;
   for(const row of bundle.profiles||[]){const data=json<any>(row.data,row.data||{});await saveProfile({...data,id:row.id,enabled:Boolean(row.enabled),intervalMinutes:Number(row.interval_minutes||0),lastRunAt:row.last_run_at||null,createdAt:row.created_at||now(),updatedAt:now()});profiles++;}
-  for(const row of bundle.products||[]){const product=json<Product>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id){const wooId=toRemoteId(row.remote_woo_id);if(wooId!=null)await setRemoteId(row.profile_id,row.source_key,'woo',wooId);}if(row.remote_basalam_id){const basalamId=toRemoteId(row.remote_basalam_id);if(basalamId!=null)await setRemoteId(row.profile_id,row.source_key,'basalam',basalamId);}products++;}
+  for(const row of bundle.products||[]){const product=json<any>(row.data,row.data);await upsertProduct(row.profile_id,product);if(row.remote_woo_id){const wooId=toRemoteId(row.remote_woo_id);if(wooId!=null)await setRemoteId(row.profile_id,row.source_key,'woo',wooId);}if(row.remote_basalam_id){const basalamId=toRemoteId(row.remote_basalam_id);if(basalamId!=null)await setRemoteId(row.profile_id,row.source_key,'basalam',basalamId);}products++;}
   for(const row of bundle.destinationMap||[]){const mapId=toRemoteId(row.remote_id);if(mapId!=null)await setDestinationId(row.profile_id,row.source_key,row.target,row.account_key,mapId);}
   await importCategoryLearning(bundle.categoryLearning||[]);await importAutoreplyLog(bundle.autoreplyLog||[]);
   for(const row of bundle.states||[]){await setState(row.key,json(row.value,row.value));states++;}return{profiles,products,states};
@@ -410,3 +431,36 @@ export async function profileStats():Promise<any[]>{const profiles=await listPro
 export async function reapStalledJobs(minutes=30):Promise<number>{const cutoff=new Date(Date.now()-Math.max(0.5,Number(minutes)||30)*60_000).toISOString();return run(`UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog',finished_at=?,updated_at=? WHERE status='running' AND updated_at<?`,[now(),now(),cutoff]);}
 export async function recoverFailedAndStalledJobs(minutes=30):Promise<number>{const cutoff=new Date(Date.now()-Math.max(0.5,Number(minutes)||30)*60_000).toISOString(),timestamp=now();return run(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=0,error=NULL,finished_at=NULL,updated_at=? WHERE status='failed' OR (status='running' AND updated_at<?)`,[timestamp,cutoff]);}
 export async function enqueueDueProfiles():Promise<Job[]>{const timestamp=Date.now(),profiles=await listProfiles(),jobs:Job[]=[];for(const profile of profiles){if(!profile.enabled||!profile.intervalMinutes)continue;const due=!profile.lastRunAt||timestamp-new Date(profile.lastRunAt).getTime()>=profile.intervalMinutes*60_000;if(!due)continue;const job=await createJob(profile.id,profile.noExtract?'sync':'scrape',profile.syncWoo&&profile.syncBasalam?'both':profile.syncWoo?'woo':profile.syncBasalam?'basalam':'none');jobs.push(job);await markProfileRun(profile.id)}return jobs;}
+
+/** Keyset pagination stays stable while updated_at changes. Conflicting edits are not overwritten. */
+export async function applyStoredResultSettings(profile:Profile,after='',previousSuffix=profile.titleSuffix||''){
+  const settings=await getState<any>('settings',{}),batch=await rows<{source_key:string;data:string}>('SELECT source_key,data FROM products WHERE profile_id=? AND source_key>? ORDER BY source_key LIMIT 20',[profile.id,after]);
+  let changed=0,conflicts=0;
+  for(const row of batch){
+    const product=json<any>(row.data,row.data);
+    if(!validProductRow(product)||typeof product.title!=='string')continue;
+    const originalData=typeof row.data==='string'?row.data:JSON.stringify(row.data);
+    if(!(product as any).resultBase&&previousSuffix&&product.title.endsWith(previousSuffix.trim())){(product as any).resultBase={title:product.title.slice(0,-previousSuffix.trim().length).trimEnd(),price:product.price,priceText:product.priceText};}
+    applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));
+    if(sameResultData(product,JSON.parse(originalData)))continue;
+    const result=await run('UPDATE products SET data=?,title=?,price=?,updated_at=? WHERE profile_id=? AND source_key=? AND data=?',[JSON.stringify(product),product.title,product.price,now(),profile.id,row.source_key,originalData]);
+    if(result)changed++;else {const current=await getProduct(profile.id,row.source_key);if(!sameResultData(current,product))conflicts++;}
+  }
+  return{changed,conflicts,next:batch.length===20?String(batch[batch.length-1].source_key):null};
+}
+
+export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
+ for(let attempt=0;attempt<3;attempt++){const row=await statement('SELECT data FROM profiles WHERE id=?',[original.id]).first<{data:string}>();if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=await run('UPDATE profiles SET data=?,updated_at=? WHERE id=? AND data=?',[JSON.stringify(merged),now(),original.id,raw]);if(changed)return true;}return false;
+}
+
+export async function listActiveJobs():Promise<Job[]>{return(await rows("SELECT id,profile_id,kind,target,status,phase,total,processed,added,updated,failed,stop_requested,error,created_at,started_at,finished_at,updated_at FROM jobs WHERE status IN ('queued','running') ORDER BY created_at")).map(jobFromRow)}
+export async function listLiveActivities():Promise<any[]>{
+ const cutoff=new Date(Date.now()-3600000).toISOString();await run("DELETE FROM app_state WHERE substr(key,1,14)='activity_live:' AND updated_at<?",[cutoff]).catch(()=>{});
+ return(await rows<{value:string}>("SELECT value FROM app_state WHERE substr(key,1,14)='activity_live:' ORDER BY updated_at DESC")).map(r=>json<any>(r.value,{})).filter(r=>r.id).map(r=>({...r,...(Date.now()-Date.parse(r.updatedAt)>90000?{status:'unknown',phase:'آخرین وضعیت قدیمی است؛ اجرا تأیید نشده'}:{})}));
+}
+
+// Immutable account snapshots plus write-through delivery receipts.
+export async function ledgerRows(scope:string,generation:string):Promise<any[]>{return (await rows<{data:string}>('SELECT data FROM destination_ledger WHERE scope=? AND generation=?',[scope,generation])).map(r=>json(r.data,{}))}
+export async function ledgerGet(scope:string,generation:string,id:string):Promise<any|null>{const r=await statement('SELECT data FROM destination_ledger WHERE scope=? AND generation=? AND remote_id=?',[scope,generation,id]).first<{data:string}>();return r?json(r.data,null):null}
+export async function ledgerPut(scope:string,generation:string,entries:any[]):Promise<void>{if(!entries.length)return;const values=entries.flatMap(x=>[scope,generation,String(x.remote.id),JSON.stringify(x)]);await run('INSERT INTO destination_ledger(scope,generation,remote_id,data) VALUES '+entries.map(()=>'(?,?,?,?)').join(',')+' ON CONFLICT(scope,generation,remote_id) DO UPDATE SET data=excluded.data',values)}
+export async function ledgerPrune(scope:string,keep:string[]):Promise<void>{await run("DELETE FROM destination_ledger WHERE scope=? AND generation NOT IN ("+keep.map(()=>'?').join(',')+") AND json_extract(data,'$.at')<?",[scope,...keep,new Date(Date.now()-86400000).toISOString()])}
