@@ -311,3 +311,16 @@ test('both twins extract embedded-state catalogs and stay silent on the shell', 
   assert.equal((await scraper.extractHeuristicProducts(html, BASE)).length, 0);
   assert.equal(rscraper.heuristicProducts(html, BASE).length, 0);
 });
+
+for(const [name,twin,parse] of [['Worker',scraper,'parseCards'],['Node',rscraper,'scrapeListCheerioFromHtml']]){
+ test(name+': all 500 Emalls-like products are extracted without a 100-item cutoff',async()=>{
+  const html=await fixture('emalls-500-cards.html'),selectors={container:'div.item.product-block',title:'h2',price:'.price',link:'a[href]',image:'img'};
+  const products=await twin[parse](html,BASE,selectors);
+  assert.equal(products.length,500);assert.equal(new Set(products.map(p=>p.url)).size,500);
+  for(let i=1;i<=500;i++){
+   const p=products.find(p=>p.url===new URL('/product/'+i,BASE).href);
+   assert.ok(p,'missing product '+i);assert.equal(p.title,'کفش زنانه مدل '+i);assert.equal(p.price,907000+i);
+   assert.equal(p.image,new URL('/images/'+i+'.jpg',BASE).href);
+  }
+ });
+}

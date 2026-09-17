@@ -31,3 +31,19 @@ test('real Node scroll adapter targets the inner list, accumulates virtualized s
  const {collectRenderedScroll}=await compile(source.slice(a,b),'collectRenderedScroll',{collectScrollProducts,parseProductsFromHtml:html=>batches[Number(html)].products.map(p=>({...p,sourceKey:p.key})),rescueRenderedProducts:(_html,_url,products)=>({products}),xpathToCss:()=>null,document:{scrollingElement:documentRoot,querySelector:()=>({parentElement:root}),querySelectorAll:()=>[]},getComputedStyle:()=>({overflowY:'auto'}),Date:{now:()=>time},setTimeout:(fn,ms)=>{time+=ms;fn()}});
  const result=await collectRenderedScroll(page,{container:'.product'});assert.equal(result.length,4);assert.equal(documentRoot.scrollTop,0);assert.equal(root.scrollTop,500);assert.ok([...listeners.values()].every(set=>set.size===0));
 });
+
+test('500-product lab: five delayed virtualized batches of 100 retain every unique product',async()=>{
+ const $=load(await read('worker-tests/fixtures/emalls-500-cards.html'));
+ const times=[0,3000,6000,21000,24000];
+ const pages=times.map((at,i)=>({at,products:$('.product-block[data-batch="'+(i+1)+'"]').toArray().map(card=>({key:$(card).find('a').attr('href'),title:$(card).find('h2').text(),price:Number($(card).find('.price').text().replace(/[^0-9]/g,''))}))}));
+ assert.deepEqual(pages.map(p=>p.products.length),[100,100,100,100,100]);
+ let now=0;const observed=[];
+ const result=await collectScrollProducts({
+  snapshot:async()=>pages.filter(p=>p.at<=now).at(-1).products,
+  step:async()=>({height:1000,top:500,atEnd:true,pending:now>=6500&&now<21000}),
+  key:p=>p.key,now:()=>now,wait:async ms=>{now+=ms},observe:(_products,added)=>{if(added)observed.push(added)}
+ });
+ assert.deepEqual(observed,[100,100,100,100,100]);assert.equal(result.length,500);
+ assert.equal(new Set(result.map(p=>p.key)).size,500);assert.ok(now>=34000,'must wait for the final batch and quiet window');
+ for(let i=1;i<=500;i++){const p=result.find(p=>p.key==='/product/'+i);assert.ok(p);assert.equal(p.price,907000+i)}
+});
