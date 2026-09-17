@@ -21,7 +21,7 @@ const SHELL = '<html><head><title></title><script id="__NEXT_DATA__" type="appli
 const stubDir = await mkdtemp(join(ROOT, 'node_modules', '.cache', 'scraper4-lab', 'test-diag-net-'));
 await writeFile(join(stubDir, 'stub-network.mjs'),
   `const SHELL=${JSON.stringify(SHELL)};\n` +
-  `export async function safeText(raw){ const u=String(raw); return { text: SHELL, url: u }; }\n` +
+  `export async function safeText(raw){ const u=String(raw); return { text: globalThis.__diagFixture||SHELL, url: u }; }\n` +
   `export const assertPublicUrl=async()=>{throw Error("Unexpected browser network in static fixture")}; export const safeFetch=assertPublicUrl; export function sourceRoute(){ return 'direct'; }`);
 const outdir = await mkdtemp(join(ROOT, 'node_modules', '.cache', 'scraper4-lab', 'test-diag-'));
 const stubPlugin = { name: 'stub-network', setup(b) { b.onResolve({ filter: /network\.js$/ }, () => ({ path: join(stubDir, 'stub-network.mjs') })); } };
@@ -72,4 +72,19 @@ test('diagnose: the Worker twin reports engine errors and deep pages too', async
   assert.ok(worker.includes('page_number)=(\\d+)'), 'the Worker twin must share the deep-page detector');
   const renderSrc = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
   assert.ok(renderSrc.includes('page_number)=(\\d+)'), 'guard: the detector regex must survive intact');
+});
+
+test('Emalls-like cards remain valid when scrolling browser fails; samples exclude the header',async()=>{
+ globalThis.__diagFixture=await readFile(join(ROOT,'worker-tests/fixtures/emalls-like-scroll.html'),'utf8');
+ try{
+  const report=await render.diagnoseExtraction({id:'emalls-fixture',url:'https://shop.test/list',pagination:'scroll',networkIndirect:true,extractionEngine:'playwright',selectors:{container:'div.item.product-block',title:'h2',price:'[class*="price"]',link:'a[href]',image:'img'}});
+  assert.equal(report.ok,false);assert.equal(report.productCount,0);
+  assert.equal(report.stages.find(s=>s.name==='list-extraction').ok,false);
+  const stage=report.stages.find(s=>s.name==='selector-evidence');
+  assert.equal(stage.ok,true);assert.equal(stage.containerCount,100);assert.equal(stage.cardsSampled,12);
+  assert.match(stage.evidence.link.sample,/product/);assert.doesNotMatch(stage.evidence.image.sample,/logo/);
+  assert.ok(!report.recommendations.some(s=>s.includes('دکمهٔ «پیشنهاد')||s.includes('سلکتور ظرف محصول')));
+  assert.doesNotMatch(JSON.stringify(stage),/nth-of-type/);
+  assert.ok(!report.recommendations.some(s=>s.includes('قیمت صفر')||s.includes('لینک محصول پیدا نشده')||s.includes('تصویر پیدا نشده')));
+ }finally{delete globalThis.__diagFixture}
 });

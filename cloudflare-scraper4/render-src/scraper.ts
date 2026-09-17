@@ -414,6 +414,7 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
 export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number;
   /** Absolute URL of the 'next page' link, when a next-selector is configured. */
   nextUrl?:string;
+  browserDiagnostics?:any;
   /**
    * Selectors the selector engines actually ran with (1.128.0). Equals the
    * input selectors unless auto-discovery repaired them first.
@@ -472,7 +473,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>, initialDocument?:{text:string;url:string}): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
@@ -481,9 +482,9 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     const driver=engine==='puppeteer'?'puppeteer':'playwright';
     const {renderBrowserSnapshot}=await import('./visual-browser.js');
     let tracker:ReturnType<typeof trackScrollRequests>;
-    const snapshot=await renderBrowserSnapshot(url,driver,indirect,{prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker)});
+    const snapshot=await renderBrowserSnapshot(url,driver,indirect,{initial:initialDocument,prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker)});
     const products=snapshot.collected as Product[];
-    return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union'};
+    return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union',browserDiagnostics:snapshot.browserDiagnostics};
   }
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url,8_000_000,{indirect});
@@ -2301,7 +2302,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
     progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto')));
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll'||(profile.pagination==='none'&&['playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto')),undefined,page);
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).
@@ -2321,9 +2322,9 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
-      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+      { count: products.length, usedEngine, ...(result.browserDiagnostics?{browser:result.browserDiagnostics}:{}), ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
-    add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
+    add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors, ...((error as any)?.browserDiagnostics?{browser:(error as any).browserDiagnostics}:{}), ...((error as any)?.scrollRequests?{scrollRequests:(error as any).scrollRequests}:{}) });
   }
   // 1.128.0 — when nothing extracted, show what proactive auto-discovery sees
   // on the same page. Verified discoveries above are handed to the route for
@@ -2336,9 +2337,9 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
       const proposed = Object.entries(discovery.selectors).filter(([, value]) => String(value || '').trim());
       if (discovery.method !== 'none' && proposed.length >= 2 && discovery.selectors.container && discovery.selectors.title) {
         add('selector-discovery', true,
-          `موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method === 'structural' ? 'تحلیل ساختاری صفحه' : discovery.method === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ این سلکتورها راستی‌آزمایی شدند و با ذخیرهٔ آن‌ها استخراج شروع می‌شود.`,
+          `موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method === 'structural' ? 'تحلیل ساختاری صفحه' : discovery.method === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ این یافته مربوط به HTML اولیه است و موفقیت مرورگر یا اسکرول را ثابت نمی‌کند.`,
           { method: discovery.method, selectors: discovery.selectors, evidence: discovery.evidence, containerCount: discovery.containerCount });
-        if (!Object.keys(selectorsToSave).length) recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
+        if (!Object.keys(selectorsToSave).length && !(await verifyListSelectors(page.text,page.url,profile.selectors)).ok) recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
       } else {
         add('selector-discovery', false, 'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.', { method: discovery.method });
       }
@@ -2356,32 +2357,13 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
       evidence[field] = { ok: values.length > 0, count: values.length, sample: values.slice(0, 3) };
     } catch (error) { evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) }; }
   }
-  const evidenceOk = ['container', 'title'].every(key => (evidence[key] as any)?.ok);
-  // The raw selector may be pinned with :nth-of-type(N) and match a single card
-  // while extraction widens it to every card. Report the number extraction
-  // really uses, otherwise the advice contradicts the result.
-  let containerCount = Number((evidence.container as any)?.count || 0);
-  let widenedContainers = 0;
-  try {
-    const $page = cheerio.load(page.text);
-    widenedContainers = containerNodes($page, String((profile.selectors as any)?.container || '').trim()).length;
-    if (widenedContainers > containerCount) {
-      (evidence.container as any).effectiveCount = widenedContainers;
-      (evidence.container as any).note = 'سلکتور ظرف با :nth-of-type محدود شده بود؛ استخراج آن را به ' + widenedContainers + ' کارت گسترش داد.';
-      containerCount = widenedContainers;
-    }
-  } catch {}
-  // Document-wide evidence can be green while container-scoped extraction finds
-  // nothing. That contradiction is itself the diagnosis, so surface it.
-  const contradiction = evidenceOk && products.length === 0;
-  add('selector-evidence', evidenceOk && !contradiction,
-    contradiction
-      ? 'سلکتورها روی کل صفحه نتیجه دارند اما داخل هر ظرف محصول چیزی پیدا نشد؛ یعنی سلکتور ظرف به کارت محصول اشاره نمی‌کند (احتمالاً کل فهرست را گرفته) یا عنوان/قیمت داخل ظرف نیست.'
-      : evidenceOk ? 'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.' : 'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.',
-    { evidence, containerCount, scope: 'این بررسی روی کل صفحه انجام می‌شود، ولی استخراج واقعی فقط داخل هر ظرف را می‌بیند.' });
-  if (contradiction) recommendations.push(containerCount <= 1
-    ? 'سلکتور ظرف فقط ' + containerCount + ' مورد در کل صفحه پیدا کرد؛ یعنی به‌جای هر کارت محصول، کل فهرست را گرفته است. سلکتوری بنویسید که به تعداد محصولات صفحه تکرار شود.'
-    : 'سلکتور ظرف ' + containerCount + ' مورد پیدا کرد ولی عنوان داخل آن‌ها نبود؛ سلکتور عنوان باید نسبت به ظرف داخلی باشد یا خودِ ظرف را هدف بگیرد.');
+  const scoped=await verifyListSelectors(page.text,page.url,{...profile.selectors,...selectorsToSave});
+  const containerCount=scoped.containerCount;
+  const evidenceOk=containerCount>0&&Number(scoped.title.count||0)>0;
+  const scopedEvidence={container:{ok:containerCount>0,count:containerCount},...Object.fromEntries(['title','price','link','image'].map(key=>[key,{...(scoped as any)[key],ok:(scoped as any)[key].count>0}]))};
+  add('selector-evidence',evidenceOk,
+    evidenceOk?'سلکتورها داخل کارت‌های واقعی HTML اولیه معتبرند؛ نتیجهٔ مرورگر و اسکرول جداگانه بررسی می‌شود.':'سلکتور ظرف یا عنوان داخل کارت‌های HTML اولیه نتیجه نداد.',
+    {evidence:scopedEvidence,containerCount,cardsSampled:scoped.cardsSampled,documentEvidence:evidence,scope:'عنوان، قیمت، لینک و تصویر فقط داخل کارت‌ها بررسی شدند؛ شاهد کل صفحه نمونهٔ محدود است.'});
   let detail: any = null;
   progress.begin('detail-extraction', 'در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate = products.find(product => product.url);
@@ -2413,12 +2395,13 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   if (Object.keys(selectorsToSave).length) recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   const deepPage = Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i) || [])[2] || 0);
   if (!products.length && deepPage > 1) recommendations.push(`آدرس صفحهٔ ${deepPage.toLocaleString('fa-IR')} است؛ اول همین عیب‌یاب را روی صفحهٔ اول (بدون پارامتر صفحه) اجرا کنید — صفحه‌های عمیق اغلب خالی‌اند یا ساختار دیگری دارند.`);
-  if (!products.length) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
-  else {
+  if (!products.length && !evidenceOk) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
+  else if(products.length) {
     if (!products.some(x => x.price > 0)) recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');
     if (!products.some(x => x.url)) recommendations.push('لینک محصول پیدا نشده است؛ سلکتور لینک باید به عنصر a یا ویژگی href/data-url برسد.');
     if (!products.some(x => x.image)) recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.');
   }
+  if(!products.length&&evidenceOk)recommendations.push('سلکتورهای فعلی در کارت‌های HTML اولیه معتبرند؛ خطای مرحلهٔ استخراج، مرورگر و ارتباط غیرمستقیم را بررسی کنید. صفر محصول پس از خطای مرورگر دلیل خرابی سلکتور نیست و کامل‌شدن اسکرول را تأیید نمی‌کند.');
   const failed = stages.filter(stage => !stage.ok);
   return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail, selectorsToSave };
 }

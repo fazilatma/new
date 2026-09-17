@@ -1901,3 +1901,16 @@ test('results API skips poisoned product rows instead of serving nulls',async()=
   assert.equal(body.total,1);
   assert.deepEqual(body.products.map(p=>p.title),['Good']);
 });
+
+test('Worker scroll refusal does not invalidate good Emalls-like card selectors',async()=>{
+ globalThis.HTMLRewriter=TestHTMLRewriter;const originalFetch=globalThis.fetch,db=new MemoryD1();
+ const html=Array.from({length:100},(_,i)=>'<div class="item product-block"><a href="/product/'+i+'"><h2>کفش زنانه</h2><img src="/shoe.jpg"></a><span class="price">10000</span></div>').join('');
+ globalThis.fetch=async()=>new Response(html,{headers:{'content-type':'text/html'}});
+ try{
+  await call(db,'/api/profiles',jsonInit({id:'diag-scroll-valid',name:'scroll',url:'https://source.example/list',pages:1,pagination:'scroll',selectors:{container:'div.item.product-block',title:'h2',price:'.price',link:'a[href]',image:'img'},enabled:true}));
+  const report=await call(db,'/api/profiles/diag-scroll-valid/extraction-diagnostic',jsonInit({})).then(r=>r.json());
+  assert.equal(report.ok,false);assert.equal(report.productCount,0);
+  const stage=report.stages.find(s=>s.name==='selector-evidence');assert.equal(stage.ok,true);assert.equal(stage.containerCount,100);
+  assert.ok(!report.recommendations.some(s=>s.includes('سلکتور ظرف محصول')));
+ }finally{globalThis.fetch=originalFetch}
+});

@@ -1026,16 +1026,14 @@ test('an empty href or src never resolves to the listing page URL', async () => 
   assert.equal(absolute('/p/1', 'https://barfbox.ir/search/?page=1'), 'https://barfbox.ir/p/1', 'real links must still resolve');
 });
 
-test('the diagnostic reports the evidence-vs-extraction contradiction', async () => {
-  // The user saw every selector green while 0 products were extracted, and the
-  // report still blamed the container selector generically. Evidence is
-  // document-wide; extraction is container-scoped. That gap IS the diagnosis.
-  const src = await readProjectFile('render-src/scraper.ts');
-  const at = src.indexOf('export async function diagnoseExtraction');
-  const body = src.slice(at);
-  assert.match(body, /const contradiction = evidenceOk && products\.length === 0/, 'the contradiction must be detected explicitly');
-  assert.match(body, /add\('selector-evidence', evidenceOk && !contradiction/, 'the evidence stage must FAIL when it contradicts extraction, not show green');
-  assert.match(body, /containerCount/, 'the report must say how many containers matched, which distinguishes the two causes');
+test('both diagnostics verify card-scoped selectors independently of browser failures', async () => {
+  for(const file of ['render-src/scraper.ts','worker-src/scraper.ts']){
+    const src=await readProjectFile(file),body=src.slice(src.indexOf('export async function diagnoseExtraction'));
+    assert.match(body,/const scoped=await verifyListSelectors/);
+    assert.match(body,/containerCount>0&&Number\(scoped.title.count/);
+    assert.doesNotMatch(body,/const contradiction = evidenceOk && products.length === 0/);
+    assert.match(body,/documentEvidence:evidence/);
+  }
 });
 
 test('the deployer restores the lockfile using its real repo-relative path', async () => {

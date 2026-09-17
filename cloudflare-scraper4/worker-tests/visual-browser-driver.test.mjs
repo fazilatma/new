@@ -8,7 +8,7 @@ const root=new URL('..',import.meta.url).pathname,temp=await mkdtemp(join(root,'
 const fixture=await readFile(join(root,'worker-tests/fixtures/list-fa.html'),'utf8');
 await build({entryPoints:[join(root,'render-src/visual-browser.ts')],outfile:join(temp,'driver.mjs'),bundle:true,platform:'node',format:'esm',logLevel:'silent',plugins:[{name:'offline',setup(b){
   b.onResolve({filter:/^(playwright|puppeteer|\.\/(scraper|network)\.js)$/},a=>({path:a.path,namespace:'mock'}));
-  b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:a.path==='playwright'?'export const chromium={launch:options=>globalThis.__visualLaunch("playwright",options)};':a.path==='puppeteer'?'export default {launch:options=>globalThis.__visualLaunch("puppeteer",options)};':a.path.includes('scraper')?'export const withBrowserSlot=async task=>task();export const browserExecutable=()=>"/fixture/chromium";':`export const assertPublicUrl=async raw=>{const url=new URL(raw);if(!['http:','https:'].includes(url.protocol)||url.hostname==='127.0.0.1'||url.hostname==='localhost')throw Error('Private host');return url};export const safeText=async url=>({text:globalThis.__visualFixture,url});export const safeFetch=async()=>new Response('resource');`}));
+  b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:a.path==='playwright'?'export const chromium={launch:options=>globalThis.__visualLaunch("playwright",options)};':a.path==='puppeteer'?'export default {launch:options=>globalThis.__visualLaunch("puppeteer",options)};':a.path.includes('scraper')?'export const withBrowserSlot=async task=>task();export const browserExecutable=()=>"/fixture/chromium";':`export const assertPublicUrl=async raw=>{const url=new URL(raw);if(!['http:','https:'].includes(url.protocol)||url.hostname==='127.0.0.1'||url.hostname==='localhost')throw Error('Private host');return url};export const safeText=async url=>({text:globalThis.__visualFixture,url});export const safeFetch=async(url,init)=>globalThis.__visualFetch?globalThis.__visualFetch(url,init):new Response('resource');`}));
 }}]});
 const driver=await import(pathToFileURL(join(temp,'driver.mjs')));
 globalThis.__visualFixture=fixture;
@@ -42,3 +42,30 @@ test('guarded scroll session prepares before navigation, keeps browser open duri
  await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',false,{prepare:()=>{},collect:async()=>{throw Error('incomplete scroll')}}),/incomplete scroll/);assert.equal(closed,2);
 });
 test.after(async()=>{delete globalThis.__visualFixture;delete globalThis.__visualLaunch;await rm(temp,{recursive:true,force:true})});
+
+test('scroll recovers a DOMContentLoaded timeout only after its guarded document was served and DOM is ready',async()=>{
+ let route,collected=false,closed=0;
+ const page={on:()=>{},context:()=>({route:async(_p,fn)=>{route=fn}}),url:()=> 'https://shop.test/list',content:async()=>fixture,evaluate:async()=>({readyState:'complete',textLength:500,htmlLength:fixture.length}),waitForLoadState:async()=>{},goto:async()=>{
+  const req={url:()=> 'https://shop.test/list',method:()=> 'GET',isNavigationRequest:()=>true,resourceType:()=> 'document',headers:()=>({})};
+  await route({request:()=>req,fulfill:async()=>{},abort:async()=>{}});const e=Error('page.goto: Timeout 30000ms exceeded');e.name='TimeoutError';throw e;
+ }};
+ globalThis.__visualLaunch=async()=>({newPage:async()=>page,close:async()=>{closed++}});
+ const result=await driver.renderBrowserSnapshot('https://shop.test/list','playwright',true,{prepare:()=>{},collect:async()=>{collected=true;return ['initial','next']}});
+ assert.equal(collected,true);assert.equal(closed,1);assert.equal(result.browserDiagnostics.navigationRecovered,true);
+ page.evaluate=async()=>({readyState:'loading',textLength:500,htmlLength:fixture.length});
+ await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',true,{prepare:()=>{},collect:async()=>assert.fail('unready DOM cannot be complete')}),/Timeout/);
+});
+
+test('scroll resource deadline aborts the guarded indirect fetch and reports incomplete scripts without query secrets',async()=>{
+ let route,aborted=false,closed=0;
+ const page={on:()=>{},context:()=>({route:async(_p,fn)=>{route=fn}}),url:()=> 'https://shop.test/list',content:async()=>fixture,waitForLoadState:async()=>{},goto:async()=>{
+  const req={url:()=> 'https://shop.test/slow.js?secret=hidden',method:()=> 'GET',isNavigationRequest:()=>false,resourceType:()=> 'script',headers:()=>({cookie:'never-forward',authorization:'never-forward'})};
+  await route({request:()=>req,fulfill:async()=>assert.fail('hanging request cannot succeed'),abort:async()=>{aborted=true}});
+ }};
+ globalThis.__visualLaunch=async()=>({newPage:async()=>page,close:async()=>{closed++}});
+ globalThis.__visualFetch=async(url,init)=>{assert.equal(init.indirect,true);assert.ok(init.signal);assert.equal(init.headers.cookie,undefined);assert.equal(init.headers.authorization,undefined);return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('resource deadline')),{once:true}))};
+ const set=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>set(fn,ms===12000?5:ms,...args);
+ try{await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',true,{prepare:()=>{},collect:async()=>['initial-only']}),e=>{
+  assert.equal(e.browserDiagnostics.failedResources[0].type,'script');assert.doesNotMatch(JSON.stringify(e.browserDiagnostics),/secret|hidden/);return /تأیید نشد/.test(e.message);
+ });assert.equal(aborted,true);assert.equal(closed,1)}finally{globalThis.setTimeout=set;delete globalThis.__visualFetch}
+});
