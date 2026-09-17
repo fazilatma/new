@@ -22,18 +22,18 @@ export function equivalentDesired(remote:any,desired:any):boolean{
  if((p.longDesc||p.shortDesc)&&raw.description===undefined)return false;
  return true;
 }
-export function cleanRemote(remote:any){const raw=remote.raw||{},keys=['id','name','title','sku','price','primary_price','regular_price','sale_price','status','stock','stock_quantity','manage_stock','description','short_description','weight','dimensions','categories','category_id','category','images','photos','photo','attributes','variations'];return {...remote,raw:Object.fromEntries(keys.filter(k=>raw[k]!==undefined).map(k=>[k,raw[k]]))}}
+export function cleanRemote(remote:any){const raw=remote.raw||{},keys=['id','name','title','sku','price','primary_price','regular_price','sale_price','status','stock','stock_quantity','manage_stock','catalog_visibility','description','short_description','weight','dimensions','categories','category_id','category','images','photos','photo','attributes','variations'];return {...remote,raw:Object.fromEntries(keys.filter(k=>raw[k]!==undefined).map(k=>[k,raw[k]]))}}
 export function createDestinationLedger(io:LedgerIO){
  const inflight=new Map<string,Promise<any>>();
  const key=(scope:string)=>'ledger_meta:'+scope;
  async function metadata(scope:string){return io.getState<any>(key(scope),null)}
  async function entries(scope:string){const meta=await metadata(scope),base:LedgerEntry[]=meta?await io.ledgerRows(scope,meta.generation):[],live=await io.ledgerRows(scope,'live');if(meta&&base.length!==meta.count)throw Error('نسخهٔ دفتر حساب ناقص است؛ تازه‌سازی لازم است.');const map=new Map(base.map(x=>[String(x.remote.id),x]));for(const x of live)if(!meta||x.at>=meta.startedAt){if(x.deleted)map.delete(String(x.remote.id));else map.set(String(x.remote.id),x)}return [...map.values()]}
  async function refresh(scope:string,fetchAll:()=>Promise<any[]>,force=false){
-  const meta=await metadata(scope);if(!force&&meta&&Date.now()-Date.parse(meta.startedAt)<LEDGER_TTL)return {cached:true,...meta};
+  const meta=await metadata(scope);if(!force&&meta?.inventoryPolicy==='customer-visible-v1'&&Date.now()-Date.parse(meta.startedAt)<LEDGER_TTL)return {cached:true,...meta};
   if(inflight.has(scope))return inflight.get(scope);
   const task=(async()=>{const startedAt=new Date().toISOString(),generation=crypto.randomUUID();const all=await fetchAll(),unique=new Map<string,any>();for(const remote of all){if(!remote?.id)throw Error('شناسهٔ محصول مقصد در اسکن دفتر حساب نامعتبر است.');const id=String(remote.id);if(unique.has(id))throw Error('صفحهٔ تکراری مقصد؛ کامل بودن دفتر حساب تأیید نشد.');unique.set(id,cleanRemote(remote))}
    const rows=[...unique.values()].map(remote=>({remote,at:startedAt}));for(let i=0;i<rows.length;i+=20)await io.ledgerPut(scope,generation,rows.slice(i,i+20));
-   const next={generation,previous:meta?.generation,startedAt,completedAt:new Date().toISOString(),count:rows.length,complete:true};await io.setState(key(scope),next);
+   const next={generation,previous:meta?.generation,startedAt,completedAt:new Date().toISOString(),count:rows.length,complete:true,inventoryPolicy:'customer-visible-v1',durationMs:Math.max(0,Date.now()-Date.parse(startedAt))};await io.setState(key(scope),next);
    // Keep the previous immutable generation for concurrent readers; writes live separately.
    await io.ledgerPrune(scope,[generation,meta?.generation||'', 'live']).catch(()=>{});return {cached:false,...next};
   })();inflight.set(scope,task);try{return await task}finally{inflight.delete(scope)}

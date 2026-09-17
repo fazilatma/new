@@ -164,6 +164,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     }
     if(!checkpoint.products.length){checkpoint.retireSafe=false;append(job,`صفحه ${checkpoint.page} فقط محصولات تکراری داشت؛ حلقهٔ صفحه‌بندی متوقف شد و بازنشسته‌سازی انجام نمی‌شود.`,'warning');await finishScrape(job,profile,checkpoint);return false}
     for(let i=0;i<checkpoint.products.length;i++){const fresh=checkpoint.products[i];checkpoint.products[i]=await reuseSourceList(fresh,await getProduct(profile.id,fresh.sourceKey),profile)}
+    append(job,'مقایسهٔ فهرست اولیه با دفتر مبدأ','info','source-cache',{sourceKey:'',title:'کش فهرست',listCount:checkpoint.products.length,reusedCount:checkpoint.products.filter(p=>(p as any)._reuseDetails).length});
     job.total+=checkpoint.products.length;
     await setState(key,checkpoint);await save(job);
   }

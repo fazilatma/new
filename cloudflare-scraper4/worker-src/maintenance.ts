@@ -1,3 +1,4 @@
+import { customerVisible } from './ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { loadConnections } from './connections.js';
 import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
@@ -113,22 +114,29 @@ export async function reconAccounts():Promise<ReconAccount[]>{
  return accounts;
 }
 async function scanLedgerAccount(account:ReconAccount):Promise<ReconRemote[]>{
- const all:any[]=[];
+ const all:any[]=[],seen=new Set<string>();
  for(let page=1;page<=100;page++){
-  const result=await destinationCatalog(account.target,{page,perPage:100,status:'all',shopId:account.accountKey});
+  const result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'active',shopId:account.accountKey});
   if(result.complete===false)throw Error('فهرست مقصد کامل تأیید نشد؛ دفتر حساب قبلی حفظ شد.');
-  for(const x of result.products)all.push({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status,shopId:account.accountKey,shopName:account.name,raw:x.raw});
-  if(page>=result.totalPages){if(Number.isFinite(result.total)&&all.length!==result.total)throw Error('تعداد محصولات دفتر حساب با مجموع مقصد یکسان نیست؛ اسکن دوباره لازم است.');return all}
+  for(const x of result.products){if(!x.id||seen.has(String(x.id)))throw Error('شناسهٔ نامعتبر یا صفحهٔ تکراری مقصد؛ دفتر قبلی حفظ شد.');seen.add(String(x.id));all.push({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status,shopId:account.accountKey,shopName:account.name,raw:x.raw});}
+  if(page>=result.totalPages){if(Number.isFinite(result.total)&&all.length!==result.total)throw Error('تعداد محصولات دفتر حساب با مجموع مقصد یکسان نیست؛ اسکن دوباره لازم است.');return all.filter(x=>customerVisible(account.target,x))}
  }
  throw Error('سقف ۱۰۰ صفحهٔ دفتر حساب رسید؛ اسکن ناقص منتشر نشد.');
 }
 async function remoteForAccount(account:ReconAccount,force=false):Promise<ReconRemote[]>{
  const scope=await destinationScope(account.target,account.accountKey);
  await destinationLedger.refresh(scope,()=>scanLedgerAccount(account),force);
- let entries=await destinationLedger.entries(scope);if(entries.some(x=>x.invalid)){await destinationLedger.refresh(scope,()=>scanLedgerAccount(account),true);entries=await destinationLedger.entries(scope);if(entries.some(x=>x.invalid))throw Error('وضعیت یک محصول مقصد هنوز نامطمئن است؛ دوباره تازه‌سازی کنید.')}return entries.map(x=>x.remote);
+ let entries=await destinationLedger.entries(scope);if(entries.some(x=>x.invalid)){await destinationLedger.refresh(scope,()=>scanLedgerAccount(account),true);entries=await destinationLedger.entries(scope);if(entries.some(x=>x.invalid))throw Error('وضعیت یک محصول مقصد هنوز نامطمئن است؛ دوباره تازه‌سازی کنید.')}return entries.map(x=>x.remote).filter(x=>customerVisible(account.target,x));
 }
-export async function refreshDestinationLedger(force=false){const accounts=await reconAccounts(),items:any[]=[];for(const account of accounts){try{await remoteForAccount(account,force);items.push({...account,...await destinationLedger.metadata(await destinationScope(account.target,account.accountKey)),ok:true})}catch(error){items.push({...account,ok:false,error:error instanceof Error?error.message:String(error)})}}return {ok:items.every(x=>x.ok),items,maxAgeHours:6}}
-export async function destinationLedgerStatus(){const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||Date.now()-Date.parse(meta.startedAt)>=21600000})}return {ok:true,items,maxAgeHours:6}}
+export async function refreshDestinationLedger(force=false){
+ const startedAt=new Date().toISOString(),accounts=await reconAccounts(),items:any[]=[];
+ for(const account of accounts){try{const before=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
+  await remoteForAccount(account,force);const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,cached:before?.generation===meta?.generation,ok:true});
+ }catch(error){items.push({...account,ok:false,error:error instanceof Error?error.message:String(error)})}}
+ const durationMs=Math.max(0,Date.now()-Date.parse(startedAt)),report={ok:items.every(x=>x.ok),items,maxAgeHours:6,startedAt,completedAt:new Date().toISOString(),durationMs,durationMinutes:durationMs/60000,scannedAccounts:items.filter(x=>x.ok&&!x.cached).length,cachedAccounts:items.filter(x=>x.cached).length};
+ await setState('destination_ledger:last_refresh',report);if(report.ok&&accounts.length&&report.scannedAccounts===accounts.length)await setState('destination_ledger:last_full_refresh',report);return report;
+}
+export async function destinationLedgerStatus(){const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=21600000})}return {ok:true,items,maxAgeHours:6,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
 
 export async function unifiedRecon(profileId=''){
   const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
@@ -214,7 +222,7 @@ export async function destinationDuplicates(apply=false,limit=200,keep:'expensiv
     duplicates:actions.filter(a=>String(a.accountKey)===String(account.accountKey)&&a.target===account.target).length,
   }));
   const capped=actions.slice(0,Math.max(1,Math.min(1000,Number(limit)||200)));
-  if(!apply)return{ok:failures.length===0,dryRun:true,keep,planned:actions.length,willDelete:capped.length,
+  if(!apply)return{source:'ledger',ok:failures.length===0,dryRun:true,keep,planned:actions.length,willDelete:capped.length,
     accounts:accounts.length,byDestination,failures,actions:capped.slice(0,200)};
   let deleted=0,archived=0;const failed:any[]=[];
   for(const action of capped){
@@ -223,7 +231,7 @@ export async function destinationDuplicates(apply=false,limit=200,keep:'expensiv
       if((result as any)?.archived)archived++;else deleted++;
     }catch(error){failed.push({title:action.title,account:action.accountName,id:action.remoteId,error:error instanceof Error?error.message:String(error)})}
   }
-  return{ok:failed.length===0&&failures.length===0,dryRun:false,keep,planned:actions.length,processed:capped.length,
+  return{source:'ledger',ok:failed.length===0&&failures.length===0,dryRun:false,keep,planned:actions.length,processed:capped.length,
     deleted,archived,accounts:accounts.length,byDestination,failures,failed:failed.slice(0,20),actions:capped.slice(0,200)};
 }
 async function rawbasalamUpdateShop(accountKey:string,id:number|string,payload:any){
@@ -403,4 +411,4 @@ export async function ledgerMissing(profileId='',apply=false,target='both'){
  return {ok:!failed.length,dryRun:!apply||mode==='report',mode,planned:items.length,changed,remaining:Math.max(0,items.length-changed),items,failed,limit:20};
 }
 
-export async function destinationLedgerProducts(target:string,accountKey:string,offset=0){const account=(await reconAccounts()).find(a=>a.target===target&&a.accountKey===accountKey);if(!account)throw Error('مقصد دفتر حساب پیدا نشد.');const scope=await destinationScope(account.target,account.accountKey),meta=await destinationLedger.metadata(scope),entries=await destinationLedger.entries(scope);const start=Math.max(0,Math.floor(offset)||0);return {ok:true,account,meta,total:entries.length,offset:start,limit:50,items:entries.slice(start,start+50),next:start+50<entries.length?start+50:null}}
+export async function destinationLedgerProducts(target:string,accountKey:string,offset=0){const account=(await reconAccounts()).find(a=>a.target===target&&a.accountKey===accountKey);if(!account)throw Error('مقصد دفتر حساب پیدا نشد.');const scope=await destinationScope(account.target,account.accountKey),meta=await destinationLedger.metadata(scope),entries=(await destinationLedger.entries(scope)).filter(x=>customerVisible(account.target,x.remote));const start=Math.max(0,Math.floor(offset)||0);return {ok:true,account,meta,total:entries.length,offset:start,limit:50,items:entries.slice(start,start+50),next:start+50<entries.length?start+50:null}}

@@ -1,3 +1,4 @@
+import { extractionDetails } from '../worker-src/job-details.js';
 import { refreshDestinationLedger, destinationLedgerStatus, destinationLedgerProducts, ledgerMissing } from './maintenance.js';
 import { maintenanceResponse } from '../worker-src/maintenance-response.js';
 import { saveConnectionsAndReprice, drainWooReprice } from '../worker-src/woo-reprice.js';
@@ -45,7 +46,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.199.0+'; } catch { return process.env.npm_package_version || '1.199.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.200.0+'; } catch { return process.env.npm_package_version || '1.200.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -443,7 +444,7 @@ app.get('/api/activity', async c => {
  active.sort((a,b)=>a.status!==b.status?(a.status==='queued'?-1:1):(Number(priorities[b.id])||0)-(Number(priorities[a.id])||0)||a.createdAt.localeCompare(b.createdAt));
  const runs=[ai&&{...ai,kind:'ai-test',name:'تست مدل‌های هوش مصنوعی'},category&&{...category,kind:'category-all',name:'دسته‌بندی باسلام'},dedup&&{...dedup,kind:'dedup',name:'حذف تکراری‌های مقصد'}].filter(Boolean).map((r:any)=>({id:r.id,kind:r.kind,name:r.name,status:r.status,phase:r.phase,scope:'server',progress:r.total?Math.min(100,Math.round(Number(r.processed??r.cursor??0)/r.total*100)):null,detail:r.total?`${r.processed??r.cursor??0}/${r.total}`:'',updatedAt:r.updatedAt}));
  runs.sort((a,b)=>a.status!==b.status?(a.status==='queued'?-1:1):(Number(runPriorities[b.kind])||0)-(Number(runPriorities[a.kind])||0));runs.push(...operations);
- return c.json({ok:true,ts:new Date().toISOString(),queue:true,version:runtimeVersion(),counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},activeJobs:active.map(j=>({...j,log:undefined,progress:j.total?Math.min(100,Math.round(j.processed/j.total*100)):null,detail:`${j.processed}/${j.total}`})),runs,lastJobs:jobs.filter(j=>!['queued','running'].includes(j.status)).slice(0,8).map(j=>({id:j.id,kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt})),quota:{writeExceeded:false}});
+ return c.json({ok:true,ts:new Date().toISOString(),queue:true,version:runtimeVersion(),counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},activeJobs:active.map(j=>({...j,extraction:extractionDetails(j),profileName:profiles.find(p=>p.id===j.profileId)?.name||j.profileId,log:undefined,progress:j.total?Math.min(100,Math.round(j.processed/j.total*100)):null,detail:`${j.processed}/${j.total}`})),runs,lastJobs:jobs.filter(j=>!['queued','running'].includes(j.status)).slice(0,8).map(j=>({id:j.id,kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt})),quota:{writeExceeded:false}});
 });
 
 // Runtime parity: the real per-model chat list. The dashboard's chat picker reads

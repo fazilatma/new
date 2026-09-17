@@ -107,7 +107,7 @@ export type Job = {
   skippedNoPrice?: number;
   stopRequested: boolean;
   error: string | null;
-  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'|'sync-skipped'; item?: {sourceKey:string;title:string;url?:string;target?:string;shop?:string;basePrice?:number;basePriceText?:string;price?:number;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string;transport?:string} }>;
+  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'|'sync-skipped'|'source-cache'; item?: {sourceKey:string;title:string;listCount?:number;reusedCount?:number;url?:string;target?:string;shop?:string;basePrice?:number;basePriceText?:string;price?:number;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string;transport?:string} }>;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
