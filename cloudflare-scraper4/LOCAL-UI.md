@@ -628,3 +628,23 @@ package, root access, external chart library or monitoring service is needed.
 Update and restart the **deployer process** to load this feature, not only the
 scraper. The measurements belong to the machine running the deployer, which
 can differ from the phone/PC viewing it or a separately hosted scraper.
+
+### Scraper process charts (1.209.0+)
+
+The resource panel now separately charts **Scraper Node CPU** and **Scraper
+Node RAM (RSS)**. These readings come from the scraper's own Node process,
+via a bounded request to its local `/health` endpoint on the configured
+scraper port. They work even if Termux prevents reading host `/proc` counters,
+and also work for a scraper started separately from the current deployer.
+
+CPU is sampled between counter readings (100% = one core, potentially over
+100% on multiple cores). Each scraper boot has a new identity, so restarts
+and reconnects reset the baseline instead of producing misleading spikes.
+RAM is RSS, including heap and native allocations. Chart axes scale to the
+observed range; unavailable samples are gaps. Chromium, separate workers,
+cron processes and other subprocesses are **not** included in these totals.
+
+Update and restart **both the scraper and deployer**. An old, stopped or
+unreachable scraper is labelled unavailable rather than zero usage. The
+health response exposes numeric process counters, not credentials or command
+lines. The deployer's chart API remains protected by its existing token.

@@ -1,3 +1,4 @@
+import { processResources } from './process-resources.js';
 import { benchmarkPagination } from '../worker-src/benchmark-pagination.js';
 import { extractionDetails } from '../worker-src/job-details.js';
 import { refreshDestinationLedger, destinationLedgerStatus, destinationLedgerProducts, ledgerMissing } from './maintenance.js';
@@ -47,7 +48,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.208.0+'; } catch { return process.env.npm_package_version || '1.208.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.209.0+'; } catch { return process.env.npm_package_version || '1.209.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -254,6 +255,7 @@ app.get('/app-icon.svg',c=>c.body(PUSH_ICON,200,{'content-type':'image/svg+xml'}
 app.get('/health', c => c.json({
   ok: true,
   app: 'scraper4',
+  resources: processResources(),
   environment: runtimeEnvironment.label,
   runtime: process.version,
   version: runtimeVersion(),

@@ -273,3 +273,13 @@ test('resource charts render real percentages, preserve gaps and label host/proc
  assert.equal(text(document,'resourceCpu'),'Unavailable');assert.equal(document.getElementById('resourceCpuPath').getAttribute('d'),'');
  api.toggleResources();assert.equal(document.getElementById('resourcePause').getAttribute('aria-pressed'),'true');assert.equal(text(document,'resourceStatus'),'Charts paused');
 });
+
+test('scraper charts show independent CPU above 100 percent and RSS, with stopped gaps',()=>{
+ const {document,api}=boot();
+ api.renderResources({samples:[{at:Date.now(),cpuPercent:10,rss:1,memory:null,scraper:{status:'available',pid:42,cpuPercent:250,rss:1073741824}}]});
+ assert.equal(text(document,'resourceScraperCpu'),'250.0%');assert.equal(text(document,'resourceScraperRam'),'1.00 GiB');
+ assert.match(text(document,'resourceScraperCpuScale'),/250.0%/);assert.match(text(document,'resourceScraperStatus'),/PID 42/);
+ api.renderResources({samples:[{at:Date.now(),scraper:{status:'unavailable',reason:'Scraper stopped',cpuPercent:null,rss:null}}]});
+ assert.equal(text(document,'resourceScraperCpu'),'Unavailable');assert.equal(text(document,'resourceScraperStatus'),'Scraper stopped');
+ assert.equal(document.getElementById('resourceScraperCpuPath').getAttribute('d'),'');
+});
