@@ -69,3 +69,20 @@ test('scroll resource deadline aborts the guarded indirect fetch and reports inc
   assert.equal(e.browserDiagnostics.failedResources[0].type,'script');assert.doesNotMatch(JSON.stringify(e.browserDiagnostics),/secret|hidden/);return /تأیید نشد/.test(e.message);
  });assert.equal(aborted,true);assert.equal(closed,1)}finally{globalThis.setTimeout=set;delete globalThis.__visualFetch}
 });
+
+test('legacy resilience: an aborted first navigation with no intercepted request retries once before collecting',async()=>{
+ let route,attempts=0,current='about:blank',collected=0,closed=0;
+ const page={on:()=>{},context:()=>({route:async(_p,fn)=>{route=fn}}),url:()=>current,content:async()=>fixture,waitForLoadState:async()=>{},goto:async()=>{
+  if(++attempts===1)throw Error('page.goto: net::ERR_ABORTED');
+  const req={url:()=> 'https://shop.test/list',method:()=> 'GET',isNavigationRequest:()=>true,resourceType:()=> 'document',headers:()=>({})};
+  await route({request:()=>req,fulfill:async()=>{current='https://shop.test/list'},abort:async()=>assert.fail('main document must be fulfilled')});
+ }};
+ globalThis.__visualLaunch=async()=>({newPage:async()=>page,close:async()=>{closed++}});
+ const session={prepare:()=>{},collect:async()=>{collected++;return ['first','next']}};
+ const result=await driver.renderBrowserSnapshot('https://shop.test/list','playwright',true,session);
+ assert.equal(attempts,2);assert.equal(collected,1);assert.equal(result.browserDiagnostics.navigationRetried,true);assert.equal(closed,1);
+ attempts=0;current='about:blank';page.goto=async()=>{attempts++;throw Error('page.goto: net::ERR_ABORTED')};
+ await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',true,session),e=>{
+  assert.equal(e.browserDiagnostics.requests,0);assert.equal(e.browserDiagnostics.documentServed,false);assert.equal(e.browserDiagnostics.navigationRetried,true);return /ERR_ABORTED/.test(e.message);
+ });assert.equal(attempts,2);assert.equal(collected,1);assert.equal(closed,2);
+});

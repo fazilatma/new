@@ -23,13 +23,13 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
         ? await (await import('playwright')).chromium.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000})
         : await (await import('puppeteer')).default.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000});
     }catch{throw Error('مرورگر انتخاب‌شده راه‌اندازی نشد. npm run browsers:install و BROWSER_EXECUTABLE_PATH را بررسی کنید؛ سرویس را با کاربر غیر root اجرا کنید.');}
-    let timeout:ReturnType<typeof setTimeout>|undefined,requests=0,bytes=0,blocked=0,expired=false,documentServed=false,navigationRecovered=false,skipped=0,criticalResourceFailed=false;
+    let timeout:ReturnType<typeof setTimeout>|undefined,requests=0,bytes=0,blocked=0,expired=false,documentServed=false,navigationRecovered=false,navigationRetried=false,skipped=0,criticalResourceFailed=false;
     const controllers=new Set<AbortController>(),failures:any[]=[];
     const canonical=(raw:string)=>{const u=new URL(raw);u.hash='';return u.href.replace(/%[a-f0-9]{2}/gi,x=>x.toUpperCase())};
     const bootstrap=(r:any)=>r.isNavigationRequest()&&r.method()==='GET'&&canonical(r.url())===canonical(initial.url);
     const safePath=(raw:string)=>{try{const u=new URL(raw);return u.origin+u.pathname}catch{return ''}};
     const failed=(r:any,e:any)=>{if(e?.expectedSkip)return;if(['script','document','xhr','fetch'].includes(r.resourceType?.()))criticalResourceFailed=true;if(failures.length<20)failures.push({url:safePath(r.url()),type:r.resourceType?.()||'unknown',reason:String(e?.message||e).replace(/https?:\/\/[^\s]+/g,safePath).slice(0,200)})};
-    const diagnostics=()=>({indirect,transport:'guarded-source',documentServed,navigationRecovered,requests,skippedResources:skipped,blockedResources:blocked,criticalResourceFailed,failedResources:failures});
+    const diagnostics=()=>({indirect,transport:'guarded-source',documentServed,navigationRecovered,navigationRetried,requests,skippedResources:skipped,blockedResources:blocked,criticalResourceFailed,failedResources:failures});
     try{
       const page=driver==='playwright'?await browser.newPage({locale:'fa-IR',serviceWorkers:'block',acceptDownloads:false}):await browser.newPage();
       page.on('popup',(popup:any)=>{void popup.close()});
@@ -64,11 +64,23 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
       const run=async()=>{
         try{await page.goto(initial.url,{waitUntil:'domcontentloaded',timeout:30_000})}
         catch(error){
+          // Preserve the old renderer's blank-page ERR_ABORTED retry. Never
+          // switch transport or accept initial HTML as a completed scroll.
+          if(session&&!documentServed&&requests===0&&/ERR_ABORTED/i.test(String(error))){
+            if(driver==='playwright')await page.waitForLoadState('domcontentloaded',{timeout:5000}).catch(()=>undefined);
+            else if(page.waitForNavigation)await page.waitForNavigation({waitUntil:'domcontentloaded',timeout:5000}).catch(()=>undefined);
+            if(!documentServed&&requests===0&&['','about:blank','chrome://newtab/'].includes(page.url())){
+              navigationRetried=true;
+              try{await page.goto(initial.url,{waitUntil:'domcontentloaded',timeout:30_000});error=null}catch(retryError){error=retryError}
+            }
+          }
+          if(error){
           // A slow iframe/ancillary load can time out goto after the main DOM is ready.
           // Never substitute the fetched HTML for a browser that did not navigate.
           let dom:any=null;try{if(session&&documentServed&&/Timeout|ERR_ABORTED/i.test(String(error)))dom=await page.evaluate(()=>({readyState:document.readyState,textLength:document.body?.innerText?.length||0,htmlLength:document.documentElement?.outerHTML?.length||0}))}catch{}
           if(!dom||!['interactive','complete'].includes(dom.readyState)||dom.textLength<20||dom.htmlLength<200||canonical(page.url())!==canonical(initial.url))throw error;
           navigationRecovered=true;
+          }
         }
         if(driver==='playwright')await page.waitForLoadState('networkidle',{timeout:5000}).catch(()=>undefined);
         else await page.waitForNetworkIdle({timeout:5000}).catch(()=>undefined);
@@ -79,6 +91,6 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
         return {text,url:finalUrl,engine,driver,blockedResources:blocked,browserDiagnostics:diagnostics(),...(session?{collected}:{})};
       };
       return await Promise.race([run(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{expired=true;reject(Error('مهلت رندر انتخاب بصری تمام شد.'))},session?240_000:45_000)})]);
-    }catch(error){throw Object.assign(error instanceof Error?error:Error(String(error)),{browserDiagnostics:diagnostics()})}finally{expired=true;for(const c of controllers)c.abort();clearTimeout(timeout);await browser.close().catch(()=>undefined)}
+    }catch(error){const failure=error instanceof Error?error:Error(String(error));failure.message=failure.message.replace(/\u001b\[[0-9;]*m/g,'');if(session&&!documentServed&&requests===0)failure.message+='\nمرورگر پیش از تحویل درخواست به رهگیر امن متوقف شد؛ سند بارگذاری نشده است. تلاش مجدد: '+String(navigationRetried)+'. اتصال مستقیم جایگزین نشده است.';throw Object.assign(failure,{browserDiagnostics:diagnostics()})}finally{expired=true;for(const c of controllers)c.abort();clearTimeout(timeout);await browser.close().catch(()=>undefined)}
   });
 }
