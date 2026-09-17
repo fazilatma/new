@@ -60,5 +60,10 @@ npm test                                            # full gate (must be green)
   parsed DOM to pin behaviour. Add a capability, add a pin.
 - **Brownfield discipline.** Small diffs, count-asserted patches, no renames
   of public behavior; run the gate before every commit and push.
+- **Automatic push (user instruction).** After each completed code change, run
+  validation, commit, and push to the session branch without waiting for another
+  push request. For this session use `git push origin arena/01a0aa17-new` only.
+  Never force-push; report any validation or push failure honestly. A successful
+  push does not imply a verified deployment.
 - **Replies in English.** Chat answers to the user are entirely in English
   (no mixed-language sentences).
