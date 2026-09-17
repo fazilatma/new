@@ -107,3 +107,12 @@ test('buildDedupGroups keeps the most expensive generic-suffix duplicate',()=>{
   assert.equal(groups[0].keep.id,102);
   assert.deepEqual(groups[0].remove.map(x=>x.id).sort((x,y)=>x-y),[101,103]);
 });
+
+test('background dedup never groups the same title across Basalam stalls, for every keep policy',()=>{
+ const rows=[candidate(1,'کیف (کد:1)',{shopId:'100',price:100}),candidate(2,'کیف (کد:2)',{shopId:'200',price:500})];
+ for(const keep of ['newest','oldest','expensive','cheapest']){
+  assert.deepEqual(buildDedupGroups(rows,keep,['(کد:x)']),[]);
+  const groups=buildDedupGroups([...rows,candidate(3,'کیف (کد:3)',{shopId:'100',price:200})],keep,['(کد:x)']);
+  assert.equal(groups.length,1);assert.equal(groups[0].keep.shopId,'100');assert.ok(groups[0].remove.every(x=>x.shopId==='100'));
+ }
+});
