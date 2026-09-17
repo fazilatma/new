@@ -42,7 +42,7 @@ test('indirect fetches go through the gateway with the target headers', async ()
     const page = await network.safeText('https://example.com/shop', 8_000_000, { indirect: true });
     assert.ok(page.text.includes('via gateway'));
     assert.equal(stub.calls.length, 1);
-    assert.equal(stub.calls[0].url, 'https://gw.example.com/fetch?url=https%3A%2F%2Fexample.com%2Fshop');
+    assert.equal(stub.calls[0].url, 'https://gw.example.com/fetch/https://example.com/shop');
     assert.equal(stub.calls[0].headers.get('x-scraper-target'), 'https://example.com/shop');
     assert.equal(stub.calls[0].headers.get('x-target-url'), 'https://example.com/shop');
   } finally {
@@ -128,7 +128,7 @@ test('node extraction paths pass the per-profile indirect flag', async () => {
     'diagnostic network stage must route like the profile asks');
   assert.ok(scraper.includes('route: sourceRoute(Boolean(profile.networkIndirect))'),
     'diagnostic must report the route taken');
-  assert.ok(scraper.includes("profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect))"),
+  assert.ok(scraper.includes("profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),"),
     'diagnostic list extraction must route like the profile asks');
   assert.ok(scraper.includes('scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect))'),
     'diagnostic detail extraction must route like the profile asks');
@@ -140,7 +140,7 @@ test('node extraction paths pass the per-profile indirect flag', async () => {
   const server = await read('../render-src/server.ts');
   assert.ok(server.includes('safeText(pageUrl(probe,1),1_000_000,{indirect:Boolean(profile.networkIndirect)})'),
     'benchmark diagnosis fetch must route like the profile asks');
-  assert.ok(server.includes("engine,undefined,false,'',true,Boolean(profile.networkIndirect)"),
+  assert.ok(server.includes("engine,undefined,false,nextSelector,true,Boolean(profile.networkIndirect)"),
     'benchmark engines must route like the profile asks');
   assert.ok(server.includes('scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect))'),
     'direct extract details must route like the profile asks');

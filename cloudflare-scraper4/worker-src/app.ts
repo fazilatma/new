@@ -1,9 +1,21 @@
+import { benchmarkPagination } from './benchmark-pagination.js';
+import { extractionDetails } from './job-details.js';
+import { refreshDestinationLedger, destinationLedgerStatus, destinationLedgerProducts, ledgerMissing } from './maintenance.js';
+import { maintenanceResponse } from './maintenance-response.js';
+import { saveConnectionsAndReprice, drainWooReprice } from './woo-reprice.js';
+import { mergeConnections } from './vault.js';
+import { activityMiddleware, monitored } from './activity-monitor.js';
+import { listActiveJobs, listLiveActivities, deleteState } from './db.js';
+import { saveBenchmarkProfile } from './db.js';
+import { applyStoredResultSettings } from './db.js';
+import { PUSH_MANIFEST, PUSH_ICON, pushIconPng } from './push-assets.js';
+import { diagnosticStream, type DiagnosticObserver } from './diagnostic-progress.js';
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import readXlsxFile from 'read-excel-file/web-worker';
-import { aiCall, aiChat, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
+import { assignProductBasalamCategory, aiCall, aiChat, aiProviders, generateProductDescription, getLastAiTestResults, getLeaderboard, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix, preferredAiChatModel, productNeedsBasalamCategory, productNeedsEnrichment, providerKeys, providerWithKey, recordVote, suggestCategoryWithModel, testModelBatch } from './ai.js';
 import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, agentModelSetupHint, controlAgentRun, createOrUpdateAgentPrompt, currentAgentRun, getAgentRunPublic, listAgentRunsPublic, publicAgentRun, removeAgentPrompt, resetAgentRun, startAgentRun } from './agent.js';
-import { automationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
+import { automationTick as rawautomationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS } from './dashboard.js';
 import { flushD1Usage, getD1Usage, allProducts, listStalestProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
@@ -14,7 +26,7 @@ import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { runDiagnostics } from './diagnostics.js';
 import { enqueueJob } from './processor.js';
-import { benchmarkProbeUrl, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListPage, sourceText, suggestSelectors, testGallery, testSelector, testVariations, transformProduct } from './scraper.js';
+import { benchmarkProbeUrl, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListPage, sourceText, suggestSelectors, testGallery, testSelector, testVariations } from './scraper.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
 import { describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
@@ -23,9 +35,9 @@ import { createVisualTicket, renderVisualSelector } from './visual.js';
 import { controlBackgroundRun, getPublicBackgroundRun, recoverBackgroundRuns, resetBackgroundRun, retryAiTestPart, startAiTestRun, startAllUnapprovedCategoryRun, startDedupRun } from './background.js';
 import { fontFile, fontStylesheet } from './fonts.js';
 import { DEFAULT_REPO, githubApiHeaders, normalizeRepo, pickGithubToken, scanDeployerBranches } from './deployer-branches.js';
-import { fetchBranchBackupFile, fetchBranchBackupSplit, listBranchBackupFiles, pushBranchBackupSplit, scheduledBranchPushTick } from './branch-backup.js';
+import { fetchBranchBackupFile, fetchBranchBackupSplit, listBranchBackupFiles, pushBranchBackupSplit, scheduledBranchPushTick as rawscheduledBranchPushTick } from './branch-backup.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from './destination-core.js';
-import { AI_ENRICH_LAST_KEY, aiEnrichTick } from './ai-enrich.js';
+import { AI_ENRICH_LAST_KEY, aiEnrichTick as rawaiEnrichTick } from './ai-enrich.js';
 
 type Variables={requestId:string};
 export const app=new Hono<{Bindings:Env;Variables:Variables}>();
@@ -34,18 +46,24 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.183.0',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.203.0+',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
+app.get('/manifest.webmanifest',c=>c.json(PUSH_MANIFEST,200,{'content-type':'application/manifest+json'}));
+app.get('/app-icon-192.png',c=>c.body(pushIconPng('192'),200,{'content-type':'image/png'}));
+app.get('/app-icon-512.png',c=>c.body(pushIconPng('512'),200,{'content-type':'image/png'}));
+app.get('/app-icon.svg',c=>c.body(PUSH_ICON,200,{'content-type':'image/svg+xml'}));
 app.get('/visual',async c=>renderVisualSelector(c.req.query('ticket')||'',c.req.query('context')==='detail'?'detail':'list'));
 app.use('/api/*',async(c,next)=>{if(c.req.path==='/api/runtime/libraries'||c.req.path==='/api/libraries')return next();if(!c.env.DB)return c.json({ok:false,error:'D1 binding DB is not configured'},503);await ensureSchema(c.env.DB);await next()});
 
-app.post('/api/visual-ticket',async c=>{const body=await c.req.json() as any,url=new URL(String(body.url||''));if(!['http:','https:'].includes(url.protocol))return c.json({ok:false,error:'Invalid visual selector URL'},400);return c.json({ok:true,ticket:await createVisualTicket(url.href),expiresIn:300})});
+app.use('/api/*',activityMiddleware({setState,deleteState}));
+app.get('/api/web-push/config',c=>c.json({ok:true,supported:false,configured:false,reason:'Web Push در این انتشار به نسخهٔ VPS/Node نیاز دارد.'}));
+app.post('/api/visual-ticket',async c=>{const body=await c.req.json() as any,url=new URL(String(body.url||''));if(!['http:','https:'].includes(url.protocol))return c.json({ok:false,error:'Invalid visual selector URL'},400);if(['playwright','puppeteer','crawlee_playwright','network_api'].includes(String(body.engine||'')))return c.json({ok:false,error:'نمایش DOM با موتور مرورگری به نسخهٔ VPS/Node نیاز دارد؛ Cloudflare این مرورگر را اجرا نمی‌کند.'},400);const ticket=await createVisualTicket(url.href,Boolean(body.indirect));return c.json({ok:true,ticket,channel:ticket,engine:'html',expiresIn:300})});
 app.get('/api/status',async c=>{const connections=await loadConnections();return c.json({ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections),queue:Boolean(c.env.JOBS),storage:{d1:true,r2:Boolean(c.env.BACKUPS)}})});
 // ─── Task-manager style live activity (lightweight) ──────────────────────────
 app.get('/api/activity',async c=>{
-  const[profiles,jobs,aiRun,dedupRun,catRun,agentRun,cronLock,priorities,runPriorities,version]=await Promise.all([
+  const[profiles,jobs,aiRun,dedupRun,catRun,agentRun,cronLock,priorities,runPriorities,version,allActive,operations]=await Promise.all([
     listProfiles(),
     listJobs(Math.min(30,Number(c.req.query('limit'))||15)),
     getPublicBackgroundRun('ai-test'),
@@ -55,10 +73,10 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.183.0')
+    Promise.resolve(c.env.WORKER_VERSION||'1.203.0+'),listActiveJobs(),listLiveActivities()
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
-  const active=jobs.filter(j=>['queued','running'].includes(j.status)).sort((a,b)=>{
+  const active=allActive.sort((a,b)=>{
     if(a.status!==b.status)return a.status==='queued'?-1:1; // queued (reorderable) first, running below
     const pa=Number(priorities[a.id])||0,pb=Number(priorities[b.id])||0;
     return pa!==pb?pb-pa:a.createdAt.localeCompare(b.createdAt);
@@ -74,30 +92,41 @@ app.get('/api/activity',async c=>{
     if(a.priority!==b.priority)return b.priority-a.priority;
     return RUN_KIND_ORDER.indexOf(a.kind)-RUN_KIND_ORDER.indexOf(b.kind);
   });
+  runs.push(...operations);
   const cronAge=cronLock?.at?Date.now()-Date.parse(cronLock.at):null;
   const quotaState=getWriteQuotaState();
   const quotaRun=(runs as any[]).some((x:any)=>x.phase==='quota'||/quota|write operations/i.test(String(x.error||'')))||(active as any[]).some((j:any)=>/quota|write operations/i.test(String(j.error||'')));
   return c.json({ok:true,ts:new Date().toISOString(),queue:Boolean(c.env.JOBS),version,
     quota:{writeExceeded:quotaState.writeExceeded||quotaRun,at:quotaState.at,d1:await getD1Usage()},
     counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},
-    activeJobs:active.slice(0,15).map(j=>{const p=profileById.get(j.profileId),started=Date.parse(j.startedAt||j.createdAt),ended=j.status==='running'?Date.now():Date.parse(j.finishedAt||j.updatedAt),minutes=Math.max(1/60,(ended-started)/60000),speed=Number((Number(j.processed||0)/minutes).toFixed(2)),engine=(p?.extractionEngineMaster||p?.extractionEngine||'auto');return{id:j.id,shortId:j.id.slice(0,8),profileId:j.profileId.slice(0,12),kind:j.kind,target:j.target,status:j.status,phase:j.phase,priority:Number(priorities[j.id])||0,progress:j.total?Math.round(j.processed/j.total*100):0,detail:`${j.processed}/${j.total}`,speedPerMinute:speed,engine,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}}),
+    activeJobs:active.map(j=>{const p=profileById.get(j.profileId),started=Date.parse(j.startedAt||j.createdAt),ended=j.status==='running'?Date.now():Date.parse(j.finishedAt||j.updatedAt),minutes=Math.max(1/60,(ended-started)/60000),speed=Number((Number(j.processed||0)/minutes).toFixed(2)),engine=(p?.extractionEngineMaster||p?.extractionEngine||'auto');return{extraction:extractionDetails(j),profileName:p?.name||j.profileId,workflow:j.workflow,id:j.id,shortId:j.id.slice(0,8),profileId:j.profileId,kind:j.kind,target:j.target,status:j.status,phase:j.phase,priority:Number(priorities[j.id])||0,progress:j.total?Math.round(j.processed/j.total*100):0,detail:`${j.processed}/${j.total}`,speedPerMinute:speed,engine,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}}),
     runs,
     cron:{held:Boolean(cronLock?.held),ageSec:cronAge?Math.round(cronAge/1000):null,lastTick:cronLock?.at||null},
-    lastJobs:jobs.slice(0,8).map(j=>({id:j.id.slice(0,8),kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}))
+    lastJobs:jobs.slice(0,8).map(j=>({id:j.id,kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}))
   });
 });
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.183.0',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.203.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.183.0',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.203.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-push-status',async c=>c.json({ok:true,last:await getState<any>('branch_push_last',null)}));
+// Runtime parity for the dashboard's «دیپلویر» section: a Worker has no local deployer to
+// proxy, and must not 404 on it. One clear answer keeps the panel's copy identical in both
+// runtimes instead of failing with a generic fetch error.
+app.on(['GET', 'POST'], '/api/deployer/local/:action', async c => c.json({
+  ok: false,
+  code: 'NO_DEPLOYER',
+  error: 'این رانتایم دیپلویر محلی ندارد؛ دیپلویر روی همان دستگاهی اجرا می‌شود که کد را نصب می‌کند.',
+  hint: 'روی Cloudflare و Render انتشار با push به شاخهٔ production انجام می‌شود؛ جدول برنچ‌ها در همین سرور کار می‌کند.'
+}, 501));
+
 app.post('/api/deployer/install-branch',async c=>c.json({ok:false,code:'NO_DEPLOYER',error:'Branch install needs a deployer-managed Node scraper; this Worker cannot install code.'}));
 app.get('/api/github/token-status',async c=>{const settings=await getState<any>('settings',{});const env=String(c.env.GH_BACKUP_TOKEN||'').trim(),stored=typeof settings?.githubBackupToken==='string'?settings.githubBackupToken.trim():'';const active=env||stored;return c.json({ok:true,active:env?'env':stored?'stored':null,env:Boolean(env),stored:Boolean(stored),hint:active?active.slice(-4):null})});
 // Cloudflare gives a Worker no "remaining quota" API, but every D1 query reports
@@ -108,7 +137,7 @@ app.get('/api/runtime/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 app.get('/api/libraries',c=>c.json(cloudflareLibraryProbe(c.env)));
 
 app.get('/api/connections',async c=>c.json({ok:true,connections:await loadConnections(true)}));
-app.post('/api/connections',async c=>c.json({ok:true,connections:await saveConnections(await c.req.json())}));
+app.post('/api/connections',async c=>c.json({ok:true,...await saveConnectionsAndReprice(await c.req.json(),wooRepriceIO(job=>enqueueJob(job,p=>c.executionCtx.waitUntil(p))))}));
 app.get('/api/ai/providers',async c=>c.json({ok:true,providers:await aiProviders(),leaderboard:await getLeaderboard()}));
 app.post('/api/ai/test-all',async c=>{const b=await jsonBody(c),started=Date.now(),categoryTitle=String(b.categoryTitle||'').trim();let categories:any[]=[];if(categoryTitle)try{categories=(await destinationCategories(Boolean(b.refreshCategories))).items}catch{/* پیام و مدل‌ها حتی بدون اتصال باسلام تست می‌شوند */}const result=await testModelBatch(String(b.prompt||'Reply with exactly: SCRAPER4_OK'),{onlyCandidates:Boolean(b.onlyCandidates),cursor:Number(b.cursor)||0,runId:String(b.runId||''),categoryTitle,categories,skipCurrent:Boolean(b.skipCurrent),skipReason:String(b.skipReason||'')});return c.json({...result,durationMs:Date.now()-started,categoryListAvailable:categories.length>0,invocationPolicy:'در هر invocation مدل هم‌ردیف همهٔ ارائه‌دهنده‌ها همزمان آزمایش می‌شود (حداکثر یکی از هر ارائه‌دهنده) تا فهرست سریع‌تر تمام شود و محدودیت نرخ رخ ندهد'})});
 app.post('/api/ai/test-runs',async c=>{const started=await startAiTestRun(await jsonBody(c),(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise));return c.json({ok:true,...started},started.existing?200:202)});
@@ -143,7 +172,7 @@ app.post('/api/profiles/:id/ai-descriptions',async c=>{
   let enrichCategories:any[]=[];try{enrichCategories=(await destinationCategories()).items}catch{}
   let filled=0;const failures:any[]=[];
   for(const product of targets as any[]){
-    const result=await generateProductDescription(product,{force,categories:enrichCategories});
+    const result=await generateProductDescription(product,{force,categories:enrichCategories,profileCategoryId:profile.basalamCategoryId});
     if(result.changed){await upsertProduct(profile.id,product);filled++}
     else if(!result.ok)failures.push({title:product.title,error:result.error});
   }
@@ -209,11 +238,15 @@ app.post('/api/import-php',async c=>{const body=await jsonBody(c),source=typeof 
 app.get('/api/profile-stats',async c=>c.json({ok:true,items:await profileStats()}));
 app.post('/api/maintenance/recon/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json({ok:true,report:await recon(target,String(b.profileId||''))})});
 app.get('/api/maintenance/recon-accounts',async c=>c.json({ok:true,accounts:await reconAccounts()}));
-app.post('/api/maintenance/recon-unified',async c=>{const b=await jsonBody(c);return c.json(await unifiedRecon(String(b.profileId||'')))});
-app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await jsonBody(c);return c.json(await unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
+app.post('/api/maintenance/ledger/products',async c=>{const b=await c.req.json().catch(()=>({})) as any;return c.json(await destinationLedgerProducts(String(b.target||'woo'),String(b.accountKey||'default'),Number(b.offset)||0))});
+app.get('/api/maintenance/ledger',async c=>c.json(await destinationLedgerStatus()));
+app.post('/api/maintenance/ledger/refresh',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>refreshDestinationLedger(b.force!==false))});
+app.post('/api/maintenance/ledger/missing',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY'))});
+app.post('/api/maintenance/recon-unified',async c=>{const b=await jsonBody(c);return maintenanceResponse(c,()=>unifiedRecon(String(b.profileId||'')))});
+app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await jsonBody(c);return maintenanceResponse(c,()=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
 // Request 36b: preview (no confirm) or delete duplicates in every destination,
 // keeping the most expensive copy by default.
-app.post('/api/maintenance/duplicates',async c=>{const b=await jsonBody(c);return c.json(await destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
+app.post('/api/maintenance/duplicates',async c=>{const b=await jsonBody(c);return maintenanceResponse(c,()=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
 app.post('/api/maintenance/recon-table/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await reconTable(target,String(b.profileId||'')))});
 app.post('/api/maintenance/rebuild/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await rebuildMap(target,String(b.profileId||'')))});
 app.post('/api/maintenance/retire/:target',async c=>{const target=validDestination(c.req.param('target')),b=await jsonBody(c);return c.json(await retire(target,String(b.profileId||''),String(b.action||'report'),b.confirm==='APPLY'))});
@@ -244,54 +277,79 @@ app.delete('/api/destination/:target/:id',async c=>{if(c.req.query('confirm')!==
 app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const profile=await getProfile(c.req.param('profileId')),product=await getProduct(c.req.param('profileId'),c.req.param('sourceKey')),target=validDestination(c.req.param('target'));if(!profile||!product)return c.json({ok:false,error:'Product/profile not found'},404);return c.json({ok:true,result:target==='woo'?await syncWoo(product,profile):await syncBasalam(product,profile)})});
 
 app.post('/api/queue-watchdog',async c=>{const b=await jsonBody(c);const settings=await getState<any>('settings',{}),stallMin=Number(b.minutes)>0?Number(b.minutes):Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));await recoverBackgroundRuns(promise=>c.executionCtx.waitUntil(promise));const autoContinue=b.autoContinue??settings.watchdog?.autoContinue!==false,recovered=autoContinue?await recoverFailedAndStalledJobs(stallMin):0,reaped=autoContinue?0:await reapStalledJobs(stallMin);if(recovered){const queued=await listQueuedJobs(200);for(const job of queued)await enqueueJob(job,promise=>c.executionCtx.waitUntil(promise))}return c.json({ok:true,reaped,recovered,autoContinue,backgroundRecovered:true,stallMinutes:stallMin})});
-app.post('/api/source-test',async c=>{const b=await jsonBody(c),result=await safeText(String(b.url||''),1_000_000);return c.json({ok:true,bytes:byteLength(result.text),url:result.url,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()})});
+app.post('/api/source-test',async c=>{const b=await jsonBody(c),profile=b.profileId?await getProfile(String(b.profileId)):null,result=await sourceText(String(b.url||''),Boolean(profile?.networkIndirect),1_000_000);return c.json({ok:true,bytes:byteLength(result.text),url:result.url,route:result.route,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()})});
 
 const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','structural','metadata','htmlrewriter','playwright','puppeteer','crawlee_playwright','network_api'];
 const MIN_BENCHMARK_PRODUCTS=2;
 const WORKER_UNAVAILABLE_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','structural','network_api']);
-async function benchmarkProfileEngines(profile:Profile){
+async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObserver){
+  const originalProfile=structuredClone(profile);
+  const emit=(event:any)=>{try{onProgress?.(event)}catch{}};
+  emit({name:'benchmark-network',status:'running',summary:'دریافت صفحهٔ مبنا برای تست سه‌صفحه‌ای…'});
   const pages=3,results:any[]=[],startedAt=new Date().toISOString(),benchmarkDiscovered:Record<string,string>={};
   // 1.137.0 — one shared first-page fetch for every engine's diagnosis.
   let diagHtml='',diagUrl='';
   const probe={...profile,url:benchmarkProbeUrl(profile)};
   try{const first=await sourceText(pageUrl(probe,1),Boolean(profile.networkIndirect),1_000_000);diagHtml=first.text;diagUrl=first.url||pageUrl(probe,1)}catch{/* diagnosis degrades to product-only signals */}
+  emit({name:'benchmark-network',status:diagHtml?'success':'error',summary:diagHtml?'صفحهٔ مبنا دریافت شد.':'دریافت صفحهٔ مبنا ناموفق بود؛ آزمون مستقل موتورها ادامه دارد.'});
   for(const engine of BENCHMARK_ENGINES){
-    const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();const engineProducts:any[]=[];let engineSelectors:any=null;
-    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){const unavailable='این موتور فقط روی اجراگر Node کار می‌کند (Termux، ویندوز، VPS یا Render).';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:engine==='structural'?'برای موتور structural همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از heuristic استفاده کنید.':'برای موتور مرورگری، همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از htmlrewriter استفاده کنید.',signals:{available:false}}});continue}
-    try{
-      for(let pageNo=1;pageNo<=pages;pageNo++){
-        const page=await scrapeListPage(pageUrl(probe,pageNo),profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),engine,undefined,false);
-        pagesScanned++;
-        if(page.discoveredSelectors&&Object.keys(page.discoveredSelectors).length){profile.selectors={...profile.selectors,...page.discoveredSelectors};Object.assign(benchmarkDiscovered,page.discoveredSelectors)}
-        if(pageNo===1&&page.selectorsUsed)engineSelectors=page.selectorsUsed;
-        for(const product of page.products){const key=product.sourceKey||product.url||product.title;if(key&&!seen.has(key)){seen.add(key);products++;engineProducts.push(product)}}
-        if(profile.pagination==='next_selector'&&!page.nextUrl)break;
+    emit({name:engine,status:'running',summary:'شروع تست موتور '+engine,pages:3});
+    const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();const engineProducts:any[]=[];let engineSelectors:any=null;let paginationReport:any=null;
+    if(WORKER_UNAVAILABLE_ENGINES.has(engine)){const unavailable='این موتور فقط روی اجراگر Node کار می‌کند (Termux، ویندوز، VPS یا Render).';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:engine==='structural'?'برای موتور structural همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از heuristic استفاده کنید.':'برای موتور مرورگری، همین پروفایل را روی اجراگر Node (Termux/VPS/Render) اجرا کنید؛ روی Cloudflare از htmlrewriter استفاده کنید.',signals:{available:false}}});emit({name:engine,status:'skipped',summary:unavailable,result:results[results.length-1]});continue}
+    paginationReport=await benchmarkPagination(probe,{pageUrl,
+      scrape:(url,nextSelector)=>scrapeListPage(url,profile.selectors,nextSelector,Boolean(profile.networkIndirect),engine,undefined,false),
+      emit:event=>emit({name:engine,...event}),
+      onPage:(scraped,pageNo)=>{
+        if(scraped.discoveredSelectors&&Object.keys(scraped.discoveredSelectors).length){profile.selectors={...profile.selectors,...scraped.discoveredSelectors};Object.assign(benchmarkDiscovered,scraped.discoveredSelectors)}
+        if(pageNo===1&&scraped.selectorsUsed)engineSelectors=scraped.selectorsUsed;
       }
-    }catch(err){error=message(err)}
+    });
+    engineProducts.push(...paginationReport.products);products=engineProducts.length;pagesScanned=paginationReport.pagesScanned;error=paginationReport.error;
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
     let diagnosis:any=null;
     try{diagnosis=await diagnoseBenchmarkEngine(engine,diagHtml,diagUrl||pageUrl(probe,1),engineSelectors||profile.selectors,engineProducts,error)}catch{diagnosis=null}
-    results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
+    results.push({engine,ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,pagination:{...paginationReport,products:undefined},productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
+    emit({name:engine,status:products>0&&!error?'success':'error',summary:error||('پایان تست؛ '+products+' محصول'),result:results[results.length-1]});
   }
   // Same coverage-first rule as the Node runtime so both runtimes agree on the
   // engine, instead of one picking a shallow engine that finds a stray card.
   const usable=results.filter(r=>r.ok&&r.available);
   const best=usable.sort((a,b)=>b.products-a.products||a.elapsedMs-b.elapsedMs)[0]||null;
   const fastest=best&&best.products>=MIN_BENCHMARK_PRODUCTS?best:null;
+  emit({name:'benchmark-save',status:'running',summary:'ذخیرهٔ نتیجهٔ مقایسه و موتور منتخب…'});
   (profile as any).extractionEngineBenchmarks=results;
   if(fastest){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
-  await saveProfile({...profile,updatedAt:new Date().toISOString()});
-  return{ok:Boolean(fastest),profileId:profile.id,startedAt,pages,fastest,results,discoveredSelectors:benchmarkDiscovered,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ۳ صفحه).`]:(best&&best.products>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${best.products}). موتور پیش‌فرض پروفایل تغییر نکرد.`]:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
+  const profileUpdated=await saveBenchmarkProfile(originalProfile,profile,benchmarkDiscovered);
+  emit({name:'benchmark-save',status:profileUpdated?'success':'error',summary:profileUpdated?'گزارش ذخیره شد؛ ویرایش‌های همزمان حفظ شدند.':'پروفایل همزمان تغییر کرد یا حذف شد؛ نتیجه روی تنظیمات جدید نوشته نشد.'});
+  return{ok:Boolean(fastest),profileUpdated,profileId:profile.id,startedAt,pages,pagination:profile.pagination,fastest,results,discoveredSelectors:benchmarkDiscovered,recommendations:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ${fastest.pagesScanned} صفحه/دسته).`]:(best&&best.products>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${best.products}). موتور پیش‌فرض پروفایل تغییر نکرد.`]:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
-app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await jsonBody(c);const report:any=await diagnoseExtraction(profile,String(b.url||''));const toSave=report.selectorsToSave||{},keys=Object.keys(toSave).filter(key=>String(toSave[key]||'').trim());if(keys.length){const selectors={...profile.selectors}as any;for(const key of keys)selectors[key]=toSave[key];await saveProfile({...profile,selectors,updatedAt:new Date().toISOString()});report.selectorsSaved=Object.fromEntries(keys.map(key=>[key,toSave[key]]));report.stages.push({name:'selectors-auto-saved',ok:true,summary:'سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند.',selectors:report.selectorsSaved})}return c.json(report)});
-app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);return c.json(await benchmarkProfileEngines(profile))});
+app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await jsonBody(c);const run=async(onProgress?:DiagnosticObserver)=>{const report:any=await diagnoseExtraction(profile,String(b.url||''),onProgress);const toSave=report.selectorsToSave||{},keys=Object.keys(toSave).filter(key=>String(toSave[key]||'').trim());if(keys.length){onProgress?.({name:'selectors-auto-saved',status:'running',summary:'در حال ذخیرهٔ سلکتورهای پیدا‌شده در پروفایل…',count:keys.length});const selectors={...profile.selectors}as any;for(const key of keys)selectors[key]=toSave[key];await saveProfile({...profile,selectors,updatedAt:new Date().toISOString()});report.selectorsSaved=Object.fromEntries(keys.map(key=>[key,toSave[key]]));report.stages.push({name:'selectors-auto-saved',ok:true,summary:'سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند.',selectors:report.selectorsSaved});onProgress?.({...report.stages[report.stages.length-1],status:'success'})}else onProgress?.({name:'selectors-auto-saved',status:'skipped',summary:'سلکتور تازه‌ای برای ذخیره وجود ندارد.'});return report};if(c.req.query('live')==='1')return diagnosticStream(run);return c.json(await run())});
+app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);if(c.req.query('live')==='1')return diagnosticStream(observe=>benchmarkProfileEngines(profile,observe));return c.json(await benchmarkProfileEngines(profile))});
 app.post('/api/test-selector',async c=>{const b=await jsonBody(c);if(b.type==='variations')return c.json({ok:true,...await testVariations(String(b.url||''),String(b.selector||''))});if(b.type==='gallery')return c.json({ok:true,...await testGallery(String(b.url||''),String(b.selector||''),Number(b.max)||30,Boolean(b.skipFirst))});return c.json({ok:true,...await testSelector(String(b.url||''),String(b.selector||''),String(b.type||'text'))})});
 app.post('/api/suggest-selectors',async c=>{const b=await jsonBody(c),mode=['list','detail'].includes(b.mode)?b.mode:'all';return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode)})});
 app.post('/api/test-connection/:target',async c=>{const target=c.req.param('target'),input=await jsonBody(c);return c.json(await connectionDiagnostic(target,input))});
 app.get('/api/categories/:target',async c=>{const target=validDestination(c.req.param('target')),connections=await loadConnections();if(target==='woo'){const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'اتصال ووکامرس کامل نیست'},400);const items:any[]=[];for(let page=1;page<=20;page++){const r=await safeWooFetch(`${x.url}/wp-json/wc/v3/products/categories?per_page=100&page=${page}`,{headers:{authorization:basicAuth(x.key,x.secret),accept:'application/json'}},3_000_000),found=await r.json() as any[];if(!r.ok)throw new Error(`Woo HTTP ${r.status}`);items.push(...found);if(found.length<100)break}return c.json({ok:true,items})}const result=await destinationCategories(c.req.query('refresh')==='1');return c.json({ok:true,...result,total:result.items.length})});
 
 app.get('/api/profiles',async c=>c.json({ok:true,profiles:await listProfiles()}));
-app.post('/api/profiles',async c=>c.json({ok:true,profile:await saveProfile(normalizeProfile(await c.req.json()))}));
+app.post('/api/profiles',async c=>{
+ const input=await c.req.json() as any,existing=input.id?await getProfile(String(input.id)):null;
+ if(input._autosavePatch&&!existing)return c.json({ok:false,error:'Profile no longer exists'},404);
+ const patch=input._autosavePatch,merged=patch?{...existing,...patch,id:existing!.id,selectors:{...existing!.selectors,...patch.selectors},gallery:{...existing!.gallery,...patch.gallery}}:input;
+ const profile=normalizeProfile(merged),before=existing;
+
+ const saved=await saveProfile(profile);let job=null;
+ if(before&&['priceMode','priceValue','roundPrice'].some(key=>String((before as any)[key]??'')!==String((saved as any)[key]??''))){
+  const connections=await loadConnections(),woo=Boolean(connections.woo.url&&connections.woo.key&&connections.woo.secret),basalam=Boolean(connections.basalam.token&&connections.basalam.vendorId||connections.basalam.shops.some(s=>s.token&&s.vendorId));
+  const target=woo&&basalam?'both':woo?'woo':basalam?'basalam':'none';
+  if(target!=='none'){job=await createJob(saved.id,'sync',target,{priceSync:true});if(job)await enqueueJob(job,p=>c.executionCtx.waitUntil(p));}
+ }
+ return c.json({ok:true,profile:saved,priceSyncJob:job,priceSync:job?'queued':'not-requested'});
+});
+app.post('/api/profiles/:id/results/apply',async c=>{
+  const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);
+  const body=await c.req.json().catch(()=>({})) as any;
+  return c.json({ok:true,...await applyStoredResultSettings(profile,String(body.after||''),body.previousSuffix===undefined?profile.titleSuffix:String(body.previousSuffix))});
+});
 app.delete('/api/profiles/:id',async c=>c.json({ok:await deleteProfile(c.req.param('id'))}));
 app.post('/api/profiles/:id/scrape',async c=>createProfileJob(c,c.req.param('id'),'scrape'));
 app.post('/api/profiles/:id/sync',async c=>createProfileJob(c,c.req.param('id'),'sync'));
@@ -302,7 +360,7 @@ app.get('/api/profiles/:id/products',async c=>c.json({ok:true,...await listProdu
 app.delete('/api/profiles/:id/products/:sourceKey',async c=>c.json({ok:await deleteProduct(c.req.param('id'),decodeURIComponent(c.req.param('sourceKey')))}));
 app.delete('/api/profiles/:id/products',async c=>{if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'برای حذف همهٔ نتایج، confirm=DELETE لازم است.'},400);return c.json({ok:true,deleted:await clearProducts(c.req.param('id'))})});
 app.get('/api/profiles/:id/export.csv',async c=>{const result=await listProducts(c.req.param('id'),100000,0,''),fields=['sourceKey','title','price','url','image','sku','brand','stock','weight','category','shortDesc','longDesc','variations','variationGroups'],csv='\uFEFF'+fields.join(',')+'\n'+result.products.map(p=>fields.map(field=>csvCell((p as any)[field])).join(',')).join('\n');return c.body(csv,200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="${c.req.param('id').replace(/[^a-z0-9_.-]/gi,'_')}.csv"`})});
-app.post('/api/profiles/:id/import',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const{records,format,wooStatus}=await importRecords(c);const opts=parseImportOptions(c.req.query('opts'));let imported=0,failed=0,skipped=0;const errors:string[]=[],mapping=opts.mapping,dedupe=String(opts.dedupe||'none');const lastTitle=new Map<string,number>();if(dedupe==='last'){for(let i=records.length-1;i>=0;i--){const rawRow=records[i],row=mapping&&Object.keys(mapping).length?applyImportMapping(rawRow,mapping):rawRow;const title=String(row.title||row.name||'').trim();if(title&&!lastTitle.has(title))lastTitle.set(title,i)}}const seenTitle=new Set<string>();for(const[index,rawRow]of records.entries())try{const row=mapping&&Object.keys(mapping).length?applyImportMapping(rawRow,mapping):rawRow;const title=String(row.title||row.name||'').trim();if(!title){if(opts.skipMissingTitle){skipped++;continue}throw new Error('title is empty')}if(dedupe==='first'&&seenTitle.has(title)){skipped++;continue}if(dedupe==='last'&&lastTitle.get(title)!==index){skipped++;continue}seenTitle.add(title);const priceRaw=String(row.price??row.priceText??'').trim();const price=normalizeImportPrice(priceRaw,opts);if(price===null){if(opts.skipMissingPrice){skipped++;continue}throw new Error(`invalid price "${priceRaw.slice(0,40)}"`)}const attrGroups:ImportAttrGroup[]=[];if(mapping&&Object.keys(mapping).length)for(const[col,field]of Object.entries(mapping)){if(field==='attributes'&&rawRow[col]!=null&&String(rawRow[col]).trim()!=='')attrGroups.push(...parseImportAttributes(rawRow[col],col))}const parsedGroups:Array<{name:string;values:string[]}>=Array.isArray(jsonValue(row.variationGroups,[]))?jsonValue(row.variationGroups,[]) as Array<{name:string;values:string[]}>:[];const variationGroups=mergeVariationGroups([...parsedGroups,...attrGroups]);const key=String(row.sourceKey||row.key||crypto.randomUUID()),image=String(row.image||'');await upsertProduct(profile.id,{sourceKey:key,title,price,priceText:priceRaw,url:String(row.url||row.link||''),image,images:image?[image]:[],sku:String(row.sku||''),brand:String(row.brand||''),stock:row.stock==null||String(row.stock).trim()===''?(opts.defaultStock>0?opts.defaultStock:undefined):Number(String(row.stock).replace(/[^\d.-]/g,'')),weight:row.weight==null?undefined:Number(String(row.weight).replace(/[^\d.-]/g,'')),category:String(row.category||''),shortDesc:String(row.shortDesc||''),longDesc:String(row.longDesc||''),variations:jsonValue(row.variations,[]),variationGroups,destinationStatus:wooStatus||undefined,sourcePage:'import',scrapedAt:new Date().toISOString()});imported++}catch(error){failed++;if(errors.length<50)errors.push(`row ${index+1}: ${message(error)}`)}await pushImportHistory({fileName:String(c.req.query('name')||'').slice(0,200),format,rows:records.length,imported,failed,skipped,wooStatus:wooStatus||undefined,opts,at:new Date().toISOString()});return c.json({ok:failed===0&&skipped<records.length,format,wooStatus,rows:records.length,imported,failed,skipped,errors})});
+app.post('/api/profiles/:id/import',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const{records,format,wooStatus}=await importRecords(c);const opts=parseImportOptions(c.req.query('opts'));let imported=0,failed=0,skipped=0;const errors:string[]=[],mapping=opts.mapping,dedupe=String(opts.dedupe||'none');const lastTitle=new Map<string,number>();if(dedupe==='last'){for(let i=records.length-1;i>=0;i--){const rawRow=records[i],row=mapping&&Object.keys(mapping).length?applyImportMapping(rawRow,mapping):rawRow;const title=String(row.title||row.name||'').trim();if(title&&!lastTitle.has(title))lastTitle.set(title,i)}}const seenTitle=new Set<string>();for(const[index,rawRow]of records.entries())try{const row=mapping&&Object.keys(mapping).length?applyImportMapping(rawRow,mapping):rawRow;const title=String(row.title||row.name||'').trim();if(!title){if(opts.skipMissingTitle){skipped++;continue}throw new Error('title is empty')}if(dedupe==='first'&&seenTitle.has(title)){skipped++;continue}if(dedupe==='last'&&lastTitle.get(title)!==index){skipped++;continue}seenTitle.add(title);const priceRaw=String(row.price??row.priceText??'').trim();const price=normalizeImportPrice(priceRaw,opts);if(price===null){if(opts.skipMissingPrice){skipped++;continue}throw new Error(`invalid price "${priceRaw.slice(0,40)}"`)}const attrGroups:ImportAttrGroup[]=[];if(mapping&&Object.keys(mapping).length)for(const[col,field]of Object.entries(mapping)){if(field==='attributes'&&rawRow[col]!=null&&String(rawRow[col]).trim()!=='')attrGroups.push(...parseImportAttributes(rawRow[col],col))}const parsedGroups:Array<{name:string;values:string[]}>=Array.isArray(jsonValue(row.variationGroups,[]))?jsonValue(row.variationGroups,[]) as Array<{name:string;values:string[]}>:[];const variationGroups=mergeVariationGroups([...parsedGroups,...attrGroups]);const key=String(row.sourceKey||row.key||crypto.randomUUID()),image=String(row.image||'');await upsertProduct(profile.id,{sourceKey:key,title,price,priceText:priceRaw,url:String(row.url||row.link||''),image,images:image?[image]:[],sku:String(row.sku||''),brand:String(row.brand||''),stock:row.stock==null||String(row.stock).trim()===''?(opts.defaultStock>0?opts.defaultStock:undefined):Number(String(row.stock).replace(/[^\d.-]/g,'')),weight:row.weight==null?undefined:Number(String(row.weight).replace(/[^\d.-]/g,'')),category:String(row.category||''),shortDesc:String(row.shortDesc||''),longDesc:String(row.longDesc||''),variations:jsonValue(row.variations,[]),variationGroups,destinationStatus:wooStatus||undefined,sourcePage:'import',scrapedAt:new Date().toISOString()},{source:true});imported++}catch(error){failed++;if(errors.length<50)errors.push(`row ${index+1}: ${message(error)}`)}await pushImportHistory({fileName:String(c.req.query('name')||'').slice(0,200),format,rows:records.length,imported,failed,skipped,wooStatus:wooStatus||undefined,opts,at:new Date().toISOString()});return c.json({ok:failed===0&&skipped<records.length,format,wooStatus,rows:records.length,imported,failed,skipped,errors})});
 
 // ─── Advanced import: analyze file, column mapping, history ──────────────────
 app.post('/api/import/analyze',async c=>{
@@ -317,7 +375,14 @@ app.post('/api/import/analyze',async c=>{
 app.get('/api/import/history',async c=>c.json({ok:true,items:await getImportHistory()}));
 app.post('/api/import/history/clear',async c=>{await setState('import_history',[]);return c.json({ok:true})});
 
-app.get('/api/jobs',async c=>c.json({ok:true,jobs:await listJobs(Math.min(200,Number(c.req.query('limit'))||50))}));
+app.get('/api/jobs',async c=>c.json({ok:true,jobs:await listJobs(Math.min(200,Number(c.req.query('limit'))||50)),processor:{mode:c.env.JOBS?'cloudflare-queue':'inline'}}));
+app.post('/api/jobs/:id/start',async c=>{
+  const job=await getJob(c.req.param('id'));
+  if(!job)return c.json({ok:false,error:'Job not found'},404);
+  if(job.status!=='queued')return c.json({ok:false,error:'Only queued jobs can be started'},409);
+  await enqueueJob(job,p=>c.executionCtx.waitUntil(p));
+  return c.json({ok:true,job,processor:'triggered'},202);
+});
 app.get('/api/jobs/:id',async c=>{const job=await getJob(c.req.param('id'));return job?c.json({ok:true,job}):c.json({ok:false,error:'Job not found'},404)});
 app.post('/api/jobs/:id/stop',async c=>{const job=await stopJob(c.req.param('id'));if(job)return c.json({ok:true,job,forced:true});await updateJob(c.req.param('id'),{stopRequested:true});return c.json({ok:true,forced:false})});
 app.post('/api/jobs/:id/retry',async c=>{const job=await retryJob(c.req.param('id'));if(!job)return c.json({ok:false,error:'Job cannot be retried'},409);await enqueueJob(job,p=>c.executionCtx.waitUntil(p));return c.json({ok:true,job})});
@@ -407,30 +472,39 @@ function isManualListEngine(engine?:string){return !!engine&&MANUAL_LIST_ENGINES
 async function applyInlineSelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',errors:string[],onlyMissing=true){try{const suggested=await suggestSelectors(url,mode),entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));if(entries.length){profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];await saveProfile({...profile,updatedAt:new Date().toISOString()});return {...suggested,selectors:Object.fromEntries(entries)}}}catch(error){errors.push(`selectors ${mode}: ${message(error)}`)}return null}
 async function runProfileApi(c:any,id:string){
   const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);
-  const body=await jsonBody(c),target=validTarget(body.target||(body.sync?'both':'none')),persist=body.persist!==false,withDetails=body.details!==false,extract=body.extract!==false&&!profile.noExtract;
-  const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(1000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||500));
+  const body=await jsonBody(c),target=validTarget(body.target||(body.sync?'both':'none')),persist=body.persist!==false||target!=='none',withDetails=body.details!==false,extract=body.extract!==false&&!profile.noExtract;
+  const requestedPages=body.pages!==undefined?Number(body.pages):Number(profile.pages),pages=['none','scroll'].includes(profile.pagination)?1:requestedPages>0?Math.min(100,Math.max(1,requestedPages)):100,limit=Math.min(1000,Math.max(1,Number(body.limit)||Number(body.limitProducts)||500));
   const products:Product[]=[],seen=new Set<string>(),syncResults:any[]=[],errors:string[]=[];let usedEngine:ExtractionEngine|undefined,engineMs=0,pagesScanned=0,added=0,updated=0,listSelectorUpdate:any=null,detailSelectorUpdate:any=null,autoSelectorsAllowed=false;const engineDiscovered:Record<string,string>={};
   if(extract){
     for(let pageNo=1;pageNo<=pages&&products.length<limit;pageNo++)try{
-      const url=pageUrl(profile,pageNo),page=await scrapeListPage(url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster);
+      const url=pageUrl(profile,pageNo),page=await scrapeListPage(url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll');
       pagesScanned++;usedEngine=page.usedEngine||usedEngine;engineMs+=page.elapsedMs||0;
       if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;await saveProfile({...profile,updatedAt:new Date().toISOString()})}
       if(page.discoveredSelectors&&Object.keys(page.discoveredSelectors).length){profile.selectors={...profile.selectors,...page.discoveredSelectors};await saveProfile({...profile,updatedAt:new Date().toISOString()});Object.assign(engineDiscovered,page.discoveredSelectors)}if(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine)){autoSelectorsAllowed=true;listSelectorUpdate=await applyInlineSelectorSuggestions(profile,page.url,'list',errors,true)}
       const before=products.length;
-      for(const raw of page.products){const product=transformProduct(raw,profile);if((profile.minPrice&&product.price<profile.minPrice)||seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}
+      for(const raw of page.products){const product=raw;if(seen.has(product.sourceKey))continue;seen.add(product.sourceKey);products.push(product);if(products.length>=limit)break}
       if(products.length===before){if(pageNo===1)throw new Error('در صفحهٔ اول هیچ محصول تازه‌ای استخراج نشد؛ این اجرا موفقِ صفرمحصول محسوب نمی‌شود. سلکتورها، موتور استخراج و محدودیت دسترسی/ضدربات سایت را بررسی کنید.');break}
       if(profile.pagination==='next_selector'&&!page.nextUrl)break;
     }catch(error){errors.push(`page ${pageNo}: ${message(error)}`);if(pageNo===1)break}
     if(!products.length&&errors.length)throw new Error(errors[0]);
     if(withDetails&&products.length){const sample=products.find(p=>p.url);if(sample?.url&&autoSelectorsAllowed)detailSelectorUpdate=await applyInlineSelectorSuggestions(profile,sample.url,'detail',errors,true);await mapLimit(products,Math.min(4,Math.max(1,Number(c.env.DETAIL_CONCURRENCY||2))),async product=>{try{Object.assign(product,await scrapeDetails(product,profile.selectors,Boolean(profile.networkIndirect)))}catch(error){errors.push(`${product.title}: details: ${message(error)}`)}});}
-    if(persist)for(const product of products)try{(await upsertProduct(profile.id,product))==='added'?added++:updated++}catch(error){errors.push(`${product?.title||'?'}: save: ${message(error)}`)}
+    const categoryPending=products.filter(product=>product.price>0&&productNeedsBasalamCategory(product));
+    if(categoryPending.length){
+      let enrichCategories:any[]=[];try{enrichCategories=(await destinationCategories()).items}catch{/* manual and learned categories remain available */}
+      await mapLimit(categoryPending,2,async product=>{
+        try{const result=await assignProductBasalamCategory(product,{categories:enrichCategories,profileCategoryId:profile.basalamCategoryId});if(!result.ok)errors.push(`${product.title}: category: ${result.error||'unresolved'}`)}
+        catch(error){errors.push(`${product.title}: category: ${error instanceof Error?error.message:String(error)}`)}
+      });
+    }
+    if(persist)for(const product of products)try{(await upsertProduct(profile.id,product,{source:true}))==='added'?added++:updated++}catch(error){errors.push(`${product?.title||'?'}: save: ${message(error)}`)}
     if(persist)await markProfileRun(profile.id);
   }else products.push(...(await listProducts(profile.id,limit,0,String(body.q||''))).products);
-  if(target!=='none')for(const product of products)try{if(target==='woo'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'woo',action:await syncWoo(product,profile)});if(target==='basalam'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'basalam',results:await syncBasalam(product,profile)})}catch(error){errors.push(`${product.title}: sync: ${message(error)}`)}
+  if(target!=='none'&&extract){const stored=await Promise.all(products.map(product=>getProduct(profile.id,product.sourceKey)));products.splice(0,products.length,...stored.filter((product):product is Product=>Boolean(product)));}
+  if(target!=='none')for(const product of products)try{if(product.price<=0||(profile.minPrice&&product.price<profile.minPrice))continue;if(target==='woo'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'woo',action:await syncWoo(product,profile)});if(target==='basalam'||target==='both')syncResults.push({sourceKey:product.sourceKey,title:product.title,target:'basalam',results:await syncBasalam(product,profile)})}catch(error){errors.push(`${product.title}: sync: ${message(error)}`)}
   const result:InlineApiResult={ok:errors.length===0,mode:'inline-api',profileId:profile.id,target,engine:{requested:profile.extractionEngine,master:profile.extractionEngineMaster,used:usedEngine||profile.extractionEngineMaster||profile.extractionEngine,elapsedMs:engineMs,pagesScanned},summary:{total:products.length,added,updated,synced:syncResults.length,failed:errors.length,persisted:persist,details:withDetails},products,syncResults,errors,selectors:{list:{...engineDiscovered,...(listSelectorUpdate?.selectors||{})},detail:detailSelectorUpdate?.selectors||{}}};
   return c.json(result,errors.length?207:200);
 }
-async function createProfileJob(c:any,id:string,kind:'scrape'|'sync'){const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);const b=await c.req.json().catch(()=>({})),target=validTarget(b.target||(kind==='sync'?'both':'none')),job=await createJob(profile.id,kind,target);if(job.status==='queued')await enqueueJob(job,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise));return c.json({ok:true,job,processor:job.kind===kind&&job.status==='queued'?'triggered':'existing-active',dedupProfile:true},202)}
+async function createProfileJob(c:any,id:string,kind:'scrape'|'sync'){const profile=await getProfile(id);if(!profile)return c.json({ok:false,error:'Profile not found'},404);const b=await c.req.json().catch(()=>({})),target=validTarget(b.target||(kind==='sync'?'both':'none')),job=await createJob(profile.id,kind,target,{workflow:b.workflow==='list-only'?'list-only':b.workflow==='full'?'full':undefined});if(job.status==='queued')await enqueueJob(job,(promise:Promise<unknown>)=>c.executionCtx.waitUntil(promise));return c.json({ok:true,job,processor:job.kind===kind&&job.status==='queued'?'triggered':'existing-active',dedupProfile:true},202)}
 async function jsonBody(c:any):Promise<any>{return c.req.json().catch(()=>({}))}
 function validTarget(value:string):'none'|'woo'|'basalam'|'both'{return['none','woo','basalam','both'].includes(value)?value as any:'none'}
 function validDestination(value:string):'woo'|'basalam'{if(value!=='woo'&&value!=='basalam')throw new Error('Invalid target');return value}
@@ -598,7 +672,7 @@ export function normalizeProfile(raw:any):Profile {
   return {
     id:String(raw.id||raw.key||idFromUrl(url.href)),name:String(raw.name||url.hostname),url:url.href,enabled:raw.enabled===undefined?true:on(raw.enabled),
     pages:Math.min(100,Math.max(0,Number(raw.pages)||0)),
-    pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none'].includes(pagination)?pagination:'query_page',
+    pagination:['query_page','query_custom','path_page','path_pattern','full_pattern','next_selector','none','scroll'].includes(pagination)?pagination:'query_page',
     extractionEngine:['auto','cheerio','htmlrewriter','jsonld','next_data','metadata','script_json','heuristic','structural','playwright','puppeteer','crawlee_playwright','network_api'].includes(engine)?engine:'auto',
     extractionEngineMaster:master,extractionEngineHost:String(raw.extractionEngineHost||raw.fetch_engine_host||''),extractionEngineMs:Math.max(0,Number(raw.extractionEngineMs||raw.fetch_engine_ms)||0),extractionEngineBenchmarks:Array.isArray(raw.extractionEngineBenchmarks)?raw.extractionEngineBenchmarks:[],
     paginationValue:String(raw.paginationValue||raw.pagVal||'page'),selectors:selectors as Profile['selectors'],gallery:gallery||undefined,titleSuffix:String(raw.titleSuffix||''),
@@ -658,6 +732,8 @@ export async function scheduledTasks(env:Env,waitUntil:(promise:Promise<unknown>
   try{
     if(settings.watchdog?.enabled!==false){const stallMin=Math.max(0.5,Number(settings.watchdog?.stallAfter||300)/60);if(settings.watchdog?.autoContinue!==false)await recoverFailedAndStalledJobs(stallMin);else await reapStalledJobs(stallMin)}
     await pruneFinishedJobs(clampNumber(settings.general?.keepReports,20,1,200));
+    await drainWooReprice(wooRepriceIO(job=>enqueueJob(job,waitUntil)));
+    await refreshDestinationLedger(false);
     const due=await enqueueDueProfiles(),queued=await listQueuedJobs(200),seen=new Set<string>();
     for(const job of [...due,...queued])if(!seen.has(job.id)){seen.add(job.id);await enqueueJob(job,waitUntil)}
     await recoverBackgroundRuns(waitUntil);
@@ -692,3 +768,11 @@ async function maybeCronPing(settings:any){
   if(delivery.some(item=>item.ok))await setState('cron_ping',{at:new Date().toISOString(),delivery});
 }
 
+
+function automationTick(...args:Parameters<typeof rawautomationTick>):ReturnType<typeof rawautomationTick>{return monitored({setState,deleteState},'پاسخ خودکار و گزارش دوره‌ای',()=>rawautomationTick(...args))}
+
+function aiEnrichTick(...args:Parameters<typeof rawaiEnrichTick>):ReturnType<typeof rawaiEnrichTick>{return monitored({setState,deleteState},'تکمیل دوره‌ای محتوای محصولات با هوش مصنوعی',()=>rawaiEnrichTick(...args))}
+
+function scheduledBranchPushTick(...args:Parameters<typeof rawscheduledBranchPushTick>):ReturnType<typeof rawscheduledBranchPushTick>{return monitored({setState,deleteState},'پشتیبان‌گیری دوره‌ای شاخه',()=>rawscheduledBranchPushTick(...args))}
+
+function wooRepriceIO(dispatch:(job:any)=>Promise<void>){return {loadConnections,saveConnections,mergeConnections,listProfiles,getState,setState,createJob,dispatch}}

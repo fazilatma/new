@@ -68,7 +68,7 @@ test('results tab: show-results renders plain and coded products alike', async (
   document.getElementById('loadProducts').dispatchEvent(new window.Event('click', { bubbles: true }));
   await waitFor(() => document.querySelectorAll('#products .product').length === 2, 'both product cards');
   const titles = [...document.querySelectorAll('#products .product .ptitle')].map((el) => el.textContent);
-  assert.ok(titles[0].includes('Plain Shoe') && titles[0].includes('(کد:s1)'), `plain product keeps its generated suffix, got: ${titles[0]}`);
+  assert.ok(titles[0] === 'Plain Shoe', `plain product shows its stored title without a display-only suffix, got: ${titles[0]}`);
   assert.ok(titles[1].includes('(کد 9)'), `coded product keeps its title suffix, got: ${titles[1]}`);
   assert.equal(failures.length, 0, failures.map((error) => error?.stack || String(error)).join('\n'));
 });

@@ -22,13 +22,13 @@ import { isChatCompatibleAiModel } from '../worker-src/ai-catalog.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixPinnedModels, normalizeCategoryFixPinned, normalizeCategoryMode, selectCategoryModels } from '../worker-src/destination-core.js';
 import { aiProviders, suggestCategoryWithModel } from './ai.js';
 import { loadConnections } from './connections.js';
-import { getState, getTriedBasalamCategories, markBasalamCategoriesTried, setState } from './db.js';
+import { getState, getTriedBasalamCategories, pruneBasalamCategoryNotebooks, markBasalamCategoriesTried, setState } from './db.js';
 import { applyBasalamCategory, destinationCatalog, destinationCategories } from './maintenance.js';
 
 export type CategoryRunStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed';
 type CategoryProduct = { id: number; shopId: string; title: string; categoryId?: number };
 export type CategoryRunItem = { id: number; shopId: string; title: string; ok: boolean; categoryId?: number; categoryName?: string; source?: string; confidence?: number; error?: string };
-export type CategoryRun = {
+export type CategoryRun = { inventoryComplete?: boolean;
   id: string; kind: 'category-all'; status: CategoryRunStatus; phase: string; stopRequested: boolean;
   createdAt: string; updatedAt: string; startedAt: string | null; finishedAt: string | null;
   attempts: number; error: string | null; modelKeys: string[]; mode: string;
@@ -146,11 +146,12 @@ async function listCategoryProducts(run: CategoryRun): Promise<void> {
     const key = `${row.shopId}:${row.id}`;
     if (row.id > 0 && row.title && !seen.has(key)) { seen.add(key); run.products.push(row); }
   }
+  (run as any).inventoryComplete=(run as any).inventoryComplete!==false&&data.complete!==false;
   run.totalPages = Math.max(run.totalPages, Number(data.totalPages) || 1);
   run.total = Math.max(Number(data.total) || 0, run.products.length);
   run.attempts = 0;
   if (run.page < run.totalPages) { run.page++; run.phase = 'listing'; }
-  else { run.total = run.products.length; run.phase = 'categorizing'; }
+  else { run.total = run.products.length; if((run as any).inventoryComplete)await pruneBasalamCategoryNotebooks(run.products); run.phase = 'categorizing'; }
 }
 
 function compactCategoryItem(row: any): CategoryRunItem {
@@ -173,30 +174,31 @@ async function categorizeProduct(run: CategoryRun, product: CategoryProduct, cat
   // Returns false when the user asked to stop.
   const currentCategory = Number(product.categoryId) || 0;
   const tried = new Set(await getTriedBasalamCategories(product.shopId, product.id));
+  if(currentCategory>0)tried.add(currentCategory);
+  const available=categories.filter(row=>!tried.has(Number(row.id)));
   // Sequential voting with early stop: models answer one by one; as soon as a category
   // reaches the majority threshold we stop asking the remaining models.
   const modelKeys = run.modelKeys, threshold = Math.floor(modelKeys.length / 2) + 1, votes = new Map<number, { count: number; row: any }>(), triedHits: number[] = [];
   let responded = 0;
-  for (const key of modelKeys) {
+  for (const key of (available.length?modelKeys:[])) {
     responded++;
     let suggestion: any;
-    try { suggestion = await suggestCategoryWithModel(product.title, key, categories); }
+    try { suggestion = await suggestCategoryWithModel(product.title, key, available); }
     catch (error) { suggestion = { ok: false, key, error: error instanceof Error ? error.message : String(error) }; }
     if (!suggestion?.ok) continue;
     const id = Number(suggestion.categoryId);
     if (!(Number.isInteger(id) && id > 0)) continue;
     if (tried.has(id)) { triedHits.push(id); continue; }
+    if(!available.some(row=>Number(row.id)===id))continue;
     const vote = votes.get(id) || { count: 0, row: suggestion };
     vote.count++; votes.set(id, vote);
     if (vote.count >= threshold) break;
   }
   const winner = [...votes.values()].sort((a, b) => b.count - a.count)[0];
-  if (winner && currentCategory && Number(winner.row.categoryId) === currentCategory) {
-    // The model's majority already matches the product's stored category: nothing to do.
-    appendCategoryItem(run, { ...product, ok: true, categoryId: currentCategory, categoryName: String(winner.row.categoryName || ''), source: `دستهٔ فعلی تأیید شد (${winner.count} از ${responded} مدل)`, confidence: responded ? Math.round(winner.count / responded * 100) : 0, error: undefined });
-  } else if (winner) {
+  if (winner) {
     try {
       const source = `هوش مصنوعی سرورساید: ${winner.count} از ${responded} مدل`;
+      await markBasalamCategoriesTried(product.shopId,product.id,[currentCategory,Number(winner.row.categoryId)]);
       await applyBasalamCategory(product.id, product.shopId, Number(winner.row.categoryId), product.title, String(winner.row.categoryName || ''), source);
       run.changed++;
       appendCategoryItem(run, { ...product, ok: true, categoryId: Number(winner.row.categoryId), categoryName: String(winner.row.categoryName || ''), source, confidence: responded ? Math.round(winner.count / responded * 100) : 0 });
@@ -205,7 +207,7 @@ async function categorizeProduct(run: CategoryRun, product: CategoryProduct, cat
       run.failed++;
       appendCategoryItem(run, { ...product, ok: false, error: (error instanceof Error ? error.message : String(error)) + ' (دستهٔ پیشنهادی برای این محصول ثبت شد تا دوباره امتحان نشود.)' });
     }
-  } else if (triedHits.length) {
+  } else if (triedHits.length || !available.length) {
     // Every suggestion the models made for this product was already tried before.
     run.failed++;
     appendCategoryItem(run, { ...product, ok: false, error: 'همهٔ دسته‌بندی‌های پیشنهادی مدل‌ها قبلاً برای این محصول امتحان شده‌اند و نتیجهٔ قطعی نداشتند؛ در اجرای بعدی از آنها صرف‌نظر می‌شود.' });

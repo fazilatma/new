@@ -1,8 +1,9 @@
+import { predictBasalamCategory } from '../worker-src/category-prediction.js';
 import { randomUUID } from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
-import { assertPublicUrl, privateIp, safeFetch, viaWorkerUrl } from './network.js';
+import { assertAiEndpointUrl, assertPublicUrl, privateIp, safeBasalamFetch, safeFetch, viaWorkerUrl } from './network.js';
 import { loadConnections, saveConnections } from './connections.js';
-import { getState, setState } from './db.js';
+import { findLearnedCategory, learnCategory, getState, setState } from './db.js';
 import { categoryPrompt, parseCategoryId } from '../worker-src/destination-core.js';
 import type { AiCategoryOption } from '../worker-src/destination-core.js';
 import { greenTestedCandidateKeys, isChatCompatibleAiModel, isReasoningAiModel, parseModelKeySuffix } from '../worker-src/ai-catalog.js';
@@ -69,7 +70,18 @@ export function providerWithKey(provider:Provider,index=0):Provider{
   return{...provider,apiKey:token||provider.apiKey};
 }
 
-export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
+export async function aiCall(provider:Provider,model:string,prompt:string,maxTokens=200,timeoutMs?:number){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',signal:AbortSignal.timeout(Math.max(1000,Number(timeoutMs)||30000)),headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages:[{role:'user',content:prompt}],max_tokens:Math.max(1,Number(maxTokens)||200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
+
+/**
+ * Chat with the whole conversation instead of a flattened transcript.
+ *
+ * The shared dashboard posts {messages:[{role,content}…]}. Joining those lines into one prompt
+ * made the model read a log file rather than answer the last turn, and the system prompt got
+ * buried in the middle of it. The Worker sends the list as-is, so Node now sends the same
+ * payload; the request shape (endpoint, guard, timeout, response parsing) stays identical to
+ * aiCall so the AI-endpoint URL rule keeps applying.
+ */
+export async function aiChatWithMessages(provider:Provider,model:string,messages:{role:string;content:string}[],maxTokens=1200){const ai=(await loadConnections()).ai;{const problem=aiConfigProblem(provider,model);if(problem)throw Error(problem);}const endpoint=provider.baseUrl+(provider.baseUrl.includes('/chat/completions')?'':'/chat/completions'),started=Date.now();const response=await networkFetch(endpoint,{method:'POST',signal:AbortSignal.timeout(Math.max(1000,Number(timeoutMs)||30000)),headers:{authorization:`Bearer ${provider.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model,messages,max_tokens:Math.max(1,Number(maxTokens)||1200),temperature:.2})},ai.network);const body=await response.json().catch(()=>null) as any;if(!response.ok)throw Error(`HTTP ${response.status}: ${body?.error?.message||body?.message||'AI error'}`);const text=body?.choices?.[0]?.message?.content||body?.result?.response||body?.response||'';return{ok:true,text:String(text),latencyMs:Date.now()-started,provider:provider.id,model}}
 export async function testAllModels(prompt='سلام',onlyCandidates=false){const ai=(await loadConnections()).ai,providers=await aiProviders(),wanted=new Set(ai.candidates),tasks=providers.filter(p=>p.enabled).flatMap(p=>p.models.map(model=>({p,model,key:`${p.id}::${model}`}))).filter(x=>!onlyCandidates||wanted.has(x.key));const results:any[]=[];let cursor=0;await Promise.all(Array.from({length:Math.min(3,tasks.length)},async()=>{while(cursor<tasks.length){const task=tasks[cursor++];try{results.push({...await aiCall(task.p,task.model,prompt),key:task.key})}catch(error){results.push({ok:false,key:task.key,provider:task.p.id,model:task.model,error:error instanceof Error?error.message:String(error)})}}}));await setState('ai_test_results',{at:new Date().toISOString(),runId:randomUUID(),prompt,categoryTitle:'',onlyCandidates,results});return results}
 /**
  * Server-side AI test run for the Node runtime.
@@ -219,7 +231,7 @@ export async function retryAiTestPart(key:string,part:string):Promise<{runId:str
 export async function recordVote(task:string,winner:string,candidates:string[]){const votes=await getState<any>('ai_votes',{scores:{},history:[]});for(const key of candidates){votes.scores[key]??={wins:0,tests:0};votes.scores[key].tests++;if(key===winner)votes.scores[key].wins++}votes.history.push({at:new Date().toISOString(),task,winner,candidates});votes.history=votes.history.slice(-1000);await setState('ai_votes',votes);return leaderboard(votes)}
 export async function getLeaderboard(){return leaderboard(await getState<any>('ai_votes',{scores:{},history:[]}))}
 function leaderboard(votes:any){return Object.entries(votes.scores||{}).map(([key,v]:any)=>({key,wins:v.wins||0,tests:v.tests||0,score:v.tests?Math.round(v.wins/v.tests*1000)/10:0})).sort((a,b)=>b.score-a.score||b.wins-a.wins)}
-async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertPublicUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=viaWorkerUrl(net.workerUrl,url);return safeFetch(target,{...init,directRoute:true},3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(privateIp(ip))throw Error('IP خصوصی برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,init,3_000_000)}
+async function networkFetch(url:string,init:RequestInit,net:Network):Promise<Response>{await assertAiEndpointUrl(url);if(net.mode==='worker'&&net.workerUrl){const target=viaWorkerUrl(net.workerUrl,url);return safeFetch(target,{...init,directRoute:true,aiEndpoint:true},3_000_000)}if(net.mode==='proxy'&&net.proxyUrl){return undiciFetch(url,{...(init as any),dispatcher:new ProxyAgent(net.proxyUrl)}) as unknown as Response}if((net.mode==='dns'||net.mode==='doh')&&(net.resolveIp||net.dohUrl)){const host=new URL(url).hostname,ip=net.resolveIp||await doh(host,net.dohUrl);if(privateIp(ip))throw Error('IP خصوصی برای اتصال دستی/DoH مجاز نیست');const dispatcher=new Agent({connect:{lookup(_host:any,_opts:any,callback:any){callback(null,[{address:ip,family:ip.includes(':')?6:4}])}} as any});return undiciFetch(url,{...(init as any),dispatcher}) as unknown as Response}return safeFetch(url,{...init,aiEndpoint:true},3_000_000)}
 async function doh(host:string,url:string){const endpoint=url+(url.includes('?')?'&':'?')+'name='+encodeURIComponent(host)+'&type=A',r=await safeFetch(endpoint,{headers:{accept:'application/dns-json'}},500_000),j=await r.json() as any,ip=(j.Answer||[]).find((x:any)=>x.type===1)?.data;if(!ip)throw Error('DoH پاسخی برای دامنه نداد');return String(ip)}
 
 /**
@@ -263,7 +275,7 @@ export async function aiConnectionDiagnostic() {
   if (mode === 'worker' && net.workerUrl) {
     const target = viaWorkerUrl(String(net.workerUrl), probeTarget);
     try {
-      const response = await safeFetch(target, { headers: { accept: 'application/json' }, directRoute: true }, 2_000_000);
+      const response = await safeFetch(target, { headers: { accept: 'application/json' }, directRoute: true, aiEndpoint: true }, 2_000_000);
       const text = (await response.text().catch(() => '')).slice(0, 400);
       // A forwarding proxy reaches the provider, which then complains about the
       // missing key. That is a HEALTHY proxy: it proves the hop works.
@@ -395,31 +407,23 @@ export type DescriptionResult = {
  * master AI model. Only empty fields are written: a real value scraped from the
  * source site is never overwritten by generated text.
  */
-export async function generateProductDescription(product: any, options: { force?: boolean; categories?: AiCategoryOption[] } = {}): Promise<DescriptionResult> {
+export async function generateProductDescription(product: any, options: { timeoutMs?:number; force?: boolean; categories?: AiCategoryOption[]; categoryOnly?: boolean; skipCategory?: boolean; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
   const need = productNeedsEnrichment(product);
-  const needCategory = productNeedsBasalamCategory(product);
-  if (!options.force && !need.any && !needCategory) return { ok: true, changed: false, fields: [] };
-  const earlyFields: string[] = [];
-  if (needCategory) {
-    try {
-      const learned = await findLearnedCategory(String(product?.title || ''));
-      if (learned && Number(learned.categoryId) > 0) {
-        product.basalamCategoryId = Number(learned.categoryId);
-        if (learned.categoryName) product.basalamCategoryName = String(learned.categoryName);
-        earlyFields.push('basalamCategory');
-      }
-    } catch { /* a learning lookup must never block enrichment */ }
-  }
-  const picked = await preferredAiChatModel();
-  if (!picked) {
-    if (earlyFields.length) { product.aiEnrichedAt = new Date().toISOString(); return { ok: true, changed: true, fields: earlyFields }; }
-    return { ok: false, changed: false, fields: [], error: 'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.' };
-  }
+  // Complete category assignment before building the description prompt. A failed
+  // description must not discard a successful category (including its save flag).
+  const categoryResult = options.skipCategory
+    ? { ok: true, changed: false, fields: [] as string[] }
+    : await assignProductBasalamCategory(product, options);
+  const earlyFields = categoryResult.fields;
+  if (options.categoryOnly || (!options.force && !need.any)) return categoryResult;
+  const picked = await preferredAiChatModel().catch(() => null);
+  if (!picked) return { ok: false, changed: earlyFields.length > 0, fields: earlyFields, error: 'هیچ مدل هوش مصنوعی فعالی برای تولید توضیحات پیدا نشد.' };
 
   const context = [
     `نام محصول: ${String(product?.title || '').trim()}`,
     product?.brand ? `برند: ${product.brand}` : '',
-    product?.category ? `دسته‌بندی: ${product.category}` : '',
+    product?.category ? `دسته‌بندی مبدأ: ${product.category}` : '',
+    product?.basalamCategoryId ? `دسته‌بندی باسلام: ${product.basalamCategoryPath || product.basalamCategoryName || ''} (شناسه: ${product.basalamCategoryId})` : '',
     product?.priceText ? `قیمت: ${product.priceText}` : '',
     product?.sku ? `کد کالا: ${product.sku}` : '',
     String(product?.shortDesc || '').trim() ? `توضیح کوتاه موجود: ${product.shortDesc}` : ''
@@ -434,9 +438,9 @@ ${context}
 قوانین: همه‌چیز فارسی و روان باشد. اگر تنوع مشخصی از نام محصول قابل استنباط نیست، آرایهٔ variations را خالی بگذار. هیچ ادعای نادرست یا مشخصات فنی ساختگی ننویس.`;
 
   try {
-    const answer = await aiCall(picked.provider, picked.model, prompt, 900);
+    const answer = await aiCall(picked.provider, picked.model, prompt, 900, options.timeoutMs);
     const parsed = firstJsonObject(answer.text);
-    if (!parsed) return { ok: false, changed: false, fields: [], provider: picked.provider.id, model: picked.model, error: 'پاسخ مدل قابل تبدیل به JSON نبود.' };
+    if (!parsed) return { ok: false, changed: earlyFields.length > 0, fields: earlyFields, provider: picked.provider.id, model: picked.model, error: 'پاسخ مدل قابل تبدیل به JSON نبود.' };
     const fields: string[] = earlyFields;
     const clean = (value: unknown) => String(value ?? '').trim();
     if ((options.force || need.shortDesc) && clean(parsed.shortDesc)) { product.shortDesc = clean(parsed.shortDesc); fields.push('shortDesc'); }
@@ -449,22 +453,52 @@ ${context}
     if (need.images && Array.isArray(product?.images) && product.image && !product.images.includes(product.image)) {
       product.images = [product.image, ...product.images];
     }
-    if (productNeedsBasalamCategory(product) && Array.isArray(options.categories) && options.categories.length) {
-      try {
-        const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, options.categories);
-        if (suggestion && (suggestion as any).ok && Number((suggestion as any).categoryId) > 0) {
-          product.basalamCategoryId = Number((suggestion as any).categoryId);
-          if ((suggestion as any).categoryName) product.basalamCategoryName = String((suggestion as any).categoryName);
-          if ((suggestion as any).categoryPath) product.basalamCategoryPath = String((suggestion as any).categoryPath);
-          fields.push('basalamCategory');
-          try { await learnCategory(String(product?.title || '').trim(), Number((suggestion as any).categoryId), String((suggestion as any).categoryName || '')); } catch { /* ignore */ }
-        }
-      } catch { /* category AI must never fail the description */ }
-    }
     product.aiEnrichedAt = new Date().toISOString();
     return { ok: true, changed: fields.length > 0, fields, provider: picked.provider.id, model: picked.model };
   } catch (error) {
-    return { ok: false, changed: false, fields: [], provider: picked.provider.id, model: picked.model, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, changed: earlyFields.length > 0, fields: earlyFields, provider: picked.provider.id, model: picked.model, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Resolve existing/manual -> learned -> validated model taxonomy, independently of descriptions. */
+export async function assignProductBasalamCategory(product: any, options: { timeoutMs?:number; categories?: AiCategoryOption[]; profileCategoryId?: number } = {}): Promise<DescriptionResult> {
+  const fields: string[] = [];
+  if (!productNeedsBasalamCategory(product)) return { ok: true, changed: false, fields };
+  const categories = options.categories || [];
+  const assign = (id: number, name = '', path = '') => {
+    const row = categories.find(item => Number(item.id) === id);
+    product.basalamCategoryId = id;
+    product.basalamCategoryName = String(row?.name || name);
+    product.basalamCategoryPath = String(row?.path || path || row?.name || name);
+    product.aiEnrichedAt = new Date().toISOString();
+    fields.push('basalamCategory');
+    return { ok: true, changed: true, fields };
+  };
+  const profileId = Number(options.profileCategoryId);
+  if (Number.isInteger(profileId) && profileId > 0) return assign(profileId);
+  try {
+    const connection=(await loadConnections()).basalam,token=connection.token||(connection.shops||[]).find((s:any)=>s.token)?.token||'';
+    if(token){const prediction=await predictBasalamCategory(product,categories,{getState,setState,fetch:safeBasalamFetch},token,Math.min(8000,(options.timeoutMs||30000)/3));
+      if(prediction.ok&&prediction.categoryId){const result=assign(prediction.categoryId);product.basalamCategorySource='basalam-prediction';return {...result,provider:'basalam',model:'category-detection'}}}
+  } catch { /* prediction is optional; learned/category-model fallback remains available */ }
+  try {
+    const learned = await findLearnedCategory(String(product?.title || ''));
+    const id = Number(learned?.categoryId);
+    if (Number.isInteger(id) && id > 0 && (!categories.length || categories.some(row => Number(row.id) === id)))
+      return assign(id, String(learned?.categoryName || ''));
+  } catch { /* lookup failure must not prevent a model suggestion */ }
+  try {
+    const picked = await preferredAiChatModel();
+    if (!picked || !categories.length) return { ok: false, changed: false, fields, error: 'مدل فعال یا فهرست دسته‌بندی باسلام در دسترس نیست.' };
+    const suggestion = await suggestCategoryWithModel(String(product?.title || '').trim(), `${picked.provider.id}::${picked.model}`, categories, options.timeoutMs);
+    const id = Number(suggestion.categoryId);
+    if (!suggestion.ok || !categories.some(row => Number(row.id) === id))
+      return { ok: false, changed: false, fields, error: suggestion.error || 'دسته‌بندی معتبر باسلام پیدا نشد.' };
+    const result = assign(id, String(suggestion.categoryName || ''), String(suggestion.categoryPath || ''));
+    try { await learnCategory(String(product?.title || '').trim(), id, product.basalamCategoryName); } catch { /* category remains usable */ }
+    return result;
+  } catch (error) {
+    return { ok: false, changed: false, fields, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -475,13 +509,13 @@ ${context}
  * Always resolves (never throws on model errors) so bulk voting can continue
  * with the remaining models; only a missing title or unknown modelKey throws.
  */
-export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[]){
+export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[],timeoutMs?:number){
   const providers=await aiProviders(),[providerId,...modelParts]=String(modelKey||'').split('::'),model=modelParts.join('::'),provider=providers.find(item=>item.id===providerId&&item.enabled!==false&&item.models.includes(model));
   if(!String(title||'').trim())throw new Error('عنوان محصول برای دسته‌بندی لازم است.');
   if(!provider||!model)throw new Error('مدل انتخاب‌شده در تنظیمات فعال هوش مصنوعی پیدا نشد.');
   const key=`${provider.id}::${model}`,categoryTitle=String(title).trim();
   try{
-    const prepared=categoryPrompt(categoryTitle,categories),detail=await aiCall(provider,model,prepared.prompt),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
+    const prepared=categoryPrompt(categoryTitle,categories),detail=await aiCall(provider,model,prepared.prompt,200,timeoutMs),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
     if(!category)return{ok:false,key,provider:provider.id,model,categoryTitle,categoryId:0,allowedCategoryCount:prepared.allowed.length,text:detail.text,latencyMs:detail.latencyMs,error:'مدل هیچ شناسهٔ معتبر از فهرست دسته‌بندی باسلام برنگرداند.'};
     return{ok:true,key,provider:provider.id,model,text:detail.text,latencyMs:detail.latencyMs,categoryTitle,categoryId,categoryName:String(category.name),categoryPath:String(category.path||category.name),allowedCategoryCount:prepared.allowed.length};
   }catch(error){return{ok:false,key,provider:provider.id,model,categoryTitle,error:error instanceof Error?error.message:String(error)}}

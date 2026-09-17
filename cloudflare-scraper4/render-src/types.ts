@@ -37,7 +37,7 @@ export type Profile = {
   url: string;
   enabled: boolean;
   pages: number;
-  pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none';
+  pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none' | 'scroll';
   extractionEngine: ExtractionEngine;
   extractionEngineMaster?: ExtractionEngine;
   extractionEngineHost?: string;
@@ -95,6 +95,7 @@ export type Job = {
   id: string;
   profileId: string;
   kind: 'scrape' | 'sync';
+  workflow?: 'list-only' | 'full';
   target: 'none' | 'woo' | 'basalam' | 'both';
   status: 'queued' | 'running' | 'done' | 'failed' | 'stopped';
   phase: string;
@@ -107,7 +108,7 @@ export type Job = {
   skippedNoPrice?: number;
   stopRequested: boolean;
   error: string | null;
-  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'; item?: {sourceKey:string;title:string;url?:string;target?:string;shop?:string;price?:number;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string;transport?:string} }>;
+  log: Array<{ at: string; level: string; message: string; event?: 'added'|'updated'|'failed'|'removed'|'out-of-stock'|'zero-price'|'price-increased'|'price-decreased'|'sync-created'|'sync-updated'|'sync-skipped'|'source-cache'|'workflow'; item?: {sourceKey:string;title:string;listCount?:number;reusedCount?:number;url?:string;target?:string;shop?:string;basePrice?:number;basePriceText?:string;price?:number;oldPrice?:number;newPrice?:number;delta?:number;percent?:number;error?:string;transport?:string} }>;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

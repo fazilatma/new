@@ -1,3 +1,5 @@
+import { mergeBenchmarkProfile } from '../worker-src/benchmark-profile.js';
+import { applyResultAdjustments, sameResultData } from '../worker-src/result-adjustments.js';
 import { isoDateTime, normalizeDbValue, normalizePersianText, toRemoteId } from '../worker-src/utils.js';
 import pg from 'pg';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -165,7 +167,8 @@ export async function migrate(): Promise<void> {
       CREATE TABLE IF NOT EXISTS destination_map (profile_id text NOT NULL,source_key text NOT NULL,target text NOT NULL,account_key text NOT NULL DEFAULT 'default',remote_id integer NOT NULL,updated_at text NOT NULL DEFAULT (datetime('now')),PRIMARY KEY(profile_id,source_key,target,account_key));
       CREATE TABLE IF NOT EXISTS category_learning (phrase text NOT NULL, category_id integer NOT NULL, category_name text NOT NULL DEFAULT '', hits integer NOT NULL DEFAULT 1, updated_at text NOT NULL DEFAULT (datetime('now')), PRIMARY KEY(phrase,category_id));
       CREATE TABLE IF NOT EXISTS autoreply_log (id integer PRIMARY KEY AUTOINCREMENT, chat_id integer, customer text NOT NULL DEFAULT '', input_text text NOT NULL, output_text text NOT NULL, source text NOT NULL, created_at text NOT NULL DEFAULT (datetime('now')));
-      CREATE TABLE IF NOT EXISTS app_state (key text PRIMARY KEY,value text NOT NULL,updated_at text NOT NULL DEFAULT (datetime('now')));
+      CREATE TABLE IF NOT EXISTS destination_ledger (scope TEXT NOT NULL,generation TEXT NOT NULL,remote_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scope,generation,remote_id));
+CREATE TABLE IF NOT EXISTS app_state (key text PRIMARY KEY,value text NOT NULL,updated_at text NOT NULL DEFAULT (datetime('now')));
     `);
     return;
   }
@@ -232,7 +235,8 @@ export async function migrate(): Promise<void> {
     CREATE TABLE IF NOT EXISTS autoreply_log (
       id bigserial PRIMARY KEY, chat_id bigint, customer text NOT NULL DEFAULT '', input_text text NOT NULL, output_text text NOT NULL, source text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
     );
-    CREATE TABLE IF NOT EXISTS app_state (
+    CREATE TABLE IF NOT EXISTS destination_ledger (scope TEXT NOT NULL,generation TEXT NOT NULL,remote_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scope,generation,remote_id));
+CREATE TABLE IF NOT EXISTS app_state (
       key text PRIMARY KEY,
       value jsonb NOT NULL,
       updated_at timestamptz NOT NULL DEFAULT now()
@@ -271,16 +275,18 @@ export async function deleteProfile(id: string): Promise<boolean> {
   return Boolean(result.rowCount);
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'full' } = {}): Promise<Job> {
+  if(_options.workflow==='list-only'){kind='scrape';target='none'}
   const settings=await getState<any>('settings',{}),staleMin=Math.max(1,Number(settings?.general?.queueDedupStale)||120);
   const active=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]);
-  if(active.rows[0]){
+  if(_options.priceSync){const queued=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND kind='sync' AND target=$2 AND status='queued' AND started_at IS NULL ORDER BY created_at LIMIT 1",[profileId,target]);if(queued.rows[0])return jobFromRow(queued.rows[0]);}
+  if(active.rows[0]&&!_options.priceSync){
     const job=jobFromRow(active.rows[0]),age=Date.now()-new Date(job.updatedAt).getTime();
     if(age>=staleMin*60_000) await updateJob(job.id,{status:'failed',phase:'stale-replaced',error:'Previous active job for this profile was stale and was replaced.',finishedAt:new Date().toISOString(),stopRequested:true});
-    else return job;
+    else {if(_options.workflow&&(job.workflow!==_options.workflow||job.kind!==kind||job.target!==target))throw Error('کار فعال همین پروفایل برنامهٔ متفاوتی دارد؛ ابتدا آن را تمام یا متوقف کنید.');return job;}
   }
   const id = crypto.randomUUID();
-  const { rows } = await pool.query(`INSERT INTO jobs(id,profile_id,kind,target) VALUES($1,$2,$3,$4) RETURNING *`, [id, profileId, kind, target]);
+  const { rows } = await pool.query(`INSERT INTO jobs(id,profile_id,kind,target,log) VALUES($1,$2,$3,$4,$5) RETURNING *`, [id, profileId, kind, target, JSON.stringify(_options.workflow==='list-only'?[{at:now(),level:'info',event:'workflow',message:'list-only'}]:[])]);
   return jobFromRow(rows[0]);
 }
 
@@ -300,26 +306,22 @@ export async function listJobs(limit = 50): Promise<Job[]> {
 }
 
 export async function claimJob(): Promise<Job | null> {
-  if (useSqlite) {
-    await query('BEGIN IMMEDIATE');
-    try {
-      const { rows } = await query(`SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1`);
-      if (!rows[0]) { await query('COMMIT'); return null; }
-      const result = await query(`UPDATE jobs SET status='running',phase='starting',started_at=datetime('now'),updated_at=datetime('now') WHERE id=$1 AND status='queued' RETURNING *`, [rows[0].id]);
-      await query('COMMIT');
-      return result.rows[0] ? jobFromRow(result.rows[0]) : null;
-    } catch (error) { await query('ROLLBACK'); throw error; }
+  const settings=await getState<any>('settings',{}),limit=Math.max(1,Math.min(8,Math.trunc(Number(settings?.general?.maxConcurrentProfiles)||2)));
+  const eligible=`NOT EXISTS (SELECT 1 FROM jobs busy WHERE busy.profile_id=jobs.profile_id AND busy.id<>jobs.id AND (busy.status='running' OR (busy.status='queued' AND busy.started_at IS NOT NULL AND (busy.created_at<jobs.created_at OR (busy.created_at=jobs.created_at AND busy.id<jobs.id))))) AND (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running') < ${limit} AND (started_at IS NOT NULL OR (SELECT count(DISTINCT profile_id) FROM jobs WHERE status='running' OR (status='queued' AND started_at IS NOT NULL)) < ${limit})`;
+  if(useSqlite){
+    const result=await query(`UPDATE jobs SET status='running',phase=CASE WHEN started_at IS NULL THEN 'starting' ELSE phase END,started_at=COALESCE(started_at,datetime('now')),updated_at=datetime('now') WHERE id=(SELECT id FROM jobs WHERE status='queued' AND ${eligible} ORDER BY started_at IS NULL,created_at,id LIMIT 1) AND status='queued' RETURNING *`);
+    return result.rows[0]?jobFromRow(result.rows[0]):null;
   }
-  const client = await pool.connect();
-  try {
+  const client=await pool.connect();
+  try{
     await client.query('BEGIN');
-    const { rows } = await client.query(`SELECT id FROM jobs WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`);
-    if (!rows[0]) { await client.query('COMMIT'); return null; }
-    const result = await client.query(`UPDATE jobs SET status='running',phase='starting',started_at=now(),updated_at=now() WHERE id=$1 RETURNING *`, [rows[0].id]);
-    await client.query('COMMIT');
-    return jobFromRow(result.rows[0]);
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
-  finally { client.release(); }
+    // Serialize admission, not processing: counting running jobs under row locks alone races.
+    await client.query('LOCK TABLE jobs IN SHARE ROW EXCLUSIVE MODE');
+    const {rows}=await client.query(`SELECT id FROM jobs WHERE status='queued' AND ${eligible} ORDER BY started_at IS NULL,created_at,id LIMIT 1 FOR UPDATE`);
+    if(!rows[0]){await client.query('COMMIT');return null}
+    const result=await client.query(`UPDATE jobs SET status='running',phase=CASE WHEN started_at IS NULL THEN 'starting' ELSE phase END,started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1 RETURNING *`,[rows[0].id]);
+    await client.query('COMMIT');return jobFromRow(result.rows[0]);
+  }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
 }
 
 export async function updateJob(id: string, patch: Partial<Job>): Promise<void> {
@@ -338,9 +340,10 @@ export async function stopRequested(id: string): Promise<boolean> {
 
 function validProductRow(p: any): p is Product { return !!p && typeof p === 'object' && !Array.isArray(p); }
 
-export async function upsertProduct(profileId: string, product: Product): Promise<'added' | 'updated'> {
+export async function upsertProduct(profileId: string, product: Product, options: {source?:boolean} = {}): Promise<'added' | 'updated'> {
   if (!validProductRow(product)) throw new Error('upsertProduct refused a non-object product');
   const { rows } = await pool.query('SELECT 1 FROM products WHERE profile_id=$1 AND source_key=$2', [profileId, product.sourceKey]);
+  if(options.source||(product as any).resultBase){const profile=await getProfile(profileId);if(profile){if(options.source)delete (product as any).resultBase;const settings=await getState<any>('settings',{});applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));}}
   await pool.query(`INSERT INTO products(profile_id,source_key,data,title,price,source_url) VALUES($1,$2,$3,$4,$5,$6)
     ON CONFLICT(profile_id,source_key) DO UPDATE SET data=EXCLUDED.data,title=EXCLUDED.title,price=EXCLUDED.price,source_url=EXCLUDED.source_url,active=true,missing_since=NULL,updated_at=now()`,
     [profileId, product.sourceKey, JSON.stringify(product), product.title, product.price, product.url]);
@@ -365,7 +368,9 @@ export async function listProducts(profileId: string, limit = 100, offset = 0, q
 }
 
 export async function allProducts(profileId: string): Promise<Product[]> {
-  const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND data::text<>'null' ORDER BY updated_at`, [profileId]);
+  // The sync queue also runs on SQLite; PostgreSQL's ::text cast is invalid there.
+  const dataText = useSqlite ? 'data' : 'data::text';
+  const { rows } = await pool.query(`SELECT data FROM products WHERE profile_id=$1 AND data IS NOT NULL AND ${dataText}<>'null' ORDER BY updated_at`, [profileId]);
   return rows.map(row => parseJson<Product>(row.data, row.data)).filter(validProductRow);
 }
 export async function listStalestProducts(profileId: string, limit = 5): Promise<Product[]> {
@@ -419,16 +424,33 @@ export async function listCategoryLearning(limit=1000):Promise<any[]>{const {row
 // ─── Basalam category bulk-fix: tried-category memory ─────────────────────────
 // Mirrors worker-src/db.ts byte-for-byte in behavior: same app_state key, same
 // 50-id cap per shop:product, so Worker and Node never retry a failed suggestion.
+const CATEGORY_NOTEBOOK_PREFIX='basalam_category_notebook_v2:';
+const categoryNotebookKey=(shopId:string,id:number)=>CATEGORY_NOTEBOOK_PREFIX+encodeURIComponent(shopId)+':'+String(id);
 export async function getTriedBasalamCategories(shopId:string,id:number):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
-  return Array.isArray(data[`${shopId}:${id}`])?data[`${shopId}:${id}`]:[];
+  const entry=await getState<{ids:number[]}|null>(categoryNotebookKey(shopId,id),null);
+  if(entry)return entry.ids||[];
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{});
+  return legacy[`${shopId}:${id}`]||[];
 }
 export async function markBasalamCategoriesTried(shopId:string,id:number,ids:Array<number|string>):Promise<number[]>{
-  const data=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),key=`${shopId}:${id}`,set=new Set(Array.isArray(data[key])?data[key]:[]);
-  for(const raw of ids||[]){const n=Number(raw);if(Number.isInteger(n)&&n>0)set.add(n)}
-  data[key]=[...set].slice(-50);
-  await setState('basalam_tried_categories_v1',data);
-  return data[key];
+  const tried=new Set(await getTriedBasalamCategories(shopId,id));
+  for(const raw of ids){const value=Number(raw);if(Number.isInteger(value)&&value>0)tried.add(value)}
+  const values=[...tried];
+  await setState(categoryNotebookKey(shopId,id),{ids:values,updatedAt:new Date().toISOString()});
+  return values;
+}
+/** Only call after a complete, successful inventory of ALL unapproved pages/shops. */
+export async function pruneBasalamCategoryNotebooks(products:Array<{shopId:string;id:number}>):Promise<number>{
+  const keep=new Set(products.map(p=>categoryNotebookKey(p.shopId,p.id)));
+  const statement=useSqlite
+    ? `DELETE FROM app_state WHERE substr(key,1,${CATEGORY_NOTEBOOK_PREFIX.length})='${CATEGORY_NOTEBOOK_PREFIX}' AND key NOT IN (SELECT value FROM json_each($1))`
+    : `DELETE FROM app_state WHERE substr(key,1,${CATEGORY_NOTEBOOK_PREFIX.length})='${CATEGORY_NOTEBOOK_PREFIX}' AND key NOT IN (SELECT jsonb_array_elements_text($1::jsonb))`;
+  const removed=(await pool.query(statement,[JSON.stringify([...keep])])).rowCount||0;
+  const legacy=await getState<Record<string,number[]>>('basalam_tried_categories_v1',{}),legacyKeep=new Set(products.map(p=>`${p.shopId}:${p.id}`));
+  const filtered=Object.fromEntries(Object.entries(legacy).filter(([key])=>legacyKeep.has(key)));
+  if(Object.keys(filtered).length)await setState('basalam_tried_categories_v1',filtered);
+  else await deleteState('basalam_tried_categories_v1');
+  return removed;
 }
 export async function addAutoreplyLog(row:{chatId:number;customer:string;input:string;output:string;source:string}):Promise<void>{await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source) VALUES($1,$2,$3,$4,$5)',[row.chatId,row.customer,row.input,row.output,row.source])}
 export async function importAutoreplyLog(raw:any):Promise<number>{if(!Array.isArray(raw))return 0;let count=0;for(const row of raw.slice(-5000)){const created=row.created_at?new Date(row.created_at):row.at?new Date(Number(row.at)*1000):null;await pool.query('INSERT INTO autoreply_log(chat_id,customer,input_text,output_text,source,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6,now()))',[toRemoteId(row.chat_id)||null,String(row.customer||row.who||''),String(row.input_text||row.in||''),String(row.output_text||row.out||''),String(row.source||row.rule||''),created]);count++}return count}
@@ -506,7 +528,7 @@ export async function enqueueDueProfiles(): Promise<number> {
 }
 
 function jobFromRow(row: any): Job {
-  return { id: row.id, profileId: row.profile_id, kind: row.kind, target: row.target, status: row.status, phase: row.phase,
+  return { workflow:parseJson<any[]>(row.log,[]).some(x=>x.event==='workflow'&&x.message==='list-only')?'list-only':'full', id: row.id, profileId: row.profile_id, kind: row.kind, target: row.target, status: row.status, phase: row.phase,
     total: Number(row.total || 0), processed: Number(row.processed || 0), added: Number(row.added || 0), updated: Number(row.updated || 0), failed: Number(row.failed || 0),
     stopRequested: Boolean(row.stop_requested), error: row.error, log: parseJson(row.log, row.log || []), createdAt: dateValue(row.created_at),
     startedAt: isoDateTime(row.started_at), finishedAt: isoDateTime(row.finished_at), updatedAt: dateValue(row.updated_at) };
@@ -538,3 +560,36 @@ export async function getImportHistory(): Promise<any[]> {
   return Array.isArray(items) ? items.slice(-60) : [];
 }
 export async function clearImportHistory(): Promise<void> { await setState('import_history', []); }
+
+/** Keyset pagination stays stable while updated_at changes. Conflicting edits are not overwritten. */
+export async function applyStoredResultSettings(profile:Profile,after='',previousSuffix=profile.titleSuffix||''){
+  const settings=await getState<any>('settings',{}),batch=(await pool.query('SELECT source_key,data FROM products WHERE profile_id=$1 AND source_key>$2 ORDER BY source_key LIMIT 20',[profile.id,after])).rows;
+  let changed=0,conflicts=0;
+  for(const row of batch){
+    const product=parseJson<Product>(row.data,row.data);
+    if(!validProductRow(product)||typeof product.title!=='string')continue;
+    const originalData=typeof row.data==='string'?row.data:JSON.stringify(row.data);
+    if(!(product as any).resultBase&&previousSuffix&&product.title.endsWith(previousSuffix.trim())){(product as any).resultBase={title:product.title.slice(0,-previousSuffix.trim().length).trimEnd(),price:product.price,priceText:product.priceText};}
+    applyResultAdjustments(product,profile,String(settings?.dedup?.suffixFormats||''));
+    if(sameResultData(product,JSON.parse(originalData)))continue;
+    const result=await pool.query('UPDATE products SET data=$1,title=$2,price=$3,updated_at=now() WHERE profile_id=$4 AND source_key=$5 AND data=$6',[JSON.stringify(product),product.title,product.price,profile.id,row.source_key,originalData]);
+    if(result.rowCount)changed++;else {const current=await getProduct(profile.id,row.source_key);if(!sameResultData(current,product))conflicts++;}
+  }
+  return{changed,conflicts,next:batch.length===20?String(batch[batch.length-1].source_key):null};
+}
+
+export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
+ for(let attempt=0;attempt<3;attempt++){const row=(await pool.query('SELECT data FROM profiles WHERE id=$1',[original.id])).rows[0];if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=(await pool.query('UPDATE profiles SET data=$1,updated_at=now() WHERE id=$2 AND data=$3',[JSON.stringify(merged),original.id,raw])).rowCount;if(changed)return true;}return false;
+}
+
+export async function listActiveJobs():Promise<Job[]>{return(await pool.query("SELECT id,profile_id,kind,target,status,phase,total,processed,added,updated,failed,stop_requested,error,created_at,started_at,finished_at,updated_at FROM jobs WHERE status IN ('queued','running') ORDER BY created_at")).rows.map(jobFromRow)}
+export async function listLiveActivities():Promise<any[]>{
+ const cutoff=useSqlite?sqliteCutoff(60):new Date(Date.now()-3600000).toISOString();await pool.query("DELETE FROM app_state WHERE substr(key,1,14)='activity_live:' AND updated_at<$1",[cutoff]).catch(()=>{});
+ return(await pool.query("SELECT value FROM app_state WHERE substr(key,1,14)='activity_live:' ORDER BY updated_at DESC")).rows.map(r=>parseJson<any>(r.value,{})).filter(r=>r.id).map(r=>({...r,...(Date.now()-Date.parse(r.updatedAt)>90000?{status:'unknown',phase:'آخرین وضعیت قدیمی است؛ اجرا تأیید نشده'}:{})}));
+}
+
+// Immutable account snapshots plus write-through delivery receipts.
+export async function ledgerRows(scope:string,generation:string):Promise<any[]>{return (await pool.query('SELECT data FROM destination_ledger WHERE scope=$1 AND generation=$2',[scope,generation])).rows.map(r=>parseJson(r.data,{}))}
+export async function ledgerGet(scope:string,generation:string,id:string):Promise<any|null>{const r=(await pool.query('SELECT data FROM destination_ledger WHERE scope=$1 AND generation=$2 AND remote_id=$3',[scope,generation,id])).rows[0];return r?parseJson(r.data,null):null}
+export async function ledgerPut(scope:string,generation:string,entries:any[]):Promise<void>{if(!entries.length)return;const values=entries.flatMap(x=>[scope,generation,String(x.remote.id),JSON.stringify(x)]);await pool.query('INSERT INTO destination_ledger(scope,generation,remote_id,data) VALUES '+entries.map((_,i)=>'('+[1,2,3,4].map(n=>'$'+(i*4+n)).join(',')+')').join(',')+' ON CONFLICT(scope,generation,remote_id) DO UPDATE SET data=excluded.data',values)}
+export async function ledgerPrune(scope:string,keep:string[]):Promise<void>{const age=useSqlite?"json_extract(data,'$.at')":"(data::jsonb->>'at')";await pool.query('DELETE FROM destination_ledger WHERE scope=$1 AND generation NOT IN ('+keep.map((_,i)=>'$'+(i+2)).join(',')+') AND '+age+'<$'+(keep.length+2),[scope,...keep,new Date(Date.now()-86400000).toISOString()])}

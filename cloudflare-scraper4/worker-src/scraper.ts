@@ -1,3 +1,7 @@
+import { applyResultAdjustments } from './result-adjustments.js';
+import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progress.js';
+import { getState } from './db.js';
+import { resolveSourceNetwork } from './source-network.js';
 import { loadConnections } from './connections.js';
 import { safeText, safeTextViaWorker } from './network.js';
 import { escapeHtml, sha256 } from './utils.js';
@@ -58,15 +62,17 @@ const VOID_TAGS=new Set(['area','base','br','col','embed','hr','img','input','li
 function hasEndTag(element:HtmlElement):boolean{return !VOID_TAGS.has(String(element.tagName||'').toLowerCase())}
 async function sourceKey(value:string):Promise<string>{return (await sha256(value)).slice(0,32)}
 export async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
-  const network=(await loadConnections()).ai.network;
+  const network=resolveSourceNetwork((await getState<any>('settings',{}))?.source,(await loadConnections()).ai.network,url);
   // A Worker URL saved in «روش اتصال» now applies to source pages too, not only
   // to AI calls. Previously it was used only when a profile had ticked the
   // per-profile «اتصال غیرمستقیم» box, so users who configured the gateway to
   // bypass a sanction block still hit the block on every extraction.
   const useWorker=Boolean(network.workerUrl)&&(indirect||network.mode==='worker');
-  if(useWorker)return safeTextViaWorker(url,network.workerUrl,maxBytes);
+  if(useWorker){try{return {...await safeTextViaWorker(url,network.workerUrl,maxBytes),route:'worker'}}catch(error){throw new Error(`${error instanceof Error?error.message:String(error)} (route: worker)؛ قرارداد آدرس پراکسی و مجوز دامنهٔ مبدأ را بررسی کنید.`)}}
+  if(network.mode==='worker'&&!network.workerUrl)throw new Error('Worker URL در تنظیمات اتصال مبدأ خالی است.');
+  if(network.mode==='proxy')throw new Error('پروکسی CONNECT در Cloudflare پشتیبانی نمی‌شود؛ روش Worker / پروکسی معکوس را انتخاب کنید.');
   if(indirect&&network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود. (در محیط Cloudflare پروکسی HTTP در دسترس نیست؛ آدرس Worker واسط را وارد کنید.)');
-  return safeText(url,maxBytes);
+  return {...await safeText(url,maxBytes),route:'direct'};
 }
 function toAbsoluteUrl(value:string,base:string):string{try{return new URL(value,base).href}catch{return ''}}
 
@@ -625,7 +631,8 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true,scrollToEnd=false):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
+  if(scrollToEnd)throw Error('اسکرول تا انتها به مرورگر Node روی VPS/Termux/Render نیاز دارد؛ Worker فقط HTML اولیه را می‌خواند.');
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
   // 1.129.0 — PROACTIVE AUTO-DISCOVERY (Worker parity with 1.128.0 on
@@ -849,15 +856,17 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
   if(fetchHint&&!dropReasons.some(reason=>String(reason).includes('سلکتور نامعتبر')))hint=fetchHint;
   return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
 }
-export async function diagnoseExtraction(profile:Profile,urlOverride=''){
+export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgress?:DiagnosticObserver){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
-  const add=(name:string,ok:boolean,summary:string,details:any={})=>stages.push({name,ok,summary,...details});
+  const progress=diagnosticProgress(onProgress);
+  const add=(name:string,ok:boolean,summary:string,details:any={})=>{const stage={name,ok,summary,...details};stages.push(stage);progress.finish(stage)};
   if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,selectorsToSave:{},recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
-  let page:{text:string;url:string;contentType:string};
+  let page:{text:string;url:string;contentType:string;route?:string};
   try{
+    progress.begin('network','در حال اتصال به مبدأ و دریافت HTML…',{url,indirect:Boolean(profile.networkIndirect)});
     page=await sourceText(url,Boolean(profile.networkIndirect));
     const bytes=new TextEncoder().encode(page.text).byteLength,title=cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g,' ')||'');
-    add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,indirect:Boolean(profile.networkIndirect)});
+    add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,route:page.route,indirect:Boolean(profile.networkIndirect)});
   }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,selectorsToSave:{},recommendations}}
   let products:Product[]=[];
   // 1.135.0 — verified discoveries the route persists when the profile's
@@ -866,8 +875,13 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   // non-custom sets), and an overridden test URL never rewrites the profile.
   const selectorsToSave:Record<string,string>={},overriddenTestUrl=String(urlOverride||'').trim().length>0&&url!==String(profile.url||'').trim();
   try{
+    progress.begin('list-extraction','در حال اجرای موتور استخراج فهرست…',{engine:profile.extractionEngine||'auto'});
     let listSelectors=profile.selectors;
-    try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{/* best-effort; extraction below uses the profile selectors */}
+    progress.begin('selector-verification','در حال کشف و راستی‌آزمایی سلکتورهای فهرست…');
+    let selectorCheckOk=true;
+    try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{selectorCheckOk=false;/* best-effort; extraction below uses the profile selectors */}
+    progress.finish({name:'selector-verification',ok:selectorCheckOk,summary:selectorCheckOk?'بررسی اولیه پایان یافت؛ موتور با سلکتورهای موجود یا کشف‌شده اجرا می‌شود.':'بررسی خودکار سلکتورها کامل نشد؛ موتور با سلکتورهای موجود ادامه می‌دهد.'});
+    if(profile.pagination==='scroll')throw Error('اسکرول تا انتها به اجراگر Node و مرورگر Chromium نیاز دارد؛ HTML اولیه فهرست کامل نیست.');
     const engineResult=await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
@@ -879,6 +893,7 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   // the manual suggest button when auto-save had nothing to persist.
   if(!products.length){
     try{
+      progress.begin('selector-discovery','در حال جست‌وجوی ساختار کارت‌های محصول…');
       const discovery=await discoverListSelectorsFromHtml(page.text,page.url);
       const proposed=Object.entries(discovery.selectors).filter(([,value])=>String(value||'').trim());
       if(discovery.method!=='none'&&proposed.length>=2&&discovery.selectors.container&&discovery.selectors.title){
@@ -887,20 +902,22 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
       }else{
         add('selector-discovery',false,'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.',{method:discovery.method});
       }
-    }catch{/* informational only */}
+    }catch(error){progress.finish({name:'selector-discovery',ok:false,summary:String(error)})}
   }
+  progress.begin('selector-evidence','در حال بررسی تک‌تک سلکتورها روی HTML واقعی…');
   const evidence:Record<string,unknown>={};
-  for(const field of ['container','title','price','link','image'] as const){const selector=String(profile.selectors[field]||'').trim();if(!selector){evidence[field]={ok:false,count:0,error:'سلکتور خالی است'};continue}try{const type=field==='link'?'link':field==='image'?'image':'text',values=await extractSelectorValues(page.text,page.url,selector,type);evidence[field]={ok:values.length>0,count:values.length,sample:values.slice(0,3)}}catch(error){evidence[field]={ok:false,count:0,error:error instanceof Error?error.message:String(error)}}}
+  for(const field of ['container','title','price','link','image'] as const){progress.begin('selector-evidence','در حال بررسی سلکتور '+field,{field});const selector=String(profile.selectors[field]||'').trim();if(!selector){evidence[field]={ok:false,count:0,error:'سلکتور خالی است'};continue}try{const type=field==='link'?'link':field==='image'?'image':'text',values=await extractSelectorValues(page.text,page.url,selector,type);evidence[field]={ok:values.length>0,count:values.length,sample:values.slice(0,3)}}catch(error){evidence[field]={ok:false,count:0,error:error instanceof Error?error.message:String(error)}}}
   const evidenceOk=['container','title'].every(key=>(evidence[key] as any)?.ok);
   add('selector-evidence',evidenceOk,evidenceOk?'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.':'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.',{evidence});
   let detail:any=null;
+  progress.begin('detail-extraction','در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate=products.find(product=>product.url);
   if(candidate&&hasDetailSelectors(profile.selectors))try{const extracted=await scrapeDetails(candidate,profile.selectors,Boolean(profile.networkIndirect));detail={url:candidate.url,title:extracted.title,shortDesc:extracted.shortDesc,descriptionCharacters:String(extracted.longDesc||'').length,sku:extracted.sku,brand:extracted.brand,stock:extracted.stock,weight:extracted.weight,category:extracted.category,tags:extracted.tags,image:extracted.image,galleryCount:extracted.images.length,variations:extracted.variations?.slice(0,20)};add('detail-extraction',true,'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.',{sample:detail})}catch(error){add('detail-extraction',false,error instanceof Error?error.message:String(error),{url:candidate.url})}
   else add('detail-extraction',true,candidate?'برای این پروفایل سلکتور جزئیات تنظیم نشده است.':'محصول دارای لینک برای تست جزئیات پیدا نشد.',{skipped:true});
   // Detail selectors are suggested from a real product page only when some
   // are missing; already-configured keys are never overwritten.
   const detailSample=candidate&&candidate.url?candidate.url:'';
-  if(!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value)}catch{/* discovery is best-effort; the report below still stands */}}
+  if(!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{progress.begin('detail-discovery','در حال دریافت صفحهٔ محصول برای پیشنهاد سلکتورهای جزئیات…');const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value);progress.finish({name:'detail-discovery',ok:true,summary:'پیشنهاد سلکتورهای جزئیات بررسی شد.'})}catch(error){progress.finish({name:'detail-discovery',ok:false,summary:String(error)})}}
   if(Object.keys(selectorsToSave).length)recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   const deepPage=Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i)||[])[2]||0);
   if(!products.length&&deepPage>1)recommendations.push(`آدرس صفحهٔ ${deepPage.toLocaleString('fa-IR')} است؛ اول همین عیب‌یاب را روی صفحهٔ اول (بدون پارامتر صفحه) اجرا کنید — صفحه‌های عمیق اغلب خالی‌اند یا ساختار دیگری دارند.`);
@@ -909,13 +926,11 @@ export async function diagnoseExtraction(profile:Profile,urlOverride=''){
   const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail,selectorsToSave};
 }
 
-export function transformProduct(product:Product,profile:Profile):Product{
-  product.title=cleanText(product.title+profile.titleSuffix).slice(0,300);const value=profile.priceValue;
-  if(profile.priceMode==='add')product.price+=value;if(profile.priceMode==='percent')product.price*=1+value/100;if(profile.priceMode==='multiply')product.price*=value;
-  if(profile.roundPrice>0)product.price=Math.ceil(product.price/profile.roundPrice)*profile.roundPrice;product.price=Math.max(0,Math.round(product.price));return product;
+export function transformProduct(product: Product, profile: Profile): Product {
+  return applyResultAdjustments(product, profile);
 }
 export function pageUrl(profile:Profile,page:number):string{
-  const url=new URL(profile.url);if(page<=1||profile.pagination==='none'||profile.pagination==='next_selector')return url.href;
+  const url=new URL(profile.url);if(page<=1||profile.pagination==='scroll'||profile.pagination==='none'||profile.pagination==='next_selector')return url.href;
   const pageNumber=(base:number)=>Math.max(1,base)+(page-1);
   if(profile.pagination==='full_pattern')return profile.paginationValue.split('{page}').join(String(pageNumber(1)));
   if(profile.pagination==='path_page'||profile.pagination==='path_pattern'){
@@ -929,7 +944,7 @@ export function pageUrl(profile:Profile,page:number):string{
 export function benchmarkProbeUrl(profile:Profile):string{
   try{
     const pagination=String((profile as any)?.pagination||'query');
-    if(pagination==='none'||pagination==='next_selector'||pagination==='full_pattern')return profile.url;
+    if(pagination==='scroll'||pagination==='none'||pagination==='next_selector'||pagination==='full_pattern')return profile.url;
     const url=new URL(profile.url);url.hash='';
     if(pagination==='path_page'||pagination==='path_pattern'){url.pathname=url.pathname.replace(/\/page\/\d+\/?$/i,'')||'/';return url.href}
     const custom=pagination==='query_custom'?String((profile as any)?.paginationValue||'paged'):'page';

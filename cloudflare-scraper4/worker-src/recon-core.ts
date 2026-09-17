@@ -353,6 +353,9 @@ export function planDuplicateDeletions(
   const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
   const groups = new Map<string, ReconRemote[]>();
   for (const remote of remotes) {
+    // A title in another Basalam stall is not a duplicate in this account.
+    // Unscoped rows remain valid for legacy callers that already supply one account.
+    if (account.target === 'basalam' && remote.shopId !== undefined && String(remote.shopId) !== String(account.accountKey)) continue;
     const name = String(remote?.name || '');
     // Only «(کد ایکس)» listings participate, exactly like reconciliation: a shop
     // product without the code suffix is not one of our published variants.

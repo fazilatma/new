@@ -1,6 +1,6 @@
 {
   "name": "scraper4-cloudflare",
-  "version": "1.183.0",
+  "version": "1.203.0+",
   "private": true,
   "description": "Cloudflare Workers-native Scraper 4 with D1, Queues, Cron, and downloadable backups",
   "type": "module",
@@ -34,7 +34,10 @@
     "browsers:install": "node scripts/browsers-install.mjs",
     "basalam:install": "node scripts/basalam-sdk-install.mjs",
     "version:sync": "node scripts/sync-version.mjs",
-    "version:check": "node scripts/sync-version.mjs --check"
+    "version:check": "node scripts/sync-version.mjs --check",
+    "https:prepare": "node scripts/prepare-https.mjs",
+    "push:keys": "node scripts/push-keys.mjs",
+    "https:env": "node scripts/prepare-https-env.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.1",
@@ -47,11 +50,13 @@
     "playwright": "^1.63.0",
     "puppeteer": "^25.10.0",
     "read-excel-file": "^5.8.8",
-    "undici": "^7.29.0"
+    "undici": "^7.29.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/pg": "^8.15.5",
+    "@types/web-push": "^3.6.4",
     "fflate": "^0.7.4",
     "linkedom": "^0.18.12",
     "typescript": "^5.9.2",

@@ -1,3 +1,4 @@
+import { sourceWorkerUrl, fetchSourceGateway, sourceGatewayAttempts } from './source-network.js';
 import { meterSubrequest } from './db.js';
 import { getEnv } from './env.js';
 import { loadConnections } from './connections.js';
@@ -47,8 +48,9 @@ export async function safeFetch(raw:string,init:ApiRequestInit={},maxBytes?:numb
       new Headers(requestInit.headers).forEach((value,name)=>requestHeaders.set(name,value));
       const {apiMode:_apiMode,...fetchInit}=requestInit as any;
       meterSubrequest();
-      const response=await fetch(url.href,{...fetchInit,redirect:'manual',signal:controller.signal,headers:requestHeaders});
+      const response=await fetch(url.href,{...fetchInit,redirect:'manual',signal:init.signal?AbortSignal.any([controller.signal,init.signal]):controller.signal,headers:requestHeaders});
       if([301,302,303,307,308].includes(response.status)){
+        if(init.redirect==='error'){await response.body?.cancel();throw Error('Unexpected redirect for API request');}
         const location=response.headers.get('location');await response.body?.cancel();if(!location)throw new Error('Redirect without location');const nextUrl=assertPublicUrl(new URL(location,url).href);requestInit=redirectedInit(requestInit,url,nextUrl,response.status);url=nextUrl;continue;
       }
       // 1.141.0 — one bounded retry on 429 (rate-limit): honour Retry-After
@@ -95,11 +97,13 @@ export function normalizeProxyUrl(raw:string):string{
   return 'https://'+value.replace(/^\/+/,'');
 }
 export async function safeTextViaWorker(raw:string,workerUrl:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{
-  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'');const response=await safeFetch(gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},maxBytes),result=await responseText(response,target);return {...result,url:target};
+  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=sourceWorkerUrl(base,target);const response=await fetchSourceGateway(target,gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},options=>safeFetch(gateway,{...options,apiMode:new Headers(options.headers).has('x-proxy-ua')},maxBytes));
+  if(!response.ok)throw new Error(`HTTP ${response.status} from ${target} (route: worker, attempts: ${sourceGatewayAttempts(response).join(' → ')}); پاسخ می‌تواند از پراکسی یا مبدأ باشد.`);
+  const result=await responseText(response,target);return {...result,url:target};
 }
 
 const WOO_EDGE_ERRORS=new Set([520,521,522,523,524,525,526]);
-function wooGatewayUrl(target:string,workerUrl:string):string{const base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return base.includes('{url}')?base.replace('{url}',encodeURIComponent(target)):base.replace(/\/$/,'')+'/'+target.replace(/^\//,'')}
+function wooGatewayUrl(target:string,workerUrl:string):string{const base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('آدرس Worker جایگزین ووکامرس وارد نشده است.');return sourceWorkerUrl(base,target)}
 async function tagNetwork(response:Response,mode:'direct'|'worker',fallbackStatus=0):Promise<Response>{const headers=new Headers(response.headers);headers.set('x-scraper-network-mode',mode);if(fallbackStatus)headers.set('x-scraper-direct-status',String(fallbackStatus));return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers})}
 async function workerFetch(target:string,workerUrl:string,init:ApiRequestInit,maxBytes:number|undefined,fallbackStatus=0):Promise<Response>{const headers=new Headers(init.headers);headers.set('x-target-url',target);headers.set('x-scraper-target-url',target);return tagNetwork(await safeFetch(wooGatewayUrl(target,workerUrl),{...init,headers},maxBytes),'worker',fallbackStatus)}
 /**

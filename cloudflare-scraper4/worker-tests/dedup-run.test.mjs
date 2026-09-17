@@ -35,6 +35,7 @@ const stubs={
     export async function deleteAgentPrompt(){}
     export async function deleteAgentRunsForPrompt(){}
     export async function touchAgentPromptLastRun(){}
+    export async function pruneBasalamCategoryNotebooks(){return 0}
     export async function getTriedBasalamCategories(){return[]}
     export async function markBasalamCategoriesTried(){return[]}
     export async function getRunPriorities(){return{}}
