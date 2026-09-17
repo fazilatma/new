@@ -12,3 +12,12 @@ data/
 storage/
 .env
 .env.*
+
+# Python runtime files
+__pycache__/
+*.py[cod]
+*.class
+*.jsonl
+scraper4_data.json
+deployer4_data.json
+*.bak

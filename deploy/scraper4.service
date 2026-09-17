@@ -1,0 +1,24 @@
+[Unit]
+Description=Scraper4 VPS (Python port of scraper4.php, URL prefix /put)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/scraper4
+Environment=SCRAPER_RUNTIME=vps
+Environment=SCRAPER_URL_PREFIX=/put
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=8000
+# No request kill — extract, Woo and Basalam drain until finished.
+ExecStart=/opt/scraper4/venv/bin/python3 -m gunicorn --bind 127.0.0.1:8000 --workers 1 --threads 8 --timeout 0 --graceful-timeout 30 --keep-alive 5 scraper4:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
