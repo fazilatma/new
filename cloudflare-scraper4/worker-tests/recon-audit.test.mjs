@@ -126,3 +126,10 @@ for(const keep of ['expensive','cheapest'])test('Basalam duplicate planning is s
  assert.equal(actions[0].remoteId,keep==='expensive'?1:3);assert.equal(actions[0].keepId,keep==='expensive'?3:1);
  assert.deepEqual(core.planDuplicateDeletions(rows,accounts[1],'',keep),[]);
 });
+
+test('ledger duplicate planning ignores code suffixes, not real title attributes or stall identity',()=>{
+ const account={target:'basalam',accountKey:'100',name:'Stall 100'};
+ const rows=[{id:1,shopId:'100',name:'کیف (کد: ایکس)',price:100},{id:2,shopId:'100',name:'کیف (کد\u200c: A12)',price:200},{id:3,shopId:'200',name:'کیف (کد:۳)',price:500},{id:4,shopId:'100',name:'کیف (قرمز) (کد:۴)',price:300}];
+ const actions=core.planDuplicateDeletions(rows,account);
+ assert.equal(actions.length,1);assert.equal(actions[0].remoteId,1);assert.equal(actions[0].keepId,2);assert.equal(actions[0].accountKey,'100');
+});

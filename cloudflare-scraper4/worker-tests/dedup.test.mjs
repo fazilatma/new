@@ -116,3 +116,11 @@ test('background dedup never groups the same title across Basalam stalls, for ev
   assert.equal(groups.length,1);assert.equal(groups[0].keep.shopId,'100');assert.ok(groups[0].remove.every(x=>x.shopId==='100'));
  }
 });
+
+test('ignore code suffix values and Persian joiners but preserve meaningful title variants and stalls',()=>{
+ const patterns=suffixPatterns(['(کد:x)','#x','[ref x]']);
+ const names=['کیف چرم (کد: ایکس)','کیف چرم (کد: ۱۲۳)','کیف چرم (کد: A12)','کیف چرم [sku: B-2]','کیف چرم (کد:۱) (کد:۲)','کیف چرم [ref Q3]','کیف چرم (کد\u200c: ایکس)','کیف چرم (کد: الف\u200cب)'];
+ for(const name of names){assert.equal(dedupKey(name,'100',patterns),dedupKey('کیف چرم','100',patterns),name);assert.notEqual(dedupKey(name,'100',patterns),dedupKey(name,'200',patterns))}
+ assert.notEqual(dedupKey('کیف چرم (قرمز) (کد:۱۲)','100',patterns),dedupKey('کیف چرم (آبی) (کد:۱۳)','100',patterns));
+ const groups=buildDedupGroups(names.map((name,i)=>candidate(i+1,name,{shopId:'100'})),'newest',['(کد:x)','#x','[ref x]']);assert.equal(groups.length,1);assert.equal(groups[0].remove.length,names.length-1);
+});
