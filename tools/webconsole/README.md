@@ -1,4 +1,4 @@
-# WebConsole Pro 1.1.1 — complete standalone PHP file
+# WebConsole Pro 1.1.2 — complete standalone PHP file
 
 **Deploy `webconsole.php`.** This is the actual console, not the earlier offline
 HTML repair tool, and it does not require the repair utility at runtime.
@@ -10,6 +10,38 @@ It retains the terminal, file manager/editor, uploads, process manager, GitHub
 explorer, backup profiles/snapshots/restore, project deployment/service runner,
 settings and authentication features. Existing JSON configuration filenames and
 project/profile field names are retained.
+
+## Project JSON import (1.1.2)
+
+Open **Projects → New project / Settings → ورود JSON**. Select a `.json` file
+or paste JSON, then choose **اعمال در فرم برای بازبینی**. Review the manual form,
+then Save. Import itself never saves, installs, or starts anything, and files are
+read locally in the browser (not uploaded to a separate endpoint).
+
+The format is one project object, or `{ "project": { ... } }`. `name` and
+`repo_url` are required. Supported optional fields are `type`, `branch`,
+`subfolder`, `deploy_path`, `port`, `install_cmd`, `build_cmd`, `start_cmd`,
+`auto_start`, `is_daemon`, `env`, and `auth_token`. An imported `id` is ignored:
+the current dialog controls whether Save creates a project or edits its target.
+Unknown fields and invalid types are rejected. Maximum UTF-8 size: 256 KiB.
+Booleans must be JSON true/false, not quoted strings. Environment values can be
+single-line strings, finite numbers or booleans; numbers/booleans become strings.
+
+Only supplied fields are changed. Environment keys merge with existing form
+values; imported keys override matching keys, while omitted database/auth keys
+are retained. An empty env object does not clear existing values. A missing
+auth_token does not overwrite the pending token field. Edit the manual form to
+remove unwanted environment entries. Import trusted profiles only: install/build/
+start commands are arbitrary shell commands when you later deploy/run the project.
+
+`examples/scraper4-project.json` contains the requested VPS profile. It uses
+`/var/www/scraper4-cloudflare`, deployer port 8790, scraper port 3000, loopback
+binding for Caddy, and disables Git auto-updates in the copied checkout. It
+contains no credentials or database override. Set strong ADMIN_TOKEN and
+DEPLOYER_UI_TOKEN privately and retain the appropriate database configuration.
+The execution account still needs ownership/write access to the deployment path.
+Auto-start after deployment is deliberately false: review the installation and
+stop any competing systemd instance before explicitly pressing Start in WebConsole.
 
 ## Installation
 

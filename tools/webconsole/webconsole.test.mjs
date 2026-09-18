@@ -10,7 +10,7 @@ const source=await readFile(new URL('./webconsole.php',import.meta.url),'utf8');
 
 test('deliverable is a complete PHP console, not a patcher or loader',()=>{
  assert.ok(source.startsWith('<?php'));
- assert.ok(source.includes("define('WCP_VERSION', '1.1.1');"));
+ assert.ok(source.includes("define('WCP_VERSION', '1.1.2');"));
  for(const name of ['wcp_php_cli','job_start','wcp_cli','handle_api','render_body','render_login','render_css','page_head','term_create','fs_scan_dir','cli_backup','cli_restore','cli_deploy','cli_service'])assert.match(source,new RegExp('function '+name+'\\('));
  assert.ok(source.endsWith('echo render_body();\n'));
  assert.ok(!source.includes('repair.mjs'));
@@ -87,7 +87,7 @@ test('rendered console initializes and opens project / file / job views',async()
  const scripts=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)],code=scripts[scripts.length-1][1];
  const calls=[];
  const data={sysinfo:{host:'test',kernel:'Linux',php:'8.2',user:'fixture',ip:'127.0.0.1',mem:{total:1024,used:512},disk:{total:4096,free:2048},cores:2,load:[0,0,0],uptime:60,cpu_pct:0,tools:{git:true,node:true}},'proj.list':{projects:[{id:'abc',name:'Fixture',repo_url:'https://github.com/example/app',branch:'main',deploy_path:'/opt/fixture',port:'3000',env:{},start_cmd:'node app.js'}]},'fs.list':{path:'/opt',items:[{name:'fixture.txt',dir:false,perms:'0600',owner:'test',group:'test',size:3,mtime:1}]},'jobs.list':{jobs:[{id:'abc',name:'Launch failure',type:'deploy',created:'2026-09-18',status:{status:'failed',exit:127}}]}};
- const context={window,document,__BOOT:{csrf:'fixture',v:'1.1.1',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
+ const context={window,document,__BOOT:{csrf:'fixture',v:'1.1.2',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
  new Script(code+'\nglobalThis.TEST={switchTab,renderProj,renderFm,renderJobs,projectDlg};').runInNewContext(context);
  await new Promise(r=>setImmediate(r));
  assert.match(document.querySelector('#v-dash').textContent,/test/);
@@ -96,4 +96,65 @@ test('rendered console initializes and opens project / file / job views',async()
  context.TEST.switchTab('files');await context.TEST.renderFm();assert.match(document.querySelector('#fmlist').textContent,/fixture.txt/);
  context.TEST.switchTab('jobs');await context.TEST.renderJobs();assert.match(document.querySelector('#v-jobs').textContent,/127/);
  for(const action of ['sysinfo','proj.list','fs.list','jobs.list'])assert.ok(calls.includes(action));
+});
+
+function importHarness(){
+ const require=createRequire(import.meta.url),{parseHTML}=require('../../cloudflare-scraper4/node_modules/linkedom');
+ const {window,document}=parseHTML(source.slice(source.indexOf('<div id="app">'),source.indexOf("<?php return ob_get_clean();}",source.indexOf('<div id="app">'))));
+ // Linkedom exposes a read-only select value; browsers also have its setter.
+ const proto=window.HTMLSelectElement.prototype,descriptor=Object.getOwnPropertyDescriptor(proto,'value');
+ if(!descriptor.set)Object.defineProperty(proto,'value',{...descriptor,set(v){for(const o of this.options)o.selected=o.value===v;}});
+ const code=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
+ const calls=[];
+ const context={window,document,__BOOT:{csrf:'test',v:'1.1.2',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
+ new Script(code+'\nglobalThis.TEST={parseProjectJson,projectDlg};').runInNewContext(context);
+ return {...context,calls,$:id=>document.querySelector('#'+id)};
+}
+
+test('pasted sample JSON fills editable form, merges env and saves only on explicit Save',async()=>{
+ const h=importHarness(),sample=await readFile(new URL('./examples/scraper4-project.json',import.meta.url),'utf8');
+ h.TEST.projectDlg({id:'existing',name:'Old',type:'node',repo_url:'https://example.com/old',env:{ADMIN_TOKEN:'keep-me',DATABASE_URL:'keep-db',SCRAPER_PORT:'9999'},auto_start:true});
+ h.$('jq-token').value='pending-token';h.$('tab-json').onclick();
+ assert.equal(h.$('json-exp').classList.contains('hide'),false);
+ h.$('jq-json-text').value=sample;h.$('jq-json-apply').onclick();
+ assert.equal(h.$('jq-name').value,'Scraper4 + Deployer');assert.equal(h.$('jq-port').value,'8790');
+ assert.equal(h.$('jq-auto').checked,false);assert.equal(h.$('jq-daemon').checked,true);
+ assert.match(h.$('jq-env').value,/ADMIN_TOKEN=keep-me/);assert.match(h.$('jq-env').value,/DATABASE_URL=keep-db/);
+ assert.match(h.$('jq-env').value,/SCRAPER_PORT=3000/);assert.ok(!h.$('jq-env').value.includes('9999'));
+ assert.equal(h.$('jq-token').value,'pending-token');assert.equal(h.$('man-exp').classList.contains('hide'),false);
+ assert.ok(!h.calls.some(q=>q.api.startsWith('proj.')));
+ await h.$('jq-save').onclick();const saved=h.calls.find(q=>q.api==='proj.save');
+ assert.equal(saved.project.id,'existing');assert.equal(saved.project.auto_start,false);
+ assert.equal(saved.project.start_cmd,'node scripts/local-deployer-ui.mjs');
+ assert.ok(!h.calls.some(q=>['proj.deploy','proj.quick_deploy','proj.service'].includes(q.api)));
+});
+
+test('file chooser stages content without auto-applying; BOM, wrapper, numeric port supported',async()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'target',name:'Before',type:'node',env:{}});
+ const json='\uFEFF'+JSON.stringify({project:{id:'foreign-id',name:'Imported',repo_url:'https://example.com/repo',port:8790,env:{FLAG:false,COUNT:2}}});
+ await h.$('jq-json-file').onchange({target:{files:[{size:json.length,text:async()=>json}]}});
+ assert.equal(h.$('jq-name').value,'Before');assert.equal(h.$('jq-json-text').value,json);
+ h.$('jq-json-apply').onclick();assert.equal(h.$('jq-name').value,'Imported');assert.equal(h.$('jq-port').value,'8790');
+ assert.match(h.$('jq-env').value,/FLAG=false/);assert.match(h.$('jq-env').value,/COUNT=2/);
+ await h.$('jq-save').onclick();assert.equal(h.calls.find(q=>q.api==='proj.save').project.id,'target');
+});
+
+test('invalid imports fail before any form mutation; rejects dangerous keys and wrong types',()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'target',name:'Unchanged',type:'node',env:{SECRET:'retained'}});
+ const base={name:'Changed',repo_url:'https://example.com/repo'};
+ const bad=['{','[]','null','{}',JSON.stringify({...base,auto_start:'false'}),JSON.stringify({...base,env:{BAD:'x\nINJECTED=y'}}),JSON.stringify({...base,env:{FLAG:null}}),JSON.stringify({...base,env:[]}),JSON.stringify({...base,port:65536}),JSON.stringify({...base,type:'invalid'}),JSON.stringify({...base,deploy_path:'/'}),JSON.stringify({...base,install_cmd:{}}),JSON.stringify({...base,unknown:true}),'\u007b"name":"x","repo_url":"https://example.com","__proto__":{"polluted":true}}'];
+ for(const text of bad){h.$('jq-json-text').value=text;h.$('jq-json-apply').onclick();assert.ok(h.$('jq-json-status').textContent,text);assert.equal(h.$('jq-name').value,'Unchanged');assert.equal(h.$('jq-env').value,'SECRET=retained');}
+ assert.equal({}.polluted,undefined);
+ assert.throws(()=>h.TEST.parseProjectJson(' '.repeat(262145)),/۲۵۶/);
+ assert.throws(()=>h.TEST.parseProjectJson('ش'.repeat(140000)),/۲۵۶/);
+ assert.ok(!h.calls.some(q=>q.api.startsWith('proj.')));
+});
+
+test('oversized files are not read, and a late file read cannot replace newly pasted content',async()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'target',name:'Before',type:'node',env:{}});
+ let read=false;await h.$('jq-json-file').onchange({target:{files:[{size:262145,text:async()=>{read=true;return '{}'}}]}});
+ assert.equal(read,false);assert.match(h.$('jq-json-status').textContent,/۲۵۶/);
+ let resolve;const pending=h.$('jq-json-file').onchange({target:{files:[{size:2,text:()=>new Promise(r=>resolve=r)}]}});
+ h.$('jq-json-text').value='newly pasted';h.$('jq-json-text').oninput();resolve('{}');await pending;
+ assert.equal(h.$('jq-json-text').value,'newly pasted');
 });

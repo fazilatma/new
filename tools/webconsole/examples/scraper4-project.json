@@ -1,0 +1,29 @@
+{
+  "name": "Scraper4 + Deployer",
+  "type": "node",
+  "repo_url": "https://github.com/fazilatma/new.git",
+  "branch": "arena/01a0aa17-new",
+  "subfolder": "cloudflare-scraper4",
+  "deploy_path": "/var/www/scraper4-cloudflare",
+  "port": "8790",
+  "install_cmd": "npm ci --include=dev --no-audit --no-fund",
+  "build_cmd": "node scripts/esbuild-check.mjs && npm run version:check && npm run render:build",
+  "start_cmd": "node scripts/local-deployer-ui.mjs",
+  "auto_start": false,
+  "is_daemon": true,
+  "env": {
+    "NODE_ENV": "production",
+    "DEPLOYER_UI_PORT": "8790",
+    "DEPLOYER_UI_HOST": "127.0.0.1",
+    "SCRAPER_PORT": "3000",
+    "SCRAPER_BIND_HOST": "127.0.0.1",
+    "RUN_WORKER_IN_WEB": "true",
+    "DEPLOYER_SUPERVISED": "true",
+    "LOCAL_SCRAPER_AUTOSTART": "true",
+    "LOCAL_SCRAPER_KEEPALIVE": "true",
+    "LOCAL_SCRAPER_STOP_WITH_UI": "true",
+    "LOCAL_DEPLOYER_AUTO_UPDATE": "false",
+    "LOCAL_DEPLOYER_AUTO_INSTALL_LATEST": "false",
+    "LOCAL_SCRAPER_AUTO_UPDATE": "false"
+  }
+}
