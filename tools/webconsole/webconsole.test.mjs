@@ -10,7 +10,7 @@ const source=await readFile(new URL('./webconsole.php',import.meta.url),'utf8');
 
 test('deliverable is a complete PHP console, not a patcher or loader',()=>{
  assert.ok(source.startsWith('<?php'));
- assert.ok(source.includes("define('WCP_VERSION', '1.2.0');"));
+ assert.ok(source.includes("define('WCP_VERSION', '1.2.1');"));
  for(const name of ['wcp_php_cli','job_start','wcp_cli','handle_api','render_body','render_login','render_css','page_head','term_create','fs_scan_dir','cli_backup','cli_restore','cli_deploy','cli_service'])assert.match(source,new RegExp('function '+name+'\\('));
  assert.ok(source.endsWith('echo render_body();\n'));
  assert.ok(!source.includes('repair.mjs'));
@@ -69,6 +69,9 @@ test('PHP engine lint and isolated persistence / launcher-preflight failure', {s
   check($status['status']==='failed' && $status['exit']===127,'persisted failure state');
   check(strpos(file_get_contents($job['log']),'launcher ERROR')!==false,'diagnostic log');
   check(job_pid_alive(1)===false,'protected PID');
+  $pages=[];$branches=gh_repo_branches('owner','repo','',function($url,$token)use(&$pages){$pages[]=$url;if(strpos($url,'/branches?')===false)return ['default_branch'=>'release'];if(preg_match('/&page=1$/',$url))return array_map(fn($i)=>['name'=>'branch-'.$i],range(1,100));return [['name'=>'release']];});
+  check(count($branches)===101 && $branches[100]['default'],'all branch pages and real default');
+  $failedPage=false;try{gh_repo_branches('owner','repo','',fn($u,$t)=>null);}catch(RuntimeException $e){$failedPage=true;}check($failedPage,'listing failures not silently empty');
   $was=$GLOBALS['__NOEXEC'];$GLOBALS['__NOEXEC']=true;
   $target=DATA_DIR.'/not-created-by-preflight';
   $pre=proj_preflight(['deploy_path'=>$target,'type'=>'node','install_cmd'=>'npm ci']);
@@ -96,7 +99,7 @@ test('rendered console initializes and opens project / file / job views',async()
  const scripts=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)],code=scripts[scripts.length-1][1];
  const calls=[];
  const data={sysinfo:{host:'test',kernel:'Linux',php:'8.2',user:'fixture',ip:'127.0.0.1',mem:{total:1024,used:512},disk:{total:4096,free:2048},cores:2,load:[0,0,0],uptime:60,cpu_pct:0,tools:{git:true,node:true}},'proj.list':{projects:[{id:'abc',name:'Fixture',repo_url:'https://github.com/example/app',branch:'main',deploy_path:'/opt/fixture',port:'3000',env:{},start_cmd:'node app.js'}]},'fs.list':{path:'/opt',items:[{name:'fixture.txt',dir:false,perms:'0600',owner:'test',group:'test',size:3,mtime:1}]},'jobs.list':{jobs:[{id:'abc',name:'Launch failure',type:'deploy',created:'2026-09-18',status:{status:'failed',exit:127}}]}};
- const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.0',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
+ const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.1',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
  new Script(code+'\nglobalThis.TEST={switchTab,renderProj,renderFm,renderJobs,projectDlg};').runInNewContext(context);
  await new Promise(r=>setImmediate(r));
  assert.match(document.querySelector('#v-dash').textContent,/test/);
@@ -112,11 +115,11 @@ function importHarness(){
  const {window,document}=parseHTML(source.slice(source.indexOf('<div id="app">'),source.indexOf("<?php return ob_get_clean();}",source.indexOf('<div id="app">'))));
  // Linkedom exposes a read-only select value; browsers also have its setter.
  const proto=window.HTMLSelectElement.prototype,descriptor=Object.getOwnPropertyDescriptor(proto,'value');
- if(!descriptor.set)Object.defineProperty(proto,'value',{...descriptor,set(v){for(const o of this.options)o.selected=o.value===v;}});
+ if(!descriptor.set)Object.defineProperty(proto,'value',{...descriptor,set(v){for(const o of this.options)o.removeAttribute('selected');const chosen=[...this.options].find(o=>o.value===v);if(chosen)chosen.setAttribute('selected','');}});
  const code=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
  const calls=[];
- const context={window,document,__BOOT:{csrf:'test',v:'1.2.0',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
- new Script(code+'\nglobalThis.TEST={parseProjectJson,projectDlg,applyAppearance,readAppearance,appearanceDlg,commandPalette,projectExport,presetProject,projectPreflight,openJob,__closeSheet};').runInNewContext(context);
+ const context={window,document,__BOOT:{csrf:'test',v:'1.2.1',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
+ new Script(code+'\nglobalThis.TEST={parsedProjectVersion,compareProjectVersions,branchVersion,sortedBranchRows,parseProjectJson,projectDlg,applyAppearance,readAppearance,appearanceDlg,commandPalette,projectExport,presetProject,projectPreflight,openJob,__closeSheet};').runInNewContext(context);
  return {...context,vm:context,calls,$:id=>document.querySelector('#'+id)};
 }
 
@@ -228,4 +231,35 @@ test('job log filtering, pause, follow, download and clear operate on loaded buf
  h.$('jdownload').onclick();assert.match(downloads[0][1],/OK ready/);
  h.$('jpause').onclick({target:h.$('jpause')});const before=requests;await poll();assert.equal(requests,before);
  h.$('jclr').onclick();assert.equal(h.$('jlog').textContent,'');h.TEST.__closeSheet();await poll();assert.equal(requests,before);
+});
+
+test('branch versions sort numerically, newest first, with prereleases and unknown last',()=>{
+ const h=importHarness(),sort=h.TEST.compareProjectVersions;
+ assert.deepEqual(['1.9.0','1.210.0+','unknown','1.210.0-rc.10','1.210.0-rc.2','1.100.0'].sort(sort),['1.210.0+','1.210.0-rc.10','1.210.0-rc.2','1.100.0','1.9.0','unknown']);
+ assert.equal(sort('v2.0.0+build.2','2.0.0+build.1'),0);
+ const rows=[{name:'v999',apps:[{subfolder:'',version:'9.0.0'},{subfolder:'cloudflare-scraper4',version:'1.9.0'}]},{name:'older-name',apps:[{subfolder:'',version:'1.0.0'},{subfolder:'cloudflare-scraper4',version:'1.210.0+'}]}];
+ assert.equal(h.TEST.sortedBranchRows(rows,'cloudflare-scraper4')[0].name,'older-name');
+ assert.equal(h.TEST.sortedBranchRows(rows,'')[0].name,'v999');
+});
+
+test('repository selection opens all branch rows and sorts by scanned project version',async()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'fixture',name:'Fixture',type:'node',env:{}});
+ const calls=[];h.vm.fetch=async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);let data={};
+ if(q.api==='gh.user_repos')data={repos:[{name:'repo',language:'JS'}]};
+ if(q.api==='gh.repo_branches')data={branches:[{name:'old',default:true},{name:'new'},{name:'unknown'}]};
+ if(q.api==='gh.inspect_branch')data={apps:[{name:'App',subfolder:'cloudflare-scraper4',version:q.branch==='new'?'1.210.0+':q.branch==='old'?'1.9.0':'',type:'node'}]};
+ return {status:200,json:async()=>({ok:true,data})};};
+ await h.$('gh-load').onclick();
+ const rows=[...h.$('gh-branch-table').querySelectorAll('tbody tr')];assert.equal(rows.length,3);assert.match(rows[0].textContent,/new/);assert.match(rows[1].textContent,/old/);assert.match(rows[2].textContent,/unknown/);
+ await rows[0].querySelector('button').onclick();await new Promise(r=>setImmediate(r));
+ h.$('gh-apps-list').querySelector('[data-custom]').onclick();await Promise.resolve();assert.equal(h.$('jq-branch').value,'new');assert.equal(h.$('jq-repo_url').value,'https://github.com/fazilatma/repo');
+ assert.equal(calls.filter(q=>q.api==='gh.inspect_branch').length,3,'selected scanned branch uses cache');
+ assert.ok(!calls.some(q=>q.api==='proj.quick_deploy'));
+});
+
+test('switching repository ignores delayed previous branch listings',async()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'fixture',type:'node',name:'Fixture',env:{}});let finish;
+ h.vm.fetch=async(url,options)=>{const q=JSON.parse(options.body);if(q.api==='gh.repo_branches'&&q.repo==='first')await new Promise(r=>finish=r);return {status:200,json:async()=>({ok:true,data:q.api==='gh.repo_branches'?{branches:[{name:q.repo}]}:{apps:[]}})}};
+ h.$('gh-repo-sel').innerHTML='<option value="first">first</option><option value="second">second</option>';h.$('gh-repo-sel').value='first';const pending=h.$('gh-repo-sel').onchange();await Promise.resolve();h.$('gh-repo-sel').value='second';await h.$('gh-repo-sel').onchange();finish();await pending;
+ assert.match(h.$('gh-branch-table').textContent,/second/);assert.ok(!h.$('gh-branch-table').textContent.includes('first'));
 });

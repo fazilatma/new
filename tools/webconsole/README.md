@@ -1,4 +1,4 @@
-# WebConsole Pro 1.2.0 — complete standalone PHP file
+# WebConsole Pro 1.2.1 — complete standalone PHP file
 
 **Deploy `webconsole.php`.** This is the actual console, not the earlier offline
 HTML repair tool, and it does not require the repair utility at runtime.
@@ -10,6 +10,31 @@ It retains the terminal, file manager/editor, uploads, process manager, GitHub
 explorer, backup profiles/snapshots/restore, project deployment/service runner,
 settings and authentication features. Existing JSON configuration filenames and
 project/profile field names are retained.
+
+## Release 1.2.1 — version-sorted branch explorer
+
+Selecting a repository now immediately opens a table of **all branch pages**,
+then progressively inspects their projects with visible progress and errors.
+The table sorts recognized numeric project versions newest first (including
+prerelease ordering and the project's trailing `+` release marker), not branch
+names. Unknown/unreadable versions sort last; no fabricated 1.0.0 fallback.
+
+For monorepos, select the project subfolder to compare that same project across
+branches. The default sort uses the highest recognized version among detected
+projects in each branch; all their paths/versions are displayed. Select a row to
+show project customization/quick-install controls. The dropdown remains as a
+secondary selection control. Nothing installs merely by selecting a repository
+or branch. Changing repository/owner or closing the dialog prevents stale scans
+from updating the current table; scans are sequential to limit concurrent load.
+
+Version discovery currently reads Node `package.json` versions. Other detected
+project types without version metadata show unknown, not a guessed version.
+Large repositories can be slow and may require a GitHub token with appropriate
+access; rate-limit/network failures and truncated trees are shown as errors.
+The refresh button reruns discovery. Tests cover >100 branches with mocked GitHub
+pagination, real Chromium table interactions with mocked APIs, numeric sorting,
+monorepo filtering, selection, and stale-response isolation. Live GitHub scans
+remain environment-dependent.
 
 ## Release 1.2.0 — balanced workspace upgrade
 
