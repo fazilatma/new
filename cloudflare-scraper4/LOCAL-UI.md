@@ -648,3 +648,10 @@ Update and restart **both the scraper and deployer**. An old, stopped or
 unreachable scraper is labelled unavailable rather than zero usage. The
 health response exposes numeric process counters, not credentials or command
 lines. The deployer's chart API remains protected by its existing token.
+
+## Automatic scraper recovery (1.210.0+)
+
+The deployer now retries unexpected scraper exits and watches prolonged failures
+to respond. Intentional Stop cancels recovery. See [KEEPALIVE.md](KEEPALIVE.md)
+for limits, controls, and persistent VPS/systemd or Termux/runit setup. A normal
+browser tab does not need to stay open, but the deployer must remain running.

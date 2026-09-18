@@ -283,3 +283,10 @@ test('scraper charts show independent CPU above 100 percent and RSS, with stoppe
  assert.equal(text(document,'resourceScraperCpu'),'Unavailable');assert.equal(text(document,'resourceScraperStatus'),'Scraper stopped');
  assert.equal(document.getElementById('resourceScraperCpuPath').getAttribute('d'),'');
 });
+
+test('keepalive status shows recovery and intentional pause without claiming permanent uptime',()=>{
+ const {document,api}=boot();api.updateRail({...STATUS,keepalive:{enabled:true,desired:true,restarts:2,lastReason:'Unexpected exit',nextRestartAt:Date.now()+5000}});
+ assert.match(text(document,'scraperKeepaliveStatus'),/enabled.*restarts 2.*Unexpected exit.*retry/);
+ api.updateRail({...STATUS,keepalive:{enabled:true,desired:false,restarts:2,lastReason:'Stopped intentionally'}});
+ assert.match(text(document,'scraperKeepaliveStatus'),/paused.*Stopped intentionally/);
+});

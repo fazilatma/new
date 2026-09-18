@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
+import { createScraperKeepalive } from './scraper-keepalive.mjs';
 import { createResourceMonitor, readResources, readScraperResources } from './deployer-resources.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
@@ -293,6 +294,12 @@ function databaseInstallPlan() {
 const maxLog = 120_000;
 const jobs = new Map();
 let scraper = null;
+const scraperKeepalive = createScraperKeepalive({
+  probe: () => scraperIsListening(1500),
+  restart: () => { if(scraper?.running)stopScraper(false); const result=startScraper(0,true); if(!result?.running)throw Error('Scraper could not start'); },
+  log: text => { scraperLog=(scraperLog+'[local scraper] '+text+'\n').slice(-maxLog); }
+},{enabled: !/^(false|0|no|off)$/i.test(String(startupEnv.LOCAL_SCRAPER_KEEPALIVE??'true'))});
+
 let scraperLog = '';
 
 function appendLog(name, chunk) {
@@ -712,6 +719,7 @@ function scraperWasRunning() { return Boolean(scraper && scraper.child && scrape
 
 function restartUiSoon({ restartScraper = false } = {}) {
   setTimeout(() => {
+    if(startupEnv.DEPLOYER_SUPERVISED==='true'){scraperKeepalive.close();stopScraper();server.close(()=>process.exit(75));return;}
     const child = spawn(process.execPath, [process.argv[1]], {
       cwd: projectDir,
       detached: true,
@@ -838,10 +846,11 @@ function portScanSummary(portState) {
   if (!portState.freed.length && !portState.foreign.length) parts.push('no holders found');
   return parts.join('; ');
 }
-function startScraper(retryDepth = 0) {
+function startScraper(retryDepth = 0, automatic = false) {
+  if(!automatic)scraperKeepalive.enable();
   if (scraper?.running && scraper.child && scraper.exitCode === null) return scraper;
   // An EADDRINUSE retry is one story, not a new one: keep attempt #1 visible.
-  if (retryDepth === 0) scraperLog = '';
+  if (retryDepth === 0 && !automatic) scraperLog = '';
   const portState = freeScraperPort();
   scraperLog += '[local scraper] ' + portScanSummary(portState) + '\n';
   if (portState.foreign.length) {
@@ -871,6 +880,8 @@ function startScraper(retryDepth = 0) {
   // Do not hold the deployer's event loop open waiting on the scraper.
   child.unref();
   scraper = { running: true, pid: child.pid, startedAt: new Date().toISOString(), exitCode: null, child, command: scraperCommand, port: scraperPort };
+  const managed = scraper;
+  scraperKeepalive.started();
   let sawEaddr = false;
   const add = d => {
     const text = d.toString();
@@ -881,17 +892,19 @@ function startScraper(retryDepth = 0) {
   for (const pid of portState.freed) add(`[local scraper] stopped stale scraper process ${pid} that was holding port ${scraperPort}\n`);
   add(`[local scraper] ${scraperCommand}\n[local scraper] PORT=${scraperPort} DATABASE_URL=${env.DATABASE_URL.replace(/:[^:@/]+@/, ':***@')}\n\n`);
   child.stdout.on('data', add); child.stderr.on('data', add);
-  child.on('exit', code => { scraper.running = false; scraper.exitCode = code ?? 0; add(`\n[scraper exited with code ${scraper.exitCode}]\n`); if (scraper.exitCode === 75) { add('[local scraper] Auto-update finished; restarting scraper process...\n'); setTimeout(() => startScraper(), 1500); return; }
-    // The bind can lose a race the pre-start scan cannot see (a second start,
-    // a dying holder). Retry ONCE after freeing again; a foreign holder still
-    // refuses as before, and the retry is logged so the log shows the count.
-    if (sawEaddr && retryDepth < 1) { add('[local scraper] first bind hit EADDRINUSE; freeing the port and retrying once...\n'); freeScraperPort(); setTimeout(() => startScraper(retryDepth + 1), 1500); return; }
-    if (sawEaddr) add(`\n[local scraper] EADDRINUSE persists on port ${scraperPort}: another process still holds it. If it is an old scraper that survived, kill it by hand (pkill -f render-dist/server \u2014 on Termux install procps first if pkill is missing), then press Build & start again.\n`); });
-  child.on('error', e => { scraper.running = false; scraper.exitCode = 1; add(`\nERROR: ${e.message}\n`); });
+  child.on('exit', (code,signal) => {
+    managed.running=false;managed.exitCode=code??0;managed.signal=signal||null;
+    add('\n[scraper exited: code '+String(code)+'; signal '+String(signal||'none')+']\n');
+    if(scraper!==managed||managed.intentionalStop)return;
+    scraperKeepalive.exited(code===75?'Auto-update completed':sawEaddr?'Bind failed (EADDRINUSE)':'Unexpected exit: code '+String(code)+', signal '+String(signal||'none'));
+  });
+  child.on('error', e => { managed.running=false;managed.exitCode=1;add('\nERROR: '+e.message+'\n');if(scraper===managed&&!managed.intentionalStop)scraperKeepalive.exited('Process launch failed'); });
   return scraper;
 }
 
-function stopScraper() {
+function stopScraper(intentional = true) {
+  if(intentional)scraperKeepalive.stop();
+  if(scraper){scraper.intentionalStop=true;scraper.running=false;}
   if (scraper?.child && !scraper.child.killed) {
     // The scraper runs detached in its own process group (so it survives the
     // deployer), which means `npm` and the node server it spawns are children.
@@ -998,6 +1011,7 @@ async function proxyScraper(req, res, url) {
   const body = Buffer.concat(chunks);
 
   if (!(await scraperIsListening())) {
+    if(scraperKeepalive.status().lastReason==='Stopped intentionally')return send(res,503,{ok:false,error:'Scraper was stopped intentionally. Press Start in the deployer.'});
     startScraper();
     const budget = Number(process.env.LOCAL_SCRAPER_PROXY_WAIT_MS || 180000);
     if (!(await waitForScraperPort(Date.now() + budget))) {
@@ -1109,6 +1123,7 @@ function status() {
       packageLock: existsSync(join(projectDir, 'package-lock.json')),
       staticHtmlDeployer: existsSync(join(projectDir, 'deploy-setup/static-universal-deployer.html'))
     },
+    keepalive: scraperKeepalive.status(),
     notify: notifyPayload(),
     jobs: [...jobs.values()].map(({ child, ...j }) => j),
     scraper: scraper ? { running: scraper.running, pid: scraper.pid, startedAt: scraper.startedAt, exitCode: scraper.exitCode, port: scraperPort, command: scraper.command || scraperCommand, serving: servingState() } : { running: false, port: scraperPort, command: scraperCommand, serving: servingState() }
@@ -1242,7 +1257,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, job: (({ child, ...j }) => j)(job) });
     }
     if (req.method === 'POST' && url.pathname === '/api/scraper/start') return send(res, 200, { ok: true, scraper: (({ child, ...s }) => ({ ...s, port: scraperPort }))(startScraper()) });
-    if (req.method === 'POST' && url.pathname === '/api/scraper/stop') return send(res, 200, { ok: true, scraper: stopScraper() });
+    if (req.method === 'POST' && url.pathname === '/api/scraper/stop') {const {child,...stopped}=stopScraper();return send(res,200,{ok:true,scraper:stopped,keepalive:scraperKeepalive.status()});}
     if (req.method === 'POST' && url.pathname === '/api/scraper/restart') {
       stopScraper();
       const deadline = Date.now() + 8000;
@@ -1317,6 +1332,7 @@ function autoStartScraper() {
     console.log('[deployer] scraper autostart disabled (LOCAL_SCRAPER_AUTOSTART=false).');
     return;
   }
+  scraperKeepalive.enable();
   // The scraper outlives the deployer, so a restarted deployer may find one
   // already serving the port. Adopt it instead of starting a second copy that
   // would fail with EADDRINUSE.
@@ -1328,7 +1344,9 @@ function autoStartScraper() {
     // and rebuilt, anything else is reported and left alone.
     const serving = await refreshServingCache(true);
     const state = servingState();
+    if(!scraperKeepalive.status().desired)return;
     if (!state.stale && state.identified) {
+      scraperKeepalive.started();
       console.log(`[deployer] a scraper is already serving http://localhost:${scraperPort}/ (HTTP ${response.statusCode}, v${serving.version || '?'}); leaving it running.`);
       return;
     }
@@ -1344,7 +1362,9 @@ function autoStartScraper() {
     }
     startFresh();
   });
+  let launching=false;
   const startFresh = () => {
+    if(launching||!scraperKeepalive.status().desired)return;launching=true;
     probe.destroy();
     try {
       startScraper();
@@ -1382,12 +1402,15 @@ function waitForScraper(attempt = 0) {
 
 listenWithRetry();
 scheduleBranchScanner();
+const scraperWatchdog=setInterval(()=>void scraperKeepalive.check(),15000);
+scraperWatchdog.unref?.();
 
 // Closing the deployer must NOT take the scraper down with it: the scraper owns
 // its own URL and has to stay reachable on its own. Set LOCAL_SCRAPER_STOP_WITH_UI=true
 // to restore the old behaviour; the Stop button still stops it on demand.
 const stopScraperWithUi = String(process.env.LOCAL_SCRAPER_STOP_WITH_UI || '').toLowerCase() === 'true';
 function shutdownUi() {
+  scraperKeepalive.close();clearInterval(scraperWatchdog);resourceMonitor.close();
   if (stopScraperWithUi) stopScraper();
   else if (scraper?.running) console.log(`\n[deployer] closing the deployer; the scraper keeps running on http://localhost:${scraperPort}/ (pid ${scraper.pid}).`);
   server.close(() => process.exit(0));
@@ -1396,7 +1419,7 @@ process.on('SIGINT', shutdownUi);
 process.on('SIGTERM', shutdownUi);
 
 function page(token) {
-  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run basalam:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.209.0+\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.209.0+\nnpm run basalam:install\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n  winget install --id Python.Python.3.12 -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.209.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nwhere python || winget install --id Python.Python.3.12 -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.209.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\npip install -q beautifulsoup4 lxml requests  # deps for the deployer Python extract tab\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run basalam:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.209.0+\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# No ADMIN_TOKEN needed locally: the vault key is generated at data/vault.key on first save.\n# Keep that file - deleting it makes already-saved API keys unreadable.\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.209.0+\n6) The build also installs the Python basalam-sdk; verify it in the libraries card", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.209.0+\nCheck daily D1 usage: https://YOUR-WORKER.workers.dev/api/quota\n  Free plan: 5,000,000 rows read + 100,000 rows written per day, reset 00:00 UTC.\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.209.0+"};
+  const commands = {"Update existing clone": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run basalam:install || true\nnpm run version:check\ngrep '\"version\"' package.json | head -1\n# Expected: 1.210.0+\nnpm run deployer:ui", "VS Code / Desktop": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.210.0+\nnpm run basalam:install\nnpm run deployer:ui", "Windows PowerShell": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n  winget install --id Python.Python.3.12 -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.210.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path.", "Windows Command Prompt": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nwhere python || winget install --id Python.Python.3.12 -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.210.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path.", "Termux / Android": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium\npip install -q beautifulsoup4 lxml requests  # deps for the deployer Python extract tab\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ngit pull --ff-only origin arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run basalam:install || true\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.210.0+\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# No ADMIN_TOKEN needed locally: the vault key is generated at data/vault.key on first save.\n# Keep that file - deleting it makes already-saved API keys unreadable.\nnpm run deployer:ui", "Database: Docker local": "docker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n' > .env.local\n# No Docker? Leave DATABASE_URL empty (or sqlite:data/scraper4.sqlite) to use built-in Node SQLite.", "Database: Termux PostgreSQL (optional)": "pkg install -y postgresql\n# If you saw role \"postgres\" does not exist, use the Termux user from whoami, not postgres:postgres.\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\nRUN_WORKER_IN_WEB=true\n\" > .env.local\n# Windows: skip this - the deployer configures built-in Node SQLite automatically.", "Render.com panel": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Your Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) Open https://YOUR-SERVICE.onrender.com/health → expected version: 1.210.0+\n6) The build also installs the Python basalam-sdk; verify it in the libraries card", "Cloudflare Worker": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nOpen https://YOUR-WORKER.workers.dev/api/version → expected version: 1.210.0+\nCheck daily D1 usage: https://YOUR-WORKER.workers.dev/api/quota\n  Free plan: 5,000,000 rows read + 100,000 rows written per day, reset 00:00 UTC.\nwrangler.toml WORKER_VERSION is kept in sync by: npm run version:sync", "API examples": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"both\",\"extract\":false,\"limit\":100}' \ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.210.0+"};
   return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark light"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#04070f"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f6fd"><title>Scraper4 Local Deployer</title>
 <style>
 *,*::before,*::after{box-sizing:border-box}
@@ -1598,6 +1621,7 @@ details.note>div{padding-bottom:.55rem;max-width:74ch}
 <div class="resource-chart"><h3>Scraper Node CPU</h3><div class="resource-value" id="resourceScraperCpu">—</div><svg viewBox="0 0 600 100" preserveAspectRatio="none" role="img" aria-label="Scraper CPU history"><path id="resourceScraperCpuPath"></path></svg><small id="resourceScraperCpuScale">100% = one core; chart scales for multiple cores</small></div>
 <div class="resource-chart"><h3>Scraper Node RAM · RSS</h3><div class="resource-value" id="resourceScraperRam">—</div><svg class="memory-line" viewBox="0 0 600 100" preserveAspectRatio="none" role="img" aria-label="Scraper memory history"><path id="resourceScraperRamPath"></path></svg><small id="resourceScraperRamScale">Waiting for samples…</small></div>
 </div>
+<p class="small" id="scraperKeepaliveStatus" role="status">Scraper keepalive: checking…</p>
 <p class="small" id="resourceScraperStatus" role="status">Connecting to scraper…</p>
 <p class="muted small">Scraper metrics are self-reported by its Node process, including in-process extraction. Chromium, separate workers and other child processes are excluded. Available even when Android blocks host counters.</p>
 <p class="small" id="resourceProcess">Deployer process: waiting…</p><p class="small" id="resourceContainer">Container memory: checking…</p>
@@ -1856,6 +1880,7 @@ function badge(panelId, text) {
 
 function updateRail(d) {
   const db = d.database || {}, scraper = d.scraper || {}, git = d.git || {}, code = d.code || {}, br = d.branches || {};
+  const keep=d.keepalive||{};if($('scraperKeepaliveStatus'))$('scraperKeepaliveStatus').textContent='Scraper keepalive: '+(keep.enabled?(keep.desired?'enabled':'paused'):'disabled')+' · restarts '+(keep.restarts||0)+' · '+(keep.lastReason||'unknown')+(keep.nextRestartAt?' · retry '+new Date(keep.nextRestartAt).toLocaleTimeString():'');
   const serving = scraper.serving || {};
   const dirtyCount = String(git.dirty || '').split(String.fromCharCode(10)).filter(Boolean).length;
   const dbOk = Boolean(db.configured) && !db.rawHasPlaceholder;

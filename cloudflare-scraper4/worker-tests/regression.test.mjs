@@ -1878,17 +1878,17 @@ test('the deployer survives a blind port scan and a lost bind race', async () =>
   // binder wins between the scan and listen(). The deployer must sweep its
   // own server processes by command line AND the PORT they were started with
   // (never a sibling on another port, never a foreign program), retry a
-  // failed bind exactly once, keep the whole story in one log, and end with
-  // a manual escape hatch when the port stays held.
+  // failed bind with bounded backoff, preserve the log, and refuse foreign holders.
   const deployer = await readFile(new URL('../scripts/local-deployer-ui.mjs', import.meta.url), 'utf8');
   assert.ok(deployer.includes('function portScanSummary('), 'every start must log what the port scan saw and did');
   assert.ok(deployer.includes('no holders found'), 'an empty scan must say so instead of staying silent');
   assert.ok(deployer.includes('DEPLOYER_PORT_SCAN_BLIND'), 'the blind-tables path must be provable with a lab hook');
   assert.ok(deployer.includes('PORT=${scraperPort}'), 'the cmdline sweep must only match our server on OUR port');
-  assert.ok(deployer.includes('function startScraper(retryDepth = 0)'), 'a bind lost to a race must be retried');
-  assert.ok(deployer.includes('retryDepth < 1'), 'the bind retry must happen exactly once, never in a loop');
-  assert.ok(deployer.includes('if (retryDepth === 0) scraperLog'), 'the retry must continue the same log story, not wipe attempt #1');
-  assert.ok(deployer.includes('pkill -f render-dist/server'), 'a port that stays held must end with a manual escape hatch');
+  assert.ok(deployer.includes('function startScraper(retryDepth = 0, automatic = false)'), 'recovery reuses the guarded start path');
+  assert.ok(deployer.includes("sawEaddr?'Bind failed (EADDRINUSE)'"), 'bind failures enter the bounded keepalive policy');
+  assert.ok(deployer.includes('if (retryDepth === 0 && !automatic) scraperLog'), 'automatic retries retain previous failure logs');
+  assert.ok(deployer.includes('refusing to kill it'), 'foreign holders remain protected');
+
 });
 
 test('results API skips poisoned product rows instead of serving nulls',async()=>{

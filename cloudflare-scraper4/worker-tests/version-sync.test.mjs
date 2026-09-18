@@ -244,7 +244,7 @@ test('opening the scraper waits for it to build instead of returning ECONNREFUSE
   // forward. `running` is true the instant spawn() returns, long before the port
   // is listening, so gating on it reintroduces the ECONNREFUSED.
   const proxy = deployer.slice(deployer.indexOf('async function proxyScraper('), deployer.indexOf('function requireAuth('));
-  assert.match(proxy, /if \(!\(await scraperIsListening\(\)\)\) \{\s*\n\s*startScraper\(\);/,
+  assert.match(proxy, /if \(!\(await scraperIsListening\(\)\)\) \{\s*if\(scraperKeepalive.status\(\).lastReason==='Stopped intentionally'\)[^\n]+\n\s*startScraper\(\);/,
     'the proxy must probe the port, not trust scraper.running, before forwarding');
   assert.match(proxy, /await waitForScraperPort\(Date\.now\(\) \+ budget\)/, 'the proxy must actually await the port');
   assert.doesNotMatch(proxy, /const budget = 0;/, 'the wait budget must not be disabled');
