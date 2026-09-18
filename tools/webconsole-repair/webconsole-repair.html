@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; form-action 'none'; base-uri 'none'">
+<title>WebConsole Pro · Complete-file repair</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#e2e8f0;font:16px/1.6 system-ui,sans-serif}main{max-width:900px;margin:3rem auto;padding:1.5rem}h1{font-size:2rem;line-height:1.2}h2{font-size:1.15rem}p{color:#b8c6d9}section{padding:1.4rem;margin:1.2rem 0;border:1px solid #334155;border-radius:14px;background:#111c2f}label{display:block;margin:1rem 0 .5rem}textarea{width:100%;height:18rem;padding:1rem;resize:vertical;background:#080e19;color:#dae9ff;border:1px solid #475569;border-radius:8px;font:13px/1.5 ui-monospace,monospace}button{padding:.8rem 1.1rem;margin:.6rem .5rem .2rem 0;border:0;border-radius:8px;background:#38bdf8;color:#082f49;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}input{max-width:100%}.pill{font:12px ui-monospace,monospace;letter-spacing:.1em;color:#67e8f9}#status{white-space:pre-wrap}.error{color:#fda4af}.success{color:#86efac}li{margin:.4rem 0}code{color:#93c5fd}a{color:#7dd3fc}small{color:#94a3b8}
+</style>
+<main><div class="pill">LOCAL ONLY · NO UPLOAD · WEBCONSOLE 1.1.1</div><h1>Repair the complete PHP file</h1>
+<p>This utility patches your original WebConsole Pro 1.1.0 and downloads a <strong>complete, single-file PHP console</strong>. It is not the console itself. All sections outside the listed repairs remain in the output; no source is sent to a server.</p>
+<section><h2>1 · Choose your original file</h2><input id="file" type="file" accept=".php,.txt"><label for="source">Or paste the complete PHP source</label><textarea id="source" spellcheck="false" placeholder="&lt;?php …"></textarea><button id="repair">Generate complete corrected PHP</button><button id="download" disabled>Download webconsole-fixed.php</button><div id="status" role="status" aria-live="polite"></div><ol id="changes"></ol></section>
+<section><h2>2 · Validate and replace</h2><ol><li>Keep a backup of the original PHP file <strong>outside the public web directory</strong>. Preserve <code>.wconsole_data</code>.</li><li>Check the downloaded file on your VPS: <code>php -l webconsole-fixed.php</code>.</li><li>Stop existing console-managed jobs before replacing the original PHP file. Use the same directory and filename as before.</li><li>Refresh the console and create a <strong>new</strong> deployment job. Old failed jobs do not resume automatically.</li></ol><p>Install PHP CLI and util-linux on the VPS if missing. The PHP web account must be able to execute PHP CLI and write its own data directory. Do not run the web console as root or use chmod 777 to bypass ownership errors.</p></section>
+<section><h2>Scope and limits</h2><p>Repairs PHP CLI discovery, parent/worker directory consistency, startup acknowledgement, worker PID reporting, launch errors, log offsets, and one terminal-cleanup typo. The original console is not otherwise rewritten or security-audited.</p><p>The original world-writable data settings, disabled GitHub TLS verification, and other pre-existing security issues still require attention. This does not install systemd, guarantee uptime, or make an Internet-facing admin shell safe. Use systemd for reboot startup and keep this console behind restricted access.</p></section>
+<small>Runs offline after download. No analytics, dependencies, or network requests.</small></main>
+<script>
+// WebConsole Pro 1.1.0 -> 1.1.1 launcher repair. Never executes the input.
+function repairWebConsole(input) {
+  let source = input.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  if (!source.trimStart().startsWith('<?php')) throw new Error('Choose the PHP source file, not an HTML page or Markdown code block.');
+  if (source.includes('function wcp_php_cli(): string')) throw new Error('This file already contains the launcher repair. Keep the existing repaired file.');
+  const changes = [];
+  function once(before, after, label) {
+    if (source.split(before).length !== 2) throw new Error('Unexpected source version: '+label+'. No output was generated.');
+    source = source.replace(before, () => after); changes.push(label);
+  }
+  function section(start, end, replacement, label) {
+    if (source.split(start).length !== 2 || source.split(end).length !== 2) throw new Error('Unexpected source version: '+label);
+    const a=source.indexOf(start), b=source.indexOf(end,a);
+    if(b<=a)throw new Error('Unexpected section order: '+label);
+    source=source.slice(0,a)+replacement+'\n'+source.slice(b); changes.push(label);
+  }
+  once("define('WCP_VERSION', '1.1.0');", "define('WCP_VERSION', '1.1.1');", 'WebConsole version 1.1.1');
+  once('function wcp_init_data_dir(): string {', String.raw`function wcp_init_data_dir(): string {
+    // A child must use the SAME directory selected by its web parent.
+    if (PHP_SAPI === 'cli') {
+        foreach (($_SERVER['argv'] ?? []) as $argument) {
+            if (strpos($argument, '--wcp-data-dir=') !== 0) continue;
+            $directory = base64_decode(substr($argument, 15), true);
+            if ($directory === false || $directory === '' || $directory[0] !== '/' || !is_dir($directory) || !is_writable($directory)) {
+                throw new RuntimeException('The inherited WebConsole data directory is invalid or not writable.');
+            }
+            return $directory;
+        }
+    }`, 'Share the selected data directory with PHP CLI');
+
+  section('function job_start(array &$job) {', 'function job_pid_alive(int $pid): bool', String.raw`function wcp_php_cli(): string {
+    if (!function_exists('exec')) throw new RuntimeException('PHP exec() is disabled; background jobs cannot launch.');
+    $override = defined('WCP_PHP_CLI') ? trim((string)WCP_PHP_CLI) : trim((string)getenv('WCP_PHP_CLI'));
+    $candidates = $override !== '' ? [$override] : array_merge(
+        [PHP_SAPI === 'cli' ? PHP_BINARY : '', '/usr/bin/php', '/usr/local/bin/php', PHP_BINDIR . '/php', trim(sh_ok('command -v php'))],
+        glob('/usr/bin/php[0-9]*') ?: []
+    );
+    foreach (array_unique($candidates) as $candidate) {
+        if ($candidate === '' || $candidate[0] !== '/' || !is_file($candidate) || !is_executable($candidate)) continue;
+        // Do not accidentally start php-fpm or apache as a server.
+        if ($override === '' && !preg_match('/^php(?:[0-9.]+|-cli)?$/', basename($candidate))) continue;
+        $probe = 'if (PHP_SAPI === "cli" && function_exists("exec") && function_exists("proc_open")) { echo "WCP_CLI_OK"; } else { exit(78); }';
+        $result = sh(esc($candidate) . ' -r ' . esc($probe), $rc);
+        if ($rc === 0 && trim($result) === 'WCP_CLI_OK') return $candidate;
+    }
+    throw new RuntimeException('No usable PHP CLI with exec/proc_open was found. Install php-cli, or configure an absolute WCP_PHP_CLI path. PHP-FPM/CGI is not PHP CLI.');
+}
+function wcp_job_alive(array $job): bool {
+    $pid = (int)($job['pid'] ?? 0);
+    if (!job_pid_alive($pid)) return false;
+    $args = explode("\0", (string)@file_get_contents('/proc/' . $pid . '/cmdline'));
+    return in_array('--bgjob=' . $job['id'], $args, true)
+        && in_array($job['script'] ?? __FILE__, $args, true);
+}
+function job_start(array &$job) {
+    $id = $job['id'];
+    $receipt = JOBS_DIR . '/' . $id . '.started.json';
+    $exitFile = JOBS_DIR . '/' . $id . '.exit';
+    try {
+        if (!is_writable(JOBS_DIR) || !is_readable(__FILE__)) throw new RuntimeException('Job directory is not writable or the PHP source is not readable.');
+        $php = wcp_php_cli();
+        $setsid = trim(sh_ok('command -v setsid'));
+        if ($setsid === '' || $setsid[0] !== '/' || !is_executable($setsid)) throw new RuntimeException('setsid is missing. Install util-linux.');
+        if (@file_put_contents($job['log'], "[launcher] PHP CLI: " . $php . "\n", FILE_APPEND | LOCK_EX) === false) throw new RuntimeException('Cannot write the job log.');
+        @unlink($receipt);
+        @unlink($exitFile);
+        @unlink(JOBS_DIR . '/' . $id . '.pid');
+        $job['pid'] = 0;
+        $job['script'] = __FILE__;
+        $job['launch_token'] = wcp_random(16);
+        $job['launch_deadline'] = time() + 10;
+        job_save($job);
+        $cmd = 'cd ' . esc(DATA_DIR) . ' && ( ' . esc($setsid) . ' ' . esc($php)
+            . ' -d register_argc_argv=1 ' . esc(__FILE__)
+            . ' ' . esc('--bgjob=' . $id)
+            . ' ' . esc('--wcp-data-dir=' . base64_encode(DATA_DIR))
+            . ' >> ' . esc($job['log']) . ' 2>&1 < /dev/null & )';
+        $output = sh($cmd, $rc);
+        if ($rc !== 0) throw new RuntimeException('Background launcher failed: ' . mask_url($output));
+        $deadline = microtime(true) + 5;
+        do {
+            clearstatcache(true, $receipt);
+            $ack = json_decode((string)@file_get_contents($receipt), true);
+            if (is_array($ack) && hash_equals($job['launch_token'], (string)($ack['token'] ?? '')) && (int)($ack['pid'] ?? 0) > 1) {
+                $job['pid'] = (int)$ack['pid'];
+                job_save($job);
+                act_log('Started ' . $job['type'] . ': ' . $job['name'] . ' (job ' . $id . ', PID ' . $job['pid'] . ')');
+                return;
+            }
+            usleep(100000);
+        } while (microtime(true) < $deadline);
+        throw new RuntimeException('PHP CLI did not acknowledge startup within 5 seconds. Read the job log for permissions, PHP configuration or bootstrap errors.');
+    } catch (Throwable $e) {
+        $message = $e->getMessage();
+        $job['result'] = ['error' => $message];
+        @file_put_contents($job['log'], "[launcher ERROR] " . $message . "\n", FILE_APPEND | LOCK_EX);
+        @file_put_contents($exitFile, "127\n", LOCK_EX);
+        job_save($job);
+        throw new RuntimeException('Job ' . $id . ': ' . $message, 0, $e);
+    }
+}`, 'Validate PHP CLI and require a child startup acknowledgement');
+
+  once("function job_pid_alive(int $pid): bool { return $pid > 0 && @file_exists('/proc/' . $pid); }", String.raw`function job_pid_alive(int $pid): bool {
+    if ($pid <= 1) return false;
+    $stat = (string)@file_get_contents('/proc/' . $pid . '/stat');
+    $end = strrpos($stat, ')');
+    if ($end === false) return false;
+    $state = substr($stat, $end + 2, 1);
+    return $state !== 'Z' && $state !== 'X';
+}`, 'Exclude zombie processes from running status');
+  once("if (job_pid_alive((int)$job['pid'])) return ['status' => 'running', 'exit' => null];", "if (wcp_job_alive($job)) return ['status' => 'running', 'exit' => null];", 'Validate process identity before reporting running');
+  once("$pid = (int)$job['pid'];\n    if ($pid > 0) {", "$pid = (int)$job['pid'];\n    if (wcp_job_alive($job)) {", 'Guard intentional stops against reused PIDs');
+
+  once("        if (!$job) exit(1);", String.raw`        if (!$job) { fwrite(STDERR, "Background job metadata not found in " . JOBS_DIR . "\n"); exit(1); }
+        if (!empty($job['launch_token'])) {
+            if (is_file(JOBS_DIR . '/' . $id . '.exit') || time() > (int)$job['launch_deadline']) {
+                fwrite(STDERR, "Background launch was cancelled or expired.\n"); exit(127);
+            }
+            $ack = ['token' => $job['launch_token'], 'pid' => getmypid()];
+            if (file_put_contents(JOBS_DIR . '/' . $id . '.started.json', json_encode($ack), LOCK_EX) === false) {
+                fwrite(STDERR, "Cannot write background startup acknowledgement.\n"); exit(127);
+            }
+            file_put_contents(JOBS_DIR . '/' . $id . '.pid', getmypid() . "\n", LOCK_EX);
+        }`, 'Record the real PHP worker PID rather than the intermediate shell PID');
+
+  once("if (!empty($in['api'])) { handle_api(); exit; }", String.raw`if (!empty($in['api'])) {
+    try { handle_api(); }
+    catch (Throwable $e) { jout(false, null, mask_url($e->getMessage()), 500); }
+    exit;
+}`, 'Return actionable JSON errors rather than blank API responses');
+  once("'offset' => $size, 'status' => job_status($job)", "'offset' => $off + strlen($data), 'has_more' => ($off + strlen($data) < $size), 'status' => job_status($job)", 'Avoid skipping log chunks');
+  once("{onclose:()=>{clearInterval(timer)}}", "{onclose:()=>{alive=false;clearInterval(timer)}}", 'Stop polling after the log viewer closes');
+  once("if(s.status==='running'){sh.querySelector('#jstop').classList.remove('hide')}else{", "if(s.status==='running'||d.has_more){sh.querySelector('#jstop').classList.toggle('hide',s.status!=='running')}else{alive=false;", 'Drain remaining logs after the worker exits');
+  once('  await poll();timer=setInterval(poll,1000);', '  await poll();if(alive)timer=setInterval(poll,1000);', 'Do not restart polling for an already completed job');
+  // A nearby existing typo otherwise crashes terminal-list cleanup.
+  once('                term_close($id);', '                term_kill($id);', 'Fix the undefined terminal cleanup function');
+  return {source, changes};
+}
+
+let result=null;
+const input=document.getElementById('source'),status=document.getElementById('status'),changes=document.getElementById('changes'),download=document.getElementById('download');
+function invalidate(){result=null;download.disabled=true;changes.replaceChildren();status.textContent='';}
+input.addEventListener('input',invalidate);
+document.getElementById('file').addEventListener('change',async e=>{invalidate();try{const file=e.target.files[0];if(!file)return;if(file.size>5*1024*1024)throw new Error('Maximum source size is 5 MiB.');input.value=await file.text();}catch(e){status.className='error';status.textContent=e.message;}});
+document.getElementById('repair').addEventListener('click',()=>{invalidate();try{let text=input.value.trim();if(text.startsWith('```'))text=text.replace(/^```(?:php)?[^\S\n]*\n/,'').replace(/\n```$/,'');result=repairWebConsole(text+'\n');for(const change of result.changes){const li=document.createElement('li');li.textContent=change;changes.append(li);}status.className='success';status.textContent='Complete PHP generated: '+new Blob([result.source]).size.toLocaleString()+' bytes. Download, then run php -l on the VPS before replacement.';download.disabled=false;}catch(e){status.className='error';status.textContent=e.message;}});
+download.addEventListener('click',()=>{if(!result)return;const url=URL.createObjectURL(new Blob([result.source],{type:'application/octet-stream'}));const a=document.createElement('a');a.href=url;a.download='webconsole-fixed.php';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+</script></html>
