@@ -1,4 +1,4 @@
-# WebConsole Pro 1.1.2 — complete standalone PHP file
+# WebConsole Pro 1.2.0 — complete standalone PHP file
 
 **Deploy `webconsole.php`.** This is the actual console, not the earlier offline
 HTML repair tool, and it does not require the repair utility at runtime.
@@ -10,6 +10,69 @@ It retains the terminal, file manager/editor, uploads, process manager, GitHub
 explorer, backup profiles/snapshots/restore, project deployment/service runner,
 settings and authentication features. Existing JSON configuration filenames and
 project/profile field names are retained.
+
+## Release 1.2.0 — balanced workspace upgrade
+
+All existing terminal, file/editor/upload, process, GitHub backup/restore, project,
+job and settings API areas remain. This is a classic-console-inspired redesign,
+not an exact recreation of the earlier pasted original interface.
+
+- **Appearance studio:** five palettes (Midnight, Paper, Ocean, Forest, Amber),
+  three desktop layouts (Classic sidebar, Studio top navigation, Focus icon rail),
+  and compact/comfortable density. Every combination uses the same feature set.
+  Preview is immediate; Save persists to console settings; closing without Save
+  restores the previous appearance. Preferences are console-wide, not per user.
+  Mobile keeps the bottom navigation in every layout. Icons are inline SVG.
+- **Navigation:** searchable section palette via the header or Ctrl/Cmd+K,
+  English search aliases, section breadcrumb, visible keyboard focus, modal
+  roles/focus handling, and reduced-motion support. The hotkey does not intercept
+  Ctrl+K inside xterm. No shell commands execute from the navigation palette.
+- **Projects:** instant list filter, Scraper4/Node/static presets, reviewed JSON
+  export, and read-only deployment checks. Exports omit IDs, auth tokens and
+  **all environment values**, strip URL credentials/query/fragment, and disable
+  auto-start. Shell command text can still contain secrets; review before sharing.
+  Exports are portable templates, not complete secret-bearing backups. Existing
+  JSON upload/paste import and manual editing remain available.
+- **Preflight:** execution account, destination/nearest existing ancestor access,
+  Git/Bash/copy tools, Node/npm when applicable, and cache write access. The same
+  checks run in the CLI worker before fetch/copy/install, and directory-creation
+  failure now has a clear ownership/permission explanation. No chmod, chown,
+  directory creation, sudo or package installation occurs in the read-only check.
+  Checks cannot guarantee Git credentials, package installation, free ports,
+  storage capacity, native supervisor survival or service health.
+- **Jobs:** persistent-in-page text/status filters; log text filtering, follow
+  toggle, pause/resume fetching and local download of the loaded buffer. The log
+  buffer retains at most the latest 2 million characters; downloads are **not**
+  guaranteed to contain the complete server log. Clearing is local only.
+- **Files:** quick filtering of the currently displayed directory, in addition
+  to the existing server-side search. Hidden selections remain selected; filtering
+  does not change the explicit selection count or bulk-action targets.
+
+Upgrade by replacing only the PHP file at its existing location. Preserve
+`.wconsole_data`, project data and `.env.local`. No main Scraper4 version change
+is needed for this independently versioned console release.
+
+### UI/browser validation
+
+The regular suite exercises PHP syntax/helpers, frontend DOM interactions,
+import/export, appearance preview/save/cancel, presets, log controls and preflight
+failure behavior. Optional real Chromium tests use the actual inline HTML/CSS/JS
+with **mocked authenticated APIs**, not a live PHP/VPS deployment. They exercise
+all 75 combinations of five palettes, three layouts and five viewport widths,
+plus navigation across every original section and project import/export.
+
+```bash
+node --test tools/webconsole/webconsole.test.mjs tools/webconsole-repair/repair.test.mjs
+# PHP_PARSER_PATH and PHP_BIN enable the additional PHP parser/engine checks.
+PLAYWRIGHT_PATH=/absolute/path/to/playwright/index.mjs \
+CHROMIUM_BIN=/absolute/path/to/chromium \
+node --test tools/webconsole/webconsole.browser.test.mjs
+```
+
+Playwright/Chromium are optional external test dependencies; they are not needed
+on the server hosting the standalone console. Without PLAYWRIGHT_PATH, the
+browser test is explicitly skipped. Native Linux/PHP-FPM process supervision and
+live GitHub/VPS operations still require deployment testing.
 
 ## Project JSON import (1.1.2)
 

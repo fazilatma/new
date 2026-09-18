@@ -10,7 +10,7 @@ const source=await readFile(new URL('./webconsole.php',import.meta.url),'utf8');
 
 test('deliverable is a complete PHP console, not a patcher or loader',()=>{
  assert.ok(source.startsWith('<?php'));
- assert.ok(source.includes("define('WCP_VERSION', '1.1.2');"));
+ assert.ok(source.includes("define('WCP_VERSION', '1.2.0');"));
  for(const name of ['wcp_php_cli','job_start','wcp_cli','handle_api','render_body','render_login','render_css','page_head','term_create','fs_scan_dir','cli_backup','cli_restore','cli_deploy','cli_service'])assert.match(source,new RegExp('function '+name+'\\('));
  assert.ok(source.endsWith('echo render_body();\n'));
  assert.ok(!source.includes('repair.mjs'));
@@ -69,6 +69,15 @@ test('PHP engine lint and isolated persistence / launcher-preflight failure', {s
   check($status['status']==='failed' && $status['exit']===127,'persisted failure state');
   check(strpos(file_get_contents($job['log']),'launcher ERROR')!==false,'diagnostic log');
   check(job_pid_alive(1)===false,'protected PID');
+  $was=$GLOBALS['__NOEXEC'];$GLOBALS['__NOEXEC']=true;
+  $target=DATA_DIR.'/not-created-by-preflight';
+  $pre=proj_preflight(['deploy_path'=>$target,'type'=>'node','install_cmd'=>'npm ci']);
+  check($pre['ok']===false && !file_exists($target),'preflight is read-only and reports missing tools');
+  file_put_contents(DATA_DIR.'/not-a-directory','file');
+  $pre=proj_preflight(['deploy_path'=>DATA_DIR.'/not-a-directory']);
+  check($pre['checks'][0]['ok']===false,'file cannot be deployment directory');
+  $pre=proj_preflight(['deploy_path'=>'/']);check($pre['checks'][0]['ok']===false,'root target blocked');
+  $GLOBALS['__NOEXEC']=$was;
   file_put_contents(DATA_DIR.'/fixture.txt','abc');
   check(count(fs_search(DATA_DIR,'fixture.txt'))===1,'file search');
   $html=render_body();check(strpos($html,'id="v-proj"')!==false,'complete UI render');
@@ -87,7 +96,7 @@ test('rendered console initializes and opens project / file / job views',async()
  const scripts=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)],code=scripts[scripts.length-1][1];
  const calls=[];
  const data={sysinfo:{host:'test',kernel:'Linux',php:'8.2',user:'fixture',ip:'127.0.0.1',mem:{total:1024,used:512},disk:{total:4096,free:2048},cores:2,load:[0,0,0],uptime:60,cpu_pct:0,tools:{git:true,node:true}},'proj.list':{projects:[{id:'abc',name:'Fixture',repo_url:'https://github.com/example/app',branch:'main',deploy_path:'/opt/fixture',port:'3000',env:{},start_cmd:'node app.js'}]},'fs.list':{path:'/opt',items:[{name:'fixture.txt',dir:false,perms:'0600',owner:'test',group:'test',size:3,mtime:1}]},'jobs.list':{jobs:[{id:'abc',name:'Launch failure',type:'deploy',created:'2026-09-18',status:{status:'failed',exit:127}}]}};
- const context={window,document,__BOOT:{csrf:'fixture',v:'1.1.2',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
+ const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.0',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
  new Script(code+'\nglobalThis.TEST={switchTab,renderProj,renderFm,renderJobs,projectDlg};').runInNewContext(context);
  await new Promise(r=>setImmediate(r));
  assert.match(document.querySelector('#v-dash').textContent,/test/);
@@ -106,9 +115,9 @@ function importHarness(){
  if(!descriptor.set)Object.defineProperty(proto,'value',{...descriptor,set(v){for(const o of this.options)o.selected=o.value===v;}});
  const code=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
  const calls=[];
- const context={window,document,__BOOT:{csrf:'test',v:'1.1.2',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
- new Script(code+'\nglobalThis.TEST={parseProjectJson,projectDlg};').runInNewContext(context);
- return {...context,calls,$:id=>document.querySelector('#'+id)};
+ const context={window,document,__BOOT:{csrf:'test',v:'1.2.0',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
+ new Script(code+'\nglobalThis.TEST={parseProjectJson,projectDlg,applyAppearance,readAppearance,appearanceDlg,commandPalette,projectExport,presetProject,projectPreflight,openJob,__closeSheet};').runInNewContext(context);
+ return {...context,vm:context,calls,$:id=>document.querySelector('#'+id)};
 }
 
 test('pasted sample JSON fills editable form, merges env and saves only on explicit Save',async()=>{
@@ -157,4 +166,66 @@ test('oversized files are not read, and a late file read cannot replace newly pa
  let resolve;const pending=h.$('jq-json-file').onchange({target:{files:[{size:2,text:()=>new Promise(r=>resolve=r)}]}});
  h.$('jq-json-text').value='newly pasted';h.$('jq-json-text').oninput();resolve('{}');await pending;
  assert.equal(h.$('jq-json-text').value,'newly pasted');
+});
+
+test('appearance previews all palettes/layouts, cancels cleanly, and explicitly persists',async()=>{
+ const h=importHarness();
+ for(const theme of ['dark','light','ocean','forest','amber'])for(const layout of ['classic','studio','focus']){
+  h.TEST.applyAppearance({theme,layout,density:'compact'});
+  assert.equal(h.document.documentElement.getAttribute('data-theme'),theme);
+  assert.equal(h.document.documentElement.getAttribute('data-layout'),layout);
+ }
+ h.TEST.applyAppearance({theme:'bad',layout:'bad',density:'bad'});
+ assert.equal(h.TEST.readAppearance().theme,'dark');assert.equal(h.TEST.readAppearance().layout,'classic');
+ h.TEST.appearanceDlg();h.document.querySelector('[data-skin="forest"]').onclick();await Promise.resolve();
+ assert.equal(h.TEST.readAppearance().theme,'forest');assert.ok(!h.calls.some(x=>x.api==='settings.save'));
+ h.TEST.__closeSheet();assert.equal(h.TEST.readAppearance().theme,'dark');
+ h.TEST.appearanceDlg();h.document.querySelector('[data-skin="ocean"]').onclick();h.document.querySelector('[data-layout-choice="studio"]').onclick();
+ await h.$('appearance-save').onclick();const saved=h.calls.find(x=>x.api==='settings.save');
+ assert.equal(saved.theme,'ocean');assert.equal(saved.layout,'studio');assert.equal(h.TEST.readAppearance().theme,'ocean');
+ assert.equal(h.document.querySelector('.msheet').getAttribute('role'),'dialog');
+});
+
+test('navigation palette filters sections without executing server commands',()=>{
+ const h=importHarness();h.TEST.commandPalette();h.$('command-query').value='files';h.$('command-query').oninput();
+ assert.equal(h.$('command-results').querySelectorAll('button').length,1);
+ assert.match(h.$('command-results').textContent,/فایل/);
+ h.$('command-query').value='no-such-section';h.$('command-query').oninput();assert.equal(h.$('command-results').querySelectorAll('button').length,0);
+ assert.ok(!h.calls.some(x=>['term.write','proj.deploy','proj.service'].includes(x.api)));
+});
+
+test('portable project export strips identity, token, env and URL credentials; requires review',()=>{
+ const h=importHarness();const q=h.TEST.projectExport({id:'secret-id',name:'Export',repo_url:'https://user:password@example.com/repo?token=secret#private',auth_token:'private-pat',env:{API_KEY:'secret'},install_cmd:'npm ci',auto_start:true,is_daemon:true});
+ assert.equal(q.repo_url,'https://example.com/repo');assert.equal(q.auto_start,false);
+ for(const field of ['id','auth_token','env'])assert.equal(q[field],undefined);
+ assert.ok(!h.$('project-export').value.includes('private-pat'));
+ const downloads=[];h.vm.downloadText=(...args)=>downloads.push(args);
+ assert.equal(downloads.length,0);h.$('project-export-save').onclick();assert.equal(downloads.length,1);
+ assert.ok(!h.calls.some(x=>x.api==='proj.save'));
+});
+
+test('project presets match committed sample and never auto-start',async()=>{
+ const h=importHarness(),sample=JSON.parse(await readFile(new URL('./examples/scraper4-project.json',import.meta.url),'utf8'));
+ assert.deepEqual(JSON.parse(JSON.stringify(h.TEST.presetProject('scraper4'))),sample);
+ for(const kind of ['node','static','scraper4'])assert.equal(h.TEST.presetProject(kind).auto_start,false);
+ assert.equal(h.TEST.presetProject('static').start_cmd,'');
+});
+
+test('preflight UI displays escaped diagnostics and does not deploy',async()=>{
+ const h=importHarness();h.vm.fetch=async(url,opts)=>{const q=JSON.parse(opts.body);h.calls.push(q);return {status:200,json:async()=>({ok:true,data:{ok:false,user:'www-data',target:'/var/www/example',checks:[{name:'Directory',ok:false,detail:'Permission denied <script>bad</script>'}],notes:['Read-only check']}})}};
+ await h.TEST.projectPreflight('fixture');assert.match(h.document.querySelector('.msheet').textContent,/Permission denied/);
+ assert.equal(h.document.querySelector('.msheet script'),null);assert.ok(h.calls.some(x=>x.api==='proj.preflight'));
+ assert.ok(!h.calls.some(x=>x.api==='proj.deploy'));
+ assert.ok(source.indexOf('$preflight=proj_preflight($p)')<source.indexOf("cli_checked('git clone --depth 1 --branch",source.indexOf("function cli_deploy(")));
+});
+
+test('job log filtering, pause, follow, download and clear operate on loaded buffer',async()=>{
+ const h=importHarness(),downloads=[];h.vm.downloadText=(...args)=>downloads.push(args);
+ let requests=0,poll;h.vm.setInterval=fn=>{poll=fn;return 1};
+ h.vm.fetch=async()=>{requests++;return {status:200,json:async()=>({ok:true,data:{offset:12,b64:Buffer.from('OK ready\nERROR permission\n').toString('base64'),status:{status:'running'}}})}};
+ await h.TEST.openJob('fixture','Fixture log');assert.match(h.$('jlog').textContent,/OK ready/);
+ h.$('jfilter').value='error';h.$('jfilter').oninput();assert.equal(h.$('jlog').textContent,'ERROR permission');
+ h.$('jdownload').onclick();assert.match(downloads[0][1],/OK ready/);
+ h.$('jpause').onclick({target:h.$('jpause')});const before=requests;await poll();assert.equal(requests,before);
+ h.$('jclr').onclick();assert.equal(h.$('jlog').textContent,'');h.TEST.__closeSheet();await poll();assert.equal(requests,before);
 });
