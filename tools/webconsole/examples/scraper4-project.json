@@ -4,7 +4,7 @@
   "repo_url": "https://github.com/fazilatma/new.git",
   "branch": "arena/01a0aa17-new",
   "subfolder": "cloudflare-scraper4",
-  "deploy_path": "/var/www/scraper4-cloudflare",
+  "deploy_path": "",
   "port": "8790",
   "install_cmd": "npm ci --include=dev --no-audit --no-fund",
   "build_cmd": "node scripts/esbuild-check.mjs && npm run version:check && npm run render:build",

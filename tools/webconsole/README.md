@@ -1,4 +1,4 @@
-# WebConsole Pro 1.2.1 — complete standalone PHP file
+# WebConsole Pro 1.2.2 — complete standalone PHP file
 
 **Deploy `webconsole.php`.** This is the actual console, not the earlier offline
 HTML repair tool, and it does not require the repair utility at runtime.
@@ -10,6 +10,75 @@ It retains the terminal, file manager/editor, uploads, process manager, GitHub
 explorer, backup profiles/snapshots/restore, project deployment/service runner,
 settings and authentication features. Existing JSON configuration filenames and
 project/profile field names are retained.
+
+## Release 1.2.2 — persistent managed project storage
+
+The old automatic destination was based on the **file browser start folder**,
+usually `/var/www`. Giving PHP access to one project did not fix the next one.
+New installs now use an independent `project_root`, defaulting to
+`/var/lib/webconsole-projects`, with a unique `<name>-<project-id>` child per
+profile. Duplicate project names do not share a destination. Quick installs,
+manual profiles with an empty path, and bundled presets all use this policy.
+
+### One-time setup on the server
+
+1. Replace the deployed `webconsole.php`, preserving `.wconsole_data`. Updating
+   the Scraper4 checkout alone does not update the PHP console.
+2. Open **Projects → Project storage** (also available from Settings). The panel
+   shows the actual PHP effective UID/GID, not the owner of the PHP source file.
+3. Use the default root outside the web document tree, or save a dedicated,
+   persistent custom root. A location already writable by PHP can be prepared
+   with **Create with current PHP permissions** without privilege escalation.
+4. If PHP cannot create that root, copy the displayed setup script and execute
+   it **once in a root SSH session**, not in the WebConsole terminal. The script
+   grants only the dedicated root to PHP's non-root UID/GID with mode 0700.
+5. Return to the panel and run **Test write access**. This creates and removes a
+   small temporary directory/file in that root. After success, future project
+   directories need no individual root `mkdir/chown` step.
+
+PHP cannot bypass Linux permissions or grant itself root access. No sudo command
+is executed by the web app; the privileged script is displayed for the operator
+only. The script refuses symlinks, untrusted writable/non-root-owned ancestors,
+and takeover of a nonempty directory belonging to another UID. It changes only
+its dedicated root (no recursive chown and no chmod 777). It is idempotent for
+a root already assigned to that same execution account. Custom user-owned roots
+normally need only the unprivileged Prepare action, not this strict SSH script.
+Temporary storage paths and paths inside the known document/WebConsole tree are
+rejected. Keep any extra web-server aliases away from the managed root.
+
+### Existing profiles and data
+
+Existing custom paths remain unchanged, including when saving an existing profile
+with a blank path. The **Use managed writable path** button can propose a new
+location for a stopped, empty/not-yet-installed profile; review and Save it before
+installing. It refuses populated/unreadable locations and active deployments/services. It
+does not move, delete or silently abandon an existing installation. For populated
+installations, an administrator must back up and migrate the full directory,
+`.env.local`, database, `data/`, vault key and any external data deliberately,
+or repair that specific installation's ownership for its intended service user.
+Do not run old and new copies on the same ports or with competing supervisors.
+
+Install/build and service commands also receive private per-project temp,
+npm/pip and XDG cache locations under `.wconsole_data/runtime/<project-id>`.
+Managed-path projects additionally receive a private HOME there; existing custom
+installations keep their inherited HOME to avoid silently losing access to
+existing credentials/state. This avoids a second common failure: npm attempting to write to an unwritable
+system HOME such as `/var/www/.npm`. Explicit environment overrides are preserved
+(including uppercase NPM_CONFIG_CACHE). Preserve this runtime directory on upgrade;
+apps may store credentials or state in HOME. If an app needs an existing HOME
+(e.g. SSH keys/private registry configuration), set HOME explicitly rather than
+copying credentials automatically. Root-only package installs and arbitrary
+system paths remain intentionally unauthorized; quotas, read-only mounts and
+SELinux/AppArmor may require separate administrator action.
+
+Validation includes PHP-engine tests for path selection, unique names, preserving
+existing paths, symlink/temp/web-root rejection, actual write-probe cleanup and
+runtime overrides. An opt-in native Linux test (`WCP_TEST_SUDO_STORAGE=1`, requires
+PHP_BIN and passwordless sudo for the test user) executes the **PHP-generated**
+setup script in a unique `/var/lib/wcp-storage-fixture-*` directory, verifies two
+non-root project directories can be created and written there, reruns it without data loss, and tests
+refusal of symlink targets and nonempty foreign-owned locations. It cleans up
+only that fixture. This is sandbox validation, not a claim of deployment on your VPS.
 
 ## Release 1.2.1 — version-sorted branch explorer
 
@@ -122,8 +191,9 @@ auth_token does not overwrite the pending token field. Edit the manual form to
 remove unwanted environment entries. Import trusted profiles only: install/build/
 start commands are arbitrary shell commands when you later deploy/run the project.
 
-`examples/scraper4-project.json` contains the requested VPS profile. It uses
-`/var/www/scraper4-cloudflare`, deployer port 8790, scraper port 3000, loopback
+`examples/scraper4-project.json` contains the requested VPS profile. Its empty
+`deploy_path` selects managed storage for a new profile (preserves the current
+path when editing an existing profile). It uses deployer port 8790, scraper port 3000, loopback
 binding for Caddy, and disables Git auto-updates in the copied checkout. It
 contains no credentials or database override. Set strong ADMIN_TOKEN and
 DEPLOYER_UI_TOKEN privately and retain the appropriate database configuration.

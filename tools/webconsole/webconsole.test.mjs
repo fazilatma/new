@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {readFile,mkdtemp,writeFile,rm,mkdir,stat} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {Script} from 'node:vm';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+let validatedStorageSetupScript=null;
 const source=await readFile(new URL('./webconsole.php',import.meta.url),'utf8');
 
 test('deliverable is a complete PHP console, not a patcher or loader',()=>{
  assert.ok(source.startsWith('<?php'));
- assert.ok(source.includes("define('WCP_VERSION', '1.2.1');"));
+ assert.ok(source.includes("define('WCP_VERSION', '1.2.2');"));
  for(const name of ['wcp_php_cli','job_start','wcp_cli','handle_api','render_body','render_login','render_css','page_head','term_create','fs_scan_dir','cli_backup','cli_restore','cli_deploy','cli_service'])assert.match(source,new RegExp('function '+name+'\\('));
  assert.ok(source.endsWith('echo render_body();\n'));
  assert.ok(!source.includes('repair.mjs'));
@@ -43,6 +44,7 @@ test('PHP 7.4 syntax parse', {skip:!process.env.PHP_PARSER_PATH},()=>{
 });
 test('PHP engine lint and isolated persistence / launcher-preflight failure', {skip:!process.env.PHP_BIN,timeout:60000},async()=>{
  const dir=await mkdtemp(join(tmpdir(),'webconsole-test-'));
+ const storageDir=await mkdtemp(join(process.cwd(),'.wcp-storage-test-'));
  try{
   const file=join(dir,'webconsole.php');await writeFile(file,source);
   const lint=execFileSync(process.env.PHP_BIN,['-l',file],{encoding:'utf8',timeout:20000});assert.match(lint,/No syntax errors/);
@@ -52,6 +54,27 @@ test('PHP engine lint and isolated persistence / launcher-preflight failure', {s
   ini_set('display_errors','1');error_reporting(E_ALL);
   function check($condition,$label){if(!$condition)throw new RuntimeException($label);}
   check(cfg()['pass_hash']==='', 'fresh defaults');
+  check(cfg()['project_root']==='/var/lib/webconsole-projects','dedicated persistent default');
+  $root=${JSON.stringify(storageDir)};
+  cfg_save(['project_root'=>$root]);
+  check(proj_storage_root()===$root,'custom managed root');
+  $report=proj_storage_status(true);check($report['ready'] && $report['probed'],'actual write probe');
+  check(count(array_diff(scandir($root),['.','..']))===0,'probe cleans up');
+  $p1=['name'=>'Same name','id'=>'aaaa','deploy_path'=>''];$p2=['name'=>'Same name','id'=>'bbbb','deploy_path'=>''];
+  check(proj_resolve_deploy_path($p1)!==proj_resolve_deploy_path($p2),'unique paths for duplicate names');
+  check(strpos(proj_resolve_deploy_path($p1),$root.'/')===0,'new empty path uses managed root');
+  check(proj_resolve_deploy_path($p1,['deploy_path'=>'/var/www/existing'])==='/var/www/existing','existing path preserved');
+  check(proj_resolve_deploy_path(['name'=>'Custom','id'=>'cccc','deploy_path'=>'/opt/custom'])==='/opt/custom','explicit custom path preserved');
+  foreach(['/','/var/www','/tmp/apps',__DIR__.'/apps']as$bad){$rejected=false;try{proj_storage_root($bad);}catch(RuntimeException $e){$rejected=true;}check($rejected,'unsafe managed root rejected');}
+  mkdir($root.'/empty');check(proj_empty_location($root.'/empty'),'empty location');file_put_contents($root.'/empty/vault.key','retain');check(!proj_empty_location($root.'/empty'),'data location protected');unlink($root.'/empty/vault.key');rmdir($root.'/empty');
+  symlink($root,$root.'-link');$rejected=false;try{proj_storage_root($root.'-link');}catch(RuntimeException $e){$rejected=true;}unlink($root.'-link');check($rejected,'symlink storage refused');
+  $script=proj_storage_setup_script('/var/lib/webconsole-projects',['uid'=>33,'gid'=>33]);check(strpos($script,'chown --no-dereference')!==false && strpos($script,'chown -R')===false,'scoped setup script');
+  echo 'SETUP_SCRIPT_BASE64:'.base64_encode($script)."\n";
+  check(strpos(proj_storage_setup_script('/var/lib/webconsole-projects',['uid'=>0,'gid'=>0]),'No safe setup command')!==false,'root PHP not encouraged');
+  $runtime=proj_runtime_env(['id'=>'runtime-fixture','deploy_path'=>$root.'/app','env'=>['EXTRA'=>'yes']]);check(is_writable($runtime['HOME']) && is_writable($runtime['TMPDIR']),'writable runtime HOME and temp');
+  check(!isset(proj_runtime_env(['id'=>'runtime-fixture','deploy_path'=>'/opt/existing','env'=>[]])['HOME']),'existing custom installations inherit original HOME');
+  $runtime=proj_runtime_env(['id'=>'runtime-fixture','env'=>['HOME'=>'/custom/home','NPM_CONFIG_CACHE'=>'/custom/cache']]);check($runtime['HOME']==='/custom/home' && !isset($runtime['npm_config_cache']),'explicit runtime overrides preserved');
+
   cfg_save(['theme'=>'light']);check(cfg()['theme']==='light','config save');
   check(norm_path('/a/../b//c')==='/b/c','path normalization');
   $new=DATA_DIR.'/child-data';mkdir($new,0700);
@@ -88,8 +111,9 @@ test('PHP engine lint and isolated persistence / launcher-preflight failure', {s
   `;
   const path=join(dir,'test.php');await writeFile(path,harness);
   const output=execFileSync(process.env.PHP_BIN,[path],{encoding:'utf8',timeout:30000});
+  const setup=Buffer.from(output.match(/SETUP_SCRIPT_BASE64:([^\n]+)/)[1],'base64').toString();validatedStorageSetupScript=setup;const setupPath=join(dir,'setup.sh');await writeFile(setupPath,setup);execFileSync('sh',['-n',setupPath]);
   assert.match(output,/WCP_HELPERS_OK/);assert.ok(!/Fatal error|Warning:/.test(output),output);
- }finally{await rm(dir,{recursive:true,force:true});}
+ }finally{await rm(dir,{recursive:true,force:true});await rm(storageDir,{recursive:true,force:true});await rm(storageDir+'-link',{force:true});}
 });
 
 test('rendered console initializes and opens project / file / job views',async()=>{
@@ -99,7 +123,7 @@ test('rendered console initializes and opens project / file / job views',async()
  const scripts=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)],code=scripts[scripts.length-1][1];
  const calls=[];
  const data={sysinfo:{host:'test',kernel:'Linux',php:'8.2',user:'fixture',ip:'127.0.0.1',mem:{total:1024,used:512},disk:{total:4096,free:2048},cores:2,load:[0,0,0],uptime:60,cpu_pct:0,tools:{git:true,node:true}},'proj.list':{projects:[{id:'abc',name:'Fixture',repo_url:'https://github.com/example/app',branch:'main',deploy_path:'/opt/fixture',port:'3000',env:{},start_cmd:'node app.js'}]},'fs.list':{path:'/opt',items:[{name:'fixture.txt',dir:false,perms:'0600',owner:'test',group:'test',size:3,mtime:1}]},'jobs.list':{jobs:[{id:'abc',name:'Launch failure',type:'deploy',created:'2026-09-18',status:{status:'failed',exit:127}}]}};
- const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.1',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
+ const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.2',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
  new Script(code+'\nglobalThis.TEST={switchTab,renderProj,renderFm,renderJobs,projectDlg};').runInNewContext(context);
  await new Promise(r=>setImmediate(r));
  assert.match(document.querySelector('#v-dash').textContent,/test/);
@@ -118,8 +142,8 @@ function importHarness(){
  if(!descriptor.set)Object.defineProperty(proto,'value',{...descriptor,set(v){for(const o of this.options)o.removeAttribute('selected');const chosen=[...this.options].find(o=>o.value===v);if(chosen)chosen.setAttribute('selected','');}});
  const code=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
  const calls=[];
- const context={window,document,__BOOT:{csrf:'test',v:'1.2.1',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
- new Script(code+'\nglobalThis.TEST={parsedProjectVersion,compareProjectVersions,branchVersion,sortedBranchRows,parseProjectJson,projectDlg,applyAppearance,readAppearance,appearanceDlg,commandPalette,projectExport,presetProject,projectPreflight,openJob,__closeSheet};').runInNewContext(context);
+ const context={window,document,__BOOT:{csrf:'test',v:'1.2.2',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
+ new Script(code+'\nglobalThis.TEST={parsedProjectVersion,compareProjectVersions,branchVersion,sortedBranchRows,parseProjectJson,projectDlg,applyAppearance,readAppearance,appearanceDlg,commandPalette,projectExport,presetProject,projectPreflight,projectStorageDlg,openJob,__closeSheet};').runInNewContext(context);
  return {...context,vm:context,calls,$:id=>document.querySelector('#'+id)};
 }
 
@@ -262,4 +286,44 @@ test('switching repository ignores delayed previous branch listings',async()=>{
  h.vm.fetch=async(url,options)=>{const q=JSON.parse(options.body);if(q.api==='gh.repo_branches'&&q.repo==='first')await new Promise(r=>finish=r);return {status:200,json:async()=>({ok:true,data:q.api==='gh.repo_branches'?{branches:[{name:q.repo}]}:{apps:[]}})}};
  h.$('gh-repo-sel').innerHTML='<option value="first">first</option><option value="second">second</option>';h.$('gh-repo-sel').value='first';const pending=h.$('gh-repo-sel').onchange();await Promise.resolve();h.$('gh-repo-sel').value='second';await h.$('gh-repo-sel').onchange();finish();await pending;
  assert.match(h.$('gh-branch-table').textContent,/second/);assert.ok(!h.$('gh-branch-table').textContent.includes('first'));
+});
+
+test('storage UI displays one-time setup, tests writes and never executes privileged commands',async()=>{
+ const h=importHarness();const calls=[];let root='/var/lib/webconsole-projects';
+ h.vm.fetch=async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);if(q.api==='settings.save')root=q.project_root;return {status:200,json:async()=>({ok:true,data:{root,uid:33,gid:33,ready:!!q.probe,probed:!!q.probe,error:'One-time SSH setup required',setup_script:'mkdir example (display only)'}})}};
+ await h.TEST.projectStorageDlg();assert.match(h.$('storage-script').value,/display only/);assert.match(h.$('storage-status').textContent,/SSH/);
+ h.$('storage-root').value='/srv/managed-projects';h.$('storage-root').oninput({target:h.$('storage-root')});assert.equal(h.$('storage-test').disabled,true);
+ await h.$('storage-save').onclick();assert.equal(root,'/srv/managed-projects');assert.equal(h.$('storage-test').disabled,false);
+ await h.$('storage-test').onclick();assert.ok(calls.some(q=>q.api==='proj.storage'&&q.probe===true));
+ assert.ok(!calls.some(q=>['term.write','proj.deploy','proj.service'].includes(q.api)));
+});
+
+test('managed-path action fills only on success and does not relocate existing data',async()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'fixture',name:'Existing',type:'node',deploy_path:'/var/www/old',env:{}});
+ h.vm.fetch=async()=>({status:200,json:async()=>({ok:false,error:'Existing installation contains data. No files were moved.'})});
+ await h.$('jq-managed-path').onclick();assert.equal(h.$('jq-deploy_path').value,'/var/www/old');
+ h.vm.fetch=async()=>({status:200,json:async()=>({ok:true,data:{path:'/var/lib/webconsole-projects/existing-fixture'}})});
+ await h.$('jq-managed-path').onclick();assert.equal(h.$('jq-deploy_path').value,'/var/lib/webconsole-projects/existing-fixture');
+ assert.ok(!h.calls.some(q=>q.api==='proj.save'));
+});
+
+test('native Linux storage provisioning: one setup, multiple non-root projects, no takeover or symlink traversal',{
+ skip:process.env.WCP_TEST_SUDO_STORAGE!=='1'||!process.env.PHP_BIN,timeout:30000
+},async()=>{
+ assert.ok(validatedStorageSetupScript,'use the actual PHP-generated script');assert.ok(process.getuid()>0,'run tests as an unprivileged user with sudo');
+ const sudo=(...args)=>execFileSync('sudo',['-n',...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
+ const parent=sudo('mktemp','-d','/var/lib/wcp-storage-fixture-XXXXXXXX').trim();
+ assert.match(parent,/^\/var\/lib\/wcp-storage-fixture-[A-Za-z0-9]+$/);
+ const local=await mkdtemp(join(tmpdir(),'wcp-storage-ssh-test-'));
+ try{
+  sudo('chmod','0755',parent);
+  const root=parent+'/projects',path=join(local,'setup.sh');
+  const script=destination=>validatedStorageSetupScript.replace(/^root=.*$/m,"root='"+destination+"'").replace(/^uid=.*$/m,'uid='+process.getuid()).replace(/^gid=.*$/m,'gid='+process.getgid());
+  await writeFile(path,script(root));sudo('sh',path);
+  assert.equal((await stat(root)).uid,process.getuid());assert.equal((await stat(root)).mode&0o777,0o700);
+  for(const name of ['project-one','project-two']){await mkdir(root+'/'+name);await writeFile(root+'/'+name+'/data.txt','preserve');}
+  sudo('sh',path);assert.equal(await readFile(root+'/project-one/data.txt','utf8'),'preserve');
+  const blocked=parent+'/existing';sudo('mkdir','-m','0700',blocked);sudo('touch',blocked+'/keep');await writeFile(path,script(blocked));assert.throws(()=>sudo('sh',path),/refusing takeover/);assert.equal((await stat(blocked)).uid,0);sudo('test','-e',blocked+'/keep');
+  const link=parent+'/link';sudo('ln','-s',root,link);await writeFile(path,script(link));assert.throws(()=>sudo('sh',path),/Symlink target refused/);
+ }finally{sudo('rm','-rf','--',parent);await rm(local,{recursive:true,force:true});}
 });

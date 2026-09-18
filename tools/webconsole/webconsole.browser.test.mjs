@@ -20,6 +20,7 @@ test('Chromium: responsive skins, every section, appearance persistence and impo
  const appearance={theme:'dark',layout:'classic',density:'comfortable'};
  const fixtures={
   sysinfo:{host:'UI fixture · not a live server',kernel:'Linux',php:'8.2',user:'www-data',ip:'127.0.0.1',mem:{total:8589934592,used:2147483648},disk:{total:107374182400,free:64424509440},cores:4,load:[.2,.4,.3],uptime:86300,cpu_pct:12,tools:{git:true,node:true,npm:true,rsync:true},term_mode:'fallback'},
+  'proj.storage':{root:'/var/lib/webconsole-projects',uid:33,gid:33,ready:true,probed:true,error:'',setup_script:'# SSH setup fixture, never executed'},
   'proj.list':{projects:[{...sample,id:'fixture',service:null}]},
   'fs.list':{path:'/var/www',items:[{name:'example.txt',dir:false,perms:'0600',owner:'www-data',group:'www-data',size:256,mtime:1}]},
   'gh.user_repos':{repos:[{name:'fixture-repo',language:'JS'}]},'gh.repo_branches':{branches:[{name:'release-99',default:true},{name:'arena/newer'},{name:'unversioned'}]},
@@ -35,7 +36,7 @@ test('Chromium: responsive skins, every section, appearance persistence and impo
    const data=q.api==='settings.get'?{...appearance,fs_start:'/var/www',session_minutes:180,allowed_ips:''}:q.api==='gh.inspect_branch'?{apps:[{name:'Root',subfolder:'',type:'node',version:q.branch==='release-99'?'9.0.0':'1.0.0'},{name:'Scraper',subfolder:'cloudflare-scraper4',type:'node',version:q.branch==='arena/newer'?'1.210.0+':q.branch==='release-99'?'1.9.0':''}]}:fixtures[q.api]??{};
    return route.fulfill({json:{ok:true,data}});
   }
-  if(req.url()==='http://wcp.test/')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><script>const __BOOT='+JSON.stringify({...appearance,csrf:'fixture',host:'UI fixture',v:'1.2.1',fs_start:'/var/www'})+';</script></head><body>'+body});
+  if(req.url()==='http://wcp.test/')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><script>const __BOOT='+JSON.stringify({...appearance,csrf:'fixture',host:'UI fixture',v:'1.2.2',fs_start:'/var/www'})+';</script></head><body>'+body});
   return route.abort();
  });
  await page.goto('http://wcp.test/');await page.locator('#v-dash .stat').first().waitFor();assert.match(await page.locator('#topbar').innerText(),/وب‌کنسول/);
@@ -53,7 +54,7 @@ test('Chromium: responsive skins, every section, appearance persistence and impo
  for(const id of ['files','proc','backup','proj','jobs','set','term','dash']){
   await page.evaluate(id=>switchTab(id),id);await page.locator('#v-'+id+'.on').waitFor();
  }
- await page.evaluate(()=>switchTab('proj'));await page.locator('.project-card').waitFor();
+ await page.evaluate(()=>switchTab('proj'));await page.locator('.project-card').waitFor();await page.locator('#project-storage').click();await page.locator('#storage-script').waitFor();assert.match(await page.locator('#storage-script').inputValue(),/SSH setup fixture/);await page.locator('#storage-test').click();await page.keyboard.press('Escape');
  await page.locator('#project-filter').fill('not-a-project');assert.equal(await page.locator('.project-card:visible').count(),0);await page.locator('#project-filter').fill('Scraper4');assert.equal(await page.locator('.project-card:visible').count(),1);
  await page.locator('[data-check]').click();await page.getByText('Permission denied. Ask an administrator to create the directory.').waitFor();await page.keyboard.press('Escape');
  await page.locator('#appearancebtn').click();await page.locator('[data-skin="ocean"]').click();await page.locator('[data-layout-choice="studio"]').click();await page.locator('#appearance-save').click();await page.locator('#modals.on').waitFor({state:'hidden'});
