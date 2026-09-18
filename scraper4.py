@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.150"
+APP_VERSION = "10.151"
 CHANGELOG = [
+    {"version":"10.151","date":"2026-09-17","title":"صفحه‌بندی سفارشی با الگوهای دلخواه نظیر ~page~{page}","items":["افزودن گزینه الگوی سفارشی (Custom Pattern) به انتخابگر صفحه‌بندی","پشتیبانی از ساختار ~page~{page}، _p_{page}، [page]، اسلش، خط‌تیره و پارامترهای سفارشی","تشخیص هوشمند الگو در صورت درج قالب {page} در فیلد پارامتر صفحه"]},
     {"version":"10.150","date":"2026-09-17","title":"افزودن BeautifulSoup و موتورهای استخراج و پارس پیشرفته","items":["پشتیبانی کامل از BeautifulSoup (BS4)، lxml و html5lib در موتورهای استخراج و پارس محتوا","افزودن گزینه‌های جدید به فهرست موتورهای ضدبات و انتخاب دستی BeautifulSoup","فالبک خودکار پارسرها (lxml -> html5lib -> html.parser) برای پایداری کامل در محیط‌های مختلف","گزارش وضعیت کامل موتورها و پارسرها در مسیر /health"]},
     {"version":"10.149","date":"2026-09-05","title":"موتور مستر هر سایت","items":["استخراج سریع‌ترین موتوری که برای آن سایت محصول بدهد را مستر پروفایل می‌کند","صفحات بعد و استخراج بعدی ابتدا مستر را می‌زنند؛ بقیه فقط پشتیبان‌اند"]},
     {"version":"10.148","date":"2026-09-05","title":"قیمت باسلام به ریال","items":["هنگام ارسال به باسلام قیمت تومان در ۱۰ ضرب می‌شود مگر اینکه واحد از قبل ریال باشد"]},
@@ -1292,25 +1293,57 @@ def parse_detail_fields(soup: BeautifulSoup, base: str, selectors: dict[str, str
 # ---------------------------------------------------------------------------
 def page_url(original: str, page: int, kind: str, value: str) -> str:
     if page <= 1:
+        if "{page}" in original:
+            return original.replace("{page}", "1")
+        if "[page]" in original:
+            return original.replace("[page]", "1")
         return original
+
+    if "{page}" in original or "[page]" in original or "{n}" in original:
+        return original.replace("{page}", str(page)).replace("[page]", str(page)).replace("{n}", str(page))
+
+    val = (value or "").strip()
+    if "{page}" in val or "[page]" in val or "{n}" in val:
+        if kind != "full":
+            kind = "custom"
+
     parsed = urlparse(original)
-    if kind == "path":
-        # Match PHP build_page_url_custom(path_pattern): append the pattern to
-        # the original listing path, not merely to the domain root.
-        pattern=value or "/page/{page}/";replacement=pattern.replace("{page}",str(page));root=f"{parsed.scheme}://{parsed.netloc}"
-        base_path=re.sub(r"/page/\d+/?$","",parsed.path.rstrip("/"),flags=re.I)
-        return root+base_path+(replacement if replacement.startswith("/") else "/"+replacement)
+
+    if kind in {"custom", "pattern", "path", "path_pattern"}:
+        pattern = val or "/page/{page}/"
+        replacement = pattern.replace("{page}", str(page)).replace("[page]", str(page)).replace("{n}", str(page))
+
+        # Clean existing pagination from base_path if re-running
+        base_path = re.sub(r"/(page|\d+)/?\d*$", "", parsed.path, flags=re.I)
+        base_path = re.sub(r"~page~\d+/?$", "", base_path, flags=re.I)
+        root = f"{parsed.scheme}://{parsed.netloc}"
+
+        # If pattern starts with a non-slash delimiter like '~', '_', '-', '.', attach directly
+        if pattern.startswith(("~", "_", "-", ".")):
+            clean_base = base_path.rstrip("/")
+            url_path = clean_base + replacement
+        elif pattern.startswith("/"):
+            url_path = base_path.rstrip("/") + replacement
+        elif pattern.startswith("?"):
+            base_full = f"{root}{base_path}"
+            return f"{base_full}{replacement}"
+        else:
+            url_path = base_path.rstrip("/") + "/" + replacement
+
+        query_part = f"?{parsed.query}" if parsed.query and not pattern.startswith("?") else ""
+        return f"{root}{url_path}{query_part}"
+
     if kind == "full":
-        return value.replace("{page}",str(page)) if value else original
-    param = value or "page"
+        v = val or original
+        return v.replace("{page}", str(page)).replace("[page]", str(page)).replace("{n}", str(page))
+
+    param = val or "page"
     query = parse_qs(parsed.query, keep_blank_values=True)
     try:
         origin = int((query.get(param) or ["1"])[0] or 1)
     except ValueError:
         origin = 1
     origin = max(1, origin)
-    if page <= 1:
-        return original
     query[param] = [str(origin + page - 1)]
     return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
 
@@ -5519,8 +5552,8 @@ button.linkish.danger{color:#fb7185!important}
 <details class="start-more"><summary>پیشرفته</summary>
 <div class="more-grid">
 <div><label>موتور ضدبات</label><select id="fetch_engine" onchange="onFetchEngineChange()"><option value="auto">خودکار · مستر + پشتیبان</option><option value="requests">Requests</option><option value="beautifulsoup">BeautifulSoup (BS4)</option><option value="httpx">httpx</option><option value="cloudscraper">Cloudscraper</option><option value="curl_cffi">curl_cffi</option><option value="playwright">Playwright</option><option value="selenium">Selenium</option></select><input type="hidden" id="fetch_engine_master"><div id="engineMasterHint" class="quiet" style="font-size:11px;margin-top:4px">استخراج اول سریع‌ترین موتور این سایت را مستر می‌کند</div></div>
-<div><label>صفحه‌بندی</label><select id="pagination"><option value="query">Query</option><option value="path">مسیر</option><option value="full">URL کامل</option><option value="next">لینک بعد</option></select></div>
-<div><label>پارامتر صفحه</label><input id="page_value" value="page" dir="ltr" placeholder="page"></div>
+<div><label>صفحه‌بندی</label><select id="pagination" onchange="onPaginationChange()"><option value="query">Query (پارامتر ?page=)</option><option value="custom">الگوی سفارشی (~page~{page})</option><option value="path">مسیر (/page/{page}/)</option><option value="full">URL کامل</option><option value="next">لینک بعد</option></select></div>
+<div><label>پارامتر صفحه</label><input id="page_value" value="page" dir="ltr" placeholder="page یا ~page~{page}"></div>
 <div><label>اسکرول مرورگر</label><input id="scrolls" type="number" value="4" min="0" max="12"></div>
 <div><label>جزئیات خودکار</label><select id="enrich"><option value="1" selected>روشن</option><option value="0">خاموش</option></select></div>
 <div><label>دامنه جزئیات</label><select id="detail_scope"><option value="missing">فقط ناقص</option><option value="all">همه</option></select></div>
@@ -5700,6 +5733,7 @@ function closeChangeList(){$('changeModal').classList.remove('open');if(!$('sett
 function renderExtractTask(t){$('extractLiveTask').style.display='block';$('extractTaskTitle').textContent=t.title||'استخراج';$('extractTaskPercent').textContent=toFa(Math.round(t.progress||0))+'٪';$('extractTaskBar').style.width=(t.progress||0)+'%';if($('extractTaskMetrics'))$('extractTaskMetrics').innerHTML=`<span><small>انجام</small><b>${toFa(t.done??'—')} / ${toFa(t.total??'—')}</b></span><span><small>محصول</small><b>${toFa(t.extracted??'—')}</b></span><span><small>سپری‌شده</small><b>${esc(shortDuration(t.elapsed_seconds))}</b></span>${t.eta_seconds?`<span><small>باقی‌مانده</small><b>≈ ${esc(shortDuration(t.eta_seconds))}</b></span>`:''}`;$('extractTaskStep').textContent=t.step||'';const events=compactTaskDetails(t.details);$('extractTaskDetails').innerHTML=events.map(x=>`<div class="live-detail"><b>${esc(x.at)}</b> · ${esc(clipTaskText(x.text))}${x.n>1?` ×${toFa(x.n)}`:''}</div>`).join('');$('extractTaskDetails').scrollTop=$('extractTaskDetails').scrollHeight}
 async function watchDetailTask(id){for(;;){try{let d=await api('/api/tasks/'+encodeURIComponent(id)),t=d.task;renderExtractTask(t);if(['completed','failed','cancelled','interrupted'].includes(t.status)){if(t.status==='completed'&&t.result){products=t.result.products||products;renderRows();renderComparisonCards(t.result.comparison||{});$('status').innerHTML='<span class="ok">✓ فهرست سریع آماده بود و اکنون جزئیات '+(t.result.diagnostics?.details?.completed||0)+' محصول نیز تکمیل شد.</span>'}else $('status').innerHTML+='<br><span class="error">وظیفه جزئیات: '+esc(t.error||t.step)+'</span>';loadTaskTopSummary();break}await new Promise(r=>setTimeout(r,1800))}catch(e){break}}}
 function updateEngineHint(){const el=$('engineMasterHint');if(!el)return;const m=(($('fetch_engine_master')||{}).value||'').trim();const pin=(($('fetch_engine')||{}).value||'auto');el.textContent=m?( (pin!=='auto'?'پین دستی: ':'مستر این سایت: ')+m+' · بقیه پشتیبان'):'هنوز مستر نیست؛ استخراج اول سریع‌ترین موتور موفق را ذخیره می‌کند'}
+function onPaginationChange(){const p=$('pagination'),v=$('page_value');if(!p||!v)return;if(p.value==='custom'){if(!v.value||v.value==='page')v.value='~page~{page}';v.placeholder='~page~{page} یا _p_{page}'}else if(p.value==='path'){if(!v.value||v.value==='page')v.value='/page/{page}/';v.placeholder='/page/{page}/'}else if(p.value==='query'){if(v.value.includes('{page}'))v.value='page';v.placeholder='page'}}
 function onFetchEngineChange(){const v=(($('fetch_engine')||{}).value||'auto');if(v&&v!=='auto'&&$('fetch_engine_master'))$('fetch_engine_master').value=v;updateEngineHint()}
 async function runScrape(){const btn=$('runBtn'),old=btn.innerHTML;if(!$('url').value.trim()){$('status').innerHTML='<span class="error">لطفاً آدرس صفحه را وارد کنید.</span>';$('url').focus();return}btn.disabled=true;lastComparison={lists:{}};renderComparisonCards({});btn.innerHTML='<span class="spinner"></span>در حال برداشت';$('status').innerHTML='<span class="progress-pulse">● وظیفه استخراج روی سرور اجرا می‌شود؛ جزئیات زنده پایین نمایش داده می‌شود.</span>';try{let started=await api('/api/scrape/start',{method:'POST',body:JSON.stringify(config())}),task;for(;;){let d=await api('/api/tasks/'+encodeURIComponent(started.task.id));task=d.task;renderExtractTask(task);if(['completed','failed','cancelled','interrupted'].includes(task.status))break;await new Promise(r=>setTimeout(r,750))}if(task.status!=='completed')throw Error(task.error||task.step||'استخراج کامل نشد');let d=task.result;products=d.products;if(d.diagnostics&&d.diagnostics.fetch_engine_master){if($('fetch_engine_master'))$('fetch_engine_master').value=d.diagnostics.fetch_engine_master;if(activeProfile&&profiles[activeProfile]){profiles[activeProfile].fetch_engine_master=d.diagnostics.fetch_engine_master;profiles[activeProfile].fetch_engine_ms=d.diagnostics.fetch_engine_ms||0}updateEngineHint()}renderRows();let c=d.comparison||{};renderComparisonCards(c);if(activeProfile&&profiles[activeProfile]){let p=profiles[activeProfile],summary={...c};delete summary.lists;p.last_comparison=c;p.comparison_history=[summary,...(p.comparison_history||[])].slice(0,10);renderComparisonHistory(p.comparison_history)}else renderComparisonHistory([c]);$('status').innerHTML=`<span class="ok">⚡ ${d.total} محصول از ${d.pages} صفحه با فاز سریع استخراج شد${d.diagnostics&&d.diagnostics.fetch_engine_master?(' · مستر '+d.diagnostics.fetch_engine_master):''}</span>\n${d.detail_task?'جزئیات به‌صورت مستقل در پس‌زمینه ادامه دارد؛ نتیجه فهرست منتظر آن نمی‌ماند.':'جدول کامل در تب «نتایج» است.'}\nروش: ${esc(d.modes.join(' · '))}`;if(d.detail_task)watchDetailTask(d.detail_task.id)}catch(e){$('status').innerHTML='<span class="error">✗ عملیات ناموفق بود\n'+esc(e.message)+'</span>'}finally{btn.disabled=false;btn.innerHTML=old}}
 function renderDetailCoverage(){let n=products.length,count=f=>products.filter(f).length,cards=[['توضیحات',count(p=>p.short_desc||p.long_desc)],['گالری چندتصویری',count(p=>(p.images||[]).length>1)],['تنوع‌ها',count(p=>(p.variation_groups||[]).length||p.variations_text)],['مشخصات',count(p=>(p.attributes||[]).length)],['جزئیات کامل',count(p=>p.detail_status==='complete')]];$('detailCoverage').innerHTML=cards.map(([name,value])=>`<div class="space-card coverage-card"><b>${value}</b><span>${name} · ${n?Math.round(value/n*100):0}٪</span></div>`).join('')}
