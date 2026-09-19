@@ -12,6 +12,10 @@ Environment=SCRAPER_RUNTIME=vps
 Environment=SCRAPER_URL_PREFIX=/put
 Environment=PYTHONUNBUFFERED=1
 Environment=PORT=8000
+# Self-update pulls scraper4.py from fazilatma/amphp, which does NOT contain the
+# Node-parity dashboard bridge. Leaving it on makes the server silently replace
+# this fork ~40s after boot and /ui starts returning 404. Update via git instead.
+Environment=SCRAPER_AUTO_UPDATE=0
 # No request kill — extract, Woo and Basalam drain until finished.
 ExecStart=/opt/scraper4/venv/bin/python3 -m gunicorn --bind 127.0.0.1:8000 --workers 1 --threads 8 --timeout 0 --graceful-timeout 30 --keep-alive 5 scraper4:application
 ExecReload=/bin/kill -s HUP $MAINPID

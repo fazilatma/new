@@ -56,6 +56,14 @@ fi
 "$VENV/bin/pip" install flask requests beautifulsoup4 lxml gunicorn
 
 install -m 644 "${REPO_DIR}/deploy/scraper4.service" /etc/systemd/system/scraper4.service
+# Older installs predate SCRAPER_AUTO_UPDATE=0 and would let the service pull
+# the upstream scraper4.py over this fork, silently removing /ui. The unit file
+# above already carries the setting; assert it so a stale hand-edited copy or a
+# drop-in override cannot bring the problem back.
+if ! grep -q '^Environment=SCRAPER_AUTO_UPDATE=0' /etc/systemd/system/scraper4.service; then
+  sed -i '/^Environment=PORT=8000/a Environment=SCRAPER_AUTO_UPDATE=0' \
+    /etc/systemd/system/scraper4.service
+fi
 if [[ -f "${REPO_DIR}/deploy/deployer4.service" ]]; then
   install -m 644 "${REPO_DIR}/deploy/deployer4.service" /etc/systemd/system/deployer4.service
 fi
@@ -162,5 +170,16 @@ if [ "$UI_CODE" = 200 ] && [ "$API_CODE" = 200 ]; then
 else
   echo "WARNING: dashboard check failed (/ui=$UI_CODE /api/profiles=$API_CODE)." >&2
   echo "The classic UI at http://SERVER/put/ should still work." >&2
-  echo "Inspect with: journalctl -u scraper4 -n 50 --no-pager" >&2
+  echo >&2
+  echo "Reason reported by the app:" >&2
+  curl -sS --max-time 10 http://127.0.0.1:8000/health 2>/dev/null \
+    | tr ',' '\n' | grep -i 'ui_bridge' >&2 || true
+  echo >&2
+  echo "Most common cause: self-update replaced $APP_DIR/scraper4.py with the" >&2
+  echo "upstream copy, which has no dashboard. Check that the service sets" >&2
+  echo "SCRAPER_AUTO_UPDATE=0, then reinstall:" >&2
+  echo "  grep SCRAPER_AUTO_UPDATE /etc/systemd/system/scraper4.service" >&2
+  echo "  ls -l $APP_DIR/scraper4.py.bak   # a .bak means an update overwrote it" >&2
+  echo >&2
+  echo "Full log: journalctl -u scraper4 -n 50 --no-pager" >&2
 fi

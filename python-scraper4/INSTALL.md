@@ -159,15 +159,62 @@ cp scraper4_data.json scraper4_data.json.bak
 ## عیب‌یابی
 
 **داشبورد `/ui` خطای ۴۰۴ می‌دهد**
-یعنی `ui_bridge.py` بالا نیامده. بررسی کنید:
+
+اول علت را از خود برنامه بپرسید:
+
+```bash
+curl -s http://127.0.0.1:8000/health | tr ',' '\n' | grep ui_bridge
+```
+
+- `"ui_bridge": true` → پل سالم است؛ مشکل از پراکسی/آدرس است.
+- `"ui_bridge": false` → متن `ui_bridge_error` علت دقیق را می‌گوید.
+- اگر اصلاً فیلد `ui_bridge` در خروجی نبود → یعنی **فایل `scraper4.py`
+  روی سرور اصلاً نسخهٔ این پروژه نیست** (بخش بعدی).
+
+### شایع‌ترین علت: خودبه‌روزرسانی فایل را عوض کرده
+
+`scraper4.py` یک به‌روزرسان خودکار دارد که **۴۰ ثانیه بعد از استارت**،
+فایل خودش را از مخزن `fazilatma/amphp` دانلود و جایگزین می‌کند. آن نسخه
+داشبورد جدید را ندارد، پس `/ui` و `/api/profiles` هر دو ۴۰۴ می‌شوند
+درحالی‌که رابط کلاسیک سالم کار می‌کند.
+
+نشانه‌ها:
+
+```bash
+ls -l /opt/scraper4/scraper4.py.bak          # وجودش یعنی فایل بازنویسی شده
+grep -c ui_bridge /opt/scraper4/scraper4.py  # اگر 0 بود، نسخه عوض شده
+```
+
+درمان:
+
+```bash
+# ۱) خودبه‌روزرسانی را خاموش کنید
+grep SCRAPER_AUTO_UPDATE /etc/systemd/system/scraper4.service \
+  || sed -i '/^Environment=PORT=8000/a Environment=SCRAPER_AUTO_UPDATE=0' \
+       /etc/systemd/system/scraper4.service
+
+# ۲) نسخهٔ درست را دوباره نصب کنید
+cd ~/new && git pull
+bash python-scraper4/tools/vps-live/install_scraper4_vps.sh
+
+systemctl daemon-reload && systemctl restart scraper4
+```
+
+از این به بعد دو لایهٔ محافظ فعال است: سرویس با
+`SCRAPER_AUTO_UPDATE=0` نصب می‌شود، و اگر کسی دوباره روشنش کند، بلوک
+داشبورد به‌صورت خودکار به هر فایل دانلودشده الحاق می‌شود تا `/ui` از بین
+نرود.
+
+**بررسی دستی فایل‌ها**
 
 ```bash
 ls ui_bridge.py ui/dashboard.html ui/dashboard.js   # هر سه باید باشند
 .venv/bin/python -c "import scraper4; print(scraper4.UI_BRIDGE_READY)"
 ```
 
-اگر `False` بود، علت در لاگ می‌آید (`journalctl -u scraper4 -n 50`).
-برنامه عمداً در این حالت crash نمی‌کند تا رابط کلاسیک از کار نیفتد.
+اگر `False` بود، traceback کامل در لاگ است
+(`journalctl -u scraper4 -n 50 --no-pager`). برنامه عمداً crash نمی‌کند تا
+رابط کلاسیک از کار نیفتد.
 
 **صفحه باز می‌شود ولی داده‌ای نمی‌آید**
 احتمالاً با اسلش آخر (`/ui/`) باز کرده‌اید؛ حالا خودکار به `/ui` ریدایرکت

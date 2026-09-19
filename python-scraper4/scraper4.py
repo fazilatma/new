@@ -2366,6 +2366,51 @@ def validate_deploy_source(content: bytes) -> str:
     return match.group(1) if match else "unknown"
 
 
+# Marker that identifies the Node-parity bridge block appended to this fork.
+UI_BRIDGE_MARKER = "# >>> scraper4 node-parity dashboard bridge >>>"
+
+
+def ensure_ui_bridge_block(content: bytes) -> bytes:
+    """Keep the Node dashboard bridge attached to a downloaded scraper4.py.
+
+    Updates are fetched from the upstream repository, which knows nothing about
+    this fork's ``ui_bridge`` layer. A straight overwrite therefore deletes the
+    bridge and ``/ui`` starts answering 404 while the classic UI keeps working
+    — a silent regression. Re-append the block whenever it is missing so an
+    update can change the scraper without amputating the dashboard.
+    """
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    # Match the marker only as a real comment line. A bare substring test would
+    # also hit the UI_BRIDGE_MARKER constant above and wrongly conclude the
+    # block is present.
+    present = re.compile("^" + re.escape(UI_BRIDGE_MARKER) + r"\s*$", re.MULTILINE)
+    if present.search(text):
+        return content
+    try:
+        with open(os.path.abspath(__file__), "r", encoding="utf-8") as fh:
+            local = fh.read()
+    except OSError:
+        return content
+    found = present.search(local)
+    if not found:
+        return content
+    block = local[found.start():]
+    # Re-attach ahead of the __main__ guard so the entrypoint stays last.
+    guard = re.search(r'^if __name__ == ["\']__main__["\']:', text, re.MULTILINE)
+    if guard:
+        merged = text[:guard.start()] + block.rstrip("\n") + "\n\n\n" + text[guard.start():]
+    else:
+        merged = text.rstrip("\n") + "\n\n\n" + block
+    try:
+        compile(merged, "scraper4-update.py", "exec")
+    except SyntaxError:
+        return content
+    return merged.encode("utf-8")
+
+
 def atomic_write(path: str, content: bytes, mode: int = 0o600) -> None:
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
@@ -2451,7 +2496,7 @@ def deploy_install(requested_branch: str = "") -> dict[str, Any]:
             if target_cand is None:
                 errors = "; ".join((c.get("branch", "?") + ": " + c.get("error", "خطا")) for c in candidates[:4])
                 raise FetchError(f"هیچ برنچی قابل نصب نبود: {errors}" if errors else "هیچ برنچی قابل نصب نبود")
-        content = target_cand["content"]
+        content = ensure_ui_bridge_block(target_cand["content"])
         new_version = validate_deploy_source(content)
         target = os.path.abspath(__file__)
         with open(target, "rb") as fh:
@@ -2550,14 +2595,15 @@ def auto_update_worker() -> None:
         with open(target, "rb") as fh:
             current = fh.read()
         if git_blob_sha(current) != remote["sha"]:
-            new_version = validate_deploy_source(remote["content"])
+            payload = ensure_ui_bridge_block(remote["content"])
+            new_version = validate_deploy_source(payload)
             # Only move forward: never auto-downgrade to an older APP_VERSION.
             if compare_versions(new_version, APP_VERSION) < 0:
                 AUTO_UPDATE_STATE["error"] = ""
                 return
             mode = os.stat(target).st_mode & 0o777
             atomic_write(target + ".bak", current, mode)
-            atomic_write(target, remote["content"], mode)
+            atomic_write(target, payload, mode)
             AUTO_UPDATE_STATE["error"] = ""
             app.logger.info("Automatically installed Scraper4 %s from %s", new_version, remote.get("branch"))
             reload_file = cfg.get("reload_file", "")
@@ -2907,6 +2953,8 @@ def health():
                    vps_mode=VPS_MODE, max_pages=MAX_PAGES_HARD, max_products=MAX_PRODUCTS_HARD,
                    stall_after=STALL_AFTER, heartbeat=HEARTBEAT_STATE, url_prefix=URL_PREFIX,
                    auto_update=AUTO_UPDATE_ENABLED, update_error=AUTO_UPDATE_STATE["error"],
+                   ui_bridge=globals().get("UI_BRIDGE_READY", False),
+                   ui_bridge_error=globals().get("UI_BRIDGE_ERROR", "bridge block missing from this file"),
                    last_error=(recent_errors(1)[-1] if recent_errors(1) else None), error_log=ERROR_LOG_PATH)
 
 
@@ -5748,6 +5796,7 @@ async function watchBuild(){try{let r=await fetch('/health',{cache:'no-store'}),
 init().then(async()=>{setInterval(watchBuild,30000);setInterval(loadTaskTopSummary,10000);try{if($('dep_autocheck')&&$('dep_autocheck').checked){await deployCheck(false)}}catch(e){}}).catch(e=>$('status').textContent=e.message);
 </script></body></html>'''
 
+# >>> scraper4 node-parity dashboard bridge >>>
 # ---------------------------------------------------------------------------
 # Node dashboard parity layer
 #
@@ -5756,17 +5805,31 @@ init().then(async()=>{setInterval(watchBuild,30000);setInterval(loadTaskTopSumma
 # REST surface that dashboard expects, mapped onto this backend's data model.
 # It is imported last so every function and constant it reaches for already
 # exists on this module. A failure here must never take the classic UI down.
+#
+# Do not delete the marker comment above: ensure_ui_bridge_block() uses it to
+# re-attach this block to updates downloaded from the upstream repository,
+# which does not carry the bridge.
 # ---------------------------------------------------------------------------
 try:
     import sys as _sys
 
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import ui_bridge as _ui_bridge
 
     _ui_bridge.register(_sys.modules[__name__])
     UI_BRIDGE_READY = True
+    UI_BRIDGE_ERROR = ""
 except Exception as _ui_exc:  # noqa: BLE001 - optional layer, never fatal
+    import traceback as _ui_traceback
+
     UI_BRIDGE_READY = False
-    app.logger.warning("Node dashboard bridge disabled: %s", _ui_exc)
+    UI_BRIDGE_ERROR = f"{type(_ui_exc).__name__}: {_ui_exc}"
+    # Loud on purpose: a silent failure here looks like a healthy install while
+    # /ui returns 404. The full traceback goes to the journal.
+    app.logger.error(
+        "Node dashboard bridge FAILED to load (/ui will return 404): %s\n%s",
+        UI_BRIDGE_ERROR, _ui_traceback.format_exc(),
+    )
 
 
 if __name__ == "__main__":
