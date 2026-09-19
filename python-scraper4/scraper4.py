@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.162"
+APP_VERSION = "10.163"
 CHANGELOG = [
+    {"version":"10.163","date":"2026-09-19","title":"دکمهٔ توقف، استخراج گیرکرده را فوراً متوقف می‌کند","items":["اگر سایت پاسخ نمی‌داد، توقف تا پایان مهلت کامل (۶۰ ثانیه و روی سرور تا ۵ دقیقه) بی‌اثر بود و دکمه خراب به‌نظر می‌رسید","علت: درخواست شبکه در همان رشته اجرا می‌شد و پرچم توقف فقط یک‌بار در هر صفحه بررسی می‌شد","حالا دریافت صفحه در رشتهٔ جداگانه انجام می‌شود و درخواست توقف در کمتر از یک ثانیه اعمال می‌شود","توقف بین موتورهای مختلف، بین تلاش‌های مجدد و حین مکث بین درخواست‌ها هم بررسی می‌شود","سایت‌های کند ولی سالم همچنان کامل استخراج می‌شوند؛ مهلت کوتاه نشد"]},
     {"version":"10.162","date":"2026-09-19","title":"رفع بیرون‌زدگی کارت‌های صف در موبایل","items":["حداقل عرض ستون‌ها ۳۱۰ پیکسل بود؛ روی گوشی ۳۶۰ پیکسلی بعد از حاشیه‌ها فقط ۳۰۸ پیکسل جا بود و کارت بیرون می‌زد","آدرس‌های طولانی داخل متن خطا شکسته نمی‌شدند و کارت را پهن می‌کردند","عنوان پروفایل و نام مرحله در صورت طولانی بودن با سه‌نقطه کوتاه می‌شوند","در گوشی، حاشیه‌ها کمتر و وضعیت هر مرحله زیر نامش نمایش داده می‌شود و دکمه‌ها تمام‌عرض می‌شوند","همین محافظت به کارت‌های تب «کارها» هم اضافه شد","چیدمان چندستونی روی صفحهٔ بزرگ دست‌نخورده ماند"]},
     {"version":"10.161","date":"2026-09-19","title":"برنامهٔ مراحل صف، رنگی و شهودی","items":["مرحلهٔ فعلی هر کار بیرون از کشویی و در یک نگاه دیده می‌شود، همراه شمارش «۳/۸» و نوار نقطه‌ای","هر مرحله رنگ و نشان جداگانه دارد: انجام‌شده سبز، در حال اجرا آبی و پویا، ناموفق قرمز، منتظر نارنجی","مقصدهایی که به این کار مربوط نیستند خط‌خورده و کم‌رنگ نمایش داده می‌شوند","ریشهٔ مشکل رفع شد: بک‌اند فقط متن فارسی می‌نوشت و کلید مرحله نمی‌فرستاد، برای همین برنامهٔ مراحل هیچ‌وقت با واقعیت مطابقت نداشت و همهٔ مراحل «در پیش» می‌ماندند","حالا هر کار مرحلهٔ جاری و تاریخچهٔ مراحل طی‌شده را گزارش می‌کند"]},
     {"version":"10.160","date":"2026-09-19","title":"بازطراحی کارت‌های صف در صفحهٔ شروع","items":["وضعیت «متوقف» به‌جای کلمهٔ انگلیسی stopped نمایش داده می‌شود","نشان وضعیت «در حال اجرا» و «ناموفق» رنگ نداشتند و بی‌استایل بودند؛ اضافه شد","کارهای متوقف‌شده دکمهٔ «تلاش مجدد» و «حذف» نداشتند و بن‌بست بودند","نوار رنگی کنار هر کارت، وضعیت را در یک نگاه نشان می‌دهد","برچسب مقصد، تعداد جدید/بروزرسانی/خطا، درصد پیشرفت و زمان آخرین تغییر روی کارت آمد","متن خطا حالا روی کارت دیده می‌شود؛ قبلاً فقط در صفحهٔ کارها بود","جزئیات فنی جمع‌شونده شد تا کارت خلوت بماند","چیدمان کارت‌ها روی صفحهٔ عریض چندستونی شد"]},
@@ -485,9 +486,19 @@ def outbound_browser_target(url: str) -> str:
     relay=public_http_url(proxy.replace("{url}",quote(target,safe=""))) if "{url}" in proxy else public_http_url(proxy);return relay if "{url}" in proxy else relay+("&" if "?" in relay else "?")+urlencode({"url":target})
 
 
+class CancelledError(Exception):
+    """Raised as soon as a stop request is seen, from anywhere in a fetch."""
+
+
 class Fetcher:
     def __init__(self, cfg: dict[str, Any]):
         self.timeout = max(5, min(FETCH_TIMEOUT_CAP, int(cfg.get("timeout", 60))))
+        # Task this fetcher serves. Stop used to be polled only once per page,
+        # so a page that exhausted every engine (3 attempts x N engines, plus
+        # backoff and a browser fallback) blocked the stop button for many
+        # minutes. With the id here we can bail out between attempts, between
+        # engines and during the politeness sleep.
+        self.task_id = str(cfg.get("_live_task_id", "") or "").strip()
         self.gap = max(0, min(10000, int(cfg.get("gap_ms", 350)))) / 1000.0
         self.verify = bool(cfg.get("verify_tls", True))
         self.proxy = str(cfg.get("proxy", "")).strip()
@@ -506,7 +517,67 @@ class Fetcher:
             self.session.proxies.update({"http": self.proxy, "https": self.proxy})
         self.last_by_host: dict[str, float] = {}
 
+    def abort_if_cancelled(self) -> None:
+        if self.task_id and live_task_cancelled(self.task_id):
+            raise CancelledError("استخراج با درخواست کاربر متوقف شد")
+
+    def effective_timeout(self) -> Any:
+        """Socket budget for the next request.
+
+        Once a stop is already pending there is no point waiting long for a
+        brand-new request, so give it a token budget and let it fail fast.
+        Otherwise use the configured timeout unchanged — shortening it would
+        break sites that are simply slow.
+        """
+        if self.task_id and live_task_cancelled(self.task_id):
+            return 2.0
+        return self.timeout
+
+    def sleep_cancellable(self, seconds: float) -> None:
+        """Sleep in short slices so a stop request is honoured quickly."""
+        end = time.monotonic() + max(0.0, seconds)
+        while True:
+            self.abort_if_cancelled()
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(0.25, left))
+
     def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
+        """Fetch a page, honouring a stop request within ~1 second.
+
+        A socket read cannot be interrupted from another thread, and shortening
+        the timeout is not an option: retrying restarts whatever work the
+        server was doing, so slow-but-healthy sites would never complete. So
+        the blocking work runs in a daemon helper thread and the caller polls
+        for cancellation. On stop we abandon the thread — it is a daemon doing
+        a read that will hit its own timeout and exit, holding no lock and
+        writing no state.
+        """
+        if not self.task_id:
+            return self._get_blocking(url, referer=referer, accept_json=accept_json, engine=engine)
+        self.abort_if_cancelled()
+        box: dict[str, Any] = {}
+        def run() -> None:
+            try:
+                box["ok"] = self._get_blocking(url, referer=referer,
+                                               accept_json=accept_json, engine=engine)
+            except BaseException as exc:  # noqa: BLE001 - re-raised in caller
+                box["err"] = exc
+        worker = threading.Thread(target=run, name="fetch-" + engine, daemon=True)
+        worker.start()
+        while True:
+            worker.join(0.25)
+            if not worker.is_alive():
+                break
+            if live_task_cancelled(self.task_id):
+                raise CancelledError("استخراج با درخواست کاربر متوقف شد")
+        if "err" in box:
+            raise box["err"]
+        return box["ok"]
+
+    def _get_blocking(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
+        self.abort_if_cancelled()
         url = public_http_url(url)
         target_url = url
         request_url = url
@@ -520,7 +591,7 @@ class Fetcher:
         host = urlparse(target_url).hostname or ""
         elapsed = time.monotonic() - self.last_by_host.get(host, 0)
         if elapsed < self.gap:
-            time.sleep(self.gap - elapsed)
+            self.sleep_cancellable(self.gap - elapsed)
         headers = {}
         if referer:
             headers["Referer"] = referer
@@ -537,11 +608,12 @@ class Fetcher:
             return render_selenium(target_url, self.timeout, 4)
         last_error = ""
         for attempt in range(3):
+            self.abort_if_cancelled()
             try:
                 if engine=="cloudscraper":
                     try:import cloudscraper
                     except ImportError as exc:raise FetchError("کتابخانه cloudscraper نصب نیست") from exc
-                    client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);response=client.get(request_url,headers=headers,timeout=self.timeout,allow_redirects=True,verify=self.verify);body=response.content
+                    client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
                 elif engine=="httpx":
                     try:
                         import httpx
@@ -551,7 +623,7 @@ class Fetcher:
                     proxy=None
                     if self.session.proxies:
                         proxy=self.session.proxies.get("https") or self.session.proxies.get("http")
-                    client_kw=dict(timeout=self.timeout, follow_redirects=True, verify=self.verify, headers=merged)
+                    client_kw=dict(timeout=self.effective_timeout(), follow_redirects=True, verify=self.verify, headers=merged)
                     try:
                         if proxy: client_kw["proxy"]=proxy
                         with httpx.Client(**client_kw) as hx:
@@ -564,9 +636,9 @@ class Fetcher:
                 elif engine=="curl_cffi":
                     try:from curl_cffi import requests as curl_requests
                     except ImportError as exc:raise FetchError("کتابخانه curl_cffi نصب نیست") from exc
-                    proxies=self.session.proxies or None;response=curl_requests.get(request_url,headers={**dict(self.session.headers),**headers},timeout=self.timeout,allow_redirects=True,verify=self.verify,impersonate="chrome",proxies=proxies);body=response.content
+                    proxies=self.session.proxies or None;response=curl_requests.get(request_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,impersonate="chrome",proxies=proxies);body=response.content
                 else:
-                    response=self.session.get(request_url,headers=headers,timeout=self.timeout,allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
+                    response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
                 self.last_by_host[host] = time.monotonic()
                 if len(body) > MAX_HTML_BYTES:
                     raise FetchError("پاسخ HTML بزرگ‌تر از سقف مجاز است")
@@ -575,7 +647,7 @@ class Fetcher:
                 blocked=any(x in sample for x in ("access denied","موقتا vpn خود را خاموش","temporarily blocked","captcha","درخواست شما مشکوک","دسترسی شما مسدود"))
                 if blocked:raise FetchError(f"{engine}: صفحه ضدبات/VPN به‌جای فهرست محصول برگشت؛ IP مسیر اتصال توسط سایت رد شده است (HTTP {response.status_code})")
                 if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                    time.sleep(1.5 * (2 ** attempt))
+                    self.sleep_cancellable(1.5 * (2 ** attempt))
                     continue
                 if not 200 <= response.status_code < 400:
                     raise FetchError(f"HTTP {response.status_code} برای {url}")
@@ -583,11 +655,14 @@ class Fetcher:
                     target_url if self.proxy_mode == "relay" else str(response.url), text, response.headers.get("Content-Type", ""),
                     response.status_code,
                 )
+            except CancelledError:
+                # Never swallow a stop request into the generic retry path.
+                raise
             except Exception as exc:
                 last_error = str(exc)
                 if "ضدبات/VPN" in last_error:break
                 if attempt < 2:
-                    time.sleep(1.0 * (2 ** attempt))
+                    self.sleep_cancellable(1.0 * (2 ** attempt))
         raise FetchError(last_error or "دریافت صفحه ناموفق بود")
 
 
@@ -1608,10 +1683,12 @@ def _is_relay_block_error(text: str) -> bool:
     return " 503" in (" " + raw) and any(x in low for x in ("proxy", "relay", "cloudflare", "abrhapaas", "workers.dev"))
 
 
-def _fetcher_direct(network: dict[str, Any]) -> "Fetcher":
+def _fetcher_direct(network: dict[str, Any], task_id: str = "") -> "Fetcher":
     cfg = dict(network or {})
     cfg["proxy"] = ""
     cfg["proxy_mode"] = "direct"
+    if task_id:
+        cfg["_live_task_id"] = task_id
     return Fetcher(cfg)
 
 
@@ -1659,7 +1736,11 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
     enrich = bool(config.get("enrich", False))
     detail_limit_raw=int(config.get("detail_limit",0) or 0);detail_limit=MAX_PRODUCTS_HARD if detail_limit_raw<=0 else max(1,min(MAX_PRODUCTS_HARD,detail_limit_raw));detail_scope=clean_text(config.get("detail_scope","missing")) or "missing"
     cfg = load_data()
-    fetcher = Fetcher(cfg["network"])
+    # Carry the live-task id into the fetcher so a stop request aborts the
+    # engine chain instead of waiting for every attempt to time out.
+    _net = dict(cfg["network"] or {})
+    _net["_live_task_id"] = clean_text(config.get("_live_task_id"))
+    fetcher = Fetcher(_net)
     job_id = re.sub(r"[^a-zA-Z0-9_-]", "", clean_text(config.get("job_id")))[:80] or ("job-" + time.strftime("%Y%m%d-%H%M%S") + "-" + hashlib.sha1(source.encode()).hexdigest()[:6])
     report = ScrapeReport(job_id=job_id)
     if config.get("_details_only"):report.pages=max(1,int(config.get("_resume_pages",pages) or pages))
@@ -1714,6 +1795,9 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                         continue
                     if relay_dead:
                         break
+                    # A page can try several engines; honour stop between them.
+                    if task_id and live_task_cancelled(task_id):
+                        raise CancelledError("استخراج با درخواست کاربر متوقف شد")
                     try:
                         if task_id:live_task_update(task_id,max(3,round((number-1)/pages*88)+engine_index),f"{'مستر' if engine==master else 'پشتیبان'} {engine} · صفحه {number} از {pages}","running",f"{url}",done=number-1,total=pages,extracted=len(report.products),engine=engine)
                         t0=time.monotonic()
@@ -1730,7 +1814,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             if not rows and fetcher.proxy_mode in {"relay","http"}:
                 report.logs.append("رله/پروکسی ناموفق — تلاش مستقیم بدون پروکسی")
                 if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+1),"تلاش مستقیم بدون پروکسی","running",url,done=number-1,total=pages,extracted=len(report.products))
-                _dom_with(_fetcher_direct(cfg.get("network") or {}))
+                _dom_with(_fetcher_direct(cfg.get("network") or {}, task_id))
             if not rows and engine_errors:diag={**diag,"attempts":engine_errors};report.logs.extend(f"صفحه {number} · {x}" for x in engine_errors)
 
         if not rows and mode in ("auto", "browser") and browser_engines:
