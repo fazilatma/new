@@ -1280,6 +1280,9 @@ function renderHomeJobs(){
       +'</div>'
       +(chips.length?'<div class="job-chips">'+chips.join('')+'</div>':'')
       +'<div class="mini-progress"><i style="width:'+progress+'%"></i></div>'
+      // Current stage stays OUTSIDE the disclosure so the card answers
+      // "where is this job right now?" without a click.
+      +jobStageStrip(job)
       +'<div class="mini-job-meta"><span>'+esc(phaseLabel(job.phase))+'</span>'
         +'<span class="mini-job-count">'+fa(processed)+' از '+fa(total)+' · '+fa(progress)+'٪</span></div>'
       +(ago?'<div class="mini-job-ago">'+esc(ago)+'</div>':'')
@@ -1518,14 +1521,78 @@ function phaseLabel(phase){const map={'sync-woo':'ارسال ووکامرس','sy
 function jobEventRows(job,metric){const log=Array.isArray(job.log)?job.log:[],events=metric==='price-changed'?['price-increased','price-decreased']:metric==='successful'?['sync-created','sync-updated']:metric==='processed'?(job.kind==='sync'?['sync-created','sync-updated','failed']:['added','updated','failed']):[metric];return log.filter(row=>row.item&&events.includes(row.event))}
 function jobMetricButton(job,metric,label,count,tone=''){return '<button class="job-metric '+tone+'" data-job-metric="'+metric+'" data-id="'+job.id+'">'+label+'<b>'+fa(count)+'</b></button>'}
 function jobMetricsHtml(job,compact=false){const count=metric=>jobEventRows(job,metric).length,success=count('successful'),removed=count('removed'),out=count('out-of-stock'),zero=count('zero-price'),price=count('price-changed');let html=jobMetricButton(job,'processed','انجام‌شده',job.processed,'info')+jobMetricButton(job,'added','جدید',job.added,'good')+jobMetricButton(job,'updated','آپدیت',job.updated,'info')+jobMetricButton(job,'failed','خطا',job.failed,'bad');if(job.kind==='sync'||success)html+=jobMetricButton(job,'successful','ارسال موفق',success,'good');if(job.kind==='scrape'&&!compact)html+=jobMetricButton(job,'removed','حذف‌شده',removed,'warn')+jobMetricButton(job,'out-of-stock','اتمام موجودی',out,'warn')+jobMetricButton(job,'zero-price','قیمت صفر',zero,'bad')+jobMetricButton(job,'price-changed','تغییر قیمت',price,'info');return'<div class="job-metrics">'+html+'</div>'}
-function jobPlanHtml(job){
- const stages=job.workflow==='list-only'?[['list','استخراج فهرست'],['list-save','ذخیرهٔ فقط فهرست']]:job.kind==='scrape'?[['list','استخراج فهرست'],['details','جزئیات'],['basalam-categories','دسته‌بندی'],['ai-descriptions','توضیح‌سازی'],['save','ذخیرهٔ نتایج'],['sync','آماده‌سازی ارسال'],['sync-woo','ارسال ووکامرس'],['sync-basalam','ارسال باسلام']]:[['apply-results','اعمال قیمت روی نتایج'],['sync','آماده‌سازی ارسال'],['sync-woo','ارسال ووکامرس'],['sync-basalam','ارسال باسلام']];
- const normalize=p=>p==='details-save-sync'?'details':p,phase=normalize(job.phase),seen=new Set((job.log||[]).filter(r=>r.level==='stage').map(r=>normalize(r.message))),terminal=!['queued','running'].includes(job.status);
- const limit=Math.max(1,Math.min(8,Number(state.settings?.general?.maxConcurrentProfiles)||2)),occupied=new Set((state.jobs||[]).filter(j=>j.status==='running'||j.status==='queued'&&j.startedAt).map(j=>j.profileId)).size;
- const sameProfile=(state.jobs||[]).some(j=>j.id!==job.id&&j.profileId===job.profileId&&(j.status==='running'||j.status==='queued'&&j.startedAt));
- const waiting=job.status==='queued'?(job.startedAt?'نقطهٔ بازیابی محفوظ است؛ منتظر پیام ادامهٔ همین مرحله از صف.':sameProfile?'منتظر پایان کار قبلی همین پروفایل.':occupied>=limit?'منتظر آزادشدن ظرفیت پروفایل‌ها ('+fa(occupied)+' / '+fa(limit)+').':'منتظر دریافت کار توسط اجراکننده؛ هنوز شروع نشده است.') : '';
- return '<div class="job-plan"><b>برنامهٔ مراحل</b>'+(waiting?'<p class="help-box">'+waiting+'</p>':'')+'<ol>'+stages.map(([key,label])=>{const disabled=key.startsWith('sync')&&(job.target==='none'||key==='sync-woo'&&job.target==='basalam'||key==='sync-basalam'&&job.target==='woo'),skipped=(job.log||[]).some(r=>String(r.message||'').startsWith(key+':')&&String(r.message).includes('ادامهٔ این زیرمرحله رد شد')),current=phase===key&&!terminal,status=disabled?'غیرفعال':skipped?'ردشده پس از خطا':current?(job.status==='queued'?'منتظر ادامه':'اکنون'):seen.has(key)?(job.status==='done'?'انجام‌شده':'اجرا شده'):terminal?'اجرا ثبت نشده':'در پیش';return '<li'+(current?' aria-current="step" style="color:#5eead4;font-weight:bold"':'')+'>'+esc(label)+' — '+status+'</li>'}).join('')+'</ol><small>برنامهٔ فقط فهرست هیچ مرحلهٔ جزئیات یا ارسال ندارد؛ در برنامهٔ کامل، مراحل برای هر دسته تکرار می‌شوند.</small></div>';
+function jobStageList(job){
+  return job.workflow==='list-only'
+    ? [['list','استخراج فهرست','🧲'],['save','ذخیرهٔ فهرست','💾']]
+    : job.kind==='scrape'
+    ? [['list','استخراج فهرست','🧲'],['details','جزئیات محصولات','🔍'],
+       ['basalam-categories','دسته‌بندی','🏷'],['ai-descriptions','توضیح‌سازی','✨'],
+       ['save','ذخیرهٔ نتایج','💾'],['sync','آماده‌سازی ارسال','📦'],
+       ['sync-woo','ارسال ووکامرس','🛒'],['sync-basalam','ارسال باسلام','🏪']]
+    : [['apply-results','اعمال قیمت','💰'],['sync','آماده‌سازی ارسال','📦'],
+       ['sync-woo','ارسال ووکامرس','🛒'],['sync-basalam','ارسال باسلام','🏪']];
 }
+/* Classify one stage. Uses the stage keys the backend now reports
+   (job.stage = current, job.stages = history) rather than the Persian
+   `phase` prose, which never matched these keys. */
+function jobStageState(job,key){
+  const done=new Set(job.stages||[]),terminal=!['queued','running'].includes(job.status);
+  const skip=key.startsWith('sync')&&(job.target==='none'||!job.target
+        ||key==='sync-woo'&&job.target==='basalam'
+        ||key==='sync-basalam'&&job.target==='woo');
+  if(skip)return {cls:'skip',label:'لازم نیست',icon:'–'};
+  if(job.stage===key&&!terminal)
+    return job.status==='queued'?{cls:'wait',label:'منتظر ادامه',icon:'⏸'}
+                                :{cls:'now',label:'در حال اجرا',icon:'⏳'};
+  if(done.has(key)){
+    if(job.status==='failed'&&job.stage===key)return {cls:'fail',label:'ناموفق',icon:'✕'};
+    return {cls:'done',label:'انجام شد',icon:'✓'};
+  }
+  if(job.status==='failed'&&job.stage===key)return {cls:'fail',label:'ناموفق',icon:'✕'};
+  if(terminal)return {cls:'never',label:'اجرا نشد',icon:'·'};
+  return {cls:'todo',label:'در انتظار',icon:'○'};
+}
+/* Compact always-visible strip: where the job is right now. */
+function jobStageStrip(job){
+  const list=jobStageList(job).filter(([k])=>jobStageState(job,k).cls!=='skip');
+  if(!list.length)return '';
+  const idx=list.findIndex(([k])=>k===job.stage);
+  const cur=idx>=0?list[idx]:null;
+  const doneCount=list.filter(([k])=>['done'].includes(jobStageState(job,k).cls)).length;
+  const dots=list.map(([k,label])=>{
+    const st=jobStageState(job,k);
+    return '<i class="st-dot st-'+st.cls+'" title="'+escAttr(label+' — '+st.label)+'"></i>';
+  }).join('');
+  const state=cur?jobStageState(job,cur[0]):null;
+  const head=cur
+    ? '<span class="st-now st-'+state.cls+'">'+state.icon+' '+esc(cur[2]+' '+cur[1])+'</span>'
+    : '<span class="st-now st-'+(job.status==='done'?'done':'todo')+'">'
+      +(job.status==='done'?'✓ همهٔ مراحل انجام شد':'○ هنوز شروع نشده')+'</span>';
+  return '<div class="stage-strip">'+head
+    +'<span class="st-count">'+fa(doneCount)+'/'+fa(list.length)+'</span>'
+    +'<span class="st-dots">'+dots+'</span></div>';
+}
+function jobPlanHtml(job){
+  const stages=jobStageList(job);
+  const limit=Math.max(1,Math.min(8,Number(state.settings?.general?.maxConcurrentProfiles)||2)),
+    occupied=new Set((state.jobs||[]).filter(j=>j.status==='running'||j.status==='queued'&&j.startedAt).map(j=>j.profileId)).size,
+    sameProfile=(state.jobs||[]).some(j=>j.id!==job.id&&j.profileId===job.profileId&&(j.status==='running'||j.status==='queued'&&j.startedAt));
+  const waiting=job.status==='queued'
+    ?(job.startedAt?'نقطهٔ بازیابی محفوظ است؛ منتظر پیام ادامهٔ همین مرحله از صف.'
+      :sameProfile?'منتظر پایان کار قبلی همین پروفایل.'
+      :occupied>=limit?'منتظر آزادشدن ظرفیت پروفایل‌ها ('+fa(occupied)+' / '+fa(limit)+').'
+      :'منتظر دریافت کار توسط اجراکننده؛ هنوز شروع نشده است.'):'';
+  return '<div class="job-plan"><b>برنامهٔ مراحل</b>'
+    +(waiting?'<p class="stage-wait">'+esc(waiting)+'</p>':'')
+    +'<ol class="stage-steps">'+stages.map(([key,label,icon])=>{
+      const st=jobStageState(job,key);
+      return '<li class="stage-step s-'+st.cls+'"'+(st.cls==='now'?' aria-current="step"':'')+'>'
+        +'<span class="stage-mark">'+st.icon+'</span>'
+        +'<span class="stage-name">'+esc(icon+' '+label)+'</span>'
+        +'<span class="stage-state">'+esc(st.label)+'</span></li>';
+    }).join('')+'</ol></div>';
+}
+
 let deliveryReportPage=0;
 function deliveryProductCardsHtml(){
  const groups=new Map(),selected=$('sendProfile')?.value||'';

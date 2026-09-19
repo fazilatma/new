@@ -325,6 +325,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "updated": _int(counts.get("updated")),
             "failed": _int(counts.get("failed")),
             "progress": _int(task.get("progress")),
+            # Machine-readable stage keys for the UI's step plan. `phase` is
+            # free Persian prose written for humans and can never be matched
+            # against the plan; these can.
+            "stage": _s(task.get("stage")),
+            "stages": [x for x in (task.get("stages") or []) if _s(x)],
+            "workflow": _s(task.get("workflow")),
             "error": _s(task.get("error")),
             "createdAt": _iso(task.get("created_at")),
             "updatedAt": _iso(task.get("updated_at")),

@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.160"
+APP_VERSION = "10.161"
 CHANGELOG = [
+    {"version":"10.161","date":"2026-09-19","title":"برنامهٔ مراحل صف، رنگی و شهودی","items":["مرحلهٔ فعلی هر کار بیرون از کشویی و در یک نگاه دیده می‌شود، همراه شمارش «۳/۸» و نوار نقطه‌ای","هر مرحله رنگ و نشان جداگانه دارد: انجام‌شده سبز، در حال اجرا آبی و پویا، ناموفق قرمز، منتظر نارنجی","مقصدهایی که به این کار مربوط نیستند خط‌خورده و کم‌رنگ نمایش داده می‌شوند","ریشهٔ مشکل رفع شد: بک‌اند فقط متن فارسی می‌نوشت و کلید مرحله نمی‌فرستاد، برای همین برنامهٔ مراحل هیچ‌وقت با واقعیت مطابقت نداشت و همهٔ مراحل «در پیش» می‌ماندند","حالا هر کار مرحلهٔ جاری و تاریخچهٔ مراحل طی‌شده را گزارش می‌کند"]},
     {"version":"10.160","date":"2026-09-19","title":"بازطراحی کارت‌های صف در صفحهٔ شروع","items":["وضعیت «متوقف» به‌جای کلمهٔ انگلیسی stopped نمایش داده می‌شود","نشان وضعیت «در حال اجرا» و «ناموفق» رنگ نداشتند و بی‌استایل بودند؛ اضافه شد","کارهای متوقف‌شده دکمهٔ «تلاش مجدد» و «حذف» نداشتند و بن‌بست بودند","نوار رنگی کنار هر کارت، وضعیت را در یک نگاه نشان می‌دهد","برچسب مقصد، تعداد جدید/بروزرسانی/خطا، درصد پیشرفت و زمان آخرین تغییر روی کارت آمد","متن خطا حالا روی کارت دیده می‌شود؛ قبلاً فقط در صفحهٔ کارها بود","جزئیات فنی جمع‌شونده شد تا کارت خلوت بماند","چیدمان کارت‌ها روی صفحهٔ عریض چندستونی شد"]},
     {"version":"10.159","date":"2026-09-19","title":"رفع بهم‌ریختگی پروفایل‌ها بعد از درون‌ریزی","items":["اگر فایل بکاپ از نسخهٔ Node.js می‌آمد، پروفایل‌ها خام ذخیره می‌شدند و در فهرست به‌جای نام، شناسه یا آدرس دیده می‌شد","موتور استخراج، پسوند عنوان و قواعد قیمت هم بی‌صدا حذف می‌شدند","حالا ساختار هر پروفایل تشخیص داده و در صورت نیاز تبدیل می‌شود","هر چهار حالت پشتیبانی می‌شود: بستهٔ Node (شیء یا آرایه) و فایل خام Node (شیء یا آرایه)"]},
     {"version":"10.158","date":"2026-09-19","title":"بازطراحی بخش نسخه و گزارش تغییرات","items":["کارت نسخهٔ نصب‌شده با عنوان و تاریخ آخرین تغییر در بالای بخش","نسخهٔ فعلی با نشان سبز مشخص می‌شود","جست‌وجوی زنده در عنوان و متن همهٔ تغییرات","روزهای قدیمی‌تر جمع‌شده نمایش داده می‌شوند تا فهرست طولانی نشود","دکمهٔ کپی کل گزارش","«گزارش فنی نسخه» حالا نسخه، تعداد انتشارها، نسخهٔ پایتون، وضعیت داشبورد و موتورهای نصب‌شده را نشان می‌دهد؛ قبلاً فیلد خالی php را گزارش می‌کرد"]},
@@ -2864,6 +2865,13 @@ def live_task_update(task_id: str, progress: int, step: str, status: str="runnin
         if not task:return
         LIVE_TASKS[task_id]=task
         task.update(progress=max(0,min(100,int(progress))),step=clean_text(step),status=status,updated_at=int(time.time()),**extra)
+        # Record which machine-readable stage this update belongs to. The UI's
+        # step plan needs stage keys ("list", "sync-woo", …); `step` itself is
+        # free Persian prose and can never be matched against that plan.
+        stage=clean_text(extra.get("stage"))
+        if stage:
+            history=task.setdefault("stages",[])
+            if stage not in history:history.append(stage)
         if detail:task.setdefault("details",[]).append({"at":time.strftime("%H:%M:%S"),"text":clean_text(detail)[:700]});task["details"]=task["details"][-80:]
         live_task_disk_write(task)
 
@@ -4110,7 +4118,7 @@ def scrape_result(report: ScrapeReport, profile_name: str="") -> dict[str,Any]:
 
 def detail_live_worker(task_id: str, config: dict[str,Any], products: list[dict[str,Any]], pages: int) -> None:
     try:
-        live_task_update(task_id,1,"آماده‌سازی استخراج تفصیلی","running",f"{len(products)} محصول؛ این وظیفه مستقل است و سرعت فهرست را کم نمی‌کند")
+        live_task_update(task_id,1,"آماده‌سازی استخراج تفصیلی","running",f"{len(products)} محصول؛ این وظیفه مستقل است و سرعت فهرست را کم نمی‌کند",stage="details")
         detail_config=dict(config);detail_config.update({"enrich":True,"_details_only":True,"_resume_products":[dict(x) for x in products],"_resume_pages":pages,"_live_task_id":task_id,"job_id":task_id})
         report=scrape(detail_config)
         if live_task_cancelled(task_id):live_task_update(task_id,100,"استخراج جزئیات متوقف شد","cancelled","نتایج قبلی پروفایل حفظ شدند");return
@@ -4123,7 +4131,7 @@ def scrape_live_worker(task_id: str, config: dict[str,Any]) -> None:
     if live_task_cancelled(task_id):live_task_update(task_id,0,"پیش از شروع متوقف شد","cancelled","درخواست توقف اجرا شد");return
     try:
         requested_details=bool(config.get("enrich",False));list_config=dict(config);list_config["enrich"]=False
-        live_task_update(task_id,2,"اعتبارسنجی آدرس و تنظیمات","running","فاز سریع فهرست آغاز شد؛ جزئیات باعث انتظار این مرحله نمی‌شود",execution="parallel");list_config.update({"job_id":task_id,"_live_task_id":task_id});report=scrape(list_config);live_task_update(task_id,94,"ذخیره سریع نتایج فهرست","running",f"{len(report.products)} محصول آماده شد");result=scrape_result(report,clean_text(config.get("_profile_name")))
+        live_task_update(task_id,2,"اعتبارسنجی آدرس و تنظیمات","running","فاز سریع فهرست آغاز شد؛ جزئیات باعث انتظار این مرحله نمی‌شود",execution="parallel",stage="list");list_config.update({"job_id":task_id,"_live_task_id":task_id});report=scrape(list_config);live_task_update(task_id,94,"ذخیره سریع نتایج فهرست","running",f"{len(report.products)} محصول آماده شد",stage="save");result=scrape_result(report,clean_text(config.get("_profile_name")))
         detail_task=None
         if requested_details and result["products"]:
             profile=clean_text(config.get("_profile_name"));detail_task=live_task_create("detail_extract","استخراج خودکار جزئیات"+(f" · {profile}" if profile else ""),private=False);detail_task["profile"]=profile;LIVE_TASKS[detail_task["id"]]=detail_task;live_task_disk_write(detail_task);result["detail_task"]={"id":detail_task["id"],"status":"waiting","total":len(result["products"])}
@@ -5170,10 +5178,10 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
     """Send every saved product for one profile, checkpointing after each destination item."""
     started=time.time();total=max(1,len(products)*len(destinations));done=sent=failed=0;counts={x:{"sent":0,"failed":0} for x in destinations}
     try:
-        live_task_update(task_id,1,"آماده‌سازی ارسال کامل پروفایل","running",f"پروفایل {profile_name} · {len(products)} محصول · مقصد: {'، '.join(destinations)}",profile=profile_name,total=total,done=0,sent=0,failed=0,destinations=counts)
+        live_task_update(task_id,1,"آماده‌سازی ارسال کامل پروفایل","running",f"پروفایل {profile_name} · {len(products)} محصول · مقصد: {'، '.join(destinations)}",profile=profile_name,total=total,done=0,sent=0,failed=0,destinations=counts,stage="sync")
         for destination in destinations:
             label="ووکامرس" if destination=="woocommerce" else "باسلام"
-            live_task_update(task_id,max(1,int(done/total*100)),f"شروع ارسال به {label}","running",f"{len(products)} محصول این پروفایل برای {label} بررسی می‌شود")
+            live_task_update(task_id,max(1,int(done/total*100)),f"شروع ارسال به {label}","running",f"{len(products)} محصول این پروفایل برای {label} بررسی می‌شود",stage="sync-woo" if destination=="woocommerce" else "sync-basalam")
             for index,product in enumerate(products,1):
                 if live_task_cancelled(task_id):
                     elapsed=max(1,int(time.time()-started));live_task_update(task_id,int(done/total*100),"ارسال توسط کاربر متوقف شد","cancelled",f"پس از {done} عملیات و {elapsed} ثانیه متوقف شد",done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=elapsed);return
