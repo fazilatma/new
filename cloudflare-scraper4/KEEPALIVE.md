@@ -22,7 +22,15 @@ startup. These commands must run on your own VPS/phone; publishing code does not
 install a service there. Stop any manually running deployer/scraper before enabling
 the service to avoid two supervisors.
 
-## Linux VPS: systemd user service
+## Linux VPS: recommended system-level installer (1.211.0+)
+
+See [SYSTEMD-VPS.md](SYSTEMD-VPS.md) for the one-time root-SSH migration to a
+dedicated non-root account, boot-enabled service, resource limits and independent
+HTTP recovery timer. It keeps the source/data as a rollback copy, uses ports
+8790/3000 and does not depend on PHP or a logged-in session. Do not also enable
+the user service below or a WebConsole watchdog for the same app.
+
+## Linux VPS: alternative systemd user service
 
 Run as the normal account that owns the checkout (not root). From
 `~/new/cloudflare-scraper4`, or your actual project directory:
