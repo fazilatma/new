@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.163"
+APP_VERSION = "10.164"
 CHANGELOG = [
+    {"version":"10.164","date":"2026-09-19","title":"توقف اجباری، رفع فونت‌ها و بازطراحی بخش نسخه","items":["دکمهٔ «توقف اجباری همهٔ پروسه‌ها» در مدیر وظایف اضافه شد؛ همهٔ کارهای در حال اجرا و در صف را یکجا متوقف می‌کند","انتخاب فونت اصلاً اعمال نمی‌شد چون فایل‌های /assets/fonts/*.css وجود نداشتند و ۴۰۴ می‌دادند؛ حالا از روی سرور سرو می‌شوند","اگر فایل woff2 را در ui/fonts بگذارید از سرور خودتان خوانده می‌شود، وگرنه از CDN","بخش نسخه حالا کارت وضعیت به‌روزرسانی دارد: عقب‌بودن از برنچ، شمارهٔ کامیت و دکمهٔ نصب","قبلاً اندپوینت‌های به‌روزرسانی هیچ رابط کاربری نداشتند و فقط با curl قابل استفاده بودند"]},
     {"version":"10.163","date":"2026-09-19","title":"دکمهٔ توقف، استخراج گیرکرده را فوراً متوقف می‌کند","items":["اگر سایت پاسخ نمی‌داد، توقف تا پایان مهلت کامل (۶۰ ثانیه و روی سرور تا ۵ دقیقه) بی‌اثر بود و دکمه خراب به‌نظر می‌رسید","علت: درخواست شبکه در همان رشته اجرا می‌شد و پرچم توقف فقط یک‌بار در هر صفحه بررسی می‌شد","حالا دریافت صفحه در رشتهٔ جداگانه انجام می‌شود و درخواست توقف در کمتر از یک ثانیه اعمال می‌شود","توقف بین موتورهای مختلف، بین تلاش‌های مجدد و حین مکث بین درخواست‌ها هم بررسی می‌شود","سایت‌های کند ولی سالم همچنان کامل استخراج می‌شوند؛ مهلت کوتاه نشد"]},
     {"version":"10.162","date":"2026-09-19","title":"رفع بیرون‌زدگی کارت‌های صف در موبایل","items":["حداقل عرض ستون‌ها ۳۱۰ پیکسل بود؛ روی گوشی ۳۶۰ پیکسلی بعد از حاشیه‌ها فقط ۳۰۸ پیکسل جا بود و کارت بیرون می‌زد","آدرس‌های طولانی داخل متن خطا شکسته نمی‌شدند و کارت را پهن می‌کردند","عنوان پروفایل و نام مرحله در صورت طولانی بودن با سه‌نقطه کوتاه می‌شوند","در گوشی، حاشیه‌ها کمتر و وضعیت هر مرحله زیر نامش نمایش داده می‌شود و دکمه‌ها تمام‌عرض می‌شوند","همین محافظت به کارت‌های تب «کارها» هم اضافه شد","چیدمان چندستونی روی صفحهٔ بزرگ دست‌نخورده ماند"]},
     {"version":"10.161","date":"2026-09-19","title":"برنامهٔ مراحل صف، رنگی و شهودی","items":["مرحلهٔ فعلی هر کار بیرون از کشویی و در یک نگاه دیده می‌شود، همراه شمارش «۳/۸» و نوار نقطه‌ای","هر مرحله رنگ و نشان جداگانه دارد: انجام‌شده سبز، در حال اجرا آبی و پویا، ناموفق قرمز، منتظر نارنجی","مقصدهایی که به این کار مربوط نیستند خط‌خورده و کم‌رنگ نمایش داده می‌شوند","ریشهٔ مشکل رفع شد: بک‌اند فقط متن فارسی می‌نوشت و کلید مرحله نمی‌فرستاد، برای همین برنامهٔ مراحل هیچ‌وقت با واقعیت مطابقت نداشت و همهٔ مراحل «در پیش» می‌ماندند","حالا هر کار مرحلهٔ جاری و تاریخچهٔ مراحل طی‌شده را گزارش می‌کند"]},
@@ -3026,6 +3027,43 @@ def api_live_task_cancel(task_id: str):
         if task.get("status") in {"completed","failed","cancelled"}:return jsonify(ok=True,task=task)
         task["cancel_requested"]=True;task["step"]="درخواست توقف ثبت شد";task["updated_at"]=int(time.time());LIVE_TASKS[task_id]=task;live_task_disk_write(task)
     return jsonify(ok=True,task=task)
+
+
+@app.post("/api/tasks/stop-all")
+def api_live_tasks_stop_all():
+    """Force-stop every task that is still waiting or running.
+
+    Per-task cancel already existed but there was no way to clear a jammed
+    queue in one action. Cancellation is cooperative: we set the flag on every
+    live task, and each worker aborts within about a second (see Fetcher.get,
+    which polls the flag while its request runs in a helper thread). Tasks that
+    are already finished are left alone.
+    """
+    if not deploy_authorized():return deploy_auth_error()
+    stopped=[];skipped=0
+    rows={}
+    try:
+        for name in os.listdir(LIVE_TASK_DIR):
+            if re.fullmatch(r"task-[0-9a-f]{16}\.json",name):
+                try:
+                    with open(os.path.join(LIVE_TASK_DIR,name),encoding="utf-8") as fh:row=json.load(fh)
+                    if isinstance(row,dict) and row.get("id"):rows[row["id"]]=row
+                except (OSError,ValueError):pass
+    except OSError:pass
+    with LIVE_TASK_LOCK:
+        for tid,task in LIVE_TASKS.items():rows[tid]=task
+        for tid,task in rows.items():
+            if task.get("status") not in {"waiting","running"}:
+                skipped+=1;continue
+            task["cancel_requested"]=True
+            task["step"]="توقف اجباری همهٔ وظایف"
+            task["updated_at"]=int(time.time())
+            LIVE_TASKS[tid]=task
+            live_task_disk_write(task)
+            stopped.append(tid)
+    return jsonify(ok=True,stopped=stopped,count=len(stopped),skipped=skipped,
+                   message=f"درخواست توقف برای {len(stopped)} وظیفه ثبت شد" if stopped
+                           else "هیچ وظیفهٔ فعالی برای توقف نبود")
 
 
 @app.post("/api/tasks/<task_id>/retry")

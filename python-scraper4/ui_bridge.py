@@ -409,6 +409,72 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         response.headers["content-type"] = "application/javascript; charset=utf-8"
         return response
 
+    # ── web fonts ────────────────────────────────────────────────────────
+    # The font picker writes --app-font and loads /assets/fonts/<name>.css.
+    # Those files were never ported, so every choice 404'd and the page stayed
+    # on Tahoma — the picker looked broken. Serve a real @font-face stylesheet:
+    # from ui/fonts/ when the .woff2 has been vendored, otherwise pointing at
+    # the upstream CDN so a server with internet still gets the font.
+    FONT_DIR = os.path.join(UI_DIR, "fonts")
+    FONT_SOURCES = {
+        # key: (family name, CDN css, local woff2 basename)
+        "vazir": ("Vazir",
+                  "https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/font-face.css",
+                  "vazir"),
+        "yekan": ("Yekan",
+                  "https://cdn.jsdelivr.net/gh/rastikerdar/yekan-bakh-font@v1.0.0/dist/font-face.css",
+                  "yekan"),
+        "shabnam": ("Shabnam",
+                    "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@v5.0.1/dist/font-face.css",
+                    "shabnam"),
+        "sahel": ("Sahel",
+                  "https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@v3.4.0/dist/font-face.css",
+                  "sahel"),
+        "samim": ("Samim",
+                  "https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@v4.0.5/dist/font-face.css",
+                  "samim"),
+    }
+
+    @app.get("/assets/fonts/<name>.css")
+    def node_font_css(name: str):
+        key = _s(name).lower()
+        entry = FONT_SOURCES.get(key)
+        if not entry:
+            return Response("/* unknown font */", mimetype="text/css"), 404
+        family, cdn, base = entry
+        local = os.path.join(FONT_DIR, base + ".woff2")
+        if os.path.isfile(local):
+            css = (
+                "@font-face{font-family:'%s';src:url('%s') format('woff2');"
+                "font-weight:100 900;font-display:swap;}" % (
+                    family, url_for("node_font_file", filename=base + ".woff2"))
+            )
+        else:
+            # No vendored copy: re-export the upstream stylesheet. If the
+            # server has no internet the browser simply falls back to Tahoma,
+            # which is the documented behaviour rather than a silent 404.
+            css = "@import url('%s');" % cdn
+        response = Response(css, mimetype="text/css")
+        response.headers["cache-control"] = "public, max-age=86400"
+        return response
+
+    @app.get("/assets/fonts/<path:filename>")
+    def node_font_file(filename: str):
+        if not os.path.isdir(FONT_DIR):
+            return Response("", status=404)
+        return send_from_directory(FONT_DIR, filename)
+
+    @app.get("/api/fonts")
+    def node_fonts_status():
+        """Which fonts are vendored locally vs served from the CDN."""
+        rows = []
+        for key, (family, cdn, base) in FONT_SOURCES.items():
+            local = os.path.isfile(os.path.join(FONT_DIR, base + ".woff2"))
+            rows.append({"id": key, "family": family, "local": local,
+                         "source": "local" if local else "cdn"})
+        return ok(fonts=rows, dir=FONT_DIR,
+                  vendored=sum(1 for r in rows if r["local"]))
+
     # ── core status / version / settings ─────────────────────────────────
     @app.get("/api/status")
     def node_status():
@@ -2457,6 +2523,17 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.get("/api/update/status")
     def node_update_status():
+        # Report the branch even before the first check, otherwise the panel
+        # shows an empty "branch —" on a fresh boot.
+        if git_available() and not UPDATE.get("branch"):
+            code, branch = git("rev-parse", "--abbrev-ref", "HEAD")
+            if not code:
+                UPDATE["branch"] = branch.strip()
+            head_code, head = git("rev-parse", "HEAD")
+            if not head_code and not UPDATE.get("local"):
+                UPDATE["local"] = head.strip()[:8]
+        elif not git_available():
+            UPDATE["status"] = "unavailable"
         return ok(update=dict(UPDATE),
                   autoUpdate=_s(os.environ.get("SCRAPER_GIT_AUTO_UPDATE", "1")
                                 ).lower() not in ("0", "false", "off", "no"),
