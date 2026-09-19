@@ -36,6 +36,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -417,7 +418,26 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.get("/api/parity")
     def node_parity():
-        return ok(parity={"php": getattr(core, "PHP_PARITY", ""), "python": core.APP_VERSION})
+        """What this build actually is, for the version panel.
+
+        This used to report a "php" field read from a PHP_PARITY constant that
+        does not exist in this fork, so the button always showed an empty
+        value. Report facts we can establish instead: version, changelog size,
+        runtime, and which optional engines are really present.
+        """
+        log = getattr(core, "CHANGELOG", []) or []
+        engines = [e for e in getattr(core, "KNOWN_ENGINES", ())
+                   if core.fetch_engine_installed(e)]
+        return ok(parity={
+            "python": core.APP_VERSION,
+            "releases": len(log),
+            "latest": (log[0].get("version") if log else core.APP_VERSION),
+            "latestDate": (log[0].get("date") if log else ""),
+            "runtime": f"python {sys.version.split()[0]} · flask",
+            "dashboard": bool(globals().get("_BRIDGE_OK", True)),
+            "engines": engines,
+            "engineCount": len(engines),
+        })
 
     @app.get("/api/settings")
     def node_settings_get():
