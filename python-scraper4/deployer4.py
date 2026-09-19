@@ -59,7 +59,10 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 
-DEPLOYER_VERSION = "1.3.3"
+# 1.4.0: installs the dashboard files (ui_bridge.py + ui/) alongside
+# scraper4.py, adds POST /api/install-dashboard, defaults to this fork instead
+# of the dashboard-less upstream, and auto-update is off by default.
+DEPLOYER_VERSION = "1.4.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # فایل اصلی سایت که باید آپدیت شود. پیش‌فرض: scraper4.py کنار همین فایل.
