@@ -28,6 +28,7 @@ Design rules:
 
 from __future__ import annotations
 
+import base64
 import importlib.metadata
 import importlib.util
 import io
@@ -952,26 +953,229 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         return ok(items=[], total=0, target=target)
 
     # ── backup / settings transfer ───────────────────────────────────────
+    # ── settings backup bundle ───────────────────────────────────────────
+    # The dashboard speaks a "settings bundle": {files: {"<name>.json":
+    # {size, b64}}}. It decodes each file, lets the user tick which sections
+    # to restore, re-encodes only those, and posts the bundle back. The old
+    # implementation exported the raw data dict and imported a handful of
+    # flat keys, so the two never lined up: the file the UI downloaded was
+    # not a bundle, and a real bundle posted back matched no key at all —
+    # import reported success while writing nothing. Both sides now use the
+    # bundle format, keyed by the file names in SETTINGS_SECTIONS.
+
+    def _b64_file(value: Any) -> dict[str, Any]:
+        raw = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        return {"size": len(raw), "b64": base64.b64encode(raw).decode("ascii")}
+
+    def _read_file(meta: Any) -> Any:
+        """Decode one bundle entry; None means unreadable (UI skips it)."""
+        if not isinstance(meta, dict) or not meta.get("b64"):
+            return None
+        try:
+            return json.loads(base64.b64decode(meta["b64"]).decode("utf-8"))
+        except Exception:  # noqa: BLE001 - a corrupt entry must not abort
+            return None
+
+    def _bundle_files(data: dict[str, Any]) -> dict[str, Any]:
+        """Split the data file into the per-file layout the UI expects."""
+        profiles = data.get("profiles") or {}
+        settings_only, products = {}, {}
+        for name, cfg in profiles.items():
+            if not isinstance(cfg, dict):
+                continue
+            rows = cfg.get("saved_products") or []
+            settings_only[name] = {k: v for k, v in cfg.items()
+                                   if k != "saved_products"}
+            settings_only[name].setdefault("name", name)
+            if rows:
+                products[name] = rows
+        ai = data.get("ai") or {}
+        connections = {
+            "woocommerce": data.get("woocommerce") or {},
+            "basalam": data.get("basalam") or {},
+            "ai": {
+                "providers": data.get("ai_providers") or {},
+                "candidates": data.get("ai_candidates") or [],
+                "master": data.get("ai_master") or "",
+                "settings": ai,
+            },
+            "notifications": data.get("notifications") or {},
+            "network": data.get("network") or {},
+        }
+        files = {
+            "profiles.json": settings_only,
+            "profile_products.json": products,
+            "connections.json": connections,
+            "category_learning.json": data.get("category_learning") or [],
+            "autoreply_rules.json": data.get("autoreply_rules") or [],
+            "autoreply_log.json": data.get("autoreply_log") or [],
+            "autoreply_state.json": data.get("autoreply_state") or {},
+            "render_settings.json": data.get("render_settings") or {},
+            "notification_settings.json": data.get("notification_settings") or {},
+            "digest_state.json": data.get("digest_state") or {},
+            "ai_votes.json": data.get("ai_votes") or {},
+            "ai_providers.json": data.get("ai_providers") or {},
+            "ai_candidates.json": data.get("ai_candidates") or [],
+            "sync_state.json": data.get("sync_state") or {},
+            "remote_map.json": data.get("remote_map") or {},
+        }
+        return {name: _b64_file(value) for name, value in files.items()}
+
     @app.get("/api/settings-export")
     def node_settings_export():
+        data = load()
+        files = _bundle_files(data)
+        bundle = {
+            "format": "settings-bundle",
+            "app": "scraper4-python",
+            "version": core.APP_VERSION,
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "host": _s(request.host),
+            "total_files": len(files),
+            "files": files,
+        }
         return Response(
-            json.dumps(load(), ensure_ascii=False, indent=2),
+            json.dumps(bundle, ensure_ascii=False, indent=2),
             mimetype="application/json",
-            headers={"content-disposition": 'attachment; filename="scraper4-settings.json"'},
+            headers={"content-disposition":
+                     'attachment; filename="scraper4-settings.json"'},
         )
 
     @app.post("/api/settings-import")
     def node_settings_import():
         body = _body()
-        payload = body.get("settings") if isinstance(body.get("settings"), dict) else body
-        if not isinstance(payload, dict) or not payload:
-            return jsonify(ok=False, error="فایل تنظیمات نامعتبر است."), 400
+        files = body.get("files") if isinstance(body.get("files"), dict) else None
         data = load()
-        for key in ("profiles", "woocommerce", "basalam", "network", "ai", "ai_providers"):
-            if isinstance(payload.get(key), dict):
-                data[key] = payload[key]
+        counts = {"profiles": 0, "products": 0, "states": 0, "categories": 0}
+        applied: list[str] = []
+        skipped: list[str] = []
+
+        if files is None:
+            # Accept a raw data dump too (older exports and hand-made files),
+            # so a legitimate file is never silently rejected.
+            payload = (body.get("settings")
+                       if isinstance(body.get("settings"), dict) else body)
+            if not isinstance(payload, dict) or not payload:
+                return jsonify(ok=False, error="فایل تنظیمات نامعتبر است."), 400
+            recognised = False
+            for key in ("profiles", "woocommerce", "basalam", "network", "ai",
+                        "ai_providers", "ai_candidates", "category_learning",
+                        "autoreply_rules", "ai_votes"):
+                if key in payload and isinstance(
+                        payload[key], type(data.get(key, payload[key]))):
+                    data[key] = payload[key]
+                    recognised = True
+                    applied.append(key)
+                    if key == "profiles" and isinstance(payload[key], dict):
+                        counts["profiles"] = len(payload[key])
+                    else:
+                        counts["states"] += 1
+            if not recognised:
+                return jsonify(
+                    ok=False,
+                    error="در این فایل هیچ بخش قابل‌شناسایی پیدا نشد؛ "
+                          "فایل بکاپ این برنامه را انتخاب کنید."), 400
+            save(data)
+            return ok(imported=counts, applied=applied, format="raw")
+
+        # ---- settings bundle -------------------------------------------
+        decoded = {name: _read_file(meta) for name, meta in files.items()}
+        unreadable = [n for n, v in decoded.items() if v is None]
+        decoded = {n: v for n, v in decoded.items() if v is not None}
+        if not decoded:
+            return jsonify(
+                ok=False,
+                error="هیچ فایل قابل خواندنی در بسته نبود."), 400
+
+        profiles = data.get("profiles") or {}
+        if isinstance(decoded.get("profiles.json"), dict):
+            for name, cfg in decoded["profiles.json"].items():
+                if not isinstance(cfg, dict):
+                    continue
+                keep = (profiles.get(name) or {}).get("saved_products") or []
+                merged = dict(cfg)
+                merged["saved_products"] = keep
+                profiles[name] = merged
+                counts["profiles"] += 1
+            applied.append("profiles.json")
+        if isinstance(decoded.get("profile_products.json"), dict):
+            for name, rows in decoded["profile_products.json"].items():
+                if not isinstance(rows, list):
+                    continue
+                if name not in profiles:
+                    # Products with no profile row would be invisible.
+                    skipped.append(f"محصولات «{name}» بدون تنظیمات پروفایل")
+                    continue
+                profiles[name]["saved_products"] = rows
+                counts["products"] += len(rows)
+            applied.append("profile_products.json")
+        data["profiles"] = profiles
+
+        conn = decoded.get("connections.json")
+        if isinstance(conn, dict):
+            if isinstance(conn.get("woocommerce") or conn.get("woo"), dict):
+                data["woocommerce"] = conn.get("woocommerce") or conn.get("woo")
+                counts["states"] += 1
+            if isinstance(conn.get("basalam"), dict):
+                data["basalam"] = conn["basalam"]
+                counts["states"] += 1
+            if isinstance(conn.get("network"), dict):
+                data["network"] = conn["network"]
+                counts["states"] += 1
+            ai_block = conn.get("ai")
+            if isinstance(ai_block, dict):
+                if isinstance(ai_block.get("providers"), (dict, list)):
+                    data["ai_providers"] = ai_block["providers"]
+                if isinstance(ai_block.get("candidates"), list):
+                    data["ai_candidates"] = ai_block["candidates"]
+                if _s(ai_block.get("master")):
+                    data["ai_master"] = _s(ai_block["master"])
+                if isinstance(ai_block.get("settings"), dict):
+                    data["ai"] = ai_block["settings"]
+                counts["states"] += 1
+            if isinstance(conn.get("notifications"), dict):
+                data["notifications"] = conn["notifications"]
+                counts["states"] += 1
+            applied.append("connections.json")
+
+        if "category_learning.json" in decoded:
+            rows = decoded["category_learning.json"]
+            if isinstance(rows, (list, dict)):
+                data["category_learning"] = rows
+                counts["categories"] = len(rows)
+                applied.append("category_learning.json")
+
+        # Remaining files map 1:1 onto top-level keys.
+        simple = {
+            "autoreply_rules.json": "autoreply_rules",
+            "autoreply_log.json": "autoreply_log",
+            "autoreply_state.json": "autoreply_state",
+            "render_settings.json": "render_settings",
+            "notification_settings.json": "notification_settings",
+            "digest_state.json": "digest_state",
+            "ai_votes.json": "ai_votes",
+            "ai_providers.json": "ai_providers",
+            "ai_candidates.json": "ai_candidates",
+            "sync_state.json": "sync_state",
+            "remote_map.json": "remote_map",
+        }
+        for fname, key in simple.items():
+            if fname in decoded and decoded[fname] not in (None, {}, []):
+                data[key] = decoded[fname]
+                counts["states"] += 1
+                applied.append(fname)
+
         save(data)
-        return ok(imported=True)
+        history = load()
+        rows = history.get("import_history")
+        if not isinstance(rows, list):
+            rows = []
+        rows.append({"at": int(time.time()), "kind": "settings-bundle",
+                     "files": applied, "counts": counts})
+        history["import_history"] = rows[-50:]
+        save(history)
+        return ok(imported=counts, applied=applied, skipped=skipped,
+                  unreadable=unreadable, format="settings-bundle")
 
     @app.post("/api/import-php")
     def node_import_php():
