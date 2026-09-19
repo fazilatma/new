@@ -65,3 +65,10 @@ PORT=8080 .venv/bin/python scraper4.py
 ```
 
 سپس `http://localhost:8080/ui` را باز کنید.
+
+برای نصب روی سرور (VPS، systemd، Apache/Nginx با پیشوند `/put/`) راهنمای
+کامل در **[INSTALL.md](INSTALL.md)** است.
+
+> هنگام انتقال به سرور، `scraper4.py` و `ui_bridge.py` و پوشهٔ `ui/` باید
+> **کنار هم** کپی شوند؛ در غیر این صورت داشبورد جدید بالا نمی‌آید و فقط
+> رابط کلاسیک کار می‌کند.

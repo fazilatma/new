@@ -34,6 +34,22 @@ if [[ -f "${REPO_DIR}/deployer4.py" ]]; then
   cp -a "${REPO_DIR}/deployer4.py" "$APP_DIR/deployer4.py"
 fi
 
+# Node-parity dashboard: ui_bridge.py registers the Node REST surface and
+# serves ui/dashboard.{html,js} at /put/ui. Without these files scraper4.py
+# still boots but silently falls back to the classic UI only, so copy them
+# alongside the app and fail loudly if they are missing from the checkout.
+if [[ ! -f "${REPO_DIR}/ui_bridge.py" || ! -f "${REPO_DIR}/ui/dashboard.html" ]]; then
+  echo "Missing ui_bridge.py or ui/dashboard.html in ${REPO_DIR}" >&2
+  exit 1
+fi
+cp -a "${REPO_DIR}/ui_bridge.py" "$APP_DIR/ui_bridge.py"
+rm -rf "$APP_DIR/ui"
+cp -a "${REPO_DIR}/ui" "$APP_DIR/ui"
+chmod 644 "$APP_DIR/ui_bridge.py" "$APP_DIR/ui/"*
+if [[ -f "${REPO_DIR}/ai_providers.json" && ! -f "$APP_DIR/ai_providers.json" ]]; then
+  cp -a "${REPO_DIR}/ai_providers.json" "$APP_DIR/ai_providers.json"
+fi
+
 # Isolated venv — never uninstall Debian pip/blinker RECORD-less packages.
 "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade pip
@@ -128,3 +144,23 @@ fi
 echo "Optional engines done."
 which chromium chromium-browser 2>/dev/null || true
 ls -l /snap/bin/chromium /usr/bin/chromium /usr/bin/chromium-browser "$APP_DIR/chrome-linux64/chrome" 2>/dev/null || true
+
+# ── verify the Node-parity dashboard actually came up ────────────────────
+# scraper4.py imports ui_bridge defensively, so a broken bridge degrades to the
+# classic UI instead of crashing. That is good for uptime but bad for installs:
+# it would look "successful" while /put/ui is dead. Check it explicitly.
+echo
+echo "Verifying dashboard…"
+for n in $(seq 1 10); do
+  UI_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8000/ui || true)"
+  [ "$UI_CODE" = 200 ] && break
+  sleep 2
+done
+API_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8000/api/profiles || true)"
+if [ "$UI_CODE" = 200 ] && [ "$API_CODE" = 200 ]; then
+  echo "OK: dashboard is live — open http://SERVER/put/ui"
+else
+  echo "WARNING: dashboard check failed (/ui=$UI_CODE /api/profiles=$API_CODE)." >&2
+  echo "The classic UI at http://SERVER/put/ should still work." >&2
+  echo "Inspect with: journalctl -u scraper4 -n 50 --no-pager" >&2
+fi

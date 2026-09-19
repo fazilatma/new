@@ -32,10 +32,11 @@ import json
 import os
 import re
 import time
-import uuid
 from typing import Any, Callable
 
-from flask import Response, jsonify, request, send_from_directory
+from flask import (
+    Response, jsonify, redirect, request, send_from_directory, url_for,
+)
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 
@@ -326,10 +327,22 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     # ── static dashboard shell ───────────────────────────────────────────
     @app.get("/ui")
-    @app.get("/ui/")
     def node_dashboard():
         """Serve the Node dashboard HTML verbatim."""
         return send_from_directory(UI_DIR, "dashboard.html")
+
+    @app.get("/ui/")
+    def node_dashboard_slash():
+        """Canonicalise ``/ui/`` to ``/ui``.
+
+        The dashboard script derives its API root from the page path
+        (``APP_BASE = location.pathname.replace(/[^/]*$/,'')``). Served at
+        ``/ui`` that yields ``/`` (or ``/put/`` behind the Apache prefix),
+        which is correct. Served at ``/ui/`` it would yield ``/ui/`` and every
+        request would hit ``/ui/api/*`` and 404 — a dashboard that renders but
+        never loads data. Redirecting keeps that URL working.
+        """
+        return redirect(url_for("node_dashboard"), code=301)
 
     @app.get("/ui/dashboard.js")
     @app.get("/dashboard.js")
