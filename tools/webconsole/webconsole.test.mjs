@@ -11,7 +11,7 @@ const source=await readFile(new URL('./webconsole.php',import.meta.url),'utf8');
 
 test('deliverable is a complete PHP console, not a patcher or loader',()=>{
  assert.ok(source.startsWith('<?php'));
- assert.ok(source.includes("define('WCP_VERSION', '1.2.2');"));
+ assert.ok(source.includes("define('WCP_VERSION', '1.2.3');"));
  for(const name of ['wcp_php_cli','job_start','wcp_cli','handle_api','render_body','render_login','render_css','page_head','term_create','fs_scan_dir','cli_backup','cli_restore','cli_deploy','cli_service'])assert.match(source,new RegExp('function '+name+'\\('));
  assert.ok(source.endsWith('echo render_body();\n'));
  assert.ok(!source.includes('repair.mjs'));
@@ -54,6 +54,19 @@ test('PHP engine lint and isolated persistence / launcher-preflight failure', {s
   ini_set('display_errors','1');error_reporting(E_ALL);
   function check($condition,$label){if(!$condition)throw new RuntimeException($label);}
   check(cfg()['pass_hash']==='', 'fresh defaults');
+  $generic=['type'=>'node','start_cmd'=>'npm start','port'=>'3000','subfolder'=>'cloudflare-scraper4','version'=>'1.210.0+'];
+  $pkg=['name'=>'scraper4-cloudflare','scripts'=>['start'=>'wrangler dev --ip 0.0.0.0','deployer:ui'=>'node scripts/local-deployer-ui.mjs']];
+  $detected=gh_apply_runtime_profile($generic,$pkg,true);
+  check($detected['start_cmd']==='node scripts/local-deployer-ui.mjs' && $detected['port']==='8790','detect local deployer instead of Wrangler');
+  check($detected['env']['SCRAPER_PORT']==='3000' && $detected['env']['DEPLOYER_UI_PORT']==='8790','two separate ports');
+  check($detected['subfolder']==='cloudflare-scraper4' && $detected['version']==='1.210.0+','preserve discovered metadata');
+  check(gh_apply_runtime_profile($generic,$pkg,false)['start_cmd']==='npm start','do not assume absent launcher');
+  check(gh_apply_runtime_profile($generic,['name'=>'another-project'],true)['start_cmd']==='npm start','do not change unrelated apps');
+  $quick=proj_quick_settings(array_merge($detected,['env'=>['ADMIN_TOKEN'=>'keep-fixture-token']]));
+  check($quick['env']['SCRAPER_PORT']==='3000' && $quick['env']['DEPLOYER_UI_PORT']==='8790' && $quick['env']['PORT']==='8790','quick deploy retains port mapping');
+  check($quick['env']['ADMIN_TOKEN']==='keep-fixture-token','quick deploy retains explicit settings');
+  check($quick['start_cmd']==='node scripts/local-deployer-ui.mjs' && $quick['auto_start'],'quick deploy starts correct program');
+
   check(cfg()['project_root']==='/var/lib/webconsole-projects','dedicated persistent default');
   $root=${JSON.stringify(storageDir)};
   cfg_save(['project_root'=>$root]);
@@ -123,7 +136,7 @@ test('rendered console initializes and opens project / file / job views',async()
  const scripts=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)],code=scripts[scripts.length-1][1];
  const calls=[];
  const data={sysinfo:{host:'test',kernel:'Linux',php:'8.2',user:'fixture',ip:'127.0.0.1',mem:{total:1024,used:512},disk:{total:4096,free:2048},cores:2,load:[0,0,0],uptime:60,cpu_pct:0,tools:{git:true,node:true}},'proj.list':{projects:[{id:'abc',name:'Fixture',repo_url:'https://github.com/example/app',branch:'main',deploy_path:'/opt/fixture',port:'3000',env:{},start_cmd:'node app.js'}]},'fs.list':{path:'/opt',items:[{name:'fixture.txt',dir:false,perms:'0600',owner:'test',group:'test',size:3,mtime:1}]},'jobs.list':{jobs:[{id:'abc',name:'Launch failure',type:'deploy',created:'2026-09-18',status:{status:'failed',exit:127}}]}};
- const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.2',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
+ const context={window,document,__BOOT:{csrf:'fixture',v:'1.2.3',theme:'dark',host:'test',fs_start:'/opt'},location:{pathname:'/webconsole.php'},navigator:{},TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q.api);return {status:200,json:async()=>({ok:true,data:data[q.api]??{}})}}};
  new Script(code+'\nglobalThis.TEST={switchTab,renderProj,renderFm,renderJobs,projectDlg};').runInNewContext(context);
  await new Promise(r=>setImmediate(r));
  assert.match(document.querySelector('#v-dash').textContent,/test/);
@@ -142,7 +155,7 @@ function importHarness(){
  if(!descriptor.set)Object.defineProperty(proto,'value',{...descriptor,set(v){for(const o of this.options)o.removeAttribute('selected');const chosen=[...this.options].find(o=>o.value===v);if(chosen)chosen.setAttribute('selected','');}});
  const code=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
  const calls=[];
- const context={window,document,__BOOT:{csrf:'test',v:'1.2.2',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
+ const context={window,document,__BOOT:{csrf:'test',v:'1.2.3',theme:'dark',host:'test',fs_start:'/var/www'},location:{pathname:'/webconsole.php'},navigator:{},URL,Blob,atob,TextEncoder,TextDecoder,Uint8Array,setTimeout(){},setInterval(){return 1},clearTimeout(){},clearInterval(){},console,fetch:async(url,options)=>{const q=JSON.parse(options.body);calls.push(q);const data=q.api==='proj.list'?{projects:[]}:q.api==='gh.user_repos'?{repos:[]}:{};return {status:200,json:async()=>({ok:true,data})}}};
  new Script(code+'\nglobalThis.TEST={parsedProjectVersion,compareProjectVersions,branchVersion,sortedBranchRows,parseProjectJson,projectDlg,applyAppearance,readAppearance,appearanceDlg,commandPalette,projectExport,presetProject,projectPreflight,projectStorageDlg,openJob,__closeSheet};').runInNewContext(context);
  return {...context,vm:context,calls,$:id=>document.querySelector('#'+id)};
 }
@@ -326,4 +339,15 @@ test('native Linux storage provisioning: one setup, multiple non-root projects, 
   const blocked=parent+'/existing';sudo('mkdir','-m','0700',blocked);sudo('touch',blocked+'/keep');await writeFile(path,script(blocked));assert.throws(()=>sudo('sh',path),/refusing takeover/);assert.equal((await stat(blocked)).uid,0);sudo('test','-e',blocked+'/keep');
   const link=parent+'/link';sudo('ln','-s',root,link);await writeFile(path,script(link));assert.throws(()=>sudo('sh',path),/Symlink target refused/);
  }finally{sudo('rm','-rf','--',parent);await rm(local,{recursive:true,force:true});}
+});
+
+test('GitHub customization carries the detected Deployer commands and both ports into the form',async()=>{
+ const h=importHarness();h.TEST.projectDlg({id:'fixture',name:'Existing',type:'node',env:{DATABASE_URL:'retain-db'},deploy_path:'/var/lib/existing'});
+ const preset=h.TEST.presetProject('scraper4');
+ h.vm.fetch=async(url,options)=>{const q=JSON.parse(options.body);const data=q.api==='gh.user_repos'?{repos:[{name:'repo',language:'JS'}]}:q.api==='gh.repo_branches'?{branches:[{name:'main',default:true}]}:{apps:[{...preset,deploy_path:undefined,subfolder:'cloudflare-scraper4',runtime_profile:'scraper4-local-deployer'}]};return {status:200,json:async()=>({ok:true,data})}};
+ await h.$('gh-load').onclick();await h.$('gh-branch-table').querySelector('button').onclick();await new Promise(r=>setImmediate(r));
+ await h.$('gh-apps-list').querySelector('[data-custom]').onclick();
+ assert.equal(h.$('jq-start_cmd').value,'node scripts/local-deployer-ui.mjs');assert.equal(h.$('jq-port').value,'8790');
+ assert.match(h.$('jq-env').value,/SCRAPER_PORT=3000/);assert.match(h.$('jq-env').value,/DEPLOYER_UI_PORT=8790/);assert.match(h.$('jq-env').value,/DATABASE_URL=retain-db/);
+ assert.equal(h.$('jq-deploy_path').value,'/var/lib/existing');assert.equal(h.$('jq-auto').checked,false);
 });

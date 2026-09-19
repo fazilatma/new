@@ -36,7 +36,7 @@ test('Chromium: responsive skins, every section, appearance persistence and impo
    const data=q.api==='settings.get'?{...appearance,fs_start:'/var/www',session_minutes:180,allowed_ips:''}:q.api==='gh.inspect_branch'?{apps:[{name:'Root',subfolder:'',type:'node',version:q.branch==='release-99'?'9.0.0':'1.0.0'},{name:'Scraper',subfolder:'cloudflare-scraper4',type:'node',version:q.branch==='arena/newer'?'1.210.0+':q.branch==='release-99'?'1.9.0':''}]}:fixtures[q.api]??{};
    return route.fulfill({json:{ok:true,data}});
   }
-  if(req.url()==='http://wcp.test/')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><script>const __BOOT='+JSON.stringify({...appearance,csrf:'fixture',host:'UI fixture',v:'1.2.2',fs_start:'/var/www'})+';</script></head><body>'+body});
+  if(req.url()==='http://wcp.test/')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><script>const __BOOT='+JSON.stringify({...appearance,csrf:'fixture',host:'UI fixture',v:'1.2.3',fs_start:'/var/www'})+';</script></head><body>'+body});
   return route.abort();
  });
  await page.goto('http://wcp.test/');await page.locator('#v-dash .stat').first().waitFor();assert.match(await page.locator('#topbar').innerText(),/وب‌کنسول/);

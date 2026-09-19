@@ -1,4 +1,4 @@
-# WebConsole Pro 1.2.2 — complete standalone PHP file
+# WebConsole Pro 1.2.3 — complete standalone PHP file
 
 **Deploy `webconsole.php`.** This is the actual console, not the earlier offline
 HTML repair tool, and it does not require the repair utility at runtime.
@@ -10,6 +10,39 @@ It retains the terminal, file manager/editor, uploads, process manager, GitHub
 explorer, backup profiles/snapshots/restore, project deployment/service runner,
 settings and authentication features. Existing JSON configuration filenames and
 project/profile field names are retained.
+
+## Release 1.2.3 — Scraper4 local runtime detection
+
+The repository's `npm start` launches **Wrangler**, whose development port is
+normally 8787. Exporting `PORT=3000` does not turn that command into the local
+Deployer and does not necessarily change Wrangler's port.
+
+GitHub inspection now recognizes `scraper4-cloudflare` with its `deployer:ui`
+script and actual `scripts/local-deployer-ui.mjs` entry point. It selects the
+Node Deployer runtime, correct install/build commands, main port 8790, and
+SCRAPER_PORT=3000. Customization fills the environment/flags as well as the
+commands, preserving unrelated existing environment keys. Quick install retains
+the two-port runtime instead of discarding its environment defaults. Unrelated
+Node projects retain their existing generic detection behavior.
+
+Existing saved profiles are intentionally **not rewritten or restarted**. To
+repair a profile that launches Wrangler, stop that project, edit the same profile,
+keep its current installation/data path, and set:
+
+- Install: `npm ci --include=dev --no-audit --no-fund`
+- Build: `node scripts/esbuild-check.mjs && npm run version:check && npm run render:build`
+- Start: `node scripts/local-deployer-ui.mjs`
+- Main service port: `8790`
+- Environment: use the `env` object from `examples/scraper4-project.json`, merging
+  it with the existing database/auth settings. DEPLOYER_UI_PORT=8790 and
+  SCRAPER_PORT=3000 must be distinct. Preserve the project's current data location.
+
+Then install/build and start that same profile. A log showing Wrangler or workerd
+still indicates the Cloudflare dev runtime. A local Deployer startup message
+plus listeners on 8790 and 3000 is the intended result; a Deployer listener alone
+does not prove the scraper started. With loopback binding, use Caddy or an SSH
+tunnel, not the VPS IP directly. No live VPS repair or process restart is performed
+by upgrading this PHP file alone.
 
 ## Release 1.2.2 — persistent managed project storage
 
