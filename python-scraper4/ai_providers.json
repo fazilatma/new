@@ -1,0 +1,97 @@
+{
+  "openrouter": {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "apiKey": "",
+    "enabled": true,
+    "models": [
+      {
+        "id": "meta-llama/llama-3.3-70b-instruct:free",
+        "name": "Llama 3.3 70B (رایگان)",
+        "free": true
+      },
+      {
+        "id": "google/gemini-2.0-flash-exp:free",
+        "name": "Gemini 2.0 Flash (رایگان)",
+        "free": true
+      },
+      {
+        "id": "deepseek/deepseek-chat",
+        "name": "DeepSeek V3",
+        "free": false
+      }
+    ]
+  },
+  "groq": {
+    "id": "groq",
+    "name": "Groq Cloud",
+    "url": "https://api.groq.com/openai/v1/chat/completions",
+    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+    "apiKey": "",
+    "enabled": true,
+    "models": [
+      {
+        "id": "llama-3.3-70b-versatile",
+        "name": "Llama 3.3 70B Versatile",
+        "free": true
+      },
+      {
+        "id": "mixtral-8x7b-32768",
+        "name": "Mixtral 8x7B",
+        "free": true
+      }
+    ]
+  },
+  "deepseek": {
+    "id": "deepseek",
+    "name": "DeepSeek API",
+    "url": "https://api.deepseek.com/chat/completions",
+    "endpoint": "https://api.deepseek.com/chat/completions",
+    "apiKey": "",
+    "enabled": true,
+    "models": [
+      {
+        "id": "deepseek-chat",
+        "name": "DeepSeek Chat (V3)",
+        "free": false
+      }
+    ]
+  },
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI (ChatGPT)",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "apiKey": "",
+    "enabled": true,
+    "models": [
+      {
+        "id": "gpt-4o-mini",
+        "name": "GPT-4o Mini",
+        "free": false
+      },
+      {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "free": false
+      }
+    ]
+  },
+  "ollama": {
+    "id": "ollama",
+    "name": "Ollama Local (لوکال بدون نیاز به اینترنت)",
+    "url": "http://127.0.0.1:11434/v1/chat/completions",
+    "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+    "apiKey": "ollama",
+    "enabled": false,
+    "models": [
+      {
+        "id": "llama3.2",
+        "name": "Llama 3.2 Local",
+        "free": true
+      }
+    ]
+  }
+}

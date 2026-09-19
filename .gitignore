@@ -12,3 +12,9 @@ data/
 storage/
 .env
 .env.*
+python-scraper4/.venv/
+python-scraper4/__pycache__/
+python-scraper4/scraper4_data.json
+python-scraper4/scraper4-errors.jsonl
+python-scraper4/live-tasks/
+python-scraper4/*.bak

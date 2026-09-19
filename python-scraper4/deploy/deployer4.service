@@ -1,0 +1,21 @@
+[Unit]
+Description=Deployer4 (multi-branch Scraper4 installer at /deploy)
+After=network-online.target scraper4.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/scraper4
+Environment=PYTHONUNBUFFERED=1
+Environment=DEPLOYER_TARGET=/opt/scraper4/scraper4.py
+Environment=DEPLOYER_AUTO_UPDATE=1
+Environment=DEPLOYER_SEARCH_ALL=1
+Environment=DEPLOYER_AUTO_INTERVAL=300
+ExecStart=/opt/scraper4/venv/bin/python3 -m gunicorn --bind 127.0.0.1:8001 --workers 1 --threads 4 --timeout 120 deployer4:application
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
