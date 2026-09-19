@@ -28,6 +28,9 @@ Design rules:
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
+import io
 import json
 import os
 import re
@@ -50,11 +53,38 @@ PAGINATIONS = (
     "query_page", "query_custom", "path_page", "path_pattern",
     "full_pattern", "next_selector", "none", "scroll",
 )
-ENGINES = (
-    "auto", "cheerio", "htmlrewriter", "jsonld", "next_data", "metadata",
-    "script_json", "heuristic", "structural", "playwright", "puppeteer",
-    "crawlee_playwright", "network_api",
+# Extraction engines offered to the dashboard.
+#
+# The Node original advertised its Cloudflare-Worker engines (HTMLRewriter,
+# Cheerio, Puppeteer …) which simply do not exist in this runtime — picking one
+# silently fell back to "auto". This catalogue lists what the Python backend can
+# genuinely do, split into the two stages it actually models:
+#
+#   fetch  — how the HTML is retrieved (Fetcher.get(engine=…) in scraper4.py)
+#   parse  — how products are read out of that HTML (parse_html / helpers)
+#
+# `module` is probed at runtime so the UI can grey out engines whose library is
+# not installed on this server instead of offering a dead option. Ordering is
+# fastest-first, matching HTTP_ENGINE_ORDER.
+ENGINE_CATALOGUE = (
+    # id, Persian label, stage, python module required ("" = always available)
+    ("auto", "خودکار (هوشمند - پیشنهادی)", "fetch", ""),
+    ("requests", "Requests — سریع، سایت‌های ساده", "fetch", "requests"),
+    ("httpx", "HTTPX — HTTP/2، سریع", "fetch", "httpx"),
+    ("curl_cffi", "curl_cffi — دور زدن اثرانگشت TLS/JA3", "fetch", "curl_cffi"),
+    ("cloudscraper", "Cloudscraper — چالش‌های کلودفلر", "fetch", "cloudscraper"),
+    ("playwright", "Playwright — رندر کامل جاوااسکریپت", "fetch", "playwright"),
+    ("selenium", "Selenium — مرورگر واقعی (کندتر)", "fetch", "selenium"),
+    ("jsonld", "JSON-LD — داده ساختاریافته Product", "parse", ""),
+    ("next_data", "Next.js / Nuxt — __NEXT_DATA__", "parse", ""),
+    ("metadata", "OpenGraph / متادیتا", "parse", ""),
+    ("script_json", "JSON داخل تگ script", "parse", ""),
+    ("heuristic", "کارت‌های محصول (تشخیص خودکار)", "parse", ""),
+    ("lxml", "lxml — پارس سریع XPath/CSS", "parse", "lxml"),
+    ("selectolax", "selectolax — پارس بسیار سریع", "parse", "selectolax"),
 )
+# Engine ids accepted when saving a profile.
+ENGINES = tuple(item[0] for item in ENGINE_CATALOGUE)
 # Python pagination vocabulary  <->  Node pagination vocabulary.
 PAG_PY_TO_NODE = {
     "query": "query_page", "query_page": "query_page", "path": "path_page",
@@ -796,6 +826,694 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         save(data)
         return ok()
 
+    # ── extraction engines (runtime capability probe) ────────────────────
+    def engine_rows() -> list[dict[str, Any]]:
+        """Report which engines this server can actually run right now."""
+        rows = []
+        for eid, label, stage, module in ENGINE_CATALOGUE:
+            if not module:
+                installed = True
+            elif hasattr(core, "fetch_engine_installed") and stage == "fetch":
+                installed = bool(core.fetch_engine_installed(eid))
+            else:
+                installed = importlib.util.find_spec(module) is not None
+            rows.append({
+                "id": eid, "label": label, "stage": stage,
+                "module": module, "installed": installed,
+                # Browser engines additionally need a downloaded browser binary.
+                "needsBrowser": eid in ("playwright", "selenium"),
+            })
+        return rows
+
+    @app.get("/api/engines")
+    def node_engines():
+        rows = engine_rows()
+        return ok(engines=rows,
+                  installed=[r["id"] for r in rows if r["installed"]],
+                  missing=[r["id"] for r in rows if not r["installed"]])
+
+    # The dashboard's "runtime libraries" panel lists what is available.
+    @app.get("/api/runtime/libraries")
+    @app.get("/api/libraries")
+    def node_runtime_libraries():
+        items = []
+        for eid, label, stage, module in ENGINE_CATALOGUE:
+            if not module:
+                continue
+            spec = importlib.util.find_spec(module)
+            version = ""
+            if spec is not None:
+                try:
+                    version = importlib.metadata.version(module.replace("_", "-"))
+                except Exception:  # noqa: BLE001 - version is cosmetic
+                    version = "?"
+            items.append({"name": module, "engine": eid, "stage": stage,
+                          "label": label, "installed": spec is not None,
+                          "version": version})
+        # De-duplicate: several engines can share one module.
+        seen, unique = set(), []
+        for item in items:
+            if item["name"] in seen:
+                continue
+            seen.add(item["name"])
+            unique.append(item)
+        return ok(items=unique)
+
+    # ── destination panels (Woo / Basalam catalogues) ────────────────────
+    DEST_ALIASES = {"woo": "woocommerce", "woocommerce": "woocommerce",
+                    "basalam": "basalam", "bsl": "basalam"}
+
+    def dest_key(target: str) -> str:
+        key = DEST_ALIASES.get(_s(target).lower())
+        if not key:
+            raise ValueError("مقصد نامعتبر است")
+        return key
+
+    @app.get("/api/destination/<target>/overview")
+    def node_dest_overview(target: str):
+        try:
+            key = dest_key(target)
+            rows = core.destination_remote_rows(key)
+        except Exception as exc:  # noqa: BLE001 - shown in the panel
+            return jsonify(ok=False, error=str(exc)), 400
+        data = load()
+        name = _s(data.get("active_profile"))
+        profile = (data.get("profiles") or {}).get(name) or {}
+        report = core.build_destination_report(name, key, profile, rows)
+        return ok(overview=report, counts=report.get("counts", {}),
+                  remoteTotal=report.get("remote_total", 0),
+                  localTotal=report.get("local_total", 0))
+
+    @app.get("/api/destination/<target>/products")
+    def node_dest_products(target: str):
+        limit = min(500, _int(request.args.get("limit"), 100) or 100)
+        try:
+            key = dest_key(target)
+            rows = core.destination_remote_rows(key)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        items = [core.remote_product_view(r, key) for r in rows[:limit]]
+        return ok(items=items, total=len(rows))
+
+    @app.post("/api/destination/<target>/<path:item_id>/status")
+    def node_dest_status(target: str, item_id: str):
+        body = _body()
+        if _s(body.get("confirm")) != "APPLY":
+            return jsonify(ok=False, error="برای اعمال تغییر، confirm=APPLY لازم است."), 400
+        status = _s(body.get("status")) or "draft"
+        try:
+            key = dest_key(target)
+            if key != "woocommerce":
+                return jsonify(ok=False, error="تغییر وضعیت فقط برای ووکامرس پشتیبانی می‌شود."), 400
+            response = core.woo_request("PUT", f"products/{item_id}", {"status": status})
+            return ok(item=response.json(), status=status)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+
+    @app.delete("/api/destination/<target>/<path:item_id>")
+    def node_dest_delete(target: str, item_id: str):
+        if request.args.get("confirm") != "DELETE":
+            return jsonify(ok=False, error="برای حذف، confirm=DELETE لازم است."), 400
+        try:
+            key = dest_key(target)
+            if key != "woocommerce":
+                return jsonify(ok=False, error="حذف فقط برای ووکامرس پشتیبانی می‌شود."), 400
+            core.woo_request("DELETE", f"products/{item_id}?force=true")
+            return ok(deleted=item_id)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+
+    @app.post("/api/destination/<target>/dedup-runs")
+    def node_dedup_start(target: str):
+        """Find duplicate remote products by normalised title."""
+        try:
+            key = dest_key(target)
+            rows = core.destination_remote_rows(key)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for raw in rows:
+            view = core.remote_product_view(raw, key)
+            title = _s(view.get("title")).strip().lower()
+            if title:
+                groups.setdefault(title, []).append(view)
+        dupes = [{"title": t, "count": len(v), "items": v}
+                 for t, v in groups.items() if len(v) > 1]
+        dupes.sort(key=lambda x: -x["count"])
+        run = {"id": "dedup-" + _s(int(time.time())), "target": key,
+               "status": "done", "scanned": len(rows),
+               "groups": dupes[:200], "duplicates": len(dupes)}
+        DEDUP_RUNS[key] = run
+        return ok(run=run, groups=run["groups"])
+
+    DEDUP_RUNS: dict[str, dict[str, Any]] = {}
+
+    @app.get("/api/destination/<target>/dedup-runs/current")
+    def node_dedup_current(target: str):
+        try:
+            key = dest_key(target)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(run=DEDUP_RUNS.get(key))
+
+    @app.post("/api/destination/<target>/dedup-runs/control")
+    @app.post("/api/destination/<target>/dedup-runs/reset")
+    def node_dedup_control(target: str):
+        try:
+            key = dest_key(target)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        if request.path.endswith("/reset"):
+            DEDUP_RUNS.pop(key, None)
+            return ok(run=None)
+        return ok(run=DEDUP_RUNS.get(key))
+
+    @app.post("/api/destination/basalam/bulk")
+    def node_basalam_bulk():
+        return jsonify(ok=False, error="عملیات گروهی باسلام در این نسخه پیاده‌سازی نشده است."), 501
+
+    @app.post("/api/destination/basalam/category/suggest")
+    def node_basalam_cat_suggest():
+        body = _body()
+        title = _s(body.get("title")).strip()
+        if not title:
+            return jsonify(ok=False, error="عنوان محصول لازم است."), 400
+        model_key = _s(body.get("modelKey"))
+        provider, _, model = model_key.partition("::")
+        prompt = (
+            "برای این محصول فقط نام مناسب‌ترین دستهٔ فروشگاهی را به فارسی بنویس. "
+            "فقط نام دسته را بنویس بدون توضیح.\n\nعنوان محصول: " + title
+        )
+        try:
+            answer = core.ai_chat(prompt, provider, model)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(suggestion=_s(answer).strip(), title=title,
+                  items=[{"name": _s(answer).strip()}])
+
+    @app.get("/api/destination/<target>/report")
+    def node_dest_report(target: str):
+        data = load()
+        name = _s(request.args.get("profileId")) or _s(data.get("active_profile"))
+        profile = (data.get("profiles") or {}).get(name) or {}
+        try:
+            key = dest_key(target)
+            rows = core.destination_remote_rows(key)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(report=core.build_destination_report(name, key, profile, rows))
+
+    # ── maintenance panels ───────────────────────────────────────────────
+    @app.post("/api/maintenance/recon-table/<target>")
+    @app.post("/api/maintenance/recon-unified/<target>")
+    def node_recon_table(target: str):
+        body = _body()
+        data = load()
+        name = _s(body.get("profileId")) or _s(data.get("active_profile"))
+        profile = (data.get("profiles") or {}).get(name) or {}
+        try:
+            key = dest_key(target)
+            rows = core.destination_remote_rows(key)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        report = core.build_destination_report(name, key, profile, rows)
+        lists = report.get("lists", {})
+        return ok(report=report, counts=report.get("counts", {}),
+                  items=lists.get("mismatch", []) + lists.get("missing", []),
+                  rows=lists)
+
+    @app.post("/api/maintenance/retire/<target>")
+    def node_maintenance_retire(target: str):
+        body = _body()
+        apply_now = _s(body.get("confirm")) == "APPLY"
+        data = load()
+        name = _s(body.get("profileId")) or _s(data.get("active_profile"))
+        profile = (data.get("profiles") or {}).get(name) or {}
+        try:
+            key = dest_key(target)
+            rows = core.destination_remote_rows(key)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        report = core.build_destination_report(name, key, profile, rows)
+        extra = report.get("lists", {}).get("extra", [])
+        if not apply_now:
+            return ok(preview=True, candidates=extra, count=len(extra),
+                      message=f"{len(extra)} محصول در مقصد هست که در منبع نیست. "
+                              "برای اجرا confirm=APPLY بفرستید.")
+        return jsonify(ok=False,
+                       error="اجرای حذف گروهی در این نسخه غیرفعال است؛ "
+                             "از فهرست پیش‌نمایش استفاده کنید."), 501
+
+    @app.post("/api/maintenance/photo-fix")
+    def node_photo_fix():
+        data = load()
+        name = _s(_body().get("profileId")) or _s(data.get("active_profile"))
+        rows = profile_products(name)
+        missing = [product_to_node(r, i) for i, r in enumerate(rows)
+                   if not _s(r.get("image"))]
+        return ok(items=missing, count=len(missing), profile=name,
+                  message=f"{len(missing)} محصول بدون تصویر پیدا شد.")
+
+    @app.post("/api/maintenance/<kind>/<target>")
+    def node_maintenance_generic(kind: str, target: str):
+        return ok(kind=kind, target=target, items=[],
+                  message="این عملیات نگهداری در نسخهٔ پایتون پیاده‌سازی نشده است.")
+
+    # ── AI panels ────────────────────────────────────────────────────────
+    @app.post("/api/ai/chat")
+    def node_ai_chat():
+        body = _body()
+        messages = body.get("messages")
+        if isinstance(messages, list) and messages:
+            prompt = "\n".join(
+                _s(m.get("content")) for m in messages if isinstance(m, dict)
+            )
+        else:
+            prompt = _s(body.get("prompt") or body.get("message"))
+        if not prompt.strip():
+            return jsonify(ok=False, error="متن پیام خالی است."), 400
+        model_key = _s(body.get("modelKey") or body.get("model"))
+        provider, _, model = model_key.partition("::")
+        try:
+            answer = core.ai_chat(prompt, provider, model)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(reply=answer, content=answer,
+                  message={"role": "assistant", "content": answer})
+
+    @app.post("/api/ai/diagnose")
+    def node_ai_diagnose():
+        data = load()
+        ai = data.get("ai") or {}
+        providers = data.get("ai_providers") or {}
+        checks = [
+            {"name": "کلید API", "ok": bool(ai.get("api_key")) or bool(providers),
+             "detail": "کلید ثبت شده است" if ai.get("api_key") or providers
+                       else "هیچ کلیدی ثبت نشده است"},
+            {"name": "مدل", "ok": bool(ai.get("model")),
+             "detail": _s(ai.get("model")) or "مدلی انتخاب نشده"},
+            {"name": "آدرس سرویس", "ok": bool(ai.get("endpoint")),
+             "detail": _s(ai.get("endpoint")) or "—"},
+        ]
+        if all(c["ok"] for c in checks):
+            try:
+                reply = core.ai_chat("سلام. فقط بنویس: OK")
+                checks.append({"name": "تماس آزمایشی", "ok": True,
+                               "detail": _s(reply)[:120]})
+            except Exception as exc:  # noqa: BLE001
+                checks.append({"name": "تماس آزمایشی", "ok": False,
+                               "detail": str(exc)[:200]})
+        return ok(checks=checks, healthy=all(c["ok"] for c in checks))
+
+    @app.post("/api/ai/vote")
+    def node_ai_vote():
+        body = _body()
+        data = load()
+        votes = data.setdefault("ai_votes", {})
+        key = _s(body.get("modelKey") or body.get("model"))
+        if not key:
+            return jsonify(ok=False, error="مدل مشخص نشده است."), 400
+        row = votes.setdefault(key, {"up": 0, "down": 0})
+        if _s(body.get("vote")) == "down":
+            row["down"] = _int(row.get("down")) + 1
+        else:
+            row["up"] = _int(row.get("up")) + 1
+        save(data)
+        return ok(votes=votes, model=key)
+
+    @app.get("/api/ai/leaderboard")
+    def node_ai_leaderboard():
+        votes = load().get("ai_votes") or {}
+        items = [{"model": k, "up": _int(v.get("up")), "down": _int(v.get("down")),
+                  "score": _int(v.get("up")) - _int(v.get("down"))}
+                 for k, v in votes.items() if isinstance(v, dict)]
+        items.sort(key=lambda x: -x["score"])
+        return ok(items=items)
+
+    @app.get("/api/ai/chat-models")
+    @app.get("/api/agent/models")
+    def node_ai_models():
+        data = load()
+        models = []
+        providers = data.get("ai_providers") or {}
+        if hasattr(core, "normalize_ai_providers"):
+            try:
+                providers = core.normalize_ai_providers(providers)
+            except Exception:  # noqa: BLE001
+                providers = data.get("ai_providers") or {}
+        for pid, provider in (providers or {}).items():
+            if not isinstance(provider, dict):
+                continue
+            for model in provider.get("models") or []:
+                mid = _s(model.get("id") if isinstance(model, dict) else model)
+                if mid:
+                    models.append({"key": f"{pid}::{mid}", "provider": pid,
+                                   "id": mid, "label": f"{pid} · {mid}"})
+        ai = data.get("ai") or {}
+        if not models and ai.get("model"):
+            pid = _s(ai.get("provider")) or "default"
+            models.append({"key": f"{pid}::{ai['model']}", "provider": pid,
+                           "id": _s(ai["model"]),
+                           "label": f"{pid} · {ai['model']}"})
+        return ok(models=models, items=models)
+
+    # AI batch test runs — kept in memory, driven by the real ai_chat().
+    AI_RUN: dict[str, Any] = {}
+
+    @app.post("/api/ai/test-runs")
+    def node_ai_test_start():
+        body = _body()
+        prompt = _s(body.get("prompt")).strip()
+        title = _s(body.get("categoryTitle")).strip()
+        if not prompt and not title:
+            return jsonify(ok=False, error="متن آزمایش را بنویسید."), 400
+        text = prompt or ("دستهٔ مناسب برای این محصول: " + title)
+        model_key = _s(body.get("modelKey"))
+        provider, _, model = model_key.partition("::")
+        started = time.time()
+        try:
+            answer = core.ai_chat(text, provider, model)
+            AI_RUN.update({"id": "ai-" + _s(int(started)), "status": "done",
+                           "prompt": text, "result": _s(answer),
+                           "ms": int((time.time() - started) * 1000),
+                           "error": ""})
+        except Exception as exc:  # noqa: BLE001
+            AI_RUN.update({"id": "ai-" + _s(int(started)), "status": "failed",
+                           "prompt": text, "result": "", "error": str(exc)[:300]})
+        return ok(run=dict(AI_RUN))
+
+    @app.get("/api/ai/test-runs/current")
+    def node_ai_test_current():
+        return ok(run=dict(AI_RUN) if AI_RUN else None)
+
+    @app.post("/api/ai/test-runs/control")
+    @app.post("/api/ai/test-runs/reset")
+    @app.post("/api/ai/test-runs/retry")
+    def node_ai_test_control():
+        if request.path.endswith("/reset"):
+            AI_RUN.clear()
+            return ok(run=None)
+        return ok(run=dict(AI_RUN) if AI_RUN else None)
+
+    @app.get("/api/ai/test-results")
+    def node_ai_test_results():
+        return ok(items=[dict(AI_RUN)] if AI_RUN else [])
+
+    # ── agent runs (not implemented in the Python backend) ───────────────
+    @app.post("/api/agent/runs/control")
+    @app.post("/api/agent/runs/reset")
+    def node_agent_control():
+        return ok(run=None)
+
+    @app.get("/api/agent/runs/<path:run_id>")
+    def node_agent_run(run_id: str):
+        return ok(run=None, id=run_id)
+
+    @app.get("/api/agent/prompts/<path:prompt_id>")
+    def node_agent_prompt(prompt_id: str):
+        return ok(prompt=None, id=prompt_id)
+
+    # ── Basalam chat panel ───────────────────────────────────────────────
+    @app.get("/api/basalam/chats")
+    def node_basalam_chats():
+        limit = min(100, _int(request.args.get("limit"), 50) or 50)
+        try:
+            payload = core.basalam_api_request(
+                "GET", "/v1/chats", params={"per_page": limit})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        rows = payload if isinstance(payload, list) else (
+            payload.get("data") or payload.get("items") or []
+            if isinstance(payload, dict) else [])
+        return ok(items=rows)
+
+    @app.get("/api/basalam/chats/<path:chat_id>/messages")
+    def node_basalam_chat_messages(chat_id: str):
+        limit = min(100, _int(request.args.get("limit"), 50) or 50)
+        try:
+            payload = core.basalam_api_request(
+                "GET", f"/v1/chats/{chat_id}/messages", params={"per_page": limit})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        rows = payload if isinstance(payload, list) else (
+            payload.get("data") or payload.get("items") or []
+            if isinstance(payload, dict) else [])
+        return ok(items=rows, chatId=chat_id)
+
+    # ── auto-reply ───────────────────────────────────────────────────────
+    @app.post("/api/autoreply/test")
+    @app.post("/api/autoreply/run")
+    def node_autoreply():
+        body = _body()
+        text = _s(body.get("text") or body.get("message")).strip()
+        if not text:
+            return jsonify(ok=False, error="متن پیام را بنویسید."), 400
+        rules = load().get("autoreply_rules") or []
+        for rule in rules if isinstance(rules, list) else []:
+            if not isinstance(rule, dict):
+                continue
+            triggers = [t.strip().lower() for t in
+                        _s(rule.get("triggers")).split(",") if t.strip()]
+            if any(t in text.lower() for t in triggers):
+                return ok(matched=True, reply=_s(rule.get("reply")),
+                          rule=rule.get("name") or rule.get("id"))
+        return ok(matched=False, reply="",
+                  message="هیچ قاعده‌ای با این متن مطابقت نداشت.")
+
+    # ── category learning ────────────────────────────────────────────────
+    @app.get("/api/category-learning")
+    def node_cat_learning_list():
+        return ok(items=load().get("category_learning") or [])
+
+    @app.post("/api/category-learning/record")
+    def node_cat_learning_record():
+        body = _body()
+        title = _s(body.get("title")).strip()
+        if not title:
+            return jsonify(ok=False, error="عنوان لازم است."), 400
+        data = load()
+        rows = data.setdefault("category_learning", [])
+        if not isinstance(rows, list):
+            rows = data["category_learning"] = []
+        rows.append({"title": title, "categoryId": _int(body.get("categoryId")),
+                     "words": _s(body.get("words")), "at": int(time.time())})
+        data["category_learning"] = rows[-500:]
+        save(data)
+        return ok(items=data["category_learning"], saved=True)
+
+    @app.post("/api/category-learning/test")
+    def node_cat_learning_test():
+        title = _s(_body().get("title")).strip().lower()
+        if not title:
+            return jsonify(ok=False, error="عنوان لازم است."), 400
+        best, score = None, 0
+        for row in load().get("category_learning") or []:
+            if not isinstance(row, dict):
+                continue
+            words = [w for w in re.split(r"[\s,،]+",
+                     _s(row.get("words")) or _s(row.get("title")).lower()) if w]
+            hits = sum(1 for w in words if w and w in title)
+            if hits > score:
+                best, score = row, hits
+        return ok(match=best, score=score,
+                  categoryId=_int((best or {}).get("categoryId")))
+
+    @app.post("/api/category-learning/import")
+    def node_cat_learning_import():
+        body = _body()
+        rows = body if isinstance(body, list) else body.get("items")
+        if not isinstance(rows, list):
+            return jsonify(ok=False, error="ساختار ورودی نامعتبر است."), 400
+        data = load()
+        current = data.get("category_learning")
+        if not isinstance(current, list):
+            current = []
+        current.extend(r for r in rows if isinstance(r, dict))
+        data["category_learning"] = current[-500:]
+        save(data)
+        return ok(imported=len(rows), items=data["category_learning"])
+
+    # ── GitHub branch browser / deployer ─────────────────────────────────
+    def _deploy_token() -> str:
+        cfg = core.deploy_config() if hasattr(core, "deploy_config") else {}
+        return _s(cfg.get("github_token")) or _s(os.environ.get("GITHUB_TOKEN"))
+
+    @app.get("/api/deployer/branches")
+    def node_deployer_branches():
+        repo = _s(request.args.get("repo"))
+        if not repo:
+            cfg = core.deploy_config() if hasattr(core, "deploy_config") else {}
+            repo = _s(cfg.get("repo"))
+        try:
+            branches = core.github_branch_list(repo, _deploy_token())
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(repo=repo, branches=branches,
+                  items=[_s(b.get("name")) for b in branches])
+
+    @app.get("/api/branch-files")
+    def node_branch_files():
+        repo = _s(request.args.get("repo"))
+        branch = _s(request.args.get("branch"))
+        if not repo or not branch:
+            return jsonify(ok=False, error="repo و branch لازم است."), 400
+        try:
+            files = core.github_python_files(repo, branch, _deploy_token())
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(repo=repo, branch=branch, files=files, items=files)
+
+    @app.get("/api/branch-file")
+    def node_branch_file():
+        repo = _s(request.args.get("repo"))
+        branch = _s(request.args.get("branch"))
+        path = _s(request.args.get("path"))
+        if not (repo and branch and path):
+            return jsonify(ok=False, error="repo، branch و path لازم است."), 400
+        try:
+            info = core.github_file_for(repo, branch, path, _deploy_token(), True)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        content = info.get("content")
+        if isinstance(content, bytes):
+            content = content.decode("utf-8", errors="replace")
+        return ok(repo=repo, branch=branch, path=path,
+                  sha=_s(info.get("sha")), content=content or "")
+
+    @app.get("/api/deployer/local/status")
+    @app.route("/api/deployer/local/<path:action>", methods=["GET", "POST"])
+    def node_deployer_local(action: str = "status"):
+        """Report the local deployer4 service state.
+
+        deployer4 runs as its own service on :8001. The dashboard's local
+        deployer panel polls this; answer with the facts we can see from here
+        rather than 404-ing the whole panel.
+        """
+        target = os.path.abspath(getattr(core, "__file__", "scraper4.py"))
+        backup = target + ".bak"
+        auto = os.environ.get("SCRAPER_AUTO_UPDATE", "1").lower() not in {
+            "0", "false", "off", "no"}
+        return ok(
+            action=action,
+            status={
+                "target": target,
+                "version": core.APP_VERSION,
+                "autoUpdate": auto,
+                "hasBackup": os.path.isfile(backup),
+                "uiBridge": globals().get("_BRIDGE_OK", True),
+                "note": "به‌روزرسانی خودکار عمداً خاموش است تا داشبورد پاک نشود؛ "
+                        "نصب نسخهٔ جدید با git روی سرور انجام می‌شود.",
+            },
+        )
+
+    @app.post("/api/deployer/install-branch")
+    def node_deployer_install():
+        return jsonify(
+            ok=False,
+            error="نصب از داشبورد غیرفعال است؛ به‌روزرسانی با git روی سرور انجام "
+                  "می‌شود تا داشبورد پاک نشود.",
+        ), 501
+
+    # ── misc small endpoints the UI polls ────────────────────────────────
+    @app.post("/api/queue-watchdog")
+    def node_queue_watchdog_post():
+        running = [t for t in live_tasks() if _s(t.get("status")) in ("waiting", "running")]
+        return ok(watchdog={"running": len(running), "stalled": 0})
+
+    @app.delete("/api/jobs")
+    def node_jobs_clear():
+        removed = 0
+        for task in live_tasks():
+            if _s(task.get("status")) in ("completed", "failed", "cancelled", "interrupted"):
+                path = os.path.join(core.LIVE_TASK_DIR, _s(task.get("id")) + ".json")
+                try:
+                    os.unlink(path)
+                    removed += 1
+                except OSError:
+                    pass
+                with core.LIVE_TASK_LOCK:
+                    core.LIVE_TASKS.pop(_s(task.get("id")), None)
+        return ok(deleted=removed)
+
+    @app.delete("/api/jobs/<job_id>")
+    def node_job_delete(job_id: str):
+        path = os.path.join(core.LIVE_TASK_DIR, job_id + ".json")
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        with core.LIVE_TASK_LOCK:
+            core.LIVE_TASKS.pop(job_id, None)
+        return ok(deleted=job_id)
+
+    @app.post("/api/jobs/<job_id>/<action>")
+    def node_job_action(job_id: str, action: str):
+        if action in ("stop", "cancel"):
+            return node_job_stop(job_id)
+        if action == "retry" and hasattr(core, "live_task_read"):
+            task = core.live_task_read(job_id)
+            if not task:
+                return jsonify(ok=False, error="Job not found"), 404
+            profile = _s(task.get("profile"))
+            if profile:
+                return _start_scrape(profile)
+        return ok(job=None, action=action)
+
+    @app.post("/api/import/analyze")
+    def node_import_analyze():
+        """Analyse an uploaded CSV/JSON before import."""
+        raw = request.get_data() or b""
+        name = _s(request.args.get("name"))
+        fmt = _s(request.args.get("format")) or ("json" if name.endswith(".json") else "csv")
+        text = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
+        if not text.strip():
+            return jsonify(ok=False, error="فایل خالی است."), 400
+        headers: list[str] = []
+        samples: list[dict[str, Any]] = []
+        if fmt == "json" or text.lstrip()[:1] in "[{":
+            try:
+                parsed = json.loads(text)
+            except ValueError as exc:
+                return jsonify(ok=False, error=f"JSON نامعتبر: {exc}"), 400
+            rows = parsed if isinstance(parsed, list) else [parsed]
+            samples = [r for r in rows[:100] if isinstance(r, dict)]
+            for row in samples:
+                for key in row:
+                    if key not in headers:
+                        headers.append(key)
+            total = len(rows)
+        else:
+            import csv as _csv
+            reader = list(_csv.reader(io.StringIO(text)))
+            if not reader:
+                return jsonify(ok=False, error="CSV خالی است."), 400
+            headers = [h.strip() for h in reader[0]]
+            body_rows = reader[1:]
+            total = len(body_rows)
+            samples = [dict(zip(headers, r)) for r in body_rows[:100]]
+        # Guess which column maps to which product field.
+        guesses = {
+            "title": ("title", "name", "عنوان", "نام"),
+            "price": ("price", "قیمت", "amount"),
+            "url": ("url", "link", "آدرس", "لینک"),
+            "image": ("image", "img", "photo", "تصویر", "عکس"),
+            "sku": ("sku", "code", "کد"),
+            "stock": ("stock", "qty", "quantity", "موجودی"),
+        }
+        mapping = []
+        for column in headers:
+            low = column.strip().lower()
+            field = next((f for f, keys in guesses.items()
+                          if any(k == low or k in low for k in keys)), "")
+            mapping.append({"column": column, "field": field})
+        missing_title = sum(
+            1 for r in samples
+            if not _s(r.get(next((m["column"] for m in mapping
+                                  if m["field"] == "title"), ""))).strip())
+        return ok(format=fmt, total=total, headers=headers, mapping=mapping,
+                  samples=samples,
+                  issues={"missingTitle": missing_title, "checked": len(samples)})
+
     # ── graceful stubs so optional panels stay quiet ─────────────────────
     def _empty(payload: dict[str, Any]) -> Callable[..., Any]:
         def view(*_args: Any, **_kwargs: Any):
@@ -804,34 +1522,24 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     stubs: dict[str, dict[str, Any]] = {
         "/api/ai/providers": {"providers": []},
-        "/api/ai/chat-models": {"models": []},
-        "/api/ai/leaderboard": {"items": []},
-        "/api/ai/test-results": {"items": []},
-        "/api/ai/test-runs/current": {"run": None},
         "/api/ai/description-settings": {"settings": {}},
         "/api/ai/workers-catalog": {"items": []},
-        "/api/agent/models": {"models": []},
         "/api/agent/prompts": {"prompts": []},
         "/api/agent/tasks": {"tasks": []},
         "/api/agent/templates": {"templates": []},
         "/api/agent/runs": {"runs": []},
-        "/api/agent/runs/current": {"run": None},
         "/api/autoreply/log": {"items": []},
         "/api/basalam/orders": {"items": []},
         "/api/bootstrap/status": {"status": "ready"},
         "/api/category-fix-status": {"status": {}},
-        "/api/category-learning": {"items": []},
         "/api/destination/basalam/category-runs/current": {"run": None},
         "/api/destination/basalam/category-tried": {"items": []},
         "/api/digest": {"digest": {}},
         "/api/github/token-status": {"hasToken": bool(os.environ.get("GITHUB_TOKEN"))},
-        "/api/libraries": {"items": []},
-        "/api/runtime/libraries": {"items": []},
         "/api/maintenance/duplicates": {"items": []},
         "/api/maintenance/ledger": {"items": []},
         "/api/maintenance/ledger/missing": {"items": []},
         "/api/maintenance/ledger/products": {"items": []},
-        "/api/maintenance/recon-unified": {"items": []},
         "/api/notifications/test": {"sent": False},
         "/api/selftest": {"checks": []},
         "/api/web-push/config": {"enabled": False, "publicKey": ""},
