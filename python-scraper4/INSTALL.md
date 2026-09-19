@@ -171,6 +171,16 @@ curl -s http://127.0.0.1:8000/health | tr ',' '\n' | grep ui_bridge
 - اگر اصلاً فیلد `ui_bridge` در خروجی نبود → یعنی **فایل `scraper4.py`
   روی سرور اصلاً نسخهٔ این پروژه نیست** (بخش بعدی).
 
+## نصب از صفر روی سرور تازه (یک دستور)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/01a0b7db-new/python-scraper4/tools/vps-live/bootstrap_vps.sh | bash
+```
+
+این اسکریپت مخزن را در `/opt/new` کلون می‌کند و بعد نصب‌کنندهٔ اصلی را اجرا
+می‌کند. کلون **کامل** است (نه `--depth 1`) تا به‌روزرسانی خودکار بتواند
+fast-forward کند.
+
 ## اگر وسط نصب، SSH قطع می‌شود
 
 **علت اصلی:** بستهٔ `needrestart`. اسکریپت قبلاً با `NEEDRESTART_MODE=a` اجرا

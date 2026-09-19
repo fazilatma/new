@@ -129,6 +129,20 @@ if ! grep -q '^Environment=SCRAPER_AUTO_UPDATE=0' /etc/systemd/system/scraper4.s
   sed -i '/^Environment=PORT=8000/a Environment=SCRAPER_AUTO_UPDATE=0' \
     /etc/systemd/system/scraper4.service
 fi
+# The app runs from $APP_DIR, which is a plain copy — not a git repo. Record
+# where the checkout actually is so the minute-by-minute git updater can find
+# it instead of guessing. GIT_REPO_DIR is the checkout root (one level above
+# python-scraper4/).
+GIT_REPO_DIR="$(cd "${REPO_DIR}/.." && pwd)"
+if [[ -d "${GIT_REPO_DIR}/.git" ]]; then
+  sed -i '/^Environment=SCRAPER_REPO_DIR=/d' /etc/systemd/system/scraper4.service
+  sed -i "/^Environment=SCRAPER_AUTO_UPDATE=0/a Environment=SCRAPER_REPO_DIR=${GIT_REPO_DIR}" \
+    /etc/systemd/system/scraper4.service
+  echo "Git auto-update will track: ${GIT_REPO_DIR}"
+else
+  echo "NOTE: ${GIT_REPO_DIR} is not a git checkout; minute-by-minute" \
+       "auto-update will be inactive. Clone the repo with git to enable it."
+fi
 if [[ -f "${REPO_DIR}/deploy/deployer4.service" ]]; then
   install -m 644 "${REPO_DIR}/deploy/deployer4.service" /etc/systemd/system/deployer4.service
   # Same hazard as scraper4's own updater: older deployer4 units shipped
