@@ -304,6 +304,16 @@ def default_data() -> dict[str, Any]:
         "bsl_jobs": {},
         "ai_test_jobs": {},
         "dispatch_jobs": {},
+        # Keys owned by the Node-parity dashboard (ui_bridge.py). load_data()
+        # drops any key that is not declared here, so anything the dashboard
+        # persists must be listed or it silently vanishes on the next read.
+        "agent_prompts": [],
+        "agent_runs": [],
+        "category_learning": [],
+        "ai_votes": {},
+        "autoreply_rules": [],
+        "import_history": [],
+        "ui_settings": {},
     }
 
 

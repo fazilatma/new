@@ -34,8 +34,10 @@ import io
 import json
 import os
 import re
+import subprocess
+import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from flask import (
     Response, jsonify, redirect, request, send_from_directory, url_for,
@@ -988,9 +990,117 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             return ok(run=None)
         return ok(run=DEDUP_RUNS.get(key))
 
-    @app.post("/api/destination/basalam/bulk")
-    def node_basalam_bulk():
-        return jsonify(ok=False, error="عملیات گروهی باسلام در این نسخه پیاده‌سازی نشده است."), 501
+    @app.post("/api/destination/<target>/bulk")
+    def node_dest_bulk(target: str):
+        """Bulk edit / delete on the destination.
+
+        Always dry-run unless confirm=APPLY, and capped at 20 items per call
+        to match the dashboard's own guard — these are real, irreversible
+        writes against a live shop.
+        """
+        body = _body()
+        try:
+            key = dest_key(target)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        ids = [_s(i) for i in (body.get("ids") or []) if _s(i)]
+        ops = body.get("ops") if isinstance(body.get("ops"), dict) else {}
+        if not ids:
+            return jsonify(ok=False, error="هیچ محصولی انتخاب نشده است."), 400
+        if len(ids) > 20:
+            return jsonify(ok=False, error="حداکثر ۲۰ محصول در هر نوبت."), 400
+        dry = _s(body.get("confirm")) != "APPLY"
+        remove = bool(ops.get("delete"))
+
+        def new_price(current: Any) -> Optional[int]:
+            spec = ops.get("price")
+            if not isinstance(spec, dict):
+                return None
+            try:
+                val = float(_s(spec.get("val")).replace(",", "") or 0)
+            except ValueError:
+                return None
+            base = float(_int(core.woo_price(current) or 0))
+            op = _s(spec.get("op"))
+            if op in ("inc_pct", "percent_up"):
+                out = base * (1 + val / 100)
+            elif op in ("dec_pct", "percent_down"):
+                out = base * (1 - val / 100)
+            elif op in ("inc", "plus"):
+                out = base + val
+            elif op in ("dec", "minus"):
+                out = base - val
+            elif op in ("set", "fixed"):
+                out = val
+            else:
+                return None
+            return max(0, int(round(out)))
+
+        items, errors = [], []
+        for item_id in ids:
+            entry: dict[str, Any] = {"id": item_id}
+            try:
+                if key == "woocommerce":
+                    current = core.woo_request("GET", f"products/{item_id}").json()
+                else:
+                    current = core.basalam_api_request(
+                        "GET", f"/v1/products/{item_id}") or {}
+                view = core.remote_product_view(
+                    current if isinstance(current, dict) else {}, key)
+                entry["title"] = view.get("title")
+                if remove:
+                    entry["action"] = ("بایگانی" if key == "basalam" else "حذف")
+                    if not dry:
+                        if key == "woocommerce":
+                            core.woo_request("DELETE", f"products/{item_id}?force=true")
+                        else:
+                            core.basalam_api_request(
+                                "PATCH", f"/v1/products/{item_id}",
+                                json_data={"status": 3400})
+                        entry["done"] = True
+                else:
+                    payload: dict[str, Any] = {}
+                    price = new_price(view.get("price"))
+                    if price is not None:
+                        entry["oldPrice"], entry["newPrice"] = view.get("price"), price
+                        payload["regular_price" if key == "woocommerce"
+                                else "price"] = (str(price) if key == "woocommerce"
+                                                 else price)
+                    if ops.get("stock") not in (None, ""):
+                        payload["stock_quantity" if key == "woocommerce"
+                                else "inventory"] = _int(ops.get("stock"))
+                    if _s(ops.get("status")):
+                        payload["status"] = _s(ops.get("status"))
+                    title = _s(view.get("title"))
+                    if _s(ops.get("titlePrefix")) or _s(ops.get("titleSuffix")):
+                        title = (_s(ops.get("titlePrefix")) + title
+                                 + _s(ops.get("titleSuffix")))
+                        payload["name" if key == "woocommerce" else "title"] = title
+                        entry["newTitle"] = title
+                    if _s(ops.get("shortDescription")):
+                        payload["short_description"] = _s(ops.get("shortDescription"))
+                    if _s(ops.get("description")):
+                        payload["description"] = _s(ops.get("description"))
+                    if not payload:
+                        entry["skipped"] = "تغییری مشخص نشده است"
+                    else:
+                        entry["changes"] = payload
+                        if not dry:
+                            if key == "woocommerce":
+                                core.woo_request("PUT", f"products/{item_id}", payload)
+                            else:
+                                core.basalam_api_request(
+                                    "PATCH", f"/v1/products/{item_id}",
+                                    json_data=payload)
+                            entry["done"] = True
+            except Exception as exc:  # noqa: BLE001 - reported per item
+                entry["error"] = str(exc)[:200]
+                errors.append(entry["error"])
+            items.append(entry)
+        return ok(items=items, dryRun=dry, target=key, count=len(items),
+                  errors=errors,
+                  message=("پیش‌نمایش؛ هیچ تغییری اعمال نشد."
+                           if dry else f"{len(items)} محصول پردازش شد."))
 
     @app.post("/api/destination/basalam/category/suggest")
     def node_basalam_cat_suggest():
@@ -1063,6 +1173,48 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         return jsonify(ok=False,
                        error="اجرای حذف گروهی در این نسخه غیرفعال است؛ "
                              "از فهرست پیش‌نمایش استفاده کنید."), 501
+
+    @app.post("/api/maintenance/recon-unified")
+    @app.post("/api/maintenance/recon-unified/apply")
+    def node_recon_unified():
+        """Reconcile the active (or all) profiles against every destination."""
+        body = _body()
+        apply_now = request.path.endswith("/apply")
+        data = load()
+        wanted = _s(body.get("profileId"))
+        names = [wanted] if wanted else list((data.get("profiles") or {}).keys())
+        reports, planned, errors = [], 0, []
+        for name in names:
+            profile = (data.get("profiles") or {}).get(name) or {}
+            for key in ("woocommerce", "basalam"):
+                try:
+                    rows = core.destination_remote_rows(key)
+                except Exception as exc:  # noqa: BLE001 - destination may be off
+                    errors.append(f"{key}: {exc}")
+                    continue
+                report = core.build_destination_report(name, key, profile, rows)
+                counts = report.get("counts", {})
+                planned += _int(counts.get("mismatch")) + _int(counts.get("missing"))
+                reports.append({"profile": name, "destination": key,
+                                "counts": counts,
+                                "lists": report.get("lists", {})})
+                # Persist the learned source→remote id map so later runs match
+                # by id instead of guessing from the title.
+                learned = report.get("learned") or {}
+                if learned and isinstance(profile, dict):
+                    remote_map = profile.setdefault("remote_map", {})
+                    if isinstance(remote_map, dict):
+                        remote_map.setdefault(key, {}).update(learned)
+        if not reports and errors:
+            return jsonify(ok=False, error="؛ ".join(errors[:3])), 400
+        save(data)
+        return ok(items=reports, reports=reports, planned=planned,
+                  applied=0 if not apply_now else 0, errors=errors,
+                  dryRun=not apply_now,
+                  message=("پیش‌نمایش مغایرت‌ها آماده شد."
+                           if not apply_now else
+                           "نگاشت شناسه‌ها ذخیره شد؛ برای ارسال تغییرات از "
+                           "«ارسال به مقصد» استفاده کنید."))
 
     @app.post("/api/maintenance/photo-fix")
     def node_photo_fix():
@@ -1219,19 +1371,281 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     def node_ai_test_results():
         return ok(items=[dict(AI_RUN)] if AI_RUN else [])
 
-    # ── agent runs (not implemented in the Python backend) ───────────────
+    # ── agent: multi-step AI flows with real tools ───────────────────────
+    # A run is a loop: ask the model what to do next, execute one tool, feed
+    # the result back, repeat until it answers FINAL or maxSteps is reached.
+    # State lives in memory (one run at a time) and is checkpointed so the
+    # stop/resume buttons in the drawer actually work.
+    AGENT: dict[str, Any] = {}
+    AGENT_LOCK = threading.Lock()
+
+    def agent_tools() -> dict[str, Any]:
+        """Tools the agent may call. Each takes a string arg, returns text."""
+
+        def t_profiles(_arg: str) -> str:
+            rows = [f"{p.get('id')}: {p.get('name')} ({p.get('url')})"
+                    for p in node_profiles_list()]
+            return "\n".join(rows) or "هیچ پروفایلی ثبت نشده است."
+
+        def t_products(arg: str) -> str:
+            name = _s(arg).strip() or _s(load().get("active_profile"))
+            rows = profile_products(name)[:40]
+            return "\n".join(
+                f"- {_s(r.get('title'))} | {_s(r.get('price'))}" for r in rows
+            ) or "محصولی ذخیره نشده است."
+
+        def t_jobs(_arg: str) -> str:
+            rows = live_tasks()[:20]
+            return "\n".join(
+                f"{_s(t.get('id'))}: {_s(t.get('status'))} {_int(t.get('percent'))}%"
+                for t in rows) or "هیچ کاری در جریان نیست."
+
+        def t_scrape(arg: str) -> str:
+            pid = _s(arg).strip() or _s(load().get("active_profile"))
+            if not pid:
+                return "پروفایل مشخص نشده است."
+            _start_scrape(pid)
+            return f"استخراج پروفایل {pid} شروع شد."
+
+        def t_fetch(arg: str) -> str:
+            url = _s(arg).strip()
+            if not url.startswith("http"):
+                return "آدرس معتبر نیست."
+            try:
+                fetcher = core.Fetcher(load().get("network") or {})
+                res = fetcher.get(url)
+                text = core.clean_text(
+                    core.BeautifulSoup(res.text[:200000], "html.parser")
+                    .get_text(" ", strip=True))
+                return text[:3000]
+            except Exception as exc:  # noqa: BLE001
+                return f"خطا در دریافت صفحه: {exc}"
+
+        def t_stats(_arg: str) -> str:
+            data = load()
+            profiles = data.get("profiles") or {}
+            total = sum(len(p.get("saved_products") or [])
+                        for p in profiles.values() if isinstance(p, dict))
+            return (f"پروفایل‌ها: {len(profiles)} · مجموع محصولات ذخیره‌شده: {total} "
+                    f"· نسخه: {core.APP_VERSION}")
+
+        return {
+            "list_profiles": t_profiles, "list_products": t_products,
+            "list_jobs": t_jobs, "start_scrape": t_scrape,
+            "fetch_page": t_fetch, "stats": t_stats,
+        }
+
+    AGENT_TOOL_HELP = {
+        "list_profiles": "فهرست پروفایل‌ها",
+        "list_products": "محصولات ذخیره‌شدهٔ یک پروفایل (ورودی: نام پروفایل)",
+        "list_jobs": "وضعیت کارهای در جریان",
+        "start_scrape": "شروع استخراج یک پروفایل (ورودی: شناسهٔ پروفایل)",
+        "fetch_page": "خواندن متن یک صفحهٔ وب (ورودی: آدرس)",
+        "stats": "آمار کلی سامانه",
+    }
+
+    def agent_worker(run: dict[str, Any]) -> None:
+        tools = agent_tools()
+        allowed = [t for t in (run.get("tools") or list(tools)) if t in tools]
+        if not allowed:
+            allowed = list(tools)
+        catalogue = "\n".join(f"- {t}: {AGENT_TOOL_HELP.get(t, '')}" for t in allowed)
+        transcript: list[str] = []
+        provider, _, model = _s(run.get("modelKey")).partition("::")
+        provider = provider or _s(run.get("providerId"))
+        model = model or _s(run.get("model"))
+        try:
+            for step in range(1, max(1, _int(run.get("maxSteps"), 6)) + 1):
+                if run.get("stop"):
+                    run["status"] = "paused"
+                    run["log"].append("⏸ در checkpoint متوقف شد.")
+                    return
+                run["step"] = step
+                prompt = (
+                    "تو یک دستیار عملیاتی برای یک سامانهٔ استخراج محصول هستی.\n"
+                    "ابزارهای موجود:\n" + catalogue + "\n\n"
+                    "برای استفاده از ابزار دقیقاً یک خط بنویس:\n"
+                    "TOOL: <نام ابزار> | <ورودی>\n"
+                    "وقتی به پاسخ نهایی رسیدی بنویس:\n"
+                    "FINAL: <پاسخ نهایی به فارسی>\n\n"
+                    "خواستهٔ کاربر: " + _s(run.get("prompt")) + "\n\n"
+                    + ("آنچه تا حالا انجام شده:\n" + "\n".join(transcript)
+                       if transcript else "")
+                )
+                reply = _s(core.ai_chat(prompt, provider, model)).strip()
+                run["log"].append(f"🤖 گام {step}: {reply[:400]}")
+                final = re.search(r"FINAL:\s*(.+)", reply, re.S)
+                if final:
+                    run["result"] = final.group(1).strip()
+                    run["status"] = "done"
+                    return
+                call = re.search(r"TOOL:\s*([a-z_]+)\s*(?:\|\s*(.*))?", reply)
+                if not call:
+                    run["result"] = reply
+                    run["status"] = "done"
+                    return
+                name, arg = call.group(1), _s(call.group(2)).strip()
+                if name not in tools:
+                    observation = f"ابزار «{name}» وجود ندارد."
+                else:
+                    try:
+                        observation = _s(tools[name](arg))[:3000]
+                    except Exception as exc:  # noqa: BLE001
+                        observation = f"خطای ابزار: {exc}"
+                run["log"].append(f"🔧 {name}({arg}) → {observation[:300]}")
+                transcript.append(f"گام {step}: {name}({arg}) نتیجه: {observation}")
+            run["status"] = "done"
+            run["result"] = run.get("result") or "به سقف گام‌ها رسید."
+        except Exception as exc:  # noqa: BLE001
+            run["status"] = "failed"
+            run["error"] = str(exc)[:400]
+        finally:
+            run["finished_at"] = int(time.time())
+            if run.get("status") not in ("paused",):
+                history = load()
+                rows = history.setdefault("agent_runs", [])
+                if isinstance(rows, list):
+                    rows.append({k: run.get(k) for k in
+                                 ("id", "name", "prompt", "status", "result",
+                                  "error", "started_at", "finished_at", "promptId")})
+                    history["agent_runs"] = rows[-50:]
+                    save(history)
+
+    @app.get("/api/agent/tools")
+    def node_agent_tools():
+        return ok(tools=[{"id": k, "label": v} for k, v in AGENT_TOOL_HELP.items()],
+                  items=[{"id": k, "label": v} for k, v in AGENT_TOOL_HELP.items()])
+
+    @app.get("/api/agent/runs")
+    def node_agent_runs():
+        rows = load().get("agent_runs") or []
+        return ok(items=list(reversed(rows)), runs=list(reversed(rows)))
+
+    @app.post("/api/agent/runs")
+    def node_agent_run_start():
+        body = _body()
+        prompt = _s(body.get("prompt")).strip()
+        if not prompt:
+            return jsonify(ok=False, error="متن درخواست خالی است."), 400
+        with AGENT_LOCK:
+            if AGENT.get("status") in ("running", "queued"):
+                return ok(run=dict(AGENT), existing=True)
+            AGENT.clear()
+            AGENT.update({
+                "id": "agent-" + _s(int(time.time())),
+                "name": _s(body.get("name")) or "اجرای دستی",
+                "prompt": prompt, "promptId": _s(body.get("promptId")),
+                "tools": body.get("tools") or [],
+                "maxSteps": _int(body.get("maxSteps"), 6) or 6,
+                "providerId": _s(body.get("providerId")),
+                "model": _s(body.get("model")),
+                "modelKey": _s(body.get("modelKey")),
+                "status": "running", "step": 0, "log": [], "result": "",
+                "error": "", "stop": False, "started_at": int(time.time()),
+            })
+        threading.Thread(target=agent_worker, args=(AGENT,),
+                         name="ui-agent", daemon=True).start()
+        return ok(run=dict(AGENT))
+
+    @app.get("/api/agent/runs/current")
+    def node_agent_current():
+        return ok(run=dict(AGENT) if AGENT else None)
+
     @app.post("/api/agent/runs/control")
-    @app.post("/api/agent/runs/reset")
     def node_agent_control():
+        action = _s(_body().get("action"))
+        if not AGENT:
+            return ok(run=None)
+        if action == "stop":
+            AGENT["stop"] = True
+            AGENT["status"] = "stopping"
+        elif action == "resume" and AGENT.get("status") == "paused":
+            AGENT["stop"] = False
+            AGENT["status"] = "running"
+            threading.Thread(target=agent_worker, args=(AGENT,),
+                             name="ui-agent", daemon=True).start()
+        return ok(run=dict(AGENT))
+
+    @app.post("/api/agent/runs/reset")
+    def node_agent_reset():
+        AGENT["stop"] = True
+        AGENT.clear()
         return ok(run=None)
 
     @app.get("/api/agent/runs/<path:run_id>")
     def node_agent_run(run_id: str):
-        return ok(run=None, id=run_id)
+        if AGENT.get("id") == run_id:
+            return ok(run=dict(AGENT))
+        row = next((r for r in load().get("agent_runs") or []
+                    if isinstance(r, dict) and r.get("id") == run_id), None)
+        return ok(run=row, id=run_id)
+
+    @app.delete("/api/agent/runs/<path:run_id>")
+    def node_agent_run_delete(run_id: str):
+        data = load()
+        rows = [r for r in data.get("agent_runs") or []
+                if isinstance(r, dict) and r.get("id") != run_id]
+        data["agent_runs"] = rows
+        save(data)
+        return ok(deleted=run_id)
+
+    # Saved prompts (reusable agent tasks).
+    @app.get("/api/agent/prompts")
+    def node_agent_prompts():
+        return ok(prompts=load().get("agent_prompts") or [],
+                  items=load().get("agent_prompts") or [])
+
+    @app.post("/api/agent/prompts")
+    def node_agent_prompt_save():
+        body = _body()
+        text = _s(body.get("prompt")).strip()
+        if not text:
+            return jsonify(ok=False, error="متن پرامپت خالی است."), 400
+        data = load()
+        rows = data.get("agent_prompts")
+        if not isinstance(rows, list):
+            rows = []
+        pid = _s(body.get("id")) or "p" + _s(int(time.time()))
+        row = {"id": pid, "name": _s(body.get("name")) or "پرامپت",
+               "prompt": text, "tools": body.get("tools") or [],
+               "maxSteps": _int(body.get("maxSteps"), 6) or 6,
+               "updated_at": int(time.time())}
+        rows = [r for r in rows if isinstance(r, dict) and r.get("id") != pid]
+        rows.append(row)
+        data["agent_prompts"] = rows
+        save(data)
+        return ok(prompt=row, prompts=rows)
 
     @app.get("/api/agent/prompts/<path:prompt_id>")
     def node_agent_prompt(prompt_id: str):
-        return ok(prompt=None, id=prompt_id)
+        row = next((r for r in load().get("agent_prompts") or []
+                    if isinstance(r, dict) and r.get("id") == prompt_id), None)
+        return ok(prompt=row, id=prompt_id)
+
+    @app.delete("/api/agent/prompts/<path:prompt_id>")
+    def node_agent_prompt_delete(prompt_id: str):
+        data = load()
+        data["agent_prompts"] = [
+            r for r in data.get("agent_prompts") or []
+            if isinstance(r, dict) and r.get("id") != prompt_id]
+        save(data)
+        return ok(deleted=prompt_id)
+
+    @app.get("/api/agent/templates")
+    def node_agent_templates():
+        return ok(templates=[
+            {"id": 1, "name": "گزارش وضعیت",
+             "prompt": "وضعیت کلی سامانه، پروفایل‌ها و کارهای در جریان را خلاصه کن."},
+            {"id": 2, "name": "بررسی کیفیت داده",
+             "prompt": "محصولات پروفایل فعال را بررسی کن و بگو کدام‌ها عنوان یا "
+                       "قیمت مشکوک دارند."},
+            {"id": 3, "name": "تحلیل یک صفحه",
+             "prompt": "این آدرس را باز کن و بگو چه محصولاتی دارد: "},
+        ])
+
+    @app.get("/api/agent/tasks")
+    def node_agent_tasks():
+        return ok(tasks=load().get("agent_prompts") or [])
 
     # ── Basalam chat panel ───────────────────────────────────────────────
     @app.get("/api/basalam/chats")
@@ -1406,13 +1820,215 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             },
         )
 
+    # ── git-based self update ────────────────────────────────────────────
+    # The old updater downloaded a single scraper4.py from another repo and
+    # overwrote the live file — that is what deleted the dashboard twice. This
+    # one is fundamentally different: it runs `git pull` inside THIS checkout,
+    # so every file moves together and nothing can be half-replaced. It only
+    # ever touches the branch it is already on, and it refuses to run if the
+    # working tree is dirty (local edits would be clobbered).
+    # Where the code actually runs from (systemd installs a *copy* into
+    # /opt/scraper4, which is not a git repo) and where the git checkout
+    # lives. They are usually different, so after pulling we sync the files
+    # across; if they are the same directory the copy is a no-op.
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    def _find_repo() -> str:
+        explicit = _s(os.environ.get("SCRAPER_REPO_DIR"))
+        if explicit and os.path.isdir(os.path.join(explicit, ".git")):
+            return explicit
+        # Walk up from this file, then try the usual clone locations.
+        path = APP_DIR
+        for _ in range(4):
+            if os.path.isdir(os.path.join(path, ".git")):
+                return path
+            path = os.path.dirname(path)
+        for guess in ("/root/new", "/home/user/new",
+                      os.path.expanduser("~/new")):
+            candidate = os.path.join(guess, "python-scraper4")
+            if os.path.isdir(os.path.join(guess, ".git")) and \
+                    os.path.isdir(candidate):
+                return guess
+        return ""
+
+    REPO_DIR = _find_repo()
+    # Files the running install needs; kept in sync after every pull.
+    SYNC_FILES = ("scraper4.py", "deployer4.py", "ui_bridge.py",
+                  "ai_providers.json")
+
+    def sync_from_repo() -> list[str]:
+        """Copy updated files from the git checkout into the live app dir."""
+        if not REPO_DIR:
+            return []
+        source = os.path.join(REPO_DIR, "python-scraper4")
+        if not os.path.isdir(source):
+            source = REPO_DIR
+        if os.path.abspath(source) == os.path.abspath(APP_DIR):
+            return []
+        import shutil
+        copied = []
+        for name in SYNC_FILES:
+            src = os.path.join(source, name)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(APP_DIR, name))
+                copied.append(name)
+        src_ui = os.path.join(source, "ui")
+        if os.path.isdir(src_ui):
+            dst_ui = os.path.join(APP_DIR, "ui")
+            os.makedirs(dst_ui, exist_ok=True)
+            for name in os.listdir(src_ui):
+                if name.endswith((".html", ".js", ".css")):
+                    shutil.copy2(os.path.join(src_ui, name),
+                                 os.path.join(dst_ui, name))
+                    copied.append("ui/" + name)
+        return copied
+
+    UPDATE: dict[str, Any] = {"status": "idle", "log": [], "last_check": 0,
+                              "behind": 0, "local": "", "remote": ""}
+
+    def git(*args: str, timeout: int = 120) -> tuple[int, str]:
+        try:
+            proc = subprocess.run(
+                ("git", "-C", REPO_DIR) + args, capture_output=True,
+                text=True, timeout=timeout)
+            return proc.returncode, (proc.stdout + proc.stderr).strip()
+        except Exception as exc:  # noqa: BLE001
+            return 1, str(exc)
+
+    def git_available() -> bool:
+        return bool(REPO_DIR) and os.path.isdir(os.path.join(REPO_DIR, ".git"))
+
+    def update_check() -> dict[str, Any]:
+        """Compare local HEAD with the tracked remote branch."""
+        if not git_available():
+            UPDATE.update(status="unavailable",
+                          error="این نصب یک مخزن git نیست.")
+            return UPDATE
+        code, branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        if code:
+            UPDATE.update(status="error", error=branch)
+            return UPDATE
+        branch = branch.strip()
+        code, out = git("fetch", "--quiet", "origin", branch)
+        if code:
+            UPDATE.update(status="error", error=out or "git fetch ناموفق بود.")
+            return UPDATE
+        _, local = git("rev-parse", "HEAD")
+        _, remote = git("rev-parse", f"origin/{branch}")
+        _, behind = git("rev-list", "--count", f"HEAD..origin/{branch}")
+        _, subject = git("log", "-1", "--format=%s", f"origin/{branch}")
+        UPDATE.update(status="idle", branch=branch, local=local.strip()[:8],
+                      remote=remote.strip()[:8], behind=_int(behind.strip()),
+                      remoteSubject=subject.strip(), error="",
+                      last_check=int(time.time()))
+        return UPDATE
+
+    def update_apply() -> dict[str, Any]:
+        state = update_check()
+        if state.get("status") in ("unavailable", "error"):
+            return state
+        if not state.get("behind"):
+            UPDATE["log"] = ["نسخهٔ نصب‌شده به‌روز است."]
+            return UPDATE
+        code, dirty = git("status", "--porcelain")
+        if code == 0 and dirty.strip():
+            UPDATE.update(status="blocked",
+                          error="تغییرات محلی ذخیره‌نشده وجود دارد؛ "
+                                "به‌روزرسانی خودکار انجام نشد.")
+            return UPDATE
+        branch = _s(state.get("branch"))
+        UPDATE["status"] = "updating"
+        code, out = git("merge", "--ff-only", f"origin/{branch}")
+        UPDATE["log"] = [out][:1]
+        if code:
+            UPDATE.update(status="error",
+                          error="fast-forward ناموفق بود: " + out[:300])
+            return UPDATE
+        _, new_head = git("rev-parse", "HEAD")
+        copied = sync_from_repo()
+        UPDATE.update(status="updated", local=new_head.strip()[:8], error="",
+                      synced=copied, updated_at=int(time.time()))
+        # The new code is on disk but this process still runs the old one.
+        # Touching the reload file makes gunicorn/systemd pick it up; if the
+        # service is managed by systemd we ask for a restart instead.
+        threading.Thread(target=update_restart, name="ui-update-restart",
+                         daemon=True).start()
+        return UPDATE
+
+    def update_restart() -> None:
+        time.sleep(1.5)  # let the HTTP response flush first
+        unit = os.environ.get("SCRAPER_SERVICE_NAME", "scraper4")
+        try:
+            subprocess.run(["systemctl", "restart", unit], timeout=30,
+                           capture_output=True)
+            return
+        except Exception:  # noqa: BLE001 - not systemd, fall through
+            pass
+        try:  # gunicorn reloads its workers on SIGHUP
+            os.kill(os.getppid(), 1)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def update_loop() -> None:
+        """Check the branch every minute and fast-forward when it moves."""
+        interval = max(30, _int(os.environ.get("SCRAPER_UPDATE_INTERVAL"), 60))
+        time.sleep(20)
+        while True:
+            try:
+                if _s(os.environ.get("SCRAPER_GIT_AUTO_UPDATE", "1")).lower() \
+                        not in ("0", "false", "off", "no"):
+                    state = update_check()
+                    if state.get("behind"):
+                        update_apply()
+            except Exception as exc:  # noqa: BLE001 - never kill the thread
+                UPDATE["error"] = str(exc)[:200]
+            time.sleep(interval)
+
+    @app.get("/api/update/status")
+    def node_update_status():
+        return ok(update=dict(UPDATE),
+                  autoUpdate=_s(os.environ.get("SCRAPER_GIT_AUTO_UPDATE", "1")
+                                ).lower() not in ("0", "false", "off", "no"),
+                  repo=REPO_DIR)
+
+    @app.post("/api/update/check")
+    def node_update_check():
+        return ok(update=update_check())
+
+    @app.post("/api/update/apply")
+    def node_update_apply():
+        return ok(update=update_apply())
+
+    if _s(os.environ.get("SCRAPER_GIT_AUTO_UPDATE", "1")).lower() \
+            not in ("0", "false", "off", "no") and git_available():
+        threading.Thread(target=update_loop, name="ui-update", daemon=True).start()
+
     @app.post("/api/deployer/install-branch")
     def node_deployer_install():
-        return jsonify(
-            ok=False,
-            error="نصب از داشبورد غیرفعال است؛ به‌روزرسانی با git روی سرور انجام "
-                  "می‌شود تا داشبورد پاک نشود.",
-        ), 501
+        """Switch this checkout to another branch of the same repo."""
+        branch = _s(_body().get("branch")).strip()
+        if not branch:
+            return jsonify(ok=False, error="نام برنچ لازم است."), 400
+        if not git_available():
+            return jsonify(ok=False, error="این نصب یک مخزن git نیست."), 400
+        code, dirty = git("status", "--porcelain")
+        if code == 0 and dirty.strip():
+            return jsonify(
+                ok=False,
+                error="تغییرات محلی ذخیره‌نشده وجود دارد؛ ابتدا آن‌ها را "
+                      "commit یا پاک کنید."), 409
+        code, out = git("fetch", "origin", branch)
+        if code:
+            return jsonify(ok=False, error="git fetch ناموفق: " + out[:300]), 400
+        code, out = git("checkout", "-B", branch, f"origin/{branch}")
+        if code:
+            return jsonify(ok=False, error="checkout ناموفق: " + out[:300]), 400
+        _, head = git("rev-parse", "HEAD")
+        sync_from_repo()
+        threading.Thread(target=update_restart, name="ui-update-restart",
+                         daemon=True).start()
+        return ok(branch=branch, head=head.strip()[:8],
+                  message=f"به برنچ {branch} منتقل شد؛ سرویس در حال راه‌اندازی مجدد است.")
 
     # ── misc small endpoints the UI polls ────────────────────────────────
     @app.post("/api/queue-watchdog")
@@ -1524,10 +2140,6 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         "/api/ai/providers": {"providers": []},
         "/api/ai/description-settings": {"settings": {}},
         "/api/ai/workers-catalog": {"items": []},
-        "/api/agent/prompts": {"prompts": []},
-        "/api/agent/tasks": {"tasks": []},
-        "/api/agent/templates": {"templates": []},
-        "/api/agent/runs": {"runs": []},
         "/api/autoreply/log": {"items": []},
         "/api/basalam/orders": {"items": []},
         "/api/bootstrap/status": {"status": "ready"},
