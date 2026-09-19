@@ -1236,7 +1236,67 @@ async function saveHomeProfile(silent=false){await flushAutoSave();const button=
 async function deleteHomeProfile(){const id=$('homeProfile').value;if(!id)throw Error('پروفایل ذخیره‌شده‌ای برای حذف انتخاب نشده است.');const profile=state.profiles.find(p=>p.id===id);if(!confirm('پروفایل «'+(profile?.name||id)+'» و محصولات آن حذف شود؟'))return;busy($('homeDeleteProfile'),true);try{await api('/api/profiles/'+encodeURIComponent(id),{method:'DELETE'});forgetRememberedProfile(id);clearForm();await refreshProfiles();renderHomeProfile(null);notice('پروفایل حذف شد.')}finally{busy($('homeDeleteProfile'),false)}}
 function homeJobTarget(){const chosen=$('homeSyncTarget')?.value||'none';if(chosen&&chosen!=='none')return chosen;const woo=$('homeSyncWoo')?.checked??$('syncWoo')?.checked??false,basalam=$('homeSyncBasalam')?.checked??$('syncBasalam')?.checked??false;return woo&&basalam?'both':woo?'woo':basalam?'basalam':'none'}
 async function startHomeExtraction(source){const listOnly=source==='backend',button=$(listOnly?'homeBackend':'homeScrape');busy(button,true);try{const profile=await saveHomeProfile(true),target=listOnly?'none':homeJobTarget();if(!profile.url||String(profile.url).includes('import.invalid'))throw Error('برای این عملیات آدرس واقعی فهرست محصولات لازم است.');if(!listOnly&&target==='none')throw Error('برای همگام‌سازی کامل، حداقل یک مقصد ارسال را فعال کنید.');const data=await createJob(profile.id,'scrape',target,false,{workflow:listOnly?'list-only':'full'});output(data);notice(listOnly?'استخراج فقط فهرست در صف قرار گرفت؛ جزئیات، دسته‌بندی، توضیح‌سازی و ارسال اجرا نمی‌شود.':'همگام‌سازی کامل در صف قرار گرفت: فهرست، جزئیات، دسته‌بندی، توضیح‌سازی و ارسال به مقصدهای انتخاب‌شده.');await loadJobs(false)}catch(error){openResultModal('⚠️ شروع استخراج ناموفق بود',{ok:false,error:error.message})}finally{busy(button,false)}}
-function renderHomeJobs(){const box=$('homeJobs');if(!box)return;const rows=(state.jobs||[]).slice(0,6),labels={queued:'در صف',running:'در حال اجرا',done:'کامل',failed:'ناموفق',cancelled:'متوقف'};box.innerHTML=rows.map(job=>{const running=['queued','running'].includes(job.status),failed=job.status==='failed',done=['done','failed','cancelled'].includes(job.status),progress=job.total?Math.max(0,Math.min(100,Math.round(Number(job.processed||0)/Number(job.total)*100))):(job.status==='done'?100:0);return '<div class="mini-job"><div class="mini-job-head"><b>'+(job.kind==='sync'?'ارسال':'استخراج')+' · '+esc(profileName(job.profileId))+'</b><span class="job-status s-'+escAttr(job.status)+'">'+esc(labels[job.status]||job.status)+'</span></div><small>'+esc(phaseLabel(job.phase))+' · '+fa(job.processed||0)+' از '+fa(job.total||0)+'</small><div class="mini-progress"><i style="width:'+progress+'%"></i></div>'+jobLiveMeta(job)+jobPlanHtml(job)+'<div class="profile-actions">'+(running?'<button class="btn btn-red btn-sm" data-home-job="stop" data-id="'+escAttr(job.id)+'">■ توقف</button>':'')+(failed?'<button class="btn btn-purple btn-sm" data-home-job="retry" data-id="'+escAttr(job.id)+'">↻ تلاش مجدد</button>':'')+(done?'<button class="btn btn-gray btn-sm" data-home-job="delete" data-id="'+escAttr(job.id)+'">حذف</button>':'')+'<button class="btn btn-blue btn-sm" data-home-job="open" data-id="'+escAttr(job.id)+'">جزئیات</button></div></div>'}).join('')||'<div class="empty compact">صف خالی است.</div>'}
+function jobAgoText(job){
+  const raw=job.updatedAt||job.createdAt;if(!raw)return '';
+  const t=Date.parse(raw);if(!t)return '';
+  const s=Math.max(0,Math.round((Date.now()-t)/1000));
+  if(s<60)return 'چند لحظه پیش';
+  if(s<3600)return fa(Math.round(s/60))+' دقیقه پیش';
+  if(s<86400)return fa(Math.round(s/3600))+' ساعت پیش';
+  return fa(Math.round(s/86400))+' روز پیش';
+}
+function jobTargetText(job){
+  if(job.kind!=='sync')return '';
+  return job.target==='woo'?'ووکامرس':job.target==='basalam'?'باسلام'
+       :job.target==='both'?'هر دو مقصد':'';
+}
+function renderHomeJobs(){
+  const box=$('homeJobs');if(!box)return;
+  const rows=(state.jobs||[]).slice(0,6);
+  // Backend maps a cancelled task to "stopped"; keep both so the badge is
+  // never rendered as a raw English status.
+  const labels={queued:'در صف',running:'در حال اجرا',done:'کامل',
+                failed:'ناموفق',cancelled:'متوقف',stopped:'متوقف'};
+  box.innerHTML=rows.map(job=>{
+    const st=job.status,
+      running=['queued','running'].includes(st),
+      failed=st==='failed',
+      finished=['done','failed','cancelled','stopped'].includes(st),
+      total=Number(job.total||0),processed=Number(job.processed||0),
+      progress=total?Math.max(0,Math.min(100,Math.round(processed/total*100)))
+                    :(st==='done'?100:0),
+      target=jobTargetText(job),ago=jobAgoText(job),
+      icon=job.kind==='sync'?'📤':'🧲';
+    const chips=[];
+    if(target)chips.push('<span class="job-chip">'+esc(target)+'</span>');
+    if(Number(job.added))chips.push('<span class="job-chip good">+'+fa(job.added)+' جدید</span>');
+    if(Number(job.updated))chips.push('<span class="job-chip info">'+fa(job.updated)+' بروزرسانی</span>');
+    if(Number(job.failed))chips.push('<span class="job-chip bad">'+fa(job.failed)+' خطا</span>');
+    return '<div class="mini-job j-'+escAttr(st)+'">'
+      +'<div class="mini-job-head">'
+        +'<b><span class="job-icon">'+icon+'</span>'
+        +esc(job.kind==='sync'?'ارسال':'استخراج')+' · '+esc(profileName(job.profileId))+'</b>'
+        +'<span class="job-status s-'+escAttr(st)+'">'+esc(labels[st]||st)+'</span>'
+      +'</div>'
+      +(chips.length?'<div class="job-chips">'+chips.join('')+'</div>':'')
+      +'<div class="mini-progress"><i style="width:'+progress+'%"></i></div>'
+      +'<div class="mini-job-meta"><span>'+esc(phaseLabel(job.phase))+'</span>'
+        +'<span class="mini-job-count">'+fa(processed)+' از '+fa(total)+' · '+fa(progress)+'٪</span></div>'
+      +(ago?'<div class="mini-job-ago">'+esc(ago)+'</div>':'')
+      // The engine/plan breakdown is useful but long; keep the card scannable
+      // and let the user open it on demand.
+      +'<details class="mini-job-more"><summary>جزئیات فنی</summary>'
+        +jobLiveMeta(job)+jobPlanHtml(job)+'</details>'
+      +(job.error?'<div class="mini-job-error" title="'+escAttr(job.error)+'">⚠ '+esc(job.error)+'</div>':'')
+      +'<div class="profile-actions">'
+        +(running?'<button class="btn btn-red btn-sm" data-home-job="stop" data-id="'+escAttr(job.id)+'">■ توقف</button>':'')
+        +((failed||st==='cancelled'||st==='stopped')?'<button class="btn btn-purple btn-sm" data-home-job="retry" data-id="'+escAttr(job.id)+'">↻ تلاش مجدد</button>':'')
+        +(finished?'<button class="btn btn-gray btn-sm" data-home-job="delete" data-id="'+escAttr(job.id)+'">حذف</button>':'')
+        +'<button class="btn btn-blue btn-sm" data-home-job="open" data-id="'+escAttr(job.id)+'">جزئیات</button>'
+      +'</div></div>';
+  }).join('')||'<div class="empty compact">🗂 صف خالی است. یک پروفایل را اجرا کنید تا اینجا نمایش داده شود.</div>';
+}
+
 function activateProfile(id){const value=String(id||''),profile=state.profiles.find(item=>item.id===value);if(!profile)return false;if($('profileId')?.value!==value)editProfile(value,false);else{rememberProfile(value);renderProfiles();syncProfileSelects(value)}return true}
 function clearForm(){state.selected='';$('profileId').value='';$('name').value='';$('url').value='';$('pages').value='0';$('pagination').value='query_page';$('paginationValue').value='page';if($('extractionEngine'))$('extractionEngine').value='auto';$('interval').value='0';$('titleSuffix').value='';$('priceMode').value='none';$('priceValue').value='0';$('roundPrice').value='0';$('minPrice').value='0';$('wooCategoryId').value='0';$('basalamCategoryId').value='0';$('basalamFallbackCategoryIds').value='';$('detailSampleUrl').value='';$('enabled').checked=true;$('networkIndirect').checked=false;$('noExtract').checked=false;$('syncWoo').checked=false;$('syncBasalam').checked=false;$('aiDescriptions').checked=true;listFields.forEach(([id])=>{$('sel-'+id).value=id==='container'?'li.product':id==='title'?'h2':id==='price'?'.price':id==='link'?'a[href]':'img';$('result-'+id).textContent='—'});detailFields.forEach(([id])=>{$('sel-'+id).value='';$('result-'+id).textContent='—'});loadGallery();$('editBadge').textContent='پروفایل جدید';renderProfiles();renderHomeProfile(null)}
 function editProfile(id,navigate=true){const p=state.profiles.find(x=>x.id===id);if(!p)return;rememberProfile(id);$('profileId').value=p.id;$('name').value=p.name;$('url').value=p.url;$('pages').value=String(p.pages??0);$('pagination').value=p.pagination;$('paginationValue').value=p.paginationValue;if($('extractionEngine'))$('extractionEngine').value=p.extractionEngine||'auto';$('interval').value=p.intervalMinutes;$('titleSuffix').value=p.titleSuffix;$('priceMode').value=p.priceMode;$('priceValue').value=p.priceValue;if(!$('roundPrice').querySelector('option[value="'+p.roundPrice+'"]'))$('roundPrice').insertAdjacentHTML('beforeend','<option value="'+escAttr(p.roundPrice)+'">سفارشی: '+fa(p.roundPrice)+'</option>');$('roundPrice').value=p.roundPrice;$('minPrice').value=p.minPrice;$('wooCategoryId').value=p.wooCategoryId;$('basalamCategoryId').value=p.basalamCategoryId;$('basalamFallbackCategoryIds').value=(p.basalamFallbackCategoryIds||[]).join(', ');$('enabled').checked=p.enabled;$('networkIndirect').checked=!!p.networkIndirect;$('noExtract').checked=!!p.noExtract;$('syncWoo').checked=p.syncWoo;$('syncBasalam').checked=p.syncBasalam;$('aiDescriptions').checked=p.aiDescriptions!==false;[...listFields,...detailFields].forEach(([key])=>{$('sel-'+key).value=p.selectors[key]||''});loadGallery(p.gallery||{mode:p.selectors.gallery?'manual':'off',selectors:p.selectors.gallery||'',max:p.selectors.galleryMax||10,skip_first:!!p.selectors.gallerySkipFirst});$('editBadge').textContent='ویرایش: '+p.name;renderProfiles();syncProfileSelects(id);renderHomeProfile(p);if(navigate){tab('selector');subTab('basic')}}
