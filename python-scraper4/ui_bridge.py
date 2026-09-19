@@ -622,6 +622,183 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     app.add_url_rule("/api/extract/<path:pid>", "node_extract_profile",
                      _start_scrape, methods=["POST"])
 
+    # ── start-page diagnostics ───────────────────────────────────────────
+    # Two buttons on the home tab (تست موتورها / عیب‌یابی) posted to these
+    # paths and got a 405 from the catch-all, so both silently did nothing.
+    # The UI accepts a plain JSON body when the response is not NDJSON, so
+    # these run synchronously and return the finished report.
+
+    def _diag_fetch(config: dict[str, Any], url: str, engine: str) -> Any:
+        """One page fetch with a specific engine, via the real Fetcher."""
+        fetcher = core.Fetcher(load().get("network") or {})
+        return fetcher.get(url, engine=engine)
+
+    @app.post("/api/profiles/<path:pid>/benchmark-engines")
+    def node_benchmark_engines(pid: str):
+        """Time every installed fetch engine against the profile's first page."""
+        data = load()
+        cfg = (data.get("profiles") or {}).get(pid)
+        if not isinstance(cfg, dict):
+            return jsonify(ok=False, error="پروفایل پیدا نشد."), 404
+        url = _s(cfg.get("url"))
+        if not url:
+            return jsonify(ok=False, error="آدرس پروفایل خالی است."), 400
+        engines = [e for e in core.KNOWN_ENGINES
+                   if core.fetch_engine_installed(e)]
+        results, best, best_rate = [], "", -1.0
+        for engine in engines:
+            row: dict[str, Any] = {"engine": engine, "ok": False,
+                                   "pagesScanned": 0, "products": 0,
+                                   "elapsedMs": 0, "productsPerMinute": 0,
+                                   "error": ""}
+            started = time.time()
+            try:
+                res = _diag_fetch(cfg, url, engine)
+                rows, _soup, _stats = core.parse_html(
+                    res.text, res.url, cfg.get("selectors") or {})
+                elapsed = max(1, int((time.time() - started) * 1000))
+                rate = round(len(rows) / (elapsed / 60000.0), 1) if rows else 0
+                row.update(ok=True, pagesScanned=1, products=len(rows),
+                           elapsedMs=elapsed, productsPerMinute=rate)
+                if rate > best_rate:
+                    best, best_rate = engine, rate
+            except Exception as exc:  # noqa: BLE001 - reported per engine
+                row["elapsedMs"] = max(1, int((time.time() - started) * 1000))
+                row["error"] = str(exc)[:240]
+                row["diagnosis"] = {"hint": _engine_hint(engine, str(exc))}
+            results.append(row)
+        # Remember the winner so the profile uses it next run.
+        if best:
+            cfg["fetch_engine_master"] = best
+            data["profiles"][pid] = cfg
+            save(data)
+        return ok(profile=pid, results=results, best=best,
+                  engines=[r["engine"] for r in results],
+                  summary=(f"سریع‌ترین موتور: {best}" if best
+                           else "هیچ موتوری موفق نشد."))
+
+    def _engine_hint(engine: str, error: str) -> str:
+        low = error.lower()
+        if "نصب نیست" in error or "not installed" in low:
+            return f"کتابخانهٔ {engine} روی سرور نصب نیست."
+        if "403" in error or "captcha" in low or "ضدبات" in error:
+            return "سایت درخواست را رد کرد؛ curl_cffi یا playwright را امتحان کنید."
+        if "timeout" in low or "timed out" in low:
+            return "زمان پاسخ تمام شد؛ مهلت را بیشتر کنید یا پروکسی عوض کنید."
+        if "ssl" in low or "certificate" in low:
+            return "خطای گواهی TLS؛ verify_tls را بررسی کنید."
+        return "جزئیات خطا را در ستون خطا ببینید."
+
+    @app.post("/api/profiles/<path:pid>/extraction-diagnostic")
+    def node_extraction_diagnostic(pid: str):
+        """Step-by-step check of why a profile does or does not extract."""
+        data = load()
+        cfg = (data.get("profiles") or {}).get(pid)
+        if not isinstance(cfg, dict):
+            return jsonify(ok=False, error="پروفایل پیدا نشد."), 404
+        stages: list[dict[str, Any]] = []
+
+        def stage(name: str, good: bool, summary: str, **extra: Any) -> None:
+            stages.append({"name": name, "ok": good, "summary": summary, **extra})
+
+        url = _s(cfg.get("url"))
+        selectors = cfg.get("selectors") or {}
+        filled = {k: v for k, v in selectors.items() if _s(v).strip()}
+        stage("configuration", bool(url),
+              f"آدرس: {url or '—'} · سلکتورهای پرشده: {len(filled)}"
+              + ("" if url else " · آدرس خالی است"),
+              url=url, selectors=filled,
+              pagination=_s(cfg.get("pagination")) or "none")
+        if not url:
+            return ok(profile=pid, stages=stages, healthy=False,
+                      summary="آدرس پروفایل تنظیم نشده است.")
+
+        engine = _s(cfg.get("fetch_engine")) or "auto"
+        res = None
+        try:
+            res = _diag_fetch(cfg, url, engine if engine != "auto" else "requests")
+            body = _s(getattr(res, "text", ""))
+            stage("network", True,
+                  f"HTTP {getattr(res, 'status', 200)} · {len(body):,} بایت "
+                  f"· موتور {engine}", bytes=len(body),
+                  finalUrl=_s(getattr(res, "url", url)))
+        except Exception as exc:  # noqa: BLE001
+            stage("network", False, f"دریافت صفحه ناموفق بود: {exc}"[:300])
+            return ok(profile=pid, stages=stages, healthy=False,
+                      summary="صفحه دریافت نشد؛ موتور یا پروکسی را بررسی کنید.")
+
+        try:
+            rows, soup, stats = core.parse_html(res.text, res.url, selectors)
+        except Exception as exc:  # noqa: BLE001
+            stage("list-extraction", False, f"خطای تجزیهٔ صفحه: {exc}"[:300])
+            return ok(profile=pid, stages=stages, healthy=False,
+                      summary="صفحه تجزیه نشد.")
+        stage("list-extraction", bool(rows),
+              f"{len(rows)} محصول از فهرست استخراج شد"
+              + ("" if rows else " · هیچ محصولی پیدا نشد"),
+              count=len(rows), stats=stats,
+              sample=[{"title": _s(r.get("title"))[:80],
+                       "price": _s(r.get("price")),
+                       "link": _s(r.get("link"))[:120]} for r in rows[:5]])
+
+        # Which configured selector actually matched anything?
+        evidence = {}
+        for key, css in filled.items():
+            try:
+                evidence[key] = len(soup.select(css))
+            except Exception:  # noqa: BLE001 - invalid CSS is the finding
+                evidence[key] = -1
+        dead = [k for k, v in evidence.items() if v <= 0]
+        stage("selector-evidence", not dead,
+              ("همهٔ سلکتورها مطابقت داشتند"
+               if not dead else "سلکتورهای بی‌نتیجه: " + "، ".join(dead)),
+              matches=evidence)
+
+        if not rows:
+            # Nothing matched — try the built-in structured readers so the
+            # user learns the data is there but the selectors are wrong.
+            found = []
+            try:
+                if core.parse_embedded_catalog(res.text, res.url):
+                    found.append("JSON داخل صفحه (JSON-LD / __NEXT_DATA__)")
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                if core.parse_json_ld_product(soup, res.url).get("title"):
+                    found.append("JSON-LD Product")
+            except Exception:  # noqa: BLE001
+                pass
+            stage("selector-discovery", bool(found),
+                  ("داده در این قالب‌ها پیدا شد: " + "، ".join(found)
+                   + " — موتور پارس مناسب را انتخاب کنید."
+                   if found else
+                   "هیچ دادهٔ ساختاریافته‌ای پیدا نشد؛ احتمالاً صفحه با "
+                   "جاوااسکریپت ساخته می‌شود. موتور playwright را امتحان کنید."),
+                  formats=found)
+
+        detail_sel = cfg.get("detail_selectors") or {}
+        if rows and detail_sel:
+            link = next((_s(r.get("link")) for r in rows if _s(r.get("link"))), "")
+            if link:
+                try:
+                    dres = _diag_fetch(cfg, link, engine if engine != "auto" else "requests")
+                    dsoup = core.BeautifulSoup(dres.text, "html.parser")
+                    fields = core.parse_detail_fields(dsoup, dres.url, detail_sel)
+                    got = {k: v for k, v in fields.items() if _s(v).strip()}
+                    stage("detail-extraction", bool(got),
+                          f"{len(got)} فیلد از صفحهٔ جزئیات خوانده شد",
+                          fields=list(got))
+                except Exception as exc:  # noqa: BLE001
+                    stage("detail-extraction", False,
+                          f"صفحهٔ جزئیات خوانده نشد: {exc}"[:240])
+
+        healthy = all(s["ok"] for s in stages)
+        return ok(profile=pid, stages=stages, healthy=healthy,
+                  summary=("همه‌چیز سالم است."
+                           if healthy else
+                           "مشکل در: " + "، ".join(
+                               s["name"] for s in stages if not s["ok"])))
+
     @app.post("/api/profiles/<path:pid>/sync")
     def node_profile_sync(pid: str):
         body = _body()
