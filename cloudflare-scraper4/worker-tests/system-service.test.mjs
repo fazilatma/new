@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createServer} from 'node:http';
-import {systemUnit,healthUnits,parseEnv,migrateEnvironment,runtimeEnvironment,requireFreePort,validateSource,install,TARGET} from '../scripts/install-system-service.mjs';
+import {activateSystemService,systemUnit,healthUnits,parseEnv,migrateEnvironment,runtimeEnvironment,requireFreePort,validateSource,install,TARGET} from '../scripts/install-system-service.mjs';
 import {healthDecision,probe} from '../scripts/system-service-health.mjs';
 
 test('system service starts non-root, uses boot target and applies cgroup recovery/limits',()=>{
@@ -63,3 +63,15 @@ test('systemd parser verifies generated units when available',{skip:!process.env
  const server=createServer(()=>{});await new Promise(r=>server.listen(0,'127.0.0.1',r));
  try{assert.equal(await probe(server.address().port,50),false);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
  });
+
+test('first installation continues when reset-failed has no loaded/failed unit state',()=>{
+ const calls=[],warnings=[];
+ activateSystemService((cmd,args)=>{calls.push([cmd,...args]);if(args[0]==='reset-failed')throw Error('Unit not loaded');},message=>warnings.push(message));
+ assert.deepEqual(calls.map(c=>c.slice(1)),[['daemon-reload'],['reset-failed','scraper4-node.service'],['enable','--now','scraper4-node.service'],['enable','--now','scraper4-node-health.timer']]);
+ assert.equal(warnings.length,1);
+});
+test('reload and enable/start failures still stop installation; success does not warn',()=>{
+ for(const step of ['daemon-reload','enable']){const calls=[];assert.throws(()=>activateSystemService((cmd,args)=>{calls.push(args);if(args[0]===step)throw Error('required step failed')},()=>{}),/required step failed/);assert.equal(calls.some(a=>a.includes('scraper4-node-health.timer')),false);}
+ const warnings=[];activateSystemService(()=>{},m=>warnings.push(m));assert.equal(warnings.length,0);
+ assert.throws(()=>activateSystemService((cmd,args)=>{if(args.includes('scraper4-node-health.timer'))throw Error('timer failed')},()=>{}),/timer failed/);
+});

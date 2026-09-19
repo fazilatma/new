@@ -99,6 +99,14 @@ WantedBy=timers.target
 function trustedAncestors(path){for(let part=path;part!=='/';part=dirname(part)){if(!existsSync(part)){try{if(lstatSync(part).isSymbolicLink())throw Error('Symlink refused: '+part);}catch(e){if(e.code!=='ENOENT')throw e;}continue;}const st=lstatSync(part);if(st.isSymbolicLink()||st.uid!==0||(st.mode&0o022))throw Error('Expected a root-owned, non-writable trusted path: '+part);}}
 export async function requireFreePort(port){await new Promise((yes,no)=>{const socket=createServer();socket.once('error',()=>no(Error(`Port ${port} is occupied. Stop the old WebConsole/manual/systemd supervisor first; no process was killed.`)));socket.listen({port,host:'0.0.0.0'},()=>socket.close(yes));});}
 const run=(cmd,args,options={})=>execFileSync(cmd,args,{stdio:'inherit',...options});
+// reset-failed is best-effort housekeeping, not a prerequisite for first boot.
+export function activateSystemService(execute=run,warn=console.warn){
+ execute('systemctl',['daemon-reload']);
+ try{execute('systemctl',['reset-failed',SERVICE],{stdio:'ignore'});}
+ catch{warn('No failed state could be reset for '+SERVICE+'; continuing with enable/start.');}
+ execute('systemctl',['enable','--now',SERVICE]);
+ execute('systemctl',['enable','--now','scraper4-node-health.timer']);
+}
 function assertAccountAbsent(){try{execFileSync('id',[ACCOUNT],{stdio:'ignore'});throw Error('The scraper4-node account already exists. Refusing to take over an unknown installation; see SYSTEMD-VPS.md.');}catch(e){if(!Number.isInteger(e.status))throw e;}}
 export async function install(source,confirmed,resume=false){
  if(process.platform!=='linux'||process.getuid?.()!==0)throw Error('Run once through root SSH on a systemd Linux VPS.');
@@ -155,7 +163,7 @@ export async function install(source,confirmed,resume=false){
  const unitFile='/etc/systemd/system/'+SERVICE;writeFileSync(unitFile,systemUnit(node),{mode:0o644});
  for(const file of [unitFile,'/etc/systemd/system/scraper4-node-health.service','/etc/systemd/system/scraper4-node-health.timer'])chmodSync(file,0o644);
  run('systemd-analyze',['verify',unitFile,'/etc/systemd/system/scraper4-node-health.service','/etc/systemd/system/scraper4-node-health.timer']);
- run('systemctl',['daemon-reload']);run('systemctl',['reset-failed',SERVICE],{stdio:'ignore'});run('systemctl',['enable','--now',SERVICE]);run('systemctl',['enable','--now','scraper4-node-health.timer']);
+ activateSystemService();
  console.log('Enabled '+SERVICE+'. Old installation left untouched: '+src);
  console.log('Check: systemctl status scraper4-node; journalctl -u scraper4-node -n 80 --no-pager');
  console.log('Expected loopback ports: Deployer 8790, Scraper 3000. Use Caddy/SSH; no web-server configuration was changed.');

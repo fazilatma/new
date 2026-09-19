@@ -112,6 +112,31 @@ with authentication (including a reverse-proxy access policy). The installer
 preserves the app's auth configuration; it does not assume a public UI is safe.
 Do not expose raw ports 8790/3000 to the Internet to work around a proxy problem.
 
+## Recovery from the 1.211.0 installer reset-failed error
+
+Fixed in installer release 1.211.1+. A fresh unit may have no loaded/failed state
+for `systemctl reset-failed`; that optional cleanup no longer aborts activation.
+Reload, enable/start and timer failures still remain fatal.
+
+If the build exited with status 0 and installation stopped specifically at
+`systemctl reset-failed scraper4-node.service`, the unit files and built app have
+already been written. Do not delete data, recreate the account, or rebuild just
+for this error. With the old supervisor still disabled, finish via root SSH:
+
+```bash
+systemctl daemon-reload &&
+systemctl enable --now scraper4-node.service &&
+systemctl enable --now scraper4-node-health.timer
+systemctl status scraper4-node.service --no-pager
+ss -ltnp | grep -E ':(8790|3000)\b'
+```
+
+If activation itself fails, inspect `journalctl -u scraper4-node -n 80 --no-pager`.
+A warning about an unsupported `RestartMode` in **snapd.service** is a separate
+systemd/package compatibility warning; it is not a directive added by this
+installer and is not the reset-failed command failure. Do not edit snapd merely
+to work around this installer bug.
+
 ## Operations, limits and failures
 
 ```bash
