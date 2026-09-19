@@ -20,8 +20,73 @@ if [[ ! -f "$SRC" ]]; then
   exit 1
 fi
 
+LOG="/var/log/scraper4-install.log"
+
+# ── survive the SSH session dying ────────────────────────────────────────
+# Two things used to kill this install half-way through:
+#
+#  1. needrestart. With NEEDRESTART_MODE=a it automatically restarts every
+#     service whose libraries changed — including ssh. Restarting ssh drops
+#     the connection, the shell gets SIGHUP, and apt/pip die mid-transaction.
+#  2. Even without that, any network blip hangs up the terminal and takes the
+#     script with it, often while dpkg holds its lock.
+#
+# So: re-exec ourselves under setsid+nohup, detached from the terminal, with
+# output teed to $LOG. The install then runs to completion regardless of what
+# happens to the SSH session, and can be followed with `tail -f`.
+if [[ "${SCRAPER_INSTALL_DETACHED:-0}" != "1" && -t 1 ]]; then
+  export SCRAPER_INSTALL_DETACHED=1
+  echo "Running the installer detached so an SSH drop cannot interrupt it."
+  echo "Log: $LOG"
+  echo
+  setsid nohup bash "$0" "$@" >>"$LOG" 2>&1 < /dev/null &
+  CHILD=$!
+  echo "PID $CHILD — following the log (Ctrl-C only stops the log, not the install):"
+  echo
+  sleep 1
+  tail -f --pid="$CHILD" "$LOG" 2>/dev/null || tail -f "$LOG"
+  wait "$CHILD" 2>/dev/null || true
+  echo
+  echo "Installer finished. Full log: $LOG"
+  exit 0
+fi
+# When we re-exec'd ourselves above, stdout is already the log file, so piping
+# through tee as well would write every line twice. Only tee when the caller
+# ran us directly (no tty, e.g. from cron or the deployer).
+if [[ "${SCRAPER_INSTALL_DETACHED:-0}" != "1" ]]; then
+  exec > >(tee -a "$LOG") 2>&1
+fi
+echo "=== scraper4 install started $(date -Is) ==="
+
 export DEBIAN_FRONTEND=noninteractive
-export NEEDRESTART_MODE=a
+# Do NOT use NEEDRESTART_MODE=a here: it restarts ssh and cuts the session.
+# 'l' only lists what would be restarted. We then restart the services we
+# actually care about ourselves, deliberately leaving ssh alone.
+export NEEDRESTART_MODE=l
+export NEEDRESTART_SUSPEND=1
+# Belt and braces: tell needrestart never to touch ssh, even if some other
+# tool invokes it during this install.
+if [[ -d /etc/needrestart/conf.d ]]; then
+  cat > /etc/needrestart/conf.d/90-scraper4-keep-ssh.conf <<'NR'
+# Installed by scraper4: restarting ssh mid-install drops the admin's session
+# and leaves a half-finished install behind.
+$nrconf{override_rc}{qr(^ssh(d)?\.service$)} = 0;
+$nrconf{restart} = 'l';
+NR
+fi
+
+# dpkg may still be locked by cloud-init or unattended-upgrades on a fresh
+# VPS. Waiting is much friendlier than dying on "could not get lock".
+for i in $(seq 1 60); do
+  if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+     || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+    echo "Waiting for another apt/dpkg process to finish ($i/60)…"
+    sleep 5
+  else
+    break
+  fi
+done
+
 apt-get update -y
 apt-get install -y python3 python3-pip python3-venv python3-dev \
   libxml2-dev libxslt1-dev zlib1g-dev gcc \
@@ -153,9 +218,25 @@ curl -sSI http://127.0.0.1/put/ | head -n 15 || true
 systemctl --no-pager --full status scraper4 | head -20
 
 echo
+# The dashboard is already live at this point; everything below is optional
+# and slow (browser downloads). SKIP_ENGINES=1 stops here so a reinstall that
+# only needs the app itself finishes in seconds.
+if [[ "${SKIP_ENGINES:-0}" = "1" ]]; then
+  echo "SKIP_ENGINES=1 — skipping optional engines."
+  echo "=== scraper4 install finished $(date -Is) ==="
+  exit 0
+fi
+
 echo "Installing optional scrape engines (httpx, selenium, playwright, …)…"
-"$VENV/bin/pip" install \
-  playwright cloudscraper curl_cffi httpx selenium playwright-stealth basalam-sdk || true
+# Prefer requirements.txt so the engine list stays in one place; fall back to
+# the explicit list if the file is missing from this checkout.
+if [[ -f "${REPO_DIR}/requirements.txt" ]]; then
+  "$VENV/bin/pip" install -r "${REPO_DIR}/requirements.txt" || true
+else
+  "$VENV/bin/pip" install \
+    playwright cloudscraper curl_cffi httpx selectolax selenium \
+    playwright-stealth basalam-sdk || true
+fi
 # cdn.playwright.dev is geo-blocked in Iran (403). Prefer Ubuntu Chromium.
 apt-get install -y chromium-browser || apt-get install -y chromium || true
 snap install chromium || true

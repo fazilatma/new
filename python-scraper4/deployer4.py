@@ -84,9 +84,30 @@ DATA_FILE = os.environ.get(
 )
 PASSWORD = os.environ.get("DEPLOYER_PASSWORD") or os.environ.get("SCRAPER_DEPLOY_PASSWORD", "")
 
-DEFAULT_REPO = "fazilatma/amphp"
-DEFAULT_BRANCHES = ["arena/01a06ac3-amphp", "arena/01a0640f-amphp"]
-DEFAULT_PATH = "scraper4.py"
+# Default to THIS fork, not the upstream amphp repo. The upstream copy has no
+# ui_bridge/ui files, so installing from it is what silently killed /ui: the
+# install "succeeds", scraper4.py is valid, and the dashboard is simply gone.
+DEFAULT_REPO = os.environ.get("DEPLOYER_REPO", "fazilatma/new")
+DEFAULT_BRANCHES = [
+    b for b in os.environ.get("DEPLOYER_BRANCHES", "arena/01a0b7db-new").split(",")
+    if b.strip()
+] or ["arena/01a0b7db-new"]
+# scraper4.py lives under python-scraper4/ in this repo. Older installs and
+# the upstream layout keep it at the root, so fetches try both (see
+# candidate_paths()).
+DEFAULT_PATH = os.environ.get("DEPLOYER_PATH", "python-scraper4/scraper4.py")
+
+
+def candidate_paths(path: str) -> list[str]:
+    """Both repo layouts: python-scraper4/<file> and a flat <file>."""
+    path = str(path or "").strip("/")
+    flat = path.split("python-scraper4/", 1)[-1]
+    out = [path]
+    if flat != path:
+        out.append(flat)
+    else:
+        out.append("python-scraper4/" + path)
+    return out
 MAX_BRANCHES = 8
 MAX_SCAN_BRANCHES = 30
 
@@ -465,12 +486,15 @@ def github_file_for(
     if not branch_cleaned:
         raise ValueError("نام برنچ معتبر نیست")
     remote_path = str(remote_path or "").strip("/")
+    # .html/.js are needed for the dashboard (ui/dashboard.*); .json for the
+    # AI provider catalogue. Everything else stays rejected, and ".." is still
+    # refused so a crafted path cannot escape the repo.
     if (
         not remote_path
-        or not remote_path.endswith(".py")
+        or not remote_path.endswith((".py", ".html", ".js", ".json"))
         or ".." in remote_path.split("/")
     ):
-        raise ValueError("مسیر منبع باید یک فایل امن با پسوند .py باشد")
+        raise ValueError("مسیر منبع باید یک فایل امن با پسوند py/html/js/json باشد")
     try:
         return git_file_for(repo, branch_cleaned, remote_path, include_content)
     except FetchError as git_exc:
@@ -637,6 +661,65 @@ def ensure_ui_bridge_block(content: bytes, target: str) -> bytes:
     return merged.encode("utf-8")
 
 
+# Files that make up the Node-parity dashboard. scraper4.py imports ui_bridge
+# defensively, so when these are missing the app still boots but silently
+# serves only the classic UI and /ui returns 404. Installing scraper4.py alone
+# is therefore not enough — these have to travel with it.
+DASHBOARD_FILES = (
+    "python-scraper4/ui_bridge.py",
+    "python-scraper4/ui/dashboard.html",
+    "python-scraper4/ui/dashboard.js",
+)
+
+
+def install_dashboard(
+    repo: str, branch: str, token: str, target_dir: str
+) -> dict[str, Any]:
+    """Download ui_bridge.py + ui/ next to scraper4.py.
+
+    Returns a summary instead of raising: the dashboard is an enhancement, so
+    a failure here must not undo an otherwise good scraper4.py install.
+    """
+    installed: list[str] = []
+    errors: list[str] = []
+    for remote in DASHBOARD_FILES:
+        name = remote.split("python-scraper4/", 1)[-1]
+        # Try the subdirectory layout first, then a flat repo layout.
+        candidates = [remote, name]
+        blob = None
+        last = ""
+        for path in candidates:
+            try:
+                blob = github_file_for(repo, branch, path, token, True)
+                if blob and blob.get("content"):
+                    break
+                blob = None
+            except (ValueError, FetchError, OSError) as exc:
+                last = str(exc)
+                blob = None
+        if not blob:
+            errors.append(f"{name}: {last or 'یافت نشد'}")
+            continue
+        content = blob["content"]
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        if name.endswith(".py"):
+            try:
+                compile(content.decode("utf-8"), name, "exec")
+            except (SyntaxError, UnicodeDecodeError) as exc:
+                errors.append(f"{name}: خطای syntax ({exc})")
+                continue
+        destination = os.path.join(target_dir, name)
+        os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
+        try:
+            atomic_write(destination, content, 0o644)
+            installed.append(name)
+        except OSError as exc:
+            errors.append(f"{name}: {exc}")
+    return {"installed": installed, "errors": errors,
+            "ok": bool(installed) and not errors}
+
+
 def fetch_candidates(
     cfg: dict[str, Any], include_content: bool = False
 ) -> tuple[list[dict[str, Any]], str]:
@@ -647,9 +730,21 @@ def fetch_candidates(
     candidates: list[dict[str, Any]] = []
     for branch in cfg["branches"]:
         try:
-            remote = github_file_for(
-                cfg["repo"], branch, cfg["path"], cfg.get("github_token", ""), include_content
-            )
+            # Try both repo layouts so a fork that keeps scraper4.py at the
+            # root and one that nests it under python-scraper4/ both resolve.
+            remote = None
+            last_exc: Exception | None = None
+            for candidate_path in candidate_paths(cfg["path"]):
+                try:
+                    remote = github_file_for(
+                        cfg["repo"], branch, candidate_path,
+                        cfg.get("github_token", ""), include_content
+                    )
+                    break
+                except (ValueError, FetchError) as exc:
+                    last_exc = exc
+            if remote is None:
+                raise last_exc or FetchError("فایل منبع پیدا نشد")
             candidates.append(
                 {
                     "branch": branch,
@@ -929,16 +1024,27 @@ def install_branch(requested_branch: str = "") -> dict[str, Any]:
             old_mode = 0o600
         atomic_write(target + ".bak", current, old_mode)
         atomic_write(target, content, old_mode)
+        # Install the dashboard files from the same branch, so the deployer
+        # delivers a complete app rather than a scraper4.py whose /ui is dead.
+        dashboard = install_dashboard(
+            cfg["repo"], target_cand["branch"], cfg.get("github_token", ""),
+            os.path.dirname(os.path.abspath(target)) or ".")
         reloaded = touch_reload_file(cfg["reload_file"]) if cfg["reload_file"] else False
         pa_reloaded = pythonanywhere_reload()
         vps_reloaded = restart_scraper_process()
+        message = f"نسخه {new_version} از برنچ {target_cand['branch']} نصب شد"
+        if dashboard["installed"]:
+            message += f" (داشبورد: {len(dashboard['installed'])} فایل)"
+        if dashboard["errors"]:
+            message += " — هشدار: داشبورد کامل نصب نشد"
         return {
             "changed": True,
-            "message": f"نسخه {new_version} از برنچ {target_cand['branch']} نصب شد",
+            "message": message,
             "version": new_version, "sha": target_cand["sha"],
             "branch": target_cand["branch"], "newest_branch": target_cand["branch"],
             "newest_version": new_version, "backup": os.path.basename(target + ".bak"),
             "reload_requested": bool(reloaded or pa_reloaded or vps_reloaded),
+            "dashboard": dashboard,
         }
     finally:
         DEPLOY_LOCK.release()
@@ -1213,6 +1319,39 @@ def api_update():
         return jsonify(ok=False, error=str(exc)), 400
 
 
+@app.post("/api/install-dashboard")
+def api_install_dashboard():
+    """Install only ui_bridge.py + ui/ without touching scraper4.py.
+
+    Useful when scraper4.py is already the right version but /ui is 404
+    because the dashboard files never made it onto the server.
+    """
+    body = request.get_json(silent=True) or {}
+    cfg = eff_config()
+    branch = clean_branch(body.get("branch", "")) if isinstance(body, dict) else ""
+    if not branch:
+        branch = (cfg.get("branches") or [""])[0]
+    if not branch:
+        return jsonify(ok=False, error="برنچی انتخاب نشده است"), 400
+    target = active_target()
+    result = install_dashboard(
+        cfg["repo"], branch, cfg.get("github_token", ""),
+        os.path.dirname(os.path.abspath(target)) or ".")
+    # install_dashboard() has its own "ok" key; drop it so it cannot collide
+    # with the envelope's ok flag when splatted into jsonify().
+    detail = {k: v for k, v in result.items() if k != "ok"}
+    if not result["installed"]:
+        return jsonify(ok=False,
+                       error="هیچ فایلی نصب نشد: " + "؛ ".join(result["errors"][:3]),
+                       **detail), 400
+    restarted = restart_scraper_process()
+    return jsonify(
+        ok=True, branch=branch, reload_requested=bool(restarted),
+        message=f"{len(result['installed'])} فایل داشبورد از برنچ {branch} نصب شد"
+                + (" — با هشدار" if result["errors"] else ""),
+        **detail)
+
+
 @app.post("/api/rollback")
 def api_rollback():
     try:
@@ -1373,6 +1512,8 @@ button:disabled{opacity:.6;cursor:wait}
 <button class="green" id="mainBtn" onclick="checkInstall(true)" style="width:100%;padding:12px">🔍 بررسی و نصب نسخهٔ جدید</button>
 <button class="gray" id="restartBtn" onclick="restartScraper()" style="width:100%;padding:11px;margin-top:8px">↻ ری‌استارت اسکرپر در حال اجرا</button>
 <button class="gray hidden" id="updateBtn" onclick="updateNewest()" style="width:100%;padding:11px;margin-top:8px">⬇ نصب جدیدترین نسخه</button>
+<button class="gray" id="dashBtn" onclick="installDashboard()" style="width:100%;padding:11px;margin-top:8px">🖥 نصب/تعمیر داشبورد (/ui)</button>
+<div class="note" style="margin-top:6px">اگر <code>/put/ui</code> خطای ۴۰۴ می‌دهد ولی رابط کلاسیک کار می‌کند، این دکمه فایل‌های داشبورد را جداگانه نصب می‌کند.</div>
 <div id="status" class="status" style="margin-top:8px">آماده بررسی.</div>
 <label class="checkline"><input type="checkbox" id="autoCheck" onchange="saveSettings(true)"> بررسی خودکار هنگام باز شدن صفحه (فقط اطلاع؛ نصب با تأیید شماست)</label>
 <label class="checkline"><input type="checkbox" id="autoUpdate" onchange="saveSettings(true)"> آپدیت خودکار سرور هر <input type="number" id="autoInterval" min="120" max="3600" step="60" value="300" onclick="event.stopPropagation()" onchange="saveSettings(true)"> ثانیه</label>
@@ -1444,6 +1585,7 @@ $('cands').innerHTML=(d.candidates||[]).length?'<div class="table-wrap"><table c
 if(manual&&d.update_available)showToast('⬆ نسخه جدید v'+(d.newest_version||'')+' آماده نصب است');return d}catch(e){$('status').innerHTML='<span class="error">'+esc(e.message)+'</span>';if(manual)showToast(e.message,1);throw e}}
 async function checkInstall(manual){let b=$('mainBtn');if(b){b.disabled=true;b.textContent='⏳ در حال بررسی…'}try{let d=await check(false);if(d.update_available){await updateNewest();return}if(d.running_version&&d.local_version&&d.running_version!==d.local_version){await restartScraper();return}if(manual)showToast('✓ فایل و فرآیند هر دو v'+(d.local_version||'')+' هستند')}catch(e){}finally{if(b){b.disabled=false;b.textContent='🔍 بررسی و نصب نسخهٔ جدید'}}}
 async function updateNewest(){let t='';try{let d0=await api('api/check',{method:'POST',body:'{}'});if(d0&&d0.newest_branch)t=d0.newest_branch}catch(e){}await updateBranch(t)}
+async function installDashboard(){let b=($('branchPick')&&$('branchPick').value.trim())||'';try{$('status').textContent='در حال نصب فایل‌های داشبورد'+(b?(' از برنچ '+b):'')+'…';let d=await api('api/install-dashboard',{method:'POST',body:JSON.stringify(b?{branch:b}:{})});let warn=(d.errors&&d.errors.length)?('\n هشدار: '+d.errors.join(' | ')):'';$('status').innerHTML='<span class="ok">'+esc(d.message)+'</span>\n نصب‌شده: '+esc((d.installed||[]).join('، '))+esc(warn)+'\n چند ثانیه صبر کنید و سپس /put/ui را باز کنید.';showToast('✓ داشبورد نصب شد')}catch(e){$('status').innerHTML='<span class="error">'+esc(e.message)+'</span>';showToast(e.message,1)}}
 async function updateBranch(branch){let label=branch?(' برنچ '+branch):' جدیدترین نسخه';if(!confirm('فایل اصلی جایگزین و نسخه قبلی در .bak ذخیره شود؟\n\nمقصد:'+label))return;try{$('status').textContent='در حال دانلود، اعتبارسنجی و نصب'+label+'…';let d=await api('api/update',{method:'POST',body:JSON.stringify(branch?{branch}:{})});$('status').innerHTML='<span class="ok">'+esc(d.message)+' — نسخه '+esc(d.version)+'</span>\n'+(d.reload_requested?'درخواست reload فرستاده شد؛ چند ثانیه بعد صفحه را رفرش کنید.':'فایل WSGI تنظیم نشده؛ از تب Web دکمه Reload را بزنید.');hideBanner();$('updateBtn').classList.add('hidden');showToast('✓ نصب شد: v'+d.version)}catch(e){$('status').innerHTML='<span class="error">'+esc(e.message)+'</span>';showToast(e.message,1)}}
 async function rollback(){if(!confirm('نسخه scraper4.py.bak بازیابی شود؟'))return;try{let d=await api('api/rollback',{method:'POST',body:'{}'});$('status').innerHTML='<span class="ok">'+esc(d.message)+' — نسخه '+esc(d.version)+'</span>'}catch(e){$('status').innerHTML='<span class="error">'+esc(e.message)+'</span>';showToast(e.message,1)}}
 async function restartScraper(){try{$('status').textContent='در حال ری‌استارت اسکرپر…';let d=await api('api/restart',{method:'POST',body:'{}'});$('status').innerHTML='<span class="ok">'+esc(d.message||'ری‌استارت شد')+(d.running_version?(' · در حال اجرا v'+esc(d.running_version)):'')+'</span>';showToast('↻ اسکرپر ری‌استارت شد');check(false).catch(()=>{})}catch(e){$('status').innerHTML='<span class="error">'+esc(e.message)+'</span>';showToast(e.message,1)}}
