@@ -173,10 +173,17 @@ curl -s http://127.0.0.1:8000/health | tr ',' '\n' | grep ui_bridge
 
 ### شایع‌ترین علت: خودبه‌روزرسانی فایل را عوض کرده
 
-`scraper4.py` یک به‌روزرسان خودکار دارد که **۴۰ ثانیه بعد از استارت**،
-فایل خودش را از مخزن `fazilatma/amphp` دانلود و جایگزین می‌کند. آن نسخه
-داشبورد جدید را ندارد، پس `/ui` و `/api/profiles` هر دو ۴۰۴ می‌شوند
-درحالی‌که رابط کلاسیک سالم کار می‌کند.
+**دو** به‌روزرسان مستقل وجود دارد و هر دو از `fazilatma/amphp` نصب می‌کنند
+که داشبورد جدید را ندارد:
+
+| سرویس | زمان‌بندی | متغیر خاموش‌کننده |
+| --- | --- | --- |
+| `scraper4` (خودِ برنامه) | ۴۰ ثانیه بعد از استارت | `SCRAPER_AUTO_UPDATE=0` |
+| `deployer4` (نصب‌کنندهٔ جدا) | **هر ۵ دقیقه** | `DEPLOYER_AUTO_UPDATE=0` |
+
+اگر فقط اولی را خاموش کنید، `deployer4` چند دقیقه بعد دوباره فایل را
+عوض می‌کند و `/ui` و `/api/profiles` باز ۴۰۴ می‌شوند — درحالی‌که رابط
+کلاسیک سالم کار می‌کند. هر دو باید خاموش باشند.
 
 نشانه‌ها:
 
@@ -185,25 +192,37 @@ ls -l /opt/scraper4/scraper4.py.bak          # وجودش یعنی فایل با
 grep -c ui_bridge /opt/scraper4/scraper4.py  # اگر 0 بود، نسخه عوض شده
 ```
 
-درمان:
+درمان — کافی است نسخهٔ جدید را بکشید و اسکریپت نصب را اجرا کنید؛ خودش هر
+دو سرویس را اصلاح می‌کند:
 
 ```bash
-# ۱) خودبه‌روزرسانی را خاموش کنید
-grep SCRAPER_AUTO_UPDATE /etc/systemd/system/scraper4.service \
-  || sed -i '/^Environment=PORT=8000/a Environment=SCRAPER_AUTO_UPDATE=0' \
-       /etc/systemd/system/scraper4.service
-
-# ۲) نسخهٔ درست را دوباره نصب کنید
 cd ~/new && git pull
 bash python-scraper4/tools/vps-live/install_scraper4_vps.sh
-
-systemctl daemon-reload && systemctl restart scraper4
 ```
 
-از این به بعد دو لایهٔ محافظ فعال است: سرویس با
-`SCRAPER_AUTO_UPDATE=0` نصب می‌شود، و اگر کسی دوباره روشنش کند، بلوک
-داشبورد به‌صورت خودکار به هر فایل دانلودشده الحاق می‌شود تا `/ui` از بین
-نرود.
+اگر ترجیح می‌دهید دستی انجام دهید:
+
+```bash
+sed -i 's/^Environment=DEPLOYER_AUTO_UPDATE=1/Environment=DEPLOYER_AUTO_UPDATE=0/' \
+  /etc/systemd/system/deployer4.service
+grep -q SCRAPER_AUTO_UPDATE /etc/systemd/system/scraper4.service \
+  || sed -i '/^Environment=PORT=8000/a Environment=SCRAPER_AUTO_UPDATE=0' \
+       /etc/systemd/system/scraper4.service
+systemctl daemon-reload && systemctl restart deployer4 scraper4
+```
+
+بررسی اینکه دیگر برنمی‌گردد — پنج دقیقه صبر کنید و دوباره بزنید:
+
+```bash
+sleep 300; curl -s http://127.0.0.1:8000/health | tr ',' '\n' | grep ui_bridge
+```
+
+باید همچنان `true` باشد.
+
+از این به بعد دو لایهٔ محافظ فعال است: هر دو سرویس با auto-update خاموش
+نصب می‌شوند، و اگر کسی دوباره روشنشان کند، بلوک داشبورد به‌صورت خودکار به
+هر فایل دانلودشده الحاق می‌شود تا `/ui` از بین نرود. پنل `/deploy/` برای
+نصب دستی همچنان کار می‌کند.
 
 **بررسی دستی فایل‌ها**
 

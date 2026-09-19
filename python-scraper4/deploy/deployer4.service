@@ -10,8 +10,13 @@ Group=root
 WorkingDirectory=/opt/scraper4
 Environment=PYTHONUNBUFFERED=1
 Environment=DEPLOYER_TARGET=/opt/scraper4/scraper4.py
-Environment=DEPLOYER_AUTO_UPDATE=1
-Environment=DEPLOYER_SEARCH_ALL=1
+# Deployer4 is a SECOND self-updater, independent of scraper4's own. With
+# auto-update on it reinstalls scraper4.py from fazilatma/amphp every 5
+# minutes; that upstream copy has no Node-parity dashboard, so /ui starts
+# returning 404 minutes after a good install. Keep the deployer UI available
+# for manual, deliberate installs, but never let it rewrite files on a timer.
+Environment=DEPLOYER_AUTO_UPDATE=0
+Environment=DEPLOYER_SEARCH_ALL=0
 Environment=DEPLOYER_AUTO_INTERVAL=300
 ExecStart=/opt/scraper4/venv/bin/python3 -m gunicorn --bind 127.0.0.1:8001 --workers 1 --threads 4 --timeout 120 deployer4:application
 Restart=always

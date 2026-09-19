@@ -594,6 +594,49 @@ def validate_target_source(content: bytes) -> str:
     return extract_version_from_text(text)
 
 
+# Marker comment that identifies the Node-parity dashboard block inside
+# scraper4.py. Kept in sync with UI_BRIDGE_MARKER over there.
+UI_BRIDGE_MARKER = "# >>> scraper4 node-parity dashboard bridge >>>"
+
+
+def ensure_ui_bridge_block(content: bytes, target: str) -> bytes:
+    """Keep the Node dashboard bridge attached to a downloaded scraper4.py.
+
+    Deployer4 installs scraper4.py from the upstream repository, which knows
+    nothing about the ui_bridge layer. Overwriting blindly deletes the bridge
+    and /ui starts answering 404 while the classic UI keeps working — a silent
+    regression. Carry the block over from the file being replaced.
+    """
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    # Anchor on a full comment line: a bare substring test would also match the
+    # UI_BRIDGE_MARKER constant and wrongly report the block as present.
+    present = re.compile("^" + re.escape(UI_BRIDGE_MARKER) + r"\s*$", re.MULTILINE)
+    if present.search(text):
+        return content
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            current = fh.read()
+    except OSError:
+        return content
+    found = present.search(current)
+    if not found:
+        return content
+    block = current[found.start():]
+    guard = re.search(r'^if __name__ == ["\']__main__["\']:', text, re.MULTILINE)
+    if guard:
+        merged = text[:guard.start()] + block.rstrip("\n") + "\n\n\n" + text[guard.start():]
+    else:
+        merged = text.rstrip("\n") + "\n\n\n" + block
+    try:
+        compile(merged, "scraper4-update.py", "exec")
+    except SyntaxError:
+        return content
+    return merged.encode("utf-8")
+
+
 def fetch_candidates(
     cfg: dict[str, Any], include_content: bool = False
 ) -> tuple[list[dict[str, Any]], str]:
@@ -867,7 +910,7 @@ def install_branch(requested_branch: str = "") -> dict[str, Any]:
                 raise FetchError(
                     f"هیچ برنچی قابل نصب نبود: {errors}" if errors else "هیچ برنچی قابل نصب نبود"
                 )
-        content = target_cand["content"]
+        content = ensure_ui_bridge_block(target_cand["content"], cfg["target"])
         new_version = validate_target_source(content)
         try:
             current = read_target()

@@ -66,6 +66,29 @@ if ! grep -q '^Environment=SCRAPER_AUTO_UPDATE=0' /etc/systemd/system/scraper4.s
 fi
 if [[ -f "${REPO_DIR}/deploy/deployer4.service" ]]; then
   install -m 644 "${REPO_DIR}/deploy/deployer4.service" /etc/systemd/system/deployer4.service
+  # Same hazard as scraper4's own updater: older deployer4 units shipped
+  # DEPLOYER_AUTO_UPDATE=1 and reinstall scraper4.py from upstream every few
+  # minutes, erasing the dashboard. Force it off on pre-existing unit files.
+  sed -i 's/^Environment=DEPLOYER_AUTO_UPDATE=1/Environment=DEPLOYER_AUTO_UPDATE=0/; s/^Environment=DEPLOYER_SEARCH_ALL=1/Environment=DEPLOYER_SEARCH_ALL=0/' \
+    /etc/systemd/system/deployer4.service
+fi
+# Drop-in overrides and saved deployer state can re-enable auto-update behind
+# the unit file's back; clear both so a reinstall is actually a clean slate.
+rm -f /etc/systemd/system/scraper4.service.d/*auto*.conf \
+      /etc/systemd/system/deployer4.service.d/*auto*.conf 2>/dev/null || true
+if [[ -f /opt/scraper4/deployer4_state.json ]]; then
+  "$PY" - <<'PY' || true
+import json, pathlib
+p = pathlib.Path("/opt/scraper4/deployer4_state.json")
+try:
+    state = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+if isinstance(state, dict) and state.get("auto_update"):
+    state["auto_update"] = False
+    p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("Disabled auto_update in saved deployer4 state.")
+PY
 fi
 systemctl daemon-reload
 systemctl enable scraper4.service
