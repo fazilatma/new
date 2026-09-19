@@ -198,6 +198,24 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "productCount": len(products) if isinstance(products, list) else 0,
         }
 
+    # Keys that only ever appear in one of the two profile schemas. Used to
+    # tell an imported profile's origin apart so it can be converted rather
+    # than written raw into storage.
+    _NODE_ONLY = ("extractionEngine", "paginationValue", "titleSuffix",
+                  "priceMode", "priceValue", "extractionEngineMaster")
+    _PY_ONLY = ("display_name", "fetch_engine", "profile_rules", "page_value",
+                "detail_selectors", "fetch_engine_master")
+
+    def _is_node_profile(cfg: dict[str, Any]) -> bool:
+        """True when this entry uses the Node dashboard's field names."""
+        if any(k in cfg for k in _PY_ONLY):
+            return False
+        if any(k in cfg for k in _NODE_ONLY):
+            return True
+        # Ambiguous (e.g. only url/pages): "name" is Node-only, since the
+        # Python schema calls it display_name.
+        return "name" in cfg
+
     def node_to_profile(node: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
         """Merge an incoming Node ``Profile`` back into the Python schema."""
         cfg = dict(previous) if isinstance(previous, dict) else {}
@@ -1078,7 +1096,35 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             if not isinstance(payload, dict) or not payload:
                 return jsonify(ok=False, error="فایل تنظیمات نامعتبر است."), 400
             recognised = False
-            for key in ("profiles", "woocommerce", "basalam", "network", "ai",
+            # Profiles need the same shape handling as a bundle: a raw Node
+            # export stores them as an array (or a dict) of Node-shaped
+            # objects, which must be converted, not written verbatim.
+            raw_profiles = payload.get("profiles")
+            if isinstance(raw_profiles, list):
+                raw_profiles = {
+                    _s(p.get("id") or p.get("name")): p
+                    for p in raw_profiles if isinstance(p, dict)
+                }
+            if isinstance(raw_profiles, dict) and raw_profiles:
+                existing = data.get("profiles") or {}
+                for name, cfg in raw_profiles.items():
+                    if not isinstance(cfg, dict) or not _s(name):
+                        continue
+                    name = _s(name)
+                    keep = (existing.get(name) or {}).get("saved_products") or []
+                    if _is_node_profile(cfg):
+                        merged = node_to_profile({**cfg, "id": name},
+                                                 existing.get(name) or {})
+                        merged.setdefault("saved_products", keep)
+                    else:
+                        merged = dict(cfg)
+                        merged.setdefault("saved_products", keep)
+                    existing[name] = merged
+                    counts["profiles"] += 1
+                data["profiles"] = existing
+                recognised = True
+                applied.append("profiles")
+            for key in ("woocommerce", "basalam", "network", "ai",
                         "ai_providers", "ai_candidates", "category_learning",
                         "autoreply_rules", "ai_votes"):
                 if key in payload and isinstance(
@@ -1086,10 +1132,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     data[key] = payload[key]
                     recognised = True
                     applied.append(key)
-                    if key == "profiles" and isinstance(payload[key], dict):
-                        counts["profiles"] = len(payload[key])
-                    else:
-                        counts["states"] += 1
+                    counts["states"] += 1
             if not recognised:
                 return jsonify(
                     ok=False,
@@ -1108,12 +1151,33 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 error="هیچ فایل قابل خواندنی در بسته نبود."), 400
 
         profiles = data.get("profiles") or {}
-        if isinstance(decoded.get("profiles.json"), dict):
-            for name, cfg in decoded["profiles.json"].items():
+        incoming_profiles = decoded.get("profiles.json")
+        # A bundle may carry either shape: this app's own storage schema
+        # (display_name / fetch_engine / profile_rules) or the Node dashboard
+        # schema (name / extractionEngine / titleSuffix / priceMode). Writing a
+        # Node-shaped entry straight into storage is what made the dropdown
+        # show the id instead of the name and silently dropped the engine,
+        # title suffix and price rules — none of those keys exist in the
+        # Python schema. Detect the shape per entry and convert when needed.
+        if isinstance(incoming_profiles, list):
+            # Node exports sometimes use an array keyed by an inner id.
+            incoming_profiles = {
+                _s(p.get("id") or p.get("name")): p
+                for p in incoming_profiles if isinstance(p, dict)
+            }
+        if isinstance(incoming_profiles, dict):
+            for name, cfg in incoming_profiles.items():
                 if not isinstance(cfg, dict):
                     continue
+                name = _s(name)
+                if not name:
+                    continue
                 keep = (profiles.get(name) or {}).get("saved_products") or []
-                merged = dict(cfg)
+                if _is_node_profile(cfg):
+                    merged = node_to_profile({**cfg, "id": name},
+                                             profiles.get(name) or {})
+                else:
+                    merged = dict(cfg)
                 merged["saved_products"] = keep
                 profiles[name] = merged
                 counts["profiles"] += 1
