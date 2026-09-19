@@ -3,7 +3,7 @@
 #
 # اجرا داخل Bash Console حساب PythonAnywhere (پلن رایگان کافی است):
 #   cd ~/scraper4
-#   curl -fsSL https://raw.githubusercontent.com/fazilatma/amphp/arena/01a06ac3-amphp/setup_deployer4.sh -o setup_deployer4.sh
+#   curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/01a0b7db-new/python-scraper4/setup_deployer4.sh -o setup_deployer4.sh
 #   bash setup_deployer4.sh
 #
 # این اسکریپت چه می‌کند:
@@ -30,8 +30,10 @@ APP_FILE="$APP_DIR/deployer4.py"
 TARGET_FILE="$APP_DIR/scraper4.py"
 TOKEN_FILE="$HOME_DIR/.pythonanywhere_api_token"
 VENV_DIR="$APP_DIR/venv"
-REPO="fazilatma/amphp"
-DEFAULT_BRANCHES="arena/01a06ac3-amphp arena/01a0640f-amphp"
+REPO="${REPO:-fazilatma/new}"
+# deployer4.py lives under python-scraper4/ in this repo.
+SRC_DIR="${SRC_DIR:-python-scraper4}"
+DEFAULT_BRANCHES="arena/01a0b7db-new"
 if [ -n "${BRANCHES:-}" ]; then
   CANDIDATE_BRANCHES="$BRANCHES"
 else
@@ -72,7 +74,7 @@ for CANDIDATE in $CANDIDATE_BRANCHES; do
   case "$CANDIDATE" in
     *[!A-Za-z0-9._/-]*) echo "Skipping invalid branch name: $CANDIDATE"; continue;;
   esac
-  CAND_URL="https://raw.githubusercontent.com/$REPO/$CANDIDATE/deployer4.py"
+  CAND_URL="https://raw.githubusercontent.com/$REPO/$CANDIDATE/$SRC_DIR/deployer4.py"
   CAND_FILE="$TMP_CANDIDATES/$(printf '%s' "$CANDIDATE" | tr '/.' '__').py"
   echo "Trying branch: $CANDIDATE"
   if ! curl -fsSL --retry 2 --connect-timeout 20 --max-time 120 "$CAND_URL" -o "$CAND_FILE"; then
@@ -153,7 +155,7 @@ import os, pathlib, py_compile, re
 wsgi = pathlib.Path(os.environ["S4_WSGI"])
 app_dir = os.environ["S4_APP_DIR"]
 password = os.environ["S4_DEPLOYER_PASSWORD"]
-branches = os.environ.get("S4_BRANCHES", "arena/01a06ac3-amphp arena/01a0640f-amphp")
+branches = os.environ.get("S4_BRANCHES", "arena/01a0b7db-new")
 text = wsgi.read_text(encoding="utf-8")
 text = re.sub(r"# >>> deployer4 dispatch >>>.*?# <<< deployer4 dispatch <<<\n*", "", text, flags=re.S)
 text = text.rstrip("\n") + "\n"
@@ -169,9 +171,9 @@ lines = [
     "# Serves the main site at / and the independent deployer at /deployer.",
     "import os as _os_deployer4",
     "_os_deployer4.environ.setdefault('DEPLOYER_PASSWORD', " + repr(password) + ")",
-    "_os_deployer4.environ.setdefault('DEPLOYER_REPO', 'fazilatma/amphp')",
+    "_os_deployer4.environ.setdefault('DEPLOYER_REPO', 'fazilatma/new')",
     "_os_deployer4.environ.setdefault('DEPLOYER_BRANCHES', " + repr(branches) + ")",
-    "_os_deployer4.environ.setdefault('DEPLOYER_PATH', 'scraper4.py')",
+    "_os_deployer4.environ.setdefault('DEPLOYER_PATH', 'python-scraper4/scraper4.py')",
     "_os_deployer4.environ.setdefault('DEPLOYER_TARGET', " + repr(app_dir + "/scraper4.py") + ")",
     "_os_deployer4.environ.setdefault('DEPLOYER_RELOAD_FILE', " + repr(str(wsgi)) + ")",
     "_os_deployer4.environ.setdefault('DEPLOYER_AUTO_UPDATE', '1')",

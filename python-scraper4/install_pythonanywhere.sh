@@ -13,16 +13,19 @@ DATA_FILE="$APP_DIR/scraper4_data.json"
 PASSWORD_FILE="$APP_DIR/admin_password.txt"
 TOKEN_FILE="$HOME_DIR/.pythonanywhere_api_token"
 VENV_DIR="$APP_DIR/venv"
-REPO="fazilatma/amphp"
+# This fork, not fazilatma/amphp: that repo has no ui_bridge.py or ui/, so
+# installing from it leaves /ui returning 404 while the classic UI works.
+REPO="${REPO:-fazilatma/new}"
+# scraper4.py lives under python-scraper4/ here; SRC_DIR is also where the
+# dashboard files are fetched from.
+SRC_DIR="${SRC_DIR:-python-scraper4}"
 # Candidate branches for the installer. The branch carrying the newest
 # APP_VERSION wins, so adding a branch here can never downgrade an install.
 # Override with:  BRANCHES="branch-a branch-b"  ./install_pythonanywhere.sh
-# A legacy single BRANCH env var is still honoured and prepended.
-BRANCH="arena/01a0640f-amphp"
-DEFAULT_BRANCHES="arena/01a06ac3-amphp arena/01a0640f-amphp"
+DEFAULT_BRANCHES="arena/01a0b7db-new"
 if [ -n "${BRANCHES:-}" ]; then
   CANDIDATE_BRANCHES="$BRANCHES"
-elif [ -n "${BRANCH:-}" ] && [ "$BRANCH" != "arena/01a0640f-amphp" ]; then
+elif [ -n "${BRANCH:-}" ]; then
   CANDIDATE_BRANCHES="$BRANCH $DEFAULT_BRANCHES"
 else
   CANDIDATE_BRANCHES="$DEFAULT_BRANCHES"
@@ -63,7 +66,7 @@ for CANDIDATE in $CANDIDATE_BRANCHES; do
   case "$CANDIDATE" in
     *[!A-Za-z0-9._/-]*) echo "Skipping invalid branch name: $CANDIDATE"; continue;;
   esac
-  CAND_URL="https://raw.githubusercontent.com/$REPO/$CANDIDATE/scraper4.py"
+  CAND_URL="https://raw.githubusercontent.com/$REPO/$CANDIDATE/$SRC_DIR/scraper4.py"
   CAND_FILE="$TMP_CANDIDATES/$(printf '%s' "$CANDIDATE" | tr '/.' '__').py"
   echo "Trying branch: $CANDIDATE"
   if ! curl -fsSL --retry 2 --connect-timeout 20 --max-time 120 "$CAND_URL" -o "$CAND_FILE"; then
@@ -117,6 +120,31 @@ PY
 [ ! -f "$APP_FILE" ]||cp -p "$APP_FILE" "$APP_FILE.$(date +%Y%m%d-%H%M%S).bak"
 mv "$DOWN" "$APP_FILE"; DOWN=""; chmod 600 "$APP_FILE"
 echo "Installed Scraper4 $BEST_VERSION from $BEST_BRANCH"
+
+# The Node-parity dashboard (/ui) needs ui_bridge.py and ui/dashboard.*.
+# scraper4.py imports ui_bridge defensively, so without these the app still
+# boots but /ui silently 404s — install them from the same branch.
+echo "Installing dashboard files (/ui)..."
+DASH_OK=1
+mkdir -p "$APP_DIR/ui"
+for REL in ui_bridge.py ui/dashboard.html ui/dashboard.js; do
+  DASH_URL="https://raw.githubusercontent.com/$REPO/$BEST_BRANCH/$SRC_DIR/$REL"
+  DASH_TMP="$APP_DIR/.dash-tmp"
+  if curl -fsSL --retry 2 --connect-timeout 20 --max-time 120 "$DASH_URL" -o "$DASH_TMP"; then
+    mv "$DASH_TMP" "$APP_DIR/$REL"
+    chmod 644 "$APP_DIR/$REL"
+    echo "  ok: $REL"
+  else
+    rm -f "$DASH_TMP"
+    echo "  WARNING: could not download $REL" >&2
+    DASH_OK=0
+  fi
+done
+if [ "$DASH_OK" = 1 ]; then
+  echo "Dashboard installed - it will be at /ui"
+else
+  echo "WARNING: dashboard incomplete; /ui may return 404 (classic UI still works)." >&2
+fi
 
 echo "Creating isolated virtual environment..."
 if [ ! -x "$VENV_DIR/bin/python" ]; then "$SYSTEM_PY" -m venv "$VENV_DIR"; fi
@@ -184,7 +212,7 @@ if datafile.exists():
  except Exception: pass
 data.setdefault("profiles",{}); data.setdefault("woocommerce",{"url":"","consumer_key":"","consumer_secret":""}); data.setdefault("network",{"timeout":25,"gap_ms":350,"proxy":"","verify_tls":True}); data.setdefault("last_result",[])
 old=data.get("deploy") if isinstance(data.get("deploy"),dict) else {}
-best=str(__import__("os").environ.get("S4_BEST_BRANCH","")).strip() or "arena/01a06ac3-amphp"
+best=str(__import__("os").environ.get("S4_BEST_BRANCH","")).strip() or "arena/01a0b7db-new"
 raw_branches=str(__import__("os").environ.get("S4_BRANCHES","")).replace(","," ").split()
 _branches=[]
 for _b in ([best]+raw_branches+[str(old.get("branch",""))]+(list(old.get("branches") or []) if isinstance(old.get("branches"),list) else [])):
@@ -193,7 +221,7 @@ for _b in ([best]+raw_branches+[str(old.get("branch",""))]+(list(old.get("branch
   _branches.append(_b)
  if len(_branches)>=8: break
 if not _branches: _branches=[best]
-data["deploy"]={"repo":"fazilatma/amphp","branch":_branches[0],"branches":_branches,"path":"scraper4.py","github_token":old.get("github_token",""),"reload_file":str(wsgi),"check_on_load":bool(old.get("check_on_load",False))}
+data["deploy"]={"repo":"fazilatma/new","branch":_branches[0],"branches":_branches,"path":"python-scraper4/scraper4.py","github_token":old.get("github_token",""),"reload_file":str(wsgi),"check_on_load":bool(old.get("check_on_load",False))}
 tmp=datafile.with_suffix(".json.tmp"); tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8"); tmp.replace(datafile)
 PY
 unset APP_DIR_E DATA_FILE_E WSGI_FILE_E PASSWORD_E SITE_E BROWSER_PATH_E S4_BEST_BRANCH S4_BRANCHES; chmod 600 "$DATA_FILE"

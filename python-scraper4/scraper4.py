@@ -287,9 +287,13 @@ def default_data() -> dict[str, Any]:
         "active_profile": "",
         "woocommerce": {"url": "", "consumer_key": "", "consumer_secret": "", "api_mode": "direct", "relay_url": "", "worker_key": ""},
         "network": {"timeout": 60, "gap_ms": 200, "proxy": "", "proxy_mode": "direct", "worker_key": "", "verify_tls": True},
+        # Default to THIS fork. Pointing at fazilatma/amphp is what silently
+        # removed the dashboard: that repo has no ui_bridge.py or ui/, so an
+        # install from it "succeeds" while /ui starts returning 404.
         "deploy": {
-            "repo": "fazilatma/amphp", "branch": "arena/01a0640f-amphp",
-            "branches": ["arena/01a06ac3-amphp", "arena/01a0640f-amphp"], "path": "scraper4.py",
+            "repo": "fazilatma/new", "branch": "arena/01a0b7db-new",
+            "branches": ["arena/01a0b7db-new"],
+            "path": "python-scraper4/scraper4.py",
             "github_token": "", "reload_file": "", "check_on_load": False,
         },
         "last_result": [],

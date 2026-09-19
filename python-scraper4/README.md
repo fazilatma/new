@@ -12,6 +12,11 @@
 | `deployer4.py`, `run_scraper4.sh`, `setup_deployer4.sh` | همان برنچ |
 | `install_pythonanywhere.sh`, `deploy/`, `tools/vps-live/` | همان برنچ |
 | `requirements.txt` | برنچ `arena/01a0afa2-new` همین مخزن |
+
+> جدول بالا **تاریخچهٔ آوردن فایل‌هاست**. از این به بعد همهٔ ابزارهای نصب و
+> به‌روزرسانی به همین مخزن (`fazilatma/new`، برنچ `arena/01a0b7db-new`)
+> اشاره می‌کنند. مخزن `amphp` فایل‌های داشبورد (`ui_bridge.py` و `ui/`) را
+> ندارد، بنابراین نصب از روی آن باعث می‌شد `/ui` خطای ۴۰۴ بدهد.
 | `ui/dashboard.html`, `ui/dashboard.js` | استخراج‌شده از `cloudflare-scraper4/worker-src/dashboard.ts` |
 | `ui_bridge.py` | **جدید** — لایهٔ سازگاری بین داشبورد Node و بک‌اند پایتون |
 

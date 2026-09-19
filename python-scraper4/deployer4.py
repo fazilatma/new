@@ -10,7 +10,7 @@ Deployer4 — فایل مستقل نصب/به‌روزرسانی چندبرنچ�
 روی VPS: http://SERVER/deploy/  (Apache به gunicorn :8001)
 نصب روی PythonAnywhere (داخل Bash Console):
     cd ~/scraper4
-    curl -fsSL https://raw.githubusercontent.com/fazilatma/amphp/arena/01a06ac3-amphp/setup_deployer4.sh -o setup_deployer4.sh
+    curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/01a0b7db-new/python-scraper4/setup_deployer4.sh -o setup_deployer4.sh
     bash setup_deployer4.sh
 
 بعد از نصب، در نوار آدرس مرورگر بزنید (اسلش آخر مهم نیست، خودکار اضافه می‌شود):
