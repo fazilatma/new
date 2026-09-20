@@ -156,6 +156,59 @@ cp scraper4_data.json scraper4_data.json.bak
 
 ---
 
+## نصب مرورگر Chromium از ایران
+
+دستور رسمی پلی‌رایت از داخل ایران کار نمی‌کند:
+
+```bash
+venv/bin/python -m playwright install chromium
+# Error: Download failure, code=1
+```
+
+چون `cdn.playwright.dev` برای IP ایران مسدود است. از نسخهٔ ۱.۵۸ به بعد،
+پلی‌رایت کرومیوم را از مسیر `builds/cft/` می‌گیرد که آینهٔ معمول npmmirror
+آن را ندارد؛ برای همین فقط تنظیم `PLAYWRIGHT_DOWNLOAD_HOST` هم کافی نیست.
+
+راه‌حل — اسکریپت آینه:
+
+```bash
+bash python-scraper4/tools/install_chromium_mirror.sh
+systemctl restart scraper4
+```
+
+این اسکریپت:
+
+1. نسخهٔ دقیق موردنیاز را از خود پلی‌رایت می‌پرسد (چیزی hardcode نشده، پس
+   بعد از ارتقا هم کار می‌کند)
+2. همان فایل‌های Chrome for Testing را از `cdn.npmmirror.com` می‌گیرد
+3. در مسیر کش پلی‌رایت با ساختار درست باز می‌کند و فایل
+   `INSTALLATION_COMPLETE` را می‌سازد
+4. کتابخانه‌های سیستمی لازم را نصب می‌کند
+5. در پایان یک مرورگر واقعی بالا می‌آورد تا مطمئن شود کار می‌کند
+
+اگر آینه هم در دسترس نبود:
+
+```bash
+# گزینهٔ ۱ — مرورگر سیستمی (ساده‌ترین)
+apt-get install -y chromium chromium-browser
+# برنامه خودش آن را پیدا می‌کند
+
+# گزینهٔ ۲ — آینهٔ دیگر
+MIRROR=https://registry.npmmirror.com/-/binary \
+  bash python-scraper4/tools/install_chromium_mirror.sh
+
+# گزینهٔ ۳ — دانلود روی سیستم دیگر و کپی به سرور
+#   فایل‌ها را در ~/.cache/ms-playwright/chromium-<build>/ بگذارید
+```
+
+بررسی نتیجه:
+
+```bash
+curl -s http://127.0.0.1:8000/api/engines | python3 -m json.tool | grep -A2 playwright
+```
+
+اگر `installed: true` بود، موتور مرورگری آمادهٔ استفاده است.
+
 ## عیب‌یابی
 
 **داشبورد `/ui` خطای ۴۰۴ می‌دهد**

@@ -256,21 +256,16 @@ else
     playwright cloudscraper curl_cffi httpx selectolax selenium \
     playwright-stealth basalam-sdk || true
 fi
-# cdn.playwright.dev is geo-blocked in Iran (403). Prefer Ubuntu Chromium.
+# cdn.playwright.dev is geo-blocked for Iranian IPs, so the normal
+# "playwright install chromium" fails there. Try the official path first, and
+# fall back to the mirror installer, which reads the exact versions Playwright
+# wants and fetches the identical Chrome-for-Testing builds from npmmirror.
 apt-get install -y chromium-browser || apt-get install -y chromium || true
 snap install chromium || true
-if ! "$VENV/bin/python" -m playwright install --with-deps chromium; then
-  echo "Playwright CDN blocked; trying npmmirror Chrome for Testing…"
-  CFT_VER="${PLAYWRIGHT_CFT_VERSION:-151.0.7922.34}"
-  ZIP=/tmp/chrome-linux64.zip
-  if curl -fL --retry 3 --max-time 180 -o "$ZIP" \
-      "https://cdn.npmmirror.com/binaries/chrome-for-testing/${CFT_VER}/linux64/chrome-linux64.zip"; then
-    unzip -o "$ZIP" -d "$APP_DIR"
-    chmod +x "$APP_DIR/chrome-linux64/chrome" || true
-    rm -f "$ZIP"
-  else
-    echo "npmmirror also failed; system Chromium will be used if present."
-  fi
+if ! "$VENV/bin/python" -m playwright install --with-deps chromium 2>/dev/null; then
+  echo "Playwright CDN unreachable — switching to the mirror installer…"
+  VENV="$VENV" bash "${REPO_DIR}/tools/install_chromium_mirror.sh" || \
+    echo "Mirror install did not finish; a system Chromium will be used if present."
 fi
 echo "Optional engines done."
 which chromium chromium-browser 2>/dev/null || true
