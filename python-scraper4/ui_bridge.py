@@ -1459,9 +1459,18 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 installed = bool(core.fetch_engine_installed(eid))
             else:
                 installed = importlib.util.find_spec(module) is not None
+            # Distinguish "pip package missing" from "package present but the
+            # browser binary was never downloaded" — the fix differs.
+            pkg = (not module) or importlib.util.find_spec(module) is not None
+            note = ""
+            if not installed:
+                note = ("مرورگر نصب نشده؛ اجرا کنید: playwright install chromium"
+                        if pkg and eid in ("playwright", "selenium")
+                        else "کتابخانه نصب نیست")
             rows.append({
                 "id": eid, "label": label, "stage": stage,
                 "module": module, "installed": installed,
+                "package": pkg, "note": note,
                 # Browser engines additionally need a downloaded browser binary.
                 "needsBrowser": eid in ("playwright", "selenium"),
             })

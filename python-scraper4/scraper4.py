@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.169"
+APP_VERSION = "10.170"
 CHANGELOG = [
+    {"version":"10.170","date":"2026-09-20","title":"رفع گیر کردن استخراج به‌خاطر مرورگر نصب‌نشده","items":["اگر کتابخانهٔ playwright نصب بود ولی مرورگر chromium دانلود نشده بود، موتور «در دسترس» شمرده می‌شد و هر بار شکست می‌خورد","نتیجه: استخراج با متن طولانی خطای نصب پلی‌رایت تمام می‌شد و به‌نظر گیرکرده می‌رسید","حالا موتورهای مرورگری علاوه بر کتابخانه، وجود خود مرورگر هم بررسی می‌شود","اگر مرورگر نباشد موتور از زنجیره کنار گذاشته می‌شود و استخراج با موتورهای HTTP ادامه پیدا می‌کند","در فهرست موتورها دلیل دقیق نمایش داده می‌شود: «کتابخانه نصب نیست» یا «مرورگر نصب نشده»","اسکریپت نصب در پایان فهرست موتورهای قابل‌استفاده را چاپ می‌کند و دستور فعال‌سازی مرورگر را می‌دهد"]},
     {"version":"10.169","date":"2026-09-20","title":"همهٔ موتورهای فهرست واقعاً پیاده‌سازی و نصب شدند","items":["موتورهای «خواندن محصول» که قبلاً بی‌اثر بودند حالا واقعاً پیاده‌سازی شده‌اند: JSON-LD، __NEXT_DATA__، JSON داخل script، متادیتا، کارت محصول و selectolax","هر پروفایل دو انتخاب مستقل دارد: موتور دریافت صفحه و موتور خواندن محصول","در صفحهٔ شروع دو منوی جدا اضافه شد و انتخاب هر دو ذخیره می‌شود","تست سرعت حالا هر دو مرحله را می‌سنجد: ۶ موتور دریافت و ۸ روش خواندن","playwright و selenium هم نصب شدند؛ هر ۱۵ موتور فهرست در دسترس‌اند","برای موتورهای مرورگری باید یک‌بار chromium نصب شود: playwright install chromium"]},
     {"version":"10.168","date":"2026-09-20","title":"ابزار تشخیص نسخهٔ در حال اجرا","items":["اسکریپت نصب حالا نسخهٔ در حال اجرا را با نسخهٔ مخزن مقایسه می‌کند و اگر یکی نبود هشدار می‌دهد","قبلاً نصب «موفق» گزارش می‌شد حتی وقتی سرویس هنوز فایل قدیمی را سرو می‌کرد","آدرس /api/build نشان می‌دهد دقیقاً کدام فایل‌ها از کدام مسیر و با چه تاریخی در حال اجرا هستند","هدر x-scraper-version روی dashboard.js اضافه شد تا از داخل مرورگر هم نسخه قابل بررسی باشد","سه مورد گزارش‌شدهٔ قبلی (چسبان بودن انتخابگر، ماندگاری فونت، فهرست موتورها) در محیط تست تأیید شدند"]},
     {"version":"10.167","date":"2026-09-20","title":"چسبان شدن انتخابگر پروفایل، ماندگاری فونت و پاک‌سازی فهرست موتورها","items":["کارت انتخاب پروفایل در صفحهٔ شروع هنگام اسکرول بالای صفحه می‌چسبد","فونت انتخابی پس از رفرش دیگر به پیش‌فرض برنمی‌گردد؛ تنظیمات ظاهری اصلاً ذخیره نمی‌شدند","علت: مسیر ذخیرهٔ تنظیمات فقط شبکه و پروفایل فعال را نگه می‌داشت و بقیهٔ گروه‌ها را دور می‌ریخت","فهرست موتورها از ۱۴ گزینه به ۷ گزینهٔ واقعی کاهش یافت؛ ۸ گزینهٔ «پارس» اصلاً قابل انتخاب نبودند و بی‌صدا نادیده گرفته می‌شدند","خواندن JSON-LD و __NEXT_DATA__ و کارت‌های محصول برای همهٔ موتورها به‌صورت خودکار انجام می‌شود و نیازی به انتخاب ندارد","بررسی شد که هر چهار موتور نصب‌شده واقعاً کار می‌کنند و موتور انتخاب‌شده دقیقاً اول امتحان می‌شود"]},
@@ -1808,6 +1809,33 @@ def save_extract_checkpoint(job_id: str, config: dict[str, Any], report: ScrapeR
         live_task_update(task_id,percent,f"صفحه {done} از {pages}","running","محصول‌ها: "+str(len(report.products))+" · "+last,done=done,total=pages,extracted=len(report.products),elapsed_seconds=elapsed,eta_seconds=eta)
 
 
+def browser_binary_ready(engine: str) -> bool:
+    """A browser engine needs its Chromium/driver, not just the pip package.
+
+    Installing `playwright` without running `playwright install chromium`
+    leaves an engine that imports fine and then fails on every page. Treating
+    it as available made the whole extraction fail with a wall of Playwright
+    install text instead of quietly falling back to the HTTP engines.
+    """
+    try:
+        if engine == "playwright":
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as pw:
+                path = pw.chromium.executable_path
+            if path and os.path.isfile(path):
+                return True
+            return bool(find_browser_executable(configured_browser_path()))
+        if engine == "selenium":
+            if any(shutil.which(x) for x in
+                   ("chromedriver", "chromium-driver", "google-chrome",
+                    "chromium", "chromium-browser")):
+                return True
+            return bool(find_browser_executable(configured_browser_path()))
+    except Exception:  # noqa: BLE001 - probing must never raise
+        return False
+    return True
+
+
 def fetch_engine_installed(engine: str) -> bool:
     if engine in {"requests", "request"}:
         return True
@@ -1817,9 +1845,11 @@ def fetch_engine_installed(engine: str) -> bool:
         return True
     try:
         importlib.import_module(mod)
-        return True
     except ImportError:
         return False
+    if engine in ("playwright", "selenium"):
+        return browser_binary_ready(engine)
+    return True
 
 
 HTTP_ENGINE_ORDER = ("requests", "httpx", "curl_cffi", "cloudscraper")

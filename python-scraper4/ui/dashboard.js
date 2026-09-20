@@ -12,7 +12,7 @@ const detailFields=[['shortDesc','توضیحات کوتاه'],['price','💰 ق�
 let extractionEngineOptions=[['auto','خودکار (هوشمند - پیشنهادی)']];
 let parseEngineOptions=[['auto','خودکار (همهٔ روش‌ها)']];
 const loadExtractionEngines=async()=>{try{const d=await api('/api/engines');if(!d||!Array.isArray(d.engines)||!d.engines.length)return;
- const lab=e=>[e.id,e.label+(e.installed?'':' — نصب نیست')];
+ const lab=e=>[e.id,e.label+(e.installed?'':' — '+(e.note||'نصب نیست'))];
  // Two independent stages: how the page is fetched, and how products are read
  // out of it. They get separate dropdowns so each choice is meaningful.
  extractionEngineOptions=d.engines.filter(e=>e.stage!=='parse').map(lab);

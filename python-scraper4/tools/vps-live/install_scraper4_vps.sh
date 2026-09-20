@@ -276,6 +276,29 @@ echo "Optional engines done."
 which chromium chromium-browser 2>/dev/null || true
 ls -l /snap/bin/chromium /usr/bin/chromium /usr/bin/chromium-browser "$APP_DIR/chrome-linux64/chrome" 2>/dev/null || true
 
+# Confirm the browser engines are genuinely usable. Installing the pip package
+# without a Chromium binary leaves an engine that imports fine and then fails
+# on every page, which reads as "extraction is stuck" rather than a setup gap.
+echo
+echo "Engine check:"
+"$VENV/bin/python" - <<'ENGPY' || true
+import sys
+sys.path.insert(0, "/opt/scraper4")
+try:
+    import scraper4
+except Exception as exc:  # noqa: BLE001
+    print("  could not import scraper4:", exc)
+    raise SystemExit(0)
+ready, missing = [], []
+for name in scraper4.KNOWN_ENGINES:
+    (ready if scraper4.fetch_engine_installed(name) else missing).append(name)
+print("  usable :", ", ".join(ready) or "-")
+if missing:
+    print("  missing:", ", ".join(missing))
+    print("  Browser engines also need Chromium. To enable them:")
+    print("    /opt/scraper4/venv/bin/python -m playwright install chromium")
+ENGPY
+
 # ── verify the Node-parity dashboard actually came up ────────────────────
 # scraper4.py imports ui_bridge defensively, so a broken bridge degrades to the
 # classic UI instead of crashing. That is good for uptime but bad for installs:
