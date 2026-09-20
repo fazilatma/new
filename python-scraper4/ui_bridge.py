@@ -73,11 +73,11 @@ PAGINATIONS = (
 ENGINE_CATALOGUE = (
     # id, Persian label, stage, python module required ("" = always available)
     #
-    # Only fetch engines are listed. There is no selectable "parse engine":
-    # parse_html() already applies the JSON-LD, __NEXT_DATA__, embedded-JSON and
-    # heuristic-card readers to every response regardless of how it was
-    # fetched, and lxml is always the parser underneath. Offering those as
-    # choices meant 8 of 14 options silently did nothing.
+    # Two independent stages. A profile pins one of each:
+    #   fetch  — how the HTML is retrieved   (Fetcher.get(engine=…))
+    #   parse  — how products are read out   (parse_html(..., strategy=…))
+    # Both are probed at runtime so an engine whose library is missing shows as
+    # "نصب نیست" rather than silently doing nothing.
     ("auto", "خودکار (هوشمند - پیشنهادی)", "fetch", ""),
     ("requests", "Requests — سریع، برای سایت‌های ساده", "fetch", "requests"),
     ("httpx", "HTTPX — HTTP/2، سریع", "fetch", "httpx"),
@@ -85,9 +85,19 @@ ENGINE_CATALOGUE = (
     ("cloudscraper", "Cloudscraper — چالش‌های کلودفلر", "fetch", "cloudscraper"),
     ("playwright", "Playwright — رندر کامل جاوااسکریپت", "fetch", "playwright"),
     ("selenium", "Selenium — مرورگر واقعی (کندتر)", "fetch", "selenium"),
+    ("auto", "خودکار (همهٔ روش‌ها به ترتیب)", "parse", ""),
+    ("lxml", "lxml — پایپ‌لاین کامل پیش‌فرض", "parse", "lxml"),
+    ("selectolax", "selectolax — کارت محصول، پارس بسیار سریع", "parse", "selectolax"),
+    ("jsonld", "JSON-LD — داده ساختاریافته Product", "parse", ""),
+    ("next_data", "Next.js / Nuxt — __NEXT_DATA__", "parse", ""),
+    ("script_json", "JSON داخل تگ script", "parse", ""),
+    ("metadata", "OpenGraph / متادیتا", "parse", ""),
+    ("heuristic", "کارت‌های محصول (تشخیص خودکار)", "parse", ""),
 )
-# Engine ids accepted when saving a profile.
-ENGINES = tuple(item[0] for item in ENGINE_CATALOGUE)
+# Ids accepted when saving a profile, per stage.
+FETCH_ENGINES = tuple(i[0] for i in ENGINE_CATALOGUE if i[2] == "fetch")
+PARSE_ENGINE_IDS = tuple(i[0] for i in ENGINE_CATALOGUE if i[2] == "parse")
+ENGINES = tuple(dict.fromkeys(i[0] for i in ENGINE_CATALOGUE))
 # Python pagination vocabulary  <->  Node pagination vocabulary.
 PAG_PY_TO_NODE = {
     "query": "query_page", "query_page": "query_page", "path": "path_page",
@@ -169,7 +179,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "enabled": cfg.get("enabled", True) is not False,
             "pages": _int(cfg.get("pages"), 1),
             "pagination": pag if pag in PAGINATIONS else "query_page",
-            "extractionEngine": engine if engine in ENGINES else "auto",
+            "extractionEngine": engine if engine in FETCH_ENGINES else "auto",
+            "parseEngine": (_s(cfg.get("parse_engine")) or "auto"),
             "extractionEngineMaster": _s(cfg.get("fetch_engine_master")) or None,
             "extractionEngineHost": _s(cfg.get("fetch_engine_host")),
             "extractionEngineMs": _int(cfg.get("fetch_engine_ms")),
@@ -245,6 +256,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "pagination": PAG_NODE_TO_PY.get(_s(node.get("pagination")), "query"),
             "page_value": _s(node.get("paginationValue")) or "page",
             "fetch_engine": _s(node.get("extractionEngine")) or "auto",
+            "parse_engine": _s(node.get("parseEngine")) or "auto",
             "selectors": selectors,
             "detail_selectors": detail,
             "enrich": bool(detail),
@@ -802,9 +814,13 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         url = _s(cfg.get("url"))
         if not url:
             return jsonify(ok=False, error="آدرس پروفایل خالی است."), 400
+        # Benchmark both stages: every installed fetch engine, then every parse
+        # strategy against one cached response so the comparison is fair and we
+        # do not hammer the site once per parser.
         engines = [e for e in core.KNOWN_ENGINES
                    if core.fetch_engine_installed(e)]
         results, best, best_rate = [], "", -1.0
+        best_text = best_url = ""
         for engine in engines:
             row: dict[str, Any] = {"engine": engine, "ok": False,
                                    "pagesScanned": 0, "products": 0,
@@ -821,17 +837,36 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                            elapsedMs=elapsed, productsPerMinute=rate)
                 if rate > best_rate:
                     best, best_rate = engine, rate
+                if not best_text:
+                    best_text, best_url = res.text, res.url
             except Exception as exc:  # noqa: BLE001 - reported per engine
                 row["elapsedMs"] = max(1, int((time.time() - started) * 1000))
                 row["error"] = str(exc)[:240]
                 row["diagnosis"] = {"hint": _engine_hint(engine, str(exc))}
             results.append(row)
+        # Parse stage: reuse the HTML already downloaded above.
+        parse_results = []
+        if best_text:
+            for strategy in getattr(core, "PARSE_ENGINES", ()):
+                prow = {"engine": strategy, "stage": "parse", "ok": False,
+                        "products": 0, "elapsedMs": 0, "error": ""}
+                t0 = time.time()
+                try:
+                    rows, _s2, _d2 = core.parse_html(
+                        best_text, best_url, cfg.get("selectors") or {}, strategy)
+                    prow.update(ok=True, products=len(rows),
+                                elapsedMs=max(1, int((time.time() - t0) * 1000)))
+                except Exception as exc:  # noqa: BLE001 - per strategy
+                    prow["error"] = str(exc)[:200]
+                    prow["elapsedMs"] = max(1, int((time.time() - t0) * 1000))
+                parse_results.append(prow)
         # Remember the winner so the profile uses it next run.
         if best:
             cfg["fetch_engine_master"] = best
             data["profiles"][pid] = cfg
             save(data)
-        return ok(profile=pid, results=results, best=best,
+        return ok(profile=pid, results=results + parse_results, best=best,
+                  fetchResults=results, parseResults=parse_results,
                   engines=[r["engine"] for r in results],
                   summary=(f"سریع‌ترین موتور: {best}" if best
                            else "هیچ موتوری موفق نشد."))

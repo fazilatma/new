@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.168"
+APP_VERSION = "10.169"
 CHANGELOG = [
+    {"version":"10.169","date":"2026-09-20","title":"همهٔ موتورهای فهرست واقعاً پیاده‌سازی و نصب شدند","items":["موتورهای «خواندن محصول» که قبلاً بی‌اثر بودند حالا واقعاً پیاده‌سازی شده‌اند: JSON-LD، __NEXT_DATA__، JSON داخل script، متادیتا، کارت محصول و selectolax","هر پروفایل دو انتخاب مستقل دارد: موتور دریافت صفحه و موتور خواندن محصول","در صفحهٔ شروع دو منوی جدا اضافه شد و انتخاب هر دو ذخیره می‌شود","تست سرعت حالا هر دو مرحله را می‌سنجد: ۶ موتور دریافت و ۸ روش خواندن","playwright و selenium هم نصب شدند؛ هر ۱۵ موتور فهرست در دسترس‌اند","برای موتورهای مرورگری باید یک‌بار chromium نصب شود: playwright install chromium"]},
     {"version":"10.168","date":"2026-09-20","title":"ابزار تشخیص نسخهٔ در حال اجرا","items":["اسکریپت نصب حالا نسخهٔ در حال اجرا را با نسخهٔ مخزن مقایسه می‌کند و اگر یکی نبود هشدار می‌دهد","قبلاً نصب «موفق» گزارش می‌شد حتی وقتی سرویس هنوز فایل قدیمی را سرو می‌کرد","آدرس /api/build نشان می‌دهد دقیقاً کدام فایل‌ها از کدام مسیر و با چه تاریخی در حال اجرا هستند","هدر x-scraper-version روی dashboard.js اضافه شد تا از داخل مرورگر هم نسخه قابل بررسی باشد","سه مورد گزارش‌شدهٔ قبلی (چسبان بودن انتخابگر، ماندگاری فونت، فهرست موتورها) در محیط تست تأیید شدند"]},
     {"version":"10.167","date":"2026-09-20","title":"چسبان شدن انتخابگر پروفایل، ماندگاری فونت و پاک‌سازی فهرست موتورها","items":["کارت انتخاب پروفایل در صفحهٔ شروع هنگام اسکرول بالای صفحه می‌چسبد","فونت انتخابی پس از رفرش دیگر به پیش‌فرض برنمی‌گردد؛ تنظیمات ظاهری اصلاً ذخیره نمی‌شدند","علت: مسیر ذخیرهٔ تنظیمات فقط شبکه و پروفایل فعال را نگه می‌داشت و بقیهٔ گروه‌ها را دور می‌ریخت","فهرست موتورها از ۱۴ گزینه به ۷ گزینهٔ واقعی کاهش یافت؛ ۸ گزینهٔ «پارس» اصلاً قابل انتخاب نبودند و بی‌صدا نادیده گرفته می‌شدند","خواندن JSON-LD و __NEXT_DATA__ و کارت‌های محصول برای همهٔ موتورها به‌صورت خودکار انجام می‌شود و نیازی به انتخاب ندارد","بررسی شد که هر چهار موتور نصب‌شده واقعاً کار می‌کنند و موتور انتخاب‌شده دقیقاً اول امتحان می‌شود"]},
     {"version":"10.166","date":"2026-09-19","title":"رفع هنگ کردن استخراج با پلی‌رایت و نصب SDK باسلام","items":["اگر استخراج با پلی‌رایت انجام می‌شد، کار کاملاً هنگ می‌کرد و حتی «توقف اجباری همه» هم کاری از پیش نمی‌برد","علت: رندر مرورگر مستقیم صدا زده می‌شد و از مسیر قابل‌توقفی که در نسخهٔ ۱۰.۱۶۳ ساخته شده بود رد می‌شد؛ ضمناً هیچ بررسی توقفی داخل خودش نداشت","حالا رندر مرورگر در رشتهٔ جداگانه اجرا می‌شود و بین هر مرحله (اجرا، ناوبری، اسکرول‌ها، خواندن صفحه) توقف بررسی می‌شود","هنگام توقف، مرورگر بسته می‌شود تا پروسهٔ chromium باقی نماند","SDK رسمی باسلام حالا همراه بسته‌های اصلی نصب می‌شود؛ قبلاً فقط در مرحلهٔ اختیاری بود و با SKIP_ENGINES=1 نصب نمی‌شد","سازگاری کامل با نسخهٔ ۱.۲.۰ کتابخانه بررسی و تأیید شد"]},
@@ -925,6 +926,11 @@ def _json_text(*values: Any) -> str:
     return ""
 
 
+def _walk_catalog(data: Any, base: str) -> list[dict[str, Any]]:
+    """Collect product-shaped dicts out of one decoded JSON payload."""
+    return _catalog_rows_from(data, base)
+
+
 def parse_embedded_catalog(text: str, base: str) -> list[dict[str, Any]]:
     """Products hidden in JSON-LD / Next / Nuxt — Snappshop category pages need this."""
     blobs: list[str] = []
@@ -991,11 +997,152 @@ def parse_embedded_catalog(text: str, base: str) -> list[dict[str, Any]]:
     return found
 
 
-def parse_html(text: str, base: str, selectors: Optional[dict[str, str]] = None) -> tuple[list[dict[str, Any]], BeautifulSoup, dict[str, int]]:
-    """Parse only the downloaded/rendered DOM, matching scraper4.php (never APIs/hydration)."""
+def _catalog_rows_from(data: Any, base: str) -> list[dict[str, Any]]:
+    """Same walker as parse_embedded_catalog, over an already-decoded payload."""
+    holder: list[dict[str, Any]] = []
+    text = json.dumps(data, ensure_ascii=False)
+    wrapper = '<script type="application/ld+json">' + text + '</script>'
+    holder.extend(parse_embedded_catalog(wrapper, base))
+    return holder
+
+
+# Parse-stage engines. These are real strategies the user can pin per profile;
+# "auto" keeps the original behaviour of trying every reader in order.
+PARSE_ENGINES = ("auto", "lxml", "selectolax", "jsonld", "next_data",
+                 "script_json", "metadata", "heuristic")
+
+
+def parse_engine_installed(engine: str) -> bool:
+    if engine in ("selectolax",):
+        try:
+            importlib.import_module("selectolax")
+            return True
+        except ImportError:
+            return False
+    return engine in PARSE_ENGINES
+
+
+def _blobs_for(text: str, kinds: tuple[str, ...]) -> list[str]:
+    """Inline <script> payloads, filtered by which family the caller wants."""
+    patterns = {
+        "jsonld": (r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',),
+        "next_data": (
+            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+            r'<script[^>]+id=["\']__NUXT_DATA__["\'][^>]*>(.*?)</script>',
+            r'window\.__NUXT__\s*=\s*(\{.*?\})\s*;\s*</script>',
+        ),
+        "script_json": (
+            r'<script[^>]*type=["\']application/json["\'][^>]*>(.*?)</script>',
+            r'<script[^>]*>\s*(\{.{80,}?\})\s*</script>',
+            r'<script[^>]*>\s*(\[.{80,}?\])\s*</script>',
+        ),
+    }
+    out: list[str] = []
+    for kind in kinds:
+        for pattern in patterns.get(kind, ()):
+            out.extend(m.group(1) for m in re.finditer(pattern, text or "", re.I | re.S))
+    return out
+
+
+def parse_json_blobs(text: str, base: str, kinds: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Reuse the embedded-catalogue walker against a chosen blob family."""
+    rows: list[dict[str, Any]] = []
+    for blob in _blobs_for(text, kinds):
+        raw = (blob or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        rows.extend(_walk_catalog(data, base))
+    return rows
+
+
+def parse_metadata_product(soup: "BeautifulSoup", base: str) -> list[dict[str, Any]]:
+    """Single product from OpenGraph / twitter / itemprop meta tags."""
+    def meta(*names: str) -> str:
+        for name in names:
+            node = soup.find("meta", attrs={"property": name}) or \
+                   soup.find("meta", attrs={"name": name}) or \
+                   soup.find("meta", attrs={"itemprop": name})
+            if node and clean_text(node.get("content")):
+                return clean_text(node.get("content"))
+        return ""
+    title = meta("og:title", "twitter:title", "name")
+    if not title:
+        return []
+    price = extract_price(meta("product:price:amount", "og:price:amount",
+                               "twitter:data1", "price"))
+    image = meta("og:image", "twitter:image", "image")
+    link = meta("og:url", "url") or base
+    return [{"title": title[:300], "price": price,
+             "link": absolute_url(link, base),
+             "image": absolute_url(image, base) if image else "",
+             "sku": meta("sku", "product:retailer_item_id")[:80]}]
+
+
+def parse_cards_selectolax(text: str, base: str, selectors: dict[str, str]) -> list[dict[str, Any]]:
+    """Product cards via selectolax — same detection, C-speed parser."""
+    try:
+        from selectolax.parser import HTMLParser
+    except ImportError as exc:
+        raise FetchError("کتابخانه selectolax نصب نیست") from exc
+    tree = HTMLParser(text or "")
+    css = (selectors or {}).get("container") or (
+        "li.product,article[class*='product'],div.product-card,div.product-item,"
+        "div[class*='product-card'],div[class*='product-item'],[data-product-id]")
+    rows: list[dict[str, Any]] = []
+    for node in tree.css(css):
+        # Re-parse just this card with BeautifulSoup so every downstream field
+        # extractor keeps working unchanged.
+        fragment = BeautifulSoup(node.html or "", "lxml")
+        target = fragment.find(True)
+        if target is None:
+            continue
+        product = _html_product(target, base, selectors)
+        if product:
+            rows.append(product)
+    return rows
+
+
+def parse_html(text: str, base: str, selectors: Optional[dict[str, str]] = None,
+               strategy: str = "auto") -> tuple[list[dict[str, Any]], BeautifulSoup, dict[str, int]]:
+    """Parse the downloaded/rendered DOM.
+
+    ``strategy`` pins one reader; "auto" (the default) runs the full pipeline
+    exactly as before, so existing profiles are unaffected.
+    """
     soup = BeautifulSoup(text, "lxml")
     store: dict[str, dict[str, Any]] = {}
     selectors = selectors or {}
+    strategy = (strategy or "auto").strip().lower()
+    if strategy not in PARSE_ENGINES:
+        strategy = "auto"
+    if strategy not in ("auto", "lxml"):
+        rows: list[dict[str, Any]] = []
+        if strategy == "jsonld":
+            rows = parse_json_blobs(text, base, ("jsonld",))
+        elif strategy == "next_data":
+            rows = parse_json_blobs(text, base, ("next_data",))
+        elif strategy == "script_json":
+            rows = parse_json_blobs(text, base, ("script_json", "jsonld", "next_data"))
+        elif strategy == "metadata":
+            rows = parse_metadata_product(soup, base)
+        elif strategy == "selectolax":
+            rows = parse_cards_selectolax(text, base, selectors)
+        elif strategy == "heuristic":
+            for node in soup.select(
+                    "li.product,article[class*=\'product\'],div.product-card,"
+                    "div.product-item,div[class*=\'product-card\'],"
+                    "div[class*=\'product-item\'],[data-product-id],[itemtype*=\'Product\']"):
+                rows.append(_html_product(node, base, selectors))
+        for row in rows:
+            add_product(store, row)
+        return (list(store.values()), soup,
+                {"selector_matches": 0, "dom_products": len(store),
+                 "strategy": strategy,
+                 "html_bytes": len(text.encode("utf-8", "ignore"))})
     selector_rows: list[dict[str, Any]] = []
     if selectors.get("container"):
         try:
@@ -1795,6 +1942,8 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
     enrich = bool(config.get("enrich", False))
     detail_limit_raw=int(config.get("detail_limit",0) or 0);detail_limit=MAX_PRODUCTS_HARD if detail_limit_raw<=0 else max(1,min(MAX_PRODUCTS_HARD,detail_limit_raw));detail_scope=clean_text(config.get("detail_scope","missing")) or "missing"
     cfg = load_data()
+    # Parse-stage engine pinned on the profile ("auto" = full pipeline).
+    parse_strategy = clean_text(config.get("parse_engine", "auto")).lower() or "auto"
     # Carry the live-task id into the fetcher so a stop request aborts the
     # engine chain instead of waiting for every attempt to time out.
     _net = dict(cfg["network"] or {})
@@ -1860,7 +2009,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     try:
                         if task_id:live_task_update(task_id,max(3,round((number-1)/pages*88)+engine_index),f"{'مستر' if engine==master else 'پشتیبان'} {engine} · صفحه {number} از {pages}","running",f"{url}",done=number-1,total=pages,extracted=len(report.products),engine=engine)
                         t0=time.monotonic()
-                        result=active_fetcher.get(url,engine=engine);candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors);engine_errors.append(f"{engine}: HTTP {result.status} · DOM={len(candidate_rows)}")
+                        result=active_fetcher.get(url,engine=engine);candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors,parse_strategy);engine_errors.append(f"{engine}: HTTP {result.status} · DOM={len(candidate_rows)}")
                         if candidate_rows:
                             won_engine,won_ms=engine,int((time.monotonic()-t0)*1000)
                             rows,soup,diag=candidate_rows,candidate_soup,{**candidate_diag,"engine":engine,"attempts":engine_errors};report.modes.add("dom-"+engine);report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM با {engine} ({won_ms}ms)");return
@@ -1881,7 +2030,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 try:
                     if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+2),f"{'مستر' if bengine==master else 'پشتیبان'} {bengine} · صفحه {number} از {pages}","running",("HTML محصولی نداشت"+(" · "+fetch_error if fetch_error else "")+f"؛ {bengine}"),done=number-1,total=pages,extracted=len(report.products))
                     snapp="snappshop.ir" in (urlparse(url).hostname or "").lower();scrolls=int(config.get("scrolls", 8 if snapp else 4));t0=time.monotonic();result = run_cancellable((lambda: render_playwright(url, fetcher.timeout, scrolls, task_id)) if bengine=="playwright" else (lambda: render_selenium(url, fetcher.timeout, scrolls, task_id)), task_id, bengine)
-                    rows, soup, diag = parse_html(result.text, result.url, selectors);diag={**diag,"engine":bengine,"attempts":diag.get("attempts",[])}
+                    rows, soup, diag = parse_html(result.text, result.url, selectors, parse_strategy);diag={**diag,"engine":bengine,"attempts":diag.get("attempts",[])}
                     report.modes.add(bengine+"-dom")
                     if rows:
                         won_engine,won_ms=bengine,int((time.monotonic()-t0)*1000)
@@ -1901,7 +2050,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     try:
                         t0=time.monotonic()
                         result=active_fetcher.get(url,engine=engine)
-                        candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors)
+                        candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors,parse_strategy)
                         if candidate_rows:
                             won_engine,won_ms=engine,int((time.monotonic()-t0)*1000)
                             rows,soup,diag=candidate_rows,candidate_soup,{**candidate_diag,"engine":engine}
