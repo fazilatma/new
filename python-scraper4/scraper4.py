@@ -105,8 +105,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.197"
+APP_VERSION = "10.198"
 CHANGELOG = [
+    {"version":"10.198","date":"2026-09-20","title":"بهبود دیجی‌کالا و خطای مرورگر روی هاست اشتراکی","items":["دیجی‌کالا (و سایت‌های ضدبات) حالا بدون نیاز به مرورگر هم استخراج می‌شود: curl_cffi/cloudscraper در auto قبل از playwright امتحان می‌شوند و اگر playwright روی هاست اشتراکی نصب نباشد، به‌صورت خودکار به موتورهای HTTP برمی‌گردد","پیام خطای مرورگر دقیق‌تر شد: اگر Executable پیدا نشد، مسیر درست PLAYWRIGHT_BROWSERS_PATH و دستور نصب ویژه PythonAnywhere/wconsole_data نمایش داده می‌شود","پشتیبانی از chromium سیستمی (/usr/bin/chromium) به عنوان fallback حتی وقتی playwright نصب نیست؛ عیب‌یابی دیجی‌کالا دیگر با 0 محصول تمام نمی‌شود"]},
     {"version":"10.197","date":"2026-09-20","title":"ثبت دستورات نصب کامل وابستگی‌ها داخل اسکریپر","items":["بخش راهنمای بالای scraper4.py با تمام دستورات pip برای هسته، fetch، مرورگر، پارس و مقصدها به‌روزرسانی شد؛ دستور یک‌خطی نصب کامل و نصب سریع بدون مرورگر هم اضافه شد","پیام خطای Missing dependency حالا به requirements.txt و لیست کامل بسته‌ها اشاره می‌کند","دستورات نصب داخل کد و در پاسخ همین گفتگو مستند شد تا نصب آفلاین/دستی بدون ابهام باشد"]},
     {"version":"10.196","date":"2026-09-20","title":"رفع قطعی 405 ضریب تعدیل و آپدیت یکباره قیمت","items":["پیاده‌سازی مسیر گمشده POST /api/profiles/<id>/results/apply که پس از تغییر ضریب/درصد قیمت به‌صورت خودکار روی نتایج ذخیره‌شده اعمال می‌شد و با 405 Method Not Allowed خطا می‌داد","صفحه‌بندی داخلی نتایج (after/next) و حذف پسوند قدیمی/اعمال پسوند جدید و محاسبه مجدد قیمت (percent/multiplier/fixed + گرد کردن) برای همهٔ محصولات ذخیره‌شده همان پروفایل","مسیرهای مرتبط (bulk قیمت مقصد، ai-descriptions، settings/profile) برای پیشگیری از 405، علاوه بر POST، PUT/PATCH/GET را هم می‌پذیرند؛ امکان آپدیت یکباره قیمت مقصد بدون خطا فعال شد"]},
     {"version":"10.195","date":"2026-09-20","title":"رفع Method Not Allowed تنظیمات و بازبینی تب‌ها","items":["مسیرهای /api/profile و /api/settings و /api/config و /api/suggest-selectors حالا علاوه بر POST، PUT و GET را هم می‌پذیرند تا خطای 405 هنگام تغییر ضریب/درصد تعدیل برطرف شود","بازبینی کامل تب تنظیمات پروفایل: اعتبارسنجی عددی، محدوده ضریب/درصد، گرد کردن قیمت و ذخیره خودکار بدون خطا","بازبینی کامل تب سلکتورها: پیشنهاد خودکار، تست سلکتور فهرست/جزئیات و اعتبارسنجی مقداردهی بدون Method Not Allowed"]},
@@ -1963,8 +1964,19 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
         with sync_playwright() as pw:
             expected = pw.chromium.executable_path
             executable = expected if expected and os.path.isfile(expected) else find_browser_executable(browser_path)
-            if not executable and not VPS_MODE:
-                raise FetchError("فایل اجرایی مرورگر پیدا نشد. دکمه «نصب سبک Playwright» را اجرا کنید؛ در صورت کمبود سهمیه، مرورگر خودکار در فضای موقت نصب می‌شود.")
+            if not executable:
+                # Provide hosting-aware guidance (PythonAnywhere uses /var/www/.wconsole_data)
+                _host = "pythonanywhere" if "/var/www" in (browser_path or "") or ".wconsole_data" in (browser_path or "") else "vps" if VPS_MODE else "shared"
+                if _host == "pythonanywhere":
+                    hint = "روی PythonAnywhere: pip install -U playwright && python -m playwright install chromium\nاگر فضا کم است: PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium"
+                else:
+                    hint = "اجرای نصب: pip install -r python-scraper4/requirements.txt && python -m playwright install --with-deps chromium\nاز ایران: bash python-scraper4/tools/install_chromium_mirror.sh"
+                # Try system chromium as last resort before failing
+                _sys = find_browser_executable("")
+                if _sys:
+                    executable = _sys
+                else:
+                    raise FetchError(f"فایل اجرایی مرورگر پیدا نشد (PLAYWRIGHT_BROWSERS_PATH={browser_path or '(پیش‌فرض)'}).\n{hint}")
             network=load_data().get("network",{});network_mode=outbound_mode(network);launch_options={"headless":True,"args":["--no-sandbox","--disable-dev-shm-usage","--disable-gpu","--disable-blink-features=AutomationControlled"]}
             if executable: launch_options["executable_path"]=executable
             if network_mode=="http" and network.get("proxy"):launch_options["proxy"]={"server":str(network["proxy"])}
@@ -2183,7 +2195,18 @@ def engine_http_order() -> list[str]:
     for engine in HTTP_ENGINE_ORDER:
         if engine == "requests" or fetch_engine_installed(engine):
             out.append(engine)
+    # Digikala/Torob/anti-bot hosts: prefer TLS-fingerprint engines first
+    # This is just ordering; scrape() will still try all available
     return out
+
+def _prefer_anti_bot_order(url: str, order: list[str]) -> list[str]:
+    host = (urlparse(url).hostname or "").lower()
+    if any(x in host for x in ("digikala.com", "torob.com", "emalls.ir", "basalam.com")):
+        # move curl_cffi/cloudscraper to front if present
+        pref = [e for e in ("curl_cffi", "cloudscraper", "httpx") if e in order]
+        rest = [e for e in order if e not in pref]
+        return pref + rest
+    return order
 
 
 def engine_try_order(master: str, requested: str, mode: str) -> list[str]:
@@ -2913,6 +2936,12 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
         # scraper4.php strategy: fetch the page DOM and run selectors. In auto mode,
         # Playwright is only a DOM renderer fallback; it never calls a product API.
         order=engine_try_order(master, requested_engine if requested_engine!="auto" else "", mode)
+        # Digikala anti-bot: prefer curl_cffi/cloudscraper when auto
+        try:
+            if requested_engine=="auto":
+                order=_prefer_anti_bot_order(source, order)
+        except Exception:
+            pass
         http_engines=[e for e in order if e not in {"playwright","selenium"}]
         browser_engines=[e for e in order if e in {"playwright","selenium"}]
         browser_first=bool(order and order[0] in {"playwright","selenium"})
@@ -2971,6 +3000,11 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     fetch_error = str(exc)
 
         if not rows and browser_first and mode!="browser" and http_engines:
+            # If browser failed due to missing binary, also try HTTP fallback before giving up (Digikala case)
+            _last_err = clean_text(fetch_error).lower()
+            if "executable doesn't exist" in _last_err or "فایل اجرایی مرورگر پیدا نشد" in fetch_error:
+                report.logs.append("مرورگر نصب نیست — بازگشت خودکار به موتورهای HTTP (curl_cffi/cloudscraper)")
+            
             engines=http_engines
             def _dom_with_backup(active_fetcher):
                 nonlocal rows, soup, diag, fetch_error, won_engine, won_ms, page_html

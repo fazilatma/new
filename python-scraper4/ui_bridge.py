@@ -2164,6 +2164,15 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             })
         return rows
 
+    @app.get("/api/diagnose/browser-help")
+    def node_browser_help():
+        host = "pythonanywhere" if "/var/www" in os.getcwd() or ".wconsole_data" in os.getcwd() else "vps"
+        return ok(
+            host=host,
+            playbook="digikala" in request.args.get("url","").lower(),
+            hint="دیجی‌کالا بدون مرورگر هم با curl_cffi/cloudscraper استخراج می‌شود؛ کافی است fetch_engine را روی auto بگذارید و curl_cffi نصب باشد."
+        )
+
     @app.get("/api/install-commands")
     def node_install_commands():
         """Return all pip install commands for dependencies (also stored inside scraper4.py header)."""
