@@ -19,9 +19,46 @@ Power that PythonAnywhere stripped, restored here:
 Extraction still follows scraper4.php: download/render HTML, CSS selectors,
 structural fallbacks, optional Playwright. No source-site product API.
 
-VPS setup
----------
+VPS setup (یک دستور)
+-----------------
+    curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/01a0bd3f-new/python-scraper4/tools/vps-live/bootstrap_vps.sh | bash
+    # یا دستی:
     sudo bash tools/vps-live/install_scraper4_vps.sh
+
+نصب دستی وابستگی‌ها — همهٔ دستورات (داخل اسکریپر هم ذخیره شده)
+------------------------------------------------
+    # 1) پیش‌نیاز سیستم (Ubuntu/Debian)
+    sudo apt update && sudo apt install -y python3 python3-venv python3-pip git curl chromium-browser
+
+    # 2) محیط مجازی (توصیه می‌شود)
+    python3 -m venv .venv && source .venv/bin/activate
+
+    # 3) هستهٔ وب (اجباری)
+    pip install --upgrade pip
+    pip install flask>=3.0.0 gunicorn>=21.2.0 urllib3>=2.0.0 requests>=2.31.0
+
+    # 4) همهٔ وابستگی‌های requirements.txt (یک دستور)
+    pip install -r python-scraper4/requirements.txt
+
+    # 5) موتورهای دریافت (fetch) — ترتیبی که داشبورد تست می‌کند
+    pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71
+
+    # 6) رندر مرورگر (اختیاری اما برای SPA و ضدبات)
+    pip install playwright>=1.40.0 playwright-stealth>=1.0.6 selenium>=4.20.0 undetected-chromedriver>=3.5.5
+    python -m playwright install --with-deps chromium
+    # از ایران (cdn.playwright.dev مسدود است):
+    bash python-scraper4/tools/install_chromium_mirror.sh
+
+    # 7) پارس HTML
+    pip install beautifulsoup4>=4.12.0 lxml>=5.0.0 html5lib>=1.1 selectolax>=0.3.21
+
+    # 8) مقصدها
+    pip install basalam-sdk>=1.2.0
+
+    # 9) اجرای محلی سریع
+    PORT=8000 python scraper4.py
+    # یا تولیدی:
+    gunicorn --bind 0.0.0.0:8000 --timeout 0 scraper4:application
 
 Run locally:  python3 scraper4.py
 Data: scraper4_data.json beside this file.
@@ -64,12 +101,13 @@ try:
     from flask import Flask, Response, jsonify, request
 except ImportError as exc:
     raise RuntimeError(
-        "Missing dependency. Run: pip3 install flask requests beautifulsoup4 lxml"
+        "Missing dependency. Run: pip install -r python-scraper4/requirements.txt  OR  pip install flask requests beautifulsoup4 lxml httpx curl_cffi cloudscraper playwright beautifulsoup4 lxml html5lib selectolax basalam-sdk"
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.196"
+APP_VERSION = "10.197"
 CHANGELOG = [
+    {"version":"10.197","date":"2026-09-20","title":"ثبت دستورات نصب کامل وابستگی‌ها داخل اسکریپر","items":["بخش راهنمای بالای scraper4.py با تمام دستورات pip برای هسته، fetch، مرورگر، پارس و مقصدها به‌روزرسانی شد؛ دستور یک‌خطی نصب کامل و نصب سریع بدون مرورگر هم اضافه شد","پیام خطای Missing dependency حالا به requirements.txt و لیست کامل بسته‌ها اشاره می‌کند","دستورات نصب داخل کد و در پاسخ همین گفتگو مستند شد تا نصب آفلاین/دستی بدون ابهام باشد"]},
     {"version":"10.196","date":"2026-09-20","title":"رفع قطعی 405 ضریب تعدیل و آپدیت یکباره قیمت","items":["پیاده‌سازی مسیر گمشده POST /api/profiles/<id>/results/apply که پس از تغییر ضریب/درصد قیمت به‌صورت خودکار روی نتایج ذخیره‌شده اعمال می‌شد و با 405 Method Not Allowed خطا می‌داد","صفحه‌بندی داخلی نتایج (after/next) و حذف پسوند قدیمی/اعمال پسوند جدید و محاسبه مجدد قیمت (percent/multiplier/fixed + گرد کردن) برای همهٔ محصولات ذخیره‌شده همان پروفایل","مسیرهای مرتبط (bulk قیمت مقصد، ai-descriptions، settings/profile) برای پیشگیری از 405، علاوه بر POST، PUT/PATCH/GET را هم می‌پذیرند؛ امکان آپدیت یکباره قیمت مقصد بدون خطا فعال شد"]},
     {"version":"10.195","date":"2026-09-20","title":"رفع Method Not Allowed تنظیمات و بازبینی تب‌ها","items":["مسیرهای /api/profile و /api/settings و /api/config و /api/suggest-selectors حالا علاوه بر POST، PUT و GET را هم می‌پذیرند تا خطای 405 هنگام تغییر ضریب/درصد تعدیل برطرف شود","بازبینی کامل تب تنظیمات پروفایل: اعتبارسنجی عددی، محدوده ضریب/درصد، گرد کردن قیمت و ذخیره خودکار بدون خطا","بازبینی کامل تب سلکتورها: پیشنهاد خودکار، تست سلکتور فهرست/جزئیات و اعتبارسنجی مقداردهی بدون Method Not Allowed"]},
     {"version":"10.194","date":"2026-09-20","title":"لاگ دقیق URL صفحه‌بندی برای عیب‌یابی ایمالز","items":["هر صفحه حالا URL ساخته‌شده با صفحه‌بندی (query/path/~page~/next) را در لاگ استخراج و پنل زنده ثبت می‌کند تا خرابی الگو فوری دیده شود","برای صفحه ۲ به بعد اگر URL تکراری بماند یا صفحه خالی برگردد، هشدار «صفحه‌بندی URL تکراری/خالی» با URL کامل در لاگ می‌آید","راهنمای فعال‌سازی حالت اشکال‌زدایی به گزارش تغییرات افزوده شد"]},
