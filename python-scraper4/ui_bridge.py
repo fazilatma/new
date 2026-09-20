@@ -42,7 +42,8 @@ import time
 from typing import Any, Callable, Optional
 
 from flask import (
-    Response, jsonify, redirect, request, send_from_directory, url_for,
+    Response, jsonify, redirect, request, send_from_directory,
+    stream_with_context, url_for,
 )
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
@@ -965,7 +966,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.post("/api/profiles/<path:pid>/benchmark-engines")
     def node_benchmark_engines(pid: str):
-        """Time every installed fetch engine against the profile's first page."""
+        """Time every installed fetch engine against the profile's first page.
+
+        With ?live=1 the result is streamed as NDJSON so the live panel can
+        show each engine as it finishes instead of appearing stuck on the
+        first sub-step for the whole run.
+        """
         data = load()
         cfg = (data.get("profiles") or {}).get(pid)
         if not isinstance(cfg, dict):
@@ -973,78 +979,123 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         url = _s(cfg.get("url"))
         if not url:
             return jsonify(ok=False, error="آدرس پروفایل خالی است."), 400
-        # Benchmark both stages: every installed fetch engine, then every parse
-        # strategy against one cached response so the comparison is fair and we
-        # do not hammer the site once per parser.
-        engines = [e for e in core.KNOWN_ENGINES
-                   if core.fetch_engine_installed(e)]
-        results, best, best_rate = [], "", -1.0
-        best_text = best_url = ""
-        # Keep the whole test responsive: cap each attempt, and give up once
-        # enough engines have failed the same way (an unreachable site fails
-        # identically for all of them, so grinding through the rest only
-        # wastes the user's time).
         probe_budget = max(5, min(_int(_body().get("timeout"), 12) or 12, 30))
-        consecutive_failures = 0
-        for engine in engines:
-            if consecutive_failures >= 2:
-                results.append({
-                    "engine": engine, "ok": False, "pagesScanned": 0,
-                    "products": 0, "elapsedMs": 0, "productsPerMinute": 0,
-                    "skipped": True,
-                    "error": "به‌دلیل در دسترس نبودن سایت، این موتور آزمایش نشد",
-                })
-                continue
-            row: dict[str, Any] = {"engine": engine, "ok": False,
-                                   "pagesScanned": 0, "products": 0,
-                                   "elapsedMs": 0, "productsPerMinute": 0,
-                                   "error": ""}
-            started = time.time()
-            try:
-                res = _diag_fetch(cfg, url, engine, probe_timeout=probe_budget)
-                rows, _soup, _stats = core.parse_html(
-                    res.text, res.url, cfg.get("selectors") or {})
-                elapsed = max(1, int((time.time() - started) * 1000))
-                rate = round(len(rows) / (elapsed / 60000.0), 1) if rows else 0
-                row.update(ok=True, pagesScanned=1, products=len(rows),
-                           elapsedMs=elapsed, productsPerMinute=rate)
-                if rate > best_rate:
-                    best, best_rate = engine, rate
-                if not best_text:
-                    best_text, best_url = res.text, res.url
-                consecutive_failures = 0
-            except Exception as exc:  # noqa: BLE001 - reported per engine
-                consecutive_failures += 1
-                row["elapsedMs"] = max(1, int((time.time() - started) * 1000))
-                row["error"] = str(exc)[:240]
-                row["diagnosis"] = {"hint": _engine_hint(engine, str(exc))}
-            results.append(row)
-        # Parse stage: reuse the HTML already downloaded above.
-        parse_results = []
-        if best_text:
-            for strategy in getattr(core, "PARSE_ENGINES", ()):
-                prow = {"engine": strategy, "stage": "parse", "ok": False,
-                        "products": 0, "elapsedMs": 0, "error": ""}
-                t0 = time.time()
+
+        def run() -> Any:
+            """Yield progress events, then the final report."""
+            engines = [e for e in core.KNOWN_ENGINES
+                       if core.fetch_engine_installed(e)]
+            results: list[dict[str, Any]] = []
+            parse_results: list[dict[str, Any]] = []
+            best, best_rate = "", -1.0
+            best_text = best_url = ""
+            consecutive_failures = 0
+            total_steps = len(engines) + len(getattr(core, "PARSE_ENGINES", ()))
+            step = 0
+            yield {"type": "progress", "name": "شروع تست",
+                   "summary": f"{len(engines)} موتور دریافت آزمایش می‌شود",
+                   "done": 0, "total": total_steps}
+            for engine in engines:
+                step += 1
+                yield {"type": "progress", "name": f"موتور {engine}",
+                       "summary": f"در حال دریافت صفحه با {engine}…",
+                       "done": step - 1, "total": total_steps}
+                if consecutive_failures >= 2:
+                    row = {"engine": engine, "ok": False, "pagesScanned": 0,
+                           "products": 0, "elapsedMs": 0,
+                           "productsPerMinute": 0, "skipped": True,
+                           "error": "به‌دلیل در دسترس نبودن سایت، این موتور آزمایش نشد"}
+                    results.append(row)
+                    yield {"type": "progress", "name": f"موتور {engine}",
+                           "summary": row["error"], "done": step,
+                           "total": total_steps, "row": row}
+                    continue
+                row = {"engine": engine, "ok": False, "pagesScanned": 0,
+                       "products": 0, "elapsedMs": 0, "productsPerMinute": 0,
+                       "error": ""}
+                started = time.time()
                 try:
-                    rows, _s2, _d2 = core.parse_html(
-                        best_text, best_url, cfg.get("selectors") or {}, strategy)
-                    prow.update(ok=True, products=len(rows),
-                                elapsedMs=max(1, int((time.time() - t0) * 1000)))
-                except Exception as exc:  # noqa: BLE001 - per strategy
-                    prow["error"] = str(exc)[:200]
-                    prow["elapsedMs"] = max(1, int((time.time() - t0) * 1000))
-                parse_results.append(prow)
-        # Remember the winner so the profile uses it next run.
-        if best:
-            cfg["fetch_engine_master"] = best
-            data["profiles"][pid] = cfg
-            save(data)
-        return ok(profile=pid, results=results + parse_results, best=best,
-                  fetchResults=results, parseResults=parse_results,
-                  engines=[r["engine"] for r in results],
-                  summary=(f"سریع‌ترین موتور: {best}" if best
-                           else "هیچ موتوری موفق نشد."))
+                    res = _diag_fetch(cfg, url, engine,
+                                      probe_timeout=probe_budget)
+                    rows, _soup, _stats = core.parse_html(
+                        res.text, res.url, cfg.get("selectors") or {})
+                    elapsed = max(1, int((time.time() - started) * 1000))
+                    rate = round(len(rows) / (elapsed / 60000.0), 1) if rows else 0
+                    row.update(ok=True, pagesScanned=1, products=len(rows),
+                               elapsedMs=elapsed, productsPerMinute=rate)
+                    if rate > best_rate:
+                        best, best_rate = engine, rate
+                    if not best_text:
+                        best_text, best_url = res.text, res.url
+                    consecutive_failures = 0
+                    summary = f"{len(rows)} محصول در {elapsed} میلی‌ثانیه"
+                except Exception as exc:  # noqa: BLE001 - per engine
+                    consecutive_failures += 1
+                    row["elapsedMs"] = max(1, int((time.time() - started) * 1000))
+                    row["error"] = str(exc)[:240]
+                    row["diagnosis"] = {"hint": _engine_hint(engine, str(exc))}
+                    summary = row["error"][:110]
+                results.append(row)
+                yield {"type": "progress", "name": f"موتور {engine}",
+                       "summary": summary, "done": step,
+                       "total": total_steps, "row": row}
+            if best_text:
+                for strategy in getattr(core, "PARSE_ENGINES", ()):
+                    step += 1
+                    prow = {"engine": strategy, "stage": "parse", "ok": False,
+                            "products": 0, "elapsedMs": 0, "error": ""}
+                    t0 = time.time()
+                    try:
+                        rows, _s2, _d2 = core.parse_html(
+                            best_text, best_url, cfg.get("selectors") or {},
+                            strategy)
+                        prow.update(ok=True, products=len(rows),
+                                    elapsedMs=max(1, int((time.time() - t0) * 1000)))
+                        summary = f"{len(rows)} محصول"
+                    except Exception as exc:  # noqa: BLE001 - per strategy
+                        prow["error"] = str(exc)[:200]
+                        prow["elapsedMs"] = max(1, int((time.time() - t0) * 1000))
+                        summary = prow["error"][:110]
+                    parse_results.append(prow)
+                    yield {"type": "progress", "name": f"خواندن {strategy}",
+                           "summary": summary, "done": step,
+                           "total": total_steps, "row": prow}
+            if best:
+                fresh = load()
+                target = (fresh.get("profiles") or {}).get(pid)
+                if isinstance(target, dict):
+                    target["fetch_engine_master"] = best
+                    save(fresh)
+            report = {
+                "ok": True, "profile": pid, "best": best,
+                "results": results + parse_results,
+                "fetchResults": results, "parseResults": parse_results,
+                "engines": [r["engine"] for r in results],
+                "summary": (f"سریع‌ترین موتور: {best}" if best
+                            else "هیچ موتوری موفق نشد."),
+            }
+            yield {"type": "result", "report": report}
+
+        if _s(request.args.get("live")) in ("1", "true", "yes"):
+            return _ndjson(run())
+        final: dict[str, Any] = {}
+        for event in run():
+            if event.get("type") == "result":
+                final = event.get("report") or {}
+        return jsonify(**final) if final else jsonify(ok=False,
+                                                      error="تست کامل نشد"), 200
+
+    def _ndjson(events: Any) -> Response:
+        """Wrap a generator of dicts as an NDJSON stream the dashboard reads."""
+        def body() -> Any:
+            for event in events:
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        response = Response(stream_with_context(body()),
+                            mimetype="application/x-ndjson")
+        # Without this a proxy may buffer the whole body and defeat streaming.
+        response.headers["x-accel-buffering"] = "no"
+        response.headers["cache-control"] = "no-cache"
+        return response
 
     def _engine_hint(engine: str, error: str) -> str:
         low = error.lower()
@@ -1066,9 +1117,26 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         if not isinstance(cfg, dict):
             return jsonify(ok=False, error="پروفایل پیدا نشد."), 404
         stages: list[dict[str, Any]] = []
+        # Collected so the ?live=1 path can emit one progress event per stage;
+        # the dashboard's live panel is driven entirely by these.
+        events: list[dict[str, Any]] = []
 
         def stage(name: str, good: bool, summary: str, **extra: Any) -> None:
             stages.append({"name": name, "ok": good, "summary": summary, **extra})
+            events.append({"type": "progress", "name": name,
+                           "summary": summary, "ok": good,
+                           "done": len(stages)})
+
+        def finish(**payload: Any) -> Any:
+            """Return the report, streaming the stage events when ?live=1."""
+            report = {"ok": True, **payload}
+            if _s(request.args.get("live")) not in ("1", "true", "yes"):
+                return jsonify(**report)
+            def run() -> Any:
+                for event in events:
+                    yield event
+                yield {"type": "result", "report": report}
+            return _ndjson(run())
 
         url = _s(cfg.get("url"))
         selectors = cfg.get("selectors") or {}
@@ -1079,7 +1147,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
               url=url, selectors=filled,
               pagination=_s(cfg.get("pagination")) or "none")
         if not url:
-            return ok(profile=pid, stages=stages, healthy=False,
+            return finish(profile=pid, stages=stages, healthy=False,
                       summary="آدرس پروفایل تنظیم نشده است.")
 
         engine = _s(cfg.get("fetch_engine")) or "auto"
@@ -1093,7 +1161,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                   finalUrl=_s(getattr(res, "url", url)))
         except Exception as exc:  # noqa: BLE001
             stage("network", False, f"دریافت صفحه ناموفق بود: {exc}"[:300])
-            return ok(profile=pid, stages=stages, healthy=False,
+            return finish(profile=pid, stages=stages, healthy=False,
                       summary="صفحه دریافت نشد؛ موتور یا پروکسی را بررسی کنید.")
 
         parse_engine = _s(cfg.get("parse_engine")) or "auto"
@@ -1102,7 +1170,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                                 parse_engine)
         except Exception as exc:  # noqa: BLE001
             stage("list-extraction", False, f"خطای تجزیهٔ صفحه: {exc}"[:300])
-            return ok(profile=pid, stages=stages, healthy=False,
+            return finish(profile=pid, stages=stages, healthy=False,
                       summary="صفحه تجزیه نشد.")
         stage("list-extraction", bool(rows),
               f"{len(rows)} محصول با موتور خواندن «{parse_engine}» استخراج شد"
@@ -1164,7 +1232,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                           f"صفحهٔ جزئیات خوانده نشد: {exc}"[:240])
 
         healthy = all(s["ok"] for s in stages)
-        return ok(profile=pid, stages=stages, healthy=healthy,
+        return finish(profile=pid, stages=stages, healthy=healthy,
                   summary=("همه‌چیز سالم است."
                            if healthy else
                            "مشکل در: " + "، ".join(
