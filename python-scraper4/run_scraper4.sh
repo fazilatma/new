@@ -11,8 +11,12 @@
 set -u
 umask 077
 
-BRANCH="${BRANCH:-arena/01a06ac3-amphp}"
-REPO_URL="https://github.com/fazilatma/amphp.git"
+# This fork. The old amphp repo has no ui_bridge.py or ui/, so installing
+# from it leaves the dashboard at /ui returning 404.
+BRANCH="${BRANCH:-arena/01a0b7db-new}"
+REPO_URL="${REPO_URL:-https://github.com/fazilatma/new.git}"
+# The app lives in a subdirectory of the repo.
+SRC_SUBDIR="${SRC_SUBDIR:-python-scraper4}"
 CMD="${1:-update}"
 
 is_termux() {
@@ -37,13 +41,13 @@ if is_termux; then
   else
     HOME_REAL="${HOME}"
   fi
-  SRC="${HOME_REAL}/amphp"
+  SRC="${HOME_REAL}/scraper4-src"
   VENV="${HOME_REAL}/scraper4-venv"
   RUN="${HOME_REAL}/storage/shared/codes/scraper4"
 elif is_vps; then
-  ROLE="vps"; SRC="/opt/amphp"; RUN="/opt/scraper4"; VENV="${RUN}/venv"
+  ROLE="vps"; SRC="/opt/scraper4-src"; RUN="/opt/scraper4"; VENV="${RUN}/venv"
 else
-  ROLE="linux"; SRC="${HOME}/amphp"; RUN="${HOME}/scraper4"; VENV="${RUN}/venv"
+  ROLE="linux"; SRC="${HOME}/scraper4-src"; RUN="${HOME}/scraper4"; VENV="${RUN}/venv"
 fi
 PY="${VENV}/bin/python"
 
@@ -73,7 +77,7 @@ termux_prepare() {
   RUN="${SHARED}/codes/scraper4"
   VENV="${HOME_REAL}/scraper4-venv"
   PY="${VENV}/bin/python"
-  SRC="${HOME_REAL}/amphp"
+  SRC="${HOME_REAL}/scraper4-src"
   if [ -L "$SRC" ]; then
     echo "Removing symlink $SRC (git stays in Termux home)"
     rm -f "$SRC"
@@ -104,7 +108,7 @@ fetch_latest() {
   require_writable "$(dirname "$SRC")"
   require_writable "$SRC"
   if is_shared_fs "$SRC"; then
-    fail "repo is on shared storage ($SRC). Use Termux home: $HOME/amphp"
+    fail "repo is on shared storage ($SRC). Use Termux home: $HOME/scraper4-src"
   fi
   if [ ! -d "${SRC}/.git" ]; then
     echo "Install: clone ${BRANCH} -> ${SRC}"
@@ -165,9 +169,24 @@ for n in ('httpx','cloudscraper','curl_cffi'):
 }
 
 sync_code() {
-  [ -f "${SRC}/scraper4.py" ] || fail "scraper4 missing in ${SRC}"
-  [ -f "${SRC}/deployer4.py" ] || fail "deployer4 missing in ${SRC}"
-  cp -a "${SRC}/"*.py "$RUN/"
+  # Files live under python-scraper4/ in this repo; fall back to the repo root
+  # so an older flat checkout still works.
+  APP="${SRC}/${SRC_SUBDIR}"
+  [ -f "${APP}/scraper4.py" ] || APP="$SRC"
+  [ -f "${APP}/scraper4.py" ] || fail "scraper4 missing in ${SRC}"
+  [ -f "${APP}/deployer4.py" ] || fail "deployer4 missing in ${SRC}"
+  cp -a "${APP}/"*.py "$RUN/"
+  # The Node-parity dashboard is three extra files. scraper4.py imports
+  # ui_bridge defensively, so without them it boots fine and /ui just 404s.
+  if [ -f "${APP}/ui_bridge.py" ] && [ -d "${APP}/ui" ]; then
+    cp -a "${APP}/ui_bridge.py" "$RUN/"
+    rm -rf "${RUN}/ui"
+    cp -a "${APP}/ui" "${RUN}/ui"
+  else
+    echo "WARNING: ui_bridge.py or ui/ missing — /ui will not be available." >&2
+  fi
+  [ -f "${APP}/ai_providers.json" ] && [ ! -f "${RUN}/ai_providers.json" ] \
+    && cp -a "${APP}/ai_providers.json" "$RUN/" || true
   find "$RUN" -name '*.pyc' -delete 2>/dev/null || true
   find "$RUN" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
   "$PY" -m py_compile "${RUN}/scraper4.py" "${RUN}/deployer4.py" || fail "py_compile failed"
