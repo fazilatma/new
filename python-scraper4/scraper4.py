@@ -46,8 +46,25 @@ VPS setup (یک دستور)
     # 6) رندر مرورگر (اختیاری اما برای SPA و ضدبات)
     pip install playwright>=1.40.0 playwright-stealth>=1.0.6 selenium>=4.20.0 undetected-chromedriver>=3.5.5
     python -m playwright install --with-deps chromium
-    # از ایران (cdn.playwright.dev مسدود است):
-    bash python-scraper4/tools/install_chromium_mirror.sh
+    # ── نصب پلی‌رایت و کرومیوم از ایران (cdn.playwright.dev مسدود است) ──
+    # روش رسمی از ایران خطا می‌دهد (Download failure):
+    #   python -m playwright install chromium  →  Error: Download failure, code=1
+    # راه‌حل‌ها (داخل سایت هم نمایش داده می‌شود - GET /api/install-commands):
+    #   A) VPS/سرور شخصی (پیشنهادی):
+    #       bash python-scraper4/tools/install_chromium_mirror.sh
+    #       # این اسکریپت نسخه دقیق را از خود playwright می‌پرسد، از cdn.npmmirror.com می‌گیرد،
+    #       # در ms-playwright با ساختار درست باز می‌کند و تست می‌کند.
+    #   B) PythonAnywhere / هاست اشتراکی (بدون sudo):
+    #       pip install --user -U playwright
+    #       PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium
+    #       # اگر فضا کم است یا خطای Executable داد:
+    #       PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium-headless-shell
+    #   C) fallback دستی (اگر آینه هم مسدود بود):
+    #       sudo apt install -y chromium-browser  # یا chromium
+    #       export SCRAPER_BROWSER_PATH=/usr/bin/chromium-browser
+    #   D) تست بعد از نصب:
+    #       curl -s http://127.0.0.1:8000/api/engines | python3 -m json.tool | grep -A2 playwright
+    #       # باید installed: true باشد
 
     # 7) پارس HTML
     pip install beautifulsoup4>=4.12.0 lxml>=5.0.0 html5lib>=1.1 selectolax>=0.3.21
@@ -105,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.198"
+APP_VERSION = "10.199"
 CHANGELOG = [
+    {"version":"10.199","date":"2026-09-20","title":"دستورات نصب پلی‌رایت/کرومیوم از ایران داخل سایت و اینجا","items":["دستورات نصب ایران (cdn.playwright.dev مسدود است) هم داخل هدر scraper4.py و هم در API /api/install-commands و پیام خطای مرورگر اضافه شد","برای VPS: bash tools/install_chromium_mirror.sh (آینه npmmirror) و برای PythonAnywhere: PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium","عیب‌یابی دیجی‌کالا اکنون بدون مرورگر هم با curl_cffi/cloudscraper کار می‌کند و پیام خطا دیگر نصفه نمی‌ماند"]},
     {"version":"10.198","date":"2026-09-20","title":"بهبود دیجی‌کالا و خطای مرورگر روی هاست اشتراکی","items":["دیجی‌کالا (و سایت‌های ضدبات) حالا بدون نیاز به مرورگر هم استخراج می‌شود: curl_cffi/cloudscraper در auto قبل از playwright امتحان می‌شوند و اگر playwright روی هاست اشتراکی نصب نباشد، به‌صورت خودکار به موتورهای HTTP برمی‌گردد","پیام خطای مرورگر دقیق‌تر شد: اگر Executable پیدا نشد، مسیر درست PLAYWRIGHT_BROWSERS_PATH و دستور نصب ویژه PythonAnywhere/wconsole_data نمایش داده می‌شود","پشتیبانی از chromium سیستمی (/usr/bin/chromium) به عنوان fallback حتی وقتی playwright نصب نیست؛ عیب‌یابی دیجی‌کالا دیگر با 0 محصول تمام نمی‌شود"]},
     {"version":"10.197","date":"2026-09-20","title":"ثبت دستورات نصب کامل وابستگی‌ها داخل اسکریپر","items":["بخش راهنمای بالای scraper4.py با تمام دستورات pip برای هسته، fetch، مرورگر، پارس و مقصدها به‌روزرسانی شد؛ دستور یک‌خطی نصب کامل و نصب سریع بدون مرورگر هم اضافه شد","پیام خطای Missing dependency حالا به requirements.txt و لیست کامل بسته‌ها اشاره می‌کند","دستورات نصب داخل کد و در پاسخ همین گفتگو مستند شد تا نصب آفلاین/دستی بدون ابهام باشد"]},
     {"version":"10.196","date":"2026-09-20","title":"رفع قطعی 405 ضریب تعدیل و آپدیت یکباره قیمت","items":["پیاده‌سازی مسیر گمشده POST /api/profiles/<id>/results/apply که پس از تغییر ضریب/درصد قیمت به‌صورت خودکار روی نتایج ذخیره‌شده اعمال می‌شد و با 405 Method Not Allowed خطا می‌داد","صفحه‌بندی داخلی نتایج (after/next) و حذف پسوند قدیمی/اعمال پسوند جدید و محاسبه مجدد قیمت (percent/multiplier/fixed + گرد کردن) برای همهٔ محصولات ذخیره‌شده همان پروفایل","مسیرهای مرتبط (bulk قیمت مقصد، ai-descriptions، settings/profile) برای پیشگیری از 405، علاوه بر POST، PUT/PATCH/GET را هم می‌پذیرند؛ امکان آپدیت یکباره قیمت مقصد بدون خطا فعال شد"]},
@@ -1968,9 +1986,18 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                 # Provide hosting-aware guidance (PythonAnywhere uses /var/www/.wconsole_data)
                 _host = "pythonanywhere" if "/var/www" in (browser_path or "") or ".wconsole_data" in (browser_path or "") else "vps" if VPS_MODE else "shared"
                 if _host == "pythonanywhere":
-                    hint = "روی PythonAnywhere: pip install -U playwright && python -m playwright install chromium\nاگر فضا کم است: PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium"
+                    hint = ("روی PythonAnywhere (هاست شما .wconsole_data):\n"
+                            "  pip install --user -U playwright\n"
+                            "  PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium\n"
+                            "  # از ایران - آینه:\n"
+                            "  bash python-scraper4/tools/install_chromium_mirror.sh")
                 else:
-                    hint = "اجرای نصب: pip install -r python-scraper4/requirements.txt && python -m playwright install --with-deps chromium\nاز ایران: bash python-scraper4/tools/install_chromium_mirror.sh"
+                    hint = ("نصب کامل:\n"
+                            "  pip install -r python-scraper4/requirements.txt\n"
+                            "  python -m playwright install --with-deps chromium\n"
+                            "از ایران (cdn مسدود):\n"
+                            "  bash python-scraper4/tools/install_chromium_mirror.sh\n"
+                            "تست: curl -s http://127.0.0.1:8000/api/engines | grep -A2 playwright")
                 # Try system chromium as last resort before failing
                 _sys = find_browser_executable("")
                 if _sys:
