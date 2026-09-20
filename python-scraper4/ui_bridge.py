@@ -1045,11 +1045,25 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             if not task:
                 return jsonify(ok=False, error="Job not found"), 404
             task["cancel_requested"] = True
-            task["step"] = "درخواست توقف ثبت شد"
             task["updated_at"] = int(time.time())
+            owner = task.get("pid")
+            live_here = job_id in core.LIVE_TASKS and owner == os.getpid()
+            other_alive = bool(owner) and owner != os.getpid() and \
+                core._pid_alive(int(owner))
+            forced = False
+            if live_here or other_alive:
+                task["step"] = "درخواست توقف ثبت شد"
+            else:
+                # Orphan from a previous process: no worker will ever read the
+                # flag, so finish it here instead of leaving it "running".
+                task["status"] = "cancelled"
+                task["step"] = "وظیفهٔ رهاشده متوقف شد"
+                task["error"] = task.get("error") or \
+                    "این وظیفه پس از قطع سرویس رها شده بود"
+                forced = True
             core.LIVE_TASKS[job_id] = task
             core.live_task_disk_write(task)
-        return ok(job=task_to_job(task), forced=False)
+        return ok(job=task_to_job(task), forced=forced)
 
     @app.post("/api/jobs/priority")
     def node_jobs_priority():

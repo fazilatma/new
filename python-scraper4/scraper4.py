@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.171"
+APP_VERSION = "10.172"
 CHANGELOG = [
+    {"version":"10.172","date":"2026-09-20","title":"رفع وظایف رهاشده که هرگز متوقف نمی‌شدند","items":["اگر سرویس هنگام اجرای یک استخراج ری‌استارت می‌شد (نصب، کرش، ریبوت)، آن وظیفه برای همیشه «در حال اجرا» می‌ماند","علت: دکمهٔ توقف فقط یک پرچم می‌گذارد که باید یک کارگر زنده آن را بخواند؛ برای وظیفهٔ رهاشده هیچ کارگری وجود نداشت","حالا هر وظیفه شناسهٔ پروسهٔ سازنده را ثبت می‌کند و هنگام بالا آمدن سرویس، وظایف بی‌صاحب پاک‌سازی می‌شوند","دکمهٔ توقف و توقف اجباری، وظیفهٔ رهاشده را مستقیماً پایان می‌دهند به‌جای گذاشتن پرچم بی‌اثر","وظایف واقعاً در حال اجرا دست‌نخورده می‌مانند","نصب مرورگر: چهار آینه به‌ترتیب امتحان می‌شوند و در صورت شکست همه، مرورگر سیستمی نصب و در سرویس ثبت می‌شود","متغیر SCRAPER_BROWSER_PATH برای معرفی دستی مرورگر اضافه شد"]},
     {"version":"10.171","date":"2026-09-20","title":"نصب مرورگر Chromium از آینه برای سرورهای ایران","items":["دستور رسمی playwright install از ایران کار نمی‌کند چون cdn.playwright.dev مسدود است","اسکریپت tools/install_chromium_mirror.sh اضافه شد که همان فایل‌ها را از آینهٔ npmmirror می‌گیرد","نسخهٔ موردنیاز از خود پلی‌رایت خوانده می‌شود، پس بعد از ارتقا هم بدون تغییر کار می‌کند","از نسخهٔ ۱.۵۸ پلی‌رایت مسیر دانلود کرومیوم عوض شده و تنظیم PLAYWRIGHT_DOWNLOAD_HOST به‌تنهایی کافی نیست؛ اسکریپت مسیر درست را مدیریت می‌کند","فایل‌ها با ساختار دقیق موردانتظار در کش باز می‌شوند و در پایان یک مرورگر واقعی برای آزمایش بالا می‌آید","اسکریپت نصب VPS در صورت شکست مسیر رسمی، خودکار به این روش سوییچ می‌کند","اگر آینه هم در دسترس نبود، راهنمای مرورگر سیستمی و آینه‌های جایگزین چاپ می‌شود"]},
     {"version":"10.170","date":"2026-09-20","title":"رفع گیر کردن استخراج به‌خاطر مرورگر نصب‌نشده","items":["اگر کتابخانهٔ playwright نصب بود ولی مرورگر chromium دانلود نشده بود، موتور «در دسترس» شمرده می‌شد و هر بار شکست می‌خورد","نتیجه: استخراج با متن طولانی خطای نصب پلی‌رایت تمام می‌شد و به‌نظر گیرکرده می‌رسید","حالا موتورهای مرورگری علاوه بر کتابخانه، وجود خود مرورگر هم بررسی می‌شود","اگر مرورگر نباشد موتور از زنجیره کنار گذاشته می‌شود و استخراج با موتورهای HTTP ادامه پیدا می‌کند","در فهرست موتورها دلیل دقیق نمایش داده می‌شود: «کتابخانه نصب نیست» یا «مرورگر نصب نشده»","اسکریپت نصب در پایان فهرست موتورهای قابل‌استفاده را چاپ می‌کند و دستور فعال‌سازی مرورگر را می‌دهد"]},
     {"version":"10.169","date":"2026-09-20","title":"همهٔ موتورهای فهرست واقعاً پیاده‌سازی و نصب شدند","items":["موتورهای «خواندن محصول» که قبلاً بی‌اثر بودند حالا واقعاً پیاده‌سازی شده‌اند: JSON-LD، __NEXT_DATA__، JSON داخل script، متادیتا، کارت محصول و selectolax","هر پروفایل دو انتخاب مستقل دارد: موتور دریافت صفحه و موتور خواندن محصول","در صفحهٔ شروع دو منوی جدا اضافه شد و انتخاب هر دو ذخیره می‌شود","تست سرعت حالا هر دو مرحله را می‌سنجد: ۶ موتور دریافت و ۸ روش خواندن","playwright و selenium هم نصب شدند؛ هر ۱۵ موتور فهرست در دسترس‌اند","برای موتورهای مرورگری باید یک‌بار chromium نصب شود: playwright install chromium"]},
@@ -1576,6 +1577,12 @@ def configured_browser_path() -> str:
 
 
 def find_browser_executable(preferred: str = "") -> str:
+    # An explicit path always wins. The Chromium mirror installer sets this
+    # when it falls back to a distro browser, and it lets an operator point at
+    # any Chrome build without touching the code.
+    explicit = clean_text(os.environ.get("SCRAPER_BROWSER_PATH"))
+    if explicit and os.path.isfile(explicit) and os.access(explicit, os.X_OK):
+        return explicit
     system_bins = [
         os.path.join(BASE_DIR, "chrome-linux64", "chrome"),
         "/opt/scraper4/chrome-linux64/chrome",
@@ -3158,6 +3165,14 @@ def start_vps_supervisors() -> None:
     if HEARTBEAT_STATE.get("started"):
         return
     HEARTBEAT_STATE["started"] = True
+    # Clear tasks left "running" by a previous process before anything else,
+    # otherwise they sit in the queue forever and cannot be stopped.
+    try:
+        freed = reap_orphan_tasks()
+        if freed:
+            app.logger.warning("reaped %s orphaned task(s) from a previous run", freed)
+    except Exception:  # noqa: BLE001 - never block startup
+        pass
     threading.Thread(target=extract_heartbeat_loop, name="scraper4-heartbeat", daemon=True).start()
     if AUTO_UPDATE_ENABLED:
         threading.Thread(target=auto_update_loop, name="scraper4-auto-update", daemon=True).start()
@@ -3174,7 +3189,7 @@ def live_task_disk_write(task: dict[str,Any]) -> None:
 
 
 def live_task_create(kind: str, title: str, private: bool=True) -> dict[str,Any]:
-    task={"id":"task-"+secrets.token_hex(8),"kind":kind,"title":title,"private":private,"status":"waiting","progress":0,"step":"در صف اجرا","details":[],"created_at":int(time.time()),"updated_at":int(time.time())}
+    task={"id":"task-"+secrets.token_hex(8),"kind":kind,"title":title,"private":private,"status":"waiting","progress":0,"step":"در صف اجرا","details":[],"pid":os.getpid(),"created_at":int(time.time()),"updated_at":int(time.time())}
     with LIVE_TASK_LOCK:
         LIVE_TASKS[task["id"]]=task;live_task_disk_write(task)
         for key in sorted(LIVE_TASKS,key=lambda x:LIVE_TASKS[x]["updated_at"])[:-LIVE_TASK_KEEP]:LIVE_TASKS.pop(key,None)
@@ -3211,6 +3226,59 @@ def live_task_read(task_id: str) -> dict[str,Any]:
 
 def live_task_cancelled(task_id: str) -> bool:
     return bool(live_task_read(task_id).get("cancel_requested"))
+
+
+def reap_orphan_tasks() -> int:
+    """Mark tasks that no living worker owns as interrupted.
+
+    A job that was running when the process stopped (deploy, restart, crash,
+    OOM) leaves a file saying "running" with no thread behind it. Nothing could
+    ever move it: the stop button only sets a flag that a live worker must read,
+    so the card stayed "running" forever and looked like a wedged extraction.
+
+    A task belongs to this process only if its pid matches and it is in
+    LIVE_TASKS. Anything else that still claims to be running is an orphan.
+    """
+    reaped = 0
+    me = os.getpid()
+    try:
+        names = os.listdir(LIVE_TASK_DIR)
+    except OSError:
+        return 0
+    for name in names:
+        if not re.fullmatch(r"task-[0-9a-f]{16}\.json", name):
+            continue
+        try:
+            with open(os.path.join(LIVE_TASK_DIR, name), encoding="utf-8") as fh:
+                row = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(row, dict) or row.get("status") not in {"waiting", "running"}:
+            continue
+        owner = row.get("pid")
+        with LIVE_TASK_LOCK:
+            alive = row.get("id") in LIVE_TASKS
+        if alive and owner == me:
+            continue                      # genuinely running here
+        if owner and owner != me and _pid_alive(int(owner)):
+            continue                      # another worker process owns it
+        row["status"] = "interrupted"
+        row["step"] = "فرآیند سرور قطع شده بود؛ این وظیفه رها شده است"
+        row["error"] = row.get("error") or "اجرا با توقف سرویس نیمه‌کاره ماند"
+        row["updated_at"] = int(time.time())
+        with LIVE_TASK_LOCK:
+            LIVE_TASKS[row["id"]] = row
+        live_task_disk_write(row)
+        reaped += 1
+    return reaped
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 @app.get("/api/tasks/summary")
@@ -3290,12 +3358,24 @@ def api_live_tasks_stop_all():
     except OSError:pass
     with LIVE_TASK_LOCK:
         for tid,task in LIVE_TASKS.items():rows[tid]=task
+        me=os.getpid()
         for tid,task in rows.items():
             if task.get("status") not in {"waiting","running"}:
                 skipped+=1;continue
             task["cancel_requested"]=True
-            task["step"]="توقف اجباری همهٔ وظایف"
             task["updated_at"]=int(time.time())
+            owner=task.get("pid")
+            live_here=tid in LIVE_TASKS and owner==me
+            other_alive=bool(owner) and owner!=me and _pid_alive(int(owner))
+            if live_here or other_alive:
+                # A worker is alive to notice the flag and unwind cleanly.
+                task["step"]="توقف اجباری همهٔ وظایف"
+            else:
+                # Nothing is running this task, so flagging it would leave the
+                # card stuck forever. Finalise it here instead.
+                task["status"]="cancelled"
+                task["step"]="وظیفهٔ رهاشده متوقف شد"
+                task["error"]=task.get("error") or "این وظیفه پس از قطع سرویس رها شده بود"
             LIVE_TASKS[tid]=task
             live_task_disk_write(task)
             stopped.append(tid)

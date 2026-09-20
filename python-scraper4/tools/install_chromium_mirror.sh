@@ -30,7 +30,18 @@ set -uo pipefail
 VENV="${VENV:-/opt/scraper4/venv}"
 PY="$VENV/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
-MIRROR="${MIRROR:-https://cdn.npmmirror.com/binaries}"
+# Several mirrors are tried in order; the first that serves the file wins.
+# Override with MIRROR=... to force a single one.
+if [ -n "${MIRROR:-}" ]; then
+  MIRRORS=("$MIRROR")
+else
+  MIRRORS=(
+    "https://cdn.npmmirror.com/binaries"
+    "https://registry.npmmirror.com/-/binary"
+    "https://mirrors.huaweicloud.com"
+    "https://mirror.nju.edu.cn"
+  )
+fi
 CACHE="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -40,7 +51,7 @@ command -v unzip >/dev/null || { apt-get install -y unzip >/dev/null 2>&1 || tru
 echo "Playwright Chromium installer (mirror mode)"
 echo "  python : $PY"
 echo "  cache  : $CACHE"
-echo "  mirror : $MIRROR"
+echo "  mirrors: ${MIRRORS[*]}"
 echo
 
 PLAN="$("$PY" -m playwright install --dry-run chromium 2>/dev/null)"
@@ -80,9 +91,14 @@ install_zip() {
     return 0
   fi
   echo "  downloading $dirname …"
-  local zip="$TMP/$dirname.zip"
-  if ! fetch "$url" "$zip"; then
-    echo "    FAILED: $url" >&2
+  local zip="$TMP/$dirname.zip" got=0 base
+  for base in "${MIRRORS[@]}"; do
+    local full="${base}/${url}"
+    echo "    trying ${base%%/binaries*}…"
+    if fetch "$full" "$zip"; then got=1; break; fi
+  done
+  if [ "$got" -ne 1 ]; then
+    echo "    FAILED on every mirror: $url" >&2
     return 1
   fi
   mkdir -p "$dest"
@@ -104,11 +120,11 @@ install_zip() {
 
 FAILED=0
 install_zip \
-  "$MIRROR/chrome-for-testing/$CFT_VER/linux64/chrome-linux64.zip" \
+  "chrome-for-testing/$CFT_VER/linux64/chrome-linux64.zip" \
   "chromium-$CHROMIUM_BUILD" "chrome-linux64" "chrome" || FAILED=1
 
 install_zip \
-  "$MIRROR/chrome-for-testing/$CFT_VER/linux64/chrome-headless-shell-linux64.zip" \
+  "chrome-for-testing/$CFT_VER/linux64/chrome-headless-shell-linux64.zip" \
   "chromium_headless_shell-$SHELL_BUILD" "chrome-headless-shell-linux64" \
   "chrome-headless-shell" || FAILED=1
 
@@ -118,7 +134,11 @@ if [ -n "$FFMPEG_BUILD" ]; then
   dest="$CACHE/ffmpeg-$FFMPEG_BUILD"
   if [ ! -e "$dest/ffmpeg-linux" ]; then
     echo "  downloading ffmpeg-$FFMPEG_BUILD …"
-    if fetch "$MIRROR/playwright/builds/ffmpeg/$FFMPEG_BUILD/ffmpeg-linux.zip" "$TMP/ff.zip"; then
+    ffok=0
+    for base in "${MIRRORS[@]}"; do
+      fetch "$base/playwright/builds/ffmpeg/$FFMPEG_BUILD/ffmpeg-linux.zip" "$TMP/ff.zip" && { ffok=1; break; }
+    done
+    if [ "$ffok" -eq 1 ]; then
       mkdir -p "$dest" && unzip -q -o "$TMP/ff.zip" -d "$dest" && \
         : > "$dest/INSTALLATION_COMPLETE" && chmod +x "$dest/ffmpeg-linux" 2>/dev/null
       echo "    ok"
@@ -160,6 +180,37 @@ except Exception as exc:  # noqa: BLE001
     print("  launch test    : FAILED —", str(exc)[:200]); sys.exit(3)
 PYEOF
 rc=$?
+
+# If the mirrors did not work, fall back to a distro Chromium. Playwright can
+# drive an external Chrome build, and Debian/Ubuntu packages install from
+# mirrors that are reachable from Iran, so this usually succeeds when the
+# Chrome-for-Testing download does not.
+if [ "$rc" -ne 0 ] || [ "$FAILED" -ne 0 ]; then
+  echo
+  echo "Mirrors did not produce a working browser — trying the system Chromium…"
+  apt-get install -y chromium >/dev/null 2>&1 || \
+    apt-get install -y chromium-browser >/dev/null 2>&1 || \
+    snap install chromium >/dev/null 2>&1 || true
+  SYS=""
+  for cand in /usr/bin/chromium /usr/bin/chromium-browser /snap/bin/chromium \
+              /usr/bin/google-chrome-stable /usr/bin/google-chrome; do
+    [ -x "$cand" ] && { SYS="$cand"; break; }
+  done
+  if [ -n "$SYS" ]; then
+    echo "  found: $SYS"
+    # The app resolves a system browser through find_browser_executable(), so
+    # just recording the path in the unit file is enough.
+    if [ -f /etc/systemd/system/scraper4.service ] && \
+       ! grep -q '^Environment=SCRAPER_BROWSER_PATH=' /etc/systemd/system/scraper4.service; then
+      sed -i "/^Environment=PORT=8000/a Environment=SCRAPER_BROWSER_PATH=$SYS" \
+        /etc/systemd/system/scraper4.service && systemctl daemon-reload 2>/dev/null || true
+      echo "  registered in scraper4.service"
+    fi
+    rc=0; FAILED=0
+  else
+    echo "  no system Chromium found either." >&2
+  fi
+fi
 
 echo
 if [ "$rc" -eq 0 ] && [ "$FAILED" -eq 0 ]; then
