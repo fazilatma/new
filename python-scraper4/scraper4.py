@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.172"
+APP_VERSION = "10.173"
 CHANGELOG = [
+    {"version":"10.173","date":"2026-09-20","title":"تفکیک دکمهٔ استخراج بک‌اند از همگام‌سازی دستی","items":["«استخراج بک‌اند» فقط فهرست را می‌خواند و ذخیره می‌کند؛ جزئیات و ارسال اجرا نمی‌شود","«همگام‌سازی دستی» کل زنجیره را اجرا می‌کند: فهرست، جزئیات و سپس ارسال به مقصدهای انتخاب‌شده","قبلاً هر دو دکمه دقیقاً یک کار می‌کردند چون workflow و target در سمت سرور نادیده گرفته می‌شدند","عیب‌یابی حالا با همان موتور خواندن پروفایل کار می‌کند؛ قبلاً همیشه حالت خودکار را می‌زد و تعداد محصولاتش با استخراج واقعی فرق می‌کرد","عیب‌یابی و تست سه‌صفحه‌ای در صورت شکست رله/پروکسی، مثل خود استخراج یک‌بار اتصال مستقیم را امتحان می‌کنند","به همین دلیل تست سه‌صفحه‌ای در مرحلهٔ اول گیر می‌کرد در حالی که استخراج واقعی موفق بود"]},
     {"version":"10.172","date":"2026-09-20","title":"رفع وظایف رهاشده که هرگز متوقف نمی‌شدند","items":["اگر سرویس هنگام اجرای یک استخراج ری‌استارت می‌شد (نصب، کرش، ریبوت)، آن وظیفه برای همیشه «در حال اجرا» می‌ماند","علت: دکمهٔ توقف فقط یک پرچم می‌گذارد که باید یک کارگر زنده آن را بخواند؛ برای وظیفهٔ رهاشده هیچ کارگری وجود نداشت","حالا هر وظیفه شناسهٔ پروسهٔ سازنده را ثبت می‌کند و هنگام بالا آمدن سرویس، وظایف بی‌صاحب پاک‌سازی می‌شوند","دکمهٔ توقف و توقف اجباری، وظیفهٔ رهاشده را مستقیماً پایان می‌دهند به‌جای گذاشتن پرچم بی‌اثر","وظایف واقعاً در حال اجرا دست‌نخورده می‌مانند","نصب مرورگر: چهار آینه به‌ترتیب امتحان می‌شوند و در صورت شکست همه، مرورگر سیستمی نصب و در سرویس ثبت می‌شود","متغیر SCRAPER_BROWSER_PATH برای معرفی دستی مرورگر اضافه شد"]},
     {"version":"10.171","date":"2026-09-20","title":"نصب مرورگر Chromium از آینه برای سرورهای ایران","items":["دستور رسمی playwright install از ایران کار نمی‌کند چون cdn.playwright.dev مسدود است","اسکریپت tools/install_chromium_mirror.sh اضافه شد که همان فایل‌ها را از آینهٔ npmmirror می‌گیرد","نسخهٔ موردنیاز از خود پلی‌رایت خوانده می‌شود، پس بعد از ارتقا هم بدون تغییر کار می‌کند","از نسخهٔ ۱.۵۸ پلی‌رایت مسیر دانلود کرومیوم عوض شده و تنظیم PLAYWRIGHT_DOWNLOAD_HOST به‌تنهایی کافی نیست؛ اسکریپت مسیر درست را مدیریت می‌کند","فایل‌ها با ساختار دقیق موردانتظار در کش باز می‌شوند و در پایان یک مرورگر واقعی برای آزمایش بالا می‌آید","اسکریپت نصب VPS در صورت شکست مسیر رسمی، خودکار به این روش سوییچ می‌کند","اگر آینه هم در دسترس نبود، راهنمای مرورگر سیستمی و آینه‌های جایگزین چاپ می‌شود"]},
     {"version":"10.170","date":"2026-09-20","title":"رفع گیر کردن استخراج به‌خاطر مرورگر نصب‌نشده","items":["اگر کتابخانهٔ playwright نصب بود ولی مرورگر chromium دانلود نشده بود، موتور «در دسترس» شمرده می‌شد و هر بار شکست می‌خورد","نتیجه: استخراج با متن طولانی خطای نصب پلی‌رایت تمام می‌شد و به‌نظر گیرکرده می‌رسید","حالا موتورهای مرورگری علاوه بر کتابخانه، وجود خود مرورگر هم بررسی می‌شود","اگر مرورگر نباشد موتور از زنجیره کنار گذاشته می‌شود و استخراج با موتورهای HTTP ادامه پیدا می‌کند","در فهرست موتورها دلیل دقیق نمایش داده می‌شود: «کتابخانه نصب نیست» یا «مرورگر نصب نشده»","اسکریپت نصب در پایان فهرست موتورهای قابل‌استفاده را چاپ می‌کند و دستور فعال‌سازی مرورگر را می‌دهد"]},
@@ -4573,6 +4574,25 @@ def scrape_result(report: ScrapeReport, profile_name: str="") -> dict[str,Any]:
     return {"products":products,"total":len(products),"pages":report.pages,"modes":sorted(report.modes),"logs":report.logs,"diagnostics":report.diagnostics,"comparison":comparison,"job_id":report.job_id,"profile":target}
 
 
+def dispatch_after_scrape(profile_name: str, target: str) -> None:
+    """Send freshly scraped products on to the chosen destinations.
+
+    Used by the "همگام‌سازی دستی" button so one click really does listing ->
+    details -> dispatch, instead of stopping after the scrape.
+    """
+    if not profile_name or not target:
+        return
+    destinations = (["woocommerce", "basalam"] if target == "both"
+                    else ["woocommerce"] if target in ("woo", "woocommerce")
+                    else ["basalam"] if target in ("basalam", "bsl") else [])
+    if not destinations:
+        return
+    try:
+        start_profile_dispatch(profile_name, {"destinations": destinations})
+    except Exception as exc:  # noqa: BLE001 - surfaced in the dispatch task
+        app.logger.warning("dispatch after scrape failed: %s", exc)
+
+
 def detail_live_worker(task_id: str, config: dict[str,Any], products: list[dict[str,Any]], pages: int) -> None:
     try:
         live_task_update(task_id,1,"آماده‌سازی استخراج تفصیلی","running",f"{len(products)} محصول؛ این وظیفه مستقل است و سرعت فهرست را کم نمی‌کند",stage="details")
@@ -4580,6 +4600,11 @@ def detail_live_worker(task_id: str, config: dict[str,Any], products: list[dict[
         report=scrape(detail_config)
         if live_task_cancelled(task_id):live_task_update(task_id,100,"استخراج جزئیات متوقف شد","cancelled","نتایج قبلی پروفایل حفظ شدند");return
         result=scrape_result(report,clean_text(config.get("_profile_name")));live_task_update(task_id,100,"جزئیات محصولات کامل شد","completed",f"{result['diagnostics'].get('details',{}).get('completed',0)} محصول بررسی شد",result=result,done=result['total'],total=result['total'],extracted=result['total'])
+        if clean_text(config.get("_dispatch_after")) and result.get("products"):
+            threading.Thread(target=dispatch_after_scrape,
+                             args=(clean_text(config.get("_profile_name")),
+                                   clean_text(config.get("_dispatch_after"))),
+                             name="dispatch-after", daemon=True).start()
     except Exception as exc:
         status="cancelled" if live_task_cancelled(task_id) else "failed";live_task_update(task_id,100,"استخراج جزئیات متوقف شد" if status=="cancelled" else "استخراج جزئیات ناموفق بود",status,str(exc),error=clean_text(exc)[:1500])
 
@@ -4594,6 +4619,13 @@ def scrape_live_worker(task_id: str, config: dict[str,Any]) -> None:
             profile=clean_text(config.get("_profile_name"));detail_task=live_task_create("detail_extract","استخراج خودکار جزئیات"+(f" · {profile}" if profile else ""),private=False);detail_task["profile"]=profile;LIVE_TASKS[detail_task["id"]]=detail_task;live_task_disk_write(detail_task);result["detail_task"]={"id":detail_task["id"],"status":"waiting","total":len(result["products"])}
         live_task_update(task_id,100,"فهرست با سرعت بالا استخراج شد","completed",f"{result['total']} محصول"+("؛ جزئیات در وظیفه مستقل ادامه دارد" if detail_task else ""),result=result,done=result['pages'],total=result['pages'],extracted=result['total'],eta_seconds=0)
         if detail_task:threading.Thread(target=detail_live_worker,args=(detail_task["id"],config,result["products"],result["pages"]),name="detail-live",daemon=True).start()
+        # "همگام‌سازی دستی" must continue all the way to the destinations. The
+        # list-only button leaves _dispatch_after empty and stops here.
+        elif clean_text(config.get("_dispatch_after")) and result["products"]:
+            threading.Thread(target=dispatch_after_scrape,
+                             args=(clean_text(config.get("_profile_name")),
+                                   clean_text(config.get("_dispatch_after"))),
+                             name="dispatch-after", daemon=True).start()
     except Exception as exc:
         if live_task_cancelled(task_id):live_task_update(task_id,100,"استخراج متوقف شد","cancelled","نتایج checkpoint تا آخرین صفحه حفظ شدند",error=clean_text(exc)[:1500])
         else:live_task_update(task_id,100,"استخراج ناموفق بود","failed",str(exc),error=clean_text(exc)[:1500])

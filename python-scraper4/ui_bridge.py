@@ -770,12 +770,32 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         cfg = (data.get("profiles") or {}).get(pid)
         if not isinstance(cfg, dict):
             return jsonify(ok=False, error="پروفایل پیدا نشد."), 404
+        body = _body()
+        # The start page has two buttons and they must do different things:
+        #   list-only  ("استخراج بک‌اند")   fetch the listing and save it, stop
+        #   full       ("همگام‌سازی دستی")  listing -> details -> … -> dispatch
+        # Both used to run the identical job because workflow/target were
+        # accepted by the UI and then dropped here.
+        workflow = _s(body.get("workflow")) or "full"
+        target = _s(body.get("target")) or "none"
+        list_only = workflow == "list-only"
         config = dict(cfg)
         config["_profile_name"] = pid
+        config["workflow"] = workflow
+        if list_only:
+            # No detail pass, no downstream dispatch.
+            config["enrich"] = False
+            config["_dispatch_after"] = ""
+        else:
+            config["enrich"] = True
+            config["_dispatch_after"] = target if target != "none" else ""
         data["active_profile"] = pid
         save(data)
-        task = core.live_task_create("scrape", f"استخراج محصولات · {pid}", private=False)
+        title = ("استخراج فهرست · " if list_only else "همگام‌سازی کامل · ") + pid
+        task = core.live_task_create("scrape", title, private=False)
         task["profile"] = pid
+        task["workflow"] = workflow
+        task["target"] = target
         with core.LIVE_TASK_LOCK:
             core.LIVE_TASKS[task["id"]] = task
         core.live_task_disk_write(task)
@@ -800,9 +820,21 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     # these run synchronously and return the finished report.
 
     def _diag_fetch(config: dict[str, Any], url: str, engine: str) -> Any:
-        """One page fetch with a specific engine, via the real Fetcher."""
-        fetcher = core.Fetcher(load().get("network") or {})
-        return fetcher.get(url, engine=engine)
+        """One page fetch with a specific engine, via the real Fetcher.
+
+        Mirrors what scrape() does: when a relay/proxy gateway is configured
+        and fails, retry once directly. Without this the diagnostic and the
+        speed test reported a dead gateway as a dead site, while a real
+        extraction of the same profile succeeded on the direct retry.
+        """
+        network = load().get("network") or {}
+        fetcher = core.Fetcher(network)
+        try:
+            return fetcher.get(url, engine=engine)
+        except Exception:
+            if fetcher.proxy_mode not in {"relay", "http"}:
+                raise
+            return core._fetcher_direct(network).get(url, engine=engine)
 
     @app.post("/api/profiles/<path:pid>/benchmark-engines")
     def node_benchmark_engines(pid: str):
@@ -921,14 +953,16 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             return ok(profile=pid, stages=stages, healthy=False,
                       summary="صفحه دریافت نشد؛ موتور یا پروکسی را بررسی کنید.")
 
+        parse_engine = _s(cfg.get("parse_engine")) or "auto"
         try:
-            rows, soup, stats = core.parse_html(res.text, res.url, selectors)
+            rows, soup, stats = core.parse_html(res.text, res.url, selectors,
+                                                parse_engine)
         except Exception as exc:  # noqa: BLE001
             stage("list-extraction", False, f"خطای تجزیهٔ صفحه: {exc}"[:300])
             return ok(profile=pid, stages=stages, healthy=False,
                       summary="صفحه تجزیه نشد.")
         stage("list-extraction", bool(rows),
-              f"{len(rows)} محصول از فهرست استخراج شد"
+              f"{len(rows)} محصول با موتور خواندن «{parse_engine}» استخراج شد"
               + ("" if rows else " · هیچ محصولی پیدا نشد"),
               count=len(rows), stats=stats,
               sample=[{"title": _s(r.get("title"))[:80],
