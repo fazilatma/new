@@ -911,22 +911,57 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     # The UI accepts a plain JSON body when the response is not NDJSON, so
     # these run synchronously and return the finished report.
 
-    def _diag_fetch(config: dict[str, Any], url: str, engine: str) -> Any:
+    def _diag_fetch(config: dict[str, Any], url: str, engine: str,
+                    probe_timeout: int = 0) -> Any:
         """One page fetch with a specific engine, via the real Fetcher.
 
         Mirrors what scrape() does: when a relay/proxy gateway is configured
         and fails, retry once directly. Without this the diagnostic and the
         speed test reported a dead gateway as a dead site, while a real
         extraction of the same profile succeeded on the direct retry.
+
+        ``probe_timeout`` caps a single attempt. The speed test forces every
+        engine in turn, and Fetcher.get() retries three times with backoff, so
+        an unresponsive site cost 33s per engine — over two minutes before the
+        first result appeared. A benchmark only needs to know whether an engine
+        works, so it probes with a short budget instead of the full extraction
+        patience.
         """
-        network = load().get("network") or {}
+        network = dict(load().get("network") or {})
+        if probe_timeout:
+            network["timeout"] = probe_timeout
         fetcher = core.Fetcher(network)
-        try:
-            return fetcher.get(url, engine=engine)
-        except Exception:
-            if fetcher.proxy_mode not in {"relay", "http"}:
-                raise
-            return core._fetcher_direct(network).get(url, engine=engine)
+
+        def attempt() -> Any:
+            try:
+                return fetcher.get(url, engine=engine)
+            except Exception:
+                if fetcher.proxy_mode not in {"relay", "http"}:
+                    raise
+                return core._fetcher_direct(network).get(url, engine=engine)
+
+        if not probe_timeout:
+            return attempt()
+        # Fetcher.get() retries three times with backoff, so a short socket
+        # timeout still adds up to ~3x per engine. A probe must be bounded as a
+        # whole, so run it in a daemon thread and abandon it at the deadline.
+        box: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                box["ok"] = attempt()
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                box["err"] = exc
+
+        worker = threading.Thread(target=run, name="probe-" + engine, daemon=True)
+        worker.start()
+        worker.join(probe_timeout + 2)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"پاسخی در {probe_timeout} ثانیه دریافت نشد")
+        if "err" in box:
+            raise box["err"]
+        return box["ok"]
 
     @app.post("/api/profiles/<path:pid>/benchmark-engines")
     def node_benchmark_engines(pid: str):
@@ -945,14 +980,28 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                    if core.fetch_engine_installed(e)]
         results, best, best_rate = [], "", -1.0
         best_text = best_url = ""
+        # Keep the whole test responsive: cap each attempt, and give up once
+        # enough engines have failed the same way (an unreachable site fails
+        # identically for all of them, so grinding through the rest only
+        # wastes the user's time).
+        probe_budget = max(5, min(_int(_body().get("timeout"), 12) or 12, 30))
+        consecutive_failures = 0
         for engine in engines:
+            if consecutive_failures >= 2:
+                results.append({
+                    "engine": engine, "ok": False, "pagesScanned": 0,
+                    "products": 0, "elapsedMs": 0, "productsPerMinute": 0,
+                    "skipped": True,
+                    "error": "به‌دلیل در دسترس نبودن سایت، این موتور آزمایش نشد",
+                })
+                continue
             row: dict[str, Any] = {"engine": engine, "ok": False,
                                    "pagesScanned": 0, "products": 0,
                                    "elapsedMs": 0, "productsPerMinute": 0,
                                    "error": ""}
             started = time.time()
             try:
-                res = _diag_fetch(cfg, url, engine)
+                res = _diag_fetch(cfg, url, engine, probe_timeout=probe_budget)
                 rows, _soup, _stats = core.parse_html(
                     res.text, res.url, cfg.get("selectors") or {})
                 elapsed = max(1, int((time.time() - started) * 1000))
@@ -963,7 +1012,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     best, best_rate = engine, rate
                 if not best_text:
                     best_text, best_url = res.text, res.url
+                consecutive_failures = 0
             except Exception as exc:  # noqa: BLE001 - reported per engine
+                consecutive_failures += 1
                 row["elapsedMs"] = max(1, int((time.time() - started) * 1000))
                 row["error"] = str(exc)[:240]
                 row["diagnosis"] = {"hint": _engine_hint(engine, str(exc))}

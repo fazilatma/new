@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.174"
+APP_VERSION = "10.175"
 CHANGELOG = [
+    {"version":"10.175","date":"2026-09-20","title":"رفع کندی استخراج و گیر کردن تست سه‌صفحه‌ای","items":["استخراج جزئیات ۱۴ برابر سریع‌تر شد: ۳۹ ثانیه به ۲٫۷ ثانیه","علت: خطای ۴۰۴ هم مثل خطای موقتی سه بار تکرار می‌شد، آن هم با هر چهار موتور؛ یعنی ۱۳ ثانیه برای هر محصول","حالا پاسخ قطعی سرور (۴۰۴، ۴۰۳ و مانند آن) تکرار نمی‌شود؛ خطای موقتی مثل ۵۰۳ همچنان سه بار تلاش می‌شود","تست سه‌صفحه‌ای دیگر گیر نمی‌کند: هر موتور حداکثر ۱۲ ثانیه فرصت دارد و اگر سایت در دسترس نباشد بقیه آزمایش نمی‌شوند","زمان تست روی سایت بی‌پاسخ از ۱۳۲ ثانیه به ۲۸ ثانیه رسید و دلیل هر موتور نمایش داده می‌شود","اگر مرورگر نصب نباشد، مرحلهٔ جزئیات دیگر بی‌جهت سراغ پلی‌رایت نمی‌رود"]},
     {"version":"10.174","date":"2026-09-20","title":"رفع آمارهای نادرست کارت‌های وظیفه","items":["عدد «انجام‌شده» درصد پیشرفت را نشان می‌داد نه تعداد محصول؛ مثلاً «۱۰۰ از ۱» به‌جای «۳ از ۳»","شمارنده‌های جدید، بروزرسانی، حذف‌شده و تغییر قیمت همیشه صفر بودند چون از جای اشتباهی خوانده می‌شدند","حالا تعداد محصولات واقعی و نتیجهٔ مقایسه با اجرای قبلی نمایش داده می‌شود","کلیک روی هر شمارنده، فهرست همان محصولات را نشان می‌دهد؛ قبلاً برنامهٔ مراحل را نشان می‌داد","تغییر قیمت با قیمت قبلی، قیمت جدید و درصد تغییر نمایش داده می‌شود","«محصولات انجام‌شده» همهٔ محصولات پردازش‌شده را فهرست می‌کند، نه فقط موارد جدید"]},
     {"version":"10.173","date":"2026-09-20","title":"تفکیک دکمهٔ استخراج بک‌اند از همگام‌سازی دستی","items":["«استخراج بک‌اند» فقط فهرست را می‌خواند و ذخیره می‌کند؛ جزئیات و ارسال اجرا نمی‌شود","«همگام‌سازی دستی» کل زنجیره را اجرا می‌کند: فهرست، جزئیات و سپس ارسال به مقصدهای انتخاب‌شده","قبلاً هر دو دکمه دقیقاً یک کار می‌کردند چون workflow و target در سمت سرور نادیده گرفته می‌شدند","عیب‌یابی حالا با همان موتور خواندن پروفایل کار می‌کند؛ قبلاً همیشه حالت خودکار را می‌زد و تعداد محصولاتش با استخراج واقعی فرق می‌کرد","عیب‌یابی و تست سه‌صفحه‌ای در صورت شکست رله/پروکسی، مثل خود استخراج یک‌بار اتصال مستقیم را امتحان می‌کنند","به همین دلیل تست سه‌صفحه‌ای در مرحلهٔ اول گیر می‌کرد در حالی که استخراج واقعی موفق بود"]},
     {"version":"10.172","date":"2026-09-20","title":"رفع وظایف رهاشده که هرگز متوقف نمی‌شدند","items":["اگر سرویس هنگام اجرای یک استخراج ری‌استارت می‌شد (نصب، کرش، ریبوت)، آن وظیفه برای همیشه «در حال اجرا» می‌ماند","علت: دکمهٔ توقف فقط یک پرچم می‌گذارد که باید یک کارگر زنده آن را بخواند؛ برای وظیفهٔ رهاشده هیچ کارگری وجود نداشت","حالا هر وظیفه شناسهٔ پروسهٔ سازنده را ثبت می‌کند و هنگام بالا آمدن سرویس، وظایف بی‌صاحب پاک‌سازی می‌شوند","دکمهٔ توقف و توقف اجباری، وظیفهٔ رهاشده را مستقیماً پایان می‌دهند به‌جای گذاشتن پرچم بی‌اثر","وظایف واقعاً در حال اجرا دست‌نخورده می‌مانند","نصب مرورگر: چهار آینه به‌ترتیب امتحان می‌شوند و در صورت شکست همه، مرورگر سیستمی نصب و در سرویس ثبت می‌شود","متغیر SCRAPER_BROWSER_PATH برای معرفی دستی مرورگر اضافه شد"]},
@@ -672,6 +673,11 @@ class Fetcher:
             except Exception as exc:
                 last_error = str(exc)
                 if "ضدبات/VPN" in last_error:break
+                # Retrying a definitive client answer (404/403/410…) just burns
+                # time: the page will not appear on the second ask. Detail
+                # extraction hit this hard — 4 engines x 3 attempts x backoff
+                # was ~13s per product for a URL that simply does not exist.
+                if re.search(r"HTTP (4\d\d)", last_error) and "429" not in last_error:break
                 if attempt < 2:
                     self.sleep_cancellable(1.0 * (2 ** attempt))
         raise FetchError(last_error or "دریافت صفحه ناموفق بود")
@@ -1819,6 +1825,9 @@ def save_extract_checkpoint(job_id: str, config: dict[str, Any], report: ScrapeR
         live_task_update(task_id,percent,f"صفحه {done} از {pages}","running","محصول‌ها: "+str(len(report.products))+" · "+last,done=done,total=pages,extracted=len(report.products),elapsed_seconds=elapsed,eta_seconds=eta)
 
 
+_BROWSER_READY_CACHE: dict[str, tuple[float, bool]] = {}
+
+
 def browser_binary_ready(engine: str) -> bool:
     """A browser engine needs its Chromium/driver, not just the pip package.
 
@@ -1827,6 +1836,17 @@ def browser_binary_ready(engine: str) -> bool:
     it as available made the whole extraction fail with a wall of Playwright
     install text instead of quietly falling back to the HTTP engines.
     """
+    # Probing playwright starts its driver, which costs ~0.3s. The detail loop
+    # asks once per product, so cache the answer briefly.
+    cached = _BROWSER_READY_CACHE.get(engine)
+    if cached and time.time() - cached[0] < 300:
+        return cached[1]
+    ready = _browser_binary_probe(engine)
+    _BROWSER_READY_CACHE[engine] = (time.time(), ready)
+    return ready
+
+
+def _browser_binary_probe(engine: str) -> bool:
     try:
         if engine == "playwright":
             from playwright.sync_api import sync_playwright
@@ -2174,7 +2194,12 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                             if q>=3:break
                             if not candidate_fields:detail_errors.append(f"{engine}: DOM جزئیات خالی بود")
                         except FetchError as exc:detail_errors.append(f"{engine}: {exc}")
-                if (detail is None or best_q<3) and mode in ("auto","browser"):
+                # Only reach for the browser if one is actually usable. Without
+                # this check every product paid a full Playwright launch failure
+                # (~13s each) when no Chromium is installed, which is what made
+                # detail extraction crawl.
+                if (detail is None or best_q<3) and mode in ("auto","browser") \
+                        and fetch_engine_installed("playwright"):
                     try:
                         candidate_detail=run_cancellable(lambda: render_playwright(product["link"],fetcher.timeout,4 if spa else 3,task_id), task_id, "playwright");candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
                         if q>best_q and candidate_fields:detail,detail_rows,detail_soup,custom_detail,best_q=candidate_detail,candidate_rows,candidate_soup,candidate_fields,q;report.modes.add("detail-playwright-stealth")
