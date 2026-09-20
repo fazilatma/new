@@ -55,7 +55,7 @@ import logging
 import zipfile
 from dataclasses import dataclass, field
 from html import escape
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 
 try:
@@ -68,8 +68,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.165"
+APP_VERSION = "10.166"
 CHANGELOG = [
+    {"version":"10.166","date":"2026-09-19","title":"رفع هنگ کردن استخراج با پلی‌رایت و نصب SDK باسلام","items":["اگر استخراج با پلی‌رایت انجام می‌شد، کار کاملاً هنگ می‌کرد و حتی «توقف اجباری همه» هم کاری از پیش نمی‌برد","علت: رندر مرورگر مستقیم صدا زده می‌شد و از مسیر قابل‌توقفی که در نسخهٔ ۱۰.۱۶۳ ساخته شده بود رد می‌شد؛ ضمناً هیچ بررسی توقفی داخل خودش نداشت","حالا رندر مرورگر در رشتهٔ جداگانه اجرا می‌شود و بین هر مرحله (اجرا، ناوبری، اسکرول‌ها، خواندن صفحه) توقف بررسی می‌شود","هنگام توقف، مرورگر بسته می‌شود تا پروسهٔ chromium باقی نماند","SDK رسمی باسلام حالا همراه بسته‌های اصلی نصب می‌شود؛ قبلاً فقط در مرحلهٔ اختیاری بود و با SKIP_ENGINES=1 نصب نمی‌شد","سازگاری کامل با نسخهٔ ۱.۲.۰ کتابخانه بررسی و تأیید شد"]},
     {"version":"10.165","date":"2026-09-19","title":"قالب پیش‌فرض تازه برای کل برنامه","items":["رنگ‌بندی حالا واقعاً روی کل برنامه اعمال می‌شود؛ قبلاً ۱۱ متغیر رنگ ساخته می‌شد ولی استایل‌ها فقط یک‌بار از آن‌ها استفاده می‌کردند","۱۹۳ رنگ ثابت به متغیرهای قالب وصل شد، پس تغییر رنگ‌بندی همهٔ کارت‌ها، نوارها و جدول‌ها را عوض می‌کند","یک مقیاس واحد برای گردی گوشه‌ها، فاصله‌ها و اندازهٔ فونت جایگزین ۲۶ گردی و ۲۹ اندازهٔ پراکنده شد","دکمه‌ها، ورودی‌ها، کارت‌ها، جدول‌ها، پنجره‌ها و نوار پیمایش ظاهر یکدست گرفتند","حلقهٔ فوکوس استاندارد برای دسترس‌پذیری و پشتیبانی از کاهش انیمیشن","پنل‌های تودرتو حالا از هم تفکیک رنگی دارند","کنتراست متن در حد AAA استاندارد WCAG بررسی و تأیید شد"]},
     {"version":"10.164","date":"2026-09-19","title":"توقف اجباری، رفع فونت‌ها و بازطراحی بخش نسخه","items":["دکمهٔ «توقف اجباری همهٔ پروسه‌ها» در مدیر وظایف اضافه شد؛ همهٔ کارهای در حال اجرا و در صف را یکجا متوقف می‌کند","انتخاب فونت اصلاً اعمال نمی‌شد چون فایل‌های /assets/fonts/*.css وجود نداشتند و ۴۰۴ می‌دادند؛ حالا از روی سرور سرو می‌شوند","اگر فایل woff2 را در ui/fonts بگذارید از سرور خودتان خوانده می‌شود، وگرنه از CDN","بخش نسخه حالا کارت وضعیت به‌روزرسانی دارد: عقب‌بودن از برنچ، شمارهٔ کامیت و دکمهٔ نصب","قبلاً اندپوینت‌های به‌روزرسانی هیچ رابط کاربری نداشتند و فقط با curl قابل استفاده بودند"]},
     {"version":"10.163","date":"2026-09-19","title":"دکمهٔ توقف، استخراج گیرکرده را فوراً متوقف می‌کند","items":["اگر سایت پاسخ نمی‌داد، توقف تا پایان مهلت کامل (۶۰ ثانیه و روی سرور تا ۵ دقیقه) بی‌اثر بود و دکمه خراب به‌نظر می‌رسید","علت: درخواست شبکه در همان رشته اجرا می‌شد و پرچم توقف فقط یک‌بار در هر صفحه بررسی می‌شد","حالا دریافت صفحه در رشتهٔ جداگانه انجام می‌شود و درخواست توقف در کمتر از یک ثانیه اعمال می‌شود","توقف بین موتورهای مختلف، بین تلاش‌های مجدد و حین مکث بین درخواست‌ها هم بررسی می‌شود","سایت‌های کند ولی سالم همچنان کامل استخراج می‌شوند؛ مهلت کوتاه نشد"]},
@@ -606,8 +607,8 @@ class Fetcher:
         if engine in {"playwright", "selenium"}:
             self.last_by_host[host] = time.monotonic()
             if engine == "playwright":
-                return render_playwright(target_url, self.timeout, 4)
-            return render_selenium(target_url, self.timeout, 4)
+                return render_playwright(target_url, self.timeout, 4, self.task_id)
+            return render_selenium(target_url, self.timeout, 4, self.task_id)
         last_error = ""
         for attempt in range(3):
             self.abort_if_cancelled()
@@ -1457,7 +1458,39 @@ def find_browser_executable(preferred: str = "") -> str:
     return candidates[0] if candidates else ""
 
 
-def render_playwright(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
+def run_cancellable(fn: Callable[[], Any], task_id: str, label: str = "browser") -> Any:
+    """Run a blocking call in a daemon thread, abandoning it on stop.
+
+    Browser launches have no timeout of their own, so even the per-phase cancel
+    checks inside render_playwright cannot help if chromium never comes up.
+    Running the whole render in a helper thread means a stop request is honoured
+    in about a second no matter where it is wedged. The thread is a daemon and
+    the renderer closes its own browser in a finally block.
+    """
+    if not task_id:
+        return fn()
+    if live_task_cancelled(task_id):
+        raise CancelledError("استخراج با درخواست کاربر متوقف شد")
+    box: dict[str, Any] = {}
+    def run() -> None:
+        try:
+            box["ok"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller
+            box["err"] = exc
+    worker = threading.Thread(target=run, name="render-" + label, daemon=True)
+    worker.start()
+    while True:
+        worker.join(0.25)
+        if not worker.is_alive():
+            break
+        if live_task_cancelled(task_id):
+            raise CancelledError("استخراج با درخواست کاربر متوقف شد")
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
+
+
+def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "") -> FetchResult:
     browser_path = configured_browser_path()
     if browser_path and os.path.isdir(browser_path):
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browser_path
@@ -1477,6 +1510,8 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
             network=load_data().get("network",{});network_mode=outbound_mode(network);launch_options={"headless":True,"args":["--no-sandbox","--disable-dev-shm-usage","--disable-gpu","--disable-blink-features=AutomationControlled"]}
             if executable: launch_options["executable_path"]=executable
             if network_mode=="http" and network.get("proxy"):launch_options["proxy"]={"server":str(network["proxy"])}
+            if task_id and live_task_cancelled(task_id):
+                raise CancelledError("استخراج با درخواست کاربر متوقف شد")
             browser = pw.chromium.launch(**launch_options);page = browser.new_page(user_agent=USER_AGENT,locale="fa-IR",viewport={"width":1366,"height":768},timezone_id="Asia/Tehran")
             page.add_init_script("""Object.defineProperty(navigator,'webdriver',{get:()=>undefined});Object.defineProperty(navigator,'languages',{get:()=>['fa-IR','fa','en-US','en']});Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});window.chrome=window.chrome||{runtime:{}};""")
             try:
@@ -1489,7 +1524,16 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
                 if network.get("worker_key"):relay_headers["X-Proxy-Key"]=str(network["worker_key"])
                 page.set_extra_http_headers(relay_headers)
             target=outbound_browser_target(url);snapp="snappshop.ir" in (url or "").lower();timeout_ms=min(20000 if snapp else 35000, max(8000,int(timeout)*1000));goto_ok=False
+            def _stop_requested() -> bool:
+                return bool(task_id) and live_task_cancelled(task_id)
+            def _abort(browser_obj: Any) -> None:
+                # Close the browser before unwinding so stopping a job never
+                # leaks a chromium process.
+                try:browser_obj.close()
+                except Exception:pass
+                raise CancelledError("استخراج با درخواست کاربر متوقف شد")
             for wait in ("load","domcontentloaded"):
+                if _stop_requested():_abort(browser)
                 try:
                     page.goto(target, wait_until=wait, timeout=timeout_ms);goto_ok=True;break
                 except Exception as exc:
@@ -1498,8 +1542,10 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
             if not goto_ok:
                 page.goto(target, wait_until="commit", timeout=timeout_ms)
             snapp="snappshop.ir" in (url or "").lower()
+            if _stop_requested():_abort(browser)
             page.wait_for_timeout(1800 if snapp else 500)
             for _ in range(max(0, min(16, scrolls if snapp else scrolls))):
+                if _stop_requested():_abort(browser)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(850 if snapp else 600)
             if snapp:
@@ -1511,6 +1557,7 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
                     page.evaluate("""() => document.querySelectorAll('img[data-src],img[data-lazy-src],img[data-original]').forEach(img=>{const u=img.getAttribute('data-src')||img.getAttribute('data-lazy-src')||img.getAttribute('data-original');if(u)img.src=u})""")
                 except Exception:
                     pass
+            if _stop_requested():_abort(browser)
             html = page.content();final_url = url if network_mode=="relay" else page.url
             try:
                 blob=page.evaluate("() => {try{const n=window.__NEXT_DATA__||window.__NUXT__||window.__NUXT_DATA__;return n?JSON.stringify(n):'';}catch(e){return '';}}")
@@ -1523,7 +1570,7 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
                 raise FetchError("Playwright Stealth نیز صفحه ضدبات/VPN دریافت کرد؛ IP مسیر اتصال توسط سایت رد شده است. مسیر مستقیم یا HTTP Proxy مجاز را در دروازه مرکزی انتخاب کنید")
             browser.close()
         return FetchResult(final_url, html, "text/html", 200, "browser")
-    except FetchError:
+    except (FetchError, CancelledError):
         raise
     except Exception as exc:
         raise FetchError(f"مرورگر headless ناموفق بود: {exc}") from exc
@@ -1539,7 +1586,7 @@ class ScrapeReport:
     job_id: str = ""
 
 
-def render_selenium(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
+def render_selenium(url: str, timeout: int, scrolls: int = 4, task_id: str = "") -> FetchResult:
     """Full Chrome/Chromium via Selenium — VPS only path; Playwright is preferred."""
     public_http_url(url)
     try:
@@ -1561,10 +1608,14 @@ def render_selenium(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
         opts.binary_location = chrome_bin
     driver = None
     try:
+        if task_id and live_task_cancelled(task_id):
+            raise CancelledError("استخراج با درخواست کاربر متوقف شد")
         driver = webdriver.Chrome(options=opts)
         driver.set_page_load_timeout(max(15, int(timeout)))
         driver.get(outbound_browser_target(url))
         for _ in range(max(0, min(12, scrolls))):
+            if task_id and live_task_cancelled(task_id):
+                raise CancelledError("استخراج با درخواست کاربر متوقف شد")
             try:
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
             except Exception:
@@ -1572,6 +1623,10 @@ def render_selenium(url: str, timeout: int, scrolls: int = 4) -> FetchResult:
             time.sleep(0.7)
         html = driver.page_source or ""
         final_url = driver.current_url or url
+    except CancelledError:
+        # A stop request must unwind, not be reported as a Selenium failure.
+        # The finally block below still quits the driver.
+        raise
     except Exception as exc:
         raise FetchError(f"Selenium: {exc}") from exc
     finally:
@@ -1823,7 +1878,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             for bengine in browser_engines:
                 try:
                     if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+2),f"{'مستر' if bengine==master else 'پشتیبان'} {bengine} · صفحه {number} از {pages}","running",("HTML محصولی نداشت"+(" · "+fetch_error if fetch_error else "")+f"؛ {bengine}"),done=number-1,total=pages,extracted=len(report.products))
-                    snapp="snappshop.ir" in (urlparse(url).hostname or "").lower();scrolls=int(config.get("scrolls", 8 if snapp else 4));t0=time.monotonic();result = render_playwright(url, fetcher.timeout, scrolls) if bengine=="playwright" else render_selenium(url, fetcher.timeout, scrolls)
+                    snapp="snappshop.ir" in (urlparse(url).hostname or "").lower();scrolls=int(config.get("scrolls", 8 if snapp else 4));t0=time.monotonic();result = run_cancellable((lambda: render_playwright(url, fetcher.timeout, scrolls, task_id)) if bengine=="playwright" else (lambda: render_selenium(url, fetcher.timeout, scrolls, task_id)), task_id, bengine)
                     rows, soup, diag = parse_html(result.text, result.url, selectors);diag={**diag,"engine":bengine,"attempts":diag.get("attempts",[])}
                     report.modes.add(bengine+"-dom")
                     if rows:
@@ -1930,7 +1985,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                         except FetchError as exc:detail_errors.append(f"{engine}: {exc}")
                 if (detail is None or best_q<3) and mode in ("auto","browser"):
                     try:
-                        candidate_detail=render_playwright(product["link"],fetcher.timeout,4 if spa else 3);candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
+                        candidate_detail=run_cancellable(lambda: render_playwright(product["link"],fetcher.timeout,4 if spa else 3,task_id), task_id, "playwright");candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
                         if q>best_q and candidate_fields:detail,detail_rows,detail_soup,custom_detail,best_q=candidate_detail,candidate_rows,candidate_soup,candidate_fields,q;report.modes.add("detail-playwright-stealth")
                         elif not candidate_fields:detail_errors.append("playwright: DOM جزئیات خالی بود")
                     except FetchError as exc:detail_errors.append(f"playwright: {exc}")

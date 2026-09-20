@@ -30,4 +30,4 @@ html5lib>=1.1
 selectolax>=0.3.21
 
 # ── destinations ────────────────────────────────────────────────────────
-basalam-sdk>=0.1.0
+basalam-sdk>=1.2.0

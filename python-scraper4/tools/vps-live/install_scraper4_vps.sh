@@ -119,6 +119,11 @@ fi
 "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade pip
 "$VENV/bin/pip" install flask requests beautifulsoup4 lxml gunicorn
+# Official Basalam SDK: the app prefers it and falls back to REST only if
+# it is missing, so install it with the core deps rather than the optional
+# engine phase (which SKIP_ENGINES=1 skips).
+"$VENV/bin/pip" install basalam-sdk || \
+  echo "WARNING: basalam-sdk not installed; Basalam will use the REST fallback." >&2
 
 install -m 644 "${REPO_DIR}/deploy/scraper4.service" /etc/systemd/system/scraper4.service
 # Older installs predate SCRAPER_AUTO_UPDATE=0 and would let the service pull
