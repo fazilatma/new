@@ -72,20 +72,19 @@ PAGINATIONS = (
 # fastest-first, matching HTTP_ENGINE_ORDER.
 ENGINE_CATALOGUE = (
     # id, Persian label, stage, python module required ("" = always available)
+    #
+    # Only fetch engines are listed. There is no selectable "parse engine":
+    # parse_html() already applies the JSON-LD, __NEXT_DATA__, embedded-JSON and
+    # heuristic-card readers to every response regardless of how it was
+    # fetched, and lxml is always the parser underneath. Offering those as
+    # choices meant 8 of 14 options silently did nothing.
     ("auto", "خودکار (هوشمند - پیشنهادی)", "fetch", ""),
-    ("requests", "Requests — سریع، سایت‌های ساده", "fetch", "requests"),
+    ("requests", "Requests — سریع، برای سایت‌های ساده", "fetch", "requests"),
     ("httpx", "HTTPX — HTTP/2، سریع", "fetch", "httpx"),
     ("curl_cffi", "curl_cffi — دور زدن اثرانگشت TLS/JA3", "fetch", "curl_cffi"),
     ("cloudscraper", "Cloudscraper — چالش‌های کلودفلر", "fetch", "cloudscraper"),
     ("playwright", "Playwright — رندر کامل جاوااسکریپت", "fetch", "playwright"),
     ("selenium", "Selenium — مرورگر واقعی (کندتر)", "fetch", "selenium"),
-    ("jsonld", "JSON-LD — داده ساختاریافته Product", "parse", ""),
-    ("next_data", "Next.js / Nuxt — __NEXT_DATA__", "parse", ""),
-    ("metadata", "OpenGraph / متادیتا", "parse", ""),
-    ("script_json", "JSON داخل تگ script", "parse", ""),
-    ("heuristic", "کارت‌های محصول (تشخیص خودکار)", "parse", ""),
-    ("lxml", "lxml — پارس سریع XPath/CSS", "parse", "lxml"),
-    ("selectolax", "selectolax — پارس بسیار سریع", "parse", "selectolax"),
 )
 # Engine ids accepted when saving a profile.
 ENGINES = tuple(item[0] for item in ENGINE_CATALOGUE)
@@ -529,16 +528,29 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "engineCount": len(engines),
         })
 
+    # Dashboard preference groups that live under ui_settings in the data
+    # file. They were previously dropped on save and never returned on load,
+    # so the font/theme picker reset to the default on every refresh.
+    UI_SETTING_GROUPS = ("appearance", "general", "watchdog", "notifications",
+                         "retire", "dedup", "agent", "ai")
+
     @app.get("/api/settings")
     def node_settings_get():
         data = load()
-        return ok(settings={
+        stored = data.get("ui_settings")
+        if not isinstance(stored, dict):
+            stored = {}
+        settings = {
             "network": data.get("network") or {},
             "maxPages": getattr(core, "MAX_PAGES_HARD", 0),
             "maxProducts": core.MAX_PRODUCTS_HARD,
             "activeProfile": _s(data.get("active_profile")),
             "autoUpdate": bool(data.get("auto_update", True)),
-        })
+        }
+        for group in UI_SETTING_GROUPS:
+            if isinstance(stored.get(group), dict):
+                settings[group] = stored[group]
+        return ok(settings=settings)
 
     @app.post("/api/settings")
     def node_settings_post():
@@ -551,6 +563,17 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             data["network"] = network
         if "activeProfile" in incoming:
             data["active_profile"] = _s(incoming["activeProfile"])
+        # Persist the dashboard preference groups (font, theme, queue limits,
+        # watchdog…). Merge per group so a partial save does not wipe siblings.
+        stored = data.get("ui_settings")
+        if not isinstance(stored, dict):
+            stored = {}
+        for group in UI_SETTING_GROUPS:
+            if isinstance(incoming.get(group), dict):
+                merged = dict(stored.get(group) or {})
+                merged.update(incoming[group])
+                stored[group] = merged
+        data["ui_settings"] = stored
         save(data)
         return ok(settings=incoming)
 
