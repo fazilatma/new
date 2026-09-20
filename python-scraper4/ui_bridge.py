@@ -406,7 +406,32 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     def node_dashboard_js():
         response: Response = send_from_directory(UI_DIR, "dashboard.js")
         response.headers["content-type"] = "application/javascript; charset=utf-8"
+        # Make the served build identifiable from the browser's network tab, so
+        # "is my server actually running the new code?" is answerable without
+        # shell access.
+        response.headers["x-scraper-version"] = core.APP_VERSION
         return response
+
+    @app.get("/api/build")
+    def node_build():
+        """Which files this process is really serving, and from where."""
+        def stamp(path: str) -> dict[str, Any]:
+            try:
+                st = os.stat(path)
+                return {"path": path, "bytes": st.st_size,
+                        "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                               time.localtime(st.st_mtime))}
+            except OSError:
+                return {"path": path, "missing": True}
+        return ok(
+            version=core.APP_VERSION,
+            files={
+                "scraper4.py": stamp(os.path.abspath(getattr(core, "__file__", ""))),
+                "ui_bridge.py": stamp(os.path.abspath(__file__)),
+                "dashboard.js": stamp(os.path.join(UI_DIR, "dashboard.js")),
+                "dashboard.html": stamp(os.path.join(UI_DIR, "dashboard.html")),
+            },
+        )
 
     # ── web fonts ────────────────────────────────────────────────────────
     # The font picker writes --app-font and loads /assets/fonts/<name>.css.

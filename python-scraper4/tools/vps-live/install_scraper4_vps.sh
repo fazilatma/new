@@ -288,6 +288,29 @@ for n in $(seq 1 10); do
   sleep 2
 done
 API_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8000/api/profiles || true)"
+# Verify the RUNNING version matches the repo we just installed from. Without
+# this the installer reports success even when the service is still serving an
+# older file (stale copy, browser cache, a second checkout, a process that was
+# never restarted) — which looks exactly like "the fix did not work".
+REPO_VER="$(grep -m1 '^APP_VERSION' "${REPO_DIR}/scraper4.py" | cut -d'"' -f2)"
+LIVE_VER="$(curl -sS --max-time 10 http://127.0.0.1:8000/health 2>/dev/null \
+  | tr ',' '\n' | grep -o '"version"[^,]*' | cut -d'"' -f4)"
+echo
+echo "Version check: repo=${REPO_VER:-?} running=${LIVE_VER:-?}"
+if [ -n "$REPO_VER" ] && [ -n "$LIVE_VER" ] && [ "$REPO_VER" != "$LIVE_VER" ]; then
+  echo "WARNING: the service is NOT running the version you just installed." >&2
+  echo "  repo    : $REPO_VER" >&2
+  echo "  running : $LIVE_VER" >&2
+  echo "  Fix: systemctl restart scraper4 && curl -s localhost:8000/health" >&2
+  echo "  If it still differs, another copy is being served:" >&2
+  echo "    systemctl cat scraper4 | grep -E 'WorkingDirectory|ExecStart'" >&2
+  echo "    ls -l $APP_DIR/scraper4.py" >&2
+elif [ -n "$LIVE_VER" ]; then
+  echo "OK: running version matches the repo."
+  echo "NOTE: browsers cache the dashboard. If the UI still looks old, reload"
+  echo "      with Ctrl-Shift-R (or Cmd-Shift-R) once."
+fi
+
 if [ "$UI_CODE" = 200 ] && [ "$API_CODE" = 200 ]; then
   echo "OK: dashboard is live — open http://SERVER/put/ui"
 else
