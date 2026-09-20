@@ -323,18 +323,110 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "failed": "failed", "cancelled": "stopped", "interrupted": "failed",
         }
         counts = task.get("counts") if isinstance(task.get("counts"), dict) else {}
+        kind = "scrape" if _s(task.get("kind")) in ("scrape", "detail_extract") else "sync"
+        comparison = task.get("comparison") if isinstance(task.get("comparison"), dict) else {}
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        if not comparison and isinstance(result.get("comparison"), dict):
+            comparison = result["comparison"]
+
+        def pick(*keys: str, default: int = 0) -> int:
+            """First key that is actually present, checking counts{} then flat.
+
+            The workers write flat keys (done/total/sent/failed/extracted);
+            only the reconcile worker writes a nested counts{}. Reading just
+            counts{} made every scrape card fall back to `progress`, which is
+            a percentage — that is why cards showed things like "100 از 1".
+            """
+            for key in keys:
+                if key in counts and counts.get(key) is not None:
+                    return _int(counts.get(key))
+                if key in task and task.get(key) is not None:
+                    return _int(task.get(key))
+                if key in result and result.get(key) is not None:
+                    return _int(result.get(key))
+            return default
+
+        if kind == "sync":
+            # Dispatch counts products sent to the destinations.
+            processed = pick("done")
+            total = pick("total")
+            added = pick("sent", "added")
+            updated = pick("updated")
+        else:
+            # Extraction counts PRODUCTS, not pages. `extracted` is the real
+            # product tally; done/total are page positions used for progress.
+            processed = pick("extracted", "total_products", default=-1)
+            if processed < 0:
+                processed = _int(result.get("total")) or pick("done")
+            total = _int(result.get("total")) or processed or pick("total")
+            added = _int(comparison.get("added"))
+            updated = _int(comparison.get("changed") or comparison.get("price_changed"))
+        # Per-product rows for the metric drill-down. Clicking a counter used
+        # to show the stage plan because job.log was never sent, so
+        # jobEventRows() always filtered an empty array.
+        log: list[dict[str, Any]] = []
+        lists = comparison.get("lists") if isinstance(comparison.get("lists"), dict) else {}
+
+        def as_item(row: Any) -> dict[str, Any]:
+            row = row if isinstance(row, dict) else {}
+            item = {
+                "title": _s(row.get("title") or row.get("name")),
+                "price": _s(row.get("price")),
+                "link": _s(row.get("link") or row.get("url")),
+                "image": _s(row.get("image")),
+                "sku": _s(row.get("sku")),
+            }
+            old = row.get("previous_price")
+            if old not in (None, "") and _s(old) != _s(row.get("price")):
+                try:
+                    old_v, new_v = int(_int(old)), int(_int(row.get("price")))
+                    item.update(oldPrice=old_v, newPrice=new_v,
+                                delta=new_v - old_v,
+                                percent=round((new_v - old_v) * 100 / old_v, 1)
+                                if old_v else 0)
+                except (TypeError, ValueError):
+                    pass
+            return item
+
+        for key, event in (("added", "added"), ("removed", "removed"),
+                           ("changed", "updated"),
+                           ("price_changed", "price-changed"),
+                           ("unchanged", "unchanged")):
+            rows = lists.get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows[:300]:
+                item = as_item(row)
+                if event == "price-changed":
+                    event_name = ("price-increased"
+                                  if _int(item.get("delta")) > 0
+                                  else "price-decreased")
+                else:
+                    event_name = event
+                log.append({"event": event_name, "item": item,
+                            "message": item["title"]})
+        for row in (task.get("failures") or [])[:300]:
+            if isinstance(row, dict):
+                log.append({"event": "failed", "item": as_item(row),
+                            "message": _s(row.get("error"))})
+
         return {
             "id": _s(task.get("id")),
             "profileId": _s(task.get("profile")),
-            "kind": "scrape" if _s(task.get("kind")) == "scrape" else "sync",
+            "kind": kind,
+            "log": log,
             "target": _s(task.get("target")) or "none",
             "status": status_map.get(_s(task.get("status")), "queued"),
             "phase": _s(task.get("step")),
-            "total": _int(counts.get("total") or task.get("total")),
-            "processed": _int(counts.get("done") or task.get("progress")),
-            "added": _int(counts.get("added")),
-            "updated": _int(counts.get("updated")),
-            "failed": _int(counts.get("failed")),
+            "total": total,
+            "processed": processed,
+            "added": added,
+            "updated": updated,
+            "failed": pick("failed"),
+            "removed": _int(comparison.get("removed")),
+            "unchanged": _int(comparison.get("unchanged")),
+            "pages": pick("done"),
+            "pagesTotal": pick("total"),
             "progress": _int(task.get("progress")),
             # Machine-readable stage keys for the UI's step plan. `phase` is
             # free Persian prose written for humans and can never be matched
