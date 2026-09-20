@@ -1,0 +1,7 @@
+{
+  "id": "b2fd5c4c6d",
+  "type": "shell",
+  "cmd": "hostname; whoami; python3 --version; dpkg -l | grep -E 'apache2 |php8|python3-pip|python3-venv' | awk '{print $2,$3}'; ls /etc/apache2/sites-enabled; ls /var/www/html | head",
+  "timeout": 45,
+  "ts": 1788565836
+}

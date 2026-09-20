@@ -1,0 +1,36 @@
+[Unit]
+Description=Scraper4 VPS (Python port of scraper4.php, URL prefix /put)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/scraper4
+Environment=SCRAPER_RUNTIME=vps
+Environment=SCRAPER_URL_PREFIX=/put
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=8000
+# Self-update pulls scraper4.py from fazilatma/amphp, which does NOT contain the
+# Node-parity dashboard bridge. Leaving it on makes the server silently replace
+# this fork ~40s after boot and /ui starts returning 404. Update via git instead.
+Environment=SCRAPER_AUTO_UPDATE=0
+# Git-based auto update: every minute the app compares this checkout against
+# its own branch on origin and fast-forwards when the branch moves, then
+# restarts the service. Unlike the old single-file updater this moves every
+# file together and refuses to run on a dirty tree, so it cannot leave a
+# half-replaced install. Set to 0 to freeze the version.
+Environment=SCRAPER_GIT_AUTO_UPDATE=1
+Environment=SCRAPER_UPDATE_INTERVAL=60
+Environment=SCRAPER_SERVICE_NAME=scraper4
+# No request kill — extract, Woo and Basalam drain until finished.
+ExecStart=/opt/scraper4/venv/bin/python3 -m gunicorn --bind 127.0.0.1:8000 --workers 1 --threads 8 --timeout 0 --graceful-timeout 30 --keep-alive 5 scraper4:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

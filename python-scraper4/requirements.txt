@@ -1,0 +1,33 @@
+# ── core web app ────────────────────────────────────────────────────────
+flask>=3.0.0
+gunicorn>=21.2.0
+urllib3>=2.0.0
+
+# ── fetch engines (Fetcher.get(engine=…)) ───────────────────────────────
+# Listed fastest-first, matching HTTP_ENGINE_ORDER in scraper4.py. Every one
+# is optional except requests: the dashboard probes them at runtime through
+# /api/engines and greys out whatever is not installed here.
+requests>=2.31.0
+httpx[http2]>=0.27.0
+# curl_cffi impersonates a real Chrome TLS/JA3 fingerprint. Plain requests and
+# httpx are now fingerprinted and blocked by many shops, so this is the first
+# thing to try when a site returns an anti-bot page instead of products.
+curl_cffi>=0.7.0
+cloudscraper>=1.2.71
+
+# ── browser rendering (JS-heavy shops / SPAs) ───────────────────────────
+playwright>=1.40.0
+playwright-stealth>=1.0.6
+selenium>=4.20.0
+undetected-chromedriver>=3.5.5
+
+# ── parsing ─────────────────────────────────────────────────────────────
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+html5lib>=1.1
+# selectolax is a C-backed parser, many times faster than BeautifulSoup on
+# large category pages. Optional: the backend falls back to lxml/bs4.
+selectolax>=0.3.21
+
+# ── destinations ────────────────────────────────────────────────────────
+basalam-sdk>=1.2.0
