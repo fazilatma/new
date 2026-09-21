@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.217"
+APP_VERSION = "10.218"
 CHANGELOG = [
+    {"version":"10.218","date":"2026-09-21","title":"رفع خطای HTTP 500 مسیرهای باسلام و fallback ایمن","items":["همه مسیرهای محصول، دسته‌بندی، گفت‌وگو و سفارش باسلام از wrapper مشترک SDK-first استفاده می‌کنند و فقط در حالت مجاز به REST برمی‌گردند","Base URLهای دارای /v1 بدون ساخت آدرس تکراری /v1/v1 نرمال می‌شوند و خطای REST اکنون method و endpoint واقعی را گزارش می‌کند","فیلدهای ویرایش محصول داشبورد مانند title، price و short_description پیش از ارسال به نام‌های رسمی name، primary_price و brief تبدیل می‌شوند","برای درخواست‌های تغییردهنده پس از timeout یا HTTP 5xx مبهم، fallback تکراری متوقف می‌شود تا محصول یا پیام دوباره ساخته/ویرایش نشود","تست‌های regression آفلاین برای اولویت SDK، fallback خواندنی، جلوگیری از retry تغییردهنده و نرمال‌سازی URL افزوده شد"]},
     {"version":"10.217","date":"2026-09-21","title":"تطبیق کامل API و داشبورد با Node 1.211.1+","items":["مانیفست ثابت ۱۶۷ قرارداد route از commit dfd6cc7 مرجع Node و checker آفلاین parity اضافه شد","بکاپ/بازیابی کامل و legacy، ورود پروفایل، jobها، AI و agent، دسته‌بندی پایدار و زمان‌بندی‌شده، PWA و Web Push رمزنگاری‌شده پیاده‌سازی شد","مدیریت واقعی WooCommerce و همه غرفه‌های باسلام، ledger، مغایرت‌گیری و هماهنگ‌سازی، حذف تکراری، تصویر، autoreply و اعلان‌ها به قرارداد داشبورد متصل شد","انتخاب‌گر بصری با ticket یک‌بارمصرف، HTML و CSP ایمن و selectorهای خودکار قابل ترمیم کامل شد","بکاپ split برنچ GitHub با یک commit اتمی، مرور و بازیابی فایل‌ها و پوش دوره‌ای اضافه شد","محافظ SSRF اکنون DNS و همه redirectها را بررسی می‌کند و fallback TLS فقط از CA معتبر سیستم استفاده می‌کند","ذخیره تنظیمات و vault اتصال‌ها lossless شد، routeهای shadow و تکراری حذف شدند و race ریست AI رفع شد","تست‌های contract بدون شبکه برای عملیات پرخطر و قراردادهای رفتاری Node افزوده شد"]},
     {"version":"10.216","date":"2026-09-21","title":"منوی همبرگری باسلام کامل + اتوسیو پروفایل + ترمیم فسادها + parity نمایشی","items":["منوی همبرگری → اتصال باسلام: تست همه غرفه‌ها و هر غرفه تکی حالا کارت کامل با نام کاربر، موبایل/ایمیل، عنوان/شناسه/شهر/امتیاز/وضعیت غرفه و کلاینت SDK/REST را نشان می‌دهد","ذخیره خودکار پروفایل فعال شد: هر تغییر در منبع، صفحه‌بندی، سلکتورها، قوانین قیمت و گالری با debounce روی سرور می‌ماند — دیگر با رفرش از بین نمی‌رود","ترمیم خودکار فسادها گسترش یافت: حذف vendor_id صفر/تکراری، پر کردن نام غرفه خالی/ژنریک، همگام‌سازی shop_name و name کاربر بعد از هر تست موفق","تطبیق نمایشی با نود جی‌اس: دکمه بررسی parity در /ui و تب نسخه، گزارش زنده از فایل مشترک scraper4_data.json، کلیدهای ui_settings و تعداد غرفه‌ها"]},
     {"version":"10.215","date":"2026-09-21","title":"Basalam full user/shop details + auto-fix + fully autosave settings + Node parity","items":["دکمه‌های تست باسلام اکنون برای هر غرفه اطلاعات کامل کاربر (نام، شناسه، موبایل، ایمیل) و غرفه (عنوان، شناسه یکتا، شهر، امتیاز، وضعیت، URL) را با کلاینت SDK/REST نمایش می‌دهد","تست همه غرفه‌ها به‌صورت خودکار فسادها را پر می‌کند: نام خالی/ژنریک غرفه، vendor_id ناقص و نام کاربر — و بلافاصله روی سرور ذخیره می‌کند (auto_fixed)","تنظیمات کاملاً اتوسیو شد: هر تغییر در اتصال مرکزی، ووکامرس، باسلام و فونت با debounce خودکار ذخیره می‌شود — دیگر با رفرش یا آپدیت کد از بین نمی‌رود","پایداری تنظیمات پس از آپدیت کد: load_data اکنون کلیدهای ناشناس را هم حفظ می‌کند تا ui_settings و ماژول‌های آینده با rsync --delete یا تغییر نسخه پاک نشوند","تطبیق کامل با نسخه نود جی‌اس: نگاشت تنظیمات، پروفایل‌ها، appearance/fontScale و اتصالات یکسان‌سازی شد و dashboards / و /ui از یک scraper4_data.json می‌خوانند"]},
@@ -6516,40 +6517,145 @@ def normalize_basalam_token(value: Any) -> str:
     return token
 
 
+def basalam_api_url(path: str, cfg: Optional[dict[str, Any]] = None) -> str:
+    """Build one OpenAPI URL without accidentally producing ``/v1/v1``.
+
+    The classic settings store the origin while the Node-compatible vault stores
+    ``https://openapi.basalam.com/v1``.  Both forms are valid user-facing values,
+    so requests must normalize the overlap rather than rewriting saved settings.
+    """
+    active = cfg if isinstance(cfg, dict) else basalam_active_cfg()
+    base = public_http_url(clean_text(active.get("api_base_url")) or
+                           "https://openapi.basalam.com").rstrip("/")
+    endpoint = "/" + clean_text(path).lstrip("/")
+    base_path = urlparse(base).path.rstrip("/").lower()
+    if base_path.endswith("/v1") and (endpoint.lower() == "/v1" or
+                                      endpoint.lower().startswith("/v1/")):
+        endpoint = endpoint[3:] or "/"
+    return base + endpoint
+
+
 def basalam_api_request(method: str, path: str, *, params: Optional[dict[str,Any]]=None, json_data: Any=None, data: Any=None, files: Any=None) -> Any:
     """Direct SalamAPI REST client routed exclusively by the global connection gateway."""
-    cfg=basalam_active_cfg();token=normalize_basalam_token(cfg.get("token"));base=public_http_url(clean_text(cfg.get("api_base_url")) or "https://openapi.basalam.com").rstrip("/");target=base+"/"+path.lstrip("/");headers={"Authorization":"Bearer "+token,"Accept":"application/json","User-Agent":"Scraper4-REST/"+APP_VERSION}
-    try:response=outbound_request(method,target,params=params,headers=headers,json=json_data,data=data,files=files,timeout=60)
-    except requests.RequestException as exc:raise FetchError(f"REST API باسلام از دروازه مرکزی قابل دسترسی نیست: {exc}") from exc
+    cfg=basalam_active_cfg();token=normalize_basalam_token(cfg.get("token"));target=basalam_api_url(path,cfg);verb=clean_text(method).upper() or "GET";headers={"Authorization":"Bearer "+token,"Accept":"application/json","User-Agent":"Scraper4-REST/"+APP_VERSION}
+    try:response=outbound_request(verb,target,params=params,headers=headers,json=json_data,data=data,files=files,timeout=60)
+    except requests.RequestException as exc:raise FetchError(f"REST API باسلام برای {verb} {path} از دروازه مرکزی قابل دسترسی نیست: {exc}") from exc
     transport=getattr(response,"scraper4_transport","gateway")
     if not response.ok:
-        body=clean_text(response.text)[:1200];hint=""
-        # include request context for 500 debugging
+        body=clean_text(response.text)[:1200] or "پاسخ خالی";hint=""
         if response.status_code>=500:
-            hint="؛ سرور باسلام خطای داخلی داد. شناسه غرفه و توکن را بررسی کنید و دوباره با SDK اول تلاش کنید"
+            hint="؛ این پاسخ 5xx از endpoint باسلام است و به‌تنهایی نشانهٔ اشتباه بودن توکن یا شناسهٔ غرفه نیست"
+            if clean_text(cfg.get("client_mode")).lower() in {"api","rest","direct"}:
+                hint+="؛ حالت «فقط REST» فعال است؛ برای استفاده از SDK-first حالت مدیریت را روی «خودکار» بگذارید"
         if transport=="relay" and response.status_code in {401,403}:
             probe=probe_gateway_authorization()
             if probe.get("tested") and not probe.get("forwarded"):hint="؛ تشخیص قطعی: Worker مرکزی Authorization را عبور نمی‌دهد. توکن واقعی آزمایش نشد؛ مسیر مستقیم یا HTTP Proxy سازگار را در تنظیمات مرکزی انتخاب کنید"
             elif probe.get("forwarded"):hint="؛ Worker هدر آزمایشی را درست عبور داد؛ توکن منقضی، نامعتبر یا فاقد scope لازم است"
             else:hint="؛ آزمون مستقل عبور Authorization نیز از این مسیر قابل انجام نبود"
-        raise FetchError(f"Basalam REST {transport} HTTP {response.status_code}: {body}{hint}")
+        raise FetchError(f"Basalam REST {transport} HTTP {response.status_code} [{verb} {path}]: {body}{hint}")
     try:return response.json()
-    except ValueError:raise FetchError("REST API باسلام پاسخ JSON معتبر برنگرداند")
+    except ValueError:raise FetchError(f"REST API باسلام برای {verb} {path} پاسخ JSON معتبر برنگرداند")
 
 
-def basalam_strategy(sdk_call: Any, api_call: Any) -> tuple[Any,str]:
-    """Basalam: SDK first, REST fallback. Respects client_mode=auto/sdk/api. HTTP proxy skips SDK by design."""
-    mode=clean_text(load_data().get("basalam",{}).get("client_mode","auto")) or "auto";errors=[]
-    network_mode=outbound_mode(load_data().get("network",{}))
+def basalam_exception_status(exc: BaseException) -> int:
+    """Extract an HTTP status from requests/httpx/SDK exceptions without importing SDK internals."""
+    for candidate in (getattr(exc,"status_code",None),
+                      getattr(getattr(exc,"response",None),"status_code",None)):
+        try:
+            if candidate is not None:return int(candidate)
+        except (TypeError,ValueError):pass
+    match=re.search(r"(?:HTTP|API error)\s*([1-5][0-9]{2})",clean_text(exc),re.I)
+    return int(match.group(1)) if match else 0
+
+
+def basalam_mutation_fallback_safe(exc: BaseException) -> bool:
+    """True only when the SDK failure proves no ambiguous mutation was accepted."""
+    status=basalam_exception_status(exc)
+    if status:
+        return 400<=status<500 and status not in {408,425,429}
+    if isinstance(exc,(ImportError,ModuleNotFoundError,AttributeError,TypeError)):
+        return True
+    # Validation can also fail while parsing a successful create response, so a
+    # generic Pydantic error is deliberately *not* considered pre-dispatch.
+    text=clean_text(exc).lower()
+    before_dispatch=(("sdk" in text and ("نصب" in text or "install" in text)) or
+                     "basalam-sdk" in text or "no module named" in text or
+                     "object has no attribute" in text or "personal token باسلام خالی" in text or
+                     "مفسر python واقعی پیدا نشد" in text)
+    return before_dispatch
+
+
+def basalam_strategy(sdk_call: Any, api_call: Any, *, mutating: bool=False,
+                     operation: str="عملیات باسلام") -> tuple[Any,str]:
+    """Run SDK first and use REST only when fallback cannot duplicate a mutation."""
+    mode=clean_text(basalam_active_cfg().get("client_mode","auto")).lower() or "auto"
+    mode={"rest":"api","direct":"api","official":"sdk"}.get(mode,mode)
+    if mode not in {"auto","sdk","api"}:mode="auto"
+    errors=[];network_mode=outbound_mode(load_data().get("network",{}))
     if mode=="sdk" and network_mode=="http":raise FetchError("SDK رسمی از HTTP CONNECT Proxy مرکزی پشتیبانی نمی‌کند؛ روش مدیریت باسلام را روی خودکار یا REST API قرار دهید")
     if mode in {"auto","sdk"} and network_mode!="http":
         try:return sdk_call(),"sdk"
         except Exception as exc:
             errors.append("SDK: "+clean_text(exc)[:600])
             if mode=="sdk":raise
+            if mutating and not basalam_mutation_fallback_safe(exc):
+                raise FetchError(
+                    f"{operation} با SDK پاسخ قطعی نگرفت؛ برای جلوگیری از تکرار، REST fallback اجرا نشد. "
+                    "ابتدا وضعیت محصول/پیام را در باسلام بررسی و سپس در صورت نیاز دوباره تلاش کنید. "
+                    +errors[-1]
+                ) from exc
     try:return api_call(),"api"
     except Exception as exc:
         errors.append("REST API: "+clean_text(exc)[:700]);raise FetchError(" | ".join(errors)) from exc
+
+
+def basalam_sdk_request(method: str, path: str, *, params: Optional[dict[str,Any]]=None,
+                        json_data: Any=None, data: Any=None, files: Any=None) -> Any:
+    """Send an arbitrary OpenAPI call through the official SDK transport."""
+    client=basalam_client();route=clean_text(path).lower()
+    service=(client.chat if route.startswith("/v1/chats") else
+             client.order_processing if route.startswith("/v1/vendor-parcels") else
+             client.upload if route.startswith("/v1/files") else client.core)
+    return service.request_sync(clean_text(method).upper() or "GET",path,params=params,
+                                data=data,json_data=json_data,files=files)
+
+
+def basalam_product_patch_payload(method: str, path: str, payload: Any) -> Any:
+    """Translate dashboard field names to the official ProductRequestSchema names."""
+    if (clean_text(method).upper()!="PATCH" or not isinstance(payload,dict) or
+            not re.fullmatch(r"/v1/products/[0-9]+/?",clean_text(path),re.I)):
+        return payload
+    normalized=dict(payload)
+    aliases={
+        "title":"name",
+        "price":"primary_price",
+        "short_description":"brief",
+        "preparation_day":"preparation_days",
+        "packaged_weight":"package_weight",
+        "inventory":"stock",
+    }
+    for source,target in aliases.items():
+        if source in normalized:
+            if target not in normalized:normalized[target]=normalized[source]
+            normalized.pop(source,None)
+    return normalized
+
+
+def basalam_request(method: str, path: str, *, params: Optional[dict[str,Any]]=None,
+                    json_data: Any=None, data: Any=None, files: Any=None,
+                    mutating: Optional[bool]=None, operation: str="") -> Any:
+    """Shared SDK-first request used by every Basalam UI/parity operation."""
+    verb=clean_text(method).upper() or "GET";payload=basalam_product_patch_payload(verb,path,json_data)
+    changes=verb not in {"GET","HEAD","OPTIONS"} if mutating is None else bool(mutating)
+    label=operation or f"{verb} {path}"
+    def via_sdk():
+        rewind_upload_files(files)
+        return basalam_sdk_request(verb,path,params=params,json_data=payload,data=data,files=files)
+    def via_api():
+        rewind_upload_files(files)
+        return basalam_api_request(verb,path,params=params,json_data=payload,data=data,files=files)
+    result,_client=basalam_strategy(via_sdk,via_api,mutating=changes,operation=label)
+    return result
 
 
 def basalam_api_rows(payload: Any) -> list[dict[str,Any]]:
@@ -6884,7 +6990,10 @@ def basalam_send_one(product: dict[str, Any], shop: Optional[dict[str, Any]] = N
             cfg["token"] = shop["token"]
         item = bsl_apply_shop_price(item, shop)
     with basalam_use_cfg(cfg):
-        result, client = basalam_strategy(lambda: basalam_send_one_sdk(item), lambda: basalam_send_one_api(item))
+        result, client = basalam_strategy(
+            lambda: basalam_send_one_sdk(item), lambda: basalam_send_one_api(item),
+            mutating=True, operation="ایجاد یا ویرایش محصول باسلام",
+        )
     if isinstance(result, dict):
         result["client"] = client
         result["vendor_id"] = int(cfg.get("vendor_id") or 0)
@@ -7218,7 +7327,7 @@ def api_basalam_products():
         # Preserve full 500 body and hint that SDK was tried first
         err=str(exc)
         if "500" in err:
-            err+=" — vendor #"+str(vendor)+" · SDK اول، سپس REST مستقیم امتحان شد؛ توکن/شناسه/دسترسی غرفه را بررسی و لاگ سرور /api/errors را ببینید"
+            err+=" — vendor #"+str(vendor)+" · SDK اول و سپس REST امتحان شد؛ پاسخ 5xx به‌تنهایی نشانه خطای توکن/غرفه نیست و جزئیات endpoint در /api/errors ثبت شده است"
         report_error("basalam:products", exc, extra={"vendor": vendor})
         return jsonify(ok=False,error=err),400
 
@@ -7276,7 +7385,7 @@ def api_basalam_operations():
     results={};checks={"chats":("/v1/chats",{"limit":20,"order_by":"updated_at"}),"unseen":("/v1/chats/unseen-count",None),"orders":("/v1/vendor-parcels",{"per_page":20})}
     for key,(path,params) in checks.items():
         try:
-            payload=basalam_api_request("GET",path,params=params);results[key]=payload;results[key+"_count"]=len(basalam_api_rows(payload)) if key!="unseen" else payload.get("data",payload) if isinstance(payload,dict) else payload
+            payload=basalam_request("GET",path,params=params);results[key]=payload;results[key+"_count"]=len(basalam_api_rows(payload)) if key!="unseen" else payload.get("data",payload) if isinstance(payload,dict) else payload
         except Exception as exc:results[key+"_error"]=clean_text(exc)[:700]
     successes=sum(1 for key in checks if key in results)
     return jsonify(ok=successes>0,successes=successes,**results)
@@ -7286,7 +7395,7 @@ def api_basalam_operations():
 def api_basalam_chat_messages(chat_id: int):
     if not deploy_authorized():return deploy_auth_error()
     try:
-        payload=basalam_api_request("GET",f"/v1/chats/{chat_id}/messages",params={"limit":50});return jsonify(ok=True,messages=basalam_api_rows(payload),raw=payload if not basalam_api_rows(payload) else None)
+        payload=basalam_request("GET",f"/v1/chats/{chat_id}/messages",params={"limit":50});return jsonify(ok=True,messages=basalam_api_rows(payload),raw=payload if not basalam_api_rows(payload) else None)
     except Exception as exc:return jsonify(ok=False,error=str(exc)),400
 
 
@@ -7296,7 +7405,7 @@ def api_basalam_chat_send(chat_id: int):
     text=clean_text((request.get_json(silent=True) or {}).get("text"))
     if not text:return jsonify(ok=False,error="متن پیام خالی است"),400
     try:
-        payload={"chat_id":chat_id,"content":{"text":text},"message_type":"text","temp_id":int(time.time()*1000)};result=basalam_api_request("POST",f"/v1/chats/{chat_id}/messages",json_data=payload);return jsonify(ok=True,message=result)
+        payload={"chat_id":chat_id,"content":{"text":text},"message_type":"text","temp_id":int(time.time()*1000)};result=basalam_request("POST",f"/v1/chats/{chat_id}/messages",json_data=payload,operation="ارسال پیام باسلام");return jsonify(ok=True,message=result)
     except Exception as exc:return jsonify(ok=False,error=str(exc)),400
 
 
@@ -7375,7 +7484,7 @@ def destination_remote_rows(destination: str) -> list[dict[str,Any]]:
     vendor=int(load_data().get("basalam",{}).get("vendor_id",0))
     if not vendor:raise ValueError("شناسه غرفه باسلام تنظیم نشده است")
     for page in range(1,REMOTE_CATALOG_PAGES+1):
-        payload=basalam_api_request("GET",f"/v1/vendors/{vendor}/products",params={"per_page":100,"page":page})
+        payload=basalam_request("GET",f"/v1/vendors/{vendor}/products",params={"per_page":100,"page":page})
         batch=basalam_api_rows(payload);rows.extend(batch)
         if len(batch)<100:break
     return rows
@@ -7792,7 +7901,7 @@ button.linkish.danger{color:#fb7185!important}
 </div>
 <div id="bsShopsHint" class="status"></div>
 </div>
-<div class="actions"><button onclick="saveBasalam()">ذخیره</button><button class="gray" onclick="installBasalamSdk()">نصب/ترمیم SDK</button><button class="gray" onclick="testBasalam()">تست اتصال باسلام</button><button class="green" onclick="loadBasalamVendor()">اطلاعات غرفه</button><button class="green" onclick="loadBasalamProducts()">محصولات غرفه</button></div><div id="bslAdminStatus" class="status">توکن را بدون عبارت Bearer وارد کنید؛ در خطای 401 یک canary بی‌خطر مشخص می‌کند مشکل از Worker است یا خود توکن. هیچ fallback مخفی به اتصال مستقیم انجام نمی‌شود.</div><div id="bslLiveTask" class="live-task" style="display:none"><div class="live-task-head"><b id="bslTaskTitle">در حال اجرا</b><span id="bslTaskPercent">۰٪</span></div><div class="progress-track"><i id="bslTaskBar"></i></div><div id="bslTaskStep" class="live-step"></div><div id="bslTaskDetails" class="live-details"></div></div><div id="bslVendorCard"></div><div id="bslProductList" class="provider-list"></div></div><div class="card operations-card"><div class="section-head"><div><h3>💬 مرکز عملیات باسلام</h3><small>REST API مستقل برای گفت‌وگوها، پیام‌ها و سفارش‌های غرفه</small></div><span class="badge">فاز عملیات</span></div><div class="actions"><button class="green" onclick="loadBasalamOperations()">دریافت داشبورد</button><button class="gray" onclick="loadBasalamOperations()">↻ بروزرسانی</button></div><div id="bslOperationStats" class="stats"></div><div class="operation-columns"><div><h4>گفت‌وگوهای اخیر</h4><div id="bslChatList" class="operation-list"><div class="note">داشبورد را دریافت کنید.</div></div></div><div><h4>سفارش‌های غرفه</h4><div id="bslOrderList" class="operation-list"><div class="note">داشبورد را دریافت کنید.</div></div></div></div><div id="bslChatPanel" class="chat-panel" style="display:none"><div class="section-head"><b id="bslChatTitle">گفت‌وگو</b><button class="gray" onclick="$('bslChatPanel').style.display='none'">✕</button></div><div id="bslMessages" class="message-list"></div><div class="chat-compose"><textarea id="bslMessageText" rows="2" placeholder="پاسخ به مشتری…"></textarea><button onclick="sendBasalamMessage()">ارسال پیام</button></div></div><div id="bslOperationStatus" class="status">این بخش از REST API استفاده می‌کند و به نصب SDK وابسته نیست.</div></div></section><section id="aiAdmin" class="admin-section"><div class="card"><div class="section-head"><div><h3>🤖 مرکز هوش مصنوعی</h3><small>مدیریت چند ارائه‌دهنده، مدل‌ها و چند کلید API مانند نسخه PHP</small></div><span id="aiSummary" class="badge">در حال خواندن…</span></div><div class="ai-tabs"><button class="on" onclick="aiPane('providers',this)">🧠 ارائه‌دهنده‌ها</button><button onclick="aiPane('editor',this)">✏️ ویرایش</button><button onclick="aiPane('models',this);loadAIStats()">📋 مدل‌ها</button><button onclick="aiPane('candidates',this);loadAICandidates()">🏆 کاندید + مستر</button><button onclick="aiPane('test',this)">⚙️ مدل</button><button onclick="aiPane('content',this)">✍️ محتوا و دسته</button><button onclick="aiPane('health',this);loadAITestJobs()">🧪 تست مدل‌ها</button></div><div id="aiPaneProviders" class="ai-pane on"><div class="grid"><div><label>ارائه‌دهنده فعال</label><select id="ai_provider" onchange="aiSelectProvider()"><option value="">— ارائه‌دهنده‌ای نیست —</option></select></div><div><label>مدل فعال</label><select id="ai_model" onchange="aiSelectModel()"><option value="">—</option></select></div></div><div id="aiProviderList" class="provider-list"></div><div class="actions"><label class="file-btn">⬆ بارگذاری ai_providers.json<input type="file" accept=".json,application/json" onchange="importAIProviders(this)"></label><button class="gray" onclick="loadAI()">↻ تازه‌سازی</button></div></div><div id="aiPaneEditor" class="ai-pane"><div class="grid"><div><label>شناسه یکتا</label><input id="ai_edit_id" dir="ltr" placeholder="openrouter"></div><div><label>نام نمایشی</label><input id="ai_edit_name" placeholder="OpenRouter"></div><div><label>Vendor اختیاری</label><input id="ai_edit_vendor" dir="ltr"></div><div><label><input id="ai_edit_enabled" type="checkbox" checked style="width:auto"> ارائه‌دهنده فعال باشد</label></div><div class="wide"><label>Base URL یا Endpoint</label><input id="ai_endpoint" dir="ltr" placeholder="https://.../v1/chat/completions"></div><div class="wide"><label>کلیدهای API — هر خط: کلید | برچسب | Account ID کلادفلر</label><textarea id="ai_keys" rows="4" dir="ltr" placeholder="sk-... | حساب اول"></textarea></div><div class="wide"><label>مدل‌ها — هر خط: model-id | نام نمایشی | free</label><textarea id="ai_models" rows="7" dir="ltr" placeholder="model/id | نام مدل | free"></textarea></div></div><div class="actions"><button onclick="saveAIProvider()">ذخیره ارائه‌دهنده</button><button class="gray" onclick="newAIProvider()">ارائه‌دهنده تازه</button><button class="gray" onclick="deleteAIProvider()">حذف</button></div></div><div id="aiPaneModels" class="ai-pane"><div id="aiStatsCards" class="stats"></div><div id="aiStatsBars"></div><div class="modal-tools" style="padding:10px 0"><input id="aiCatalogSearch" placeholder="جستجوی مدل یا ارائه‌دهنده…" oninput="renderAIModelCatalog()"><select id="aiCatalogFilter" onchange="renderAIModelCatalog()"><option value="all">همه مدل‌ها</option><option value="available">سالم</option><option value="failed">ناموفق</option><option value="untested">تست‌نشده</option><option value="free">رایگان</option></select></div><div id="aiModelCatalog" class="model-catalog"></div></div><div id="aiPaneCandidates" class="ai-pane"><div class="note">مانند نسخه PHP، مدل‌های سالم را به کاندیدها اضافه کنید و یک مدل مستر برای دسته‌بندی و پاسخ خودکار تعیین کنید.</div><div class="grid"><div><label>ارائه‌دهنده</label><select id="aiCandProvider" onchange="renderCandidateModels()"></select></div><div><label>مدل سالم</label><select id="aiCandModel"></select></div></div><div class="actions"><button onclick="addAICandidate()">افزودن کاندید</button><button class="green" onclick="addAllHealthyCandidates()">افزودن همه سالم‌ها</button><button class="gray" onclick="saveAICandidates()">ذخیره</button></div><div id="aiCandidateList" class="candidate-list"></div><div class="grid"><div class="wide"><label>مدل مستر</label><select id="aiMasterModel" onchange="saveAICandidates()"><option value="">خودکار — بهترین امتیاز</option></select></div></div></div><div id="aiPaneTest" class="ai-pane"><div class="grid"><div><label>Temperature</label><input id="ai_temperature" type="number" min="0" max="2" step="0.1"></div><div><label>Max tokens</label><input id="ai_max_tokens" type="number" min="64" max="32000"></div><div class="wide"><label>System prompt</label><textarea id="ai_system_prompt" rows="3"></textarea></div><div class="wide"><label>پیام آزمایش</label><textarea id="ai_test_prompt" rows="3">فقط این JSON را برگردان: {"status":"ok"}</textarea></div></div><div class="actions"><button onclick="saveAIOptions()">ذخیره گزینه‌ها</button><button class="gray" onclick="testAI()">تست مدل فعال</button><button class="green" onclick="enrichAI()">تکمیل ۳ محصول</button></div></div><div id="aiPaneContent" class="ai-pane"><div class="note">توضیح‌ساز، دسته‌بندی و اصلاح دسته با <b>مدل فعال</b>. کار روی سرور می‌ماند.</div><div class="grid"><div><label>منبع محصولات</label><select id="ai_c_scope"><option value="results">نتایج همین استخراج</option><option value="profile">پروفایل فعال</option><option value="all">همه پروفایل‌ها</option></select></div><div><label>سقف هر اجرا</label><input id="ai_c_limit" type="number" min="1" max="80" value="20"></div><div class="wide"><label><input id="ai_c_missing" type="checkbox" checked style="width:auto"> فقط ناقص / دسته مشکوک</label></div></div><div class="actions" style="flex-wrap:wrap"><button class="green" onclick="startAIContent('desc')">✍️ توضیح‌ساز</button><button onclick="startAIContent('category')">📂 دسته‌بندی</button><button onclick="startAIContent('catfix')">🛠️ اصلاح دسته اشتباه</button><button class="gray" onclick="startAIContent('all')">همه با هم</button></div><div id="aiContentStatus" class="status">مدل و کلید را از تب ارائه‌دهنده‌ها انتخاب کنید.</div><div id="aiContentTask" class="card live-task" style="display:none"><div class="live-task-head"><b id="aiContentTitle">هوش مصنوعی</b><span id="aiContentPercent">۰٪</span></div><div class="progress-track"><i id="aiContentBar"></i></div><div id="aiContentStep" class="live-step"></div><div id="aiContentDetails" class="live-details"></div></div></div>
+<div class="actions"><button onclick="saveBasalam()">ذخیره</button><button class="gray" onclick="installBasalamSdk()">نصب/ترمیم SDK</button><button class="gray" onclick="testBasalam()">تست اتصال باسلام</button><button class="green" onclick="loadBasalamVendor()">اطلاعات غرفه</button><button class="green" onclick="loadBasalamProducts()">محصولات غرفه</button></div><div id="bslAdminStatus" class="status">توکن را بدون عبارت Bearer وارد کنید؛ در خطای 401 یک canary بی‌خطر مشخص می‌کند مشکل از Worker است یا خود توکن. هیچ fallback مخفی به اتصال مستقیم انجام نمی‌شود.</div><div id="bslLiveTask" class="live-task" style="display:none"><div class="live-task-head"><b id="bslTaskTitle">در حال اجرا</b><span id="bslTaskPercent">۰٪</span></div><div class="progress-track"><i id="bslTaskBar"></i></div><div id="bslTaskStep" class="live-step"></div><div id="bslTaskDetails" class="live-details"></div></div><div id="bslVendorCard"></div><div id="bslProductList" class="provider-list"></div></div><div class="card operations-card"><div class="section-head"><div><h3>💬 مرکز عملیات باسلام</h3><small>REST API مستقل برای گفت‌وگوها، پیام‌ها و سفارش‌های غرفه</small></div><span class="badge">فاز عملیات</span></div><div class="actions"><button class="green" onclick="loadBasalamOperations()">دریافت داشبورد</button><button class="gray" onclick="loadBasalamOperations()">↻ بروزرسانی</button></div><div id="bslOperationStats" class="stats"></div><div class="operation-columns"><div><h4>گفت‌وگوهای اخیر</h4><div id="bslChatList" class="operation-list"><div class="note">داشبورد را دریافت کنید.</div></div></div><div><h4>سفارش‌های غرفه</h4><div id="bslOrderList" class="operation-list"><div class="note">داشبورد را دریافت کنید.</div></div></div></div><div id="bslChatPanel" class="chat-panel" style="display:none"><div class="section-head"><b id="bslChatTitle">گفت‌وگو</b><button class="gray" onclick="$('bslChatPanel').style.display='none'">✕</button></div><div id="bslMessages" class="message-list"></div><div class="chat-compose"><textarea id="bslMessageText" rows="2" placeholder="پاسخ به مشتری…"></textarea><button onclick="sendBasalamMessage()">ارسال پیام</button></div></div><div id="bslOperationStatus" class="status">این بخش ابتدا SDK رسمی و سپس در صورت مجاز بودن REST fallback را به‌کار می‌گیرد.</div></div></section><section id="aiAdmin" class="admin-section"><div class="card"><div class="section-head"><div><h3>🤖 مرکز هوش مصنوعی</h3><small>مدیریت چند ارائه‌دهنده، مدل‌ها و چند کلید API مانند نسخه PHP</small></div><span id="aiSummary" class="badge">در حال خواندن…</span></div><div class="ai-tabs"><button class="on" onclick="aiPane('providers',this)">🧠 ارائه‌دهنده‌ها</button><button onclick="aiPane('editor',this)">✏️ ویرایش</button><button onclick="aiPane('models',this);loadAIStats()">📋 مدل‌ها</button><button onclick="aiPane('candidates',this);loadAICandidates()">🏆 کاندید + مستر</button><button onclick="aiPane('test',this)">⚙️ مدل</button><button onclick="aiPane('content',this)">✍️ محتوا و دسته</button><button onclick="aiPane('health',this);loadAITestJobs()">🧪 تست مدل‌ها</button></div><div id="aiPaneProviders" class="ai-pane on"><div class="grid"><div><label>ارائه‌دهنده فعال</label><select id="ai_provider" onchange="aiSelectProvider()"><option value="">— ارائه‌دهنده‌ای نیست —</option></select></div><div><label>مدل فعال</label><select id="ai_model" onchange="aiSelectModel()"><option value="">—</option></select></div></div><div id="aiProviderList" class="provider-list"></div><div class="actions"><label class="file-btn">⬆ بارگذاری ai_providers.json<input type="file" accept=".json,application/json" onchange="importAIProviders(this)"></label><button class="gray" onclick="loadAI()">↻ تازه‌سازی</button></div></div><div id="aiPaneEditor" class="ai-pane"><div class="grid"><div><label>شناسه یکتا</label><input id="ai_edit_id" dir="ltr" placeholder="openrouter"></div><div><label>نام نمایشی</label><input id="ai_edit_name" placeholder="OpenRouter"></div><div><label>Vendor اختیاری</label><input id="ai_edit_vendor" dir="ltr"></div><div><label><input id="ai_edit_enabled" type="checkbox" checked style="width:auto"> ارائه‌دهنده فعال باشد</label></div><div class="wide"><label>Base URL یا Endpoint</label><input id="ai_endpoint" dir="ltr" placeholder="https://.../v1/chat/completions"></div><div class="wide"><label>کلیدهای API — هر خط: کلید | برچسب | Account ID کلادفلر</label><textarea id="ai_keys" rows="4" dir="ltr" placeholder="sk-... | حساب اول"></textarea></div><div class="wide"><label>مدل‌ها — هر خط: model-id | نام نمایشی | free</label><textarea id="ai_models" rows="7" dir="ltr" placeholder="model/id | نام مدل | free"></textarea></div></div><div class="actions"><button onclick="saveAIProvider()">ذخیره ارائه‌دهنده</button><button class="gray" onclick="newAIProvider()">ارائه‌دهنده تازه</button><button class="gray" onclick="deleteAIProvider()">حذف</button></div></div><div id="aiPaneModels" class="ai-pane"><div id="aiStatsCards" class="stats"></div><div id="aiStatsBars"></div><div class="modal-tools" style="padding:10px 0"><input id="aiCatalogSearch" placeholder="جستجوی مدل یا ارائه‌دهنده…" oninput="renderAIModelCatalog()"><select id="aiCatalogFilter" onchange="renderAIModelCatalog()"><option value="all">همه مدل‌ها</option><option value="available">سالم</option><option value="failed">ناموفق</option><option value="untested">تست‌نشده</option><option value="free">رایگان</option></select></div><div id="aiModelCatalog" class="model-catalog"></div></div><div id="aiPaneCandidates" class="ai-pane"><div class="note">مانند نسخه PHP، مدل‌های سالم را به کاندیدها اضافه کنید و یک مدل مستر برای دسته‌بندی و پاسخ خودکار تعیین کنید.</div><div class="grid"><div><label>ارائه‌دهنده</label><select id="aiCandProvider" onchange="renderCandidateModels()"></select></div><div><label>مدل سالم</label><select id="aiCandModel"></select></div></div><div class="actions"><button onclick="addAICandidate()">افزودن کاندید</button><button class="green" onclick="addAllHealthyCandidates()">افزودن همه سالم‌ها</button><button class="gray" onclick="saveAICandidates()">ذخیره</button></div><div id="aiCandidateList" class="candidate-list"></div><div class="grid"><div class="wide"><label>مدل مستر</label><select id="aiMasterModel" onchange="saveAICandidates()"><option value="">خودکار — بهترین امتیاز</option></select></div></div></div><div id="aiPaneTest" class="ai-pane"><div class="grid"><div><label>Temperature</label><input id="ai_temperature" type="number" min="0" max="2" step="0.1"></div><div><label>Max tokens</label><input id="ai_max_tokens" type="number" min="64" max="32000"></div><div class="wide"><label>System prompt</label><textarea id="ai_system_prompt" rows="3"></textarea></div><div class="wide"><label>پیام آزمایش</label><textarea id="ai_test_prompt" rows="3">فقط این JSON را برگردان: {"status":"ok"}</textarea></div></div><div class="actions"><button onclick="saveAIOptions()">ذخیره گزینه‌ها</button><button class="gray" onclick="testAI()">تست مدل فعال</button><button class="green" onclick="enrichAI()">تکمیل ۳ محصول</button></div></div><div id="aiPaneContent" class="ai-pane"><div class="note">توضیح‌ساز، دسته‌بندی و اصلاح دسته با <b>مدل فعال</b>. کار روی سرور می‌ماند.</div><div class="grid"><div><label>منبع محصولات</label><select id="ai_c_scope"><option value="results">نتایج همین استخراج</option><option value="profile">پروفایل فعال</option><option value="all">همه پروفایل‌ها</option></select></div><div><label>سقف هر اجرا</label><input id="ai_c_limit" type="number" min="1" max="80" value="20"></div><div class="wide"><label><input id="ai_c_missing" type="checkbox" checked style="width:auto"> فقط ناقص / دسته مشکوک</label></div></div><div class="actions" style="flex-wrap:wrap"><button class="green" onclick="startAIContent('desc')">✍️ توضیح‌ساز</button><button onclick="startAIContent('category')">📂 دسته‌بندی</button><button onclick="startAIContent('catfix')">🛠️ اصلاح دسته اشتباه</button><button class="gray" onclick="startAIContent('all')">همه با هم</button></div><div id="aiContentStatus" class="status">مدل و کلید را از تب ارائه‌دهنده‌ها انتخاب کنید.</div><div id="aiContentTask" class="card live-task" style="display:none"><div class="live-task-head"><b id="aiContentTitle">هوش مصنوعی</b><span id="aiContentPercent">۰٪</span></div><div class="progress-track"><i id="aiContentBar"></i></div><div id="aiContentStep" class="live-step"></div><div id="aiContentDetails" class="live-details"></div></div></div>
 <div id="aiPaneHealth" class="ai-pane"><div class="grid grid4"><div><label>حداکثر مدل هر ارائه‌دهنده</label><input id="ai_test_per" type="number" min="1" max="5000" value="5000"></div><div><label>تأخیر بین مدل‌ها (ms)</label><input id="ai_test_delay" type="number" min="0" max="60000" value="120"></div><div><label>مدل در هر درخواست</label><input id="ai_test_batch" type="number" min="1" max="3" value="1"></div><div><label><input id="ai_test_only" type="checkbox" style="width:auto"> فقط تست‌نشده‌ها</label><label><input id="ai_test_skip" type="checkbox" checked style="width:auto"> ردکردن مدل غیرچت</label></div><div class="wide"><label>پیام نمونه مشتری</label><textarea id="ai_reply_sample" rows="2">سلام، این محصول موجود است و چه زمانی ارسال می‌شود؟</textarea></div><div class="wide"><label>عنوان نمونه برای دسته‌بندی</label><input id="ai_category_sample" value="ادو پرفیوم مردانه دیور ساواج ۱۰۰ میلی‌لیتر"></div></div><div class="actions"><button class="green" onclick="startAutoAITests()">▶ تست خودکار همه مدل‌ها</button><button onclick="processAITests()">اجرای فقط یک مرحله</button><button class="gray" onclick="stopAutoAITests()">توقف خودکار</button><button class="gray" onclick="openAITestModal()">جدول پیشرفته نتایج</button></div><div id="aiTestSummary" class="stats"></div><div id="aiTestRows" class="test-results"></div></div><div id="aiStatus" class="status">فایل PHP را بارگذاری کنید؛ ارائه‌دهنده‌ها و مدل‌ها فوراً در فهرست ظاهر می‌شوند.</div></div></section><div id="adminMount"></div></div></aside><div class="wrap">
 <div id="deployBanner" class="deploy-banner"><span id="deployBannerText" style="flex:1;min-width:200px">⬆ نسخه جدید موجود است</span><button onclick="deployGoTo()">نصب کن</button><button class="ghost" onclick="dismissDeployBanner()">بعداً</button></div><header class="hero"><div class="hero-main"><div class="logo">🕸️</div><div><div class="eyebrow">مرکز استخراج محصول</div><h1>🛒 اسکرپر <small id="appVersion" onclick="deployGoTo()" title="برای بررسی به‌روزرسانی کلیک کنید">v10.141</small></h1><div class="sub">استخراج و مدیریت هوشمند محصولات</div></div></div><div class="hero-badge"><span>●</span> آنلاین و آماده</div></header><div id="toast"></div>
 
@@ -8147,9 +8256,9 @@ async function loadBasalamVendor(){try{$('bslAdminStatus').textContent='در ح�
 async function loadBasalamProducts(){try{$('bslAdminStatus').textContent='در حال دریافت محصولات غرفه…';let d=await deployApi('/api/basalam/products');$('bslProductList').innerHTML=(d.products||[]).map(p=>`<div class="provider-row"><div><b>${esc(p.name||'بدون نام')}</b> <code>#${esc(p.id)}</code><br><small>SKU: ${esc(p.sku||'—')} · موجودی: ${esc(p.stock??'—')} · قیمت: ${esc(p.price??'—')}</small></div><span class="badge">${esc(p.status||'—')}</span></div>`).join('')||'<div class="note">محصولی در غرفه پیدا نشد.</div>';$('bslAdminStatus').innerHTML='<span class="ok">'+d.total+' محصول نخست غرفه با '+esc(d.client||'—')+' دریافت شد.</span>'}catch(e){$('bslAdminStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 function bslApiList(v){if(Array.isArray(v))return v;if(v&&typeof v==='object'){for(const k of ['data','items','results','chats','messages','parcels','products']){let x=v[k];if(Array.isArray(x))return x;if(x&&typeof x==='object'){let y=bslApiList(x);if(y.length)return y}}}return []}
 let activeBasalamChat=0;
-async function loadBasalamOperations(){try{$('bslOperationStatus').innerHTML='<span class="spinner"></span> دریافت هم‌زمان گفت‌وگوها و سفارش‌ها از REST API…';let d=await deployApi('/api/basalam/operations'),chats=bslApiList(d.chats),orders=bslApiList(d.orders),unseen=d.unseen_count?.count??d.unseen_count?.data?.count??d.unseen_count??0;$('bslOperationStats').innerHTML=`<div class="space-card"><b>${chats.length}</b><span>گفت‌وگوی اخیر</span></div><div class="space-card"><b>${typeof unseen==='object'?'—':unseen}</b><span>پیام خوانده‌نشده</span></div><div class="space-card"><b>${orders.length}</b><span>سفارش/مرسوله</span></div>`;$('bslChatList').innerHTML=chats.map(c=>{let contact=c.contact||{},last=c.last_message||{},txt=last.content?.text||last.text||'';return `<div class="operation-item" onclick="openBasalamChat(${Number(c.id)||0},'${esc(contact.name||contact.title||'گفت‌وگو')}')"><b>${esc(contact.name||contact.title||'گفت‌وگو #'+c.id)}</b><small>${esc(txt||c.chat_type||'')} · خوانده‌نشده ${c.unseen_message_count||0}</small></div>`}).join('')||'<div class="note">گفت‌وگویی برگردانده نشد.</div>';$('bslOrderList').innerHTML=orders.map(o=>`<div class="operation-item"><b>سفارش/مرسوله #${esc(o.id||o.order_id||'—')}</b><small>${esc(o.status||o.state||'')} · ${esc(o.created_at||o.estimate_send_at||'')}</small></div>`).join('')||'<div class="note">سفارشی برگردانده نشد.</div>';$('bslOperationStatus').innerHTML=(d.chats_error?'<span class="error">چت: '+esc(d.chats_error)+'</span><br>':'')+(d.orders_error?'<span class="error">سفارش: '+esc(d.orders_error)+'</span>':'<span class="ok">داشبورد REST API بروزرسانی شد.</span>')}catch(e){$('bslOperationStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
+async function loadBasalamOperations(){try{$('bslOperationStatus').innerHTML='<span class="spinner"></span> دریافت هم‌زمان گفت‌وگوها و سفارش‌ها با SDK-first…';let d=await deployApi('/api/basalam/operations'),chats=bslApiList(d.chats),orders=bslApiList(d.orders),unseen=d.unseen_count?.count??d.unseen_count?.data?.count??d.unseen_count??0;$('bslOperationStats').innerHTML=`<div class="space-card"><b>${chats.length}</b><span>گفت‌وگوی اخیر</span></div><div class="space-card"><b>${typeof unseen==='object'?'—':unseen}</b><span>پیام خوانده‌نشده</span></div><div class="space-card"><b>${orders.length}</b><span>سفارش/مرسوله</span></div>`;$('bslChatList').innerHTML=chats.map(c=>{let contact=c.contact||{},last=c.last_message||{},txt=last.content?.text||last.text||'';return `<div class="operation-item" onclick="openBasalamChat(${Number(c.id)||0},'${esc(contact.name||contact.title||'گفت‌وگو')}')"><b>${esc(contact.name||contact.title||'گفت‌وگو #'+c.id)}</b><small>${esc(txt||c.chat_type||'')} · خوانده‌نشده ${c.unseen_message_count||0}</small></div>`}).join('')||'<div class="note">گفت‌وگویی برگردانده نشد.</div>';$('bslOrderList').innerHTML=orders.map(o=>`<div class="operation-item"><b>سفارش/مرسوله #${esc(o.id||o.order_id||'—')}</b><small>${esc(o.status||o.state||'')} · ${esc(o.created_at||o.estimate_send_at||'')}</small></div>`).join('')||'<div class="note">سفارشی برگردانده نشد.</div>';$('bslOperationStatus').innerHTML=(d.chats_error?'<span class="error">چت: '+esc(d.chats_error)+'</span><br>':'')+(d.orders_error?'<span class="error">سفارش: '+esc(d.orders_error)+'</span>':'<span class="ok">داشبورد باسلام با SDK-first بروزرسانی شد.</span>')}catch(e){$('bslOperationStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 async function openBasalamChat(id,title){if(!id)return;activeBasalamChat=id;$('bslChatPanel').style.display='block';$('bslChatTitle').textContent=title+' · #'+id;$('bslMessages').innerHTML='<span class="spinner"></span>';try{let d=await deployApi('/api/basalam/chats/'+id+'/messages'),rows=d.messages||[];$('bslMessages').innerHTML=rows.map(m=>`<div class="message">${esc(m.content?.text||m.text||m.message_type||'پیام')}<small>${esc(m.created_at||'')} · ${esc(m.sender?.id||'')}</small></div>`).join('')||'<div class="note">پیامی برگردانده نشد.</div>';$('bslMessages').scrollTop=$('bslMessages').scrollHeight}catch(e){$('bslMessages').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
-async function sendBasalamMessage(){let text=$('bslMessageText').value.trim();if(!activeBasalamChat||!text)return;try{await deployApi('/api/basalam/chats/'+activeBasalamChat+'/messages',{method:'POST',body:JSON.stringify({text})});$('bslMessageText').value='';await openBasalamChat(activeBasalamChat,$('bslChatTitle').textContent.split('·')[0]);$('bslOperationStatus').innerHTML='<span class="ok">پیام با REST API ارسال شد.</span>'}catch(e){$('bslOperationStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
+async function sendBasalamMessage(){let text=$('bslMessageText').value.trim();if(!activeBasalamChat||!text)return;try{await deployApi('/api/basalam/chats/'+activeBasalamChat+'/messages',{method:'POST',body:JSON.stringify({text})});$('bslMessageText').value='';await openBasalamChat(activeBasalamChat,$('bslChatTitle').textContent.split('·')[0]);$('bslOperationStatus').innerHTML='<span class="ok">پیام با مسیر امن SDK-first ارسال شد.</span>'}catch(e){$('bslOperationStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 async function searchBasalamCategories(){try{$('bslCategoryResults').innerHTML='<div class="status">در حال دریافت درخت دسته‌ها…</div>';let d=await deployApi('/api/basalam/categories?q='+encodeURIComponent($('bsl_category_query').value.trim()));$('bslCategoryResults').innerHTML=(d.categories||[]).map(x=>`<div class="category-item"><span>${esc(x.path)} <code>${esc(x.id)}</code></span><button onclick="chooseBasalamCategory('${esc(x.id)}','${esc(x.name)}')">انتخاب</button></div>`).join('')||'<div class="note">دسته‌ای پیدا نشد.</div>'}catch(e){$('bslCategoryResults').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 function chooseBasalamCategory(id,name){$('bsl_category').value=id;$('bsl_category_query').value=name;$('bslCategoryResults').innerHTML='<span class="ok">دسته انتخاب شد؛ اکنون تنظیمات باسلام را ذخیره کنید.</span>'}
 let activeBasalamJob='';

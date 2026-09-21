@@ -855,7 +855,7 @@ def install_parity_extensions(app: Any, core: Any, helpers: dict[str, Any]) -> N
                     try:
                         context, _shop = shop_context(shop_id)
                         with context:
-                            core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                            core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                      json_data={"category_id": cid})
                         found = found_by_id[cid]
                         confidence = round(vote_count * 100 / max(1, len(run.get("modelKeys") or [])))
@@ -1308,7 +1308,7 @@ def install_parity_extensions(app: Any, core: Any, helpers: dict[str, Any]) -> N
                 else:
                     context, _shop = shop_context(action.get("shopId") or action["accountKey"])
                     with context:
-                        core.basalam_api_request("PATCH", f"/v1/products/{action['remoteId']}",
+                        core.basalam_request("PATCH", f"/v1/products/{action['remoteId']}",
                                                  json_data={"status": 4184})
                     archived += 1
             except Exception as exc:  # noqa: BLE001
@@ -1411,7 +1411,7 @@ def install_parity_extensions(app: Any, core: Any, helpers: dict[str, Any]) -> N
                 else:
                     context, _shop = shop_context(row.get("shopId"))
                     with context:
-                        core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                        core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                  json_data={"status": 4184})
                 changed += 1
             except Exception as exc:  # noqa: BLE001
@@ -2184,7 +2184,7 @@ window.addEventListener('message',e=>{if(e.source!==parent||e.data?.channel!==ch
     @app.get("/api/basalam/orders")
     def parity_basalam_orders():
         try:
-            payload = core.basalam_api_request("GET", "/v1/vendor-parcels",
+            payload = core.basalam_request("GET", "/v1/vendor-parcels",
                                                params={"per_page": min(100, max(1, _int(request.args.get("limit"), 50)))})
             rows = core.basalam_api_rows(payload)
             return ok(items=rows, total=len(rows))

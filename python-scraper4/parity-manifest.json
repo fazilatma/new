@@ -10,7 +10,7 @@
   },
   "target": {
     "runtime": "python-scraper4",
-    "minimumVersion": "10.217"
+    "minimumVersion": "10.218"
   },
   "normalization": "Dynamic path parameters are represented as <>.",
   "requiredRoutes": [

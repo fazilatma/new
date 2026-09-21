@@ -382,6 +382,71 @@ class NodeParityContracts(unittest.TestCase):
         self.assertRegex(saved["id"], r"^[a-f0-9]{64}$")
         self.assert_ok(self.client.post("/api/web-push/unsubscribe", json={"id": saved["id"]}))
 
+    def test_basalam_sdk_first_and_safe_fallback(self):
+        data = self.data()
+        data["basalam"].update(token="test-personal-token-123", vendor_id=77,
+                               client_mode="auto", api_base_url="https://1.1.1.1/v1")
+        self.save(data)
+
+        # Node-compatible settings include /v1; the low-level REST URL must not
+        # repeat it; duplicated version prefixes can surface as opaque 5xx responses.
+        self.assertEqual(core.basalam_api_url("/v1/products/12"),
+                         "https://1.1.1.1/v1/products/12")
+        self.assertEqual(core.basalam_api_url(
+            "/v1/products/12", {"api_base_url": "https://1.1.1.1"}),
+            "https://1.1.1.1/v1/products/12")
+        with patch.object(core, "outbound_request",
+                          return_value=FakeResponse({"data": []})) as outbound:
+            core.basalam_api_request("GET", "/v1/vendors/77/products")
+        self.assertEqual(outbound.call_args.args[1],
+                         "https://1.1.1.1/v1/vendors/77/products")
+
+        sdk_payload = {"data": [{"id": 12}]}
+        with patch.object(core, "basalam_sdk_request", return_value=sdk_payload) as sdk, \
+                patch.object(core, "basalam_api_request",
+                             side_effect=AssertionError("REST must not run")) as rest:
+            self.assertEqual(core.basalam_request("GET", "/v1/products/12"), sdk_payload)
+        sdk.assert_called_once()
+        rest.assert_not_called()
+
+        with patch.object(core, "basalam_sdk_request", return_value={"id": 12}) as sdk, \
+                patch.object(core, "basalam_api_request") as rest:
+            core.basalam_request("PATCH", "/v1/products/12",
+                                 json_data={"title": "A", "price": 9000,
+                                            "short_description": "B"})
+        sent = sdk.call_args.kwargs["json_data"]
+        self.assertEqual(sent, {"name": "A", "primary_price": 9000, "brief": "B"})
+        rest.assert_not_called()
+
+        # Reads can safely fall back after an SDK transport failure.
+        with patch.object(core, "basalam_sdk_request", side_effect=RuntimeError("SDK down")), \
+                patch.object(core, "basalam_api_request", return_value=sdk_payload) as rest:
+            self.assertEqual(core.basalam_request("GET", "/v1/products/12"), sdk_payload)
+        rest.assert_called_once()
+
+        class SdkServerError(RuntimeError):
+            status_code = 500
+
+        # A mutating 5xx is ambiguous: Basalam may have applied the change.
+        # Never issue the same PATCH through REST and risk a duplicate mutation.
+        with patch.object(core, "basalam_sdk_request", side_effect=SdkServerError("boom")), \
+                patch.object(core, "basalam_api_request") as rest:
+            with self.assertRaisesRegex(core.FetchError, "REST fallback اجرا نشد"):
+                core.basalam_request("PATCH", "/v1/products/12",
+                                     json_data={"primary_price": 9000})
+        rest.assert_not_called()
+
+        # A failure proven to happen before dispatch is safe to fall back.
+        with patch.object(core, "basalam_sdk_request",
+                          side_effect=ModuleNotFoundError("No module named basalam_sdk")), \
+                patch.object(core, "basalam_api_request", return_value={"id": 12}) as rest:
+            self.assertEqual(core.basalam_request("PATCH", "/v1/products/12",
+                                                  json_data={"status": 4184}), {"id": 12})
+        rest.assert_called_once()
+
+        for adapter in (ROOT / "ui_bridge.py", ROOT / "parity_ext.py"):
+            self.assertNotIn("core.basalam_api_request(", adapter.read_text(encoding="utf-8"))
+
     def test_persistent_category_run(self):
         data = self.data()
         data["basalam"].update(token="token", vendor_id=77, shop_name="Shop")
@@ -400,7 +465,7 @@ class NodeParityContracts(unittest.TestCase):
                     {"id": 1, "name": "قدیمی", "path": "قدیمی"},
                     {"id": 9, "name": "عطر و ادکلن", "path": "زیبایی > عطر و ادکلن"},
                 ]), patch.object(core, "ai_chat", return_value='{"category":"عطر و ادکلن"}'), \
-                patch.object(core, "basalam_api_request", side_effect=basalam):
+                patch.object(core, "basalam_request", side_effect=basalam):
             started = self.assert_ok(self.client.post(
                 "/api/destination/basalam/category-runs", json={"mode": "master"}), status=202)
             self.assertEqual(started["run"]["status"], "queued")

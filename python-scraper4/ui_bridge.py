@@ -2222,7 +2222,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         "توکن را بدون Bearer و بدون فاصله وارد کنید."])
                 api = _s(cfg.get("api") or (data.get("basalam") or {}).get("api_base_url")) \
                     or "https://openapi.basalam.com"
-                endpoint = core.public_http_url(api).rstrip("/") + "/users/me"
+                endpoint = core.basalam_api_url("/v1/users/me", {"api_base_url": api})
                 response = core.outbound_request("GET", endpoint,
                                                  headers={"Authorization": "Bearer " + token,
                                                           "Accept": "application/json",
@@ -2793,7 +2793,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 continue
             with core.basalam_use_cfg(shop["cfg"]):
                 for page in range(1, getattr(core, "REMOTE_CATALOG_PAGES", 20) + 1):
-                    payload = core.basalam_api_request(
+                    payload = core.basalam_request(
                         "GET", f"/v1/vendors/{shop['vendor_id']}/products",
                         params={"per_page": 100, "page": page},
                     )
@@ -2935,7 +2935,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             for path in (f"/v1/products/{item_id}",
                          f"/v1/vendors/{shop['vendor_id']}/products/{item_id}"):
                 try:
-                    payload = core.basalam_api_request("GET", path)
+                    payload = core.basalam_request("GET", path)
                     raw = payload.get("data", payload) if isinstance(payload, dict) else {}
                     if isinstance(raw, dict):
                         raw = dict(raw)
@@ -3004,7 +3004,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             else:
                 ctx, _shop = _shop_context(body.get("shopId") or current.get("shopId"))
                 with ctx:
-                    raw = core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                    raw = core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                    json_data=changes)
                 raw = raw.get("data", raw) if isinstance(raw, dict) else {}
                 if isinstance(raw, dict):
@@ -3041,7 +3041,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             else:
                 ctx, shop = _shop_context(body.get("shopId"))
                 with ctx:
-                    item = core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                    item = core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                     json_data={"status": _int(status)})
                 item = item.get("data", item) if isinstance(item, dict) else item
                 if isinstance(item, dict):
@@ -3063,7 +3063,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 return ok(deleted=item_id, force=force)
             ctx, shop = _shop_context(request.args.get("shop") or request.args.get("shopId"))
             with ctx:
-                result = core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                result = core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                   json_data={"status": 4184})
             return ok(deleted=item_id, archived=True, status=4184, shopId=shop["id"], raw=result)
         except Exception as exc:  # noqa: BLE001
@@ -3198,7 +3198,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     else:
                         context, _shop = _shop_context(item.get("shopId"))
                         with context:
-                            core.basalam_api_request("PATCH", f"/v1/products/{item['id']}",
+                            core.basalam_request("PATCH", f"/v1/products/{item['id']}",
                                                      json_data={"status": 4184})
                     record["ok"] = True
                     run["removed"] = _int(run.get("removed")) + 1
@@ -3364,7 +3364,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                             core.woo_request("DELETE", f"products/{item_id}?force=false")
                         else:
                             with context:
-                                core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                          json_data={"status": 4184})
                         entry["done"] = True
                 else:
@@ -3406,7 +3406,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                 core.woo_request("PUT", f"products/{item_id}", payload)
                             else:
                                 with context:
-                                    core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                    core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                              json_data=payload)
                                 if assignment:
                                     learned.append({
@@ -3724,7 +3724,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     else:
                         core.woo_request("PUT", f"products/{item_id}", {"status": "draft"})
                 else:
-                    core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                    core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                              json_data={"status": 4184 if mode in {"archive", "trash", "delete"} else 3790})
                 changed += 1
             except Exception as exc:  # noqa: BLE001
@@ -3832,7 +3832,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         else:
                             context, _shop = _shop_context(action["accountKey"])
                             with context:
-                                core.basalam_api_request("PATCH", f"/v1/products/{remote_id}",
+                                core.basalam_request("PATCH", f"/v1/products/{remote_id}",
                                                          json_data={"primary_price": _int(action["toPrice"])})
                     else:
                         source = local_index.get((action["profileId"], action["sourceKey"]))
@@ -4001,7 +4001,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     else:
                         context, _shop = _shop_context(shop_id)
                         with context:
-                            core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                            core.basalam_request("PATCH", f"/v1/products/{item_id}",
                                                      json_data=payload)
                     row["done"] = True
                     changed += 1
@@ -4681,7 +4681,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     def node_basalam_chats():
         limit = min(100, _int(request.args.get("limit"), 50) or 50)
         try:
-            payload = core.basalam_api_request(
+            payload = core.basalam_request(
                 "GET", "/v1/chats", params={"per_page": limit})
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
@@ -4694,7 +4694,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     def node_basalam_chat_messages(chat_id: str):
         limit = min(100, _int(request.args.get("limit"), 50) or 50)
         try:
-            payload = core.basalam_api_request(
+            payload = core.basalam_request(
                 "GET", f"/v1/chats/{chat_id}/messages", params={"per_page": limit})
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
@@ -4759,7 +4759,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         scan_limit = min(50, max(1, _int(cfg.get("scanLimit"), 20)))
         max_per_run = min(50, max(1, _int(cfg.get("maxPerRun"), 5)))
         try:
-            payload = core.basalam_api_request("GET", "/v1/chats",
+            payload = core.basalam_request("GET", "/v1/chats",
                                                params={"limit": scan_limit,
                                                        "order_by": "updated_at"})
             chats = core.basalam_api_rows(payload)[:scan_limit]
@@ -4775,7 +4775,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 skipped += 1
                 continue
             try:
-                messages_payload = core.basalam_api_request(
+                messages_payload = core.basalam_request(
                     "GET", f"/v1/chats/{chat_id}/messages", params={"per_page": 20})
                 messages = core.basalam_api_rows(messages_payload)
                 last = next((message for message in messages
@@ -4804,7 +4804,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     send_payload = {"chat_id": chat_id,
                                     "content": {"text": result["text"]},
                                     "message_type": "text", "temp_id": int(time.time() * 1000)}
-                    core.basalam_api_request("POST", f"/v1/chats/{chat_id}/messages",
+                    core.basalam_request("POST", f"/v1/chats/{chat_id}/messages",
                                              json_data=send_payload)
                     chat_state[_s(chat_id)] = {"msgId": message_id, "at": int(time.time())}
                     log = data.get("autoreply_log")
