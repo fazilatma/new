@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.203"
+APP_VERSION = "10.204"
 CHANGELOG = [
+    {"version":"10.204","date":"2026-09-21","title":"جلوگیری از حذف مرورگر با Deploy وب‌کنسول و رفع 18KB دیجی‌کالا","items":["مسیر مرورگر از deploy_dir/ms-playwright به DATA_DIR/runtime/<id>/cache/ms-playwright منتقل شد تا rsync --delete وب‌کنسول آن را پاک نکند","Playwright حالا حتی اگر صفحه 13KB shell بدهد، لاگ HTML و دلیل بلاک را نشان می‌دهد و 18KB دیگر FAIL گمراه‌کننده نیست","پنجره بصری: اگر مرورگر پاک شده باشد، پیام نصب دوباره با دستور درست همان پروژه را نشان می‌دهد (نه مسیر truncated)"]},
     {"version":"10.203","date":"2026-09-21","title":"پنجره انتخاب بصری با Playwright/Selenium و رفع دیجی‌کالا 18KB","items":["پنجره انتخاب بصری حالا 3 موتور دارد: HTTP / Playwright / Selenium — دیجی‌کالا با Playwright رندر می‌شود","دیجی‌کالا به لیست SPA اضافه شد: رندر با Playwright، 8 اسکرول، انتظار کارت محصول و 1.8ثانیه صبر اضافه","وقتی playwright با 18KB خالی برمی‌گردد، 2000 کاراکتر اول HTML در لاگ ذخیره می‌شود تا دلیل بلاک شدن IP مشخص شود"]},
     {"version":"10.202","date":"2026-09-21","title":"رفع دسترسی مرورگر روی WebConsole (root vs www-data) و سلکتور دیجی‌کالا","items":["PLAYWRIGHT_BROWSERS_PATH روی WebConsole حتی اگر پوشه برای کاربر سرویس قابل خواندن نبود هم قبول می‌شود و fallback به /root/.cache را هم امتحان می‌کند","find_browser_executable حالا /root/.cache/ms-playwright را حتی اگر WebConsole HOME متفاوت باشد هم می‌گردد","دیجی‌کالا: وقتی 5 سلکتور دستی پر است و DOM=0، کشف خودکار دوباره فعال شد؛ پیام خطا دیگر نصفه نمی‌ماند"]},
     {"version":"10.201","date":"2026-09-21","title":"کوتاه کردن پیام خطای مرورگر برای نمایش کامل دستور ایران","items":["پیام PLAYWRIGHT_BROWSERS_PATH برای wconsole کوتاه شد تا در diagnostic نصفه نماند: فقط cd ... && bash tools/install_chromium_mirror.sh","سلکتور خالی شد (0 پرشده) درست است؛ بعد از نصب مرورگر دیجی‌کالا خودکار کشف می‌شود"]},
@@ -1897,6 +1898,18 @@ def configured_browser_path() -> str:
         # If it looks like a playwright cache (contains ms-playwright or chromium), accept it
         if os.path.isdir(env_path) or "ms-playwright" in env_path or "playwright" in env_path.lower():
             return env_path
+    # 10.204 WebConsole: use runtime cache so rsync --delete does NOT wipe browsers
+    try:
+        # DATA_DIR is /var/www/html/.wconsole_data when running under WebConsole
+        _wc_cache = os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "cache", "ms-playwright")
+        _wc_cache = os.path.abspath(_wc_cache)
+        if os.path.isdir(_wc_cache):
+            return _wc_cache
+        _rt_cache = os.path.join(DATA_DIR, "cache", "ms-playwright") if "DATA_DIR" in globals() else ""
+        if _rt_cache and os.path.isdir(_rt_cache):
+            return _rt_cache
+    except Exception:
+        pass
     cache = os.path.expanduser("~/.cache/ms-playwright")
     if VPS_MODE and os.path.isdir(cache):
         return cache
@@ -1905,6 +1918,13 @@ def configured_browser_path() -> str:
         root_cache = "/root/.cache/ms-playwright"
         if VPS_MODE and os.path.isdir(root_cache):
             return root_cache
+    except Exception:
+        pass
+    # Fallback: try BASE_DIR/ms-playwright but also check wc cache even if not isdir yet (will be created)
+    try:
+        _wc_fallback = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "cache", "ms-playwright"))
+        if "wconsole_data" in _wc_fallback:
+            return _wc_fallback
     except Exception:
         pass
     return os.path.join(BASE_DIR, "ms-playwright")
@@ -1928,7 +1948,16 @@ def find_browser_executable(preferred: str = "") -> str:
         "/opt/google/chrome/chrome",
     ]
     roots = []
-    for root in (preferred, os.path.join(BASE_DIR, "ms-playwright"), temporary_browser_path(), os.path.expanduser("~/.cache/ms-playwright"), "/root/.cache/ms-playwright", "/home/www-data/.cache/ms-playwright", "/usr/bin", "/snap/bin", "/opt/google/chrome", "/opt/scraper4"):
+    # 10.204 also search WebConsole runtime caches (survives Deploy)
+    try:
+        _wc1 = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "cache", "ms-playwright"))
+    except Exception:
+        _wc1 = ""
+    try:
+        _wc2 = os.path.join(DATA_DIR, "cache", "ms-playwright") if "DATA_DIR" in globals() else ""
+    except Exception:
+        _wc2 = ""
+    for root in (preferred, os.path.join(BASE_DIR, "ms-playwright"), _wc1, _wc2, temporary_browser_path(), os.path.expanduser("~/.cache/ms-playwright"), "/root/.cache/ms-playwright", "/home/www-data/.cache/ms-playwright", "/usr/bin", "/snap/bin", "/opt/google/chrome", "/opt/scraper4"):
         root = os.path.abspath(root) if root else ""
         if root and root not in roots and os.path.isdir(root): roots.append(root)
     # 10.202 if preferred was /root/.cache but not readable, ensure we still walk it
