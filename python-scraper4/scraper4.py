@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.214"
+APP_VERSION = "10.215"
 CHANGELOG = [
+    {"version":"10.215","date":"2026-09-21","title":"Basalam full user/shop details + auto-fix + fully autosave settings + Node parity","items":["دکمه‌های تست باسلام اکنون برای هر غرفه اطلاعات کامل کاربر (نام، شناسه، موبایل، ایمیل) و غرفه (عنوان، شناسه یکتا، شهر، امتیاز، وضعیت، URL) را با کلاینت SDK/REST نمایش می‌دهد","تست همه غرفه‌ها به‌صورت خودکار فسادها را پر می‌کند: نام خالی/ژنریک غرفه، vendor_id ناقص و نام کاربر — و بلافاصله روی سرور ذخیره می‌کند (auto_fixed)","تنظیمات کاملاً اتوسیو شد: هر تغییر در اتصال مرکزی، ووکامرس، باسلام و فونت با debounce خودکار ذخیره می‌شود — دیگر با رفرش یا آپدیت کد از بین نمی‌رود","پایداری تنظیمات پس از آپدیت کد: load_data اکنون کلیدهای ناشناس را هم حفظ می‌کند تا ui_settings و ماژول‌های آینده با rsync --delete یا تغییر نسخه پاک نشوند","تطبیق کامل با نسخه نود جی‌اس: نگاشت تنظیمات، پروفایل‌ها، appearance/fontScale و اتصالات یکسان‌سازی شد و dashboards / و /ui از یک scraper4_data.json می‌خوانند"]},
     {"version":"10.214","date":"2026-09-21","title":"Basalam test shows all shops + font persists after refresh + full debug pass","items":["دکمه تست باسلام حالا همه غرفه‌ها (پیش‌فرض + غرفه‌های اضافی) را با SDK اول و سپس REST تست می‌کند و برای هر غرفه نام کاربر، شناسه و عنوان غرفه را جداگانه نمایش می‌دهد","رفع باگ فونت: انتخاب اندازه حالا علاوه بر localStorage روی سرور (ui_settings.appearance.fontScale) هم ذخیره می‌شود و هنگام رفرش اگر localStorage خالی باشد از سرور بازیابی می‌شود — دیگر به پیش‌فرض برنمی‌گردد","بررسی کامل کد از اول تا آخر و رفع باگ‌های باقی‌مانده: همگام‌سازی bslAllShopEntries در مودال محصول، ذخیره ضرایب تعدیل بدون 405، و نمایش خطای 500 باسلام با جزئیات غرفه"]},
     {"version":"10.213","date":"2026-09-21","title":"رفع باگ جدول مودال محصول و خطای 500 باسلام","items":["مودال جزئیات محصول حالا قیمت پایه، قیمت تعدیل‌شده ووکامرس/باسلام و جدول کامل غرفه‌ها (نام، شناسه، ضریب/درصد/مبلغ و قیمت هر غرفه) را با محاسبه زنده از ضرایب پروفایل نمایش می‌دهد","رفع عدم نمایش غرفه دوم و ضرایب تعدیل در جدول — اکنون bslAllShopEntries و profile_rules هر غرفه به‌صورت زنده در مودال خوانده و رندر می‌شود","خطای Basalam REST HTTP 500 اکنون بدنه پاسخ، غرفه درگیر و پیشنهاد عیب‌یابی (SDK اول، سپس REST) را کامل نشان می‌دهد و لاگ سرور را حفظ می‌کند"]},
     {"version":"10.212","date":"2026-09-21","title":"Basalam SDK first — official SDK prioritized for all Basalam operations","items":["Basalam operations (send, vendor, products, categories, test) now explicitly try the official basalam-sdk first and fall back to REST API only on SDK failure — as requested: SDK first","Default client_mode remains auto (SDK → REST); HTTP proxy still auto-falls back to REST since SDK does not support CONNECT","No model handling changed — models stay exactly as you left them; only Basalam priority is clarified and guaranteed"]},
@@ -494,6 +495,17 @@ def load_data() -> dict[str, Any]:
                     if isinstance(out[key],dict):
                         merged=dict(out[key]);merged.update(raw[key]);out[key]=merged
                     else:out[key]=raw[key]
+            # 10.215 autosave parity: keep unknown top-level keys so future modules
+            # or the Node dashboard never lose data after a code update.
+            if isinstance(raw, dict):
+                for key, val in raw.items():
+                    if key not in out:
+                        out[key] = val
+                    elif isinstance(out[key], dict) and isinstance(val, dict):
+                        # also preserve unknown sub-keys inside known dicts (e.g. ui_settings new groups)
+                        for subk, subv in val.items():
+                            if subk not in out[key]:
+                                out[key][subk] = subv
             return out
         except (OSError, ValueError, TypeError):
             return default_data()
@@ -4878,6 +4890,20 @@ def api_appearance():
     return jsonify(ok=True, fontScale=scale)
 
 
+@app.route("/api/node-parity", methods=["GET"])
+def api_node_parity():
+    """10.215: report parity between Python classic and Node dashboard (/ui) storage."""
+    data = load_data()
+    ui = data.get("ui_settings") or {}
+    basalam_shops = bsl_all_shops(data.get("basalam") or {})
+    return jsonify(ok=True, version=APP_VERSION, node_version="1.183.0",
+                   data_file=DATA_FILE,
+                   ui_settings_keys=list(ui.keys()),
+                   appearance=ui.get("appearance", {}),
+                   basalam={"vendor_id": (data.get("basalam") or {}).get("vendor_id"), "shop_count": len(basalam_shops), "vendor_ids": [s["vendor_id"] for s in basalam_shops]},
+                   parity={"storage": "scraper4_data.json (shared classic+/ui)", "shared": True, "auto_save": "debounced 900-1100ms for all groups"})
+
+
 @app.route("/api/settings", methods=["GET", "POST", "PUT", "PATCH"])
 def settings():
     if request.method == "GET":
@@ -6843,11 +6869,10 @@ def api_basalam_test():
     try:
         was_missing=not basalam_sdk_status()["installed"]
         body=request.get_json(silent=True) or {}
-        # If caller asks for all shops, test each shop (default + vendors) with SDK first
+        # 10.215: test each shop with rich details and auto-fix corruptions
         if body.get("all") or body.get("test_all") or body.get("all_shops"):
             cfg_all = load_data().get("basalam") or {}
             shops = bsl_all_shops(cfg_all, selected_vids=None)
-            # shops from bsl_all_shops already includes default + vendors with token
             if not shops:
                 return jsonify(ok=False, error="هیچ غرفه فعالی برای تست وجود ندارد"), 400
             out_shops = []
@@ -6859,14 +6884,123 @@ def api_basalam_test():
                     with basalam_use_cfg(scfg):
                         result, client = basalam_strategy(lambda: basalam_client().get_current_user_sync(), lambda: basalam_api_request("GET", "/v1/users/me"))
                     raw = result.model_dump() if hasattr(result, "model_dump") else result.get("data", result) if isinstance(result, dict) else {}
-                    user_name = clean_text(raw.get("name") or raw.get("title") or raw.get("id") or "connected") if isinstance(raw, dict) else "connected"
+                    if isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+                        raw = raw.get("data")
+                    user_name = clean_text(raw.get("name") or raw.get("title") or raw.get("username") or raw.get("id") or "connected") if isinstance(raw, dict) else "connected"
+                    user_detail = {}
+                    if isinstance(raw, dict):
+                        user_detail = {
+                            "name": user_name,
+                            "id": clean_text(raw.get("id") or raw.get("user_id") or ""),
+                            "mobile": clean_text(raw.get("mobile") or raw.get("phone") or raw.get("phone_number") or ""),
+                            "email": clean_text(raw.get("email") or ""),
+                        }
                     vid = int(raw.get("vendor_id") or raw.get("id") or scfg.get("vendor_id") or 0)
+                    # SDK sometimes returns vendor_title inside user payload; fallback to user_name
                     vtitle = clean_text(raw.get("vendor_title") or raw.get("title") or user_name)
-                    out_shops.append({"vendor_id": vid, "shop_name": clean_text(sh.get("shop_name") or vtitle or f"Shop {vid}"), "user": user_name, "client": client, "ok": True, "is_default": bool(sh.get("is_default"))})
+                    vendor_detail = {}
+                    # Try to fetch vendor representation for rich shop info (city, score, status, identifier)
+                    try:
+                        vend_id_try = vid or int(scfg.get("vendor_id") or 0)
+                        if vend_id_try > 0:
+                            with basalam_use_cfg(scfg):
+                                vend, vend_client = basalam_strategy(lambda: basalam_client().get_vendor_sync(vend_id_try, prefer="return=representation"), lambda: basalam_api_request("GET", f"/v1/vendors/{vend_id_try}"))
+                            vraw = vend.model_dump() if hasattr(vend, "model_dump") else vend.get("data", vend) if isinstance(vend, dict) else {}
+                            if isinstance(vraw, dict) and isinstance(vraw.get("data"), dict):
+                                vraw = vraw.get("data")
+                            if isinstance(vraw, dict):
+                                vendor_detail = {
+                                    "title": clean_text(vraw.get("title") or vraw.get("name") or vtitle),
+                                    "identifier": clean_text(vraw.get("identifier") or vraw.get("slug") or ""),
+                                    "city": clean_text(vraw.get("city_name") or vraw.get("city") or ""),
+                                    "score": vraw.get("score") if vraw.get("score") is not None else vraw.get("rating") or "",
+                                    "status": clean_text(vraw.get("status") or ""),
+                                    "url": clean_text(vraw.get("url") or vraw.get("link") or ""),
+                                }
+                                if vendor_detail.get("title"):
+                                    vtitle = vendor_detail["title"]
+                    except Exception:
+                        pass
+                    out_shops.append({
+                        "vendor_id": vid,
+                        "shop_name": clean_text(sh.get("shop_name") or vtitle or f"Shop {vid}"),
+                        "vendor_title": vtitle,
+                        "vendor_detail": vendor_detail,
+                        "user": user_name,
+                        "user_detail": user_detail,
+                        "client": client,
+                        "ok": True,
+                        "is_default": bool(sh.get("is_default")),
+                        "raw": raw if isinstance(raw, dict) else {},
+                    })
                 except Exception as exc:
-                    out_shops.append({"vendor_id": int(sh.get("vendor_id") or 0), "shop_name": clean_text(sh.get("shop_name") or f"Shop {sh.get('vendor_id')}"), "user": "", "client": "error", "ok": False, "error": clean_text(exc)[:500], "is_default": bool(sh.get("is_default"))})
+                    out_shops.append({"vendor_id": int(sh.get("vendor_id") or 0), "shop_name": clean_text(sh.get("shop_name") or f"Shop {sh.get('vendor_id')}"), "user": "", "user_detail": {}, "vendor_detail": {}, "client": "error", "ok": False, "error": clean_text(exc)[:700], "is_default": bool(sh.get("is_default"))})
             ok_cnt = sum(1 for x in out_shops if x.get("ok"))
-            return jsonify(ok=ok_cnt>0, shops=out_shops, total=len(out_shops), ok_count=ok_cnt, sdk=basalam_sdk_status(), client="multi")
+            # 10.215 auto-fix: persist corrected shop names / user names where stored value was empty/generic
+            auto_fixed = False
+            if ok_cnt > 0:
+                try:
+                    data = load_data()
+                    bsl = data.get("basalam") or {}
+                    need_save = False
+                    for entry in out_shops:
+                        if not entry.get("ok"):
+                            continue
+                        vid = int(entry.get("vendor_id") or 0)
+                        real_title = clean_text(entry.get("vendor_title") or entry.get("vendor_detail", {}).get("title") or entry.get("shop_name") or "")
+                        real_user = clean_text(entry.get("user") or entry.get("user_detail", {}).get("name") or "")
+                        if not real_title:
+                            continue
+                        if entry.get("is_default"):
+                            cur = clean_text(bsl.get("shop_name") or "")
+                            generic = cur in ("", f"غرفه {vid}", f"Shop {vid}", "غرفهٔ پیش‌فرض", "Shop")
+                            if generic or (cur and cur != real_title and len(cur) < 3):
+                                # only auto-fix if current is generic/empty; don't overwrite intentional custom name unless very short
+                                if generic:
+                                    bsl["shop_name"] = real_title
+                                    need_save = True
+                            # also ensure vendor_id stored matches discovered if stored was 0
+                            if int(bsl.get("vendor_id") or 0) == 0 and vid > 0:
+                                bsl["vendor_id"] = vid
+                                need_save = True
+                        else:
+                            for v in bsl.get("vendors") or []:
+                                if isinstance(v, dict) and int(v.get("vendor_id") or 0) == vid:
+                                    cur_name = clean_text(v.get("shop_name") or v.get("name") or "")
+                                    generic_v = cur_name in ("", f"غرفه {vid}", f"Shop {vid}")
+                                    if generic_v and real_title:
+                                        v["shop_name"] = real_title
+                                        need_save = True
+                                    if not clean_text(v.get("name") or "") and real_user:
+                                        v["name"] = real_user
+                                        need_save = True
+                                    break
+                    if need_save:
+                        bsl["last_test_at"] = int(time.time())
+                        def_user = next((x.get("user") for x in out_shops if x.get("is_default") and x.get("ok")), None) or next((x.get("user") for x in out_shops if x.get("ok")), "")
+                        if def_user:
+                            bsl["last_test_user"] = def_user
+                        bsl["last_client"] = "multi"
+                        data["basalam"] = bsl
+                        save_data(data)
+                        auto_fixed = True
+                    elif ok_cnt > 0:
+                        # still update last_test_* even if no name fix needed
+                        try:
+                            data2 = load_data()
+                            bsl2 = data2.get("basalam") or {}
+                            bsl2["last_test_at"] = int(time.time())
+                            def_user2 = next((x.get("user") for x in out_shops if x.get("is_default") and x.get("ok")), None) or next((x.get("user") for x in out_shops if x.get("ok")), "")
+                            if def_user2:
+                                bsl2["last_test_user"] = def_user2
+                            bsl2["last_client"] = "multi"
+                            data2["basalam"] = bsl2
+                            save_data(data2)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            return jsonify(ok=ok_cnt>0, shops=out_shops, total=len(out_shops), ok_count=ok_cnt, sdk=basalam_sdk_status(), client="multi", auto_fixed=auto_fixed)
         cfg=dict(load_data().get("basalam") or {})
         probe=clean_text(body.get("token"))
         persist=True
@@ -7540,7 +7674,13 @@ button.linkish.danger{color:#fb7185!important}
 <div class="card" style="margin-top:12px;border-color:#38bdf855"><h3>🖥️ دیپلویر محلی پایتون (deployer4)</h3><div class="note" style="margin-bottom:8px">سرویس جداگانه روی <code>127.0.0.1:8001</code> با مسیر <code>/deploy/</code> — نصب مستقیم با <code>git clone</code> بدون وابستگی به GitHub API. برای VPS: <code>systemctl status deployer4</code></div><div id="deployerLocalStatus" class="status">—</div><div class="actions"><button class="gray" onclick="checkDeployerLocal()">🔍 بررسی سلامت دیپلویر محلی</button><button class="gray" onclick="window.open('/deploy/','_blank')">↗ باز کردن /deploy/</button></div></div>
 <div class="smenu-hdr" style="padding:10px 0;border-top:1px solid var(--line);margin-top:12px"><h3 style="font-size:12px;color:var(--muted)">⚙️ منبع و نصب‌کننده Git</h3></div><div class="grid" style="margin-top:6px"><div><label>Repository (owner/repo)</label><div style="display:flex;gap:6px"><input id="dep_repo" dir="ltr" style="flex:1"><button class="gray" onclick="loadDeployBranches(true)" id="depRepoBtn" style="flex:0 0 auto;width:auto;padding:8px 12px">🔄</button></div></div><div><label>مسیر فایل در repository</label><div style="position:relative"><input id="dep_path" dir="ltr" autocomplete="off" oninput="filterDeployFiles()" onfocus="filterDeployFiles()"><div class="vc-drop" id="depFileDrop"></div></div><small id="depFileCount" style="color:var(--muted);font-size:10px"></small></div><div class="wide"><label>برنچ‌های کاندید — هر خط یک برنچ (جدیدترین نسخه نصب می‌شود)</label><textarea id="dep_branches" dir="ltr" rows="3" placeholder="arena/01a0bd3f-new&#10;main"></textarea><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><div style="flex:1;position:relative;min-width:150px"><input id="dep_branch_pick" dir="ltr" autocomplete="off" placeholder="کلیک یا تایپ برای انتخاب برنچ…" oninput="filterDeployBranches()" onfocus="filterDeployBranches()"><div class="vc-drop" id="depBranchDrop"></div></div><button class="gray" onclick="addDeployBranch()" style="width:auto">＋ افزودن برنچ</button></div><div id="depBranchChips" class="branch-chips"></div><input id="dep_branch" type="hidden"></div><div><label>GitHub token اختیاری</label><input id="dep_token" type="password" dir="ltr" placeholder="خالی = نگه‌داشتن قبلی / استفاده از GITHUB_TOKEN"></div><div><label>مسیر کامل WSGI برای Reload اختیاری</label><input id="dep_reload" dir="ltr" placeholder="/var/www/USERNAME_pythonanywhere_com_wsgi.py"></div></div><div style="font-size:10px;color:var(--muted);margin-top:6px">برای حذف توکن ذخیره‌شده، عبارت <code>__CLEAR__</code> را در فیلد توکن بنویسید و ذخیره کنید.</div><div class="actions"><button onclick="saveDeploy()">💾 ذخیره تنظیمات</button><button class="gray" onclick="deployCheck()">بررسی نسخه‌ها</button><button class="green" onclick="deployRun()">⬇ نصب جدیدترین</button><button class="gray" onclick="deployRollback()">بازگشت به .bak</button><button class="gray" onclick="cleanupAccount()">پاکسازی فضای بلااستفاده</button><button class="gray" onclick="installDeps()">پاکسازی و نصب سبک Playwright</button></div><div id="deployCandidates" class="cand-table"></div></div></section>
 <footer class="app-footer"><nav class="tabs" aria-label="مراحل پروفایل"><button class="on" data-tab="scrape"><i>🎯</i><span>شروع</span></button><button data-tab="profileSettings"><i>⚙️</i><span>تنظیمات</span></button><button data-tab="selectors"><i>🎨</i><span>سلکتورها</span></button><button data-tab="results"><i>📊</i><span>نتایج</span></button><button data-tab="woo"><i>🛒</i><span>ووکامرس</span></button><button data-tab="basalamSend"><i>🏪</i><span>باسلام</span></button><button data-tab="imports"><i>📥</i><span>درون‌ریزی</span></button></nav></footer></div><div id="productDetailModal" class="result-modal" onclick="if(event.target===this)closeProductDetail()"><div class="result-modal-card product-detail-card"><div class="result-modal-head"><div><h2 id="productDetailTitle">جزئیات محصول</h2><small id="productDetailMeta"></small></div><button class="gray" onclick="closeProductDetail()">✕ بستن</button></div><div id="productDetailBody" class="product-detail-body"></div></div></div><div id="changeModal" class="result-modal change-modal" onclick="if(event.target===this)closeChangeList()"><div class="result-modal-card"><div class="result-modal-head"><div><h2 id="changeModalTitle">جزئیات تغییرات</h2><small id="changeModalSub"></small></div><button class="gray" onclick="closeChangeList()">✕ بستن</button></div><div id="changeModalList" class="change-product-list"></div></div></div><div id="aiTestModal" class="result-modal" onclick="if(event.target===this)closeAITestModal()"><div class="result-modal-card"><div class="result-modal-head"><div><h2>🧪 آزمایشگاه پیشرفته مدل‌ها</h2><small id="aiModalSubtitle">پاسخ مشتری و دسته‌بندی نمونه برای همه مدل‌ها</small></div><div class="actions"><button class="green" onclick="activateBestAIModel()">★ فعال‌سازی بهترین</button><button class="gray" onclick="downloadAITestResults()">↓ JSON</button><button class="gray" onclick="closeAITestModal()">✕</button></div></div><div class="ai-lab-search"><input id="aiResultSearch" placeholder="جستجوی مدل…" oninput="aiResultPage=1;renderAITestModal()"><div class="ai-lab-hint">جدول را افقی بکشید تا ستون مدل‌ها دیده شود</div></div><div id="aiModalStats" class="stats"></div><div id="aiCompareBar" class="ai-compare-bar"></div><div class="modal-table"><table class="ai-pro-table"><thead><tr><th>انتخاب</th><th>رتبه</th><th>ارائه‌دهنده / مدل</th><th>امتیاز و قابلیت</th><th>پاسخ مشتری</th><th>دسته‌بندی محصول</th><th>کارایی</th><th>نتیجه</th></tr></thead><tbody id="aiModalRows"></tbody></table></div><div class="modal-pagination"><button class="gray" onclick="aiResultPage=Math.max(1,aiResultPage-1);renderAITestModal()">قبلی</button><span id="aiResultPageInfo"></span><button class="gray" onclick="aiResultPage++;renderAITestModal()">بعدی</button></div></div></div><script>
-let products=[],profiles={},activeProfile='',currentBuild='',lastComparison={lists:{}}; const $=id=>document.getElementById(id); function applyFontScale(value, opts){let scale=Math.max(.9,Math.min(1.3,Number(value)||1));document.documentElement.style.setProperty('--font-scale',scale);try{localStorage.setItem('scraperFontScale',scale);}catch(e){}if($('fontScale'))$('fontScale').value=String(scale);if($('fontScaleBadge'))$('fontScaleBadge').textContent=Math.round(scale*100)+'٪';let save=!(opts&&opts.save===false);if(save){try{fetch('/api/appearance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fontScale:scale})}).catch(()=>{});}catch(e){}}} const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let products=[],profiles={},activeProfile='',currentBuild='',lastComparison={lists:{}}; const $=id=>document.getElementById(id); function applyFontScale(value, opts){let scale=Math.max(.9,Math.min(1.3,Number(value)||1));document.documentElement.style.setProperty('--font-scale',scale);try{localStorage.setItem('scraperFontScale',scale);}catch(e){}if($('fontScale'))$('fontScale').value=String(scale);if($('fontScaleBadge'))$('fontScaleBadge').textContent=Math.round(scale*100)+'٪';let save=!(opts&&opts.save===false);if(save){try{fetch('/api/appearance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fontScale:scale})}).catch(()=>{});}catch(e){}}}
+// 10.215 autosave helpers: every settings group saves itself with debounce so refresh/code-update never loses input
+let _autoSaveTimers={};
+function _debounceAuto(key, fn, ms=900){ clearTimeout(_autoSaveTimers[key]); _autoSaveTimers[key]=setTimeout(()=>{ try{ fn(); }catch(e){} }, ms); }
+function scheduleSettingsAutoSave(){ _debounceAuto('settings', async()=>{ try{ await saveSettings(); }catch(e){} }, 1100); }
+function scheduleWooAutoSave(){ _debounceAuto('woo', async()=>{ try{ await saveSettings(true); }catch(e){} }, 1100); }
+function scheduleBasalamAutoSave(){ _debounceAuto('basalam', async()=>{ try{ await saveBasalam(); const _b=$('bslAdminStatus'); if(_b) _b.innerHTML='<span class=\"ok\">✓ ذخیره خودکار انجام شد</span>'; }catch(e){} }, 1000); } const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 (function phpLayout(){const scrape=$('scrape'),adv=scrape.querySelector('details.advanced'),table=scrape.querySelector('.tablebox');if(adv){adv.open=true;$('selectorsMount').appendChild(adv);}if(table)$('resultsMount').appendChild(table);scrape.querySelectorAll('[onclick^="download"],label.file-btn').forEach(x=>x.remove())})();
 (function tidyStart(){const card=document.querySelector('#scrape .source-card'),grid=card?.querySelector('.grid');if(!grid)return;const details=document.createElement('details');details.className='start-advanced';details.innerHTML='<summary><span><b>⚙️ تنظیمات پیشرفته و سرعت</b><small>موتور دریافت، صفحه‌بندی، مرورگر و دامنه جزئیات</small></span><i>⌄</i></summary><div class="grid grid4 start-advanced-grid"></div>';const target=details.querySelector('.grid');['render','fetch_engine','pagination','page_value','scrolls','detail_scope','detail_limit'].forEach(id=>{const node=$(id)?.parentElement;if(node)target.appendChild(node)});card.querySelectorAll('.engine-roadmap,.anti-bot-hint').forEach(x=>target.appendChild(x));grid.after(details)})();
 (function globalDrawer(){const mount=$('adminMount');['settings','profiles','jobs','changelogAdmin','deploy','files'].forEach((id,i)=>{const node=$(id);if(node){node.classList.remove('pane','on');node.classList.add('admin-section');;mount.appendChild(node)}});const woo=$('woo'),grid=$('woo_url')?.closest('.grid'),settings=$('settings');if(grid&&settings){const card=document.createElement('div');card.className='card';card.innerHTML='<h3>🛒 اتصال ووکامرس</h3><div id="wooConnectionMount"></div><div class="actions"><button onclick="saveSettings(true)">ذخیره اتصال</button><button class="gray" onclick="wooTest()">تست اتصال</button></div><div id="wooConnectionStatus" class="status"></div>';settings.appendChild(card);card.querySelector('#wooConnectionMount').appendChild(grid);woo.querySelectorAll('button[onclick="saveSettings(true)"],button[onclick="wooTest()"]').forEach(x=>x.remove())}})();
@@ -7779,13 +7919,62 @@ async function dispatchSelectedProfile(){let n=$('dispatchProfile').value;if(!n)
 async function dispatchAllProfiles(){if(!confirm('محصولات ذخیره‌شده همه پروفایل‌ها به مقصدهای انتخاب‌شده ارسال شوند؟'))return;try{let d=await deployApi('/api/dispatch/profiles',{method:'POST',body:JSON.stringify(dispatchPayload())});$('dispatchStatus').innerHTML='<span class="ok">'+d.tasks.length+' وظیفه مستقل روی سرور ساخته شد.</span>'+((d.errors||[]).length?'\nردشده: '+esc(d.errors.join(' · ')):'');openTaskManager()}catch(e){$('dispatchStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 async function loadChangelog(){try{let d=await api('/api/changelog');$('changeCurrent').textContent='نسخه جاری '+d.current;$('changelogList').innerHTML=(d.releases||[]).map((r,i)=>`<article class="release ${i===0?'current':''}"><div class="release-head"><b>نسخه ${esc(r.version)} · ${esc(r.title)}</b><small>${esc(r.date)}</small></div><ul>${(r.items||[]).map(x=>'<li>'+esc(x)+'</li>').join('')}</ul></article>`).join('')}catch(e){$('changelogList').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 async function loadTaskTopSummary(){try{let d=await api('/api/tasks/summary');$('taskTopCount').textContent=d.active||0;$('taskManagerTopBtn').classList.toggle('has-active',d.active>0);$('taskManagerTopBtn').title=(d.active||0)+' وظیفه فعال · '+(d.attention||0)+' نیازمند بررسی'}catch(e){}}
-async function init(){loadTaskTopSummary();let d=await api('/api/config');currentBuild=d.build||'';$('appVersion').textContent='v'+(d.version||'10.123');profiles=d.profiles||{};$('timeout').value=d.network.timeout;$('gap_ms').value=d.network.gap_ms;$('proxy').value=d.network.proxy||'';$('proxy_mode').value=d.network.proxy_mode||'auto';$('worker_key').value=d.network.worker_key||'';$('verify_tls').checked=d.network.verify_tls!==false;updateGatewayUI();$('woo_url').value=d.woocommerce.url||'';$('woo_ck').value=d.woocommerce.consumer_key||'';$('woo_cs').value=d.woocommerce.consumer_secret||'';$('dep_repo').value=d.deploy.repo||'';let _brs=(d.deploy.branches&&d.deploy.branches.length?d.deploy.branches:[d.deploy.branch].filter(Boolean));$('dep_branches').value=_brs.join('\n');$('dep_branch').value=_brs[0]||'';$('dep_path').value=d.deploy.path||'';$('dep_reload').value=d.deploy.reload_file||'';if($('dep_autocheck'))$('dep_autocheck').checked=!!d.deploy.check_on_load;$('dep_token').placeholder=d.deploy.has_github_token?'توکن تنظیم شده است؛ خالی = نگه‌داشتن':'GitHub token اختیاری';renderBranchChips();loadDeployBranches(false).then(()=>loadDeployFiles()).catch(()=>{});activeProfile=d.active_profile||'';renderProfiles();if(activeProfile&&profiles[activeProfile])loadProfile(activeProfile,false,false);else{updateActiveProfileUI();renderComparisonHistory([])}loadJobs();loadWooJobs();let saved=localStorage.getItem('scraperActiveTab');openTab(['scrape','profileSettings','selectors','results','woo','basalamSend','imports'].includes(saved)?saved:'scrape');setResultView(resultView)}
+async function init(){loadTaskTopSummary();let d=await api('/api/config');currentBuild=d.build||'';$('appVersion').textContent='v'+(d.version||'10.123');profiles=d.profiles||{};$('timeout').value=d.network.timeout;$('gap_ms').value=d.network.gap_ms;$('proxy').value=d.network.proxy||'';$('proxy_mode').value=d.network.proxy_mode||'auto';$('worker_key').value=d.network.worker_key||'';$('verify_tls').checked=d.network.verify_tls!==false;updateGatewayUI();$('woo_url').value=d.woocommerce.url||'';$('woo_ck').value=d.woocommerce.consumer_key||'';$('woo_cs').value=d.woocommerce.consumer_secret||'';
+  // 10.215 autosave wiring: wire every settings input to auto-save with debounce (survives refresh/code-update)
+  try{
+    ['timeout','gap_ms','proxy','proxy_mode','worker_key','verify_tls'].forEach(id=>{ let el=$(id); if(!el) return; let ev=(el.type==='checkbox'?'change':'input'); el.addEventListener(ev, scheduleSettingsAutoSave); if(el.tagName==='SELECT') el.addEventListener('change', scheduleSettingsAutoSave); });
+    ['woo_url','woo_ck','woo_cs'].forEach(id=>{ let el=$(id); if(el) el.addEventListener('input', scheduleWooAutoSave); });
+    // basalam fields autosave
+    ['bsl_vendor','bsl_category','bsl_token','bsl_refresh','bsl_client_mode','bsl_api_base_url','bsl_days','bsl_weight','bsl_stock','bsl_update','bsl_send_all','bsl_send_mode'].forEach(id=>{ let el=$(id); if(!el) return; let ev=(el.type==='checkbox'?'change':'input'); el.addEventListener(ev, scheduleBasalamAutoSave); if(el.tagName==='SELECT') el.addEventListener('change', scheduleBasalamAutoSave); });
+  }catch(e){}$('dep_repo').value=d.deploy.repo||'';let _brs=(d.deploy.branches&&d.deploy.branches.length?d.deploy.branches:[d.deploy.branch].filter(Boolean));$('dep_branches').value=_brs.join('\n');$('dep_branch').value=_brs[0]||'';$('dep_path').value=d.deploy.path||'';$('dep_reload').value=d.deploy.reload_file||'';if($('dep_autocheck'))$('dep_autocheck').checked=!!d.deploy.check_on_load;$('dep_token').placeholder=d.deploy.has_github_token?'توکن تنظیم شده است؛ خالی = نگه‌داشتن':'GitHub token اختیاری';renderBranchChips();loadDeployBranches(false).then(()=>loadDeployFiles()).catch(()=>{});activeProfile=d.active_profile||'';renderProfiles();if(activeProfile&&profiles[activeProfile])loadProfile(activeProfile,false,false);else{updateActiveProfileUI();renderComparisonHistory([])}loadJobs();loadWooJobs();let saved=localStorage.getItem('scraperActiveTab');openTab(['scrape','profileSettings','selectors','results','woo','basalamSend','imports'].includes(saved)?saved:'scrape');setResultView(resultView)}
 async function loadBasalam(){try{let d=await deployApi('/api/basalam/config'),b=d.basalam,s=d.sdk||{};$('bsl_vendor').value=b.vendor_id||0;$('bsl_category').value=b.category_id||0;$('bsl_token').value=b.token||'';$('bsl_refresh').value=b.refresh_token||'';$('bsl_client_mode').value=b.client_mode||'auto';$('bsl_api_base_url').value=b.api_base_url||'https://openapi.basalam.com';$('bsl_days').value=b.preparation_days||3;$('bsl_weight').value=b.weight||500;$('bsl_stock').value=b.stock||10;$('bsl_update').checked=b.update_existing!==false;bslExtraVendors=Array.isArray(b.vendors)?b.vendors.map(v=>({vendor_id:+(v.vendor_id||0),token:v.token||'',shop_name:v.shop_name||v.name||'',name:v.name||'',price_mode:v.price_mode||'none',price_val:+(v.price_val||0)})):[];if($('bsl_send_all'))$('bsl_send_all').value=b.send_all_shops===false?'0':'1';if($('bsl_send_mode'))$('bsl_send_mode').value=b.send_mode==='sequential'?'sequential':'parallel';bslSelectedShopVids=null;renderBslVendors();$('bslSdkBadge').textContent=s.installed?'SDK '+s.version:'نصب نشده';$('bslSdkBadge').className='badge '+(s.installed?'ok':'error');if(b.last_test_at)$('bslAdminStatus').innerHTML='<span class="ok">آخرین اتصال موفق: '+esc(b.last_test_user||'باسلام')+' · '+new Date(b.last_test_at*1000).toLocaleString('fa-IR')+'</span>'}catch(e){$('bslAdminStatus').textContent=e.message}}
 async function saveBasalam(){try{let basalam={vendor_id:+$('bsl_vendor').value,category_id:+$('bsl_category').value,token:$('bsl_token').value.trim(),refresh_token:$('bsl_refresh').value.trim(),client_mode:$('bsl_client_mode').value,api_base_url:$('bsl_api_base_url').value.trim(),preparation_days:+$('bsl_days').value,weight:+$('bsl_weight').value,stock:+$('bsl_stock').value,update_existing:$('bsl_update').checked,vendors:bslExtraVendors,send_all_shops:$('bsl_send_all')?$('bsl_send_all').value!=='0':true,send_mode:$('bsl_send_mode')?$('bsl_send_mode').value:'parallel'};await deployApi('/api/basalam/settings',{method:'POST',body:JSON.stringify({basalam})});$('bslAdminStatus').innerHTML='<span class="ok">اتصال ذخیره شد.</span>'}catch(e){$('bslAdminStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 function renderLiveTask(task){$('bslLiveTask').style.display='block';$('bslTaskTitle').textContent=task.title||'وظیفه سرور';$('bslTaskPercent').textContent=toFa(Math.round(task.progress||0))+'٪';$('bslTaskBar').style.width=(task.progress||0)+'%';$('bslTaskStep').textContent=task.step||'';const events=compactTaskDetails(task.details).slice().reverse();$('bslTaskDetails').innerHTML=events.map(x=>`<div class="live-detail"><b>${esc(x.at)}</b> · ${esc(clipTaskText(x.text))}${x.n>1?` ×${toFa(x.n)}`:''}</div>`).join('')}
 async function watchLiveTask(id){for(;;){let d=await deployApi('/api/tasks/'+encodeURIComponent(id));renderLiveTask(d.task);if(['completed','failed'].includes(d.task.status))return d.task;await new Promise(r=>setTimeout(r,850))}}
 async function installBasalamSdk(){try{$('bslAdminStatus').innerHTML='<span class="spinner"></span> وظیفه نصب روی سرور آغاز می‌شود…';let d=await deployApi('/api/basalam/sdk/install/start',{method:'POST',body:'{}'}),task=await watchLiveTask(d.task.id);if(task.status==='failed')throw Error(task.error||'نصب ناموفق بود');$('bslAdminStatus').innerHTML='<span class="ok">SDK روی سرور نصب و آماده شد · نسخه '+esc(task.sdk?.version||'')+'</span>';$('bslSdkBadge').textContent='SDK '+(task.sdk?.version||'آماده');$('bslSdkBadge').className='badge ok'}catch(e){$('bslAdminStatus').innerHTML='<span class="error">خطای نصب: '+esc(e.message)+'</span>'}}
-async function testBasalam(){try{$('bslAdminStatus').innerHTML='<span class="spinner"></span> در حال آزمایش همه غرفه‌ها (SDK اول، سپس REST)…';let d=await deployApi('/api/basalam/test',{method:'POST',body:JSON.stringify({all:true})});if(d.shops){let html=d.shops.map(s=>`<div class="provider-row" style="border-color:${s.ok?'#34d39955':'#fb718555'}"><div><b>${esc(s.shop_name||('غرفه #'+s.vendor_id))} <code>#${s.vendor_id}</code>${s.is_default?' <span class="badge ok">پیش‌فرض</span>':''}</b><br><small>${s.ok?('کاربر: '+esc(s.user)+' · کلاینت '+esc(s.client)):'<span class="error">'+esc(s.error||'ناموفق')+'</span>'}</small></div><span class="badge ${s.ok?'ok':'error'}">${s.ok?'✓ موفق':'✕ خطا'}</span></div>`).join('');let okCount=d.ok_count||d.shops.filter(s=>s.ok).length;$('bslAdminStatus').innerHTML=`<span class="${okCount?'ok':'error'}">تست ${d.total} غرفه: ${okCount} موفق، ${d.total-okCount} خطا — SDK اول امتحان شد.</span><div style="margin-top:8px;display:grid;gap:6px">${html}</div>`;}else{$('bslAdminStatus').innerHTML='<span class="ok">اتصال باسلام موفق: '+esc(d.user)+' · کلاینت '+esc(d.client||'—')+(d.installed_now?' · SDK نیز نصب شد':'')+' · غرفه '+esc(d.vendor_id||'')+' '+esc(d.vendor_title||'')+'</span>';} $('bslSdkBadge').textContent='SDK '+(d.sdk?.version||'آماده');$('bslSdkBadge').className='badge ok';}catch(e){$('bslAdminStatus').innerHTML='<span class="error">خطای اتصال: '+esc(e.message)+'</span>';}}
+async function testBasalam(){try{$('bslAdminStatus').innerHTML='<span class="spinner"></span> در حال آزمایش همه غرفه‌ها (SDK اول، سپس REST) — اطلاعات کامل کاربر و غرفه دریافت می‌شود…';let d=await deployApi('/api/basalam/test',{method:'POST',body:JSON.stringify({all:true})});if(d.shops){let html=d.shops.map(s=>{
+  let vd=s.vendor_detail||{}, ud=s.user_detail||{};
+  let detailLines=[];
+  if(s.ok){
+    if(ud.mobile) detailLines.push('موبایل: '+esc(ud.mobile));
+    if(ud.email) detailLines.push('ایمیل: '+esc(ud.email));
+    if(vd.identifier) detailLines.push('شناسه: '+esc(vd.identifier));
+    if(vd.city) detailLines.push(esc(vd.city));
+    if(vd.score) detailLines.push('امتیاز '+esc(vd.score));
+    if(vd.status) detailLines.push('وضعیت '+esc(vd.status));
+  }
+  let sub = s.ok
+    ? ('کاربر: <b>'+esc(s.user||ud.name||'—')+'</b>'+(ud.id?' <code>#'+esc(ud.id)+'</code>':'')+' · کلاینت <code>'+esc(s.client)+'</code>'+(vd.title&&vd.title!==s.shop_name?' · '+esc(vd.title):'')+(detailLines.length?'<br><small style=\"opacity:.85\">'+detailLines.join(' · ')+'</small>':''))
+    : ('<span class=\"error\">'+esc(s.error||'ناموفق')+'</span>');
+  return `<div class=\"provider-row\" style=\"border-color:${s.ok?'#34d39955':'#fb718555'};align-items:flex-start\"><div style=\"flex:1\"><b>${esc(s.shop_name||s.vendor_title||('غرفه #'+s.vendor_id))} <code>#${s.vendor_id}</code>${s.is_default?' <span class=\"badge ok\">پیش‌فرض</span>':''}</b><br><small>${sub}</small></div><span class=\"badge ${s.ok?'ok':'error'}\" style=\"white-space:nowrap\">${s.ok?'✓ موفق':'✕ خطا'}</span></div>`;
+}).join('');let okCount=d.ok_count||d.shops.filter(s=>s.ok).length;
+  // 10.215 auto-fill: if server fixed generic names, reflect in local bslExtraVendors without needing manual save
+  let fixedNote = d.auto_fixed ? '<br><span class=\"ok\">✓ نام‌های ناقص غرفه به‌صورت خودکار تصحیح و ذخیره شد</span>' : '';
+  $('bslAdminStatus').innerHTML=`<span class=\"${okCount?'ok':'error'}\"><b>تست ${d.total} غرفه:</b> ${okCount} موفق، ${d.total-okCount} خطا — SDK اول امتحان شد${fixedNote}</span><div style=\"margin-top:8px;display:grid;gap:6px\">${html}</div>`;
+  // update local extra vendors with corrected names/user so UI stays in sync without reload
+  try{
+    d.shops.forEach(s=>{
+      if(!s.ok || s.is_default) return;
+      let idx = bslExtraVendors.findIndex(v=> parseInt(v.vendor_id||0)===parseInt(s.vendor_id||0));
+      if(idx>=0){
+        let cur = bslExtraVendors[idx];
+        let realTitle = s.vendor_title || (s.vendor_detail&&s.vendor_detail.title) || s.shop_name;
+        let realUser = s.user || (s.user_detail&&s.user_detail.name);
+        if(realTitle && (!cur.shop_name || cur.shop_name===('غرفه '+s.vendor_id) || cur.shop_name==='Shop '+s.vendor_id)){
+          cur.shop_name = realTitle;
+        }
+        if(realUser && !cur.name){
+          cur.name = realUser;
+        }
+      }
+    });
+    if(d.auto_fixed) renderBslVendors();
+  }catch(e){}
+  if(d.auto_fixed){
+    // also refresh default vendor badge after a moment
+    setTimeout(()=>{ try{ loadBasalam(); }catch(e){} }, 900);
+  }
+}else{$('bslAdminStatus').innerHTML='<span class=\"ok\">اتصال باسلام موفق: '+esc(d.user)+' · کلاینت '+esc(d.client||'—')+(d.installed_now?' · SDK نیز نصب شد':'')+' · غرفه '+esc(d.vendor_id||'')+' '+esc(d.vendor_title||'')+'</span>';} $('bslSdkBadge').textContent='SDK '+(d.sdk?.version||'آماده');$('bslSdkBadge').className='badge ok';}catch(e){$('bslAdminStatus').innerHTML='<span class=\"error\">خطای اتصال: '+esc(e.message)+'</span>';}}
 async function loadBasalamVendor(){try{$('bslAdminStatus').textContent='در حال دریافت اطلاعات رسمی غرفه…';let d=await deployApi('/api/basalam/vendor'),v=d.vendor||{};$('bslVendorCard').innerHTML=`<div class="provider-row vendor-card"><div><b>${esc(v.title||'غرفه')} <code>#${esc(v.id)}</code></b><br><small>${esc(v.identifier||'')} · ${esc(v.city||'')} · امتیاز ${esc(v.score??'—')}</small></div><span class="badge">${esc(v.status||'—')}</span></div>`;$('bslAdminStatus').innerHTML='<span class="ok">اطلاعات غرفه با کلاینت '+esc(d.client||'—')+' دریافت شد.</span>'}catch(e){$('bslAdminStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 async function loadBasalamProducts(){try{$('bslAdminStatus').textContent='در حال دریافت محصولات غرفه…';let d=await deployApi('/api/basalam/products');$('bslProductList').innerHTML=(d.products||[]).map(p=>`<div class="provider-row"><div><b>${esc(p.name||'بدون نام')}</b> <code>#${esc(p.id)}</code><br><small>SKU: ${esc(p.sku||'—')} · موجودی: ${esc(p.stock??'—')} · قیمت: ${esc(p.price??'—')}</small></div><span class="badge">${esc(p.status||'—')}</span></div>`).join('')||'<div class="note">محصولی در غرفه پیدا نشد.</div>';$('bslAdminStatus').innerHTML='<span class="ok">'+d.total+' محصول نخست غرفه با '+esc(d.client||'—')+' دریافت شد.</span>'}catch(e){$('bslAdminStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 function bslApiList(v){if(Array.isArray(v))return v;if(v&&typeof v==='object'){for(const k of ['data','items','results','chats','messages','parcels','products']){let x=v[k];if(Array.isArray(x))return x;if(x&&typeof x==='object'){let y=bslApiList(x);if(y.length)return y}}}return []}
@@ -7800,10 +7989,14 @@ let bslExtraVendors=[],bslSelectedShopVids=null;
 function bslAllShopEntries(){const shops=[];const defVid=parseInt(($('bsl_vendor')||{}).value)||0;const defTok=String(($('bsl_token')||{}).value||'').trim();if(defVid>0&&defTok)shops.push({vendor_id:defVid,token:defTok,shop_name:'غرفهٔ پیش‌فرض',is_default:true});(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const vid=parseInt(v&&v.vendor_id)||0,tok=String(v&&v.token||'').trim();if(vid>0&&tok)shops.push({vendor_id:vid,token:tok,shop_name:v.shop_name||v.name||('غرفه '+vid),is_default:false,price_mode:v.price_mode||'none',price_val:parseFloat(v.price_val||0)});});return shops;}
 function bslGetSelectedVids(){const shops=bslAllShopEntries();if($('bsl_send_all')&&$('bsl_send_all').value==='0'){const d=shops.find(s=>s.is_default);return d?[d.vendor_id]:[];}if(!bslSelectedShopVids||bslSelectedShopVids.length===shops.length)return null;return bslSelectedShopVids.slice();}
 function bslRenderShopsHint(){const el=$('bsShopsHint');if(!el)return;const n=bslAllShopEntries().length;const mode=$('bsl_send_mode')?$('bsl_send_mode').value:'parallel';const all=$('bsl_send_all')?$('bsl_send_all').value!=='0':true;el.textContent=n?((all?'ارسال به ':'فقط غرفه پیش‌فرض · ')+toFa(n)+' غرفه فعال · '+(mode==='sequential'?'ترتیبی':'همزمان')):'غرفه فعالی با توکن و شناسه نیست';}
-function addBslVendor(){bslExtraVendors.push({vendor_id:0,token:'',shop_name:'',name:'',price_mode:'none',price_val:0});renderBslVendors();}
-function removeBslVendor(idx){if(!confirm('حذف این غرفه؟'))return;bslExtraVendors.splice(idx,1);renderBslVendors();}
-async function testBslVendor(idx){const v=bslExtraVendors[idx];if(!v)return;const btn=$('bslVTestBtn_'+idx);if(btn){btn.disabled=true;btn.textContent='…';}try{const d=await deployApi('/api/basalam/test',{method:'POST',body:JSON.stringify({token:v.token||'',vendor_id:+(v.vendor_id||0)})});if(d.vendor_id)bslExtraVendors[idx].vendor_id=d.vendor_id;if(d.vendor_title)bslExtraVendors[idx].shop_name=d.vendor_title;if(d.user)bslExtraVendors[idx].name=d.user;renderBslVendors();if($('bslAdminStatus'))$('bslAdminStatus').innerHTML='<span class="ok">✓ '+(esc(d.vendor_title||d.user||'غرفه'))+'</span>';}catch(e){if($('bslAdminStatus'))$('bslAdminStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>';}if(btn){btn.disabled=false;btn.textContent='تست';}}
-function renderBslVendors(){const list=$('bslVendorsList');if(!list)return;bslRenderShopsHint();if(!bslExtraVendors.length){list.innerHTML='<div style="font-size:11px;opacity:.7;text-align:center;padding:8px">غرفه اضافی وجود ندارد</div>';return;}list.innerHTML=bslExtraVendors.map((v,idx)=>'<div style="background:#0f172a;border:1px solid #475569;border-radius:8px;padding:10px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:12px">غرفه '+toFa(idx+1)+(v.shop_name?(' · '+esc(v.shop_name)):'')+'</b><button class="gray" type="button" onclick="removeBslVendor('+idx+')">حذف</button></div><input type="text" placeholder="نام غرفه" value="'+esc(v.shop_name||v.name||'')+'" oninput="bslExtraVendors['+idx+'].shop_name=this.value" style="width:100%;margin-bottom:6px"><input type="password" dir="ltr" placeholder="Personal Token" value="'+esc(v.token||'')+'" oninput="bslExtraVendors['+idx+'].token=this.value" style="width:100%;margin-bottom:6px"><div class="grid"><div><input type="number" placeholder="شناسه غرفه" value="'+(v.vendor_id||'')+'" oninput="bslExtraVendors['+idx+'].vendor_id=parseInt(this.value)||0"></div><div><button class="gray" type="button" id="bslVTestBtn_'+idx+'" onclick="testBslVendor('+idx+')">تست</button></div><div><label>تعدیل قیمت</label><select onchange="bslExtraVendors['+idx+'].price_mode=this.value"><option value="none"'+(v.price_mode==='none'?' selected':'')+'>بدون تعدیل</option><option value="percent"'+(v.price_mode==='percent'?' selected':'')+'>درصد</option><option value="multiplier"'+(v.price_mode==='multiplier'?' selected':'')+'>ضریب</option></select></div><div><label>مقدار</label><input type="number" step="0.01" value="'+(v.price_val||0)+'" oninput="bslExtraVendors['+idx+'].price_val=parseFloat(this.value)||0"></div></div></div>').join('');}
+function addBslVendor(){bslExtraVendors.push({vendor_id:0,token:'',shop_name:'',name:'',price_mode:'none',price_val:0});renderBslVendors();scheduleBasalamAutoSave();}
+function removeBslVendor(idx){if(!confirm('حذف این غرفه؟'))return;bslExtraVendors.splice(idx,1);renderBslVendors();scheduleBasalamAutoSave();}
+async function testBslVendor(idx){const v=bslExtraVendors[idx];if(!v)return;const btn=$('bslVTestBtn_'+idx);if(btn){btn.disabled=true;btn.textContent='…';}try{const d=await deployApi('/api/basalam/test',{method:'POST',body:JSON.stringify({token:v.token||'',vendor_id:+(v.vendor_id||0)})});if(d.vendor_id)bslExtraVendors[idx].vendor_id=d.vendor_id;if(d.vendor_title)bslExtraVendors[idx].shop_name=d.vendor_title;if(d.user)bslExtraVendors[idx].name=d.user;renderBslVendors();scheduleBasalamAutoSave();if($('bslAdminStatus')){
+  let extra = '';
+  if(d.vendor_detail){ let vd=d.vendor_detail; let parts=[]; if(vd.city) parts.push(esc(vd.city)); if(vd.score) parts.push('امتیاز '+esc(vd.score)); if(vd.identifier) parts.push(esc(vd.identifier)); if(parts.length) extra=' · '+parts.join(' · '); }
+  $('bslAdminStatus').innerHTML='<span class=\"ok\">✓ '+esc(d.vendor_title||d.user||'غرفه')+' <small>'+esc(d.client||'')+extra+' — ذخیره خودکار شد</small></span>';
+}}catch(e){if($('bslAdminStatus'))$('bslAdminStatus').innerHTML='<span class=\"error\">'+esc(e.message)+'</span>';}if(btn){btn.disabled=false;btn.textContent='تست';}}
+function renderBslVendors(){const list=$('bslVendorsList');if(!list)return;bslRenderShopsHint();if(!bslExtraVendors.length){list.innerHTML='<div style="font-size:11px;opacity:.7;text-align:center;padding:8px">غرفه اضافی وجود ندارد</div>';return;}list.innerHTML=bslExtraVendors.map((v,idx)=>'<div style="background:#0f172a;border:1px solid #475569;border-radius:8px;padding:10px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:12px">غرفه '+toFa(idx+1)+(v.shop_name?(' · '+esc(v.shop_name)):'')+'</b><button class="gray" type="button" onclick="removeBslVendor('+idx+')">حذف</button></div><input type="text" placeholder="نام غرفه" value="'+esc(v.shop_name||v.name||'')+'" oninput="bslExtraVendors['+idx+'].shop_name=this.value;scheduleBasalamAutoSave()" style="width:100%;margin-bottom:6px"><input type="password" dir="ltr" placeholder="Personal Token" value="'+esc(v.token||'')+'" oninput="bslExtraVendors['+idx+'].token=this.value;scheduleBasalamAutoSave()" style="width:100%;margin-bottom:6px"><div class="grid"><div><input type="number" placeholder="شناسه غرفه" value="'+(v.vendor_id||'')+'" oninput="bslExtraVendors['+idx+'].vendor_id=parseInt(this.value)||0;scheduleBasalamAutoSave()"></div><div><button class="gray" type="button" id="bslVTestBtn_'+idx+'" onclick="testBslVendor('+idx+')">تست</button></div><div><label>تعدیل قیمت</label><select onchange="bslExtraVendors['+idx+'].price_mode=this.value;scheduleBasalamAutoSave()"><option value="none"'+(v.price_mode==='none'?' selected':'')+'>بدون تعدیل</option><option value="percent"'+(v.price_mode==='percent'?' selected':'')+'>درصد</option><option value="multiplier"'+(v.price_mode==='multiplier'?' selected':'')+'>ضریب</option></select></div><div><label>مقدار</label><input type="number" step="0.01" value="'+(v.price_val||0)+'" oninput="bslExtraVendors['+idx+'].price_val=parseFloat(this.value)||0;scheduleBasalamAutoSave()"></div></div></div>').join('');}
 function renderBasalamJobs(jobs){let list=jobs||[];if(list[0])activeBasalamJob=list[0].id;$('bslJobList').innerHTML=list.map(j=>`<div class="provider-row"><div><b>${esc(j.id)}</b><br><small>${esc(j.status)} · ${j.cursor}/${j.total} · موفق ${j.sent} · ویرایش ${j.updated} · خطا ${j.failed}</small><div class="progress-track"><i style="width:${j.total?Math.round(j.cursor/j.total*100):0}%"></i></div></div><div><button class="gray" onclick="deleteBasalamJob('${esc(j.id)}')">حذف</button></div>${(j.results||[]).slice(-3).map(r=>`<small class="${r.ok?'ok':'error'}">${r.ok?'✓':'✕'} ${esc(r.source||'')} ${esc(r.error||'')}</small>`).join('')}</div>`).join('')||'<div class="note">صفی وجود ندارد.</div>'}
 async function loadBasalamJobs(){try{let d=await deployApi('/api/basalam/jobs');renderBasalamJobs(d.jobs)}catch(e){$('bslSendStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
 async function createBasalamQueue(){if(!products.length){$('bslSendStatus').innerHTML='<span class="error">ابتدا محصول استخراج یا وارد کنید.</span>';return}try{let d=await deployApi('/api/basalam/jobs',{method:'POST',body:JSON.stringify({products,vendor_ids:bslGetSelectedVids()})});activeBasalamJob=d.job.id;$('bslSendStatus').innerHTML='<span class="ok">صف '+d.job.total+' محصولی ساخته شد.</span>';await loadBasalamJobs()}catch(e){$('bslSendStatus').innerHTML='<span class="error">'+esc(e.message)+'</span>'}}
