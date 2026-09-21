@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.209"
+APP_VERSION = "10.210"
 CHANGELOG = [
+    {"version":"10.210","date":"2026-09-21","title":"عبور هوشمند AI از فیلتر Worker و پاکسازی مدل‌ها","items":["AI حالا روی 403 Worker (Access denied/security policy) خودکار یک بار مسیر مستقیم (direct) را می‌آزماید و نتیجه را با برچسب via ثبت می‌کند","تست مدل‌ها در هر دو مسیر via: worker / via: direct را لاگ می‌کند تا دلیل فیلترینگ فوری دیده شود","پاکسازی خودکار مدل‌های 400 badmodel و 402 credit در هر دور تست — دیگر مدل‌های تکراری بی‌اعتبار تست نمی‌شوند"]},
     {"version":"10.209","date":"2026-09-21","title":"پنجره بصری سرورساید: ادامه در پس‌زمینه و نمایش خودکار","items":["پیش‌نمایش بصری حالا Job سرورساید است: با بستن پنجره هم رندر ادامه می‌یابد و بعد از اتمام خودکار ظاهر می‌شود","API جدید: POST /api/picker/start → {job_id}, GET /api/picker/status/<id> برای پولینگ زنده مراحل","فیکس: اگر مرورگر پاک شده باشد، به‌جای iframe سفید، توست قرمز با دستور نصب پایدار نمایش داده می‌شود"]},
     {"version":"10.208","date":"2026-09-21","title":"پیش‌نمایش 40% سریع‌تر با headless_shell و توست‌های همیشه‌قابل‌مشاهده","items":["پنجره بصری حالا حتی اگر toast() نباشد، یک نوار زرد بالای پیش‌نمایش مراحل را زنده نشان می‌دهد","Playwright برای بصری و دیجی‌کالا از chromium_headless_shell (سبک، 40% سریع‌تر، 300M رم کمتر) استفاده می‌کند","سلنیوم با undetected-chromedriver در منوی بصری فعال شد — انتخاب Selenium حالا واقعاً Selenium را اجرا می‌کند"]},
     {"version":"10.207","date":"2026-09-21","title":"نوتیف زنده مراحل رندر در پنجره انتخاب بصری","items":["پنجره بصری حالا با توست‌های زنده مراحل را نشان می‌دهد: اتصال → رندر Playwright → اسکرول → انتظار محصول → آماده انتخاب","اگر Playwright پاک شده باشد، به‌جای صفحه سفید، توست خطا با دستور نصب پایدار (/var/www/html/.wconsole_data/cache/...) نمایش داده می‌شود","دیجی‌کالا با Playwright حتی با HTML 13KB هم اسکرول و انتظار کارت را کامل انجام می‌دهد تا DOM پر شود"]},
@@ -5373,11 +5374,28 @@ def ai_chat(prompt: str, provider_id: str="", model_id: str="") -> str:
         if key:headers["Authorization"]="Bearer "+key
         try:
             response=outbound_request("POST",request_endpoint,json=payload,headers=headers,timeout=90)
+            via = getattr(response, "scraper4_transport", outbound_mode(data.get("network",{})))
+            # 10.210 smart fallback: if Worker blocks with 403 security policy, retry direct once
+            if not response.ok and response.status_code==403 and via=="relay" and ("security" in (response.text or "").lower() or "access denied" in (response.text or "").lower() or "forbidden" in (response.text or "").lower()):
+                try:
+                    direct_resp = requests.request("POST", request_endpoint, json=payload, headers=headers, timeout=90, verify=True)
+                    if direct_resp.ok:
+                        text=ai_extract_text(direct_resp.json())
+                        if text:return text
+                        raise FetchError("پاسخ مدل خالی بود (direct fallback)")
+                    errors.append(f"HTTP {direct_resp.status_code} via direct (fallback از worker 403): {direct_resp.text[:240]}")
+                    # keep trying next key if 401/403/429, otherwise stop
+                    if direct_resp.status_code not in (401,402,403,429):break
+                    continue
+                except Exception as de:
+                    errors.append(f"direct fallback خطا: {de} (worker 403: {(response.text or '')[:120]})")
+                    if response.status_code not in (401,402,403,429):break
+                    continue
             if response.ok:
                 text=ai_extract_text(response.json())
                 if text:return text
                 raise FetchError("پاسخ مدل خالی بود")
-            errors.append(f"HTTP {response.status_code}: {response.text[:240]}")
+            errors.append(f"HTTP {response.status_code} via {via}: {response.text[:240]}")
             if response.status_code not in (401,402,403,429):break
         except (requests.RequestException,ValueError) as exc:errors.append(str(exc));break
     raise FetchError(errors[-1] if errors else "فراخوانی مدل ناموفق بود")
@@ -5545,7 +5563,13 @@ def api_ai_test_process(job_id: str):
         if task_id:live_task_update(task_id,round((i+1)*100/max(1,total)),f"مدل {i+1} از {total} بررسی شد","running",f"{'✓ سالم' if both else '✕ ناموفق/ناقص'} · {row['provider_name']} · {row['model_name']} · {row['latency_ms']} ms",done=i+1,total=total,sent=sum(x.get("status")=="ok" for x in job["rows"]),failed=sum(x.get("status")=="failed" for x in job["rows"]),current_model=row["model_name"])
         # Persist both customer-reply and categorization health like the PHP model laboratory.
         provider=data.get("ai_providers",{}).get(row["provider"],{});model=next((x for x in provider.get("models",[]) if isinstance(x,dict) and clean_text(x.get("id"))==row["model"]),None)
-        if model is not None:model.update({"tested":True,"available":both,"replyAvailable":bool(reply),"categoryAvailable":bool(category),"latencyMs":row["latency_ms"],"lastTestAt":int(time.time()),"testError":errors,"testScore":row["score"]})
+        if model is not None:
+            # 10.210 auto-mark badmodel / depleted credits so they are skipped next time
+            low_err=(errors or "").lower()
+            is_bad = ("badmodel" in low_err or "model not found" in low_err or "does not exist" in low_err or "invalid model" in low_err)
+            is_credit = ("402" in low_err and "credit" in low_err) or "depleted" in low_err or "insufficient" in low_err
+            if is_bad:model["enabled"]=False
+            model.update({"tested":True,"available":both,"replyAvailable":bool(reply),"categoryAvailable":bool(category),"latencyMs":row["latency_ms"],"lastTestAt":int(time.time()),"testError":errors,"testScore":row["score"],"pruned_badmodel": bool(is_bad), "pruned_credit": bool(is_credit)})
         job["cursor"]=i+1;processed+=1
         if job["options"].get("delay_ms") and processed<batch:time.sleep(job["options"]["delay_ms"]/1000)
         save_data(data)
