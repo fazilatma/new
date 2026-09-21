@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.208"
+APP_VERSION = "10.209"
 CHANGELOG = [
+    {"version":"10.209","date":"2026-09-21","title":"پنجره بصری سرورساید: ادامه در پس‌زمینه و نمایش خودکار","items":["پیش‌نمایش بصری حالا Job سرورساید است: با بستن پنجره هم رندر ادامه می‌یابد و بعد از اتمام خودکار ظاهر می‌شود","API جدید: POST /api/picker/start → {job_id}, GET /api/picker/status/<id> برای پولینگ زنده مراحل","فیکس: اگر مرورگر پاک شده باشد، به‌جای iframe سفید، توست قرمز با دستور نصب پایدار نمایش داده می‌شود"]},
     {"version":"10.208","date":"2026-09-21","title":"پیش‌نمایش 40% سریع‌تر با headless_shell و توست‌های همیشه‌قابل‌مشاهده","items":["پنجره بصری حالا حتی اگر toast() نباشد، یک نوار زرد بالای پیش‌نمایش مراحل را زنده نشان می‌دهد","Playwright برای بصری و دیجی‌کالا از chromium_headless_shell (سبک، 40% سریع‌تر، 300M رم کمتر) استفاده می‌کند","سلنیوم با undetected-chromedriver در منوی بصری فعال شد — انتخاب Selenium حالا واقعاً Selenium را اجرا می‌کند"]},
     {"version":"10.207","date":"2026-09-21","title":"نوتیف زنده مراحل رندر در پنجره انتخاب بصری","items":["پنجره بصری حالا با توست‌های زنده مراحل را نشان می‌دهد: اتصال → رندر Playwright → اسکرول → انتظار محصول → آماده انتخاب","اگر Playwright پاک شده باشد، به‌جای صفحه سفید، توست خطا با دستور نصب پایدار (/var/www/html/.wconsole_data/cache/...) نمایش داده می‌شود","دیجی‌کالا با Playwright حتی با HTML 13KB هم اسکرول و انتظار کارت را کامل انجام می‌دهد تا DOM پر شود"]},
     {"version":"10.206","date":"2026-09-21","title":"رفع مسیر دوتایی wconsole_data و نصب پایدار مرورگر","items":["باگ مسیر /var/www/html/.wconsole_data/cache درست شد → حالا /var/www/html/.wconsole_data/cache/ms-playwright پایدار است","chrome حالا در هر دو مسیر قدیمی و جدید جستجو می‌شود تا لاگ truncated درست شود","دستور نصب هم به‌روز شد: دیگر نیازی به git pull دستی نیست — Deploy وب‌کنسول کافی است"]},
@@ -4657,6 +4658,100 @@ def index():
 
 
 
+# 10.209 Server-side picker jobs: continue in background even if window closed
+PICKER_JOBS: dict[str, dict] = {}
+PICKER_LOCK = threading.Lock()
+
+def _picker_job_run(job_id: str, url: str, render: str, scrolls: int):
+    job = PICKER_JOBS.get(job_id, {})
+    def _set(status, msg, progress=None):
+        job["status"]=status
+        job["message"]=msg
+        if progress is not None: job["progress"]=progress
+        job["updated"]=time.time()
+    try:
+        _set("running", "🔌 در حال اتصال به "+url[:60]+"…", 10)
+        time.sleep(0.3)
+        network=load_data().get("network",{})
+        fetcher=Fetcher(network)
+        result=None; errors=[]
+        _set("running", "🎭 در حال رندر با "+("Playwright" if render!="selenium" else "Selenium")+"…", 30)
+        if render in ("selenium","playwright","browser"):
+            eng = "selenium" if render=="selenium" else "playwright"
+            _set("running", "↕️ اسکرول و انتظار محصول…", 60)
+            # use existing picker_browser_fetch with engine
+            try:
+                result=picker_browser_fetch(url, fetcher.timeout, scrolls, errors, engine=eng)
+            except Exception as e:
+                errors.append(str(e))
+        else:
+            _set("running", "📄 دریافت HTTP…", 30)
+            result=picker_http_fetch(url, fetcher, errors)
+            if result is None and fetcher.proxy_mode in {"relay","http"}:
+                result=picker_http_fetch(url, _fetcher_direct(network), errors)
+        if result is None:
+            _set("failed", "❌ "+("\n".join(errors) or "دریافت ناموفق بود"), 100)
+            job["error"]="\n".join(errors)
+            return
+        # process HTML like before
+        _set("running", "🧩 پردازش DOM…", 85)
+        soup=BeautifulSoup(result.text,"lxml")
+        for node in soup.select("script,noscript,iframe,object,embed,base,meta[http-equiv]"): node.decompose()
+        for node in soup.find_all(True):
+            for attr in list(node.attrs):
+                if str(attr).lower().startswith("on"): del node.attrs[attr]
+            if node.name in {"a","form"}: node.attrs.pop("target",None); node.attrs.pop("action",None)
+        head=soup.head or soup.new_tag("head")
+        if not soup.head: soup.insert(0,head)
+        base_tag=soup.new_tag("base",href=result.url); head.insert(0,base_tag)
+        style=soup.new_tag("style"); style.string="html{scroll-behavior:smooth}body{cursor:crosshair!important;padding-top:42px!important}.__s4_hover{outline:3px dashed #38bdf8!important;outline-offset:2px!important;background-color:rgba(56,189,248,.12)!important}.__s4_picked{outline:4px solid #f43f5e!important;outline-offset:2px!important;background-color:rgba(244,63,94,.12)!important}#__s4bar{position:fixed;z-index:2147483647;inset:0 0 auto;background:#07111fee;color:#fff;padding:8px 12px;font:700 14px Tahoma,sans-serif;direction:rtl;box-shadow:0 4px 20px #0008}#__s4bar b{color:#67e8f9}a{cursor:crosshair!important}"
+        head.append(style)
+        script=soup.new_tag("script")
+        script.string=r'''(()=>{let picked=null;const bad=/^(active|selected|hover|focus|open|show|hidden|current|disabled|loading)$/i;function esc(x){return CSS.escape(String(x))}function best(el){if(!el||el===document.body)return 'body';if(el.id&&el.id.length<60&&!/\d{5,}/.test(el.id))return '#'+esc(el.id);let cls=[...el.classList].filter(x=>x.length<45&&!bad.test(x)&&!/^(__s4_|css-|jsx-)/.test(x)&&!/^[a-f0-9]{8,}$/i.test(x)).slice(0,3),tag=el.tagName.toLowerCase(),tries=[];if(cls.length)tries.push(tag+'.'+cls.map(esc).join('.'),'.'+cls.map(esc).join('.'));for(const c of cls)tries.push(tag+'.'+esc(c),'.'+esc(c));for(const q of tries){try{let n=document.querySelectorAll(q).length;if(n>0&&n<300)return q}catch(e){}}let p=el.parentElement;if(p&&p!==document.body){let siblings=[...p.children].filter(x=>x.tagName===el.tagName);if(siblings.length>1)return best(p)+' > '+tag+':nth-of-type('+(siblings.indexOf(el)+1)+')'}return tag}function relative(el,root){if(el===root)return best(el);let parts=[];while(el&&el!==root){let tag=el.tagName.toLowerCase(),cls=[...el.classList].filter(x=>x.length<45&&!bad.test(x)&&!/^(__s4_|css-|jsx-)/.test(x)).slice(0,2);if(cls.length){parts.unshift(tag+'.'+cls.map(esc).join('.'));break}let same=el.parentElement?[...el.parentElement.children].filter(x=>x.tagName===el.tagName):[];parts.unshift(tag+(same.length>1?':nth-of-type('+(same.indexOf(el)+1)+')':''));el=el.parentElement}return parts.join(' > ')||best(picked)}function report(){if(!picked)return;let root=null;try{root=window.__s4context?picked.closest(window.__s4context):null}catch(e){}let selector=root&&root!==picked?relative(picked,root):best(picked),matches=0;try{matches=root?root.querySelectorAll(selector).length:document.querySelectorAll(selector).length}catch(e){}parent.postMessage({type:'s4-picker-picked',selector,tag:picked.tagName.toLowerCase(),text:(picked.innerText||picked.getAttribute('alt')||'').trim().slice(0,180),matches},'*')}function choose(el){if(picked)picked.classList.remove('__s4_picked');picked=el;picked.classList.add('__s4_picked');report()}document.addEventListener('mouseover',e=>{if(e.target.id==='__s4bar')return;e.target.classList.add('__s4_hover')},true);document.addEventListener('mouseout',e=>e.target.classList.remove('__s4_hover'),true);document.addEventListener('click',e=>{if(e.target.closest('#__s4bar'))return;e.preventDefault();e.stopPropagation();choose(e.target)},true);window.addEventListener('message',e=>{let a=e.data&&e.data.action;if(a==='context'){window.__s4context=e.data.selector||'';return}if(!picked)return;if(a==='up'&&picked.parentElement)choose(picked.parentElement);if(a==='down'&&picked.firstElementChild)choose(picked.firstElementChild);if(a==='prev'&&picked.previousElementSibling)choose(picked.previousElementSibling);if(a==='next'&&picked.nextElementSibling)choose(picked.nextElementSibling)});let bar=document.createElement('div');bar.id='__s4bar';bar.innerHTML='🎯 <b>انتخابگر Scraper4</b> — روی جزء موردنظر کلیک کنید؛ سپس از کنترل‌های بیرون پیش‌نمایش استفاده کنید.';document.documentElement.append(bar);parent.postMessage({type:'s4-picker-ready'},'*')})()'''
+        (soup.body or soup).append(script)
+        job["html"]=str(soup)
+        job["url"]=result.url
+        _set("done", "✅ آماده — کلیک کنید", 100)
+    except Exception as e:
+        _set("failed", "❌ خطا: "+str(e)[:200], 100)
+        job["error"]=str(e)
+
+@app.post("/api/picker/start")
+def api_picker_start():
+    url=public_http_url(clean_text((request.get_json() or {}).get("url") or request.args.get("url") or ""))
+    render=clean_text((request.get_json() or {}).get("render") or request.args.get("render") or "auto")
+    if render.lower() in ("playwright","selenium"): render=render.lower()
+    elif "digikala" in url.lower() or "snappshop" in url.lower(): render="playwright"
+    scrolls=8 if render in ("playwright","selenium","browser") else 4
+    job_id=time.strftime("%Y%m%d%H%M%S")+wcp_random(4) if "wcp_random" in globals() else str(int(time.time()*1000))[-8:]
+    # fallback random
+    try:
+        job_id=hashlib.sha1((url+str(time.time())).encode()).hexdigest()[:10]
+    except Exception:
+        pass
+    PICKER_JOBS[job_id]={"id":job_id,"url":url,"render":render,"status":"queued","message":"⏳ در صف…","progress":0,"created":time.time(),"updated":time.time()}
+    th=threading.Thread(target=_picker_job_run, args=(job_id, url, render, scrolls), daemon=True)
+    th.start()
+    return jsonify(ok=True, job_id=job_id)
+
+@app.get("/api/picker/status/<job_id>")
+def api_picker_status(job_id):
+    job=PICKER_JOBS.get(job_id)
+    if not job: return jsonify(ok=False, error="job not found"), 404
+    return jsonify(ok=True, job={k: v for k,v in job.items() if k!="html"})
+
+@app.get("/api/picker/result/<job_id>")
+def api_picker_result(job_id):
+    job=PICKER_JOBS.get(job_id)
+    if not job: return Response("job not found", status=404)
+    if job.get("status")!="done": return Response("not ready: "+job.get("status",""), status=425)
+    html=job.get("html","")
+    resp=Response(html, mimetype="text/html; charset=utf-8")
+    resp.headers["Content-Security-Policy"]="default-src * data: blob: 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'self'"
+    resp.headers["Cache-Control"]="no-store"
+    return resp
+
+@app.get("/api/picker/preview")
 @app.get("/api/picker/preview")
 def api_picker_preview():
     """Return a sandboxed, script-stripped DOM preview with our visual selector inspector."""
@@ -7385,6 +7480,8 @@ function nextPickerField(){let fields=pickerFields[pickerKind],at=fields.findInd
 function loadVisualPicker(forceBrowser){
   let url=($('pickerUrl').value.trim()||$('url')?.value||'').trim();
   if(!url){$('pickerStatus').innerHTML='<span class="error">آدرس صفحه را وارد کنید.</span>';return}
+  // 10.209 server-side job: if pickerEngine is set, pass as engine
+  let _pickerEngineVal = ($('pickerEngine')?.value||'auto');
   // 10.208 ensure toast overlay exists even if global toast missing
   let _toastBox = document.getElementById('pickerLiveToasts');
   if(!_toastBox){
@@ -7456,8 +7553,59 @@ function loadVisualPicker(forceBrowser){
   window._pickerToastTimer = _watchdog;
   // Hook to clear on message
   const _origHandler = window._pickerMessageHandler;
-  $('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);
-  $('pickerStatus').textContent=isBrowser?'رندر Playwright با اسکرول و انتظار محصول (دیجی‌کالا/اسنپ‌شاپ)…':'صفحه از مسیر مرکزی دریافت می‌شود…';
+  // 10.209 use server-side job so closing window does not abort rendering
+  let _jobId = null;
+  let _pollTimer = null;
+  async function _startPickerJob(){
+    try{
+      const r = await fetch('/api/picker/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url, render: mode, engine: _pickerEngineVal})});
+      const j = await r.json();
+      if(!j.ok) throw new Error(j.error||'شروع job ناموفق');
+      _jobId = j.job_id;
+      window._pickerJobId = _jobId;
+      try{ localStorage.setItem('pickerJobId', _jobId); localStorage.setItem('pickerJobUrl', url); }catch(e){}
+      _pickerToast('🔌 Job ساخته شد — رندر در پس‌زمینه ادامه می‌یابد (حتی با بستن پنجره)…', '');
+      _pollPickerJob();
+      _pollTimer = setInterval(_pollPickerJob, 900);
+    }catch(e){
+      // fallback to direct preview if job API fails
+      $('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);
+      _pickerToast('⚠️ fallback به پیش‌نمایش مستقیم: '+e.message, 'err');
+    }
+  }
+  async function _pollPickerJob(){
+    if(!_jobId) return;
+    try{
+      const r = await fetch('/api/picker/status/'+_jobId);
+      const j = await r.json();
+      if(!j.ok) return;
+      const job = j.job;
+      $('pickerReady').textContent = job.message || job.status;
+      $('pickerStatus').textContent = job.message;
+      if(job.status==='running'){
+        _pickerToast(job.message, '');
+      } else if(job.status==='done'){
+        clearInterval(_pollTimer);
+        _pickerToast('✅ رندر تمام شد — در حال نمایش…', 'ok');
+        // auto-show even if wrap was closed
+        $('pickerFrameWrap').classList.add('open');
+        $('pickerFrame').src='/api/picker/result/'+_jobId;
+      } else if(job.status==='failed'){
+        clearInterval(_pollTimer);
+        _pickerToast('❌ '+ (job.message||job.error||'خطا'), 'err');
+        $('pickerReady').textContent='خطای بارگذاری';
+        $('pickerReady').className='badge error';
+        $('pickerStatus').innerHTML='<span class="error">'+(job.error||job.message||'بارگذاری ناموفق').replace(/</g,'&lt;')+'</span>';
+        // also try to show fallback preview for debug
+      }
+    }catch(e){}
+  }
+  // expose for auto-reopen on page reload
+  window._pickerPoll = _pollPickerJob;
+  _startPickerJob();
+  $('pickerStatus').textContent=isBrowser?'⏳ Job سرورساید ساخته شد — رندر در پس‌زمینه (حتی با بستن پنجره)…':'صفحه از مسیر مرکزی دریافت می‌شود…';
+  // keep old direct preview as fallback comment
+  // $('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);
 }
 function loadSnappPicker(){if($('render'))$('render').value='browser';if(!$('pickerUrl').value.trim()&&$('url'))$('pickerUrl').value=$('url').value;loadVisualPicker(true)}
 function closeVisualPicker(){$('pickerFrame').src='about:blank';$('pickerFrameWrap').classList.remove('open');$('pickerReady').textContent='بسته شد'}
@@ -7483,7 +7631,35 @@ window.addEventListener('message',event=>{
   }if(d.type==='s4-picker-picked'){let field=$('pickerField').value,input=$(pickerInputId(field));if(input){input.value=d.selector;input.dispatchEvent(new Event('change'));$('pickerSelection').textContent=d.selector;$('pickerStatus').innerHTML='<span class="ok">✓ '+esc(d.tag)+' · '+d.matches+' تطابق · '+esc(d.text||'')+'</span>';renderPickerChips()}}});selectorTab('list');
 function config(){const g=id=>$(id)||{value:'',checked:false};const num=(id,d)=>{const n=+(g(id).value);return Number.isFinite(n)?n:d};let selectors={},detail_selectors={};['container','title','price','link','image','sku'].forEach(k=>selectors[k]=g('sel_'+k).value.trim());['gallery','variations','weight','category','price','stock','brand','sku','short_desc','long_desc','tags','attributes'].forEach(k=>detail_selectors[k]=g('det_'+k).value.trim());let profile_rules={title_prefix:g('rule_title_prefix').value.trim(),title_suffix:g('rule_title_suffix').value.trim(),price_mode:g('rule_price_mode').value||'none',price_value:num('rule_price_value',0),price_round:num('rule_price_round',0),default_stock:g('rule_default_stock').value,default_category:g('rule_default_category').value.trim(),bsl_category_id:num('rule_bsl_category_id',0),woo_category_id:num('rule_woo_category_id',0),woo_price_mode:g('rule_woo_price_mode').value||'none',woo_price_value:num('rule_woo_price_value',0),woo_price_round:num('rule_woo_price_round',0),bsl_price_mode:g('rule_bsl_price_mode').value||'none',bsl_price_value:num('rule_bsl_price_value',0),bsl_price_round:num('rule_bsl_price_round',0)};return {url:g('url').value.trim(),pages:Math.max(1,num('pages',1)),render:g('render').value||'auto',fetch_engine:g('fetch_engine').value||'auto',fetch_engine_master:g('fetch_engine_master').value||((profiles[activeProfile]&&profiles[activeProfile].fetch_engine_master)||''),fetch_engine_host:(profiles[activeProfile]&&profiles[activeProfile].fetch_engine_host)||'',pagination:g('pagination').value||'query',page_value:g('page_value').value.trim(),scrolls:num('scrolls',4),enrich:g('enrich').value!=='0',detail_scope:g('detail_scope').value||'missing',detail_limit:num('detail_limit',0),selectors,detail_selectors,profile_rules,display_name:(profiles[activeProfile]&&profiles[activeProfile].display_name)||'',gallery:{mode:g('galMode').value||'auto',box:g('galBox').value.trim(),selectors:g('galSelectors').value.trim(),pattern:g('galPattern').value.trim(),from:num('galFrom',1),to:num('galTo',10),skip_first:!!g('galSkipFirst').checked}}}
 function galModeChanged(){const m=$('galMode')?$('galMode').value:'auto';['galAutoBox','galManualBox','galNumberBox'].forEach(id=>{const e=$(id);if(!e)return;e.classList.toggle('hidden', (id==='galAutoBox'&&m!=='auto')||(id==='galManualBox'&&m!=='manual')||(id==='galNumberBox'&&m!=='number'))})}
-function apply(c){if(!c)return;['url','pages','render','fetch_engine','pagination','page_value','scrolls','detail_scope','detail_limit'].forEach(k=>{if(c[k]!==undefined&&$(k))$(k).value=c[k]});try{if(window.updatePaginationPlaceholder)window.updatePaginationPlaceholder();}catch(e){}if($('fetch_engine_master'))$('fetch_engine_master').value=c.fetch_engine_master||'';if(typeof updateEngineHint==='function')updateEngineHint();if($('enrich'))$('enrich').value=c.enrich?'1':'0';Object.entries(c.selectors||{}).forEach(([k,v])=>{if($('sel_'+k))$('sel_'+k).value=v||''});Object.entries(c.detail_selectors||{}).forEach(([k,v])=>{if($('det_'+k))$('det_'+k).value=v||''});(function(g){g=c.gallery||{};if($('galMode'))$('galMode').value=g.mode||'auto';if($('galBox'))$('galBox').value=g.box||'';if($('galSelectors'))$('galSelectors').value=g.selectors||'';if($('galPattern'))$('galPattern').value=g.pattern||'';if($('galFrom'))$('galFrom').value=g.from||1;if($('galTo'))$('galTo').value=g.to||10;if($('galSkipFirst'))$('galSkipFirst').checked=!!g.skip_first;if(typeof galModeChanged==='function')galModeChanged()})();let r=c.profile_rules||{};['title_prefix','title_suffix','price_mode','price_value','price_round','default_stock','default_category','bsl_category_id','woo_category_id','woo_price_mode','woo_price_value','woo_price_round','bsl_price_mode','bsl_price_value','bsl_price_round'].forEach(k=>{if($('rule_'+k)&&r[k]!==undefined)$('rule_'+k).value=r[k]});if($('pickerUrl'))$('pickerUrl').value=c.url||$('url')?.value||'';syncProfileAcrossTabs()}
+function apply(c){if(!c)return;
+  // 10.209 auto-resume picker job if exists
+  try{
+    const _jid = localStorage.getItem('pickerJobId');
+    if(_jid){
+      fetch('/api/picker/status/'+_jid).then(r=>r.json()).then(j=>{
+        if(j.ok && j.job && j.job.status==='running'){
+          if(typeof _pickerToast==='function') _pickerToast('⏳ ادامه رندر قبلی در پس‌زمینه…', '');
+          // re-attach polling
+          let _t=setInterval(async()=>{
+            const rr=await fetch('/api/picker/status/'+_jid);
+            const jj=await rr.json();
+            if(jj.ok && jj.job.status==='done'){
+              clearInterval(_t);
+              document.getElementById('pickerFrameWrap')?.classList.add('open');
+              const fr=document.getElementById('pickerFrame');
+              if(fr) fr.src='/api/picker/result/'+_jid;
+              if(typeof _pickerToast==='function') _pickerToast('✅ رندر قبلی آماده شد — نمایش خودکار', 'ok');
+            } else if(jj.ok && jj.job.status==='failed'){
+              clearInterval(_t);
+            }
+          }, 1000);
+        } else if(j.ok && j.job && j.job.status==='done'){
+          const fr=document.getElementById('pickerFrame');
+          if(fr){ document.getElementById('pickerFrameWrap')?.classList.add('open'); fr.src='/api/picker/result/'+_jid; }
+        }
+      }).catch(()=>{});
+    }
+  }catch(e){}['url','pages','render','fetch_engine','pagination','page_value','scrolls','detail_scope','detail_limit'].forEach(k=>{if(c[k]!==undefined&&$(k))$(k).value=c[k]});try{if(window.updatePaginationPlaceholder)window.updatePaginationPlaceholder();}catch(e){}if($('fetch_engine_master'))$('fetch_engine_master').value=c.fetch_engine_master||'';if(typeof updateEngineHint==='function')updateEngineHint();if($('enrich'))$('enrich').value=c.enrich?'1':'0';Object.entries(c.selectors||{}).forEach(([k,v])=>{if($('sel_'+k))$('sel_'+k).value=v||''});Object.entries(c.detail_selectors||{}).forEach(([k,v])=>{if($('det_'+k))$('det_'+k).value=v||''});(function(g){g=c.gallery||{};if($('galMode'))$('galMode').value=g.mode||'auto';if($('galBox'))$('galBox').value=g.box||'';if($('galSelectors'))$('galSelectors').value=g.selectors||'';if($('galPattern'))$('galPattern').value=g.pattern||'';if($('galFrom'))$('galFrom').value=g.from||1;if($('galTo'))$('galTo').value=g.to||10;if($('galSkipFirst'))$('galSkipFirst').checked=!!g.skip_first;if(typeof galModeChanged==='function')galModeChanged()})();let r=c.profile_rules||{};['title_prefix','title_suffix','price_mode','price_value','price_round','default_stock','default_category','bsl_category_id','woo_category_id','woo_price_mode','woo_price_value','woo_price_round','bsl_price_mode','bsl_price_value','bsl_price_round'].forEach(k=>{if($('rule_'+k)&&r[k]!==undefined)$('rule_'+k).value=r[k]});if($('pickerUrl'))$('pickerUrl').value=c.url||$('url')?.value||'';syncProfileAcrossTabs()}
 function syncProfileAcrossTabs(){const u=$('url')?.value||'';if($('pickerUrl')&&u)$('pickerUrl').value=u;if($('dispatchProfile')&&activeProfile)$('dispatchProfile').value=activeProfile;if($('dispatchProfileBasalam')&&activeProfile)$('dispatchProfileBasalam').value=activeProfile}
 function asciiFile(file,fallback){if(!file)return file;let n=String(file.name||fallback||'upload.bin'),s='';for(let i=0;i<n.length;i++){const c=n.charCodeAt(i);s+=(c>=32&&c<=126)?n[i]:'_'}if(!/[A-Za-z0-9]/.test(s))s=fallback||'upload.bin';return new File([file],s,{type:file.type||'application/octet-stream'})}
 function headerLatin(v){const s=String(v??'');for(let i=0;i<s.length;i++) if(s.charCodeAt(i)>255) return encodeURIComponent(s);return s}
