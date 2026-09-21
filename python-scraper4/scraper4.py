@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.199"
+APP_VERSION = "10.200"
 CHANGELOG = [
+    {"version":"10.200","date":"2026-09-21","title":"رفع مسیر wconsole_data و سلکتور دیجی‌کالا","items":["مسیر PythonAnywhere/wconsole_data اصلاح شد: PLAYWRIGHT_BROWSERS_PATH حالا دقیقاً /var/www/html/.wconsole_data/projects/python-scraper4-.../ms-playwright را نشان می‌دهد و دستور نصب همان مسیر را پیشنهاد می‌کند","دیجی‌کالا وقتی 5 سلکتور دستی پر است دیگر کشف خودکار را بلوکه نمی‌کند؛ اگر DOM=0 بود سلکتورها خودکار بازنویسی می‌شوند","پیشنهاد مرورگر برای دیجی‌کالا کوتاه و بدون قطع شد: دستور یک‌خطی bash tools/install_chromium_mirror.sh برای همین پروژه کافی است"]},
     {"version":"10.199","date":"2026-09-20","title":"دستورات نصب پلی‌رایت/کرومیوم از ایران داخل سایت و اینجا","items":["دستورات نصب ایران (cdn.playwright.dev مسدود است) هم داخل هدر scraper4.py و هم در API /api/install-commands و پیام خطای مرورگر اضافه شد","برای VPS: bash tools/install_chromium_mirror.sh (آینه npmmirror) و برای PythonAnywhere: PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium","عیب‌یابی دیجی‌کالا اکنون بدون مرورگر هم با curl_cffi/cloudscraper کار می‌کند و پیام خطا دیگر نصفه نمی‌ماند"]},
     {"version":"10.198","date":"2026-09-20","title":"بهبود دیجی‌کالا و خطای مرورگر روی هاست اشتراکی","items":["دیجی‌کالا (و سایت‌های ضدبات) حالا بدون نیاز به مرورگر هم استخراج می‌شود: curl_cffi/cloudscraper در auto قبل از playwright امتحان می‌شوند و اگر playwright روی هاست اشتراکی نصب نباشد، به‌صورت خودکار به موتورهای HTTP برمی‌گردد","پیام خطای مرورگر دقیق‌تر شد: اگر Executable پیدا نشد، مسیر درست PLAYWRIGHT_BROWSERS_PATH و دستور نصب ویژه PythonAnywhere/wconsole_data نمایش داده می‌شود","پشتیبانی از chromium سیستمی (/usr/bin/chromium) به عنوان fallback حتی وقتی playwright نصب نیست؛ عیب‌یابی دیجی‌کالا دیگر با 0 محصول تمام نمی‌شود"]},
     {"version":"10.197","date":"2026-09-20","title":"ثبت دستورات نصب کامل وابستگی‌ها داخل اسکریپر","items":["بخش راهنمای بالای scraper4.py با تمام دستورات pip برای هسته، fetch، مرورگر، پارس و مقصدها به‌روزرسانی شد؛ دستور یک‌خطی نصب کامل و نصب سریع بدون مرورگر هم اضافه شد","پیام خطای Missing dependency حالا به requirements.txt و لیست کامل بسته‌ها اشاره می‌کند","دستورات نصب داخل کد و در پاسخ همین گفتگو مستند شد تا نصب آفلاین/دستی بدون ابهام باشد"]},
@@ -1986,11 +1987,17 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                 # Provide hosting-aware guidance (PythonAnywhere uses /var/www/.wconsole_data)
                 _host = "pythonanywhere" if "/var/www" in (browser_path or "") or ".wconsole_data" in (browser_path or "") else "vps" if VPS_MODE else "shared"
                 if _host == "pythonanywhere":
-                    hint = ("روی PythonAnywhere (هاست شما .wconsole_data):\n"
-                            "  pip install --user -U playwright\n"
-                            "  PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium\n"
-                            "  # از ایران - آینه:\n"
-                            "  bash python-scraper4/tools/install_chromium_mirror.sh")
+                    # wconsole_data host: browsers must be in projects/.../ms-playwright, not $HOME/.cache
+                    _proj = "/var/www/html/.wconsole_data/projects/python-scraper4-5465c80dbc/ms-playwright"
+                    # Try to detect actual BASE_DIR at runtime
+                    try:
+                        _proj = os.path.join(BASE_DIR, "ms-playwright")
+                    except Exception:
+                        pass
+                    hint = ("روی هاست شما (.wconsole_data/wpy):\n"
+                            f"  cd /var/www/html/.wconsole_data/projects/python-scraper4-5465c80dbc && bash tools/install_chromium_mirror.sh\n"
+                            f"  # یا دستی: PLAYWRIGHT_BROWSERS_PATH={_proj} python -m playwright install chromium\n"
+                            "  # از ایران آینه خودکار است؛ بعد Reload بزنید")
                 else:
                     hint = ("نصب کامل:\n"
                             "  pip install -r python-scraper4/requirements.txt\n"
@@ -3060,9 +3067,19 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
         # manual selectors — then the page is re-read with them. Only fully
         # custom *and* valid/verified selectors skip discovery, so hand-tuned
         # profiles stay untouched while broken selectors are auto-fixed.
+        # 10.200 force discovery for Digikala when generic selectors yield 0
+        _force_discovery = (not rows and page_html and "digikala" in (url or "").lower())
         if number == start_page and page_html:
             try:
+                if _force_discovery:
+                    # Temporarily clear selectors to force discovery
+                    _orig_sel = dict(selectors)
+                    selectors = {}
                 ensured=ensure_list_selectors(page_html,url,selectors)
+                if _force_discovery and ensured.get("discovered"):
+                    report.logs.append("دیجی‌کالا: سلکتورهای نادرست پاک و خودکار کشف شد")
+                elif _force_discovery:
+                    selectors = _orig_sel
             except Exception as exc:
                 ensured={"selectors":selectors};report_error("selector_discovery",exc)
             discovered=ensured.get("discovered") or {}
