@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.216"
+APP_VERSION = "10.217"
 CHANGELOG = [
+    {"version":"10.217","date":"2026-09-21","title":"پایداری سرویس + حفظ غرفه‌های ناقص + عیب‌یابی وب‌کنسول","items":["رفع ریست غرفه‌ها پس از رفرش: غرفه با شناسه ۰ یا توکن خالی دیگر حذف نمی‌شود — به‌صورت پیش‌نویس ذخیره می‌ماند تا کاربر شناسه را پر کند","پایداری سرویس وب‌کنسول: هندل خطای DATA_FILE غیرقابل‌نوشتن و fallback به مسیر موقت؛ /api/health و /api/node-parity حالا وضعیت دیسک و خطای bridge را هم گزارش می‌دهند","لاگ اتو آپدیت و heartbeat دیگر باعث خروج -1 نمی‌شود: Supervisorها خطای IO را لاگ می‌کنند و سرویس زنده می‌ماند","دکمه همبرگری → اتصال باسلام: تست تکی هر غرفه هم کارت کامل SDK/REST را نشان می‌دهد و auto_fixed فقط نام‌های ژنریک را ترمیم می‌کند — دوبلیکیت صفر حذف نمی‌شود تا تنظیمات ناپدید نشود"]},
     {"version":"10.216","date":"2026-09-21","title":"منوی همبرگری باسلام کامل + اتوسیو پروفایل + ترمیم فسادها + parity نمایشی","items":["منوی همبرگری → اتصال باسلام: تست همه غرفه‌ها و هر غرفه تکی حالا کارت کامل با نام کاربر، موبایل/ایمیل، عنوان/شناسه/شهر/امتیاز/وضعیت غرفه و کلاینت SDK/REST را نشان می‌دهد","ذخیره خودکار پروفایل فعال شد: هر تغییر در منبع، صفحه‌بندی، سلکتورها، قوانین قیمت و گالری با debounce روی سرور می‌ماند — دیگر با رفرش از بین نمی‌رود","ترمیم خودکار فسادها گسترش یافت: حذف vendor_id صفر/تکراری، پر کردن نام غرفه خالی/ژنریک، همگام‌سازی shop_name و name کاربر بعد از هر تست موفق","تطبیق نمایشی با نود جی‌اس: دکمه بررسی parity در /ui و تب نسخه، گزارش زنده از فایل مشترک scraper4_data.json، کلیدهای ui_settings و تعداد غرفه‌ها"]},
     {"version":"10.215","date":"2026-09-21","title":"Basalam full user/shop details + auto-fix + fully autosave settings + Node parity","items":["دکمه‌های تست باسلام اکنون برای هر غرفه اطلاعات کامل کاربر (نام، شناسه، موبایل، ایمیل) و غرفه (عنوان، شناسه یکتا، شهر، امتیاز، وضعیت، URL) را با کلاینت SDK/REST نمایش می‌دهد","تست همه غرفه‌ها به‌صورت خودکار فسادها را پر می‌کند: نام خالی/ژنریک غرفه، vendor_id ناقص و نام کاربر — و بلافاصله روی سرور ذخیره می‌کند (auto_fixed)","تنظیمات کاملاً اتوسیو شد: هر تغییر در اتصال مرکزی، ووکامرس، باسلام و فونت با debounce خودکار ذخیره می‌شود — دیگر با رفرش یا آپدیت کد از بین نمی‌رود","پایداری تنظیمات پس از آپدیت کد: load_data اکنون کلیدهای ناشناس را هم حفظ می‌کند تا ui_settings و ماژول‌های آینده با rsync --delete یا تغییر نسخه پاک نشوند","تطبیق کامل با نسخه نود جی‌اس: نگاشت تنظیمات، پروفایل‌ها، appearance/fontScale و اتصالات یکسان‌سازی شد و dashboards / و /ui از یک scraper4_data.json می‌خوانند"]},
     {"version":"10.214","date":"2026-09-21","title":"Basalam test shows all shops + font persists after refresh + full debug pass","items":["دکمه تست باسلام حالا همه غرفه‌ها (پیش‌فرض + غرفه‌های اضافی) را با SDK اول و سپس REST تست می‌کند و برای هر غرفه نام کاربر، شناسه و عنوان غرفه را جداگانه نمایش می‌دهد","رفع باگ فونت: انتخاب اندازه حالا علاوه بر localStorage روی سرور (ui_settings.appearance.fontScale) هم ذخیره می‌شود و هنگام رفرش اگر localStorage خالی باشد از سرور بازیابی می‌شود — دیگر به پیش‌فرض برنمی‌گردد","بررسی کامل کد از اول تا آخر و رفع باگ‌های باقی‌مانده: همگام‌سازی bslAllShopEntries در مودال محصول، ذخیره ضرایب تعدیل بدون 405، و نمایش خطای 500 باسلام با جزئیات غرفه"]},
@@ -513,21 +514,39 @@ def load_data() -> dict[str, Any]:
 
 
 def save_data(data: dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(DATA_FILE) or ".", exist_ok=True)
-    with DATA_LOCK:
-        fd, tmp = tempfile.mkstemp(prefix=".scraper4-", suffix=".json", dir=os.path.dirname(DATA_FILE) or ".")
+    # 10.217: resilient save — fallback to BASE_DIR if persistent path not writable (WebConsole permission)
+    try:
+        os.makedirs(os.path.dirname(DATA_FILE) or ".", exist_ok=True)
+    except OSError as _e:
+        app.logger.warning("save_data makedirs failed for %s: %s", DATA_FILE, _e)
+    last_err = None
+    for cand in (DATA_FILE, os.path.join(BASE_DIR, "scraper4_data.json"), os.path.join(tempfile.gettempdir(), "scraper4_data.json")):
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, DATA_FILE)
-        finally:
-            try:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-            except OSError:
-                pass
+            ddir = os.path.dirname(cand) or "."
+            os.makedirs(ddir, exist_ok=True)
+            with DATA_LOCK:
+                fd, tmp = tempfile.mkstemp(prefix=".scraper4-", suffix=".json", dir=ddir)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        json.dump(data, fh, ensure_ascii=False, indent=2)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.replace(tmp, cand)
+                    if cand != DATA_FILE:
+                        app.logger.warning("save_data fallback used: %s (primary %s not writable)", cand, DATA_FILE)
+                    return
+                finally:
+                    try:
+                        if os.path.exists(tmp):
+                            os.unlink(tmp)
+                    except OSError:
+                        pass
+        except Exception as _e:
+            last_err = _e
+            app.logger.warning("save_data failed for %s: %s", cand, _e)
+            continue
+    # if all fallbacks fail, raise with context
+    raise RuntimeError(f"save_data failed for {DATA_FILE}: {last_err}")
 
 
 # ---------------------------------------------------------------------------
@@ -4626,12 +4645,22 @@ def health():
     except Exception:
         flask_ver = "unknown"
     enabled, interval = _auto_update_from_data()
+    # 10.217 disk diag for WebConsole exit -1 diagnosis
+    try:
+        _wok = os.access(os.path.dirname(DATA_FILE) or ".", os.W_OK)
+        _exists = os.path.isfile(DATA_FILE)
+        _size = os.path.getsize(DATA_FILE) if _exists else 0
+    except Exception:
+        _wok = False
+        _exists = False
+        _size = 0
     return jsonify(ok=True, version=APP_VERSION, build=BUILD_ID, edition="vps", php_parity="10.123", python=platform.python_version(), flask=flask_ver,
                    vps_mode=VPS_MODE, max_pages=MAX_PAGES_HARD, max_products=MAX_PRODUCTS_HARD,
                    stall_after=STALL_AFTER, heartbeat=HEARTBEAT_STATE, url_prefix=URL_PREFIX,
                    auto_update=enabled, auto_update_interval=interval, update_error=AUTO_UPDATE_STATE["error"],
                    ui_bridge=globals().get("UI_BRIDGE_READY", False),
                    ui_bridge_error=globals().get("UI_BRIDGE_ERROR", "bridge block missing from this file"),
+                   data_file=DATA_FILE, data_file_writable=_wok, data_file_exists=_exists, data_file_size=_size,
                    last_error=(recent_errors(1)[-1] if recent_errors(1) else None), error_log=ERROR_LOG_PATH)
 
 
@@ -4893,16 +4922,29 @@ def api_appearance():
 
 @app.route("/api/node-parity", methods=["GET"])
 def api_node_parity():
-    """10.215: report parity between Python classic and Node dashboard (/ui) storage."""
+    """10.217: parity + disk diag — reports writability so WebConsole exit -1 can be diagnosed."""
     data = load_data()
     ui = data.get("ui_settings") or {}
-    basalam_shops = bsl_all_shops(data.get("basalam") or {})
+    bsl = data.get("basalam") or {}
+    basalam_shops = bsl_all_shops(bsl)
+    try:
+        _wok = os.access(os.path.dirname(DATA_FILE) or ".", os.W_OK)
+    except Exception:
+        _wok = False
+    try:
+        _exists = os.path.isfile(DATA_FILE)
+        _size = os.path.getsize(DATA_FILE) if _exists else 0
+    except Exception:
+        _exists = False
+        _size = 0
     return jsonify(ok=True, version=APP_VERSION, node_version="1.183.0",
-                   data_file=DATA_FILE,
+                   data_file=DATA_FILE, data_file_writable=_wok, data_file_exists=_exists, data_file_size=_size,
                    ui_settings_keys=list(ui.keys()),
                    appearance=ui.get("appearance", {}),
-                   basalam={"vendor_id": (data.get("basalam") or {}).get("vendor_id"), "shop_count": len(basalam_shops), "vendor_ids": [s["vendor_id"] for s in basalam_shops]},
-                   parity={"storage": "scraper4_data.json (shared classic+/ui)", "shared": True, "auto_save": "debounced 900-1100ms for all groups"})
+                   basalam={"vendor_id": bsl.get("vendor_id"), "shop_count": len(basalam_shops), "vendor_ids": [s["vendor_id"] for s in basalam_shops], "auto_save": True, "vendors_raw": bsl.get("vendors") or [], "masked_shop_count": len(bsl.get("vendors") or [])},
+                   parity={"storage": "scraper4_data.json (shared classic+/ui)", "shared": True, "auto_save": "debounced"},
+                   bridge={"ready": UI_BRIDGE_READY, "error": UI_BRIDGE_ERROR},
+                   note="10.217: drafts (vid 0) kept, not deleted; disk diag included")
 
 
 @app.route("/api/settings", methods=["GET", "POST", "PUT", "PATCH"])
@@ -6633,6 +6675,7 @@ def basalam_use_cfg(cfg: dict[str, Any]) -> _BasalamCfgCtx:
 
 
 def bsl_merge_vendors(old_rows: list, incoming: list) -> list[dict[str, Any]]:
+    # 10.217: keep incomplete drafts (vid==0 or empty token) so they don't disappear on refresh
     old_by_vid: dict[int, dict[str, Any]] = {}
     for row in old_rows or []:
         if not isinstance(row, dict):
@@ -6640,16 +6683,38 @@ def bsl_merge_vendors(old_rows: list, incoming: list) -> list[dict[str, Any]]:
         vid = int(row.get("vendor_id") or 0)
         if vid > 0:
             old_by_vid[vid] = row
+        elif vid == 0:
+            # keep zero-id drafts keyed by token tail for masked restore
+            old_by_vid[0] = row
     out: list[dict[str, Any]] = []
     seen: set[int] = set()
-    for row in incoming or []:
+    for idx, row in enumerate(incoming or []):
         if not isinstance(row, dict):
             continue
         vid = int(row.get("vendor_id") or 0)
         tok = str(row.get("token") or "").strip()
         if tok.startswith("••••"):
-            tok = str((old_by_vid.get(vid) or {}).get("token") or "").strip()
-        if vid <= 0 or not tok:
+            # restore full token from previous save by vendor_id; for vid==0 try first old zero entry
+            if vid > 0:
+                tok = str((old_by_vid.get(vid) or {}).get("token") or "").strip()
+            else:
+                # incomplete draft with masked token — keep as is, don't drop
+                tok = str((old_by_vid.get(0) or {}).get("token") or tok).strip()
+                # if still masked, keep masked so frontend can show placeholder without losing draft
+                if tok.startswith("••••"):
+                    pass
+        # 10.217: do NOT drop incomplete drafts; keep them so UI doesn't lose them after refresh
+        if vid <= 0 or not tok or tok.startswith("••••"):
+            # keep draft but normalize token if it's masked and we have original, otherwise keep masked placeholder
+            # drafts are kept with vid 0 so they stay visible until user fills id
+            out.append({
+                "vendor_id": vid,
+                "token": tok if tok else str(row.get("token") or "").strip(),
+                "shop_name": clean_text(row.get("shop_name") or row.get("name") or (f"غرفه {vid}" if vid>0 else "غرفه جدید")),
+                "name": clean_text(row.get("name") or ""),
+                "price_mode": str(row.get("price_mode") or "none"),
+                "price_val": float(row.get("price_val") or 0),
+            })
             continue
         if vid in seen:
             continue
@@ -6662,7 +6727,21 @@ def bsl_merge_vendors(old_rows: list, incoming: list) -> list[dict[str, Any]]:
             "price_mode": str(row.get("price_mode") or "none"),
             "price_val": float(row.get("price_val") or 0),
         })
-    return out
+    # de-duplicate zero-id drafts: keep at most one per position, drop pure empties (vid==0 and token=="" and no name)
+    filtered=[]
+    for r in out:
+        if r["vendor_id"]==0 and not r["token"] and not r["shop_name"].strip() not in ("", "غرفه جدید"):
+            # keep if user started filling something
+            if not r["token"] and r["shop_name"]=="غرفه جدید":
+                continue
+        filtered.append(r)
+    # if we kept too many empty drafts, keep only last 5
+    if len(filtered)>20:
+        # keep valid (>0) plus last 5 drafts
+        valid=[x for x in filtered if x["vendor_id"]>0]
+        drafts=[x for x in filtered if x["vendor_id"]==0][-5:]
+        filtered=valid+drafts
+    return filtered
 
 
 def bsl_all_shops(cfg: Optional[dict[str, Any]] = None, selected_vids: Any = None) -> list[dict[str, Any]]:
@@ -6944,25 +7023,23 @@ def api_basalam_test():
                     data = load_data()
                     bsl = data.get("basalam") or {}
                     need_save = False
-                    # 1) clean vendor list: remove zero ids and duplicates (keep first)
+                    # 1) clean vendor list: deduplicate only (10.217: keep zero-id drafts, don't delete on auto-fix)
                     vendors = bsl.get("vendors") or []
                     seen = set()
                     cleaned = []
+                    dup_found = False
                     for v in vendors:
                         if not isinstance(v, dict):
                             continue
                         vid2 = int(v.get("vendor_id") or 0)
-                        tok2 = str(v.get("token") or "").strip()
-                        if vid2 <= 0:
+                        if vid2 > 0 and vid2 in seen:
+                            dup_found = True
                             need_save = True
                             continue
-                        if vid2 in seen:
-                            need_save = True
-                            continue
-                        # keep masked entries as-is (they represent real token), don't drop on masked prefix
-                        seen.add(vid2)
+                        if vid2 > 0:
+                            seen.add(vid2)
                         cleaned.append(v)
-                    if len(cleaned) != len(vendors):
+                    if dup_found and len(cleaned) != len(vendors):
                         bsl["vendors"] = cleaned
                         need_save = True
                     for entry in out_shops:
