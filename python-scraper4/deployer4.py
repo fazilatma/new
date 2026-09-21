@@ -59,10 +59,10 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 
-# 1.4.0: installs the dashboard files (ui_bridge.py + ui/) alongside
-# scraper4.py, adds POST /api/install-dashboard, defaults to this fork instead
-# of the dashboard-less upstream, and auto-update is off by default.
-DEPLOYER_VERSION = "1.4.0"
+# 1.5.0: deploys the complete Node-parity unit atomically (bridge, extension,
+# pinned manifest, dashboard/PWA assets) and rolls scraper4.py back rather than
+# restarting a partial installation.
+DEPLOYER_VERSION = "1.5.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # فایل اصلی سایت که باید آپدیت شود. پیش‌فرض: scraper4.py کنار همین فایل.
@@ -509,15 +509,14 @@ def github_file_for(
     if not branch_cleaned:
         raise ValueError("نام برنچ معتبر نیست")
     remote_path = str(remote_path or "").strip("/")
-    # .html/.js are needed for the dashboard (ui/dashboard.*); .json for the
-    # AI provider catalogue. Everything else stays rejected, and ".." is still
-    # refused so a crafted path cannot escape the repo.
+    # Dashboard/PWA installation also needs JSON catalogues and PNG icons.
+    # Everything else stays rejected, and ".." is still refused.
     if (
         not remote_path
-        or not remote_path.endswith((".py", ".html", ".js", ".json"))
+        or not remote_path.endswith((".py", ".html", ".js", ".json", ".png"))
         or ".." in remote_path.split("/")
     ):
-        raise ValueError("مسیر منبع باید یک فایل امن با پسوند py/html/js/json باشد")
+        raise ValueError("مسیر منبع باید یک فایل امن با پسوند py/html/js/json/png باشد")
     try:
         return git_file_for(repo, branch_cleaned, remote_path, include_content)
     except FetchError as git_exc:
@@ -684,25 +683,24 @@ def ensure_ui_bridge_block(content: bytes, target: str) -> bytes:
     return merged.encode("utf-8")
 
 
-# Files that make up the Node-parity dashboard. scraper4.py imports ui_bridge
-# defensively, so when these are missing the app still boots but silently
-# serves only the classic UI and /ui returns 404. Installing scraper4.py alone
-# is therefore not enough — these have to travel with it.
+# Files that make up the Node-parity API/dashboard/PWA. Installing scraper4.py
+# alone is not enough — the extension, pinned contract and assets travel with it.
 DASHBOARD_FILES = (
     "python-scraper4/ui_bridge.py",
+    "python-scraper4/parity_ext.py",
+    "python-scraper4/parity-manifest.json",
     "python-scraper4/ui/dashboard.html",
     "python-scraper4/ui/dashboard.js",
+    "python-scraper4/ui/workers-ai-catalog.json",
+    "python-scraper4/ui/app-icon-192.png",
+    "python-scraper4/ui/app-icon-512.png",
 )
 
 
 def install_dashboard(
     repo: str, branch: str, token: str, target_dir: str
 ) -> dict[str, Any]:
-    """Download ui_bridge.py + ui/ next to scraper4.py.
-
-    Returns a summary instead of raising: the dashboard is an enhancement, so
-    a failure here must not undo an otherwise good scraper4.py install.
-    """
+    """Download the parity extension, contract manifest and UI/PWA assets."""
     installed: list[str] = []
     errors: list[str] = []
     for remote in DASHBOARD_FILES:
@@ -1035,10 +1033,17 @@ def install_branch(requested_branch: str = "") -> dict[str, Any]:
         except OSError as exc:
             raise FetchError(f"فایل اصلی قابل خواندن نیست: {exc}") from exc
         if git_blob_sha(current) == target_cand["sha"]:
+            dashboard = install_dashboard(
+                cfg["repo"], target_cand["branch"], cfg.get("github_token", ""),
+                os.path.dirname(os.path.abspath(cfg["target"])) or ".")
+            if not dashboard["ok"]:
+                raise FetchError("فایل‌های parity کامل نشد: " + "؛ ".join(dashboard["errors"][:3]))
             return {
-                "changed": False, "message": "همین نسخه اکنون نصب است",
+                "changed": False,
+                "message": "همین نسخه اکنون نصب است؛ فایل‌های parity نیز بررسی شدند",
                 "version": new_version, "branch": target_cand["branch"],
                 "newest_branch": target_cand["branch"], "newest_version": new_version,
+                "dashboard": dashboard,
             }
         target = cfg["target"]
         try:
@@ -1052,6 +1057,13 @@ def install_branch(requested_branch: str = "") -> dict[str, Any]:
         dashboard = install_dashboard(
             cfg["repo"], target_cand["branch"], cfg.get("github_token", ""),
             os.path.dirname(os.path.abspath(target)) or ".")
+        required_names = {path.split("python-scraper4/", 1)[-1] for path in DASHBOARD_FILES}
+        missing = sorted(required_names - set(dashboard["installed"]))
+        if missing:
+            # parity_ext is boot-critical for this build. Restore scraper4.py
+            # instead of restarting into a knowingly partial deployment.
+            atomic_write(target, current, old_mode)
+            raise FetchError("نصب ناقص parity؛ فایل اصلی برگردانده شد: " + ", ".join(missing))
         reloaded = touch_reload_file(cfg["reload_file"]) if cfg["reload_file"] else False
         pa_reloaded = pythonanywhere_reload()
         vps_reloaded = restart_scraper_process()
@@ -1363,9 +1375,9 @@ def api_install_dashboard():
     # install_dashboard() has its own "ok" key; drop it so it cannot collide
     # with the envelope's ok flag when splatted into jsonify().
     detail = {k: v for k, v in result.items() if k != "ok"}
-    if not result["installed"]:
+    if not result["ok"]:
         return jsonify(ok=False,
-                       error="هیچ فایلی نصب نشد: " + "؛ ".join(result["errors"][:3]),
+                       error="نصب parity کامل نشد: " + "؛ ".join(result["errors"][:3]),
                        **detail), 400
     restarted = restart_scraper_process()
     return jsonify(

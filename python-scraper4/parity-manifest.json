@@ -1,0 +1,744 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-09-21",
+  "source": {
+    "repository": "fazilatma/new",
+    "ref": "arena/01a0aa17-new",
+    "commit": "dfd6cc7fede31622ac15be90c15eb21b7f549ece",
+    "runtime": "cloudflare-scraper4",
+    "version": "1.211.1+"
+  },
+  "target": {
+    "runtime": "python-scraper4",
+    "minimumVersion": "10.217"
+  },
+  "normalization": "Dynamic path parameters are represented as <>.",
+  "requiredRoutes": [
+    {
+      "method": "DELETE",
+      "path": "/api/agent/prompts/<>"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/agent/runs/<>"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/destination/<>/<>"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/jobs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/jobs/<>"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/profiles/<>"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/profiles/<>/products"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/profiles/<>/products/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/activity"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/models"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/prompts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/runs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/runs/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/runs/current"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/templates"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/tools"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/chat-models"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/description-settings"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/diagnose"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/leaderboard"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/providers"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/test-results"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/test-runs/current"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai/workers-catalog"
+    },
+    {
+      "method": "GET",
+      "path": "/api/autoreply/log"
+    },
+    {
+      "method": "GET",
+      "path": "/api/backup"
+    },
+    {
+      "method": "GET",
+      "path": "/api/basalam/chats"
+    },
+    {
+      "method": "GET",
+      "path": "/api/basalam/chats/<>/messages"
+    },
+    {
+      "method": "GET",
+      "path": "/api/basalam/orders"
+    },
+    {
+      "method": "GET",
+      "path": "/api/bootstrap/status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/branch-file"
+    },
+    {
+      "method": "GET",
+      "path": "/api/branch-files"
+    },
+    {
+      "method": "GET",
+      "path": "/api/branch-push-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/categories/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/category-fix-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/category-learning"
+    },
+    {
+      "method": "GET",
+      "path": "/api/connections"
+    },
+    {
+      "method": "GET",
+      "path": "/api/debug"
+    },
+    {
+      "method": "GET",
+      "path": "/api/deployer/branches"
+    },
+    {
+      "method": "GET",
+      "path": "/api/deployer/local/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/<>/dedup-runs/current"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/<>/duplicates"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/<>/overview"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/<>/product/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/<>/products"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/basalam/category-runs/current"
+    },
+    {
+      "method": "GET",
+      "path": "/api/destination/basalam/category-tried"
+    },
+    {
+      "method": "GET",
+      "path": "/api/github/token-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/import/history"
+    },
+    {
+      "method": "GET",
+      "path": "/api/jobs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/jobs/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/libraries"
+    },
+    {
+      "method": "GET",
+      "path": "/api/maintenance/ledger"
+    },
+    {
+      "method": "GET",
+      "path": "/api/maintenance/recon-accounts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/parity"
+    },
+    {
+      "method": "GET",
+      "path": "/api/profile-stats"
+    },
+    {
+      "method": "GET",
+      "path": "/api/profiles"
+    },
+    {
+      "method": "GET",
+      "path": "/api/profiles/<>/export.csv"
+    },
+    {
+      "method": "GET",
+      "path": "/api/profiles/<>/products"
+    },
+    {
+      "method": "GET",
+      "path": "/api/quota"
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime/libraries"
+    },
+    {
+      "method": "GET",
+      "path": "/api/selftest"
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings"
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings-export"
+    },
+    {
+      "method": "GET",
+      "path": "/api/status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/version"
+    },
+    {
+      "method": "GET",
+      "path": "/api/web-push/config"
+    },
+    {
+      "method": "GET",
+      "path": "/app-icon-192.png"
+    },
+    {
+      "method": "GET",
+      "path": "/app-icon-512.png"
+    },
+    {
+      "method": "GET",
+      "path": "/app-icon.svg"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/fonts/<>"
+    },
+    {
+      "method": "GET",
+      "path": "/dashboard.js"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/legacy/backup"
+    },
+    {
+      "method": "GET",
+      "path": "/legacy/jobs"
+    },
+    {
+      "method": "GET",
+      "path": "/legacy/profiles"
+    },
+    {
+      "method": "GET",
+      "path": "/legacy/profiles/<>/products"
+    },
+    {
+      "method": "GET",
+      "path": "/manifest.webmanifest"
+    },
+    {
+      "method": "GET",
+      "path": "/setup"
+    },
+    {
+      "method": "GET",
+      "path": "/sw.js"
+    },
+    {
+      "method": "GET",
+      "path": "/visual"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agent/prompts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agent/prompts/<>/run"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agent/runs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agent/runs/control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agent/runs/reset"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/call"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/description-settings"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/diagnose"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/test-all"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/test-runs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/test-runs/control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/test-runs/reset"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/test-runs/retry"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/vote"
+    },
+    {
+      "method": "POST",
+      "path": "/api/autoreply/run"
+    },
+    {
+      "method": "POST",
+      "path": "/api/autoreply/test"
+    },
+    {
+      "method": "POST",
+      "path": "/api/branch-push"
+    },
+    {
+      "method": "POST",
+      "path": "/api/category-learning/import"
+    },
+    {
+      "method": "POST",
+      "path": "/api/category-learning/record"
+    },
+    {
+      "method": "POST",
+      "path": "/api/category-learning/test"
+    },
+    {
+      "method": "POST",
+      "path": "/api/connections"
+    },
+    {
+      "method": "POST",
+      "path": "/api/deployer/install-branch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/deployer/local/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/<>/<>/status"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/<>/<>/update"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/<>/bulk"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/<>/dedup-runs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/<>/dedup-runs/control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/<>/dedup-runs/reset"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/basalam/category-runs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/basalam/category-runs/control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/basalam/category-runs/reset"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/basalam/category-tried"
+    },
+    {
+      "method": "POST",
+      "path": "/api/destination/basalam/category/suggest"
+    },
+    {
+      "method": "POST",
+      "path": "/api/digest"
+    },
+    {
+      "method": "POST",
+      "path": "/api/extract/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/import-php"
+    },
+    {
+      "method": "POST",
+      "path": "/api/import/analyze"
+    },
+    {
+      "method": "POST",
+      "path": "/api/import/history/clear"
+    },
+    {
+      "method": "POST",
+      "path": "/api/jobs/<>/retry"
+    },
+    {
+      "method": "POST",
+      "path": "/api/jobs/<>/start"
+    },
+    {
+      "method": "POST",
+      "path": "/api/jobs/<>/stop"
+    },
+    {
+      "method": "POST",
+      "path": "/api/jobs/priority"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/bulk/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/duplicates"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/ledger/missing"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/ledger/products"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/ledger/refresh"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/photo-fix"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/rebuild/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/recon-table/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/recon-unified"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/recon-unified/apply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/recon/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/maintenance/retire/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/notifications/test"
+    },
+    {
+      "method": "POST",
+      "path": "/api/products/<>/<>/sync/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/ai-descriptions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/benchmark-engines"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/extract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/extraction-diagnostic"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/import"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/results/apply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/run"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/scrape"
+    },
+    {
+      "method": "POST",
+      "path": "/api/profiles/<>/sync"
+    },
+    {
+      "method": "POST",
+      "path": "/api/queue-watchdog"
+    },
+    {
+      "method": "POST",
+      "path": "/api/restore"
+    },
+    {
+      "method": "POST",
+      "path": "/api/runs/priority"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings-import"
+    },
+    {
+      "method": "POST",
+      "path": "/api/source-test"
+    },
+    {
+      "method": "POST",
+      "path": "/api/suggest-selectors"
+    },
+    {
+      "method": "POST",
+      "path": "/api/test-connection/<>"
+    },
+    {
+      "method": "POST",
+      "path": "/api/test-selector"
+    },
+    {
+      "method": "POST",
+      "path": "/api/visual-ticket"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web-push/subscribe"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web-push/test"
+    },
+    {
+      "method": "POST",
+      "path": "/api/web-push/unsubscribe"
+    },
+    {
+      "method": "POST",
+      "path": "/legacy/profiles"
+    },
+    {
+      "method": "POST",
+      "path": "/legacy/profiles/<>/extract"
+    },
+    {
+      "method": "POST",
+      "path": "/legacy/profiles/<>/sync"
+    },
+    {
+      "method": "POST",
+      "path": "/legacy/restore"
+    }
+  ],
+  "behavioralContracts": [
+    {
+      "id": "settings-vault",
+      "test": "NodeParityContracts.test_settings_and_connection_vault"
+    },
+    {
+      "id": "connection-diagnostics",
+      "test": "NodeParityContracts.test_connection_diagnostics_make_authenticated_probes"
+    },
+    {
+      "id": "backup-restore",
+      "test": "NodeParityContracts.test_backup_restore_round_trip"
+    },
+    {
+      "id": "dns-redirect-ssrf",
+      "test": "NodeParityContracts.test_dns_and_redirect_ssrf_guard"
+    },
+    {
+      "id": "visual-security",
+      "test": "NodeParityContracts.test_visual_ticket_is_secure_and_consume_once"
+    },
+    {
+      "id": "pwa-web-push",
+      "test": "NodeParityContracts.test_pwa_and_encrypted_push_subscription"
+    },
+    {
+      "id": "branch-atomic-split-backup",
+      "test": "NodeParityContracts.test_atomic_branch_push_contract"
+    },
+    {
+      "id": "category-run",
+      "test": "NodeParityContracts.test_persistent_category_run"
+    },
+    {
+      "id": "destination-maintenance",
+      "test": "NodeParityContracts.test_destination_and_duplicate_contracts"
+    },
+    {
+      "id": "reconciliation-photo-dedup",
+      "test": "NodeParityContracts.test_reconciliation_photo_and_persistent_dedup_apply"
+    },
+    {
+      "id": "watchdog",
+      "test": "NodeParityContracts.test_watchdog_recovers_stale_task"
+    },
+    {
+      "id": "ai",
+      "test": "NodeParityContracts.test_ai_call_and_batch"
+    },
+    {
+      "id": "ai-reset-race",
+      "test": "NodeParityContracts.test_ai_reset_does_not_resurrect_inflight_run"
+    },
+    {
+      "id": "source-key-path",
+      "test": "NodeParityContracts.test_profile_import_and_product_sync"
+    }
+  ]
+}

@@ -121,13 +121,12 @@ PY
 mv "$DOWN" "$APP_FILE"; DOWN=""; chmod 600 "$APP_FILE"
 echo "Installed Scraper4 $BEST_VERSION from $BEST_BRANCH"
 
-# The Node-parity dashboard (/ui) needs ui_bridge.py and ui/dashboard.*.
-# scraper4.py imports ui_bridge defensively, so without these the app still
-# boots but /ui silently 404s — install them from the same branch.
-echo "Installing dashboard files (/ui)..."
+# The Node-parity runtime needs its bridge, extension module, pinned manifest,
+# dashboard and PWA/catalog assets from the exact same branch.
+echo "Installing Node-parity files (/ui + API extensions)..."
 DASH_OK=1
 mkdir -p "$APP_DIR/ui"
-for REL in ui_bridge.py ui/dashboard.html ui/dashboard.js; do
+for REL in ui_bridge.py parity_ext.py parity-manifest.json ui/dashboard.html ui/dashboard.js ui/workers-ai-catalog.json ui/app-icon-192.png ui/app-icon-512.png; do
   DASH_URL="https://raw.githubusercontent.com/$REPO/$BEST_BRANCH/$SRC_DIR/$REL"
   DASH_TMP="$APP_DIR/.dash-tmp"
   if curl -fsSL --retry 2 --connect-timeout 20 --max-time 120 "$DASH_URL" -o "$DASH_TMP"; then
@@ -151,7 +150,7 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then "$SYSTEM_PY" -m venv "$VENV_DIR"; fi
 VENV_PY="$VENV_DIR/bin/python"; VENV_PIP="$VENV_DIR/bin/pip"
 # Free-plan quota: clear only disposable caches and install packages used by this app.
 rm -rf "$HOME_DIR/.cache/pip" "$HOME_DIR/.cache/ms-playwright" "$APP_DIR/__pycache__"
-PIP_NO_CACHE_DIR=1 "$VENV_PIP" install --no-cache-dir flask requests beautifulsoup4 lxml playwright basalam-sdk cloudscraper curl_cffi
+PIP_NO_CACHE_DIR=1 "$VENV_PIP" install --no-cache-dir flask requests beautifulsoup4 lxml playwright basalam-sdk cloudscraper curl_cffi pywebpush cryptography
 BROWSER_PATH="$APP_DIR/ms-playwright"
 export PLAYWRIGHT_BROWSERS_PATH="$BROWSER_PATH"
 echo "Installing the smaller Chromium Headless Shell for Playwright..."

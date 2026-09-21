@@ -94,6 +94,20 @@
 python3 python-scraper4/tools/test_auto_selectors.py
 ```
 
+## قرارداد تطبیق با Node.js
+
+فهرست API مرجع Node.js نسخهٔ `1.211.1+` (کامیت
+`dfd6cc7fede31622ac15be90c15eb21b7f549ece`) در
+`parity-manifest.json` ثابت شده است. بررسی اول، پوشش هر ۱۶۷ route، نبود route
+تکراری، نسخه، changelog و assetهای لازم را بدون شبکه کنترل می‌کند. بررسی دوم
+قراردادهای رفتاری و عملیات پرخطر را با adapterهای شبکهٔ mockشده اجرا می‌کند؛
+هیچ فروشگاه، سرویس Push، مدل AI یا ریپوی GitHub واقعی تغییر نمی‌کند.
+
+```bash
+python3 python-scraper4/tools/check_node_parity.py
+python3 python-scraper4/tools/test_node_parity_contracts.py
+```
+
 ## نسخه‌بندی
 
 نسخهٔ برنامه در `APP_VERSION` داخل `scraper4.py` است و **هر تغییر نسخه باید

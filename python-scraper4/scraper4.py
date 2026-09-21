@@ -97,19 +97,20 @@ import re
 import secrets
 import site
 import socket
+import ssl
 import subprocess
 import shutil
 import sys
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import time
 import traceback
 import logging
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dataclass_field
 from html import escape
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 
 try:
@@ -122,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.216"
+APP_VERSION = "10.217"
 CHANGELOG = [
+    {"version":"10.217","date":"2026-09-21","title":"تطبیق کامل API و داشبورد با Node 1.211.1+","items":["مانیفست ثابت ۱۶۷ قرارداد route از commit dfd6cc7 مرجع Node و checker آفلاین parity اضافه شد","بکاپ/بازیابی کامل و legacy، ورود پروفایل، jobها، AI و agent، دسته‌بندی پایدار و زمان‌بندی‌شده، PWA و Web Push رمزنگاری‌شده پیاده‌سازی شد","مدیریت واقعی WooCommerce و همه غرفه‌های باسلام، ledger، مغایرت‌گیری و هماهنگ‌سازی، حذف تکراری، تصویر، autoreply و اعلان‌ها به قرارداد داشبورد متصل شد","انتخاب‌گر بصری با ticket یک‌بارمصرف، HTML و CSP ایمن و selectorهای خودکار قابل ترمیم کامل شد","بکاپ split برنچ GitHub با یک commit اتمی، مرور و بازیابی فایل‌ها و پوش دوره‌ای اضافه شد","محافظ SSRF اکنون DNS و همه redirectها را بررسی می‌کند و fallback TLS فقط از CA معتبر سیستم استفاده می‌کند","ذخیره تنظیمات و vault اتصال‌ها lossless شد، routeهای shadow و تکراری حذف شدند و race ریست AI رفع شد","تست‌های contract بدون شبکه برای عملیات پرخطر و قراردادهای رفتاری Node افزوده شد"]},
     {"version":"10.216","date":"2026-09-21","title":"منوی همبرگری باسلام کامل + اتوسیو پروفایل + ترمیم فسادها + parity نمایشی","items":["منوی همبرگری → اتصال باسلام: تست همه غرفه‌ها و هر غرفه تکی حالا کارت کامل با نام کاربر، موبایل/ایمیل، عنوان/شناسه/شهر/امتیاز/وضعیت غرفه و کلاینت SDK/REST را نشان می‌دهد","ذخیره خودکار پروفایل فعال شد: هر تغییر در منبع، صفحه‌بندی، سلکتورها، قوانین قیمت و گالری با debounce روی سرور می‌ماند — دیگر با رفرش از بین نمی‌رود","ترمیم خودکار فسادها گسترش یافت: حذف vendor_id صفر/تکراری، پر کردن نام غرفه خالی/ژنریک، همگام‌سازی shop_name و name کاربر بعد از هر تست موفق","تطبیق نمایشی با نود جی‌اس: دکمه بررسی parity در /ui و تب نسخه، گزارش زنده از فایل مشترک scraper4_data.json، کلیدهای ui_settings و تعداد غرفه‌ها"]},
     {"version":"10.215","date":"2026-09-21","title":"Basalam full user/shop details + auto-fix + fully autosave settings + Node parity","items":["دکمه‌های تست باسلام اکنون برای هر غرفه اطلاعات کامل کاربر (نام، شناسه، موبایل، ایمیل) و غرفه (عنوان، شناسه یکتا، شهر، امتیاز، وضعیت، URL) را با کلاینت SDK/REST نمایش می‌دهد","تست همه غرفه‌ها به‌صورت خودکار فسادها را پر می‌کند: نام خالی/ژنریک غرفه، vendor_id ناقص و نام کاربر — و بلافاصله روی سرور ذخیره می‌کند (auto_fixed)","تنظیمات کاملاً اتوسیو شد: هر تغییر در اتصال مرکزی، ووکامرس، باسلام و فونت با debounce خودکار ذخیره می‌شود — دیگر با رفرش یا آپدیت کد از بین نمی‌رود","پایداری تنظیمات پس از آپدیت کد: load_data اکنون کلیدهای ناشناس را هم حفظ می‌کند تا ui_settings و ماژول‌های آینده با rsync --delete یا تغییر نسخه پاک نشوند","تطبیق کامل با نسخه نود جی‌اس: نگاشت تنظیمات، پروفایل‌ها، appearance/fontScale و اتصالات یکسان‌سازی شد و dashboards / و /ui از یک scraper4_data.json می‌خوانند"]},
     {"version":"10.214","date":"2026-09-21","title":"Basalam test shows all shops + font persists after refresh + full debug pass","items":["دکمه تست باسلام حالا همه غرفه‌ها (پیش‌فرض + غرفه‌های اضافی) را با SDK اول و سپس REST تست می‌کند و برای هر غرفه نام کاربر، شناسه و عنوان غرفه را جداگانه نمایش می‌دهد","رفع باگ فونت: انتخاب اندازه حالا علاوه بر localStorage روی سرور (ui_settings.appearance.fontScale) هم ذخیره می‌شود و هنگام رفرش اگر localStorage خالی باشد از سرور بازیابی می‌شود — دیگر به پیش‌فرض برنمی‌گردد","بررسی کامل کد از اول تا آخر و رفع باگ‌های باقی‌مانده: همگام‌سازی bslAllShopEntries در مودال محصول، ذخیره ضرایب تعدیل بدون 405، و نمایش خطای 500 باسلام با جزئیات غرفه"]},
@@ -578,27 +580,50 @@ def require_password():
 
 
 def public_http_url(url: str) -> str:
-    """Validate source URLs and reject localhost/private literal addresses."""
+    """Return a public HTTP(S) URL or reject it before any outbound request.
+
+    Checking only literal IPs leaves the usual DNS-rebinding/hostname SSRF gap
+    (``internal.example`` resolving to 127.0.0.1, RFC1918, link-local, etc.).
+    Resolve every hostname and require *all* answers to be globally routable.
+    ``outbound_request`` invokes this again for every redirect hop.
+    """
     url = (url or "").strip()
     markdown = re.fullmatch(r"\[[^]]+\]\((https?://[^)]+)\)", url, re.I)
-    if markdown: url = markdown.group(1).strip()
+    if markdown:
+        url = markdown.group(1).strip()
     # Also tolerate copied rich-text links that contain a URL after display text.
     if not url.lower().startswith(("http://", "https://")):
         embedded = re.search(r"https?://[^\s)]+", url, re.I)
-        if embedded: url = embedded.group(0)
+        if embedded:
+            url = embedded.group(0)
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("آدرس باید با http:// یا https:// شروع شود")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("نام کاربری/رمز در آدرس مجاز نیست")
     host = parsed.hostname.lower().rstrip(".")
-    if host in {"localhost", "localhost.localdomain"}:
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
         raise ValueError("آدرس محلی مجاز نیست")
     try:
-        ip = ipaddress.ip_address(host)
-        if not ip.is_global:
-            raise ValueError("IP خصوصی/محلی مجاز نیست")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
     except ValueError as exc:
-        if "مجاز نیست" in str(exc):
-            raise
+        raise ValueError("پورت آدرس معتبر نیست") from exc
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        addresses = {literal}
+    else:
+        try:
+            answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            addresses = {ipaddress.ip_address(row[4][0].split("%", 1)[0]) for row in answers}
+        except (socket.gaierror, OSError, ValueError) as exc:
+            raise ValueError("نام میزبان قابل resolve نیست") from exc
+        if not addresses:
+            raise ValueError("نام میزبان هیچ IP معتبری ندارد")
+    if any(not address.is_global for address in addresses):
+        raise ValueError("IP خصوصی/محلی/رزروشده مجاز نیست")
     return url
 
 
@@ -621,24 +646,103 @@ def outbound_mode(cfg: Optional[dict[str,Any]]=None) -> str:
 
 
 def outbound_request(method: str, url: str, **kwargs: Any) -> requests.Response:
-    """Route every requests-based external call through the one global connection gateway."""
-    cfg=load_data().get("network",{});mode=outbound_mode(cfg);proxy=clean_text(cfg.get("proxy"));target=public_http_url(url)
-    headers=dict(kwargs.pop("headers",{}) or {});params=kwargs.pop("params",None)
-    if params:target=requests.Request("GET",target,params=params).prepare().url
-    request_url=target
-    if mode=="relay":
-        if not proxy:raise FetchError("حالت Worker انتخاب شده اما آدرس دروازه مرکزی خالی است")
-        relay=public_http_url(proxy.replace("{url}",quote(target,safe=""))) if "{url}" in proxy else public_http_url(proxy);request_url=relay if "{url}" in proxy else relay+("&" if "?" in relay else "?")+urlencode({"url":target});headers["X-Proxy-UA"]=headers.get("User-Agent",USER_AGENT);headers["X-Proxy-Method"]=method.upper()
-        authorization=clean_text(headers.get("Authorization"))
+    """Route requests through the global gateway with redirect-safe SSRF checks."""
+    cfg = load_data().get("network", {})
+    forced_mode = clean_text(kwargs.pop("_scraper4_mode", "")).lower()
+    mode = forced_mode if forced_mode in {"direct", "http", "relay"} else outbound_mode(cfg)
+    proxy = clean_text(cfg.get("proxy"))
+    target = public_http_url(url)
+    base_headers = dict(kwargs.pop("headers", {}) or {})
+    params = kwargs.pop("params", None)
+    if params:
+        target = public_http_url(requests.Request("GET", target, params=params).prepare().url)
+    # Never delegate redirects to requests: every Location must pass the same
+    # DNS/public-IP policy, and credentials must not cross origins.
+    kwargs.pop("allow_redirects", None)
+    kwargs.setdefault("timeout", max(5, min(REQUEST_TIMEOUT_CAP, int(cfg.get("timeout", 60)))))
+    kwargs.setdefault("verify", bool(cfg.get("verify_tls", True)))
+    if mode == "http":
+        if not proxy:
+            raise FetchError("حالت HTTP Proxy انتخاب شده اما آدرس پروکسی خالی است")
+        kwargs["proxies"] = {"http": proxy, "https": proxy}
+    if mode == "relay" and not proxy:
+        raise FetchError("حالت Worker انتخاب شده اما آدرس دروازه مرکزی خالی است")
+
+    def routed_request_url(upstream: str, request_headers: dict[str, Any], verb: str) -> tuple[str, dict[str, Any]]:
+        sent_headers = dict(request_headers)
+        if mode != "relay":
+            return upstream, sent_headers
+        relay = (public_http_url(proxy.replace("{url}", quote(upstream, safe="")))
+                 if "{url}" in proxy else public_http_url(proxy))
+        request_url = (relay if "{url}" in proxy else
+                       relay + ("&" if "?" in relay else "?") + urlencode({"url": upstream}))
+        sent_headers["X-Proxy-UA"] = sent_headers.get("User-Agent", USER_AGENT)
+        sent_headers["X-Proxy-Method"] = verb.upper()
+        authorization = clean_text(sent_headers.get("Authorization"))
         if authorization:
-            # Compatible aliases for dedicated relays; none places credentials in the URL.
-            for relay_header in ("X-Proxy-Authorization","X-Upstream-Authorization","X-Target-Authorization","X-Authorization"):headers[relay_header]=authorization
-        if cfg.get("worker_key"):headers["X-Proxy-Key"]=str(cfg["worker_key"])
-    elif mode=="http":
-        if not proxy:raise FetchError("حالت HTTP Proxy انتخاب شده اما آدرس پروکسی خالی است")
-        kwargs["proxies"]={"http":proxy,"https":proxy}
-    kwargs.setdefault("timeout",max(5,min(REQUEST_TIMEOUT_CAP,int(cfg.get("timeout",60)))));kwargs.setdefault("allow_redirects",True);kwargs.setdefault("verify",bool(cfg.get("verify_tls",True)))
-    response=requests.request(method,request_url,headers=headers,**kwargs);setattr(response,"scraper4_transport",mode);return response
+            # Compatible aliases for dedicated relays; none puts credentials in a URL.
+            for relay_header in ("X-Proxy-Authorization", "X-Upstream-Authorization",
+                                 "X-Target-Authorization", "X-Authorization"):
+                sent_headers[relay_header] = authorization
+        if cfg.get("worker_key"):
+            sent_headers["X-Proxy-Key"] = str(cfg["worker_key"])
+        return request_url, sent_headers
+
+    def send(verb: str, request_url: str, sent_headers: dict[str, Any], options: dict[str, Any]) -> requests.Response:
+        call_options = dict(options)
+        call_options["allow_redirects"] = False
+        try:
+            return requests.request(verb, request_url, headers=sent_headers, **call_options)
+        except requests.exceptions.SSLError:
+            # Managed hosts sometimes install an HTTPS inspection/root CA only
+            # in the OS store. Retry with an actual CA file, never verify=False.
+            if call_options.get("verify") is not True:
+                raise
+            candidates = [os.environ.get("SSL_CERT_FILE", ""),
+                          ssl.get_default_verify_paths().cafile or "",
+                          "/etc/ssl/certs/ca-certificates.crt",
+                          "/etc/pki/tls/certs/ca-bundle.crt"]
+            ca_file = next((path for path in candidates if path and os.path.isfile(path)), "")
+            if not ca_file:
+                raise
+            call_options["verify"] = ca_file
+            return requests.request(verb, request_url, headers=sent_headers, **call_options)
+
+    current = target
+    current_method = method.upper()
+    current_headers = base_headers
+    current_options = dict(kwargs)
+    response: requests.Response
+    for hop in range(6):
+        request_url, sent_headers = routed_request_url(current, current_headers, current_method)
+        response = send(current_method, request_url, sent_headers, current_options)
+        location = response.headers.get("Location") if getattr(response, "headers", None) else None
+        if response.status_code not in {301, 302, 303, 307, 308} or not location:
+            setattr(response, "scraper4_transport", mode)
+            setattr(response, "scraper4_final_url", current)
+            return response
+        if hop >= 5:
+            if hasattr(response, "close"):
+                response.close()
+            raise FetchError("تعداد تغییرمسیرهای HTTP بیش از حد مجاز است")
+        next_target = public_http_url(urljoin(current, location))
+        old_origin = (urlparse(current).scheme, urlparse(current).hostname, urlparse(current).port)
+        new_origin = (urlparse(next_target).scheme, urlparse(next_target).hostname,
+                      urlparse(next_target).port)
+        if old_origin != new_origin:
+            current_headers = {key: value for key, value in current_headers.items()
+                               if key.lower() not in {"authorization", "cookie", "proxy-authorization"}}
+            current_options.pop("auth", None)
+        if response.status_code == 303 or (response.status_code in {301, 302} and current_method == "POST"):
+            current_method = "GET"
+            for body_key in ("json", "data", "files"):
+                current_options.pop(body_key, None)
+            current_headers = {key: value for key, value in current_headers.items()
+                               if key.lower() not in {"content-length", "content-type"}}
+        if hasattr(response, "close"):
+            response.close()
+        current = next_target
+    raise FetchError("تغییرمسیر HTTP نامعتبر است")
 
 
 def outbound_browser_target(url: str) -> str:
@@ -674,9 +778,18 @@ class Fetcher:
             "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6",
             "Cache-Control": "no-cache",
         })
+        self.session.hooks.setdefault("response", []).append(self._validate_redirect)
         if self.proxy and self.proxy_mode == "http":
             self.session.proxies.update({"http": self.proxy, "https": self.proxy})
         self.last_by_host: dict[str, float] = {}
+
+    @staticmethod
+    def _validate_redirect(response: Any, *args: Any, **kwargs: Any) -> Any:
+        """Requests response hook: reject a private redirect before it is followed."""
+        location = response.headers.get("Location") if getattr(response, "headers", None) else None
+        if location and response.status_code in {301, 302, 303, 307, 308}:
+            public_http_url(urljoin(str(response.url), location))
+        return response
 
     def abort_if_cancelled(self) -> None:
         if self.task_id and live_task_cancelled(self.task_id):
@@ -774,7 +887,7 @@ class Fetcher:
                 if engine=="cloudscraper":
                     try:import cloudscraper
                     except ImportError as exc:raise FetchError("کتابخانه cloudscraper نصب نیست") from exc
-                    client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
+                    client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);client.hooks.setdefault("response",[]).append(self._validate_redirect);response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
                 elif engine=="httpx":
                     try:
                         import httpx
@@ -784,7 +897,11 @@ class Fetcher:
                     proxy=None
                     if self.session.proxies:
                         proxy=self.session.proxies.get("https") or self.session.proxies.get("http")
-                    client_kw=dict(timeout=self.effective_timeout(), follow_redirects=True, verify=self.verify, headers=merged)
+                    def _httpx_redirect_guard(item: Any) -> None:
+                        location=item.headers.get("location")
+                        if location and item.status_code in {301,302,303,307,308}:
+                            public_http_url(urljoin(str(item.request.url),location))
+                    client_kw=dict(timeout=self.effective_timeout(), follow_redirects=True, verify=self.verify, headers=merged,event_hooks={"response":[_httpx_redirect_guard]})
                     try:
                         if proxy: client_kw["proxy"]=proxy
                         with httpx.Client(**client_kw) as hx:
@@ -797,7 +914,14 @@ class Fetcher:
                 elif engine=="curl_cffi":
                     try:from curl_cffi import requests as curl_requests
                     except ImportError as exc:raise FetchError("کتابخانه curl_cffi نصب نیست") from exc
-                    proxies=self.session.proxies or None;response=curl_requests.get(request_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,impersonate="chrome",proxies=proxies);body=response.content
+                    proxies=self.session.proxies or None;curl_url=request_url
+                    for redirect_hop in range(6):
+                        response=curl_requests.get(curl_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=False,verify=self.verify,impersonate="chrome",proxies=proxies)
+                        location=response.headers.get("Location") if getattr(response,"headers",None) else None
+                        if response.status_code not in {301,302,303,307,308} or not location:break
+                        if redirect_hop>=5:raise FetchError("تعداد تغییرمسیرهای HTTP بیش از حد مجاز است")
+                        curl_url=public_http_url(urljoin(curl_url,location))
+                    body=response.content
                 else:
                     response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
                 self.last_by_host[host] = time.monotonic()
@@ -1950,7 +2074,7 @@ def configured_browser_path() -> str:
         _wc_cache = os.path.abspath(_wc_cache)
         if os.path.isdir(_wc_cache):
             return _wc_cache
-        _rt_cache = os.path.join(DATA_DIR, "cache", "ms-playwright") if "DATA_DIR" in globals() else ""
+        _rt_cache = os.path.join(str(globals().get("DATA_DIR", "")), "cache", "ms-playwright") if globals().get("DATA_DIR") else ""
         if _rt_cache and os.path.isdir(_rt_cache):
             return _rt_cache
     except Exception:
@@ -1999,7 +2123,7 @@ def find_browser_executable(preferred: str = "") -> str:
     except Exception:
         _wc1 = ""
     try:
-        _wc2 = os.path.join(DATA_DIR, "cache", "ms-playwright") if "DATA_DIR" in globals() else ""
+        _wc2 = os.path.join(str(globals().get("DATA_DIR", "")), "cache", "ms-playwright") if globals().get("DATA_DIR") else ""
     except Exception:
         _wc2 = ""
     for root in (preferred, os.path.join(BASE_DIR, "ms-playwright"), _wc1, _wc2, temporary_browser_path(), os.path.expanduser("~/.cache/ms-playwright"), "/root/.cache/ms-playwright", "/home/www-data/.cache/ms-playwright", "/usr/bin", "/snap/bin", "/opt/google/chrome", "/opt/scraper4"):
@@ -2114,6 +2238,17 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
             if task_id and live_task_cancelled(task_id):
                 raise CancelledError("استخراج با درخواست کاربر متوقف شد")
             browser = pw.chromium.launch(**launch_options);page = browser.new_page(user_agent=USER_AGENT,locale="fa-IR",viewport={"width":1366,"height":768},timezone_id="Asia/Tehran")
+            def _guard_browser_request(route: Any) -> None:
+                candidate=str(route.request.url)
+                try:
+                    if candidate.lower().startswith(("http://","https://")):
+                        public_http_url(candidate)
+                    elif candidate.lower().startswith(("ws://","wss://")):
+                        public_http_url(re.sub(r"^ws", "http", candidate, count=1, flags=re.I))
+                    route.continue_()
+                except Exception:
+                    route.abort()
+            page.route("**/*", _guard_browser_request)
             page.add_init_script("""Object.defineProperty(navigator,'webdriver',{get:()=>undefined});Object.defineProperty(navigator,'languages',{get:()=>['fa-IR','fa','en-US','en']});Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});window.chrome=window.chrome||{runtime:{}};""")
             try:
                 from playwright_stealth import stealth_sync
@@ -2198,11 +2333,11 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
 
 @dataclass
 class ScrapeReport:
-    products: dict[str, dict[str, Any]] = field(default_factory=dict)
-    logs: list[str] = field(default_factory=list)
+    products: dict[str, dict[str, Any]] = dataclass_field(default_factory=dict)
+    logs: list[str] = dataclass_field(default_factory=list)
     pages: int = 0
-    modes: set[str] = field(default_factory=set)
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+    modes: set[str] = dataclass_field(default_factory=set)
+    diagnostics: dict[str, Any] = dataclass_field(default_factory=dict)
     job_id: str = ""
 
 
@@ -2243,6 +2378,10 @@ def render_selenium(url: str, timeout: int, scrolls: int = 4, task_id: str = "")
             time.sleep(0.7)
         html = driver.page_source or ""
         final_url = driver.current_url or url
+        if outbound_mode(load_data().get("network",{})) != "relay":
+            # Selenium lacks Playwright's per-request routing hook; at minimum
+            # never accept/use a document after a redirect to a private host.
+            public_http_url(final_url)
     except CancelledError:
         # A stop request must unwind, not be reported as a Selenium failure.
         # The finally block below still quits the driver.
@@ -3051,6 +3190,9 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
     if requested_engine in KNOWN_ENGINES:
         master=requested_engine
     profile_name=clean_text(config.get("_profile_name"))
+    # Carries the prior page into auto-pagination detection. Initialising it
+    # also makes resume-at-page-2 safe when no first-page checkpoint exists.
+    page_html = ""
 
     for number in range(start_page, pages + 1):
         if task_id and live_task_cancelled(task_id):raise ValueError("استخراج با درخواست کاربر متوقف شد")
@@ -3748,10 +3890,9 @@ def github_file_for(repo: str, branch: str, remote_path: str, token: str = "", i
     if token:
         headers["Authorization"] = "Bearer " + token
     try:
-        if VPS_MODE:
-            response = requests.get(api_url, params={"ref": branch_cleaned}, headers=headers, timeout=30)
-        else:
-            response = outbound_request("GET",api_url,params={"ref":branch_cleaned},headers=headers,timeout=30)
+        response = outbound_request("GET", api_url, params={"ref": branch_cleaned},
+                                    headers=headers, timeout=30,
+                                    _scraper4_mode="direct" if VPS_MODE else "")
     except requests.RequestException as exc:
         raise FetchError(f"ارتباط با GitHub ناموفق بود: {exc}") from exc
     if response.status_code == 401:
@@ -4741,7 +4882,9 @@ def api_picker_start():
     if render.lower() in ("playwright","selenium"): render=render.lower()
     elif "digikala" in url.lower() or "snappshop" in url.lower(): render="playwright"
     scrolls=8 if render in ("playwright","selenium","browser") else 4
-    job_id=time.strftime("%Y%m%d%H%M%S")+wcp_random(4) if "wcp_random" in globals() else str(int(time.time()*1000))[-8:]
+    _random_suffix=globals().get("wcp_random")
+    job_id=(time.strftime("%Y%m%d%H%M%S")+_random_suffix(4)
+            if callable(_random_suffix) else str(int(time.time()*1000))[-8:])
     # fallback random
     try:
         job_id=hashlib.sha1((url+str(time.time())).encode()).hexdigest()[:10]
@@ -4770,7 +4913,6 @@ def api_picker_result(job_id):
     return resp
 
 @app.get("/api/picker/preview")
-@app.get("/api/picker/preview")
 def api_picker_preview():
     """Return a sandboxed, script-stripped DOM preview with our visual selector inspector."""
     url=public_http_url(clean_text(request.args.get("url")))
@@ -4796,7 +4938,6 @@ def api_picker_preview():
         # try requested engine first
         if render=="selenium":
             try:
-                from selenium import webdriver as _wd  # check installed
                 browser=picker_browser_fetch(url,fetcher.timeout,scrolls,errors, engine="selenium")
             except Exception as _e:
                 errors.append(f"selenium not available: {_e}")
@@ -4905,7 +5046,7 @@ def api_node_parity():
                    parity={"storage": "scraper4_data.json (shared classic+/ui)", "shared": True, "auto_save": "debounced 900-1100ms for all groups"})
 
 
-@app.route("/api/settings", methods=["GET", "POST", "PUT", "PATCH"])
+@app.route("/api/classic/settings", methods=["GET", "POST", "PUT", "PATCH"])
 def settings():
     if request.method == "GET":
         data = load_data()
@@ -5436,7 +5577,9 @@ def ai_chat(prompt: str, provider_id: str="", model_id: str="") -> str:
             # 10.210 smart fallback: if Worker blocks with 403 security policy, retry direct once
             if not response.ok and response.status_code==403 and via=="relay" and ("security" in (response.text or "").lower() or "access denied" in (response.text or "").lower() or "forbidden" in (response.text or "").lower()):
                 try:
-                    direct_resp = requests.request("POST", request_endpoint, json=payload, headers=headers, timeout=90, verify=True)
+                    direct_resp = outbound_request("POST", request_endpoint, json=payload,
+                                                   headers=headers, timeout=90,
+                                                   _scraper4_mode="direct")
                     if direct_resp.ok:
                         text=ai_extract_text(direct_resp.json())
                         if text:return text
@@ -5647,7 +5790,7 @@ def api_ai_enrich():
         if product.get("short_desc") and product.get("long_desc"):continue
         prompt="محصول زیر را بدون ادعای ساختگی تکمیل کن. فقط JSON با کلیدهای short_desc و long_desc و tags(array) بده:\n"+json.dumps({k:product.get(k) for k in ("title","brand","category","price","variations_text")},ensure_ascii=False)
         try:
-            text=ai_chat(prompt);match=re.search(r"\{.*\}",text,re.S);obj=json.loads(match.group(0) if match else text)
+            text=ai_chat(prompt);found_json=re.search(r"\{.*\}",text,re.S);obj=json.loads(found_json.group(0) if found_json else text)
             for field in ("short_desc","long_desc","tags"):
                 if obj.get(field):product[field]=obj[field]
             done.append(product.get("title"))
@@ -5950,7 +6093,7 @@ def profile_save():
     return jsonify(ok=True, profiles=data["profiles"], active_profile=name)
 
 
-@app.route("/api/suggest-selectors", methods=["GET", "POST", "PUT"])
+@app.route("/api/classic/suggest-selectors", methods=["GET", "POST", "PUT"])
 def suggest_selectors_alias():
     body = request.get_json(silent=True) or {}
     url = clean_text(body.get("url") or request.args.get("url") or "")
@@ -6952,7 +7095,6 @@ def api_basalam_test():
                         if not isinstance(v, dict):
                             continue
                         vid2 = int(v.get("vendor_id") or 0)
-                        tok2 = str(v.get("token") or "").strip()
                         if vid2 <= 0:
                             need_save = True
                             continue

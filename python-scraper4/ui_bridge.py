@@ -21,25 +21,29 @@ Design rules:
   * Mutate nothing in the Python schema. Profiles stay keyed by name in
     ``data['profiles']``; we translate to/from the Node ``Profile`` shape on
     the fly so both UIs keep working against one ``scraper4_data.json``.
-  * Unknown/unsupported endpoints answer with a valid empty payload rather
-    than 404, so optional dashboard panels degrade quietly instead of
-    spraying red error toasts.
+  * Every route in the pinned Node parity manifest is registered explicitly.
+    Unsupported operations fail explicitly; no catch-all success response may
+    claim an operation completed when no backend work happened.
 """
 
 from __future__ import annotations
 
 import base64
+import copy
 import importlib.metadata
 import importlib.util
 import io
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
 import time
-from typing import Any, Callable, Optional
+from datetime import datetime
+from typing import Any, Optional
+from urllib.parse import quote
 
 from flask import (
     Response, jsonify, redirect, request, send_from_directory,
@@ -465,31 +469,188 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             rows.update({k: dict(v) for k, v in core.LIVE_TASKS.items()})
         return sorted(rows.values(), key=lambda x: _int(x.get("updated_at")), reverse=True)
 
-    def connections_payload() -> dict[str, Any]:
-        data = load()
+    def _deep_merge(base: Any, patch: Any) -> Any:
+        """Recursively merge JSON objects without dropping unknown Node keys."""
+        if not isinstance(base, dict) or not isinstance(patch, dict):
+            return copy.deepcopy(patch)
+        out = copy.deepcopy(base)
+        for key, value in patch.items():
+            out[key] = _deep_merge(out.get(key), value) if key in out else copy.deepcopy(value)
+        return out
+
+    def _secret_placeholder(value: Any) -> bool:
+        text = _s(value).strip()
+        return bool(text) and (text == "***" or text.startswith("••••") or text.startswith("********"))
+
+    def _merge_connection_input(base: Any, patch: Any) -> Any:
+        """Merge a vault update while never replacing a real secret with a mask.
+
+        The current dashboard returns clear values to its authenticated owner,
+        just like Node's decrypted vault.  Older Python builds returned ``***``;
+        accepting a save from one of those open tabs must not destroy keys.
+        Provider arrays are matched by id (not array position), so reordering is
+        safe as well.
+        """
+        if _secret_placeholder(patch):
+            return copy.deepcopy(base)
+        if isinstance(base, dict) and isinstance(patch, dict):
+            out = copy.deepcopy(base)
+            for key, value in patch.items():
+                out[key] = _merge_connection_input(out.get(key), value)
+            return out
+        if isinstance(patch, list):
+            old_by_id = {
+                _s(item.get("id")): item for item in (base if isinstance(base, list) else [])
+                if isinstance(item, dict) and _s(item.get("id"))
+            }
+            out = []
+            for index, item in enumerate(patch):
+                old = old_by_id.get(_s(item.get("id"))) if isinstance(item, dict) else None
+                if old is None and isinstance(base, list) and index < len(base):
+                    old = base[index]
+                out.append(_merge_connection_input(old, item))
+            return out
+        return copy.deepcopy(patch)
+
+    def _node_ai_providers(data: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            providers = core.normalize_ai_providers(data.get("ai_providers") or {})
+        except (ValueError, TypeError):
+            providers = {}
+        rows: list[dict[str, Any]] = []
+        for provider in providers.values():
+            models = [m for m in provider.get("models", []) if isinstance(m, dict)]
+            reasoning = {
+                _s(x) for x in provider.get("reasoningModels", [])
+            } | {_s(m.get("id")) for m in models if m.get("reasoning")}
+            non_chat = {
+                _s(x) for x in provider.get("nonChatModels", [])
+            } | {_s(m.get("id")) for m in models if m.get("nonChat") or m.get("chat") is False}
+            keys: list[Any] = []
+            for item in provider.get("apiKeys", []):
+                if not isinstance(item, dict):
+                    continue
+                key = _s(item.get("key"))
+                if not key:
+                    continue
+                account = _s(item.get("acct") or item.get("accountId"))
+                keys.append({"accountId": account, "token": key} if account else key)
+            if not keys and _s(provider.get("apiKey")):
+                keys = [_s(provider.get("apiKey"))]
+            model_ids = [_s(m.get("id")) for m in models if _s(m.get("id"))]
+            row = {
+                "id": _s(provider.get("id")),
+                "name": _s(provider.get("name") or provider.get("id")),
+                "baseUrl": _s(provider.get("url") or provider.get("endpoint")),
+                "apiKey": (_s(keys[0].get("token")) if keys and isinstance(keys[0], dict)
+                           else _s(keys[0]) if keys else ""),
+                "apiKeys": keys,
+                "models": model_ids,
+                "reasoningModels": sorted(x for x in reasoning if x in model_ids),
+                "nonChatModels": sorted(x for x in non_chat if x in model_ids),
+                "enabled": provider.get("enabled", True) is not False,
+            }
+            if _s(provider.get("vendor")):
+                row["vendor"] = _s(provider.get("vendor"))
+            rows.append(row)
+        ai = data.get("ai") or {}
+        # A classic-Python installation may only have the legacy single model.
+        # Surface it as one provider so the Node model picker remains usable.
+        if not rows and (_s(ai.get("endpoint")) or _s(ai.get("api_key"))):
+            model = _s(ai.get("model"))
+            rows.append({
+                "id": _s(ai.get("provider")) or "default",
+                "name": _s(ai.get("provider")) or "Default",
+                "baseUrl": _s(ai.get("endpoint")),
+                "apiKey": _s(ai.get("api_key")),
+                "apiKeys": [_s(ai.get("api_key"))] if _s(ai.get("api_key")) else [],
+                "models": [model] if model else [],
+                "reasoningModels": [], "nonChatModels": [], "enabled": True,
+            })
+        return rows
+
+    def connections_payload(data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """Return Node's complete ``ConnectionVault`` shape.
+
+        Secrets are intentionally returned to the authenticated dashboard: the
+        Node runtime decrypts its vault for this same endpoint, and provider
+        editing/export cannot work with placeholder values.  ``/api/status``
+        exposes booleans only and never calls this payload directly.
+        """
+        data = data or load()
         woo = data.get("woocommerce") or {}
         bsl = data.get("basalam") or {}
         ai = data.get("ai") or {}
-        return {
+        stored = data.get("node_connections")
+        if not isinstance(stored, dict):
+            stored = {}
+        empty = {
+            "woo": {"url": "", "key": "", "secret": "", "categoryId": 0,
+                    "pricePercent": 0, "network": {"mode": "auto", "workerUrl": ""}},
+            "basalam": {"token": "", "vendorId": "", "api": "https://openapi.basalam.com/v1",
+                        "pricePercent": 0, "preparationDays": 3, "weight": 500,
+                        "packageWeight": 600, "stock": 10, "categoryId": 0,
+                        "fallbackCategoryIds": [], "autoCategory": False,
+                        "netIndirect": False, "shops": []},
+            "ai": {"catalogVersion": 0, "baseUrl": "", "apiKey": "", "model": "",
+                   "providers": [], "candidates": [], "master": "",
+                   "network": {"mode": "direct", "proxyUrl": "", "workerUrl": "",
+                               "dohUrl": "https://cloudflare-dns.com/dns-query", "resolveIp": ""}},
+            "notifications": {"url": "", "token": "", "chatId": "", "baleToken": "",
+                              "baleChatId": "", "rubikaToken": "", "rubikaChatId": ""},
+        }
+        result = _deep_merge(empty, stored)
+        shops = []
+        for row in bsl.get("vendors") or []:
+            if not isinstance(row, dict):
+                continue
+            shops.append({
+                "name": _s(row.get("shop_name") or row.get("name")),
+                "token": _s(row.get("token")),
+                "vendorId": _s(row.get("vendor_id")),
+                "pricePercent": _num(row.get("price_val")) if _s(row.get("price_mode")) == "percent" else 0,
+            })
+        native = {
             "woo": {
-                "url": _s(woo.get("url")),
-                "key": _s(woo.get("consumer_key")),
-                "secret": "***" if woo.get("consumer_secret") else "",
-                "configured": bool(woo.get("url") and woo.get("consumer_key") and woo.get("consumer_secret")),
+                "url": _s(woo.get("url")), "key": _s(woo.get("consumer_key")),
+                "secret": _s(woo.get("consumer_secret")),
+                "categoryId": _int(woo.get("category_id")),
+                "pricePercent": _num(woo.get("price_percent")),
+                "network": {"mode": "worker" if _s(woo.get("api_mode")) == "relay" else "direct",
+                            "workerUrl": _s(woo.get("relay_url"))},
             },
             "basalam": {
-                "token": "***" if bsl.get("token") else "",
-                "vendorId": _int(bsl.get("vendor_id")),
-                "shops": bsl.get("vendors") or [],
-                "configured": bool(bsl.get("token") and bsl.get("vendor_id")),
+                "token": _s(bsl.get("token")), "vendorId": _s(bsl.get("vendor_id")),
+                "api": _s(bsl.get("api_base_url")) or "https://openapi.basalam.com/v1",
+                "pricePercent": _num(bsl.get("price_val")) if _s(bsl.get("price_mode")) == "percent" else 0,
+                "preparationDays": _int(bsl.get("preparation_days"), 3),
+                "weight": _int(bsl.get("weight"), 500),
+                "packageWeight": _int(bsl.get("package_weight"), 600),
+                "stock": _int(bsl.get("stock"), 10), "categoryId": _int(bsl.get("category_id")),
+                "fallbackCategoryIds": list(bsl.get("fallback_category_ids") or []),
+                "autoCategory": bool(bsl.get("auto_category", False)),
+                "netIndirect": bool(bsl.get("net_indirect", False)), "shops": shops,
             },
             "ai": {
-                "provider": _s(ai.get("provider")),
-                "model": _s(ai.get("model")),
-                "key": "***" if ai.get("api_key") else "",
-                "configured": bool(ai.get("api_key")),
+                "baseUrl": _s(ai.get("endpoint")), "apiKey": _s(ai.get("api_key")),
+                "model": _s(ai.get("model")), "providers": _node_ai_providers(data),
             },
         }
+        result = _deep_merge(result, native)
+        candidates = []
+        for item in data.get("ai_candidates") or []:
+            if isinstance(item, dict):
+                key = _s(item.get("provider")) + "::" + _s(item.get("model"))
+            else:
+                key = _s(item).replace("/", "::", 1) if "::" not in _s(item) else _s(item)
+            if key.strip(":"):
+                candidates.append(key)
+        if candidates:
+            result["ai"]["candidates"] = list(dict.fromkeys(candidates))
+        master = _s(data.get("ai_master"))
+        if master:
+            result["ai"]["master"] = master.replace("/", "::", 1) if "::" not in master else master
+        return result
 
     def ok(**payload: Any):
         return jsonify(ok=True, **payload)
@@ -615,12 +776,23 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     @app.get("/api/status")
     def node_status():
         data = load()
+        vault = connections_payload(data)
+        providers = vault.get("ai", {}).get("providers") or []
+        status = {
+            "woo": bool(vault["woo"].get("url") and vault["woo"].get("key") and vault["woo"].get("secret")),
+            "basalam": bool(vault["basalam"].get("token") and vault["basalam"].get("vendorId")),
+            "ai": bool((vault["ai"].get("baseUrl") and vault["ai"].get("apiKey") and vault["ai"].get("model"))
+                       or any(p.get("enabled", True) is not False and p.get("baseUrl")
+                              and p.get("apiKey") and p.get("models") for p in providers)),
+            "notifications": bool(any(vault.get("notifications", {}).get(k) for k in
+                                      ("url", "baleToken", "rubikaToken"))),
+        }
         return ok(
             profiles=len(data.get("profiles") or {}),
             jobs=[task_to_job(t) for t in live_tasks()[:10]],
-            connections=connections_payload(),
+            connections=status,
             queue=True,
-            storage={"d1": True, "r2": False},
+            storage={"json": True, "atomic": True, "path": core.DATA_FILE},
         )
 
     @app.get("/api/version")
@@ -654,6 +826,14 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         log = getattr(core, "CHANGELOG", []) or []
         engines = [e for e in getattr(core, "KNOWN_ENGINES", ())
                    if core.fetch_engine_installed(e)]
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "parity-manifest.json"),
+                      encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except Exception:  # pragma: no cover - packaging damage is reported by checker
+            manifest = {}
+        source = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
+        contracts = manifest.get("behavioralContracts") if isinstance(manifest.get("behavioralContracts"), list) else []
         return ok(parity={
             "python": core.APP_VERSION,
             "releases": len(log),
@@ -663,56 +843,94 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "dashboard": bool(globals().get("_BRIDGE_OK", True)),
             "engines": engines,
             "engineCount": len(engines),
+            "nodeVersion": source.get("version"),
+            "nodeCommit": source.get("commit"),
+            "requiredRoutes": len(manifest.get("requiredRoutes") or []),
+            "behavioralContracts": [row.get("id") for row in contracts if isinstance(row, dict)],
         })
 
-    # Dashboard preference groups that live under ui_settings in the data
-    # file. They were previously dropped on save and never returned on load,
-    # so the font/theme picker reset to the default on every refresh.
-    UI_SETTING_GROUPS = ("appearance", "general", "watchdog", "notifications",
-                         "retire", "dedup", "agent", "ai")
-
-    @app.get("/api/settings")
-    def node_settings_get():
-        data = load()
+    # Every dashboard key is persisted, including future groups unknown to this
+    # Python release.  Earlier builds used an allow-list and silently discarded
+    # source, digest, autoreply, branchPush, category, photo and scalar keys such
+    # as githubBackupToken.
+    def _settings_payload(data: dict[str, Any]) -> dict[str, Any]:
         stored = data.get("ui_settings")
         if not isinstance(stored, dict):
             stored = {}
-        settings = {
-            "network": data.get("network") or {},
+        settings = copy.deepcopy(stored)
+        settings.update({
+            "network": _deep_merge(data.get("network") or {}, settings.get("network") or {}),
             "maxPages": getattr(core, "MAX_PAGES_HARD", 0),
             "maxProducts": core.MAX_PRODUCTS_HARD,
             "activeProfile": _s(data.get("active_profile")),
             "autoUpdate": bool(data.get("auto_update", True)),
-        }
-        for group in UI_SETTING_GROUPS:
-            if isinstance(stored.get(group), dict):
-                settings[group] = stored[group]
-        return ok(settings=settings)
+        })
+        return settings
+
+    @app.get("/api/settings")
+    def node_settings_get():
+        data = load()
+        return ok(settings=_settings_payload(data), network=data.get("network") or {},
+                  ui_settings=data.get("ui_settings") or {}, deploy=data.get("deploy") or {})
 
     @app.route("/api/settings", methods=["POST", "PUT", "PATCH"])
     def node_settings_post():
         body = _body()
         data = load()
         incoming = body.get("settings") if isinstance(body.get("settings"), dict) else body
-        if isinstance(incoming.get("network"), dict):
-            network = dict(data.get("network") or {})
-            network.update(incoming["network"])
-            data["network"] = network
-        if "activeProfile" in incoming:
-            data["active_profile"] = _s(incoming["activeProfile"])
-        # Persist the dashboard preference groups (font, theme, queue limits,
-        # watchdog…). Merge per group so a partial save does not wipe siblings.
+        if not isinstance(incoming, dict):
+            return jsonify(ok=False, error="settings must be an object"), 400
         stored = data.get("ui_settings")
         if not isinstance(stored, dict):
             stored = {}
-        for group in UI_SETTING_GROUPS:
-            if isinstance(incoming.get(group), dict):
-                merged = dict(stored.get(group) or {})
-                merged.update(incoming[group])
-                stored[group] = merged
-        data["ui_settings"] = stored
+        # Runtime-derived values are accepted for compatibility but not copied
+        # into the preference vault. All other nested/scalar values round-trip.
+        persist = {k: v for k, v in incoming.items()
+                   if k not in {"maxPages", "maxProducts", "activeProfile", "autoUpdate",
+                                "network", "source", "deploy", "woocommerce"}}
+        data["ui_settings"] = _deep_merge(stored, persist)
+        if isinstance(incoming.get("network"), dict):
+            data["network"] = _merge_connection_input(data.get("network") or {}, incoming["network"])
+        # The classic Python console also saves its gateway/Woo/deployer forms
+        # through /api/settings. Preserve that contract while the Node dashboard
+        # uses /api/connections for the same vault.
+        if isinstance(incoming.get("woocommerce"), dict):
+            data["woocommerce"] = _merge_connection_input(
+                data.get("woocommerce") or {}, incoming["woocommerce"])
+        if isinstance(incoming.get("deploy"), dict):
+            deploy_in = incoming["deploy"]
+            deploy = _merge_connection_input(data.get("deploy") or {}, deploy_in)
+            if "branches" in deploy_in or "branch" in deploy_in:
+                branches = core.normalize_branches(
+                    deploy_in.get("branches", deploy_in.get("branch", "")),
+                    _s(deploy_in.get("branch")))
+                if branches:
+                    deploy["branches"], deploy["branch"] = branches, branches[0]
+            if deploy_in.get("clear_token"):
+                deploy["github_token"] = ""
+            data["deploy"] = deploy
+        if "activeProfile" in incoming:
+            active = _s(incoming["activeProfile"])
+            if not active or active in (data.get("profiles") or {}):
+                data["active_profile"] = active
+        source = incoming.get("source")
+        if isinstance(source, dict):
+            network = dict(data.get("network") or {})
+            mode = _s(source.get("mode")).lower()
+            proxy = _s(source.get("proxy"))
+            worker = _s(source.get("worker"))
+            if mode in {"worker", "relay"} and worker:
+                network.update(proxy_mode="relay", proxy=worker)
+            elif mode in {"proxy", "http", "httpproxy"} and proxy:
+                network.update(proxy_mode="http", proxy=proxy)
+            elif mode in {"direct", "none"}:
+                network.update(proxy_mode="direct", proxy="")
+            if source.get("gap") is not None:
+                network["gap_ms"] = max(0, _int(source.get("gap")))
+            data["network"] = network
         save(data)
-        return ok(settings=incoming)
+        return ok(settings=_settings_payload(data), network=data.get("network") or {},
+                  ui_settings=data.get("ui_settings") or {}, deploy=data.get("deploy") or {})
 
     @app.get("/api/connections")
     def node_connections_get():
@@ -722,39 +940,136 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     def node_connections_post():
         body = _body()
         incoming = body.get("connections") if isinstance(body.get("connections"), dict) else body
+        if not isinstance(incoming, dict):
+            return jsonify(ok=False, error="connections must be an object"), 400
         data = load()
-        woo_in = incoming.get("woo") or {}
-        if woo_in:
-            woo = dict(data.get("woocommerce") or {})
-            if _s(woo_in.get("url")):
-                woo["url"] = _s(woo_in["url"])
-            if _s(woo_in.get("key")):
-                woo["consumer_key"] = _s(woo_in["key"])
-            secret = _s(woo_in.get("secret"))
-            if secret and secret != "***":
-                woo["consumer_secret"] = secret
-            data["woocommerce"] = woo
-        bsl_in = incoming.get("basalam") or {}
-        if bsl_in:
-            bsl = dict(data.get("basalam") or {})
-            token = _s(bsl_in.get("token"))
-            if token and token != "***":
-                bsl["token"] = token
-            if bsl_in.get("vendorId"):
-                bsl["vendor_id"] = _int(bsl_in["vendorId"])
-            data["basalam"] = bsl
-        ai_in = incoming.get("ai") or {}
-        if ai_in:
-            ai = dict(data.get("ai") or {})
-            key = _s(ai_in.get("key"))
-            if key and key != "***":
-                ai["api_key"] = key
-            for src, dst in (("provider", "provider"), ("model", "model"), ("endpoint", "endpoint")):
-                if _s(ai_in.get(src)):
-                    ai[dst] = _s(ai_in[src])
-            data["ai"] = ai
+        current = connections_payload(data)
+        vault = _merge_connection_input(current, incoming)
+        data["node_connections"] = copy.deepcopy(vault)
+
+        woo_in = vault.get("woo") if isinstance(vault.get("woo"), dict) else {}
+        woo = dict(data.get("woocommerce") or {})
+        woo.update({
+            "url": _s(woo_in.get("url")).rstrip("/"),
+            "consumer_key": _s(woo_in.get("key")),
+            "consumer_secret": _s(woo_in.get("secret")),
+            "category_id": _int(woo_in.get("categoryId")),
+            "price_percent": _num(woo_in.get("pricePercent")),
+        })
+        woo_network = woo_in.get("network") if isinstance(woo_in.get("network"), dict) else {}
+        if _s(woo_network.get("mode")) == "worker":
+            woo.update(api_mode="relay", relay_url=_s(woo_network.get("workerUrl")))
+        elif _s(woo_network.get("mode")) in {"direct", "auto"}:
+            woo["api_mode"] = "direct"
+        data["woocommerce"] = woo
+
+        bsl_in = vault.get("basalam") if isinstance(vault.get("basalam"), dict) else {}
+        bsl = dict(data.get("basalam") or {})
+        token = _s(bsl_in.get("token"))
+        token = re.sub(r"^(?:authorization\s*:\s*)?(?:bearer|token)\s+", "", token,
+                       flags=re.I).strip().strip("\"'")
+        bsl.update({
+            "token": token,
+            "vendor_id": _int(bsl_in.get("vendorId")),
+            "api_base_url": _s(bsl_in.get("api")) or "https://openapi.basalam.com",
+            "price_mode": "percent" if _num(bsl_in.get("pricePercent")) else "none",
+            "price_val": _num(bsl_in.get("pricePercent")),
+            "preparation_days": max(0, _int(bsl_in.get("preparationDays"), 3)),
+            "weight": max(0, _int(bsl_in.get("weight"), 500)),
+            "package_weight": max(0, _int(bsl_in.get("packageWeight"), 600)),
+            "stock": max(0, _int(bsl_in.get("stock"), 10)),
+            "category_id": max(0, _int(bsl_in.get("categoryId"))),
+            "fallback_category_ids": [
+                _int(x) for x in (bsl_in.get("fallbackCategoryIds") or []) if _int(x) > 0
+            ],
+            "auto_category": bool(bsl_in.get("autoCategory", False)),
+            "net_indirect": bool(bsl_in.get("netIndirect", False)),
+        })
+        shops = []
+        for row in bsl_in.get("shops") or []:
+            if not isinstance(row, dict):
+                continue
+            shops.append({
+                "shop_name": _s(row.get("name")), "name": _s(row.get("name")),
+                "token": re.sub(r"^(?:bearer|token)\s+", "", _s(row.get("token")),
+                                flags=re.I).strip(),
+                "vendor_id": _int(row.get("vendorId")),
+                "price_mode": "percent" if _num(row.get("pricePercent")) else "none",
+                "price_val": _num(row.get("pricePercent")),
+            })
+        bsl["vendors"] = shops
+        data["basalam"] = bsl
+
+        ai_in = vault.get("ai") if isinstance(vault.get("ai"), dict) else {}
+        native_providers: dict[str, dict[str, Any]] = {}
+        for index, provider in enumerate(ai_in.get("providers") or []):
+            if not isinstance(provider, dict):
+                continue
+            pid = re.sub(r"[^A-Za-z0-9_.-]+", "-", _s(provider.get("id"))).strip("-")
+            if not pid:
+                pid = f"provider-{index + 1}"
+            model_ids = []
+            for value in provider.get("models") or []:
+                mid = _s(value.get("id") or value.get("name")) if isinstance(value, dict) else _s(value)
+                if mid and mid not in model_ids:
+                    model_ids.append(mid)
+            reasoning = {_s(x) for x in provider.get("reasoningModels") or []}
+            non_chat = {_s(x) for x in provider.get("nonChatModels") or []}
+            models = [{"id": mid, "name": mid, "enabled": True,
+                       "reasoning": mid in reasoning, "nonChat": mid in non_chat,
+                       "chat": mid not in non_chat} for mid in model_ids]
+            key_rows = []
+            raw_keys = provider.get("apiKeys") if isinstance(provider.get("apiKeys"), list) else []
+            if not raw_keys and _s(provider.get("apiKey")):
+                raw_keys = [_s(provider.get("apiKey"))]
+            for value in raw_keys:
+                if isinstance(value, dict):
+                    key = _s(value.get("token") or value.get("key"))
+                    account = _s(value.get("accountId") or value.get("acct"))
+                else:
+                    key, account = _s(value), ""
+                if key:
+                    key_rows.append({"key": key, "acct": account, "enabled": True})
+            native_providers[pid] = {
+                "id": pid, "name": _s(provider.get("name")) or pid,
+                "vendor": _s(provider.get("vendor")),
+                "url": _s(provider.get("baseUrl")).rstrip("/"),
+                "endpoint": _s(provider.get("baseUrl")).rstrip("/"),
+                "enabled": provider.get("enabled", True) is not False,
+                "apiKey": key_rows[0]["key"] if key_rows else _s(provider.get("apiKey")),
+                "apiKeys": key_rows, "models": models,
+                "reasoningModels": sorted(reasoning), "nonChatModels": sorted(non_chat),
+            }
+        data["ai_providers"] = native_providers
+        candidates = []
+        for key in ai_in.get("candidates") or []:
+            text = _s(key)
+            if "::" not in text:
+                continue
+            provider, model = text.split("::", 1)
+            model = re.sub(r"::k\d+$", "", model)
+            if provider in native_providers and model:
+                candidates.append({"provider": provider, "model": model})
+        data["ai_candidates"] = candidates
+        master = _s(ai_in.get("master"))
+        data["ai_master"] = master.replace("::", "/", 1) if "::" in master else master
+        ai = dict(data.get("ai") or {})
+        selected = _s(ai_in.get("model"))
+        selected_provider = ""
+        selected_model = selected
+        if "::" in selected:
+            selected_provider, selected_model = selected.split("::", 1)
+            selected_model = re.sub(r"::k\d+$", "", selected_model)
+        if selected_provider in native_providers:
+            provider = native_providers[selected_provider]
+            ai.update(provider=selected_provider, model=selected_model,
+                      endpoint=provider.get("url", ""), api_key=provider.get("apiKey", ""))
+        else:
+            ai.update(endpoint=_s(ai_in.get("baseUrl")), api_key=_s(ai_in.get("apiKey")),
+                      model=selected_model)
+        data["ai"] = ai
         save(data)
-        return ok(connections=connections_payload())
+        return ok(connections=connections_payload(data))
 
     # ── profiles ─────────────────────────────────────────────────────────
     @app.get("/api/profiles")
@@ -1157,7 +1472,6 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     pagination_error = ""
                     detected_kind = ""
                     detected_value = ""
-                    cur_soup = None
                     next_url = ""
                     first_text = ""
                     first_url = ""
@@ -1200,7 +1514,6 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         rows, _soup, _stats = core.parse_html(res.text, res.url, cfg.get("selectors") or {})
                         if pn == 1:
                             first_text, first_url = res.text, res.url
-                            cur_soup = _soup
                             # Auto-detect pagination for next iterations
                             if _is_auto:
                                 try:
@@ -1252,7 +1565,6 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         # If pagination returned 0 products on page 2/3, treat as pagination failure
                         if pn > 1 and not rows:
                             pagination_error = f"صفحهٔ {pn} با صفحه‌بندی {(detected_kind if _is_auto and detected_kind else pag_kind_raw)}:{(detected_value if _is_auto and detected_value else pag_value_raw)} خالی برگشت — احتمالاً الگو نادرست است (URL: {cur_url[:100]})"
-                        cur_soup = _soup
                     elapsed = max(1, int((time.time() - started) * 1000))
                     if pagination_error:
                         # Report pagination failure explicitly; don't mark as successful engine if no products at all
@@ -1688,14 +2000,26 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     @app.get("/api/profile-stats")
     def node_profile_stats():
         data = load()
-        stats = {}
+        stats: dict[str, Any] = {}
+        items: list[dict[str, Any]] = []
         for name, cfg in (data.get("profiles") or {}).items():
-            rows = cfg.get("saved_products") if isinstance(cfg, dict) else []
-            stats[name] = {
-                "products": len(rows) if isinstance(rows, list) else 0,
-                "lastRunAt": (cfg or {}).get("last_run_at"),
-            }
-        return ok(stats=stats)
+            if not isinstance(cfg, dict):
+                continue
+            rows = [row for row in cfg.get("saved_products") or [] if isinstance(row, dict)]
+            woo_mapped = sum(bool(row.get("remote_woo_id") or row.get("woo_id")) for row in rows)
+            basalam_mapped = sum(bool(row.get("remote_basalam_id") or row.get("basalam_id")) for row in rows)
+            last_product = max((_s(row.get("updated_at") or row.get("scraped_at")) for row in rows),
+                               default="")
+            item = {"id": name, "name": _s(cfg.get("name")) or name,
+                    "products": len(rows), "woo_mapped": woo_mapped,
+                    "basalam_mapped": basalam_mapped,
+                    "last_product_at": last_product or None,
+                    "lastRunAt": cfg.get("last_run_at")}
+            items.append(item)
+            stats[name] = {"products": len(rows), "wooMapped": woo_mapped,
+                           "basalamMapped": basalam_mapped,
+                           "lastRunAt": cfg.get("last_run_at")}
+        return ok(items=items, stats=stats)
 
     # ── jobs / queue ─────────────────────────────────────────────────────
     @app.get("/api/jobs")
@@ -1758,8 +2082,14 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.get("/api/queue-watchdog")
     def node_queue_watchdog():
+        settings = load().get("ui_settings") or {}
+        watchdog = settings.get("watchdog") if isinstance(settings.get("watchdog"), dict) else {}
+        stall_after = max(60, _int(watchdog.get("stallAfter"), 300))
+        now = time.time()
         running = [t for t in live_tasks() if _s(t.get("status")) in ("waiting", "running")]
-        return ok(watchdog={"running": len(running), "stalled": 0})
+        stalled = [task_to_job(t) for t in running if now - _num(t.get("updated_at")) > stall_after]
+        return ok(watchdog={"running": len(running), "stalled": len(stalled),
+                            "stallAfter": stall_after}, stalled=stalled)
 
     # ── selector tooling ─────────────────────────────────────────────────
     @app.post("/api/test-selector")
@@ -1785,10 +2115,10 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     @app.route("/api/suggest-selectors", methods=["GET", "POST", "PUT"])
     def node_suggest_selectors():
         body = _body()
-        url = _s(body.get("url"))
+        url = _s(body.get("url") or request.args.get("url"))
         if not url:
             return jsonify(ok=False, error="آدرس لازم است."), 400
-        mode = _s(body.get("mode")).lower() or "all"
+        mode = _s(body.get("mode") or request.args.get("mode")).lower() or "all"
         try:
             result = core.auto_selectors(url, mode)
         except AttributeError:
@@ -1813,25 +2143,190 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.post("/api/test-connection/<target>")
     def node_test_connection(target: str):
+        """Perform the same lightweight authenticated probes as the Node UI."""
+        started = time.monotonic()
+        started_at = _iso()
+        body = _body()
         data = load()
-        if target == "woo":
-            woo = data.get("woocommerce") or {}
-            done = bool(woo.get("url") and woo.get("consumer_key") and woo.get("consumer_secret"))
-            return ok(target=target, connected=done,
-                      message="اتصال ووکامرس تنظیم شده است." if done else "اطلاعات ووکامرس کامل نیست.")
-        if target == "basalam":
-            bsl = data.get("basalam") or {}
-            done = bool(bsl.get("token"))
-            return ok(target=target, connected=done,
-                      message="توکن باسلام ثبت شده است." if done else "توکن باسلام ثبت نشده است.")
-        ai = data.get("ai") or {}
-        done = bool(ai.get("api_key"))
-        return ok(target=target, connected=done,
-                  message="کلید هوش مصنوعی ثبت شده است." if done else "کلید هوش مصنوعی ثبت نشده است.")
+        vault = connections_payload(data)
+
+        def elapsed() -> int:
+            return int((time.monotonic() - started) * 1000)
+
+        def config_error(message: str, recommendations: list[str]):
+            return jsonify(ok=False, target=target, startedAt=started_at,
+                           durationMs=elapsed(), phase="configuration", error=message,
+                           recommendations=recommendations)
+
+        def safe_json(response: Any) -> Any:
+            try:
+                value = response.json()
+            except Exception:  # noqa: BLE001
+                value = _s(getattr(response, "text", ""))[:100000]
+            return value
+
+        def redact(value: Any, hidden: list[str]) -> Any:
+            if isinstance(value, str):
+                for secret in hidden:
+                    if secret:
+                        value = value.replace(secret, "[پنهان]")
+                return value
+            if isinstance(value, list):
+                return [redact(item, hidden) for item in value]
+            if isinstance(value, dict):
+                return {key: ("[پنهان]" if re.search(
+                    r"authorization|api[_-]?key|token|secret|password|consumer", key, re.I)
+                    else redact(item, hidden)) for key, item in value.items()}
+            return value
+
+        try:
+            if target in {"woo", "woocommerce"}:
+                cfg = vault.get("woo") or {}
+                site, key, secret = _s(cfg.get("url")), _s(cfg.get("key")), _s(cfg.get("secret"))
+                if not site or not key or not secret:
+                    return config_error("آدرس فروشگاه، Consumer Key و Consumer Secret را کامل کنید.", [
+                        "آدرس باید با https:// شروع شود.",
+                        "کلید خواندن/نوشتن را از ووکامرس ← تنظیمات ← پیشرفته ← REST API بسازید."])
+                endpoint = core.public_http_url(site).rstrip("/") + \
+                    "/wp-json/wc/v3/products?per_page=1&status=any&_fields=id,name,status"
+                response = core.outbound_request("GET", endpoint, auth=(key, secret),
+                                                 headers={"Accept": "application/json",
+                                                          "User-Agent": core.USER_AGENT}, timeout=60)
+                raw = safe_json(response)
+                sample = raw[0] if isinstance(raw, list) and raw and isinstance(raw[0], dict) else {}
+                return jsonify(ok=bool(response.ok), target="woo", service="WooCommerce REST API",
+                               startedAt=started_at, durationMs=elapsed(),
+                               request={"method": "GET", "endpoint": endpoint,
+                                        "authentication": "Basic Auth (کلید در گزارش نمایش داده نمی‌شود)"},
+                               http={"status": response.status_code,
+                                     "contentType": response.headers.get("content-type", ""),
+                                     "finalUrl": getattr(response, "scraper4_final_url", endpoint),
+                                     "networkMode": getattr(response, "scraper4_transport", "direct")},
+                               summary={"siteUrl": site, "sampleProductId": sample.get("id"),
+                                        "sampleProductName": sample.get("name"),
+                                        "sampleProductStatus": sample.get("status")},
+                               recommendations=(["اتصال معتبر است و فهرست سبک محصولات ووکامرس پاسخ داد."]
+                                                if response.ok else
+                                                [f"پاسخ HTTP {response.status_code} موفق نبود."]),
+                               raw=redact(raw, [key, secret]))
+            if target in {"basalam", "bsl"}:
+                cfg = vault.get("basalam") or {}
+                shops = cfg.get("shops") if isinstance(cfg.get("shops"), list) else []
+                index = _int(body.get("shopIndex"), -1)
+                selected = shops[index] if 0 <= index < len(shops) and isinstance(shops[index], dict) else cfg
+                token = _s(selected.get("token") or cfg.get("token"))
+                expected_vendor = _s(selected.get("vendorId") or cfg.get("vendorId"))
+                if not token:
+                    return config_error("توکن باسلام وارد نشده است.", [
+                        "از پنل توسعه‌دهندگان باسلام یک توکن معتبر بسازید.",
+                        "توکن را بدون Bearer و بدون فاصله وارد کنید."])
+                api = _s(cfg.get("api") or (data.get("basalam") or {}).get("api_base_url")) \
+                    or "https://openapi.basalam.com"
+                endpoint = core.public_http_url(api).rstrip("/") + "/users/me"
+                response = core.outbound_request("GET", endpoint,
+                                                 headers={"Authorization": "Bearer " + token,
+                                                          "Accept": "application/json",
+                                                          "User-Agent": core.USER_AGENT}, timeout=60)
+                raw = safe_json(response)
+                user = raw.get("data", raw) if isinstance(raw, dict) else {}
+                user = user if isinstance(user, dict) else {}
+                vendor = user.get("vendor") if isinstance(user.get("vendor"), dict) else {}
+                vendor_id = _s(vendor.get("id") or user.get("vendor_id"))
+                autofill: dict[str, Any] = {}
+                if vendor_id:
+                    autofill["vendorId"] = vendor_id
+                if _s(vendor.get("title") or user.get("vendor_title")):
+                    autofill["name"] = _s(vendor.get("title") or user.get("vendor_title"))
+                prep = _int(vendor.get("preparation_days") or vendor.get("default_preparation_days"))
+                if prep > 0:
+                    autofill["preparationDays"] = prep
+                return jsonify(ok=bool(response.ok), target="basalam", service="Basalam OpenAPI",
+                               startedAt=started_at, durationMs=elapsed(),
+                               request={"method": "GET", "endpoint": endpoint,
+                                        "authentication": "Bearer Token (توکن در گزارش نمایش داده نمی‌شود)",
+                                        "shopIndex": index if selected is not cfg else None},
+                               http={"status": response.status_code,
+                                     "contentType": response.headers.get("content-type", ""),
+                                     "finalUrl": getattr(response, "scraper4_final_url", endpoint)},
+                               summary={"userId": user.get("id"),
+                                        "userName": user.get("name") or user.get("username"),
+                                        "vendorId": vendor_id or None,
+                                        "vendorTitle": vendor.get("title") or user.get("vendor_title"),
+                                        "configuredVendorId": expected_vendor or None,
+                                        "vendorIdMatches": (None if not expected_vendor or not vendor_id else
+                                                            expected_vendor == vendor_id),
+                                        "autofill": autofill},
+                               recommendations=(["توکن معتبر است و مسیر users/me پاسخ داد."]
+                                                if response.ok else
+                                                [f"پاسخ HTTP {response.status_code} موفق نبود."]),
+                               raw=redact(raw, [token]))
+            if target == "ai":
+                provider, model = _s(body.get("provider")), _s(body.get("model"))
+                prompt = _s(body.get("prompt")) or "Reply with exactly: SCRAPER4_OK"
+                if body.get("baseUrl") and body.get("apiKey"):
+                    endpoint = core.ai_endpoint(_s(body.get("baseUrl")))
+                    model = model or _s(body.get("model"))
+                    if not model:
+                        return config_error("نام مدل هوش مصنوعی وارد نشده است.", ["نام دقیق مدل را وارد کنید."])
+                    response = core.outbound_request("POST", endpoint,
+                        headers={"Authorization": "Bearer " + _s(body.get("apiKey")),
+                                 "Content-Type": "application/json", "User-Agent": core.USER_AGENT},
+                        json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+                        timeout=90)
+                    raw = safe_json(response)
+                    text = core.ai_extract_text(raw)
+                    if not response.ok or not text:
+                        raise ValueError(f"AI HTTP {response.status_code}: {_s(raw)[:500]}")
+                else:
+                    if not model:
+                        model = _s((data.get("ai") or {}).get("model"))
+                    if not provider:
+                        provider = _s((data.get("ai") or {}).get("provider"))
+                    if not model:
+                        return config_error("ارائه‌دهنده و مدل هوش مصنوعی تنظیم نشده است.", [
+                            "یک ارائه‌دهنده و حداقل یک مدل را ذخیره کنید."])
+                    text = core.ai_chat(prompt, provider, re.sub(r"::k\d+$", "", model))
+                return ok(target="ai", service="AI Chat Completions", startedAt=started_at,
+                          durationMs=elapsed(), provider=provider, model=model, prompt=prompt,
+                          text=text, recommendations=["مدل پاسخ معتبر برگرداند."])
+            return jsonify(ok=False, target=target, startedAt=started_at,
+                           durationMs=elapsed(), error="نوع اتصال ناشناخته است.")
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, target=target, startedAt=started_at,
+                           durationMs=elapsed(), phase="network", error=str(exc)[:1200],
+                           recommendations=["دسترسی اینترنت و آدرس سرویس را بررسی کنید.",
+                                            "مجوز کلید یا توکن را بررسی و دوباره آزمایش کنید."])
 
     @app.get("/api/categories/<target>")
     def node_categories(target: str):
-        return ok(items=[], total=0, target=target)
+        key = _s(target).lower()
+        try:
+            if key in {"woo", "woocommerce"}:
+                rows: list[dict[str, Any]] = []
+                for page in range(1, 101):
+                    batch = core.woo_request(
+                        "GET", f"products/categories?per_page=100&page={page}"
+                    ).json()
+                    if not isinstance(batch, list):
+                        break
+                    rows.extend(x for x in batch if isinstance(x, dict))
+                    if len(batch) < 100:
+                        break
+                items = [{"id": row.get("id"), "name": _s(row.get("name")),
+                          "parent": row.get("parent", 0), "count": row.get("count", 0)}
+                         for row in rows]
+                return ok(items=items, total=len(items), target="woo")
+            if key in {"basalam", "bsl"}:
+                rows = core.ai_load_category_rows()
+                items = [{"id": row.get("id"), "name": _s(row.get("name")),
+                          "path": _s(row.get("path") or row.get("name")),
+                          "parentId": row.get("parentId"),
+                          "leaf": row.get("leaf", True)}
+                         for row in rows if isinstance(row, dict)]
+                return ok(items=items, total=len(items), target="basalam")
+            return jsonify(ok=False, error="مقصد دسته‌بندی نامعتبر است."), 400
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
 
     # ── backup / settings transfer ───────────────────────────────────────
     # ── settings backup bundle ───────────────────────────────────────────
@@ -2238,31 +2733,299 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             raise ValueError("مقصد نامعتبر است")
         return key
 
+    def _basalam_shop_configs() -> list[dict[str, Any]]:
+        cfg = dict(load().get("basalam") or {})
+        shops = [{
+            "id": _s(cfg.get("vendor_id")), "name": _s(cfg.get("shop_name")) or "غرفهٔ پیش‌فرض",
+            "token": _s(cfg.get("token")), "vendor_id": _int(cfg.get("vendor_id")),
+            "primary": True, "cfg": cfg,
+        }]
+        for row in cfg.get("vendors") or []:
+            if not isinstance(row, dict):
+                continue
+            vendor = _int(row.get("vendor_id"))
+            merged = dict(cfg)
+            merged.update({"vendor_id": vendor, "token": _s(row.get("token")),
+                           "shop_name": _s(row.get("shop_name") or row.get("name"))})
+            shops.append({
+                "id": _s(vendor), "name": _s(row.get("shop_name") or row.get("name")) or f"غرفه {vendor}",
+                "token": _s(row.get("token")), "vendor_id": vendor,
+                "primary": False, "cfg": merged,
+            })
+        # Keep the configured list visible even when credentials are incomplete,
+        # but never issue an API request without both values.
+        seen, out = set(), []
+        for shop in shops:
+            if not shop["id"] or shop["id"] in seen:
+                continue
+            seen.add(shop["id"])
+            out.append(shop)
+        return out
+
+    def _basalam_shop(shop_id: Any = "") -> Optional[dict[str, Any]]:
+        wanted = _s(shop_id)
+        shops = _basalam_shop_configs()
+        if wanted and wanted not in {"all", "default"}:
+            return next((shop for shop in shops if shop["id"] == wanted), None)
+        return next((shop for shop in shops if shop.get("primary")), shops[0] if shops else None)
+
+    def _destination_rows(key: str, shop_filter: str = "all") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        if key == "woocommerce":
+            return core.destination_remote_rows(key), []
+        shops = _basalam_shop_configs()
+        selected = shops if shop_filter in {"", "all"} else [s for s in shops if s["id"] == shop_filter]
+        if not selected:
+            raise ValueError("غرفهٔ انتخاب‌شده پیدا نشد")
+        rows: list[dict[str, Any]] = []
+        # Preserve the backend's tested/default path for a single primary shop
+        # (and make this helper straightforward to monkeypatch in contract tests).
+        if len(selected) == 1 and selected[0].get("primary"):
+            raw_rows = core.destination_remote_rows("basalam")
+            for raw in raw_rows:
+                if isinstance(raw, dict):
+                    item = dict(raw)
+                    item["__s4_shop_id"] = selected[0]["id"]
+                    item["__s4_shop_name"] = selected[0]["name"]
+                    rows.append(item)
+            return rows, [{k: s[k] for k in ("id", "name", "primary")} for s in shops]
+        for shop in selected:
+            if not shop.get("token") or not shop.get("vendor_id"):
+                continue
+            with core.basalam_use_cfg(shop["cfg"]):
+                for page in range(1, getattr(core, "REMOTE_CATALOG_PAGES", 20) + 1):
+                    payload = core.basalam_api_request(
+                        "GET", f"/v1/vendors/{shop['vendor_id']}/products",
+                        params={"per_page": 100, "page": page},
+                    )
+                    batch = core.basalam_api_rows(payload)
+                    for raw in batch:
+                        if isinstance(raw, dict):
+                            item = dict(raw)
+                            item["__s4_shop_id"] = shop["id"]
+                            item["__s4_shop_name"] = shop["name"]
+                            rows.append(item)
+                    if len(batch) < 100:
+                        break
+        return rows, [{k: s[k] for k in ("id", "name", "primary")} for s in shops]
+
+    def _nested(row: dict[str, Any], *names: str) -> Any:
+        sources = [row]
+        for key in ("data", "revision", "product", "category"):
+            value = row.get(key)
+            if isinstance(value, dict):
+                sources.append(value)
+                if isinstance(value.get("data"), dict):
+                    sources.append(value["data"])
+        for source in sources:
+            for name in names:
+                if source.get(name) not in (None, ""):
+                    return source.get(name)
+        return None
+
+    def _destination_view(raw: dict[str, Any], key: str) -> dict[str, Any]:
+        row = raw if isinstance(raw, dict) else {}
+        basic = core.remote_product_view(row, key)
+        if key == "woocommerce":
+            images = row.get("images") if isinstance(row.get("images"), list) else []
+            image = next((_s(x.get("src")) for x in images if isinstance(x, dict) and x.get("src")), "")
+            cats = row.get("categories") if isinstance(row.get("categories"), list) else []
+            cat = next((x for x in cats if isinstance(x, dict)), {})
+            return {
+                **basic, "title": _s(row.get("name") or basic.get("title")),
+                "image": image, "stock": row.get("stock_quantity"),
+                "category": _s(cat.get("name")), "categoryId": _int(cat.get("id")),
+                "shortDescription": _s(row.get("short_description")),
+                "description": _s(row.get("description")), "raw": row,
+                "shopId": "default", "shopName": "ووکامرس",
+                "statusLabel": _s(row.get("status")),
+            }
+        photo = _nested(row, "photo", "image", "primary_photo")
+        if isinstance(photo, dict):
+            image = _s(photo.get("url") or photo.get("medium") or photo.get("src"))
+        else:
+            image = _s(photo)
+        price = _nested(row, "primary_price", "price")
+        if isinstance(price, dict):
+            price = price.get("amount") or price.get("value") or price.get("price")
+        status = _nested(row, "status", "status_id", "state")
+        if isinstance(status, dict):
+            status = status.get("id") or status.get("value")
+        category = _nested(row, "category_title", "category_name")
+        category_id = _nested(row, "category_id")
+        category_obj = row.get("category")
+        if isinstance(category_obj, dict):
+            category = category or category_obj.get("title") or category_obj.get("name")
+            category_id = category_id or category_obj.get("id")
+        labels = {2976: "فعال", 3790: "غیرفعال", 3567: "تأیید نشده",
+                  3568: "در انتظار تأیید", 4184: "بایگانی"}
+        return {
+            **basic, "title": _s(_nested(row, "title", "name") or basic.get("title")),
+            "price": _int(core.woo_price(price) or 0), "image": image,
+            "stock": _nested(row, "stock", "inventory", "quantity"),
+            "category": _s(category), "categoryId": _int(category_id),
+            "shortDescription": _s(_nested(row, "short_description", "short_desc")),
+            "description": _s(_nested(row, "description", "long_description")),
+            "rejectionReason": _s(_nested(row, "rejection_reason", "reject_reason")),
+            "raw": row, "shopId": _s(row.get("__s4_shop_id")),
+            "shopName": _s(row.get("__s4_shop_name")), "status": status,
+            "statusLabel": labels.get(_int(status), _s(status)),
+        }
+
+    def _shop_context(shop_id: Any):
+        shop = _basalam_shop(shop_id)
+        if not shop:
+            raise ValueError("غرفه پیدا نشد")
+        return core.basalam_use_cfg(shop["cfg"]), shop
+
     @app.get("/api/destination/<target>/overview")
     def node_dest_overview(target: str):
         try:
             key = dest_key(target)
-            rows = core.destination_remote_rows(key)
+            rows, shops = _destination_rows(key, _s(request.args.get("shop")) or "all")
         except Exception as exc:  # noqa: BLE001 - shown in the panel
             return jsonify(ok=False, error=str(exc)), 400
         data = load()
-        name = _s(data.get("active_profile"))
+        name = _s(request.args.get("profileId")) or _s(data.get("active_profile"))
         profile = (data.get("profiles") or {}).get(name) or {}
         report = core.build_destination_report(name, key, profile, rows)
-        return ok(overview=report, counts=report.get("counts", {}),
+        return ok(overview=report, counts=report.get("counts", {}), shops=shops,
                   remoteTotal=report.get("remote_total", 0),
                   localTotal=report.get("local_total", 0))
 
     @app.get("/api/destination/<target>/products")
     def node_dest_products(target: str):
-        limit = min(500, _int(request.args.get("limit"), 100) or 100)
+        per_page = min(500, max(1, _int(request.args.get("per_page"),
+                                        _int(request.args.get("limit"), 100) or 100)))
+        page = max(1, _int(request.args.get("page"), 1))
+        query = _s(request.args.get("q")).strip().lower()
+        status = _s(request.args.get("status")) or "all"
+        shop_filter = _s(request.args.get("shop")) or "all"
         try:
             key = dest_key(target)
-            rows = core.destination_remote_rows(key)
+            rows, shops = _destination_rows(key, shop_filter)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
-        items = [core.remote_product_view(r, key) for r in rows[:limit]]
-        return ok(items=items, total=len(rows))
+        items = [_destination_view(r, key) for r in rows]
+        if query:
+            items = [item for item in items if query in (
+                _s(item.get("title")) + " " + _s(item.get("sku")) + " " + _s(item.get("id"))
+            ).lower()]
+        counts: dict[str, int] = {"all": len(items)}
+        for item in items:
+            code = _s(item.get("status"))
+            counts[code] = counts.get(code, 0) + 1
+        if status != "all":
+            items = [item for item in items if _s(item.get("status")) == status]
+        total = len(items)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+        offset = (page - 1) * per_page
+        return ok(items=items[offset:offset + per_page], total=total, page=page,
+                  perPage=per_page, totalPages=total_pages, counts=counts, shops=shops,
+                  priceUnit="تومان", remotePriceUnit="ریال" if key == "basalam" else "تومان",
+                  archiveInsteadOfDelete=key == "basalam")
+
+    def _destination_get_one(key: str, item_id: str, shop_id: str = "") -> dict[str, Any]:
+        if key == "woocommerce":
+            raw = core.woo_request("GET", f"products/{item_id}").json()
+            return _destination_view(raw if isinstance(raw, dict) else {}, key)
+        ctx, shop = _shop_context(shop_id)
+        last: Optional[Exception] = None
+        with ctx:
+            for path in (f"/v1/products/{item_id}",
+                         f"/v1/vendors/{shop['vendor_id']}/products/{item_id}"):
+                try:
+                    payload = core.basalam_api_request("GET", path)
+                    raw = payload.get("data", payload) if isinstance(payload, dict) else {}
+                    if isinstance(raw, dict):
+                        raw = dict(raw)
+                        raw["__s4_shop_id"] = shop["id"]
+                        raw["__s4_shop_name"] = shop["name"]
+                        return _destination_view(raw, key)
+                except Exception as exc:  # noqa: BLE001 - try vendor endpoint too
+                    last = exc
+        raise last or ValueError("محصول باسلام پیدا نشد")
+
+    @app.get("/api/destination/<target>/product/<path:item_id>")
+    def node_dest_product(target: str, item_id: str):
+        try:
+            key = dest_key(target)
+            return ok(product=_destination_get_one(key, item_id, _s(request.args.get("shop"))))
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+
+    def _direct_destination_payload(key: str, body: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if "title" in body and _s(body.get("title")) != _s(current.get("title")):
+            payload["name" if key == "woocommerce" else "title"] = _s(body.get("title"))
+        if body.get("price") not in (None, "") and _int(body.get("price")) != _int(current.get("price")):
+            payload["regular_price" if key == "woocommerce" else "price"] = (
+                _s(_int(body.get("price"))) if key == "woocommerce" else _int(body.get("price")))
+        if body.get("stock") not in (None, "") and _int(body.get("stock")) != _int(current.get("stock")):
+            if key == "woocommerce":
+                payload.update(manage_stock=True, stock_quantity=_int(body.get("stock")))
+            else:
+                payload["stock"] = _int(body.get("stock"))
+        if "status" in body and _s(body.get("status")) != _s(current.get("status")):
+            payload["status"] = _int(body.get("status")) if key == "basalam" else _s(body.get("status"))
+        mappings = (("shortDescription", "short_description"), ("description", "description"))
+        for source, destination in mappings:
+            if source in body and _s(body.get(source)) != _s(current.get(source)):
+                payload[destination] = _s(body.get(source))
+        if key == "woocommerce" and "sku" in body and _s(body.get("sku")) != _s(current.get("sku")):
+            payload["sku"] = _s(body.get("sku"))
+        if body.get("categoryId") not in (None, "") and _int(body.get("categoryId")) != _int(current.get("categoryId")):
+            if key == "woocommerce":
+                payload["categories"] = [{"id": _int(body.get("categoryId"))}]
+            else:
+                payload["category_id"] = _int(body.get("categoryId"))
+        for field in ("preparation_days", "weight", "package_weight"):
+            if key == "basalam" and body.get(field) not in (None, ""):
+                payload[field] = max(0, _int(body.get(field)))
+        return payload
+
+    @app.post("/api/destination/<target>/<path:item_id>/update")
+    def node_dest_update(target: str, item_id: str):
+        body = _body()
+        apply_now = _s(body.get("confirm")) == "APPLY"
+        try:
+            key = dest_key(target)
+            current = _destination_get_one(key, item_id, _s(body.get("shopId")))
+            changes = _direct_destination_payload(key, body, current)
+            if not changes:
+                return ok(dryRun=not apply_now, id=item_id, shopId=current.get("shopId"),
+                          changed=False, current=current, changes={})
+            if not apply_now:
+                return ok(dryRun=True, id=item_id, shopId=current.get("shopId"), changed=True,
+                          current=current, changes=changes,
+                          summary="پیش‌نمایش است؛ چیزی روی مقصد تغییر نکرد.")
+            if key == "woocommerce":
+                raw = core.woo_request("PUT", f"products/{item_id}", changes).json()
+            else:
+                ctx, _shop = _shop_context(body.get("shopId") or current.get("shopId"))
+                with ctx:
+                    raw = core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                                   json_data=changes)
+                raw = raw.get("data", raw) if isinstance(raw, dict) else {}
+                if isinstance(raw, dict):
+                    raw = dict(raw)
+                    raw["__s4_shop_id"] = current.get("shopId")
+                    raw["__s4_shop_name"] = current.get("shopName")
+                if _int(changes.get("category_id")) > 0:
+                    learning = load()
+                    records = learning.get("category_learning")
+                    if not isinstance(records, list):
+                        records = []
+                    records.append({"title": current.get("title"),
+                                    "categoryId": _int(changes["category_id"]),
+                                    "categoryName": _s(body.get("categoryName") or current.get("category")),
+                                    "at": _iso()})
+                    learning["category_learning"] = records[-5000:]
+                    save(learning)
+            return ok(dryRun=False, id=item_id, shopId=current.get("shopId"), changed=True,
+                      product=_destination_view(raw if isinstance(raw, dict) else {}, key))
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
 
     @app.post("/api/destination/<target>/<path:item_id>/status")
     def node_dest_status(target: str, item_id: str):
@@ -2272,10 +3035,19 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         status = _s(body.get("status")) or "draft"
         try:
             key = dest_key(target)
-            if key != "woocommerce":
-                return jsonify(ok=False, error="تغییر وضعیت فقط برای ووکامرس پشتیبانی می‌شود."), 400
-            response = core.woo_request("PUT", f"products/{item_id}", {"status": status})
-            return ok(item=response.json(), status=status)
+            if key == "woocommerce":
+                response = core.woo_request("PUT", f"products/{item_id}", {"status": status})
+                item = response.json()
+            else:
+                ctx, shop = _shop_context(body.get("shopId"))
+                with ctx:
+                    item = core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                                    json_data={"status": _int(status)})
+                item = item.get("data", item) if isinstance(item, dict) else item
+                if isinstance(item, dict):
+                    item = {**item, "__s4_shop_id": shop["id"], "__s4_shop_name": shop["name"]}
+            return ok(item=_destination_view(item, key) if isinstance(item, dict) else item,
+                      status=_int(status) if key == "basalam" else status)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
 
@@ -2285,37 +3057,198 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             return jsonify(ok=False, error="برای حذف، confirm=DELETE لازم است."), 400
         try:
             key = dest_key(target)
-            if key != "woocommerce":
-                return jsonify(ok=False, error="حذف فقط برای ووکامرس پشتیبانی می‌شود."), 400
-            core.woo_request("DELETE", f"products/{item_id}?force=true")
-            return ok(deleted=item_id)
+            if key == "woocommerce":
+                force = _s(request.args.get("force")).lower() in {"1", "true", "yes"}
+                core.woo_request("DELETE", f"products/{item_id}?force={'true' if force else 'false'}")
+                return ok(deleted=item_id, force=force)
+            ctx, shop = _shop_context(request.args.get("shop") or request.args.get("shopId"))
+            with ctx:
+                result = core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                                  json_data={"status": 4184})
+            return ok(deleted=item_id, archived=True, status=4184, shopId=shop["id"], raw=result)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
+
+    DEDUP_RUNS: dict[str, dict[str, Any]] = {}
+    DEDUP_LOCK = threading.RLock()
+
+    def _dedup_get(key: str) -> Optional[dict[str, Any]]:
+        with DEDUP_LOCK:
+            if key in DEDUP_RUNS:
+                return copy.deepcopy(DEDUP_RUNS[key])
+            stored = load().get("dedup_runs")
+            row = stored.get(key) if isinstance(stored, dict) else None
+            if isinstance(row, dict):
+                DEDUP_RUNS[key] = copy.deepcopy(row)
+                return copy.deepcopy(row)
+        return None
+
+    def _dedup_save(key: str, run: dict[str, Any]) -> None:
+        with DEDUP_LOCK:
+            DEDUP_RUNS[key] = copy.deepcopy(run)
+            data = load()
+            rows = data.setdefault("dedup_runs", {})
+            if not isinstance(rows, dict):
+                rows = {}
+                data["dedup_runs"] = rows
+            rows[key] = copy.deepcopy(run)
+            save(data)
+
+    def _dedup_suffix_patterns(raw: Any) -> list[re.Pattern[str]]:
+        formats = ([_s(value) for value in raw] if isinstance(raw, list) else
+                   re.split(r"[,،|\n]+", _s(raw)))
+        formats = [value.strip() for value in formats if value.strip() and re.search(r"x", value, re.I)][:8]
+        if not formats:
+            formats = ["(کد:x)", "#x"]
+        patterns = []
+        for value in formats:
+            pieces = re.split(r"[xX]+", value)
+            body = r"[\w\u0600-\u06ff]{1,20}".join(re.escape(piece).replace(r"\ ", r"\s*")
+                                                         for piece in pieces)
+            patterns.append(re.compile(r"(?:\s|[-–—_·.])*" + body + r"\s*$", re.I))
+        patterns.append(re.compile(
+            r"(?:\s|[-–—_·.])*[\[(]\s*(?:کد|كد|code|sku)\s*[:：#-]?\s*"
+            r"[\w\u0600-\u06ff][\w\u0600-\u06ff\s._/-]{0,40}?\s*[\])]\s*$", re.I))
+        return patterns
+
+    def _dedup_base_title(title: Any, patterns: list[re.Pattern[str]]) -> str:
+        text = core.clean_text(title).lower()
+        for _ in range(5):
+            old = text
+            for pattern in patterns:
+                text = pattern.sub("", text)
+            if text == old:
+                break
+        text = re.sub(r"[^\w\s\u0600-\u06ff]", " ", text, flags=re.UNICODE)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _dedup_worker(key: str, run_id: str) -> None:
+        run = _dedup_get(key)
+        if not run or run.get("id") != run_id:
+            return
+        try:
+            if not run.get("groups"):
+                run.update(status="running", phase="listing", updatedAt=_iso())
+                _dedup_save(key, run)
+                raw_rows, _shops = _destination_rows(key, "all")
+                views = [_destination_view(row, key) for row in raw_rows]
+                run.update(scanned=len(views), page=1, totalPages=1, phase="grouping",
+                           updatedAt=_iso())
+                _dedup_save(key, run)
+                patterns = _dedup_suffix_patterns(run.get("suffixFormats"))
+                grouped: dict[str, list[dict[str, Any]]] = {}
+                for view in views:
+                    name = _s(view.get("title"))
+                    base = _dedup_base_title(name, patterns)
+                    if not base:
+                        continue
+                    shop_id = _s(view.get("shopId")) or "default"
+                    raw = view.get("raw") if isinstance(view.get("raw"), dict) else {}
+                    candidate = {"id": _int(view.get("id")), "shopId": shop_id,
+                                 "name": name, "price": _int(view.get("price")),
+                                 "date": _s(raw.get("date_created") or raw.get("created_at")),
+                                 "status": _s(view.get("status")), "sku": _s(view.get("sku"))}
+                    if candidate["id"]:
+                        grouped.setdefault(shop_id + "::" + base, []).append(candidate)
+                groups = []
+                keep = run.get("keep")
+                for group_key, candidates in grouped.items():
+                    if len(candidates) < 2:
+                        continue
+                    def created(item: dict[str, Any]) -> float:
+                        try:
+                            return datetime.fromisoformat(item["date"].replace("Z", "+00:00")).timestamp()
+                        except (ValueError, TypeError):
+                            return float(item["id"])
+                    if keep == "oldest":
+                        ordered = sorted(candidates, key=lambda item: (created(item), item["id"]))
+                    elif keep == "cheapest":
+                        ordered = sorted(candidates, key=lambda item: (item["price"], -item["id"]))
+                    elif keep == "expensive":
+                        ordered = sorted(candidates, key=lambda item: (-item["price"], -item["id"]))
+                    else:
+                        ordered = sorted(candidates, key=lambda item: (-created(item), -item["id"]))
+                    groups.append({"key": group_key, "title": ordered[0]["name"],
+                                   "count": len(ordered), "keep": ordered[0],
+                                   "remove": ordered[1:]})
+                groups.sort(key=lambda group: (-len(group["remove"]), group["title"]))
+                run.update(groups=groups[:500], groupsFound=len(groups),
+                           duplicates=sum(len(group["remove"]) for group in groups),
+                           phase="removing" if run.get("apply") else "finished",
+                           status="running" if run.get("apply") else "done", updatedAt=_iso())
+                _dedup_save(key, run)
+            if not run.get("apply"):
+                return
+            actions = [(group, item) for group in run.get("groups") or []
+                       for item in group.get("remove") or []]
+            cursor = max(0, _int(run.get("cursor")))
+            for index in range(cursor, len(actions)):
+                latest = _dedup_get(key) or run
+                if latest.get("stopRequested"):
+                    run.update(status="paused", phase="paused", cursor=index,
+                               stopRequested=False, updatedAt=_iso())
+                    _dedup_save(key, run)
+                    return
+                group, item = actions[index]
+                record = {"id": item["id"], "shopId": item.get("shopId"),
+                          "name": item.get("name"), "action": "archive" if key == "basalam" else "trash"}
+                try:
+                    if key == "woocommerce":
+                        core.woo_request("DELETE", f"products/{item['id']}?force=false")
+                    else:
+                        context, _shop = _shop_context(item.get("shopId"))
+                        with context:
+                            core.basalam_api_request("PATCH", f"/v1/products/{item['id']}",
+                                                     json_data={"status": 4184})
+                    record["ok"] = True
+                    run["removed"] = _int(run.get("removed")) + 1
+                except Exception as exc:  # noqa: BLE001
+                    record.update(ok=False, error=str(exc)[:500])
+                    run["failed"] = _int(run.get("failed")) + 1
+                logs = run.get("items") if isinstance(run.get("items"), list) else []
+                logs.append(record)
+                run.update(items=logs[-500:], cursor=index + 1, updatedAt=_iso())
+                _dedup_save(key, run)
+            run.update(status="done", phase="finished", finishedAt=_iso(), updatedAt=_iso())
+            _dedup_save(key, run)
+        except Exception as exc:  # noqa: BLE001
+            run = _dedup_get(key) or run
+            run.update(status="failed", phase="failed", error=str(exc)[:1000],
+                       finishedAt=_iso(), updatedAt=_iso())
+            _dedup_save(key, run)
+
+    def _launch_dedup(key: str, run: dict[str, Any]) -> None:
+        threading.Thread(target=_dedup_worker, args=(key, _s(run.get("id"))),
+                         name="destination-dedup", daemon=True).start()
 
     @app.post("/api/destination/<target>/dedup-runs")
     def node_dedup_start(target: str):
-        """Find duplicate remote products by normalised title."""
         try:
             key = dest_key(target)
-            rows = core.destination_remote_rows(key)
-        except Exception as exc:  # noqa: BLE001
+        except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
-        groups: dict[str, list[dict[str, Any]]] = {}
-        for raw in rows:
-            view = core.remote_product_view(raw, key)
-            title = _s(view.get("title")).strip().lower()
-            if title:
-                groups.setdefault(title, []).append(view)
-        dupes = [{"title": t, "count": len(v), "items": v}
-                 for t, v in groups.items() if len(v) > 1]
-        dupes.sort(key=lambda x: -x["count"])
-        run = {"id": "dedup-" + _s(int(time.time())), "target": key,
-               "status": "done", "scanned": len(rows),
-               "groups": dupes[:200], "duplicates": len(dupes)}
-        DEDUP_RUNS[key] = run
-        return ok(run=run, groups=run["groups"])
-
-    DEDUP_RUNS: dict[str, dict[str, Any]] = {}
+        existing = _dedup_get(key)
+        if existing and existing.get("status") in {"queued", "running"}:
+            return ok(run=existing, existing=True)
+        body = _body()
+        keep = _s(body.get("keep")).lower()
+        if keep not in {"newest", "oldest", "cheapest", "expensive"}:
+            keep = "newest"
+        formats = [_s(value).strip() for value in body.get("suffixFormats") or []] \
+            if isinstance(body.get("suffixFormats"), list) else \
+            [value.strip() for value in re.split(r"[,،|\n]+", _s(body.get("suffixFormats"))) if value.strip()]
+        run = {"id": "dedup-" + secrets.token_hex(8),
+               "target": "basalam" if key == "basalam" else "woo",
+               "status": "queued", "phase": "waiting", "keep": keep,
+               "suffixFormats": formats or ["(کد:x)", "#x"],
+               "apply": bool(body.get("apply")), "scanned": 0, "page": 1,
+               "totalPages": 1, "groups": [], "groupsFound": 0,
+               "duplicates": 0, "removed": 0, "failed": 0, "cursor": 0,
+               "items": [], "stopRequested": False, "error": "",
+               "createdAt": _iso(), "updatedAt": _iso()}
+        _dedup_save(key, run)
+        _launch_dedup(key, run)
+        return ok(run=run, existing=False), 202
 
     @app.get("/api/destination/<target>/dedup-runs/current")
     def node_dedup_current(target: str):
@@ -2323,7 +3256,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             key = dest_key(target)
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
-        return ok(run=DEDUP_RUNS.get(key))
+        return ok(run=_dedup_get(key))
 
     @app.post("/api/destination/<target>/dedup-runs/control")
     @app.post("/api/destination/<target>/dedup-runs/reset")
@@ -2332,10 +3265,27 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             key = dest_key(target)
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+        run = _dedup_get(key)
         if request.path.endswith("/reset"):
-            DEDUP_RUNS.pop(key, None)
+            if run and run.get("status") in {"queued", "running"}:
+                return jsonify(ok=False, error="اجرای فعال را ابتدا متوقف کنید.", run=run), 409
+            with DEDUP_LOCK:
+                DEDUP_RUNS.pop(key, None)
+                data = load()
+                stored = data.get("dedup_runs")
+                if isinstance(stored, dict):
+                    stored.pop(key, None)
+                save(data)
             return ok(run=None)
-        return ok(run=DEDUP_RUNS.get(key))
+        action = _s(_body().get("action"))
+        if run and action == "stop" and run.get("status") in {"queued", "running"}:
+            run.update(stopRequested=True, phase="stopping", updatedAt=_iso())
+            _dedup_save(key, run)
+        elif run and action == "resume" and run.get("status") in {"paused", "failed"}:
+            run.update(stopRequested=False, status="queued", phase="waiting", error="", updatedAt=_iso())
+            _dedup_save(key, run)
+            _launch_dedup(key, run)
+        return ok(run=_dedup_get(key))
 
     @app.route("/api/destination/<target>/bulk", methods=["GET", "POST", "PUT", "PATCH"])
     def node_dest_bulk(target: str):
@@ -2350,14 +3300,25 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             key = dest_key(target)
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
-        ids = [_s(i) for i in (body.get("ids") or []) if _s(i)]
+        refs: list[dict[str, str]] = []
+        for value in body.get("ids") or []:
+            if isinstance(value, dict):
+                item_id, shop_id = _s(value.get("id")), _s(value.get("shopId"))
+            else:
+                item_id, shop_id = _s(value), _s(body.get("shopId"))
+            if item_id:
+                refs.append({"id": item_id, "shopId": shop_id})
         ops = body.get("ops") if isinstance(body.get("ops"), dict) else {}
-        if not ids:
+        if not refs:
             return jsonify(ok=False, error="هیچ محصولی انتخاب نشده است."), 400
-        if len(ids) > 20:
+        if len(refs) > 20:
             return jsonify(ok=False, error="حداکثر ۲۰ محصول در هر نوبت."), 400
         dry = _s(body.get("confirm")) != "APPLY"
         remove = bool(ops.get("delete"))
+        assignments: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in ops.get("categoryAssignments") or []:
+            if isinstance(row, dict) and _s(row.get("id")) and _int(row.get("categoryId")) > 0:
+                assignments[(_s(row.get("shopId")), _s(row.get("id")))] = row
 
         def new_price(current: Any) -> Optional[int]:
             spec = ops.get("price")
@@ -2384,68 +3345,93 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             return max(0, int(round(out)))
 
         items, errors = [], []
-        for item_id in ids:
-            entry: dict[str, Any] = {"id": item_id}
+        changed = deleted = skipped = 0
+        learned: list[dict[str, Any]] = []
+        for ref in refs:
+            item_id, shop_id = ref["id"], ref["shopId"]
+            entry: dict[str, Any] = {"id": item_id, "shopId": shop_id or "default"}
             try:
-                if key == "woocommerce":
-                    current = core.woo_request("GET", f"products/{item_id}").json()
-                else:
-                    current = core.basalam_api_request(
-                        "GET", f"/v1/products/{item_id}") or {}
-                view = core.remote_product_view(
-                    current if isinstance(current, dict) else {}, key)
-                entry["title"] = view.get("title")
+                view = _destination_get_one(key, item_id, shop_id)
+                entry.update(title=view.get("title"), shopId=view.get("shopId") or entry["shopId"])
+                context = None
+                if key == "basalam":
+                    context, _shop = _shop_context(entry["shopId"])
                 if remove:
-                    entry["action"] = ("بایگانی" if key == "basalam" else "حذف")
+                    entry["action"] = ("بایگانی با وضعیت ۴۱۸۴" if key == "basalam" else "حذف")
+                    deleted += 1
                     if not dry:
                         if key == "woocommerce":
-                            core.woo_request("DELETE", f"products/{item_id}?force=true")
+                            core.woo_request("DELETE", f"products/{item_id}?force=false")
                         else:
-                            core.basalam_api_request(
-                                "PATCH", f"/v1/products/{item_id}",
-                                json_data={"status": 3400})
+                            with context:
+                                core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                                         json_data={"status": 4184})
                         entry["done"] = True
                 else:
                     payload: dict[str, Any] = {}
                     price = new_price(view.get("price"))
                     if price is not None:
                         entry["oldPrice"], entry["newPrice"] = view.get("price"), price
-                        payload["regular_price" if key == "woocommerce"
-                                else "price"] = (str(price) if key == "woocommerce"
-                                                 else price)
+                        payload["regular_price" if key == "woocommerce" else "price"] = (
+                            str(price) if key == "woocommerce" else price)
                     if ops.get("stock") not in (None, ""):
-                        payload["stock_quantity" if key == "woocommerce"
-                                else "inventory"] = _int(ops.get("stock"))
+                        payload["stock_quantity" if key == "woocommerce" else "stock"] = _int(ops.get("stock"))
                     if _s(ops.get("status")):
-                        payload["status"] = _s(ops.get("status"))
+                        payload["status"] = (_int(ops.get("status")) if key == "basalam"
+                                             else _s(ops.get("status")))
                     title = _s(view.get("title"))
                     if _s(ops.get("titlePrefix")) or _s(ops.get("titleSuffix")):
-                        title = (_s(ops.get("titlePrefix")) + title
-                                 + _s(ops.get("titleSuffix")))
+                        title = _s(ops.get("titlePrefix")) + title + _s(ops.get("titleSuffix"))
                         payload["name" if key == "woocommerce" else "title"] = title
                         entry["newTitle"] = title
                     if _s(ops.get("shortDescription")):
                         payload["short_description"] = _s(ops.get("shortDescription"))
                     if _s(ops.get("description")):
                         payload["description"] = _s(ops.get("description"))
+                    assignment = (assignments.get((entry["shopId"], item_id))
+                                  or assignments.get((shop_id, item_id))
+                                  or assignments.get(("", item_id)))
+                    if assignment and key == "basalam":
+                        payload["category_id"] = _int(assignment.get("categoryId"))
+                        entry.update(categoryName=_s(assignment.get("categoryName")),
+                                     categorySource=_s(assignment.get("source")))
                     if not payload:
                         entry["skipped"] = "تغییری مشخص نشده است"
+                        skipped += 1
                     else:
+                        changed += 1
                         entry["changes"] = payload
                         if not dry:
                             if key == "woocommerce":
                                 core.woo_request("PUT", f"products/{item_id}", payload)
                             else:
-                                core.basalam_api_request(
-                                    "PATCH", f"/v1/products/{item_id}",
-                                    json_data=payload)
+                                with context:
+                                    core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                                             json_data=payload)
+                                if assignment:
+                                    learned.append({
+                                        "title": view.get("title"),
+                                        "categoryId": _int(assignment.get("categoryId")),
+                                        "categoryName": _s(assignment.get("categoryName")),
+                                        "source": _s(assignment.get("source")), "at": _iso(),
+                                    })
                             entry["done"] = True
             except Exception as exc:  # noqa: BLE001 - reported per item
-                entry["error"] = str(exc)[:200]
+                entry["error"] = str(exc)[:400]
                 errors.append(entry["error"])
             items.append(entry)
-        return ok(items=items, dryRun=dry, target=key, count=len(items),
-                  errors=errors,
+        if learned:
+            data = load()
+            rows = data.get("category_learning")
+            if not isinstance(rows, list):
+                rows = []
+            rows.extend(learned)
+            data["category_learning"] = rows[-5000:]
+            save(data)
+        return ok(items=items, dryRun=dry, target=key, total=len(items), count=len(items),
+                  changed=changed, deleted=deleted, skipped=skipped,
+                  failed=len(errors), errors=errors, learningRecords=len(learned),
+                  archiveInsteadOfDelete=key == "basalam",
                   message=("پیش‌نمایش؛ هیچ تغییری اعمال نشد."
                            if dry else f"{len(items)} محصول پردازش شد."))
 
@@ -2455,18 +3441,56 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         title = _s(body.get("title")).strip()
         if not title:
             return jsonify(ok=False, error="عنوان محصول لازم است."), 400
+        if _s(body.get("mode")) == "learned":
+            best, score = None, 0
+            needle = title.lower()
+            for row in load().get("category_learning") or []:
+                if not isinstance(row, dict) or _int(row.get("categoryId")) <= 0:
+                    continue
+                phrase = _s(row.get("words") or row.get("phrase") or row.get("title")).lower()
+                words = [w for w in re.split(r"[\s,،]+", phrase) if len(w) > 1]
+                hits = sum(w in needle for w in words)
+                if hits > score:
+                    best, score = row, hits
+            result = None
+            if best:
+                result = {"categoryId": _int(best.get("categoryId")),
+                          "categoryName": _s(best.get("categoryName")),
+                          "phrase": _s(best.get("phrase") or best.get("title")),
+                          "hits": score}
+            return ok(result=result, title=title)
         model_key = _s(body.get("modelKey"))
         provider, _, model = model_key.partition("::")
-        prompt = (
-            "برای این محصول فقط نام مناسب‌ترین دستهٔ فروشگاهی را به فارسی بنویس. "
-            "فقط نام دسته را بنویس بدون توضیح.\n\nعنوان محصول: " + title
-        )
+        model = re.sub(r"::k\d+$", "", model)
         try:
+            categories = core.ai_load_category_rows()
+            names = [_s(row.get("path") or row.get("name")) for row in categories[:250]
+                     if isinstance(row, dict) and _s(row.get("path") or row.get("name"))]
+            prompt = (
+                "برای عنوان محصول زیر مناسب‌ترین دستهٔ باسلام را انتخاب کن. "
+                "فقط JSON معتبر با کلید category برگردان و category باید دقیقاً یکی از نام‌های فهرست باشد.\n"
+                "عنوان: " + title + "\nفهرست دسته‌ها: " + " | ".join(names)
+            )
             answer = core.ai_chat(prompt, provider, model)
+            name = _s(answer).strip()
+            try:
+                parsed = core.ai_parse_json_object(answer)
+                name = _s(parsed.get("category") or parsed.get("categoryName") or name)
+            except Exception:
+                match = re.search(r'"(?:category|categoryName)"\s*:\s*"([^"]+)"', answer)
+                if match:
+                    name = match.group(1)
+            found = core.ai_match_category(name, categories)
+            if not found:
+                return jsonify(ok=False, key=model_key, error="پاسخ مدل با هیچ دستهٔ معتبر باسلام منطبق نشد.",
+                               suggestion=name), 400
+            return ok(key=model_key, title=title, suggestion=name,
+                      categoryId=_int(found.get("id")),
+                      categoryName=_s(found.get("name") or name),
+                      categoryPath=_s(found.get("path") or found.get("name") or name),
+                      items=[found])
         except Exception as exc:  # noqa: BLE001
-            return jsonify(ok=False, error=str(exc)), 400
-        return ok(suggestion=_s(answer).strip(), title=title,
-                  items=[{"name": _s(answer).strip()}])
+            return jsonify(ok=False, key=model_key, error=str(exc)), 400
 
     @app.get("/api/destination/<target>/report")
     def node_dest_report(target: str):
@@ -2481,23 +3505,182 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         return ok(report=core.build_destination_report(name, key, profile, rows))
 
     # ── maintenance panels ───────────────────────────────────────────────
+    _CODE_SUFFIX_RE = re.compile(
+        r"\s*[\[(](?:(?:کد|code|sku)\s*[:：]?\s*)?[0-9۰-۹]+[\])]\s*$", re.I)
+
+    def _recon_title(value: Any) -> str:
+        text = core.clean_text(value).lower()
+        text = _CODE_SUFFIX_RE.sub("", text)
+        text = re.sub(r"[^\w\s\u0600-\u06ff]", " ", text, flags=re.UNICODE)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _has_code_suffix(value: Any) -> bool:
+        return bool(_CODE_SUFFIX_RE.search(_s(value)))
+
+    def _recon_local_rows(data: dict[str, Any], profile_id: str = "") -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for pid, profile in (data.get("profiles") or {}).items():
+            if profile_id and pid != profile_id:
+                continue
+            if not isinstance(profile, dict):
+                continue
+            for product in profile.get("saved_products") or []:
+                if not isinstance(product, dict):
+                    continue
+                source_key = _s(product.get("source_key") or product.get("sourceKey"))
+                if not source_key:
+                    source_key = core.product_identity_key(product)
+                price = _int(core.woo_price(product.get("price")) or 0)
+                rows.append({"profile_id": pid, "profile_name": _s(profile.get("name")) or pid,
+                             "source_key": source_key, "title": _s(product.get("title") or product.get("name")),
+                             "price": price, "active": product.get("active", True) is not False,
+                             "sku": _s(product.get("sku")), "product": product, "profile": profile})
+        return rows
+
+    def _mapped_remote_id(local: dict[str, Any], target: str, account_key: str) -> int:
+        product = local["product"]
+        maps = product.get("destination_maps")
+        if isinstance(maps, dict):
+            row = maps.get(f"{target}:{account_key}")
+            if isinstance(row, dict) and _int(row.get("id") or row.get("remote_id")) > 0:
+                return _int(row.get("id") or row.get("remote_id"))
+            if _int(row) > 0:
+                return _int(row)
+        profile_map = local["profile"].get("remote_map")
+        map_target = "woocommerce" if target == "woo" else target
+        if isinstance(profile_map, dict):
+            row = (profile_map.get(map_target) or {}).get(local["source_key"]) \
+                if isinstance(profile_map.get(map_target), dict) else None
+            if isinstance(row, dict) and _int(row.get("id")) > 0:
+                return _int(row.get("id"))
+        legacy = (product.get("remote_woo_id") or product.get("woo_id") if target == "woo" else
+                  product.get("remote_basalam_id") or product.get("basalam_id"))
+        return _int(legacy)
+
+    def _recon_account(local_all: list[dict[str, Any]], remote_raw: list[dict[str, Any]],
+                       target: str, account_key: str, account_name: str,
+                       price_percent: float = 0, to_rial: bool = False,
+                       require_suffix: bool = False) -> list[dict[str, Any]]:
+        local = [row for row in local_all if not require_suffix or _has_code_suffix(row["title"])]
+        duplicate_counts: dict[str, int] = {}
+        for row in local:
+            key = _recon_title(row["title"])
+            duplicate_counts[key] = duplicate_counts.get(key, 0) + 1
+        by_title: dict[str, list[dict[str, Any]]] = {}
+        by_sku: dict[str, dict[str, Any]] = {}
+        by_remote: dict[int, dict[str, Any]] = {}
+        for row in local:
+            by_title.setdefault(_recon_title(row["title"]), []).append(row)
+            sku = row["sku"] or f"s4-{row['profile_id']}-{row['source_key']}"[:100]
+            if sku:
+                by_sku.setdefault(sku, row)
+            mapped = _mapped_remote_id(row, target, account_key)
+            if mapped:
+                by_remote.setdefault(mapped, row)
+        consumed: set[tuple[str, str]] = set()
+        out: list[dict[str, Any]] = []
+
+        def expected(source_price: int) -> Optional[int]:
+            if source_price <= 0:
+                return None
+            adjusted = round(source_price * (1 + float(price_percent or 0) / 100))
+            return adjusted * 10 if to_rial else adjusted
+
+        def base(source: Optional[dict[str, Any]]) -> dict[str, Any]:
+            return {"target": target, "accountKey": account_key, "accountName": account_name,
+                    "pricePercent": price_percent, "profileId": source["profile_id"] if source else "",
+                    "profileName": source["profile_name"] if source else "",
+                    "sourceKey": source["source_key"] if source else ""}
+
+        for raw in remote_raw:
+            view = _destination_view(raw, "woocommerce" if target == "woo" else "basalam")
+            title = _s(view.get("title"))
+            if require_suffix and not _has_code_suffix(title):
+                continue
+            remote_id = _int(view.get("id"))
+            candidates = by_title.get(_recon_title(title)) or []
+            source = next((row for row in candidates
+                           if (row["profile_id"], row["source_key"]) not in consumed), None)
+            matched_by = "title" if source else "none"
+            sku = _s(view.get("sku"))
+            if not source and sku and sku in by_sku:
+                candidate = by_sku[sku]
+                if (candidate["profile_id"], candidate["source_key"]) not in consumed:
+                    source, matched_by = candidate, "sku"
+            if not source and remote_id in by_remote:
+                candidate = by_remote[remote_id]
+                if (candidate["profile_id"], candidate["source_key"]) not in consumed:
+                    source, matched_by = candidate, "id"
+            remote_price = _int(view.get("price")) or None
+            if not source:
+                out.append({**base(None), "bucket": "extra", "title": title,
+                            "remoteTitle": title, "remoteId": remote_id or None,
+                            "sourcePrice": None, "expectedPrice": None,
+                            "remotePrice": remote_price, "delta": None, "matchedBy": "none",
+                            "status": _s(view.get("status")),
+                            "why": "در مقصد هست ولی در هیچ پروفایلی نیست",
+                            "duplicateCount": duplicate_counts.get(_recon_title(title), 0)})
+                continue
+            consumed.add((source["profile_id"], source["source_key"]))
+            source_price = source["price"] or None
+            wanted = expected(source["price"])
+            common = {**base(source), "title": source["title"], "remoteTitle": title,
+                      "remoteId": remote_id or None, "sourcePrice": source_price,
+                      "expectedPrice": wanted, "remotePrice": remote_price,
+                      "matchedBy": matched_by, "status": _s(view.get("status")),
+                      "duplicateCount": duplicate_counts.get(_recon_title(source["title"]), 0)}
+            if wanted is None:
+                out.append({**common, "bucket": "noPrice", "delta": None,
+                            "why": "قیمت مبدأ ثبت نشده — مقایسه نشد"})
+            elif remote_price != wanted:
+                out.append({**common, "bucket": "priceDiff",
+                            "delta": (remote_price or 0) - wanted,
+                            "why": "قیمت مقصد با قیمت تعدیل‌شده یکی نیست" if price_percent else
+                                   "قیمت مقصد با مبدأ یکی نیست"})
+            else:
+                out.append({**common, "bucket": "matched", "delta": 0, "why": ""})
+        for row in local:
+            if (row["profile_id"], row["source_key"]) in consumed or not row["active"]:
+                continue
+            source_price = row["price"] or None
+            out.append({**base(row), "bucket": "missing", "title": row["title"],
+                        "remoteTitle": "", "remoteId": None, "sourcePrice": source_price,
+                        "expectedPrice": expected(row["price"]), "remotePrice": None,
+                        "delta": None, "matchedBy": "none", "status": "",
+                        "why": "در مبدأ هست ولی در مقصد نیست",
+                        "duplicateCount": duplicate_counts.get(_recon_title(row["title"]), 0)})
+        return out
+
+    def _recon_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = {bucket: sum(row.get("bucket") == bucket for row in rows)
+                  for bucket in ("matched", "priceDiff", "extra", "missing", "noPrice", "unreachable")}
+        return {**counts, "total": len(rows),
+                "inSync": not any(counts[key] for key in ("priceDiff", "extra", "missing", "unreachable"))}
+
     @app.post("/api/maintenance/recon-table/<target>")
     @app.post("/api/maintenance/recon-unified/<target>")
     def node_recon_table(target: str):
         body = _body()
         data = load()
         name = _s(body.get("profileId")) or _s(data.get("active_profile"))
-        profile = (data.get("profiles") or {}).get(name) or {}
         try:
             key = dest_key(target)
-            rows = core.destination_remote_rows(key)
+            remote, _shops = _destination_rows(key, _s(body.get("shopId")) or "all")
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
-        report = core.build_destination_report(name, key, profile, rows)
-        lists = report.get("lists", {})
-        return ok(report=report, counts=report.get("counts", {}),
-                  items=lists.get("mismatch", []) + lists.get("missing", []),
-                  rows=lists)
+        normalized = "woo" if key == "woocommerce" else "basalam"
+        rows = _recon_account(_recon_local_rows(data, name), remote, normalized,
+                              _s(body.get("shopId")) or "default",
+                              "ووکامرس" if normalized == "woo" else "باسلام",
+                              to_rial=normalized == "basalam", require_suffix=False)
+        summary = _recon_summary(rows)
+        report = {"ok": True, "target": normalized, "at": _iso(), "profileId": name,
+                  "local": len(_recon_local_rows(data, name)), "remote": len(remote),
+                  **summary, "matchedByTitle": sum(row["matchedBy"] == "title" for row in rows),
+                  "matchedBySku": sum(row["matchedBy"] == "sku" for row in rows),
+                  "matchedById": sum(row["matchedBy"] == "id" for row in rows),
+                  "rows": rows}
+        return jsonify(report)
 
     @app.post("/api/maintenance/retire/<target>")
     def node_maintenance_retire(target: str):
@@ -2513,70 +3696,323 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             return jsonify(ok=False, error=str(exc)), 400
         report = core.build_destination_report(name, key, profile, rows)
         extra = report.get("lists", {}).get("extra", [])
-        if not apply_now:
-            return ok(preview=True, candidates=extra, count=len(extra),
+        settings = data.get("ui_settings") if isinstance(data.get("ui_settings"), dict) else {}
+        retire = settings.get("retire") if isinstance(settings.get("retire"), dict) else {}
+        max_count = max(1, _int(retire.get("maxCount"), 100))
+        max_pct = max(1, min(100, _int(retire.get("maxPct"), 25)))
+        mode = _s(body.get("action") or body.get("mode") or retire.get("mode") or "report")
+        pct = round(len(extra) * 100 / max(1, len(rows)), 2)
+        if not apply_now or mode == "report":
+            return ok(preview=True, candidates=extra, count=len(extra), mode=mode,
+                      percent=pct, safety={"maxCount": max_count, "maxPct": max_pct},
                       message=f"{len(extra)} محصول در مقصد هست که در منبع نیست. "
                               "برای اجرا confirm=APPLY بفرستید.")
-        return jsonify(ok=False,
-                       error="اجرای حذف گروهی در این نسخه غیرفعال است؛ "
-                             "از فهرست پیش‌نمایش استفاده کنید."), 501
+        if len(extra) > max_count or pct > max_pct:
+            return jsonify(ok=False, error="ترمز ایمنی بازنشستگی فعال شد.", count=len(extra),
+                           percent=pct, maxCount=max_count, maxPct=max_pct), 409
+        changed, failed = 0, []
+        for row in extra:
+            item_id = _s(row.get("id"))
+            try:
+                if key == "woocommerce":
+                    if mode in {"trash", "delete"}:
+                        core.woo_request("DELETE", f"products/{item_id}?force=false")
+                    elif mode in {"outofstock", "out-of-stock", "stock"}:
+                        core.woo_request("PUT", f"products/{item_id}",
+                                         {"manage_stock": True, "stock_quantity": 0,
+                                          "stock_status": "outofstock"})
+                    else:
+                        core.woo_request("PUT", f"products/{item_id}", {"status": "draft"})
+                else:
+                    core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                             json_data={"status": 4184 if mode in {"archive", "trash", "delete"} else 3790})
+                changed += 1
+            except Exception as exc:  # noqa: BLE001
+                failed.append({"id": item_id, "error": str(exc)[:400]})
+        return ok(preview=False, mode=mode, count=len(extra), changed=changed,
+                  failed=failed, failedCount=len(failed), percent=pct)
 
     @app.post("/api/maintenance/recon-unified")
     @app.post("/api/maintenance/recon-unified/apply")
     def node_recon_unified():
-        """Reconcile the active (or all) profiles against every destination."""
+        """Compare and optionally synchronize every configured destination account."""
         body = _body()
-        apply_now = request.path.endswith("/apply")
+        apply_now = request.path.endswith("/apply") and _s(body.get("confirm")) == "APPLY"
         data = load()
         wanted = _s(body.get("profileId"))
-        names = [wanted] if wanted else list((data.get("profiles") or {}).keys())
-        reports, planned, errors = [], 0, []
-        for name in names:
-            profile = (data.get("profiles") or {}).get(name) or {}
-            for key in ("woocommerce", "basalam"):
+        local_all = _recon_local_rows(data, wanted)
+        eligible = [row for row in local_all if _has_code_suffix(row["title"])]
+        accounts: list[dict[str, Any]] = []
+        woo = data.get("woocommerce") if isinstance(data.get("woocommerce"), dict) else {}
+        if woo.get("url") and woo.get("consumer_key") and woo.get("consumer_secret"):
+            accounts.append({"target": "woo", "key": "default", "name": "ووکامرس",
+                             "pricePercent": _num(woo.get("price_percent"))})
+        for shop in _basalam_shop_configs():
+            if shop.get("token") and shop.get("vendor_id"):
+                cfg = shop.get("cfg") or {}
+                pct = _num(cfg.get("price_val")) if _s(cfg.get("price_mode")) == "percent" else 0
+                accounts.append({"target": "basalam", "key": shop["id"],
+                                 "name": "باسلام — " + shop["name"],
+                                 "pricePercent": pct, "shop": shop})
+
+        rows: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        for account in accounts:
+            try:
+                if account["target"] == "woo":
+                    remote, _ = _destination_rows("woocommerce", "all")
+                else:
+                    remote, _ = _destination_rows("basalam", account["key"])
+                rows.extend(_recon_account(
+                    local_all, remote, account["target"], account["key"], account["name"],
+                    account.get("pricePercent", 0), account["target"] == "basalam", True))
+            except Exception as exc:  # noqa: BLE001
+                message = str(exc)[:600]
+                failures.append({"account": account["name"], "error": message})
+                for local in eligible:
+                    rows.append({"target": account["target"], "accountKey": account["key"],
+                                 "accountName": account["name"],
+                                 "pricePercent": account.get("pricePercent", 0),
+                                 "profileId": local["profile_id"], "profileName": local["profile_name"],
+                                 "sourceKey": local["source_key"], "bucket": "unreachable",
+                                 "title": local["title"], "remoteTitle": "", "remoteId": None,
+                                 "sourcePrice": local["price"] or None, "expectedPrice": None,
+                                 "remotePrice": None, "delta": None, "matchedBy": "none",
+                                 "status": "unreachable", "why": "مقصد پاسخ نداد: " + message,
+                                 "duplicateCount": 0})
+
+        actions: list[dict[str, Any]] = []
+        for row in rows:
+            if row["bucket"] == "priceDiff" and row.get("remoteId") and row.get("expectedPrice"):
+                actions.append({"kind": "updatePrice", **{key: row.get(key) for key in
+                                ("target", "accountKey", "accountName", "profileId", "sourceKey",
+                                 "title", "remoteId")}, "fromPrice": row.get("remotePrice"),
+                                "toPrice": row.get("expectedPrice")})
+            elif row["bucket"] == "missing" and row.get("profileId") and row.get("sourceKey"):
+                actions.append({"kind": "create", **{key: row.get(key) for key in
+                                ("target", "accountKey", "accountName", "profileId", "sourceKey",
+                                 "title", "remoteId")}, "fromPrice": None,
+                                "toPrice": row.get("expectedPrice")})
+        limit = max(1, min(1000, _int(body.get("limit"), 200)))
+        actions = actions[:limit]
+        changed = 0
+        failed: list[dict[str, Any]] = []
+
+        def remember(action: dict[str, Any], remote_id: Any) -> None:
+            if _int(remote_id) <= 0:
+                return
+            profile = (data.get("profiles") or {}).get(action["profileId"])
+            if not isinstance(profile, dict):
+                return
+            product = next((item for item in profile.get("saved_products") or []
+                            if isinstance(item, dict) and
+                            _s(item.get("source_key") or item.get("sourceKey") or
+                               core.product_identity_key(item)) == action["sourceKey"]), None)
+            if not product:
+                return
+            maps = product.setdefault("destination_maps", {})
+            if isinstance(maps, dict):
+                maps[f"{action['target']}:{action['accountKey']}"] = {
+                    "id": _int(remote_id), "updated_at": int(time.time())}
+            map_target = "woocommerce" if action["target"] == "woo" else "basalam"
+            profile_map = profile.setdefault("remote_map", {})
+            if isinstance(profile_map, dict) and action["accountKey"] == "default":
+                profile_map.setdefault(map_target, {})[action["sourceKey"]] = {
+                    "id": _int(remote_id), "updated_at": int(time.time())}
+
+        if apply_now:
+            local_index = {(row["profile_id"], row["source_key"]): row for row in local_all}
+            for action in actions:
                 try:
-                    rows = core.destination_remote_rows(key)
-                except Exception as exc:  # noqa: BLE001 - destination may be off
-                    errors.append(f"{key}: {exc}")
-                    continue
-                report = core.build_destination_report(name, key, profile, rows)
-                counts = report.get("counts", {})
-                planned += _int(counts.get("mismatch")) + _int(counts.get("missing"))
-                reports.append({"profile": name, "destination": key,
-                                "counts": counts,
-                                "lists": report.get("lists", {})})
-                # Persist the learned source→remote id map so later runs match
-                # by id instead of guessing from the title.
-                learned = report.get("learned") or {}
-                if learned and isinstance(profile, dict):
-                    remote_map = profile.setdefault("remote_map", {})
-                    if isinstance(remote_map, dict):
-                        remote_map.setdefault(key, {}).update(learned)
-        if not reports and errors:
-            return jsonify(ok=False, error="؛ ".join(errors[:3])), 400
-        save(data)
-        return ok(items=reports, reports=reports, planned=planned,
-                  applied=0 if not apply_now else 0, errors=errors,
-                  dryRun=not apply_now,
-                  message=("پیش‌نمایش مغایرت‌ها آماده شد."
-                           if not apply_now else
-                           "نگاشت شناسه‌ها ذخیره شد؛ برای ارسال تغییرات از "
-                           "«ارسال به مقصد» استفاده کنید."))
+                    remote_id = action.get("remoteId")
+                    if action["kind"] == "updatePrice":
+                        if action["target"] == "woo":
+                            core.woo_request("PUT", f"products/{remote_id}",
+                                             {"regular_price": str(_int(action["toPrice"]))})
+                        else:
+                            context, _shop = _shop_context(action["accountKey"])
+                            with context:
+                                core.basalam_api_request("PATCH", f"/v1/products/{remote_id}",
+                                                         json_data={"primary_price": _int(action["toPrice"])})
+                    else:
+                        source = local_index.get((action["profileId"], action["sourceKey"]))
+                        if not source:
+                            raise ValueError("محصول منبع پیدا نشد")
+                        product = copy.deepcopy(source["product"])
+                        if action["target"] == "woo":
+                            if action.get("toPrice"):
+                                product["price"] = str(_int(action["toPrice"]))
+                            result = core.woo_send_one(product,
+                                                       _s(product.get("destination_status") or "draft"), True)
+                        else:
+                            context, shop = _shop_context(action["accountKey"])
+                            with context:
+                                result = core.basalam_send_one(product, shop.get("cfg"))
+                        remote_id = result.get("id") if isinstance(result, dict) else None
+                    remember(action, remote_id)
+                    changed += 1
+                except Exception as exc:  # noqa: BLE001
+                    failed.append({"title": action.get("title"),
+                                   "account": action.get("accountName"),
+                                   "error": str(exc)[:500]})
+            save(data)
+
+        summary = _recon_summary(rows)
+        account_rows = []
+        for account in accounts:
+            selected = [row for row in rows if row["target"] == account["target"] and
+                        _s(row["accountKey"]) == _s(account["key"])]
+            account_rows.append({"key": f"{account['target']}:{account['key']}",
+                                 "target": account["target"], "accountKey": account["key"],
+                                 "name": account["name"],
+                                 "pricePercent": account.get("pricePercent", 0),
+                                 **_recon_summary(selected)})
+        profiles = []
+        for pid in dict.fromkeys(row["profileId"] for row in rows if row.get("profileId")):
+            selected = [row for row in rows if row.get("profileId") == pid]
+            profiles.append({"profileId": pid, "profileName": selected[0].get("profileName") or pid,
+                             **_recon_summary(selected)})
+        return jsonify({"ok": not failures and not failed, "dryRun": not apply_now,
+                        "at": _iso(), "profileId": wanted, "local": len(eligible),
+                        "localAll": len(local_all), "skippedNoCode": len(local_all) - len(eligible),
+                        "accounts": len(accounts), **summary, "planned": len(actions),
+                        "actions": actions[:200], "changed": changed, "applied": changed,
+                        "failed": failed[:20], "failures": failures,
+                        "accountsBreakdown": account_rows, "profiles": profiles, "rows": rows})
 
     @app.post("/api/maintenance/photo-fix")
     def node_photo_fix():
+        body = _body()
+        apply_now = _s(body.get("confirm")) == "APPLY"
         data = load()
-        name = _s(_body().get("profileId")) or _s(data.get("active_profile"))
-        rows = profile_products(name)
-        missing = [product_to_node(r, i) for i, r in enumerate(rows)
-                   if not _s(r.get("image"))]
-        return ok(items=missing, count=len(missing), profile=name,
-                  message=f"{len(missing)} محصول بدون تصویر پیدا شد.")
+        name = _s(body.get("profileId")) or _s(data.get("active_profile"))
+        locals_ = _recon_local_rows(data, name)
+        try:
+            remote = core.destination_remote_rows("woocommerce")
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        by_id = {_int(row.get("id")): row for row in remote if isinstance(row, dict) and _int(row.get("id"))}
+        items: list[dict[str, Any]] = []
+        for local in locals_:
+            product = local["product"]
+            image = _s(product.get("image"))
+            if not image and isinstance(product.get("images"), list):
+                image = next((_s(value) for value in product["images"] if _s(value)), "")
+            remote_id = _mapped_remote_id(local, "woo", "default")
+            row = by_id.get(remote_id)
+            images = row.get("images") if isinstance(row, dict) and isinstance(row.get("images"), list) else []
+            if image and row is not None and not images:
+                items.append({"id": remote_id, "title": local["title"], "image": image,
+                              "profileId": local["profile_id"], "sourceKey": local["source_key"]})
+        if not apply_now:
+            return ok(dryRun=True, items=items[:200], count=len(items), profile=name,
+                      message=f"{len(items)} محصول ووکامرس بدون تصویر پیدا شد.")
+        changed, failed = 0, []
+        for item in items:
+            try:
+                core.woo_request("PUT", f"products/{item['id']}",
+                                 {"images": [{"src": item["image"]}]})
+                changed += 1
+            except Exception as exc:  # noqa: BLE001
+                failed.append({**item, "error": str(exc)[:500]})
+        return ok(dryRun=False, items=items[:200], count=len(items), profile=name,
+                  changed=changed, failed=failed[:20], failedCount=len(failed))
 
-    @app.post("/api/maintenance/<kind>/<target>")
-    def node_maintenance_generic(kind: str, target: str):
-        return ok(kind=kind, target=target, items=[],
-                  message="این عملیات نگهداری در نسخهٔ پایتون پیاده‌سازی نشده است.")
+    @app.post("/api/maintenance/recon/<target>")
+    def node_maintenance_recon(target: str):
+        body = _body()
+        data = load()
+        name = _s(body.get("profileId")) or _s(data.get("active_profile"))
+        profile = (data.get("profiles") or {}).get(name)
+        if not isinstance(profile, dict):
+            return jsonify(ok=False, error="پروفایل پیدا نشد."), 404
+        try:
+            key = dest_key(target)
+            rows, _shops = _destination_rows(key, _s(body.get("shopId")) or "all")
+            report = core.build_destination_report(name, key, profile, rows)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(target=key, profileId=name, report=report,
+                  counts=report.get("counts", {}), lists=report.get("lists", {}))
+
+    @app.post("/api/maintenance/rebuild/<target>")
+    def node_maintenance_rebuild(target: str):
+        body = _body()
+        data = load()
+        name = _s(body.get("profileId")) or _s(data.get("active_profile"))
+        profile = (data.get("profiles") or {}).get(name)
+        if not isinstance(profile, dict):
+            return jsonify(ok=False, error="پروفایل پیدا نشد."), 404
+        try:
+            key = dest_key(target)
+            rows, _shops = _destination_rows(key, _s(body.get("shopId")) or "all")
+            report = core.build_destination_report(name, key, profile, rows)
+            learned = report.get("learned") if isinstance(report.get("learned"), dict) else {}
+            remote_map = profile.setdefault("remote_map", {})
+            if isinstance(remote_map, dict):
+                remote_map[key] = dict(learned)
+            save(data)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        return ok(target=key, profileId=name, rebuilt=len(learned), map=learned,
+                  report=report)
+
+    @app.post("/api/maintenance/bulk/<target>")
+    def node_maintenance_bulk(target: str):
+        body = _body()
+        apply_now = _s(body.get("confirm")) == "APPLY"
+        query = _s(body.get("query")).strip().lower()
+        try:
+            key = dest_key(target)
+            raw_rows, _shops = _destination_rows(key, _s(body.get("shopId")) or "all")
+            views = [_destination_view(row, key) for row in raw_rows]
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        if query:
+            views = [row for row in views if query in
+                     (_s(row.get("title")) + " " + _s(row.get("sku")) + " " +
+                      _s(row.get("id"))).lower()]
+        views = views[:200]
+        prefix, suffix = _s(body.get("prefix")), _s(body.get("suffix"))
+        price_pct = _num(body.get("pricePercent"))
+        stock = body.get("stock")
+        items, failed, changed = [], [], 0
+        for view in views:
+            item_id, shop_id = _s(view.get("id")), _s(view.get("shopId"))
+            payload: dict[str, Any] = {}
+            if prefix or suffix:
+                payload["name" if key == "woocommerce" else "title"] = (
+                    prefix + _s(view.get("title")) + suffix)
+            if price_pct:
+                new_price = max(0, int(round(_num(view.get("price")) *
+                                             (1 + price_pct / 100))))
+                payload["regular_price" if key == "woocommerce" else "price"] = (
+                    str(new_price) if key == "woocommerce" else new_price)
+            if stock not in (None, ""):
+                payload["stock_quantity" if key == "woocommerce" else "stock"] = _int(stock)
+            row = {"id": item_id, "shopId": shop_id or "default",
+                   "title": view.get("title"), "changes": payload}
+            if not payload:
+                row["skipped"] = True
+            elif apply_now:
+                try:
+                    if key == "woocommerce":
+                        core.woo_request("PUT", f"products/{item_id}", payload)
+                    else:
+                        context, _shop = _shop_context(shop_id)
+                        with context:
+                            core.basalam_api_request("PATCH", f"/v1/products/{item_id}",
+                                                     json_data=payload)
+                    row["done"] = True
+                    changed += 1
+                except Exception as exc:  # noqa: BLE001
+                    row["error"] = str(exc)[:400]
+                    failed.append(row)
+            items.append(row)
+        return ok(target=key, dryRun=not apply_now, count=len(items), total=len(items),
+                  changed=changed, failed=failed, failedCount=len(failed), items=items,
+                  message=("پیش‌نمایش آماده شد؛ تغییری اعمال نشد."
+                           if not apply_now else f"{changed} محصول ویرایش شد."))
 
     # ── AI panels ────────────────────────────────────────────────────────
     @app.post("/api/ai/chat")
@@ -2600,7 +4036,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         return ok(reply=answer, content=answer,
                   message={"role": "assistant", "content": answer})
 
-    @app.post("/api/ai/diagnose")
+    @app.route("/api/ai/diagnose", methods=["GET", "POST"])
     def node_ai_diagnose():
         data = load()
         ai = data.get("ai") or {}
@@ -2624,30 +4060,44 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                "detail": str(exc)[:200]})
         return ok(checks=checks, healthy=all(c["ok"] for c in checks))
 
+    def _leaderboard(votes: dict[str, Any]) -> list[dict[str, Any]]:
+        items = [{"model": key, "key": key, "wins": _int(value.get("wins", value.get("up"))),
+                  "appearances": _int(value.get("appearances", value.get("up"))) + _int(value.get("down")),
+                  "up": _int(value.get("up", value.get("wins"))),
+                  "down": _int(value.get("down")),
+                  "score": _int(value.get("wins", value.get("up"))) - _int(value.get("down"))}
+                 for key, value in votes.items() if isinstance(value, dict)]
+        items.sort(key=lambda item: (-item["score"], -item["wins"], item["model"]))
+        return items
+
     @app.post("/api/ai/vote")
     def node_ai_vote():
         body = _body()
         data = load()
         votes = data.setdefault("ai_votes", {})
-        key = _s(body.get("modelKey") or body.get("model"))
+        winner = _s(body.get("winner"))
+        candidates = [_s(x) for x in body.get("candidates") or [] if _s(x)]
+        key = winner or _s(body.get("modelKey") or body.get("model"))
         if not key:
             return jsonify(ok=False, error="مدل مشخص نشده است."), 400
-        row = votes.setdefault(key, {"up": 0, "down": 0})
-        if _s(body.get("vote")) == "down":
-            row["down"] = _int(row.get("down")) + 1
-        else:
-            row["up"] = _int(row.get("up")) + 1
+        if not candidates:
+            candidates = [key]
+        for candidate in dict.fromkeys(candidates):
+            row = votes.setdefault(candidate, {"wins": 0, "appearances": 0, "up": 0, "down": 0})
+            row["appearances"] = _int(row.get("appearances")) + 1
+            if candidate == key:
+                row["wins"] = _int(row.get("wins")) + 1
+                row["up"] = _int(row.get("up")) + 1
+            elif _s(body.get("vote")) == "down":
+                row["down"] = _int(row.get("down")) + 1
         save(data)
-        return ok(votes=votes, model=key)
+        board = _leaderboard(votes)
+        return ok(votes=votes, model=key, leaderboard=board)
 
     @app.get("/api/ai/leaderboard")
     def node_ai_leaderboard():
-        votes = load().get("ai_votes") or {}
-        items = [{"model": k, "up": _int(v.get("up")), "down": _int(v.get("down")),
-                  "score": _int(v.get("up")) - _int(v.get("down"))}
-                 for k, v in votes.items() if isinstance(v, dict)]
-        items.sort(key=lambda x: -x["score"])
-        return ok(items=items)
+        items = _leaderboard(load().get("ai_votes") or {})
+        return ok(items=items, leaderboard=items)
 
     @app.get("/api/ai/chat-models")
     @app.get("/api/agent/models")
@@ -2676,47 +4126,275 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                            "label": f"{pid} · {ai['model']}"})
         return ok(models=models, items=models)
 
-    # AI batch test runs — kept in memory, driven by the real ai_chat().
+    # AI batch test runs — persistent checkpoints, real provider/model calls.
     AI_RUN: dict[str, Any] = {}
+    AI_RUN_LOCK = threading.RLock()
+    # Reset is allowed while a provider call is in flight. Tombstones prevent
+    # that worker from resurrecting the cleared checkpoint when it returns.
+    AI_CANCELLED_RUNS: set[str] = set()
+
+    def _ai_run_models(only_candidates: bool = False) -> list[dict[str, str]]:
+        data = load()
+        providers = data.get("ai_providers") or {}
+        try:
+            providers = core.normalize_ai_providers(providers)
+        except Exception:  # noqa: BLE001
+            providers = providers if isinstance(providers, dict) else {}
+        wanted = {_s(value) for value in data.get("ai_candidates") or []}
+        rows: list[dict[str, str]] = []
+        for pid, provider in providers.items():
+            if not isinstance(provider, dict) or provider.get("enabled") is False:
+                continue
+            for raw in provider.get("models") or []:
+                if isinstance(raw, dict):
+                    if raw.get("enabled") is False:
+                        continue
+                    model = _s(raw.get("id") or raw.get("name"))
+                else:
+                    model = _s(raw)
+                key = f"{pid}::{model}"
+                if model and (not only_candidates or key in wanted or model in wanted):
+                    rows.append({"key": key, "provider": _s(pid), "model": model,
+                                 "providerName": _s(provider.get("name") or pid)})
+        ai = data.get("ai") if isinstance(data.get("ai"), dict) else {}
+        if not rows and _s(ai.get("model")):
+            pid, model = _s(ai.get("provider")) or "default", _s(ai.get("model"))
+            rows.append({"key": f"{pid}::{model}", "provider": pid,
+                         "model": model, "providerName": pid})
+        return rows
+
+    def _ai_run_save(run: dict[str, Any]) -> bool:
+        with AI_RUN_LOCK:
+            run_id = _s(run.get("id"))
+            if run_id and run_id in AI_CANCELLED_RUNS:
+                AI_CANCELLED_RUNS.discard(run_id)
+                return False
+            AI_RUN.clear()
+            AI_RUN.update(copy.deepcopy(run))
+            data = load()
+            data["ai_test_run"] = copy.deepcopy(run)
+            save(data)
+            return True
+
+    def _ai_run_get() -> Optional[dict[str, Any]]:
+        with AI_RUN_LOCK:
+            if AI_RUN:
+                return copy.deepcopy(AI_RUN)
+            stored = load().get("ai_test_run")
+            if isinstance(stored, dict):
+                AI_RUN.update(copy.deepcopy(stored))
+                return copy.deepcopy(stored)
+        return None
+
+    def _ai_test_message(row: dict[str, str], prompt: str) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            answer = core.ai_chat(prompt, row["provider"],
+                                  re.sub(r"::k\d+$", "", row["model"]))
+            return {**row, "ok": True, "text": _s(answer), "prompt": prompt,
+                    "latencyMs": int((time.monotonic() - started) * 1000)}
+        except Exception as exc:  # noqa: BLE001
+            return {**row, "ok": False, "text": "", "prompt": prompt,
+                    "latencyMs": int((time.monotonic() - started) * 1000),
+                    "error": str(exc)[:1200]}
+
+    def _ai_test_category(row: dict[str, str], title: str,
+                          categories: list[dict[str, Any]]) -> dict[str, Any]:
+        if not title:
+            return {"ok": False, "skipped": True, "error": "عنوان دسته خالی است."}
+        names = [_s(value.get("path") or value.get("name"))
+                 for value in categories[:350] if isinstance(value, dict) and
+                 _s(value.get("path") or value.get("name"))]
+        if not names:
+            return {"ok": False, "skipped": True, "error": "فهرست دسته در دسترس نیست."}
+        prompt = ("برای این عنوان فقط JSON معتبر با کلید category بده؛ مقدار باید دقیقاً "
+                  "یکی از گزینه‌ها باشد.\nعنوان: " + title + "\nگزینه‌ها: " + " | ".join(names))
+        result = _ai_test_message(row, prompt)
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error"), "text": result.get("text", "")}
+        suggestion = _s(result.get("text")).strip()
+        try:
+            parsed = core.ai_parse_json_object(suggestion)
+            suggestion = _s(parsed.get("category") or parsed.get("categoryName") or suggestion)
+        except Exception:  # noqa: BLE001
+            pass
+        found = core.ai_match_category(suggestion, categories)
+        if not found:
+            return {"ok": False, "error": "پاسخ با دسته معتبر منطبق نشد.",
+                    "text": result.get("text"), "suggestion": suggestion}
+        return {"ok": True, "categoryId": _int(found.get("id")),
+                "categoryName": _s(found.get("name") or suggestion),
+                "categoryPath": _s(found.get("path") or found.get("name")),
+                "text": result.get("text")}
+
+    def _ai_test_worker(run_id: str) -> None:
+        run = _ai_run_get()
+        if not run or run.get("id") != run_id:
+            return
+        try:
+            run.update(status="running", phase="testing", error="", updatedAt=_iso())
+            if not _ai_run_save(run):
+                return
+            categories = []
+            if run.get("categoryTitle"):
+                try:
+                    categories = core.ai_load_category_rows()
+                except Exception:  # noqa: BLE001
+                    categories = []
+            models = run.get("models") if isinstance(run.get("models"), list) else []
+            results = ((run.get("result") or {}).get("results")
+                       if isinstance(run.get("result"), dict) else [])
+            results = list(results) if isinstance(results, list) else []
+            cursor = min(len(models), max(0, _int(run.get("cursor"))))
+            delay = max(0, min(60000, _int(run.get("delayMs")))) / 1000
+            for index in range(cursor, len(models)):
+                latest = _ai_run_get() or run
+                if latest.get("stopRequested"):
+                    run.update(status="paused", phase="paused", cursor=index,
+                               processed=index, updatedAt=_iso())
+                    _ai_run_save(run)
+                    return
+                row = models[index]
+                run.update(currentKey=row.get("key"), currentStartedAt=_iso(),
+                           processed=index, cursor=index, updatedAt=_iso())
+                if not _ai_run_save(run):
+                    return
+                result = _ai_test_message(row, run["prompt"])
+                if run.get("categoryTitle"):
+                    result["categoryTitle"] = run["categoryTitle"]
+                    result["categoryResult"] = _ai_test_category(
+                        row, run["categoryTitle"], categories)
+                results = [old for old in results if old.get("key") != row.get("key")]
+                results.append(result)
+                payload = {"ok": True, "prompt": run["prompt"],
+                           "categoryTitle": run.get("categoryTitle", ""),
+                           "results": results, "total": len(models),
+                           "tested": index + 1, "okCount": sum(bool(x.get("ok")) for x in results),
+                           "failed": sum(not bool(x.get("ok")) for x in results),
+                           "categoryListAvailable": bool(categories), "done": False}
+                run.update(result=payload, cursor=index + 1, processed=index + 1,
+                           updatedAt=_iso(), currentKey="")
+                if not _ai_run_save(run):
+                    return
+                if delay and index + 1 < len(models):
+                    time.sleep(delay)
+            successful = [_s(row.get("key")) for row in results if row.get("ok")]
+            data = load()
+            existing = [_s(value) for value in data.get("ai_candidates") or [] if _s(value)]
+            added = [key for key in successful if key and key not in existing]
+            data["ai_candidates"] = list(dict.fromkeys([*existing, *successful]))
+            payload = {**(run.get("result") or {}), "done": True,
+                       "autoCandidatesAdded": added, "tested": len(results),
+                       "total": len(models)}
+            run.update(status="done", phase="done", cursor=len(models),
+                       processed=len(models), result=payload, finishedAt=_iso(),
+                       updatedAt=_iso(), currentKey="")
+            data["ai_test_results"] = {**payload, "at": _iso()}
+            save(data)
+            _ai_run_save(run)
+        except Exception as exc:  # noqa: BLE001
+            run = _ai_run_get() or run
+            run.update(status="failed", phase="failed", error=str(exc)[:1000],
+                       finishedAt=_iso(), updatedAt=_iso())
+            _ai_run_save(run)
 
     @app.post("/api/ai/test-runs")
     def node_ai_test_start():
         body = _body()
-        prompt = _s(body.get("prompt")).strip()
+        prompt = _s(body.get("prompt")).strip() or "Reply with exactly: SCRAPER4_OK"
         title = _s(body.get("categoryTitle")).strip()
-        if not prompt and not title:
-            return jsonify(ok=False, error="متن آزمایش را بنویسید."), 400
-        text = prompt or ("دستهٔ مناسب برای این محصول: " + title)
-        model_key = _s(body.get("modelKey"))
-        provider, _, model = model_key.partition("::")
-        started = time.time()
-        try:
-            answer = core.ai_chat(text, provider, model)
-            AI_RUN.update({"id": "ai-" + _s(int(started)), "status": "done",
-                           "prompt": text, "result": _s(answer),
-                           "ms": int((time.time() - started) * 1000),
-                           "error": ""})
-        except Exception as exc:  # noqa: BLE001
-            AI_RUN.update({"id": "ai-" + _s(int(started)), "status": "failed",
-                           "prompt": text, "result": "", "error": str(exc)[:300]})
-        return ok(run=dict(AI_RUN))
+        existing = _ai_run_get()
+        if existing and existing.get("status") in {"queued", "running"}:
+            return ok(run=existing, existing=True)
+        models = _ai_run_models(bool(body.get("onlyCandidates")))
+        if not models:
+            return jsonify(ok=False, error="هیچ مدل فعالی برای آزمایش ثبت نشده است."), 400
+        run = {"id": "ai-" + secrets.token_hex(8), "status": "queued", "phase": "queued",
+               "prompt": prompt, "categoryTitle": title, "onlyCandidates": bool(body.get("onlyCandidates")),
+               "delayMs": max(0, min(60000, _int(body.get("delayMs")))),
+               "models": models, "total": len(models), "processed": 0, "cursor": 0,
+               "stopRequested": False, "createdAt": _iso(), "updatedAt": _iso(),
+               "result": {"ok": True, "prompt": prompt, "categoryTitle": title,
+                          "results": [], "total": len(models), "tested": 0, "done": False},
+               "error": ""}
+        _ai_run_save(run)
+        threading.Thread(target=_ai_test_worker, args=(run["id"],),
+                         name="ai-model-tests", daemon=True).start()
+        return ok(run=run, existing=False), 202
 
     @app.get("/api/ai/test-runs/current")
     def node_ai_test_current():
-        return ok(run=dict(AI_RUN) if AI_RUN else None)
+        return ok(run=_ai_run_get())
 
     @app.post("/api/ai/test-runs/control")
-    @app.post("/api/ai/test-runs/reset")
-    @app.post("/api/ai/test-runs/retry")
     def node_ai_test_control():
-        if request.path.endswith("/reset"):
-            AI_RUN.clear()
+        action = "resume" if _s(_body().get("action")) == "resume" else "stop"
+        run = _ai_run_get()
+        if not run:
             return ok(run=None)
-        return ok(run=dict(AI_RUN) if AI_RUN else None)
+        if action == "stop" and run.get("status") in {"queued", "running"}:
+            run.update(stopRequested=True, phase="stopping", updatedAt=_iso())
+            _ai_run_save(run)
+        elif action == "resume" and run.get("status") in {"paused", "failed"}:
+            run.update(stopRequested=False, status="queued", phase="queued", error="", updatedAt=_iso())
+            _ai_run_save(run)
+            threading.Thread(target=_ai_test_worker, args=(run["id"],),
+                             name="ai-model-tests", daemon=True).start()
+        return ok(run=_ai_run_get())
+
+    @app.post("/api/ai/test-runs/reset")
+    def node_ai_test_reset():
+        run = _ai_run_get()
+        with AI_RUN_LOCK:
+            run_id = _s((run or {}).get("id"))
+            if run_id and (run or {}).get("status") in {"queued", "running"}:
+                AI_CANCELLED_RUNS.add(run_id)
+            AI_RUN.clear()
+            data = load()
+            data.pop("ai_test_run", None)
+            save(data)
+        return ok(run=None)
+
+    @app.post("/api/ai/test-runs/retry")
+    def node_ai_test_retry():
+        body = _body()
+        key, part = _s(body.get("key")), _s(body.get("part"))
+        run = _ai_run_get()
+        if not run:
+            return jsonify(ok=False, error="اجرای آزمایشی پیدا نشد."), 404
+        row = next((value for value in run.get("models") or [] if value.get("key") == key), None)
+        if not row:
+            return jsonify(ok=False, error="مدل پیدا نشد."), 404
+        payload = dict(run.get("result") or {})
+        results = list(payload.get("results") or [])
+        old = next((value for value in results if value.get("key") == key), {**row})
+        if part == "category":
+            try:
+                categories = core.ai_load_category_rows()
+            except Exception:  # noqa: BLE001
+                categories = []
+            old["categoryResult"] = _ai_test_category(
+                row, _s(run.get("categoryTitle")), categories)
+        else:
+            replacement = _ai_test_message(row, _s(run.get("prompt")))
+            category = old.get("categoryResult")
+            old = replacement
+            if category is not None:
+                old["categoryResult"] = category
+        results = [value for value in results if value.get("key") != key] + [old]
+        payload["results"] = results
+        run["result"] = payload
+        run["updatedAt"] = _iso()
+        _ai_run_save(run)
+        return jsonify({**payload, "ok": True, "part": part})
 
     @app.get("/api/ai/test-results")
     def node_ai_test_results():
-        return ok(items=[dict(AI_RUN)] if AI_RUN else [])
+        result = load().get("ai_test_results")
+        if not isinstance(result, dict):
+            run = _ai_run_get()
+            result = dict((run or {}).get("result") or {})
+        return jsonify({**result, "ok": True, "items": result.get("results") or []})
 
     # ── agent: multi-step AI flows with real tools ───────────────────────
     # A run is a loop: ask the model what to do next, execute one tool, feed
@@ -2730,9 +4408,11 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         """Tools the agent may call. Each takes a string arg, returns text."""
 
         def t_profiles(_arg: str) -> str:
-            rows = [f"{p.get('id')}: {p.get('name')} ({p.get('url')})"
-                    for p in node_profiles_list()]
-            return "\n".join(rows) or "هیچ پروفایلی ثبت نشده است."
+            rows = [profile_to_node(name, cfg) for name, cfg in
+                    (load().get("profiles") or {}).items() if isinstance(cfg, dict)]
+            return "\n".join(
+                f"{p.get('id')}: {p.get('name')} ({p.get('url')})" for p in rows
+            ) or "هیچ پروفایلی ثبت نشده است."
 
         def t_products(arg: str) -> str:
             name = _s(arg).strip() or _s(load().get("active_profile"))
@@ -2868,9 +4548,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         rows = load().get("agent_runs") or []
         return ok(items=list(reversed(rows)), runs=list(reversed(rows)))
 
-    @app.post("/api/agent/runs")
-    def node_agent_run_start():
-        body = _body()
+    def _agent_start(body: dict[str, Any]):
         prompt = _s(body.get("prompt")).strip()
         if not prompt:
             return jsonify(ok=False, error="متن درخواست خالی است."), 400
@@ -2893,6 +4571,10 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         threading.Thread(target=agent_worker, args=(AGENT,),
                          name="ui-agent", daemon=True).start()
         return ok(run=dict(AGENT))
+
+    @app.post("/api/agent/runs")
+    def node_agent_run_start():
+        return _agent_start(_body())
 
     @app.get("/api/agent/runs/current")
     def node_agent_current():
@@ -3022,24 +4704,128 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         return ok(items=rows, chatId=chat_id)
 
     # ── auto-reply ───────────────────────────────────────────────────────
+    def _autoreply_config(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        settings = data.get("ui_settings") if isinstance(data.get("ui_settings"), dict) else {}
+        cfg = settings.get("autoreply") if isinstance(settings.get("autoreply"), dict) else {}
+        rules = cfg.get("rules") if isinstance(cfg.get("rules"), list) else data.get("autoreply_rules")
+        return cfg, [row for row in (rules or []) if isinstance(row, dict)]
+
+    def _autoreply_generate(text: str, cfg: dict[str, Any],
+                            rules: list[dict[str, Any]]) -> dict[str, Any]:
+        lowered = text.lower()
+        for rule in rules:
+            if rule.get("enabled") is False:
+                continue
+            raw = rule.get("triggers") or rule.get("keywords") or []
+            triggers = ([_s(value).strip().lower() for value in raw]
+                        if isinstance(raw, list) else
+                        [value.strip().lower() for value in re.split(r"[,،\n]", _s(raw))])
+            triggers = [value for value in triggers if value]
+            if any(value in lowered for value in triggers):
+                reply = _s(rule.get("reply") or rule.get("response")).strip()
+                if reply:
+                    return {"text": reply,
+                            "source": "rule:" + _s(rule.get("id") or rule.get("name") or "rule")}
+        order = _s(cfg.get("order") or cfg.get("reply_order") or "rules_first")
+        if order not in {"rules_only", ""}:
+            try:
+                system = (_s(cfg.get("systemText")).strip()
+                          if _s(cfg.get("systemMode")) == "custom" else
+                          "تو پشتیبان مؤدب و دقیق فروشگاه هستی.")
+                answer = core.ai_chat(system + "\nبه فارسی، کوتاه و فقط پاسخ نهایی را بنویس.\nپیام مشتری: " + text)
+                if _s(answer).strip():
+                    return {"text": _s(answer).strip(), "source": "ai"}
+            except Exception:  # noqa: BLE001 - no AI means no automatic reply
+                pass
+        return {"text": "", "source": "none"}
+
     @app.post("/api/autoreply/test")
     @app.post("/api/autoreply/run")
     def node_autoreply():
         body = _body()
-        text = _s(body.get("text") or body.get("message")).strip()
-        if not text:
-            return jsonify(ok=False, error="متن پیام را بنویسید."), 400
-        rules = load().get("autoreply_rules") or []
-        for rule in rules if isinstance(rules, list) else []:
-            if not isinstance(rule, dict):
+        data = load()
+        cfg, rules = _autoreply_config(data)
+        if request.path.endswith("/test"):
+            text = _s(body.get("text") or body.get("message")).strip()
+            if not text:
+                return jsonify(ok=False, error="متن پیام را بنویسید."), 400
+            result = _autoreply_generate(text, cfg, rules)
+            return ok(result=result, matched=bool(result["text"]),
+                      reply=result["text"], source=result["source"])
+
+        dry_run = _s(body.get("confirm")) != "APPLY"
+        if not dry_run and cfg.get("enabled") is False:
+            return jsonify(ok=False, error="پاسخ خودکار فعال نیست."), 400
+        scan_limit = min(50, max(1, _int(cfg.get("scanLimit"), 20)))
+        max_per_run = min(50, max(1, _int(cfg.get("maxPerRun"), 5)))
+        try:
+            payload = core.basalam_api_request("GET", "/v1/chats",
+                                               params={"limit": scan_limit,
+                                                       "order_by": "updated_at"})
+            chats = core.basalam_api_rows(payload)[:scan_limit]
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(ok=False, error=str(exc)), 400
+        state = data.get("autoreply_state") if isinstance(data.get("autoreply_state"), dict) else {}
+        chat_state = state.get("chats") if isinstance(state.get("chats"), dict) else {}
+        items: list[dict[str, Any]] = []
+        replied = skipped = failed = 0
+        for chat in chats[:max_per_run]:
+            chat_id = _int(chat.get("id") or chat.get("chat_id"))
+            if not chat_id:
+                skipped += 1
                 continue
-            triggers = [t.strip().lower() for t in
-                        _s(rule.get("triggers")).split(",") if t.strip()]
-            if any(t in text.lower() for t in triggers):
-                return ok(matched=True, reply=_s(rule.get("reply")),
-                          rule=rule.get("name") or rule.get("id"))
-        return ok(matched=False, reply="",
-                  message="هیچ قاعده‌ای با این متن مطابقت نداشت.")
+            try:
+                messages_payload = core.basalam_api_request(
+                    "GET", f"/v1/chats/{chat_id}/messages", params={"per_page": 20})
+                messages = core.basalam_api_rows(messages_payload)
+                last = next((message for message in messages
+                             if isinstance(message, dict) and
+                             not bool(message.get("is_mine") or message.get("mine") or
+                                      (message.get("sender") or {}).get("is_vendor"))), None)
+                if not last:
+                    skipped += 1
+                    continue
+                content = last.get("content") if isinstance(last.get("content"), dict) else {}
+                text = _s(content.get("text") or last.get("text") or last.get("message")).strip()
+                message_id = _s(last.get("id") or last.get("message_id"))
+                previous = chat_state.get(_s(chat_id)) if isinstance(chat_state.get(_s(chat_id)), dict) else {}
+                if not text or (message_id and _s(previous.get("msgId")) == message_id):
+                    skipped += 1
+                    continue
+                result = _autoreply_generate(text, cfg, rules)
+                item = {"chatId": chat_id, "messageId": message_id, "text": text,
+                        "reply": result["text"], "source": result["source"],
+                        "customer": _s((chat.get("contact") or {}).get("name")
+                                       if isinstance(chat.get("contact"), dict) else chat.get("customer"))}
+                if not result["text"]:
+                    item["skip"] = "پاسخ معتبری ساخته نشد"
+                    skipped += 1
+                elif not dry_run:
+                    send_payload = {"chat_id": chat_id,
+                                    "content": {"text": result["text"]},
+                                    "message_type": "text", "temp_id": int(time.time() * 1000)}
+                    core.basalam_api_request("POST", f"/v1/chats/{chat_id}/messages",
+                                             json_data=send_payload)
+                    chat_state[_s(chat_id)] = {"msgId": message_id, "at": int(time.time())}
+                    log = data.get("autoreply_log")
+                    if not isinstance(log, list):
+                        log = []
+                    log.append({"chat_id": chat_id, "customer": item["customer"],
+                                "input_text": text, "output_text": result["text"],
+                                "source": result["source"], "created_at": _iso()})
+                    data["autoreply_log"] = log[-5000:]
+                    item["sent"] = True
+                    replied += 1
+                items.append(item)
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                items.append({"chatId": chat_id, "error": str(exc)[:400]})
+        state["chats"] = chat_state
+        data["autoreply_state"] = state
+        if not dry_run:
+            save(data)
+        return ok(dryRun=dry_run, items=items, replied=replied, skipped=skipped,
+                  failed=failed, scanned=len(chats))
 
     # ── category learning ────────────────────────────────────────────────
     @app.get("/api/category-learning")
@@ -3191,34 +4977,146 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         BRANCH_SCAN_CACHE.update(ts=now, repo=repo, payload=payload)
         return jsonify(payload)
 
+    def _safe_backup_path(value: Any, allow_empty: bool = False) -> str:
+        path = _s(value).strip().replace("\\", "/").strip("/")
+        if not path and allow_empty:
+            return ""
+        if (not path or len(path) > 400 or
+                any(part in {"", ".", ".."} for part in path.split("/")) or
+                not re.fullmatch(r"[A-Za-z0-9_.@/-]+", path)):
+            raise ValueError("مسیر بکاپ نامعتبر یا ناامن است.")
+        return path
+
+    def _github_tree(repo: str, branch: str) -> list[dict[str, Any]]:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise ValueError("repo باید owner/name باشد.")
+        clean = core.clean_branch(branch)
+        if not clean:
+            raise ValueError("نام branch معتبر نیست.")
+        value = core.github_api_json(
+            "https://api.github.com/repos/" + repo + "/git/trees/" + quote(clean, safe=""),
+            _deploy_token(), params={"recursive": 1}, timeout=45)
+        if not isinstance(value, dict) or not isinstance(value.get("tree"), list):
+            raise ValueError("GitHub فهرست فایل معتبری برنگرداند.")
+        if value.get("truncated"):
+            raise ValueError("فهرست GitHub ناقص است؛ پوشه بکاپ را کوچک‌تر کنید.")
+        return [node for node in value["tree"] if isinstance(node, dict)]
+
+    def _github_blob(repo: str, sha: str, max_size: int = 5 * 1024 * 1024) -> bytes:
+        value = core.github_api_json(
+            "https://api.github.com/repos/" + repo + "/git/blobs/" + quote(sha, safe=""),
+            _deploy_token(), timeout=45)
+        if not isinstance(value, dict) or _s(value.get("encoding")) != "base64":
+            raise ValueError("محتوای فایل GitHub قابل خواندن نیست.")
+        size = _int(value.get("size"))
+        if size > max_size:
+            raise ValueError("فایل بکاپ بزرگ‌تر از ۵ مگابایت است.")
+        try:
+            raw = base64.b64decode(_s(value.get("content")).replace("\n", ""), validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("کدگذاری فایل GitHub خراب است.") from exc
+        if len(raw) > max_size:
+            raise ValueError("فایل بکاپ بزرگ‌تر از ۵ مگابایت است.")
+        return raw
+
     @app.get("/api/branch-files")
     def node_branch_files():
         repo = _s(request.args.get("repo"))
         branch = _s(request.args.get("branch"))
-        if not repo or not branch:
-            return jsonify(ok=False, error="repo و branch لازم است."), 400
         try:
-            files = core.github_python_files(repo, branch, _deploy_token())
+            prefix = _safe_backup_path(request.args.get("path") or "backups", allow_empty=True)
+            tree = _github_tree(repo, branch)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
-        return ok(repo=repo, branch=branch, files=files, items=files)
+        base = prefix + "/" if prefix else ""
+        files: list[dict[str, Any]] = []
+        folders: list[dict[str, Any]] = []
+        folder_seen: set[str] = set()
+        for node in tree:
+            if node.get("type") != "blob":
+                continue
+            path = _s(node.get("path"))
+            if not path.startswith(base):
+                continue
+            relative = path[len(base):]
+            if not relative:
+                continue
+            if relative.lower().endswith("/manifest.json"):
+                folder_path = path[:-len("/manifest.json")]
+                if folder_path not in folder_seen:
+                    folder_seen.add(folder_path)
+                    folders.append({"name": folder_path.rsplit("/", 1)[-1],
+                                    "path": folder_path, "size": _int(node.get("size")),
+                                    "sha": _s(node.get("sha")), "kind": "split-backup"})
+            elif "/" not in relative and relative.lower().endswith(".json"):
+                files.append({"name": relative, "path": path,
+                              "size": _int(node.get("size")), "sha": _s(node.get("sha")),
+                              "kind": "json"})
+        files.sort(key=lambda row: row["name"], reverse=True)
+        folders.sort(key=lambda row: row["name"], reverse=True)
+        return ok(repo=repo, branch=branch, path=prefix, files=files[:200],
+                  folders=folders[:200], items=[*folders[:200], *files[:200]])
 
     @app.get("/api/branch-file")
     def node_branch_file():
         repo = _s(request.args.get("repo"))
         branch = _s(request.args.get("branch"))
-        path = _s(request.args.get("path"))
-        if not (repo and branch and path):
-            return jsonify(ok=False, error="repo، branch و path لازم است."), 400
         try:
-            info = core.github_file_for(repo, branch, path, _deploy_token(), True)
+            path = _safe_backup_path(request.args.get("path"))
+            tree = _github_tree(repo, branch)
+            blobs = {_s(node.get("path")): node for node in tree
+                     if node.get("type") == "blob" and _s(node.get("sha"))}
+            if path.lower().endswith(".json"):
+                node = blobs.get(path)
+                if not node:
+                    raise ValueError("فایل بکاپ در این branch پیدا نشد.")
+                raw = _github_blob(repo, _s(node.get("sha")))
+                bundle = json.loads(raw.decode("utf-8-sig"))
+                if not isinstance(bundle, dict):
+                    raise ValueError("فایل انتخاب‌شده یک bundle معتبر نیست.")
+                return ok(repo=repo, branch=branch, path=path,
+                          name=path.rsplit("/", 1)[-1], size=len(raw), bundle=bundle)
+            manifest_path = path + "/manifest.json"
+            manifest_node = blobs.get(manifest_path)
+            if not manifest_node:
+                raise ValueError("پوشه manifest.json معتبر ندارد.")
+            manifest_raw = _github_blob(repo, _s(manifest_node.get("sha")), 1024 * 1024)
+            manifest = json.loads(manifest_raw.decode("utf-8-sig"))
+            if (not isinstance(manifest, dict) or manifest.get("kind") != "split-backup" or
+                    manifest.get("format") != "scraper4-split-1" or
+                    not isinstance(manifest.get("parts"), list)):
+                raise ValueError("manifest مربوط به بکاپ بخش‌بخش Scraper4 نیست.")
+            files: dict[str, Any] = {}
+            total = 0
+            for raw_name in manifest["parts"]:
+                name = _s(raw_name)
+                if (not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@-]*\.json", name) or
+                        name == "manifest.json"):
+                    raise ValueError(f"نام بخش ناامن است: {name[:80]}")
+                node = blobs.get(path + "/" + name)
+                if not node:
+                    raise ValueError(f"بخش {name} در branch پیدا نشد.")
+                raw = _github_blob(repo, _s(node.get("sha")))
+                try:
+                    json.loads(raw.decode("utf-8-sig"))
+                except (ValueError, UnicodeDecodeError) as exc:
+                    raise ValueError(f"بخش {name} JSON معتبر نیست.") from exc
+                total += len(raw)
+                if total > 5 * 1024 * 1024:
+                    raise ValueError("مجموع بکاپ بزرگ‌تر از ۵ مگابایت است.")
+                files[name] = {"size": len(raw),
+                               "b64": base64.b64encode(raw).decode("ascii")}
+            bundle = {"app": _s(manifest.get("app")) or "scraper4-python",
+                      "version": _s(manifest.get("version")),
+                      "created_at": manifest.get("created_at"),
+                      "created_at_h": manifest.get("created_at_h"),
+                      "host": manifest.get("host"), "kind": "settings-export",
+                      "format": "scraper4-php-compatible", "files": files,
+                      "total_files": len(files), "total_bytes": total}
+            return ok(repo=repo, branch=branch, path=path, name=path.rsplit("/", 1)[-1],
+                      size=total, bundle=bundle, manifest=manifest)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
-        content = info.get("content")
-        if isinstance(content, bytes):
-            content = content.decode("utf-8", errors="replace")
-        return ok(repo=repo, branch=branch, path=path,
-                  sha=_s(info.get("sha")), content=content or "")
 
     @app.get("/api/deployer/local/status")
     @app.route("/api/deployer/local/<path:action>", methods=["GET", "POST"])
@@ -3279,8 +5177,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     REPO_DIR = _find_repo()
     # Files the running install needs; kept in sync after every pull.
-    SYNC_FILES = ("scraper4.py", "deployer4.py", "ui_bridge.py",
-                  "ai_providers.json")
+    SYNC_FILES = ("scraper4.py", "deployer4.py", "ui_bridge.py", "parity_ext.py",
+                  "parity-manifest.json", "ai_providers.json")
 
     def sync_from_repo() -> list[str]:
         """Copy updated files from the git checkout into the live app dir."""
@@ -3303,7 +5201,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             dst_ui = os.path.join(APP_DIR, "ui")
             os.makedirs(dst_ui, exist_ok=True)
             for name in os.listdir(src_ui):
-                if name.endswith((".html", ".js", ".css")):
+                if name.endswith((".html", ".js", ".css", ".json", ".png", ".woff2")):
                     shutil.copy2(os.path.join(src_ui, name),
                                  os.path.join(dst_ui, name))
                     copied.append("ui/" + name)
@@ -3490,8 +5388,43 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     # ── misc small endpoints the UI polls ────────────────────────────────
     @app.post("/api/queue-watchdog")
     def node_queue_watchdog_post():
-        running = [t for t in live_tasks() if _s(t.get("status")) in ("waiting", "running")]
-        return ok(watchdog={"running": len(running), "stalled": 0})
+        body = _body()
+        minutes = max(1, min(1440, _int(body.get("minutes"), 5)))
+        cutoff = time.time() - minutes * 60
+        auto_continue = body.get("autoContinue", True) is not False
+        running, stale, recovered = [], [], []
+        for task in live_tasks():
+            if _s(task.get("status")) not in ("waiting", "running"):
+                continue
+            running.append(task)
+            if _num(task.get("updated_at")) >= cutoff:
+                continue
+            task = dict(task)
+            task.update(status="interrupted", updated_at=int(time.time()),
+                        step="نگهبان صف وظیفهٔ گیرکرده را بست",
+                        error=task.get("error") or f"بیش از {minutes} دقیقه بدون heartbeat")
+            with core.LIVE_TASK_LOCK:
+                core.LIVE_TASKS[_s(task.get("id"))] = task
+            core.live_task_disk_write(task)
+            stale.append(task_to_job(task))
+            profile = _s(task.get("profile"))
+            if auto_continue and profile in (load().get("profiles") or {}):
+                data = load()
+                config = dict(data["profiles"][profile])
+                config.update(_profile_name=profile, workflow="full")
+                replacement = core.live_task_create("scrape", "ادامهٔ خودکار · " + profile,
+                                                    private=False)
+                replacement.update(profile=profile, workflow="full", recoveredFrom=task.get("id"))
+                with core.LIVE_TASK_LOCK:
+                    core.LIVE_TASKS[replacement["id"]] = replacement
+                core.live_task_disk_write(replacement)
+                core.threading.Thread(target=core.scrape_live_worker,
+                                      args=(replacement["id"], config),
+                                      name="watchdog-recovery", daemon=True).start()
+                recovered.append(task_to_job(replacement))
+        return ok(watchdog={"running": len(running), "stalled": len(stale)},
+                  stalled=stale, recovered=len(recovered), jobs=recovered,
+                  reaped=len(stale), autoContinue=auto_continue, minutes=minutes)
 
     @app.delete("/api/jobs")
     def node_jobs_clear():
@@ -3587,34 +5520,19 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                   samples=samples,
                   issues={"missingTitle": missing_title, "checked": len(samples)})
 
-    # ── graceful stubs so optional panels stay quiet ─────────────────────
-    def _empty(payload: dict[str, Any]) -> Callable[..., Any]:
-        def view(*_args: Any, **_kwargs: Any):
-            return ok(**payload)
-        return view
-
-    stubs: dict[str, dict[str, Any]] = {
-        "/api/ai/providers": {"providers": []},
-        "/api/ai/description-settings": {"settings": {}},
-        "/api/ai/workers-catalog": {"items": []},
-        "/api/autoreply/log": {"items": []},
-        "/api/basalam/orders": {"items": []},
-        "/api/bootstrap/status": {"status": "ready"},
-        "/api/category-fix-status": {"status": {}},
-        "/api/destination/basalam/category-runs/current": {"run": None},
-        "/api/destination/basalam/category-tried": {"items": []},
-        "/api/digest": {"digest": {}},
-        "/api/github/token-status": {"hasToken": bool(os.environ.get("GITHUB_TOKEN"))},
-        "/api/maintenance/duplicates": {"items": []},
-        "/api/maintenance/ledger": {"items": []},
-        "/api/maintenance/ledger/missing": {"items": []},
-        "/api/maintenance/ledger/products": {"items": []},
-        "/api/notifications/test": {"sent": False},
-        "/api/selftest": {"checks": []},
-        "/api/web-push/config": {"enabled": False, "publicKey": ""},
-        "/api/visual-ticket": {"ticket": ""},
-        "/api/branch-push-status": {"status": "idle"},
-    }
-    for path, payload in stubs.items():
-        endpoint = "node_stub_" + re.sub(r"[^a-z0-9]+", "_", path.strip("/").lower())
-        app.add_url_rule(path, endpoint, _empty(payload), methods=["GET", "POST"])
+    # Integration-heavy parity routes live in a separate module so this bridge
+    # remains reviewable. They share these closures rather than creating a
+    # second state/destination implementation.
+    try:
+        from parity_ext import install_parity_extensions
+        install_parity_extensions(app, core, {
+            "load": load, "save": save, "ok": ok,
+            "profile_products": profile_products, "product_to_node": product_to_node,
+            "profile_to_node": profile_to_node, "start_scrape": _start_scrape,
+            "task_to_job": task_to_job, "live_tasks": live_tasks,
+            "bundle_files": _bundle_files, "destination_rows": _destination_rows,
+            "destination_view": _destination_view, "dest_key": dest_key,
+            "shop_context": _shop_context, "agent_start": _agent_start,
+        })
+    except Exception as exc:  # Fail boot loudly: silent parity stubs hid defects.
+        raise RuntimeError(f"installing Python/Node parity routes failed: {exc}") from exc

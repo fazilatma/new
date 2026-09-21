@@ -159,8 +159,13 @@ ensure_venv() {
       echo "  ${mod}: skipped (no wheel/build on this device)"
     fi
   done
+  if ! "$PY" -c "import pywebpush,cryptography" 2>/dev/null; then
+    echo "pip optional Web Push (pywebpush, cryptography)"
+    "$PY" -m pip install pywebpush cryptography \
+      || echo "  Web Push skipped (other API/PWA features remain available)"
+  fi
   "$PY" -c "import importlib
-for n in ('httpx','cloudscraper','curl_cffi'):
+for n in ('httpx','cloudscraper','curl_cffi','pywebpush','cryptography'):
     try:
         importlib.import_module(n); print('fetch engine ready:', n)
     except ImportError:
@@ -176,20 +181,21 @@ sync_code() {
   [ -f "${APP}/scraper4.py" ] || fail "scraper4 missing in ${SRC}"
   [ -f "${APP}/deployer4.py" ] || fail "deployer4 missing in ${SRC}"
   cp -a "${APP}/"*.py "$RUN/"
-  # The Node-parity dashboard is three extra files. scraper4.py imports
-  # ui_bridge defensively, so without them it boots fine and /ui just 404s.
-  if [ -f "${APP}/ui_bridge.py" ] && [ -d "${APP}/ui" ]; then
-    cp -a "${APP}/ui_bridge.py" "$RUN/"
+  # Keep the parity manifest and UI assets beside the Python extension modules.
+  if [ -f "${APP}/ui_bridge.py" ] && [ -f "${APP}/parity_ext.py" ] && [ -d "${APP}/ui" ]; then
+    cp -a "${APP}/ui_bridge.py" "${APP}/parity_ext.py" "$RUN/"
+    [ -f "${APP}/parity-manifest.json" ] && cp -a "${APP}/parity-manifest.json" "$RUN/"
     rm -rf "${RUN}/ui"
     cp -a "${APP}/ui" "${RUN}/ui"
   else
-    echo "WARNING: ui_bridge.py or ui/ missing — /ui will not be available." >&2
+    echo "WARNING: parity Python modules or ui/ missing — /ui and Node-compatible APIs will not be available." >&2
   fi
   [ -f "${APP}/ai_providers.json" ] && [ ! -f "${RUN}/ai_providers.json" ] \
     && cp -a "${APP}/ai_providers.json" "$RUN/" || true
   find "$RUN" -name '*.pyc' -delete 2>/dev/null || true
   find "$RUN" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-  "$PY" -m py_compile "${RUN}/scraper4.py" "${RUN}/deployer4.py" || fail "py_compile failed"
+  "$PY" -m py_compile "${RUN}/scraper4.py" "${RUN}/deployer4.py" \
+    "${RUN}/ui_bridge.py" "${RUN}/parity_ext.py" || fail "py_compile failed"
   "$PY" - <<'PY'
 import re, pathlib, os
 run=os.environ.get("S4_RUN",".")

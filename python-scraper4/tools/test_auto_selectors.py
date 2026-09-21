@@ -117,7 +117,9 @@ def main() -> int:
     os.environ["SCRAPER_DATA_FILE"] = os.path.join(tmpdir, "scraper4_data.json")
     import scraper4 as core  # noqa: E402 - env must be set before import
 
-    base = "https://shop.example/list"
+    # Use an actually resolvable public host: production URL validation is
+    # intentionally DNS-aware and rejects reserved .example hostnames.
+    base = "https://example.com/list"
 
     print("list_selectors_status")
     check("empty", core.list_selectors_status({}) == "empty")
@@ -164,10 +166,18 @@ def main() -> int:
           str(ensured))
     check("repaired set verifies",
           core.verify_list_selectors(WOO_LIST, base, ensured["selectors"])["ok"])
-    custom = {k: "x" for k in core.LIST_SELECTOR_KEYS}
-    ensured = core.ensure_list_selectors(WOO_LIST, base, custom)
-    check("custom selectors pass through untouched",
-          ensured["selectors"] == custom and "discovered" not in ensured)
+    # A form being completely filled does not make it valid: stale selectors
+    # that match zero nodes must be repaired from the live sample.
+    broken_custom = {k: "x" for k in core.LIST_SELECTOR_KEYS}
+    ensured = core.ensure_list_selectors(WOO_LIST, base, broken_custom)
+    check("stale custom selectors are repaired",
+          ensured["selectors"] != broken_custom and bool(ensured.get("discovered"))
+          and core.verify_list_selectors(WOO_LIST, base, ensured["selectors"])["ok"],
+          str(ensured))
+    valid_custom = core.discover_list_selectors(WOO_LIST, base)["selectors"]
+    ensured = core.ensure_list_selectors(WOO_LIST, base, valid_custom)
+    check("working custom selectors stay untouched",
+          ensured["selectors"] == valid_custom and "discovered" not in ensured)
     partial = {"container": "li.product", "title": ".woocommerce-loop-product__title"}
     ensured = core.ensure_list_selectors(WOO_LIST, base, partial)
     discovered = ensured.get("discovered") or {}
@@ -186,9 +196,16 @@ def main() -> int:
               str(suggested["selectors"]))
     ensured_detail = core.ensure_detail_selectors(
         DETAIL_PAGE, "https://shop.example/p/1", {"sku": ".my-own-sku"})
-    check("hand-set detail field untouched",
-          ensured_detail["selectors"]["sku"] == ".my-own-sku"
-          and "sku" not in ensured_detail["discovered"])
+    check("stale hand-set detail field is repaired",
+          ensured_detail["selectors"]["sku"] != ".my-own-sku"
+          and bool(ensured_detail["discovered"].get("sku")),
+          str(ensured_detail))
+    valid_sku = suggested["selectors"]["sku"]
+    valid_detail = core.ensure_detail_selectors(
+        DETAIL_PAGE, "https://shop.example/p/1", {"sku": valid_sku})
+    check("working hand-set detail field stays untouched",
+          valid_detail["selectors"]["sku"] == valid_sku
+          and "sku" not in valid_detail["discovered"])
     check("empty detail fields filled",
           bool(ensured_detail["discovered"].get("long_desc")))
 
@@ -210,6 +227,7 @@ def main() -> int:
 
     print("scrape() end-to-end — empty profile selectors (monkeypatched fetch)")
     fixture_by_url = {base: STRUCTURAL_LIST,
+                      "https://example.com/p/1": DETAIL_PAGE,
                       "https://shop.example/p/1": DETAIL_PAGE,
                       "https://shop.example/": STRUCTURAL_LIST}
 
@@ -270,7 +288,7 @@ def main() -> int:
         check("evidence reports method",
               (payload.get("evidence") or {}).get("discoveryMethod") == "structural")
         resp = client.post("/api/suggest-selectors",
-                           json={"url": "https://shop.example/p/1", "mode": "detail"})
+                           json={"url": "https://example.com/p/1", "mode": "detail"})
         payload = resp.get_json() or {}
         selectors = payload.get("selectors") or {}
         check("detail mode uses Node field ids",
