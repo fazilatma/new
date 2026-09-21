@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.204"
+APP_VERSION = "10.205"
 CHANGELOG = [
+    {"version":"10.205","date":"2026-09-21","title":"جلوگیری از صفر شدن تنظیمات با هر Deploy وب‌کنسول","items":["دلیل ریست: scraper4_data.json داخل پوشه Deploy بود و rsync --delete وب‌کنسول با هر آپدیت آن را پاک می‌کرد","DATA_FILE حالا خارج از Deploy است: اول $SCRAPER_DATA_FILE، بعد /var/www/html/.wconsole_data/scraper4_data.json، بعد BASE_DIR/scraper4_data.json","با اولین اجرا، داده‌های قدیمی از BASE_DIR به مسیر پایدار منتقل می‌شود تا تنظیمات و سلکتورها حفظ شوند"]},
     {"version":"10.204","date":"2026-09-21","title":"جلوگیری از حذف مرورگر با Deploy وب‌کنسول و رفع 18KB دیجی‌کالا","items":["مسیر مرورگر از deploy_dir/ms-playwright به DATA_DIR/runtime/<id>/cache/ms-playwright منتقل شد تا rsync --delete وب‌کنسول آن را پاک نکند","Playwright حالا حتی اگر صفحه 13KB shell بدهد، لاگ HTML و دلیل بلاک را نشان می‌دهد و 18KB دیگر FAIL گمراه‌کننده نیست","پنجره بصری: اگر مرورگر پاک شده باشد، پیام نصب دوباره با دستور درست همان پروژه را نشان می‌دهد (نه مسیر truncated)"]},
     {"version":"10.203","date":"2026-09-21","title":"پنجره انتخاب بصری با Playwright/Selenium و رفع دیجی‌کالا 18KB","items":["پنجره انتخاب بصری حالا 3 موتور دارد: HTTP / Playwright / Selenium — دیجی‌کالا با Playwright رندر می‌شود","دیجی‌کالا به لیست SPA اضافه شد: رندر با Playwright، 8 اسکرول، انتظار کارت محصول و 1.8ثانیه صبر اضافه","وقتی playwright با 18KB خالی برمی‌گردد، 2000 کاراکتر اول HTML در لاگ ذخیره می‌شود تا دلیل بلاک شدن IP مشخص شود"]},
     {"version":"10.202","date":"2026-09-21","title":"رفع دسترسی مرورگر روی WebConsole (root vs www-data) و سلکتور دیجی‌کالا","items":["PLAYWRIGHT_BROWSERS_PATH روی WebConsole حتی اگر پوشه برای کاربر سرویس قابل خواندن نبود هم قبول می‌شود و fallback به /root/.cache را هم امتحان می‌کند","find_browser_executable حالا /root/.cache/ms-playwright را حتی اگر WebConsole HOME متفاوت باشد هم می‌گردد","دیجی‌کالا: وقتی 5 سلکتور دستی پر است و DOM=0، کشف خودکار دوباره فعال شد؛ پیام خطا دیگر نصفه نمی‌ماند"]},
@@ -273,7 +274,34 @@ def _auto_update_from_data() -> tuple[bool, int]:
         return True, 300
 
 AUTO_UPDATE_ENABLED, AUTO_UPDATE_INTERVAL = _auto_update_from_data()
-DATA_FILE = os.environ.get("SCRAPER_DATA_FILE", os.path.join(BASE_DIR, "scraper4_data.json"))
+# 10.205 WebConsole fix: keep scraper4_data.json OUTSIDE the deploy dir so rsync --delete does NOT wipe it.
+# Deploy dir is .../projects/python-scraper4-... and is fully rsynced. DATA_DIR is .../.wconsole_data (persistent).
+def _resolve_data_file() -> str:
+    env = os.environ.get("SCRAPER_DATA_FILE", "").strip()
+    if env:
+        return env
+    # Prefer WebConsole persistent dir if it exists
+    for cand in ("/var/www/html/.wconsole_data/scraper4_data.json", os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "scraper4_data.json")):
+        try:
+            cand = os.path.abspath(cand)
+            if "wconsole_data" in cand:
+                # Use it even if not yet exists, so future deploys don't delete it
+                # Migrate existing BASE_DIR file once
+                old_path = os.path.join(BASE_DIR, "scraper4_data.json")
+                if os.path.isfile(old_path) and not os.path.isfile(cand):
+                    try:
+                        os.makedirs(os.path.dirname(cand), exist_ok=True)
+                        import shutil
+                        shutil.copy2(old_path, cand)
+                        print(f"[data] migrated {old_path} -> {cand}", flush=True)
+                    except Exception:
+                        pass
+                return cand
+        except Exception:
+            pass
+    return os.path.join(BASE_DIR, "scraper4_data.json")
+
+DATA_FILE = _resolve_data_file()
 ERROR_LOG_PATH = os.environ.get("SCRAPER_ERROR_LOG", os.path.join(BASE_DIR, "scraper4-errors.jsonl"))
 ERROR_LOG_LOCK = threading.Lock()
 PASSWORD = os.environ.get("SCRAPER_PASSWORD", "")
