@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.211"
+APP_VERSION = "10.212"
 CHANGELOG = [
+    {"version":"10.212","date":"2026-09-21","title":"Basalam SDK first — official SDK prioritized for all Basalam operations","items":["Basalam operations (send, vendor, products, categories, test) now explicitly try the official basalam-sdk first and fall back to REST API only on SDK failure — as requested: SDK first","Default client_mode remains auto (SDK → REST); HTTP proxy still auto-falls back to REST since SDK does not support CONNECT","No model handling changed — models stay exactly as you left them; only Basalam priority is clarified and guaranteed"]},
     {"version":"10.211","date":"2026-09-21","title":"حفظ مدل‌ها بدون حذف خودکار — فقط عبور هوشمند AI","items":["پاکسازی خودکار مدل‌های 400/402 لغو شد — مدل‌ها دقیقاً همان‌طور که هستند می‌مانند و فقط برچسب available/tested می‌خورند","عبور هوشمند AI از Worker 403 همچنان فعال است: هر درخواست روی 403 security policy یک بار مسیر direct را خودکار می‌آزماید","هیچ مدلی خودکار غیرفعال (enabled=False) نمی‌شود؛ مدیریت مدل‌ها کاملاً دستی باقی می‌ماند"]},
     {"version":"10.210","date":"2026-09-21","title":"عبور هوشمند AI از فیلتر Worker و پاکسازی مدل‌ها","items":["AI حالا روی 403 Worker (Access denied/security policy) خودکار یک بار مسیر مستقیم (direct) را می‌آزماید و نتیجه را با برچسب via ثبت می‌کند","تست مدل‌ها در هر دو مسیر via: worker / via: direct را لاگ می‌کند تا دلیل فیلترینگ فوری دیده شود","پاکسازی خودکار مدل‌های 400 badmodel و 402 credit در هر دور تست — دیگر مدل‌های تکراری بی‌اعتبار تست نمی‌شوند"]},
     {"version":"10.209","date":"2026-09-21","title":"پنجره بصری سرورساید: ادامه در پس‌زمینه و نمایش خودکار","items":["پیش‌نمایش بصری حالا Job سرورساید است: با بستن پنجره هم رندر ادامه می‌یابد و بعد از اتمام خودکار ظاهر می‌شود","API جدید: POST /api/picker/start → {job_id}, GET /api/picker/status/<id> برای پولینگ زنده مراحل","فیکس: اگر مرورگر پاک شده باشد، به‌جای iframe سفید، توست قرمز با دستور نصب پایدار نمایش داده می‌شود"]},
@@ -6335,6 +6336,7 @@ def basalam_api_request(method: str, path: str, *, params: Optional[dict[str,Any
 
 
 def basalam_strategy(sdk_call: Any, api_call: Any) -> tuple[Any,str]:
+    """Basalam: SDK first, REST fallback. Respects client_mode=auto/sdk/api. HTTP proxy skips SDK by design."""
     mode=clean_text(load_data().get("basalam",{}).get("client_mode","auto")) or "auto";errors=[]
     network_mode=outbound_mode(load_data().get("network",{}))
     if mode=="sdk" and network_mode=="http":raise FetchError("SDK رسمی از HTTP CONNECT Proxy مرکزی پشتیبانی نمی‌کند؛ روش مدیریت باسلام را روی خودکار یا REST API قرار دهید")
