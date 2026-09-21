@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.206"
+APP_VERSION = "10.207"
 CHANGELOG = [
+    {"version":"10.207","date":"2026-09-21","title":"نوتیف زنده مراحل رندر در پنجره انتخاب بصری","items":["پنجره بصری حالا با توست‌های زنده مراحل را نشان می‌دهد: اتصال → رندر Playwright → اسکرول → انتظار محصول → آماده انتخاب","اگر Playwright پاک شده باشد، به‌جای صفحه سفید، توست خطا با دستور نصب پایدار (/var/www/html/.wconsole_data/cache/...) نمایش داده می‌شود","دیجی‌کالا با Playwright حتی با HTML 13KB هم اسکرول و انتظار کارت را کامل انجام می‌دهد تا DOM پر شود"]},
     {"version":"10.206","date":"2026-09-21","title":"رفع مسیر دوتایی wconsole_data و نصب پایدار مرورگر","items":["باگ مسیر /var/www/html/.wconsole_data/cache درست شد → حالا /var/www/html/.wconsole_data/cache/ms-playwright پایدار است","chrome حالا در هر دو مسیر قدیمی و جدید جستجو می‌شود تا لاگ truncated درست شود","دستور نصب هم به‌روز شد: دیگر نیازی به git pull دستی نیست — Deploy وب‌کنسول کافی است"]},
     {"version":"10.205","date":"2026-09-21","title":"جلوگیری از صفر شدن تنظیمات با هر Deploy وب‌کنسول","items":["دلیل ریست: scraper4_data.json داخل پوشه Deploy بود و rsync --delete وب‌کنسول با هر آپدیت آن را پاک می‌کرد","DATA_FILE حالا خارج از Deploy است: اول $SCRAPER_DATA_FILE، بعد /var/www/html/.wconsole_data/scraper4_data.json، بعد BASE_DIR/scraper4_data.json","با اولین اجرا، داده‌های قدیمی از BASE_DIR به مسیر پایدار منتقل می‌شود تا تنظیمات و سلکتورها حفظ شوند"]},
     {"version":"10.204","date":"2026-09-21","title":"جلوگیری از حذف مرورگر با Deploy وب‌کنسول و رفع 18KB دیجی‌کالا","items":["مسیر مرورگر از deploy_dir/ms-playwright به DATA_DIR/runtime/<id>/cache/ms-playwright منتقل شد تا rsync --delete وب‌کنسول آن را پاک نکند","Playwright حالا حتی اگر صفحه 13KB shell بدهد، لاگ HTML و دلیل بلاک را نشان می‌دهد و 18KB دیگر FAIL گمراه‌کننده نیست","پنجره بصری: اگر مرورگر پاک شده باشد، پیام نصب دوباره با دستور درست همان پروژه را نشان می‌دهد (نه مسیر truncated)"]},
@@ -7326,13 +7327,82 @@ function selectorTab(kind){pickerKind=kind;document.querySelectorAll('.selector-
 function pickerInputId(field){return (pickerKind==='list'?'sel_':'det_')+field}
 function renderPickerChips(){$('pickerChips').innerHTML=pickerFields[pickerKind].map(([k,n])=>{let done=$(pickerInputId(k))?.value.trim();return `<button class="picker-chip ${done?'done':''}" onclick="$('pickerField').value='${k}';pickerContext()">${done?'✓':'○'} ${n}</button>`}).join('')}
 function nextPickerField(){let fields=pickerFields[pickerKind],at=fields.findIndex(x=>x[0]===$('pickerField').value),next=fields.slice(at+1).find(x=>!$(pickerInputId(x[0]))?.value.trim())||fields.find(x=>!$(pickerInputId(x[0]))?.value.trim())||fields[(at+1)%fields.length];$('pickerField').value=next[0];pickerContext();$('pickerStatus').textContent='اکنون «'+next[1]+'» را روی صفحه انتخاب کنید.'}
-function loadVisualPicker(forceBrowser){let url=($('pickerUrl').value.trim()||$('url')?.value||'').trim();if(!url){$('pickerStatus').innerHTML='<span class="error">آدرس صفحه را وارد کنید.</span>';return}$('pickerUrl').value=url;$('pickerReady').textContent='در حال دریافت…';$('pickerReady').className='badge';$('pickerFrameWrap').classList.add('open');let mode;if(forceBrowser) mode='browser'; else if($('pickerEngine')) mode=$('pickerEngine').value; else if(/snappshop\.ir|digikala\.com/i.test(url)) mode='browser'; else mode=($('render')?.value||'auto');if(mode==='playwright'||mode==='selenium') mode='browser';$('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);$('pickerStatus').textContent=mode==='browser'?'رندر Playwright با اسکرول و انتظار محصول (دیجی‌کالا/اسنپ‌شاپ)…':'صفحه از مسیر مرکزی دریافت می‌شود…'}
+function loadVisualPicker(forceBrowser){
+  let url=($('pickerUrl').value.trim()||$('url')?.value||'').trim();
+  if(!url){$('pickerStatus').innerHTML='<span class="error">آدرس صفحه را وارد کنید.</span>';return}
+  $('pickerUrl').value=url;
+  $('pickerReady').textContent='در حال دریافت…';
+  $('pickerReady').className='badge';
+  $('pickerFrameWrap').classList.add('open');
+  let mode;
+  if(forceBrowser) mode='browser';
+  else if($('pickerEngine')) mode=$('pickerEngine').value;
+  else if(/snappshop\.ir|digikala\.com/i.test(url)) mode='browser';
+  else mode=($('render')?.value||'auto');
+  if(mode==='playwright'||mode==='selenium') mode='browser';
+  // --- Live toast sequence for visual picker ---
+  let _pickerToastTimer=null;
+  function _showPickerToast(msg, type){
+    try{
+      if(typeof toast==='function') toast(msg, type||'');
+      else if(typeof window.toast==='function') window.toast(msg, type||'');
+      // also update status line for persistence
+      $('pickerStatus').textContent=msg;
+    }catch(e){}
+  }
+  // clear old timer
+  if(window._pickerToastTimer) clearInterval(window._pickerToastTimer);
+  let step=0;
+  const isBrowser = mode==='browser';
+  const steps = isBrowser ? [
+    ['🔌 در حال اتصال به '+new URL(url).hostname+'…', 0],
+    ['🎭 در حال رندر با '+(($('pickerEngine')?.value||'playwright')==='selenium'?'Selenium':'Playwright')+'…', 900],
+    ['↕️ اسکرول صفحه و بارگذاری تنبل تصاویر…', 2200],
+    ['⏳ انتظار کارت‌های محصول (Digikala/SPA)…', 3800],
+    ['🧩 پردازش DOM و تزریق انتخابگر…', 5600]
+  ] : [
+    ['🔌 در حال دریافت HTTP…', 0],
+    ['📄 دریافت HTML و پاکسازی اسکریپت‌ها…', 800],
+    ['🧩 آماده‌سازی پیش‌نمایش…', 1500]
+  ];
+  steps.forEach(([msg, delay])=>{
+    setTimeout(()=>{ if($('pickerFrameWrap').classList.contains('open') && $('pickerReady').textContent!=='آماده انتخاب') _showPickerToast(msg, ''); }, delay);
+  });
+  // Watch iframe load/error via postMessage (handled below) and also timeout
+  let _watchdog = setTimeout(()=>{
+    if($('pickerReady').textContent==='در حال دریافت…'){
+      _showPickerToast('⏳ رندر کمی طول کشیده — در حال انتظار پاسخ مرورگر…', 'warn');
+    }
+  }, 7500);
+  // Store to clear on ready/error
+  window._pickerToastTimer = _watchdog;
+  // Hook to clear on message
+  const _origHandler = window._pickerMessageHandler;
+  $('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);
+  $('pickerStatus').textContent=isBrowser?'رندر Playwright با اسکرول و انتظار محصول (دیجی‌کالا/اسنپ‌شاپ)…':'صفحه از مسیر مرکزی دریافت می‌شود…';
+}
 function loadSnappPicker(){if($('render'))$('render').value='browser';if(!$('pickerUrl').value.trim()&&$('url'))$('pickerUrl').value=$('url').value;loadVisualPicker(true)}
 function closeVisualPicker(){$('pickerFrame').src='about:blank';$('pickerFrameWrap').classList.remove('open');$('pickerReady').textContent='بسته شد'}
 function pickerMove(action){$('pickerFrame').contentWindow?.postMessage({action},'*')}
 function pickerContext(){$('pickerFrame').contentWindow?.postMessage({action:'context',selector:pickerKind==='list'&&$('pickerField').value!=='container'?$('sel_container').value.trim():''},'*')}
 function setPickerHeight(value){$('pickerFrameWrap').style.height=value+'px'}
-window.addEventListener('message',event=>{if(event.source!==$('pickerFrame').contentWindow)return;let d=event.data||{};if(d.type==='s4-picker-ready'){pickerContext();$('pickerReady').textContent='آماده انتخاب';$('pickerReady').className='badge ok';$('pickerStatus').textContent='فیلد را انتخاب کنید، سپس روی جزء متناظر در پیش‌نمایش بزنید.'}if(d.type==='s4-picker-error'){$('pickerReady').textContent='خطای بارگذاری';$('pickerReady').className='badge error';$('pickerStatus').innerHTML='<span class="error">'+esc(d.error||'بارگذاری ناموفق بود')+'</span>'}if(d.type==='s4-picker-picked'){let field=$('pickerField').value,input=$(pickerInputId(field));if(input){input.value=d.selector;input.dispatchEvent(new Event('change'));$('pickerSelection').textContent=d.selector;$('pickerStatus').innerHTML='<span class="ok">✓ '+esc(d.tag)+' · '+d.matches+' تطابق · '+esc(d.text||'')+'</span>';renderPickerChips()}}});selectorTab('list');
+window.addEventListener('message',event=>{
+  if(event.source!==$('pickerFrame').contentWindow) return;
+  let d=event.data||{};
+  if(window._pickerToastTimer){ clearTimeout(window._pickerToastTimer); window._pickerToastTimer=null; }
+  if(d.type==='s4-picker-ready'){
+    pickerContext();
+    $('pickerReady').textContent='آماده انتخاب';
+    $('pickerReady').className='badge ok';
+    $('pickerStatus').textContent='✅ آماده — فیلد را انتخاب کنید، سپس روی جزء متناظر در پیش‌نمایش بزنید.';
+    try{ if(typeof toast==='function') toast('✅ پیش‌نمایش با '+(($('pickerEngine')?.value||'auto')==='http'?'HTTP':'Playwright')+' آماده شد — حالا روی محصول کلیک کنید', 'ok'); }catch(e){}
+  }
+  if(d.type==='s4-picker-error'){
+    $('pickerReady').textContent='خطای بارگذاری';
+    $('pickerReady').className='badge error';
+    $('pickerStatus').innerHTML='<span class="error">'+esc(d.error||'بارگذاری ناموفق بود')+'</span>';
+    try{ if(typeof toast==='function') toast('❌ خطای رندر: '+(d.error||'مرورگر پاسخی نداد').slice(0,120), 'err'); }catch(e){}
+  }if(d.type==='s4-picker-picked'){let field=$('pickerField').value,input=$(pickerInputId(field));if(input){input.value=d.selector;input.dispatchEvent(new Event('change'));$('pickerSelection').textContent=d.selector;$('pickerStatus').innerHTML='<span class="ok">✓ '+esc(d.tag)+' · '+d.matches+' تطابق · '+esc(d.text||'')+'</span>';renderPickerChips()}}});selectorTab('list');
 function config(){const g=id=>$(id)||{value:'',checked:false};const num=(id,d)=>{const n=+(g(id).value);return Number.isFinite(n)?n:d};let selectors={},detail_selectors={};['container','title','price','link','image','sku'].forEach(k=>selectors[k]=g('sel_'+k).value.trim());['gallery','variations','weight','category','price','stock','brand','sku','short_desc','long_desc','tags','attributes'].forEach(k=>detail_selectors[k]=g('det_'+k).value.trim());let profile_rules={title_prefix:g('rule_title_prefix').value.trim(),title_suffix:g('rule_title_suffix').value.trim(),price_mode:g('rule_price_mode').value||'none',price_value:num('rule_price_value',0),price_round:num('rule_price_round',0),default_stock:g('rule_default_stock').value,default_category:g('rule_default_category').value.trim(),bsl_category_id:num('rule_bsl_category_id',0),woo_category_id:num('rule_woo_category_id',0),woo_price_mode:g('rule_woo_price_mode').value||'none',woo_price_value:num('rule_woo_price_value',0),woo_price_round:num('rule_woo_price_round',0),bsl_price_mode:g('rule_bsl_price_mode').value||'none',bsl_price_value:num('rule_bsl_price_value',0),bsl_price_round:num('rule_bsl_price_round',0)};return {url:g('url').value.trim(),pages:Math.max(1,num('pages',1)),render:g('render').value||'auto',fetch_engine:g('fetch_engine').value||'auto',fetch_engine_master:g('fetch_engine_master').value||((profiles[activeProfile]&&profiles[activeProfile].fetch_engine_master)||''),fetch_engine_host:(profiles[activeProfile]&&profiles[activeProfile].fetch_engine_host)||'',pagination:g('pagination').value||'query',page_value:g('page_value').value.trim(),scrolls:num('scrolls',4),enrich:g('enrich').value!=='0',detail_scope:g('detail_scope').value||'missing',detail_limit:num('detail_limit',0),selectors,detail_selectors,profile_rules,display_name:(profiles[activeProfile]&&profiles[activeProfile].display_name)||'',gallery:{mode:g('galMode').value||'auto',box:g('galBox').value.trim(),selectors:g('galSelectors').value.trim(),pattern:g('galPattern').value.trim(),from:num('galFrom',1),to:num('galTo',10),skip_first:!!g('galSkipFirst').checked}}}
 function galModeChanged(){const m=$('galMode')?$('galMode').value:'auto';['galAutoBox','galManualBox','galNumberBox'].forEach(id=>{const e=$(id);if(!e)return;e.classList.toggle('hidden', (id==='galAutoBox'&&m!=='auto')||(id==='galManualBox'&&m!=='manual')||(id==='galNumberBox'&&m!=='number'))})}
 function apply(c){if(!c)return;['url','pages','render','fetch_engine','pagination','page_value','scrolls','detail_scope','detail_limit'].forEach(k=>{if(c[k]!==undefined&&$(k))$(k).value=c[k]});try{if(window.updatePaginationPlaceholder)window.updatePaginationPlaceholder();}catch(e){}if($('fetch_engine_master'))$('fetch_engine_master').value=c.fetch_engine_master||'';if(typeof updateEngineHint==='function')updateEngineHint();if($('enrich'))$('enrich').value=c.enrich?'1':'0';Object.entries(c.selectors||{}).forEach(([k,v])=>{if($('sel_'+k))$('sel_'+k).value=v||''});Object.entries(c.detail_selectors||{}).forEach(([k,v])=>{if($('det_'+k))$('det_'+k).value=v||''});(function(g){g=c.gallery||{};if($('galMode'))$('galMode').value=g.mode||'auto';if($('galBox'))$('galBox').value=g.box||'';if($('galSelectors'))$('galSelectors').value=g.selectors||'';if($('galPattern'))$('galPattern').value=g.pattern||'';if($('galFrom'))$('galFrom').value=g.from||1;if($('galTo'))$('galTo').value=g.to||10;if($('galSkipFirst'))$('galSkipFirst').checked=!!g.skip_first;if(typeof galModeChanged==='function')galModeChanged()})();let r=c.profile_rules||{};['title_prefix','title_suffix','price_mode','price_value','price_round','default_stock','default_category','bsl_category_id','woo_category_id','woo_price_mode','woo_price_value','woo_price_round','bsl_price_mode','bsl_price_value','bsl_price_round'].forEach(k=>{if($('rule_'+k)&&r[k]!==undefined)$('rule_'+k).value=r[k]});if($('pickerUrl'))$('pickerUrl').value=c.url||$('url')?.value||'';syncProfileAcrossTabs()}
