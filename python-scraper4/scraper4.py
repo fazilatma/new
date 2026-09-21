@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.202"
+APP_VERSION = "10.203"
 CHANGELOG = [
+    {"version":"10.203","date":"2026-09-21","title":"پنجره انتخاب بصری با Playwright/Selenium و رفع دیجی‌کالا 18KB","items":["پنجره انتخاب بصری حالا 3 موتور دارد: HTTP / Playwright / Selenium — دیجی‌کالا با Playwright رندر می‌شود","دیجی‌کالا به لیست SPA اضافه شد: رندر با Playwright، 8 اسکرول، انتظار کارت محصول و 1.8ثانیه صبر اضافه","وقتی playwright با 18KB خالی برمی‌گردد، 2000 کاراکتر اول HTML در لاگ ذخیره می‌شود تا دلیل بلاک شدن IP مشخص شود"]},
     {"version":"10.202","date":"2026-09-21","title":"رفع دسترسی مرورگر روی WebConsole (root vs www-data) و سلکتور دیجی‌کالا","items":["PLAYWRIGHT_BROWSERS_PATH روی WebConsole حتی اگر پوشه برای کاربر سرویس قابل خواندن نبود هم قبول می‌شود و fallback به /root/.cache را هم امتحان می‌کند","find_browser_executable حالا /root/.cache/ms-playwright را حتی اگر WebConsole HOME متفاوت باشد هم می‌گردد","دیجی‌کالا: وقتی 5 سلکتور دستی پر است و DOM=0، کشف خودکار دوباره فعال شد؛ پیام خطا دیگر نصفه نمی‌ماند"]},
     {"version":"10.201","date":"2026-09-21","title":"کوتاه کردن پیام خطای مرورگر برای نمایش کامل دستور ایران","items":["پیام PLAYWRIGHT_BROWSERS_PATH برای wconsole کوتاه شد تا در diagnostic نصفه نماند: فقط cd ... && bash tools/install_chromium_mirror.sh","سلکتور خالی شد (0 پرشده) درست است؛ بعد از نصب مرورگر دیجی‌کالا خودکار کشف می‌شود"]},
     {"version":"10.200","date":"2026-09-21","title":"رفع مسیر wconsole_data و سلکتور دیجی‌کالا","items":["مسیر PythonAnywhere/wconsole_data اصلاح شد: PLAYWRIGHT_BROWSERS_PATH حالا دقیقاً /var/www/html/.wconsole_data/projects/python-scraper4-.../ms-playwright را نشان می‌دهد و دستور نصب همان مسیر را پیشنهاد می‌کند","دیجی‌کالا وقتی 5 سلکتور دستی پر است دیگر کشف خودکار را بلوکه نمی‌کند؛ اگر DOM=0 بود سلکتورها خودکار بازنویسی می‌شوند","پیشنهاد مرورگر برای دیجی‌کالا کوتاه و بدون قطع شد: دستور یک‌خطی bash tools/install_chromium_mirror.sh برای همین پروژه کافی است"]},
@@ -2057,15 +2058,27 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
             if not goto_ok:
                 page.goto(target, wait_until="commit", timeout=timeout_ms)
             snapp="snappshop.ir" in (url or "").lower()
+            digi="digikala.com" in (url or "").lower() or "digikala.ir" in (url or "").lower()
+            is_spa = snapp or digi
             if _stop_requested():_abort(browser)
-            page.wait_for_timeout(1800 if snapp else 500)
-            for _ in range(max(0, min(16, scrolls if snapp else scrolls))):
+            page.wait_for_timeout(1800 if is_spa else 500)
+            for _ in range(max(0, min(16, 8 if is_spa else scrolls))):
                 if _stop_requested():_abort(browser)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(850 if snapp else 600)
+                page.wait_for_timeout(850 if is_spa else 600)
             if snapp:
                 try:
                     page.wait_for_selector('a[href*="/product/"],a[href*="/snp-"],article, [class*="product"]', timeout=12000)
+                except Exception:
+                    pass
+            if digi:
+                try:
+                    # Digikala product cards: wait for known selectors
+                    page.wait_for_selector('[data-testid="product-card"], div[data-cro-id], a[href*="/product/"]', timeout=15000)
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_timeout(1800)
                 except Exception:
                     pass
                 try:
@@ -2081,6 +2094,13 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
             except Exception:
                 pass
             sample=clean_text(BeautifulSoup(html[:200000],"html.parser").get_text(" ",strip=True)).lower()
+            # 10.203 if Digikala returns shell 13-18KB with no products, log snippet for debug
+            if digi and len(html) < 50000 and "product" not in sample:
+                try:
+                    report = html[:2000].replace("\n"," ")[:800]
+                    print(f"[digikala] SPA shell {len(html)} bytes, snippet: {report[:300]}", flush=True)
+                except Exception:
+                    pass
             if any(x in sample for x in ("access denied","موقتا vpn خود را خاموش","temporarily blocked","captcha","درخواست شما مشکوک","دسترسی شما مسدود")):
                 raise FetchError("Playwright Stealth نیز صفحه ضدبات/VPN دریافت کرد؛ IP مسیر اتصال توسط سایت رد شده است. مسیر مستقیم یا HTTP Proxy مجاز را در دروازه مرکزی انتخاب کنید")
             browser.close()
@@ -4552,10 +4572,14 @@ def api_picker_preview():
     """Return a sandboxed, script-stripped DOM preview with our visual selector inspector."""
     url=public_http_url(clean_text(request.args.get("url")))
     render=clean_text(request.args.get("render","auto"));host=(urlparse(url).hostname or "").lower()
-    spa=any(x in host for x in ("snappshop.ir","snapp.ir"))
+    spa=any(x in host for x in ("snappshop.ir","snapp.ir","digikala.com","digikala.ir"))
     if spa: render="browser"
     network=load_data().get("network",{});fetcher=Fetcher(network);result=None;errors=[]
-    scrolls=8 if spa else 4
+    scrolls=8 if spa else 4  # Digikala now counted as spa via host check above
+    # 10.203 picker: support ?render=playwright/selenium/browser/http/auto
+    render_norm=render.lower().strip()
+    if render_norm in ("playwright","selenium","browser"): render="browser"
+    elif render_norm in ("http","requests","curl_cffi","cloudscraper","httpx"): render="http"
     if render!="browser":
         result=picker_http_fetch(url,fetcher,errors)
         if result is None and fetcher.proxy_mode in {"relay","http"}:
@@ -7211,7 +7235,7 @@ button.linkish.danger{color:#fb7185!important}
 <div id="galManualBox" class="hidden"><label>سلکتورها (هر خط یا |)</label><textarea id="galSelectors" rows="3" dir="ltr" placeholder=".gallery img | .thumb img"></textarea></div>
 <div id="galNumberBox" class="hidden"><label>الگو با {n}</label><input id="galPattern" dir="ltr" placeholder=".thumb-{n} img"><div class="pair"><input id="galFrom" type="number" value="1" min="0"><input id="galTo" type="number" value="12" min="0"></div></div>
 <label class="checkline"><input type="checkbox" id="galSkipFirst"> عکس اول را رد کن</label></div></div>
-<div class="visual-picker"><div class="section-head"><div><h3>🎯 انتخابگر بصری DOM</h3><small>مانند نسخه PHP: جزء را روی صفحه انتخاب کنید و با والد/فرزند/هم‌سطح سلکتور را اصلاح کنید.</small></div><span id="pickerReady" class="badge">آماده بارگذاری</span></div><div class="picker-toolbar"><select id="pickerField" onchange="pickerContext()"></select><input id="pickerUrl" dir="ltr" placeholder="آدرس فهرست یا صفحه محصول"><button onclick="loadVisualPicker()">بارگذاری</button><button class="green" onclick="loadSnappPicker()">اسنپ‌شاپ / SPA</button><button class="green" onclick="nextPickerField()">⏭ فیلد بعدی</button><button class="gray" onclick="closeVisualPicker()">✕ بستن</button><button class="green" onclick="saveProfilePrompt()">💾 ذخیره در پروفایل</button></div><div id="pickerChips" class="picker-chips"></div><div id="pickerControls" class="picker-controls"><button onclick="pickerMove('up')">⬆ والد</button><button onclick="pickerMove('down')">⬇ فرزند</button><button onclick="pickerMove('prev')">→ قبلی</button><button onclick="pickerMove('next')">← بعدی</button><span id="pickerSelection">یک جزء را انتخاب کنید</span><label class="picker-height">ارتفاع <input type="range" min="350" max="1400" value="720" oninput="setPickerHeight(this.value)"></label></div><div id="pickerFrameWrap" class="picker-frame-wrap"><iframe id="pickerFrame" sandbox="allow-scripts" title="پیش‌نمایش انتخابگر سلکتور"></iframe></div><div id="pickerStatus" class="status">در تب فهرست، ظرف محصول و اجزای کارت را انتخاب کنید؛ در تب جزئیات، صفحه یکی از محصولات را باز کنید.</div></div></div></details><div class="primary-actions"><button id="runBtn" type="button" onclick="runScrape()">شروع برداشت</button><div class="export-row"><button type="button" class="ghost" onclick="saveProfilePrompt()">ذخیره</button><button type="button" class="ghost" onclick="downloadCSV()">CSV</button><button type="button" class="ghost" onclick="downloadJSON()">JSON</button><button type="button" class="ghost" onclick="downloadXLSX()">Excel</button><label class="ghost file-btn">ورود<input id="csvImport" type="file" accept=".csv,text/csv" onchange="importCSV(this)"></label></div></div>
+<div class="visual-picker"><div class="section-head"><div><h3>🎯 انتخابگر بصری DOM</h3><small>مانند نسخه PHP: جزء را روی صفحه انتخاب کنید و با والد/فرزند/هم‌سطح سلکتور را اصلاح کنید.</small></div><span id="pickerReady" class="badge">آماده بارگذاری</span></div><div class="picker-toolbar"><select id="pickerField" onchange="pickerContext()"></select><input id="pickerUrl" dir="ltr" placeholder="آدرس فهرست یا صفحه محصول"><select id="pickerEngine" title="موتور رندر"><option value="auto">خودکار</option><option value="playwright">Playwright</option><option value="selenium">Selenium</option><option value="http">HTTP</option></select><button onclick="loadVisualPicker()">بارگذاری</button><button class="green" onclick="loadSnappPicker()">اسنپ‌شاپ / SPA</button><button class="green" onclick="nextPickerField()">⏭ فیلد بعدی</button><button class="gray" onclick="closeVisualPicker()">✕ بستن</button><button class="green" onclick="saveProfilePrompt()">💾 ذخیره در پروفایل</button></div><div id="pickerChips" class="picker-chips"></div><div id="pickerControls" class="picker-controls"><button onclick="pickerMove('up')">⬆ والد</button><button onclick="pickerMove('down')">⬇ فرزند</button><button onclick="pickerMove('prev')">→ قبلی</button><button onclick="pickerMove('next')">← بعدی</button><span id="pickerSelection">یک جزء را انتخاب کنید</span><label class="picker-height">ارتفاع <input type="range" min="350" max="1400" value="720" oninput="setPickerHeight(this.value)"></label></div><div id="pickerFrameWrap" class="picker-frame-wrap"><iframe id="pickerFrame" sandbox="allow-scripts" title="پیش‌نمایش انتخابگر سلکتور"></iframe></div><div id="pickerStatus" class="status">در تب فهرست، ظرف محصول و اجزای کارت را انتخاب کنید؛ در تب جزئیات، صفحه یکی از محصولات را باز کنید.</div></div></div></details><div class="primary-actions"><button id="runBtn" type="button" onclick="runScrape()">شروع برداشت</button><div class="export-row"><button type="button" class="ghost" onclick="saveProfilePrompt()">ذخیره</button><button type="button" class="ghost" onclick="downloadCSV()">CSV</button><button type="button" class="ghost" onclick="downloadJSON()">JSON</button><button type="button" class="ghost" onclick="downloadXLSX()">Excel</button><label class="ghost file-btn">ورود<input id="csvImport" type="file" accept=".csv,text/csv" onchange="importCSV(this)"></label></div></div>
 <div id="status" class="card status">آماده برای برداشت محصولات</div><div id="extractLiveTask" class="card live-task" style="display:none"><div class="live-task-head"><b id="extractTaskTitle">استخراج محصولات</b><span id="extractTaskPercent">۰٪</span></div><div class="progress-track"><i id="extractTaskBar"></i></div><div id="extractTaskMetrics" class="task-metrics"></div><div id="extractTaskStep" class="live-step"></div><div id="extractTaskDetails" class="live-details"></div></div><div id="extractCounters" class="stats clickable-counts"><button onclick="openChangeList('all')"><b>۰</b><span>کل محصولات</span></button><button onclick="openChangeList('added')"><b>۰</b><span>محصول جدید</span></button><button onclick="openChangeList('price_changed')"><b>۰</b><span>تغییر قیمت</span></button><button onclick="openChangeList('changed')"><b>۰</b><span>تغییر محتوا</span></button><button onclick="openChangeList('removed')"><b>۰</b><span>حذف‌شده</span></button><button onclick="openChangeList('unchanged')"><b>۰</b><span>بدون تغییر</span></button></div><div class="card tablebox"><table><thead><tr><th>#</th><th>تصویر</th><th>عنوان</th><th>قیمت</th><th>SKU</th><th>جزئیات</th><th>لینک</th></tr></thead><tbody id="rows"><tr><td class="empty" colspan="6">پس از شروع برداشت، محصولات اینجا نمایش داده می‌شوند.</td></tr></tbody></table></div></section>
 <section id="profileSettings" class="pane"><div class="card"><h3>⚙️ تنظیمات پروفایل</h3><div class="grid grid4"><div><label>پیشوند عنوان</label><input id="rule_title_prefix"></div><div><label>پسوند عنوان</label><input id="rule_title_suffix"></div><div><label>نوع تعدیل قیمت</label><select id="rule_price_mode"><option value="none">بدون تغییر</option><option value="percent">درصد</option><option value="multiplier">ضریب</option><option value="fixed">مبلغ ثابت</option></select></div><div><label>مقدار تعدیل</label><input id="rule_price_value" type="number" step="0.01" value="0"></div><div><label>گردکردن قیمت</label><input id="rule_price_round" type="number" value="0" placeholder="مثلاً 1000"></div><div><label>موجودی پیش‌فرض</label><input id="rule_default_stock" type="number"></div><div><label>دسته‌بندی پیش‌فرض</label><input id="rule_default_category"></div><div><label>شناسه دسته باسلام</label><input id="rule_bsl_category_id" type="number"></div><div><label>شناسه دسته ووکامرس</label><input id="rule_woo_category_id" type="number"></div></div><div class="destination-price-grid"><div class="destination-price-card woo-price-card"><h3>🛒 تعدیل قیمت ووکامرس</h3><div class="grid"><div><label>روش</label><select id="rule_woo_price_mode"><option value="none">بدون تغییر</option><option value="percent">درصد</option><option value="multiplier">ضریب</option><option value="fixed">مبلغ ثابت</option></select></div><div><label>مقدار</label><input id="rule_woo_price_value" type="number" step="0.01" value="0"></div><div class="wide"><label>گرد کردن</label><input id="rule_woo_price_round" type="number" value="0" placeholder="مثلاً 1000"></div></div></div><div class="destination-price-card bsl-price-card"><h3>🏪 تعدیل قیمت باسلام</h3><div class="grid"><div><label>روش</label><select id="rule_bsl_price_mode"><option value="none">بدون تغییر</option><option value="percent">درصد</option><option value="multiplier">ضریب</option><option value="fixed">مبلغ ثابت</option></select></div><div><label>مقدار</label><input id="rule_bsl_price_value" type="number" step="0.01" value="0"></div><div class="wide"><label>گرد کردن</label><input id="rule_bsl_price_round" type="number" value="0" placeholder="مثلاً 1000"></div></div></div></div><div class="note">تنظیم عمومی روی نتیجه استخراج اعمال می‌شود؛ تعدیل هر مقصد فقط هنگام ارسال همان پروفایل محاسبه خواهد شد.</div></div></section>
 <section id="selectors" class="pane"><div id="selectorsMount"></div></section>
@@ -7249,7 +7273,7 @@ function selectorTab(kind){pickerKind=kind;document.querySelectorAll('.selector-
 function pickerInputId(field){return (pickerKind==='list'?'sel_':'det_')+field}
 function renderPickerChips(){$('pickerChips').innerHTML=pickerFields[pickerKind].map(([k,n])=>{let done=$(pickerInputId(k))?.value.trim();return `<button class="picker-chip ${done?'done':''}" onclick="$('pickerField').value='${k}';pickerContext()">${done?'✓':'○'} ${n}</button>`}).join('')}
 function nextPickerField(){let fields=pickerFields[pickerKind],at=fields.findIndex(x=>x[0]===$('pickerField').value),next=fields.slice(at+1).find(x=>!$(pickerInputId(x[0]))?.value.trim())||fields.find(x=>!$(pickerInputId(x[0]))?.value.trim())||fields[(at+1)%fields.length];$('pickerField').value=next[0];pickerContext();$('pickerStatus').textContent='اکنون «'+next[1]+'» را روی صفحه انتخاب کنید.'}
-function loadVisualPicker(forceBrowser){let url=($('pickerUrl').value.trim()||$('url')?.value||'').trim();if(!url){$('pickerStatus').innerHTML='<span class="error">آدرس صفحه را وارد کنید.</span>';return}$('pickerUrl').value=url;$('pickerReady').textContent='در حال دریافت…';$('pickerReady').className='badge';$('pickerFrameWrap').classList.add('open');let mode=forceBrowser||/snappshop\.ir/i.test(url)?'browser':($('render')?.value||'auto');$('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);$('pickerStatus').textContent=/snappshop/i.test(url)?'اسنپ‌شاپ: رندر Playwright با اسکرول و انتظار کارت محصول…':'صفحه از مسیر مرکزی دریافت می‌شود…'}
+function loadVisualPicker(forceBrowser){let url=($('pickerUrl').value.trim()||$('url')?.value||'').trim();if(!url){$('pickerStatus').innerHTML='<span class="error">آدرس صفحه را وارد کنید.</span>';return}$('pickerUrl').value=url;$('pickerReady').textContent='در حال دریافت…';$('pickerReady').className='badge';$('pickerFrameWrap').classList.add('open');let mode;if(forceBrowser) mode='browser'; else if($('pickerEngine')) mode=$('pickerEngine').value; else if(/snappshop\.ir|digikala\.com/i.test(url)) mode='browser'; else mode=($('render')?.value||'auto');if(mode==='playwright'||mode==='selenium') mode='browser';$('pickerFrame').src='/api/picker/preview?render='+encodeURIComponent(mode)+'&url='+encodeURIComponent(url);$('pickerStatus').textContent=mode==='browser'?'رندر Playwright با اسکرول و انتظار محصول (دیجی‌کالا/اسنپ‌شاپ)…':'صفحه از مسیر مرکزی دریافت می‌شود…'}
 function loadSnappPicker(){if($('render'))$('render').value='browser';if(!$('pickerUrl').value.trim()&&$('url'))$('pickerUrl').value=$('url').value;loadVisualPicker(true)}
 function closeVisualPicker(){$('pickerFrame').src='about:blank';$('pickerFrameWrap').classList.remove('open');$('pickerReady').textContent='بسته شد'}
 function pickerMove(action){$('pickerFrame').contentWindow?.postMessage({action},'*')}
