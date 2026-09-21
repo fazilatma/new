@@ -41,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import quote
@@ -2783,13 +2784,206 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             return next((shop for shop in shops if shop["id"] == wanted), None)
         return next((shop for shop in shops if shop.get("primary")), shops[0] if shops else None)
 
+    def _selected_basalam_shops(shop_filter: str = "all") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        shops = _basalam_shop_configs()
+        selected = shops if shop_filter in {"", "all"} else [
+            shop for shop in shops if shop["id"] == shop_filter
+        ]
+        if not selected:
+            raise ValueError("غرفهٔ انتخاب‌شده پیدا نشد")
+        runnable = [shop for shop in selected if shop.get("token") and shop.get("vendor_id")]
+        if not runnable:
+            raise ValueError("توکن و شناسهٔ غرفهٔ انتخاب‌شده کامل نیست")
+        return runnable, shops
+
+    def _plain_catalog_payload(payload: Any) -> dict[str, Any]:
+        """Turn REST dictionaries or Pydantic SDK responses into one mapping."""
+        if hasattr(payload, "model_dump"):
+            try:
+                payload = payload.model_dump(mode="json")
+            except TypeError:
+                payload = payload.model_dump()
+        elif hasattr(payload, "dict"):
+            payload = payload.dict()
+        return payload if isinstance(payload, dict) else {}
+
+    def _catalog_meta(payload: dict[str, Any], rows: list[dict[str, Any]],
+                      page: int, per_page: int) -> dict[str, Any]:
+        containers = [payload]
+        for name in ("meta", "pagination", "paging"):
+            value = payload.get(name)
+            if isinstance(value, dict):
+                containers.append(value)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            containers.append(data)
+            for name in ("meta", "pagination", "paging"):
+                value = data.get(name)
+                if isinstance(value, dict):
+                    containers.append(value)
+
+        def number(*names: str) -> Optional[int]:
+            for container in containers:
+                for name in names:
+                    value = container.get(name)
+                    if value in (None, "") or isinstance(value, bool):
+                        continue
+                    try:
+                        return max(0, int(float(value)))
+                    except (TypeError, ValueError):
+                        continue
+            return None
+
+        total = number("total_count", "total", "count", "records_total")
+        total_pages = number("total_page", "total_pages", "last_page", "page_count")
+        known = total is not None or total_pages is not None
+        if total is None:
+            # Keep «next» available when an older API response has no metadata.
+            total = (page - 1) * per_page + len(rows)
+            if len(rows) >= per_page:
+                total += 1
+        if total_pages is None:
+            total_pages = max(1, (total + per_page - 1) // per_page)
+        return {"total": total, "totalPages": max(1, total_pages), "known": known}
+
+    def _basalam_status_values(status: str) -> list[str]:
+        mapping = {
+            "all": ["2976", "3790", "3567", "3568", "4184",
+                    "2977", "2978", "3248", "4221"],
+            "active": ["2976"], "inactive": ["3790"],
+            "not_approved": ["3567"], "pending": ["3568"],
+            "archived": ["4184"],
+        }
+        normalized = _s(status) or "all"
+        if normalized in mapping:
+            return mapping[normalized]
+        return [normalized] if normalized in {"2976", "3790", "3567", "3568", "4184"} \
+            else mapping["all"]
+
+    def _basalam_page_for_shop(shop: dict[str, Any], page: int, per_page: int,
+                                query: str = "", status: str = "all") -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "page": page,
+            "per_page": per_page,
+            "statuses": _basalam_status_values(status),
+        }
+        if query:
+            params["title"] = query
+        with core.basalam_use_cfg(shop["cfg"]):
+            payload = core.basalam_request(
+                "GET", f"/v1/vendors/{shop['vendor_id']}/products", params=params)
+        plain = _plain_catalog_payload(payload)
+        raw_rows = core.basalam_api_rows(plain)
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            item["__s4_shop_id"] = shop["id"]
+            item["__s4_shop_name"] = shop["name"]
+            rows.append(item)
+        return {"rows": rows, **_catalog_meta(plain, rows, page, per_page)}
+
+    def _basalam_catalog_page(selected: list[dict[str, Any]], page: int,
+                               per_page: int, query: str = "",
+                               status: str = "all") -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        total, total_pages, known, errors = 0, 1, True, []
+        for shop in selected:
+            try:
+                result = _basalam_page_for_shop(shop, page, per_page, query, status)
+            except Exception as exc:  # Keep other configured shops usable.
+                errors.append({"shopId": shop["id"], "shopName": shop["name"],
+                               "error": str(exc)[:500]})
+                if len(selected) == 1:
+                    raise
+                continue
+            rows.extend(result["rows"])
+            total += _int(result.get("total"))
+            total_pages = max(total_pages, _int(result.get("totalPages"), 1))
+            known = known and bool(result.get("known"))
+        if not rows and errors and len(errors) == len(selected):
+            raise ValueError("دریافت فهرست محصولات از هیچ غرفه‌ای موفق نبود")
+        return {"rows": rows, "total": total, "totalPages": total_pages,
+                "complete": known and not errors, "errors": errors}
+
+    def _basalam_catalog_counts(selected: list[dict[str, Any]],
+                                 current_status: str, current_total: int) -> dict[str, int]:
+        statuses = ("all", "2976", "3790", "3567", "3568", "4184")
+        counts: dict[str, int] = {}
+        if current_status in statuses:
+            counts[current_status] = current_total
+
+        def fetch(status: str) -> tuple[str, int]:
+            result = _basalam_catalog_page(selected, 1, 10, "", status)
+            return status, _int(result.get("total"))
+
+        pending = [status for status in statuses if status != current_status]
+        with ThreadPoolExecutor(max_workers=min(5, len(pending))) as pool:
+            futures = [pool.submit(fetch, status) for status in pending]
+            for future in as_completed(futures):
+                try:
+                    status, total = future.result()
+                    counts[status] = total
+                except Exception:
+                    # Product rows are more important than an optional pill count.
+                    pass
+        return counts
+
+    def _basalam_catalog_all(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Build one full snapshot, fetching known pages concurrently."""
+        all_rows: list[dict[str, Any]] = []
+        fetched_pages, expected_total, complete = 0, 0, True
+        # The interactive all-at-once mode is explicit, so unlike background
+        # maintenance it may read at least the same 100 pages as the Node app.
+        page_limit = min(2000, max(100, _int(
+            getattr(core, "REMOTE_CATALOG_PAGES", 200), 200)))
+        for shop in selected:
+            first = _basalam_page_for_shop(shop, 1, 100, "", "all")
+            pages: dict[int, list[dict[str, Any]]] = {1: first["rows"]}
+            fetched_pages += 1
+            expected_total += _int(first.get("total"))
+            if first.get("known"):
+                reported_pages = max(1, _int(first.get("totalPages"), 1))
+                last_page = min(page_limit, reported_pages)
+                complete = complete and reported_pages <= page_limit
+                if last_page > 1:
+                    with ThreadPoolExecutor(max_workers=min(6, last_page - 1)) as pool:
+                        futures = {
+                            pool.submit(_basalam_page_for_shop, shop, page, 100, "", "all"): page
+                            for page in range(2, last_page + 1)
+                        }
+                        for future in as_completed(futures):
+                            page = futures[future]
+                            pages[page] = future.result()["rows"]
+                            fetched_pages += 1
+            else:
+                page, batch = 1, first["rows"]
+                while len(batch) >= 100 and page < page_limit:
+                    page += 1
+                    result = _basalam_page_for_shop(shop, page, 100, "", "all")
+                    batch = result["rows"]
+                    pages[page] = batch
+                    fetched_pages += 1
+                if len(batch) >= 100:
+                    complete = False
+            shop_count = 0
+            for page in sorted(pages):
+                all_rows.extend(pages[page])
+                shop_count += len(pages[page])
+            if first.get("known") and shop_count < _int(first.get("total")):
+                complete = False
+        return all_rows, {"complete": complete, "pagesFetched": fetched_pages,
+                          "remoteTotal": expected_total or len(all_rows)}
+
+    destination_catalog_cache: dict[Any, dict[str, Any]] = {}
+    destination_catalog_lock = threading.RLock()
+    destination_catalog_ttl = 180
+
     def _destination_rows(key: str, shop_filter: str = "all") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if key == "woocommerce":
             return core.destination_remote_rows(key), []
-        shops = _basalam_shop_configs()
-        selected = shops if shop_filter in {"", "all"} else [s for s in shops if s["id"] == shop_filter]
-        if not selected:
-            raise ValueError("غرفهٔ انتخاب‌شده پیدا نشد")
+        selected, shops = _selected_basalam_shops(shop_filter)
         rows: list[dict[str, Any]] = []
         # Preserve the backend's tested/default path for a single primary shop
         # (and make this helper straightforward to monkeypatch in contract tests).
@@ -2908,36 +3102,137 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.get("/api/destination/<target>/products")
     def node_dest_products(target: str):
-        per_page = min(500, max(1, _int(request.args.get("per_page"),
-                                        _int(request.args.get("limit"), 100) or 100)))
+        per_page = min(100, max(1, _int(request.args.get("per_page"),
+                                        _int(request.args.get("limit"), 25) or 25)))
         page = max(1, _int(request.args.get("page"), 1))
         query = _s(request.args.get("q")).strip().lower()
         status = _s(request.args.get("status")) or "all"
         shop_filter = _s(request.args.get("shop")) or "all"
+        requested_mode = _s(request.args.get("fetch_mode") or
+                            request.args.get("catalog_mode")).lower()
+        fetch_mode = "all" if requested_mode in {"all", "full", "once"} else "page"
+        include_counts = _truthy(request.args.get("counts"))
+        force_refresh = _truthy(request.args.get("refresh"))
         try:
             key = dest_key(target)
-            rows, shops = _destination_rows(key, shop_filter)
+            # Preserve the existing Woo catalogue behavior in this focused
+            # Basalam fix; Basalam now mirrors Node's remote page forwarding.
+            if key != "basalam":
+                rows, shops = _destination_rows(key, shop_filter)
+                items = [_destination_view(row, key) for row in rows]
+                if query:
+                    items = [item for item in items if query in (
+                        _s(item.get("title")) + " " + _s(item.get("sku")) +
+                        " " + _s(item.get("id"))).lower()]
+                counts: dict[str, int] = {"all": len(items)}
+                for item in items:
+                    code = _s(item.get("status"))
+                    counts[code] = counts.get(code, 0) + 1
+                if status != "all":
+                    items = [item for item in items if _s(item.get("status")) == status]
+                total = len(items)
+                total_pages = max(1, (total + per_page - 1) // per_page)
+                page = min(page, total_pages)
+                offset = (page - 1) * per_page
+                return ok(items=items[offset:offset + per_page], total=total, page=page,
+                          perPage=per_page, totalPages=total_pages, counts=counts,
+                          shops=shops, fetchMode="all", cached=False,
+                          priceUnit="تومان", remotePriceUnit="تومان",
+                          archiveInsteadOfDelete=False)
+
+            selected, shops = _selected_basalam_shops(shop_filter)
+            shop_list = [{field: shop[field] for field in ("id", "name", "primary")}
+                         for shop in shops]
+            if fetch_mode == "page":
+                if query.isdigit():
+                    items, lookup_errors = [], []
+                    for shop in selected:
+                        try:
+                            items.append(_destination_get_one(key, query, shop["id"]))
+                        except Exception as exc:
+                            lookup_errors.append({"shopId": shop["id"],
+                                                  "error": str(exc)[:500]})
+                    catalog = {"total": len(items), "totalPages": 1,
+                               "complete": not lookup_errors, "errors": lookup_errors}
+                else:
+                    catalog = _basalam_catalog_page(
+                        selected, page, per_page, query, status)
+                    items = [_destination_view(row, key) for row in catalog["rows"]]
+                counts = None
+                if include_counts:
+                    counts = _basalam_catalog_counts(
+                        selected, status if not query else "", _int(catalog.get("total")))
+                payload: dict[str, Any] = {
+                    "items": items,
+                    "total": _int(catalog.get("total")),
+                    "page": page,
+                    "perPage": per_page,
+                    "totalPages": max(1, _int(catalog.get("totalPages"), 1)),
+                    "shops": shop_list,
+                    "fetchMode": "page",
+                    "cached": False,
+                    "complete": bool(catalog.get("complete")),
+                    "errors": catalog.get("errors") or [],
+                    "priceUnit": "تومان",
+                    "remotePriceUnit": "ریال",
+                    "archiveInsteadOfDelete": True,
+                }
+                if counts is not None:
+                    payload["counts"] = counts
+                return ok(**payload)
+
+            cache_key = ("basalam", tuple(
+                (shop["id"], shop["token"], _s(shop["cfg"].get("api_base_url")),
+                 core.normalize_basalam_client_mode(shop["cfg"].get("client_mode")))
+                for shop in selected))
+            now = time.time()
+            with destination_catalog_lock:
+                for old_key, old_entry in list(destination_catalog_cache.items()):
+                    if now - _num(old_entry.get("createdAt")) > destination_catalog_ttl:
+                        destination_catalog_cache.pop(old_key, None)
+                entry = destination_catalog_cache.get(cache_key)
+            cached = bool(entry and not force_refresh)
+            if not cached:
+                rows, meta = _basalam_catalog_all(selected)
+                entry = {
+                    "createdAt": time.time(),
+                    "items": [_destination_view(row, key) for row in rows],
+                    **meta,
+                }
+                with destination_catalog_lock:
+                    destination_catalog_cache[cache_key] = entry
+                    if len(destination_catalog_cache) > 8:
+                        oldest = min(destination_catalog_cache,
+                                     key=lambda item: _num(
+                                         destination_catalog_cache[item].get("createdAt")))
+                        destination_catalog_cache.pop(oldest, None)
+
+            all_items = list(entry.get("items") or [])
+            counts = {"all": len(all_items)}
+            for item in all_items:
+                code = _s(item.get("status"))
+                counts[code] = counts.get(code, 0) + 1
+            items = all_items
+            if query:
+                items = [item for item in items if query in (
+                    _s(item.get("title")) + " " + _s(item.get("sku")) +
+                    " " + _s(item.get("id"))).lower()]
+            if status != "all":
+                items = [item for item in items if _s(item.get("status")) == status]
+            total = len(items)
+            total_pages = max(1, (total + per_page - 1) // per_page)
+            page = min(page, total_pages)
+            offset = (page - 1) * per_page
+            return ok(items=items[offset:offset + per_page], total=total, page=page,
+                      perPage=per_page, totalPages=total_pages, counts=counts,
+                      shops=shop_list, fetchMode="all", cached=cached,
+                      complete=bool(entry.get("complete")),
+                      pagesFetched=_int(entry.get("pagesFetched")),
+                      snapshotAgeSeconds=max(0, int(now - _num(entry.get("createdAt")))),
+                      priceUnit="تومان", remotePriceUnit="ریال",
+                      archiveInsteadOfDelete=True)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400
-        items = [_destination_view(r, key) for r in rows]
-        if query:
-            items = [item for item in items if query in (
-                _s(item.get("title")) + " " + _s(item.get("sku")) + " " + _s(item.get("id"))
-            ).lower()]
-        counts: dict[str, int] = {"all": len(items)}
-        for item in items:
-            code = _s(item.get("status"))
-            counts[code] = counts.get(code, 0) + 1
-        if status != "all":
-            items = [item for item in items if _s(item.get("status")) == status]
-        total = len(items)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        page = min(page, total_pages)
-        offset = (page - 1) * per_page
-        return ok(items=items[offset:offset + per_page], total=total, page=page,
-                  perPage=per_page, totalPages=total_pages, counts=counts, shops=shops,
-                  priceUnit="تومان", remotePriceUnit="ریال" if key == "basalam" else "تومان",
-                  archiveInsteadOfDelete=key == "basalam")
 
     def _destination_get_one(key: str, item_id: str, shop_id: str = "") -> dict[str, Any]:
         if key == "woocommerce":

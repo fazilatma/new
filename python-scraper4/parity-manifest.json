@@ -10,7 +10,7 @@
   },
   "target": {
     "runtime": "python-scraper4",
-    "minimumVersion": "10.219"
+    "minimumVersion": "10.220"
   },
   "normalization": "Dynamic path parameters are represented as <>.",
   "requiredRoutes": [
@@ -719,6 +719,10 @@
     {
       "id": "destination-maintenance",
       "test": "NodeParityContracts.test_destination_and_duplicate_contracts"
+    },
+    {
+      "id": "basalam-catalog-fetch-modes",
+      "test": "NodeParityContracts.test_basalam_paged_and_one_shot_catalogs"
     },
     {
       "id": "reconciliation-photo-dedup",

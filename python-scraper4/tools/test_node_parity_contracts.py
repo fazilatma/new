@@ -502,6 +502,73 @@ class NodeParityContracts(unittest.TestCase):
         self.assertNotIn("core.basalam_api_request(",
                          (ROOT / "parity_ext.py").read_text(encoding="utf-8"))
 
+    def test_basalam_paged_and_one_shot_catalogs(self):
+        data = self.data()
+        data["basalam"].update(token="catalog-token", vendor_id=7701,
+                               shop_name="Catalog shop", client_mode="api",
+                               api_base_url="https://1.1.1.1/v1")
+        self.save(data)
+        requested_pages = []
+
+        def catalog(method, path, **kwargs):
+            self.assertEqual(method, "GET")
+            self.assertEqual(path, "/v1/vendors/7701/products")
+            params = kwargs["params"]
+            page, per_page = int(params["page"]), int(params["per_page"])
+            self.assertIn("2976", params["statuses"])
+            self.assertIn("4184", params["statuses"])
+            requested_pages.append(page)
+            start = (page - 1) * per_page + 1
+            stop = min(205, page * per_page)
+            rows = [{"id": product_id, "title": f"Product {product_id}",
+                     "primary_price": product_id * 10, "stock": 2,
+                     "status": 2976}
+                    for product_id in range(start, stop + 1)]
+            return {"data": rows, "total_count": 205, "total_page":
+                    (205 + per_page - 1) // per_page}
+
+        # Default mode forwards only the requested remote page, like Node.
+        with patch.object(core, "basalam_request", side_effect=catalog), \
+                patch.object(core, "destination_remote_rows",
+                             side_effect=AssertionError("full catalogue must not run")):
+            paged = self.assert_ok(self.client.get(
+                "/api/destination/basalam/products?page=2&per_page=20&shop=7701"))
+        self.assertEqual(requested_pages, [2])
+        self.assertEqual(paged["fetchMode"], "page")
+        self.assertFalse(paged["cached"])
+        self.assertEqual(paged["total"], 205)
+        self.assertEqual(paged["totalPages"], 11)
+        self.assertEqual([row["id"] for row in paged["items"]], list(range(21, 41)))
+
+        # Explicit all-at-once mode builds one complete snapshot concurrently;
+        # page navigation then reuses it without touching Basalam again.
+        requested_pages.clear()
+        with patch.object(core, "basalam_request", side_effect=catalog), \
+                patch.object(core, "destination_remote_rows",
+                             side_effect=AssertionError("legacy full catalogue must not run")):
+            complete = self.assert_ok(self.client.get(
+                "/api/destination/basalam/products?fetch_mode=all&refresh=1&"
+                "page=1&per_page=20&shop=7701"))
+            calls_after_snapshot = len(requested_pages)
+            cached = self.assert_ok(self.client.get(
+                "/api/destination/basalam/products?fetch_mode=all&"
+                "page=2&per_page=20&shop=7701"))
+        self.assertEqual(sorted(requested_pages), [1, 2, 3])
+        self.assertEqual(calls_after_snapshot, 3)
+        self.assertEqual(complete["fetchMode"], "all")
+        self.assertFalse(complete["cached"])
+        self.assertTrue(complete["complete"])
+        self.assertEqual(complete["pagesFetched"], 3)
+        self.assertEqual(complete["total"], 205)
+        self.assertTrue(cached["cached"])
+        self.assertEqual([row["id"] for row in cached["items"]], list(range(21, 41)))
+
+        html = (ROOT / "ui" / "dashboard.html").read_text(encoding="utf-8")
+        dashboard = (ROOT / "ui" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn('id="destFetchMode"', html)
+        self.assertIn("صفحه‌ای — سریع و پیش‌فرض", html)
+        self.assertIn("fetch_mode:fetchMode", dashboard)
+
     def test_persistent_category_run(self):
         data = self.data()
         data["basalam"].update(token="token", vendor_id=77, shop_name="Shop")
