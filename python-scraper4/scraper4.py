@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.205"
+APP_VERSION = "10.206"
 CHANGELOG = [
+    {"version":"10.206","date":"2026-09-21","title":"رفع مسیر دوتایی wconsole_data و نصب پایدار مرورگر","items":["باگ مسیر /var/www/html/.wconsole_data/cache درست شد → حالا /var/www/html/.wconsole_data/cache/ms-playwright پایدار است","chrome حالا در هر دو مسیر قدیمی و جدید جستجو می‌شود تا لاگ truncated درست شود","دستور نصب هم به‌روز شد: دیگر نیازی به git pull دستی نیست — Deploy وب‌کنسول کافی است"]},
     {"version":"10.205","date":"2026-09-21","title":"جلوگیری از صفر شدن تنظیمات با هر Deploy وب‌کنسول","items":["دلیل ریست: scraper4_data.json داخل پوشه Deploy بود و rsync --delete وب‌کنسول با هر آپدیت آن را پاک می‌کرد","DATA_FILE حالا خارج از Deploy است: اول $SCRAPER_DATA_FILE، بعد /var/www/html/.wconsole_data/scraper4_data.json، بعد BASE_DIR/scraper4_data.json","با اولین اجرا، داده‌های قدیمی از BASE_DIR به مسیر پایدار منتقل می‌شود تا تنظیمات و سلکتورها حفظ شوند"]},
     {"version":"10.204","date":"2026-09-21","title":"جلوگیری از حذف مرورگر با Deploy وب‌کنسول و رفع 18KB دیجی‌کالا","items":["مسیر مرورگر از deploy_dir/ms-playwright به DATA_DIR/runtime/<id>/cache/ms-playwright منتقل شد تا rsync --delete وب‌کنسول آن را پاک نکند","Playwright حالا حتی اگر صفحه 13KB shell بدهد، لاگ HTML و دلیل بلاک را نشان می‌دهد و 18KB دیگر FAIL گمراه‌کننده نیست","پنجره بصری: اگر مرورگر پاک شده باشد، پیام نصب دوباره با دستور درست همان پروژه را نشان می‌دهد (نه مسیر truncated)"]},
     {"version":"10.203","date":"2026-09-21","title":"پنجره انتخاب بصری با Playwright/Selenium و رفع دیجی‌کالا 18KB","items":["پنجره انتخاب بصری حالا 3 موتور دارد: HTTP / Playwright / Selenium — دیجی‌کالا با Playwright رندر می‌شود","دیجی‌کالا به لیست SPA اضافه شد: رندر با Playwright، 8 اسکرول، انتظار کارت محصول و 1.8ثانیه صبر اضافه","وقتی playwright با 18KB خالی برمی‌گردد، 2000 کاراکتر اول HTML در لاگ ذخیره می‌شود تا دلیل بلاک شدن IP مشخص شود"]},
@@ -280,25 +281,21 @@ def _resolve_data_file() -> str:
     env = os.environ.get("SCRAPER_DATA_FILE", "").strip()
     if env:
         return env
-    # Prefer WebConsole persistent dir if it exists
-    for cand in ("/var/www/html/.wconsole_data/scraper4_data.json", os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "scraper4_data.json")):
-        try:
-            cand = os.path.abspath(cand)
-            if "wconsole_data" in cand:
-                # Use it even if not yet exists, so future deploys don't delete it
-                # Migrate existing BASE_DIR file once
-                old_path = os.path.join(BASE_DIR, "scraper4_data.json")
-                if os.path.isfile(old_path) and not os.path.isfile(cand):
-                    try:
-                        os.makedirs(os.path.dirname(cand), exist_ok=True)
-                        import shutil
-                        shutil.copy2(old_path, cand)
-                        print(f"[data] migrated {old_path} -> {cand}", flush=True)
-                    except Exception:
-                        pass
-                return cand
-        except Exception:
-            pass
+    persistent = "/var/www/html/.wconsole_data/scraper4_data.json"
+    try:
+        old_path = os.path.join(BASE_DIR, "scraper4_data.json")
+        if os.path.isfile(old_path) and not os.path.isfile(persistent):
+            try:
+                os.makedirs(os.path.dirname(persistent), exist_ok=True)
+                import shutil
+                shutil.copy2(old_path, persistent)
+                print(f"[data] migrated {old_path} -> {persistent}", flush=True)
+            except Exception:
+                pass
+        if os.path.isdir(os.path.dirname(persistent)) or os.path.isfile(persistent):
+            return persistent
+    except Exception:
+        pass
     return os.path.join(BASE_DIR, "scraper4_data.json")
 
 DATA_FILE = _resolve_data_file()
@@ -1928,8 +1925,7 @@ def configured_browser_path() -> str:
             return env_path
     # 10.204 WebConsole: use runtime cache so rsync --delete does NOT wipe browsers
     try:
-        # DATA_DIR is /var/www/html/.wconsole_data when running under WebConsole
-        _wc_cache = os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "cache", "ms-playwright")
+        _wc_cache = "/var/www/html/.wconsole_data/cache/ms-playwright"
         _wc_cache = os.path.abspath(_wc_cache)
         if os.path.isdir(_wc_cache):
             return _wc_cache
@@ -1978,7 +1974,7 @@ def find_browser_executable(preferred: str = "") -> str:
     roots = []
     # 10.204 also search WebConsole runtime caches (survives Deploy)
     try:
-        _wc1 = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "cache", "ms-playwright"))
+        _wc1 = "/var/www/html/.wconsole_data/cache/ms-playwright"
     except Exception:
         _wc1 = ""
     try:
@@ -2066,7 +2062,7 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                         _proj = os.path.join(BASE_DIR, "ms-playwright")
                     except Exception:
                         _proj = "/var/www/html/.wconsole_data/projects/python-scraper4-5465c80dbc/ms-playwright"
-                    hint = f"cd /var/www/html/.wconsole_data/projects/python-scraper4-5465c80dbc && bash tools/install_chromium_mirror.sh  # PLAYWRIGHT_BROWSERS_PATH={_proj}"
+                    hint = f"PLAYWRIGHT_BROWSERS_PATH=/var/www/html/.wconsole_data/cache/ms-playwright bash tools/install_chromium_mirror.sh  # PLAYWRIGHT_BROWSERS_PATH={_proj}"
                 else:
                     hint = ("نصب کامل:\n"
                             "  pip install -r python-scraper4/requirements.txt\n"
