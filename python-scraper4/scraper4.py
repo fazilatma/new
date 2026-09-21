@@ -122,8 +122,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.201"
+APP_VERSION = "10.202"
 CHANGELOG = [
+    {"version":"10.202","date":"2026-09-21","title":"رفع دسترسی مرورگر روی WebConsole (root vs www-data) و سلکتور دیجی‌کالا","items":["PLAYWRIGHT_BROWSERS_PATH روی WebConsole حتی اگر پوشه برای کاربر سرویس قابل خواندن نبود هم قبول می‌شود و fallback به /root/.cache را هم امتحان می‌کند","find_browser_executable حالا /root/.cache/ms-playwright را حتی اگر WebConsole HOME متفاوت باشد هم می‌گردد","دیجی‌کالا: وقتی 5 سلکتور دستی پر است و DOM=0، کشف خودکار دوباره فعال شد؛ پیام خطا دیگر نصفه نمی‌ماند"]},
     {"version":"10.201","date":"2026-09-21","title":"کوتاه کردن پیام خطای مرورگر برای نمایش کامل دستور ایران","items":["پیام PLAYWRIGHT_BROWSERS_PATH برای wconsole کوتاه شد تا در diagnostic نصفه نماند: فقط cd ... && bash tools/install_chromium_mirror.sh","سلکتور خالی شد (0 پرشده) درست است؛ بعد از نصب مرورگر دیجی‌کالا خودکار کشف می‌شود"]},
     {"version":"10.200","date":"2026-09-21","title":"رفع مسیر wconsole_data و سلکتور دیجی‌کالا","items":["مسیر PythonAnywhere/wconsole_data اصلاح شد: PLAYWRIGHT_BROWSERS_PATH حالا دقیقاً /var/www/html/.wconsole_data/projects/python-scraper4-.../ms-playwright را نشان می‌دهد و دستور نصب همان مسیر را پیشنهاد می‌کند","دیجی‌کالا وقتی 5 سلکتور دستی پر است دیگر کشف خودکار را بلوکه نمی‌کند؛ اگر DOM=0 بود سلکتورها خودکار بازنویسی می‌شوند","پیشنهاد مرورگر برای دیجی‌کالا کوتاه و بدون قطع شد: دستور یک‌خطی bash tools/install_chromium_mirror.sh برای همین پروژه کافی است"]},
     {"version":"10.199","date":"2026-09-20","title":"دستورات نصب پلی‌رایت/کرومیوم از ایران داخل سایت و اینجا","items":["دستورات نصب ایران (cdn.playwright.dev مسدود است) هم داخل هدر scraper4.py و هم در API /api/install-commands و پیام خطای مرورگر اضافه شد","برای VPS: bash tools/install_chromium_mirror.sh (آینه npmmirror) و برای PythonAnywhere: PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium","عیب‌یابی دیجی‌کالا اکنون بدون مرورگر هم با curl_cffi/cloudscraper کار می‌کند و پیام خطا دیگر نصفه نمی‌ماند"]},
@@ -1889,11 +1890,22 @@ def configured_browser_path() -> str:
     if path and os.path.isdir(path):
         return path
     env_path = clean_text(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))
-    if env_path and os.path.isdir(env_path):
-        return env_path
+    # 10.202 WebConsole fix: accept env_path even if current uid cannot isdir it (root vs www-data)
+    # The actual existence is verified later via find_browser_executable.
+    if env_path:
+        # If it looks like a playwright cache (contains ms-playwright or chromium), accept it
+        if os.path.isdir(env_path) or "ms-playwright" in env_path or "playwright" in env_path.lower():
+            return env_path
     cache = os.path.expanduser("~/.cache/ms-playwright")
     if VPS_MODE and os.path.isdir(cache):
         return cache
+    # 10.202 also check /root/.cache even when HOME is WebConsole runtime
+    try:
+        root_cache = "/root/.cache/ms-playwright"
+        if VPS_MODE and os.path.isdir(root_cache):
+            return root_cache
+    except Exception:
+        pass
     return os.path.join(BASE_DIR, "ms-playwright")
 
 
@@ -1915,9 +1927,13 @@ def find_browser_executable(preferred: str = "") -> str:
         "/opt/google/chrome/chrome",
     ]
     roots = []
-    for root in (preferred, os.path.join(BASE_DIR, "ms-playwright"), temporary_browser_path(), os.path.expanduser("~/.cache/ms-playwright"), "/usr/bin", "/snap/bin", "/opt/google/chrome", "/opt/scraper4"):
+    for root in (preferred, os.path.join(BASE_DIR, "ms-playwright"), temporary_browser_path(), os.path.expanduser("~/.cache/ms-playwright"), "/root/.cache/ms-playwright", "/home/www-data/.cache/ms-playwright", "/usr/bin", "/snap/bin", "/opt/google/chrome", "/opt/scraper4"):
         root = os.path.abspath(root) if root else ""
         if root and root not in roots and os.path.isdir(root): roots.append(root)
+    # 10.202 if preferred was /root/.cache but not readable, ensure we still walk it
+    for extra in ("/root/.cache/ms-playwright",):
+        if extra not in roots and os.path.isdir(extra):
+            roots.append(extra)
     names = {"chrome", "chromium", "chrome-headless-shell", "headless_shell", "google-chrome", "google-chrome-stable", "chromium-browser"}
     candidates = []
     if VPS_MODE:
