@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.218"
+APP_VERSION = "10.219"
 CHANGELOG = [
+    {"version":"10.219","date":"2026-09-21","title":"انتخاب مستقیم SDK یا REST API در تنظیمات باسلام","items":["در منوی تنظیمات باسلام داشبورد جدید، انتخاب سه‌حالته REST مستقیم، فقط SDK و خودکار اضافه شد و تغییر آن فوراً و پایدار ذخیره می‌شود","حالت REST مستقیم تمام نصب، import و انتظار timeout مربوط به SDK را دور می‌زند تا دریافت محصولات بدون تأخیر SDK انجام شود","آدرس REST API در همان فرم قابل مشاهده و ویرایش است و دکمه تست دریافت محصول، حداکثر ۲۰ محصول نخست را با روش انتخاب‌شده آزمایش می‌کند","تست اتصال باسلام اکنون واقعاً روش انتخاب‌شده را اجرا و کلاینت استفاده‌شده را در گزارش اعلام می‌کند","اعتبارسنجی backend فقط مقادیر auto، sdk و api را می‌پذیرد و تنظیم انتخاب‌شده در vault و تنظیمات اصلی همگام می‌ماند"]},
     {"version":"10.218","date":"2026-09-21","title":"رفع خطای HTTP 500 مسیرهای باسلام و fallback ایمن","items":["همه مسیرهای محصول، دسته‌بندی، گفت‌وگو و سفارش باسلام از wrapper مشترک SDK-first استفاده می‌کنند و فقط در حالت مجاز به REST برمی‌گردند","Base URLهای دارای /v1 بدون ساخت آدرس تکراری /v1/v1 نرمال می‌شوند و خطای REST اکنون method و endpoint واقعی را گزارش می‌کند","فیلدهای ویرایش محصول داشبورد مانند title، price و short_description پیش از ارسال به نام‌های رسمی name، primary_price و brief تبدیل می‌شوند","برای درخواست‌های تغییردهنده پس از timeout یا HTTP 5xx مبهم، fallback تکراری متوقف می‌شود تا محصول یا پیام دوباره ساخته/ویرایش نشود","تست‌های regression آفلاین برای اولویت SDK، fallback خواندنی، جلوگیری از retry تغییردهنده و نرمال‌سازی URL افزوده شد"]},
     {"version":"10.217","date":"2026-09-21","title":"تطبیق کامل API و داشبورد با Node 1.211.1+","items":["مانیفست ثابت ۱۶۷ قرارداد route از commit dfd6cc7 مرجع Node و checker آفلاین parity اضافه شد","بکاپ/بازیابی کامل و legacy، ورود پروفایل، jobها، AI و agent، دسته‌بندی پایدار و زمان‌بندی‌شده، PWA و Web Push رمزنگاری‌شده پیاده‌سازی شد","مدیریت واقعی WooCommerce و همه غرفه‌های باسلام، ledger، مغایرت‌گیری و هماهنگ‌سازی، حذف تکراری، تصویر، autoreply و اعلان‌ها به قرارداد داشبورد متصل شد","انتخاب‌گر بصری با ticket یک‌بارمصرف، HTML و CSP ایمن و selectorهای خودکار قابل ترمیم کامل شد","بکاپ split برنچ GitHub با یک commit اتمی، مرور و بازیابی فایل‌ها و پوش دوره‌ای اضافه شد","محافظ SSRF اکنون DNS و همه redirectها را بررسی می‌کند و fallback TLS فقط از CA معتبر سیستم استفاده می‌کند","ذخیره تنظیمات و vault اتصال‌ها lossless شد، routeهای shadow و تکراری حذف شدند و race ریست AI رفع شد","تست‌های contract بدون شبکه برای عملیات پرخطر و قراردادهای رفتاری Node افزوده شد"]},
     {"version":"10.216","date":"2026-09-21","title":"منوی همبرگری باسلام کامل + اتوسیو پروفایل + ترمیم فسادها + parity نمایشی","items":["منوی همبرگری → اتصال باسلام: تست همه غرفه‌ها و هر غرفه تکی حالا کارت کامل با نام کاربر، موبایل/ایمیل، عنوان/شناسه/شهر/امتیاز/وضعیت غرفه و کلاینت SDK/REST را نشان می‌دهد","ذخیره خودکار پروفایل فعال شد: هر تغییر در منبع، صفحه‌بندی، سلکتورها، قوانین قیمت و گالری با debounce روی سرور می‌ماند — دیگر با رفرش از بین نمی‌رود","ترمیم خودکار فسادها گسترش یافت: حذف vendor_id صفر/تکراری، پر کردن نام غرفه خالی/ژنریک، همگام‌سازی shop_name و name کاربر بعد از هر تست موفق","تطبیق نمایشی با نود جی‌اس: دکمه بررسی parity در /ui و تب نسخه، گزارش زنده از فایل مشترک scraper4_data.json، کلیدهای ui_settings و تعداد غرفه‌ها"]},
@@ -6585,12 +6586,17 @@ def basalam_mutation_fallback_safe(exc: BaseException) -> bool:
     return before_dispatch
 
 
+def normalize_basalam_client_mode(value: Any) -> str:
+    """Return one persisted Basalam client mode: auto, SDK-only, or REST-only."""
+    mode=clean_text(value).lower() or "auto"
+    mode={"rest":"api","direct":"api","rest-api":"api","official":"sdk"}.get(mode,mode)
+    return mode if mode in {"auto","sdk","api"} else "auto"
+
+
 def basalam_strategy(sdk_call: Any, api_call: Any, *, mutating: bool=False,
                      operation: str="عملیات باسلام") -> tuple[Any,str]:
     """Run SDK first and use REST only when fallback cannot duplicate a mutation."""
-    mode=clean_text(basalam_active_cfg().get("client_mode","auto")).lower() or "auto"
-    mode={"rest":"api","direct":"api","official":"sdk"}.get(mode,mode)
-    if mode not in {"auto","sdk","api"}:mode="auto"
+    mode=normalize_basalam_client_mode(basalam_active_cfg().get("client_mode","auto"))
     errors=[];network_mode=outbound_mode(load_data().get("network",{}))
     if mode=="sdk" and network_mode=="http":raise FetchError("SDK رسمی از HTTP CONNECT Proxy مرکزی پشتیبانی نمی‌کند؛ روش مدیریت باسلام را روی خودکار یا REST API قرار دهید")
     if mode in {"auto","sdk"} and network_mode!="http":
@@ -7087,6 +7093,9 @@ def api_basalam_settings():
             continue
         if k in {"send_mode"}:
             cfg[k]="sequential" if str(v).strip().lower() in {"sequential","ترتیبی","seq"} else "parallel"
+            continue
+        if k=="client_mode":
+            cfg[k]=normalize_basalam_client_mode(v)
             continue
         if k in cfg and not (k in {"token","refresh_token","worker_key"} and str(v).startswith("••••")):cfg[k]=v
         elif k in default_data()["basalam"]:

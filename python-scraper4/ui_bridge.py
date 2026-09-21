@@ -588,7 +588,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "woo": {"url": "", "key": "", "secret": "", "categoryId": 0,
                     "pricePercent": 0, "network": {"mode": "auto", "workerUrl": ""}},
             "basalam": {"token": "", "vendorId": "", "api": "https://openapi.basalam.com/v1",
-                        "pricePercent": 0, "preparationDays": 3, "weight": 500,
+                        "clientMode": "auto", "pricePercent": 0, "preparationDays": 3, "weight": 500,
                         "packageWeight": 600, "stock": 10, "categoryId": 0,
                         "fallbackCategoryIds": [], "autoCategory": False,
                         "netIndirect": False, "shops": []},
@@ -622,6 +622,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "basalam": {
                 "token": _s(bsl.get("token")), "vendorId": _s(bsl.get("vendor_id")),
                 "api": _s(bsl.get("api_base_url")) or "https://openapi.basalam.com/v1",
+                "clientMode": core.normalize_basalam_client_mode(bsl.get("client_mode")),
                 "pricePercent": _num(bsl.get("price_val")) if _s(bsl.get("price_mode")) == "percent" else 0,
                 "preparationDays": _int(bsl.get("preparation_days"), 3),
                 "weight": _int(bsl.get("weight"), 500),
@@ -972,6 +973,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "token": token,
             "vendor_id": _int(bsl_in.get("vendorId")),
             "api_base_url": _s(bsl_in.get("api")) or "https://openapi.basalam.com",
+            "client_mode": core.normalize_basalam_client_mode(bsl_in.get("clientMode")),
             "price_mode": "percent" if _num(bsl_in.get("pricePercent")) else "none",
             "price_val": _num(bsl_in.get("pricePercent")),
             "preparation_days": max(0, _int(bsl_in.get("preparationDays"), 3)),
@@ -2222,12 +2224,22 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         "توکن را بدون Bearer و بدون فاصله وارد کنید."])
                 api = _s(cfg.get("api") or (data.get("basalam") or {}).get("api_base_url")) \
                     or "https://openapi.basalam.com"
+                client_mode = core.normalize_basalam_client_mode(cfg.get("clientMode"))
                 endpoint = core.basalam_api_url("/v1/users/me", {"api_base_url": api})
-                response = core.outbound_request("GET", endpoint,
-                                                 headers={"Authorization": "Bearer " + token,
-                                                          "Accept": "application/json",
-                                                          "User-Agent": core.USER_AGENT}, timeout=60)
-                raw = safe_json(response)
+                active_cfg = dict(data.get("basalam") or {})
+                active_cfg.update(token=token, api_base_url=api, client_mode=client_mode)
+                if expected_vendor:
+                    active_cfg["vendor_id"] = _int(expected_vendor)
+                with core.basalam_use_cfg(active_cfg):
+                    raw, used_client = core.basalam_strategy(
+                        lambda: core.basalam_client().get_current_user_sync(),
+                        lambda: core.basalam_api_request("GET", "/v1/users/me"),
+                    )
+                if hasattr(raw, "model_dump"):
+                    try:
+                        raw = raw.model_dump(mode="json")
+                    except TypeError:
+                        raw = raw.model_dump()
                 user = raw.get("data", raw) if isinstance(raw, dict) else {}
                 user = user if isinstance(user, dict) else {}
                 vendor = user.get("vendor") if isinstance(user.get("vendor"), dict) else {}
@@ -2240,14 +2252,16 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 prep = _int(vendor.get("preparation_days") or vendor.get("default_preparation_days"))
                 if prep > 0:
                     autofill["preparationDays"] = prep
-                return jsonify(ok=bool(response.ok), target="basalam", service="Basalam OpenAPI",
+                labels = {"api": "REST API مستقیم", "sdk": "SDK رسمی"}
+                return jsonify(ok=True, target="basalam",
+                               service="Basalam " + labels.get(used_client, used_client),
+                               clientMode=client_mode, client=used_client,
                                startedAt=started_at, durationMs=elapsed(),
                                request={"method": "GET", "endpoint": endpoint,
                                         "authentication": "Bearer Token (توکن در گزارش نمایش داده نمی‌شود)",
                                         "shopIndex": index if selected is not cfg else None},
-                               http={"status": response.status_code,
-                                     "contentType": response.headers.get("content-type", ""),
-                                     "finalUrl": getattr(response, "scraper4_final_url", endpoint)},
+                               http={"status": 200, "contentType": "application/json",
+                                     "finalUrl": endpoint, "networkMode": used_client},
                                summary={"userId": user.get("id"),
                                         "userName": user.get("name") or user.get("username"),
                                         "vendorId": vendor_id or None,
@@ -2256,9 +2270,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                         "vendorIdMatches": (None if not expected_vendor or not vendor_id else
                                                             expected_vendor == vendor_id),
                                         "autofill": autofill},
-                               recommendations=(["توکن معتبر است و مسیر users/me پاسخ داد."]
-                                                if response.ok else
-                                                [f"پاسخ HTTP {response.status_code} موفق نبود."]),
+                               recommendations=["توکن با مسیر «" +
+                                                labels.get(used_client, used_client) +
+                                                "» معتبر پاسخ داد."],
                                raw=redact(raw, [token]))
             if target == "ai":
                 provider, model = _s(body.get("provider")), _s(body.get("model"))

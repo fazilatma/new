@@ -110,14 +110,20 @@ class NodeParityContracts(unittest.TestCase):
         vault = self.assert_ok(self.client.get("/api/connections"))["connections"]
         self.assertEqual(vault["woo"]["key"], "ck-real")
         self.assertEqual(vault["woo"]["secret"], "cs-real")
+        self.assertEqual(vault["basalam"]["clientMode"], "auto")
         vault["woo"]["secret"] = "••••••••"
         vault["woo"]["key"] = "********stored"
+        vault["basalam"]["clientMode"] = "api"
         vault["future"]["new"] = 10
         self.assert_ok(self.client.post("/api/connections", json={"connections": vault}))
         persisted = self.data()
         self.assertEqual(persisted["woocommerce"]["consumer_key"], "ck-real")
         self.assertEqual(persisted["woocommerce"]["consumer_secret"], "cs-real")
+        self.assertEqual(persisted["basalam"]["client_mode"], "api")
+        self.assertEqual(persisted["node_connections"]["basalam"]["clientMode"], "api")
         self.assertEqual(persisted["node_connections"]["future"], {"nested": 9, "new": 10})
+        reloaded = self.assert_ok(self.client.get("/api/connections"))["connections"]
+        self.assertEqual(reloaded["basalam"]["clientMode"], "api")
         status = self.assert_ok(self.client.get("/api/status"))
         self.assertIsInstance(status["connections"]["woo"], bool)
         self.assertNotIn("consumer_secret", json.dumps(status))
@@ -387,6 +393,9 @@ class NodeParityContracts(unittest.TestCase):
         data["basalam"].update(token="test-personal-token-123", vendor_id=77,
                                client_mode="auto", api_base_url="https://1.1.1.1/v1")
         self.save(data)
+        self.assertEqual(core.normalize_basalam_client_mode("REST"), "api")
+        self.assertEqual(core.normalize_basalam_client_mode("sdk"), "sdk")
+        self.assertEqual(core.normalize_basalam_client_mode("unknown"), "auto")
 
         # Node-compatible settings include /v1; the low-level REST URL must not
         # repeat it; duplicated version prefixes can surface as opaque 5xx responses.
@@ -444,8 +453,54 @@ class NodeParityContracts(unittest.TestCase):
                                                   json_data={"status": 4184}), {"id": 12})
         rest.assert_called_once()
 
-        for adapter in (ROOT / "ui_bridge.py", ROOT / "parity_ext.py"):
-            self.assertNotIn("core.basalam_api_request(", adapter.read_text(encoding="utf-8"))
+        # REST-only mode must bypass SDK completely, including SDK installation/import.
+        data = self.data()
+        data["basalam"]["client_mode"] = "api"
+        self.save(data)
+        direct_payload = {"data": [{"id": 31, "title": "Direct product"}]}
+        with patch.object(core, "basalam_sdk_request",
+                          side_effect=AssertionError("SDK must be bypassed")) as sdk, \
+                patch.object(core, "ensure_basalam_sdk",
+                             side_effect=AssertionError("SDK install/import must be bypassed")) as install, \
+                patch.object(core, "basalam_api_request", return_value=direct_payload) as rest:
+            self.assertEqual(core.basalam_request("GET", "/v1/vendors/77/products"), direct_payload)
+        sdk.assert_not_called()
+        install.assert_not_called()
+        rest.assert_called_once()
+
+        user_payload = {"data": {"id": 8, "name": "User", "vendor_id": 77,
+                                 "vendor_title": "Shop"}}
+        with patch.object(core, "basalam_client",
+                          side_effect=AssertionError("SDK must be bypassed")) as sdk_client, \
+                patch.object(core, "ensure_basalam_sdk",
+                             side_effect=AssertionError("SDK install/import must be bypassed")) as install, \
+                patch.object(core, "basalam_api_request", return_value=user_payload):
+            tested = self.assert_ok(self.client.post("/api/test-connection/basalam", json={}))
+        self.assertEqual(tested["client"], "api")
+        self.assertEqual(tested["clientMode"], "api")
+        sdk_client.assert_not_called()
+        install.assert_not_called()
+
+        with patch.object(core, "basalam_client",
+                          side_effect=AssertionError("SDK must be bypassed")) as sdk_client, \
+                patch.object(core, "ensure_basalam_sdk",
+                             side_effect=AssertionError("SDK install/import must be bypassed")) as install, \
+                patch.object(core, "basalam_api_request", return_value=direct_payload):
+            listed = self.assert_ok(self.client.get("/api/basalam/products"))
+        self.assertEqual(listed["client"], "api")
+        self.assertEqual(listed["total"], 1)
+        self.assertEqual(listed["products"][0]["id"], 31)
+        sdk_client.assert_not_called()
+        install.assert_not_called()
+
+        dashboard = (ROOT / "ui" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("BCON('basalam.clientMode')", dashboard)
+        self.assertIn("REST API مستقیم — سریع‌تر و بدون SDK", dashboard)
+        self.assertIn("basalam-products-test", dashboard)
+        ui_bridge = (ROOT / "ui_bridge.py").read_text(encoding="utf-8")
+        self.assertEqual(ui_bridge.count("core.basalam_api_request("), 1)
+        self.assertNotIn("core.basalam_api_request(",
+                         (ROOT / "parity_ext.py").read_text(encoding="utf-8"))
 
     def test_persistent_category_run(self):
         data = self.data()
