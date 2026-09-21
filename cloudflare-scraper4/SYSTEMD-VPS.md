@@ -1,3 +1,50 @@
+# Independent installation alongside WebConsole (1.212.0+)
+
+Use **parallel mode**, not the legacy migration procedure below, to keep your existing WebConsole project and `scraper4-node` service untouched. Linux/systemd only; this privileged installer is not for Termux.
+
+## One command — run as root through SSH
+
+Prerequisites: system-wide Node 22.13+ under `/usr` or `/opt`, npm, Git, rsync, systemd, runuser, useradd; at least 2 GiB free build space plus source size. This command does not install OS packages or change Apache/firewall rules.
+
+```bash
+bash -c 'set -eu; test "$(id -u)" -eq 0 || { echo "Run as root through SSH"; exit 1; }; umask 077; stage=$(mktemp -d /opt/scraper4-install.XXXXXX); git clone --depth 1 --single-branch --branch arena/01a0aa17-new https://github.com/fazilatma/new.git "$stage/repo"; node "$stage/repo/cloudflare-scraper4/scripts/install-system-service.mjs" --parallel --public-bind --source "$stage/repo/cloudflare-scraper4"; grep "^DEPLOYER_UI_TOKEN=" /etc/scraper4-managed/runtime.env'
+```
+
+Open `http://YOUR_VPS_IP:8890/` and enter the printed token **without its surrounding quotes**. Keep the token private; do not paste it into support logs. Inside Deployer, use **Open scraper** (`/scraper/`), not port 3100.
+
+- Public Deployer: `0.0.0.0:8890`, authenticated before serving the dashboard, proxy, or APIs. Login exchanges the token for an HttpOnly, SameSite cookie and redirects away from the token query. HTTPS connections use a Secure cookie.
+- Private scraper: `127.0.0.1:3100`, accessed through the authenticated Deployer proxy.
+- Dedicated service/account: `scraper4-managed`; app `/opt/scraper4-managed`, state/cache `/var/lib/scraper4-managed`, root-owned configuration `/etc/scraper4-managed`.
+- A **fresh checkout** is required. Existing data/env files and occupied ports are refused. No old supervisor is stopped, no existing database/vault is copied, and no foreign port owner is killed by the installer.
+- The runtime and build each have a 30% RAM cap and 50% CPU quota; runtime memory-high is 25%. **Isolation of names/data is not isolation of all host resources.** On a roughly 1 GiB VPS, simultaneous browser scraping/builds may run out of memory. This is not a guarantee both installations fit.
+- The staging checkout is retained as an installer/rollback source. It is not the running program. Automatic branch installation is disabled; do not replace this public instance with older code lacking its authentication guard.
+
+**HTTP is unencrypted.** Restrict TCP 8890 to your own public IP in the provider/host firewall, or use an SSH tunnel. Do not disable the firewall or expose port 3100. These safeguards apply only to this new instance: this command does not secure an older Deployer you previously exposed on 8790. Keep that older panel private/restricted too. When DNS is ready, place this instance behind HTTPS. For loopback-only installation omit `--public-bind`, then tunnel `ssh -L 8890:127.0.0.1:8890 root@YOUR_VPS_IP`.
+
+## Stop / uninstall inside Deployer
+
+The **Independent installation** card appears only in this managed profile. Type `scraper4-managed`, then choose:
+
+- **Stop installation**: stops this systemd cgroup (Deployer + scraper). The panel disconnects; the health timer respects the stop. Boot enablement is retained. Restart over SSH with `systemctl start scraper4-managed.service`, or reboot.
+- **Uninstall and archive**: disables/stops only managed main/health/control timers, removes their fixed unit files, and moves app/state/config under root-only `scraper4-managed-removed-<timestamp>-<random>/saved` archive wrappers in `/opt`, `/var/lib`, and `/etc`. Databases, vault keys and configuration are preserved. This is **not permanent data erasure**. The non-login account remains reserved to prevent UID reuse; a new installation with the same name therefore requires administrator review rather than silently reusing that account.
+
+The web UI runs without root or sudo. It writes a bounded fixed-format request; a root-owned `/etc/scraper4-managed/control.mjs` service checks it every five seconds (first boot check after 30 seconds). It accepts only the two actions for the fixed namespace, rejects symlinks/nonregular files and unexpected ownership, and does not execute code from the app directory as root. Successful HTTP response means **queued, not completed**. If an operation fails, do not assume removal succeeded: inspect the root journal and remaining directories. No WebConsole, Apache, Python or legacy `scraper4-node` units are selected.
+
+```bash
+systemctl status scraper4-managed.service --no-pager
+journalctl -u scraper4-managed-control.service -n 60 --no-pager
+```
+
+If the initial build failed, retain the printed staging directory and resume using its same source path:
+
+```bash
+node /opt/scraper4-install.REPLACE/repo/cloudflare-scraper4/scripts/install-system-service.mjs --parallel --public-bind --resume --source /opt/scraper4-install.REPLACE/repo/cloudflare-scraper4
+```
+
+`--resume` may rebuild/restart **only this managed instance**; it does not recopy its live data or rotate secrets. Installation and privileged stop/uninstall on a real VPS have not been exercised in the development sandbox. Tests cover HTTP authentication, request validation, generated units, namespace selection, and the legacy installer regressions.
+
+---
+
 # Persistent Node VPS installation — 1.211.0+
 
 This is the system-level alternative to running the app from PHP/WebConsole or

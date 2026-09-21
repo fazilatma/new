@@ -46,7 +46,7 @@ test('HTTP monitor respects manual stop, startup grace, invocation changes and t
 });
 test('installer has explicit consent, never root npm, and preserves source/rollback data',async()=>{
  const code=readFileSync(new URL('../scripts/install-system-service.mjs',import.meta.url),'utf8');
- for(const s of ['--confirm-old-supervisor-stopped','requireIdleSource(src)','--no-perms','process.umask(0o077)','--no-links','--no-devices','--no-specials','--no-dereference','--no-create-home',"'-p','User='+ACCOUNT","'-p','MemoryMax=50%'",'prepared:true','--resume'])assert.ok(code.includes(s),s);
+ for(const s of ['--confirm-old-supervisor-stopped','requireIdleSource(src)','--no-perms','process.umask(0o077)','--no-links','--no-devices','--no-specials','--no-dereference','--no-create-home',"'-p','User='+ACCOUNT","'-p','MemoryMax='+MEMORY",'prepared:true','--resume'])assert.ok(code.includes(s),s);
  assert.ok(!code.includes("run('npm'"));assert.ok(!code.includes("'--delete'"));assert.ok(!code.includes("run('rm'"));
  await assert.rejects(install('/does-not-exist',false),/root SSH|First stop/);
 });

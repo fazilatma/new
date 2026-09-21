@@ -104,7 +104,7 @@ function boot() {
     .replace(/\$\{JSON\.stringify\(commands\)\}/g, 'COMMANDS_FIXTURE')
     .replace(/\$\{JSON\.stringify\([^)]*\)\}/g, '{}')
     .replace(/\$\{[^}]*\}/g, '0');
-  const exports_ = '{ updateRail, tickUpdated, refresh, renderGuides, renderBranchesData, filterGuides, toggleCmd, followLog, badge, toast, bumpFont, applyTextSize, logError, escHtml, renderResources, resourcePath, toggleResources }';
+  const exports_ = '{ updateRail, tickUpdated, refresh, renderGuides, renderBranchesData, filterGuides, toggleCmd, followLog, badge, toast, bumpFont, applyTextSize, logError, escHtml, renderResources, resourcePath, toggleResources, installationAction }';
   const keys = Object.keys(sandbox);
   const api = new Function(...keys, script + '\nreturn ' + exports_ + ';')(...keys.map(key => sandbox[key]));
   return { window, document, api, store };
@@ -289,4 +289,12 @@ test('keepalive status shows recovery and intentional pause without claiming per
  assert.match(text(document,'scraperKeepaliveStatus'),/enabled.*restarts 2.*Unexpected exit.*retry/);
  api.updateRail({...STATUS,keepalive:{enabled:true,desired:false,restarts:2,lastReason:'Stopped intentionally'}});
  assert.match(text(document,'scraperKeepaliveStatus'),/paused.*Stopped intentionally/);
+});
+
+test('independent lifecycle controls require typed confirmation without blocking popups',async()=>{
+ const {document,api}=boot();
+ document.getElementById('managedConfirm').value='wrong-instance';
+ await api.installationAction('uninstall');
+ assert.match(document.getElementById('managedResult').textContent,/Nothing was requested/);
+ assert.equal(document.querySelector('#managedInstallation button').disabled,false);
 });
