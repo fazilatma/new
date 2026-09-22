@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.230"
+APP_VERSION = "10.231"
 CHANGELOG = [
+    {"version":"10.231","date":"2026-09-22","title":"عنوان صفحهٔ دریافتی در لاگ: مدرک یک‌خطی صفحهٔ واقعی یا نسخهٔ کپی","items":["استخراج صفحه‌به‌صفحه از ابتدا همین کار ساده را می‌کند: صفحهٔ ۱ استخراج، سپس ~page~2، سپس صفحهٔ بعد؛ گزارش‌ها هم نشان می‌دهند صفحهٔ ۲ واقعاً خوانده می‌شود اما به‌جای محصولات جدید همان کپی صفحهٔ ۱ است","برای اینکه معلوم شود emalls در پاسخ به سرور شما چه چیزی می‌گذارد، عنوان (title) صفحهٔ دریافتی هر صفحه حالا در لاگ هر موتور، در عیب‌یابی و در pagination_stopped.served_titles ثبت می‌شود","صفحهٔ واقعی ۲ ایمالز عنوانش «صفحه ۲ از ۹۳۴۶ …» است؛ نسخهٔ جایگزین عنوان سادهٔ دسته را دارد — با یک نگاه در گزارش مشخص می‌شود مشکل سمت کلاینت است یا سمت پاسخ سایت"]},
     {"version":"10.230","date":"2026-09-22","title":"اثرانگشت کامل کروم برای curl_cffi و پشتیبان مرورگر واقعی برای صفحهٔ تکراری","items":["بررسی سمت ما نشان داد emalls صفحهٔ ۲ واقعی را حتی در درخواست‌های پشت‌سرهم به کلاینت سالم می‌دهد؛ یعنی تصمیم emalls دربارهٔ سرور شما اثرانگشتی است — و اسکرپر خودش اثرانگشت curl_cffi را خراب می‌کرد: هدرهای عمومی سشن (UA قدیمی Chrome/126 و Accept با application/json) روی مجموعهٔ کامل جعل هدر کروم می‌نشست","حالا curl_cffi با همان مجموعهٔ کامل مرورگر خودش (UA به‌روز، sec-ch-ua و Sec-Fetch-*) ارسال می‌شود و فقط Referer به آن اضافه می‌شود — همان رفتاری که در نسخه‌های قدیمی‌تر نتیجه می‌داد","اگر همهٔ موتورهای HTTP برای صفحهٔ ۲ به بعد فقط کپی صفحات قبل آوردند، همان صفحه با مرورگر واقعی (Playwright/Selenium نصب‌شده) رندر می‌شود؛ اولین منبعی که محصول تازه بیاورد صفحه‌بندی را ادامه می‌دهد","عیب‌یابی استخراج هم مرورگر را به‌عنوان آخرین پشتیبان زنجیرهٔ صفحه‌بندی امتحان می‌کند تا اگر مرورگر واقعی صفحهٔ ۲ را گرفت، لاگ صریح بگوید مشکل فقط اثرانگشت HTTP بوده است"]},
     {"version":"10.229","date":"2026-09-22","title":"رفع تداخل کوکی‌های هم‌نام و آشکارسازی ریدایرکت پنهان صفحه‌بندی","items":["گزارش جدید: curl_cffi با خطای «چند کوکی هم‌نام ASP.NET_SessionId» متوقف شد چون کوکی هر موتور در شیشهٔ چند-دامنه‌ای requests تکثیر می‌شد؛ کوکی‌ها حالا در یک انبار تخت {نام: مقدار} نگهداری و با همهٔ موتورها ارسال می‌شوند و Set-Cookie همهٔ موتورها همان‌جا ذخیره می‌شود — تداخل هم‌نام دیگر ممکن نیست","سه موتور دیگر هنوز برای صفحهٔ ۲ همان ۴۰ محصول تکراری را گرفتند حتی با کوکی؛ فاحش‌ترین مظنون ریدایرکت پنهان emalls به صفحهٔ ۱ است که بعد از دنبال‌کردن خودکار، مثل HTTP 200 عادی دیده می‌شود","حالا نتیجهٔ هر تلاش صفحهٔ ۲ در لاگ و عیب‌یابی، نشانی نهایی را هم نشان می‌دهد؛ اگر با ریدایرکت به صفحهٔ قبل مواجه شد، صریح نوشته می‌شود تا معلوم شود emalls برای این سرور صفحات عمیق را نمی‌دهد و باید از رله/پروکسی رفت"]},
     {"version":"10.228","date":"2026-09-22","title":"پیوستگی سشن/کوکی بین همهٔ موتورها و همهٔ صفحات","items":["گزارش عیب‌یابی نشان داد هر ۴ موتور برای صفحهٔ ۲ ایمالز همان ۴۰ محصول تکراری می‌گیرند؛ علت کوکی سشن بود: curl_cffi/cloudscraper/httpx برای هر درخواست کلاینت بی‌کوکی می‌ساختند و فقط requests کوکی نگه می‌داشت","حالا کوکی‌های سشن مشترک با همهٔ موتورها ارسال می‌شود (curl_cffi cookies=، cloudscraper cookies.update، httpx هدر Cookie) و Set-Cookie پاسخ هر موتور هم به سشن برمی‌گردد تا اجرای واقعی مثل یک مرورگر واحد رفتار کند","عیب‌یابی استخراج کل اجرا را با یک Fetcher واحد انجام می‌دهد؛ کوکی صفحهٔ ۱ به صفحات ۲ و ۳ می‌رسد — قبلاً صفحهٔ ۱ و ۲ با دو نشست متفاوت خوانده می‌شدند و سایت صفحهٔ ۲ را fallback می‌داد","تست رگرسیون جدید: سایتی که صفحهٔ ۲ به بعد را بدون کوکی سشن تکراری می‌دهد؛ اجرای واقعی و عیب‌یابی باید هر دو با پیوستگی کوکی عبور کنند"]},
@@ -3481,7 +3482,9 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                         t0=time.monotonic()
                         result=active_fetcher.get(url,engine=engine);page_html=result.text;candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors,parse_strategy)
                         _final=str(getattr(result,"url","") or url)
-                        engine_errors.append(f"{engine}: HTTP {result.status} · DOM={len(candidate_rows)}"+(f" · ریدایرکت به {_final[:100]}" if _final.rstrip('/') != url.rstrip('/') else ""))
+                        _t_match=re.search(r"<title>(.*?)</title>", page_html[:60000], re.S)
+                        _t_txt=clean_text(_t_match.group(1))[:70] if _t_match else "?"
+                        engine_errors.append(f"{engine}: HTTP {result.status} · DOM={len(candidate_rows)}"+(f" · ریدایرکت به {_final[:100]}" if _final.rstrip('/') != url.rstrip('/') else "")+f" · عنوان صفحه: {_t_txt}")
                         if candidate_rows:
                             won_engine,won_ms=engine,int((time.monotonic()-t0)*1000)
                             rows,soup,diag=candidate_rows,candidate_soup,{**candidate_diag,"engine":engine,"attempts":engine_errors};report.modes.add("dom-"+engine);report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM با {engine} ({won_ms}ms)");return
@@ -3737,7 +3740,8 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 "reason": "no-new-products",
                 "reason_fa": f"صفحهٔ {number} همان محصولات صفحات قبل را برگرداند ({len(rows)} تکراری)",
                 "duplicates": len(rows), "pagination": f"{_effective_kind}:{pag_value}",
-                "engine_attempts": list(engine_errors)[:12]}
+                "engine_attempts": list(engine_errors)[:12],
+                "served_titles": [m.group(1).strip()[:70] for m in [re.search(r"<title>(.*?)</title>", page_html[:60000], re.S)] if m]}
             break
 
     if not report.products:

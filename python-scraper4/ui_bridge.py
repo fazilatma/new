@@ -2127,7 +2127,13 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         # looks like an ordinary HTTP 200 after auto-following.
                         _target = str(getattr(_r, "url", "") or target)
                         _redir = "" if _target.rstrip("/") == target.rstrip("/") else f" · ریدایرکت به {_target[:90]}"
-                        attempts.append(f"{_eng}: HTTP {_r.status} · {len(_rr)} محصول · {_fresh} تازه{_redir}")
+                        # 10.231: the served page's <title> settles it instantly -
+                        # emalls' real page 2 says «صفحه ۲ از …», a page-1
+                        # fallback keeps the plain category title.
+                        import re as _re_t
+                        _tm = _re_t.search(r"<title>(.*?)</title>", _r.text[:60000], _re_t.S)
+                        _title = clean_text(_tm.group(1))[:70] if _tm else "?"
+                        attempts.append(f"{_eng}: HTTP {_r.status} · {len(_rr)} محصول · {_fresh} تازه{_redir} · عنوان صفحه: {_title}")
                         if _fresh > 0:
                             return _r, _rr, _rs, _eng, attempts
                     # 10.230: last resort — a REAL browser render. If the browser
