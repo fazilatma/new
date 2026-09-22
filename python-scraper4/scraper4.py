@@ -41,7 +41,9 @@ VPS setup (یک دستور)
     pip install -r python-scraper4/requirements.txt
 
     # 5) موتورهای دریافت (fetch) — ترتیبی که داشبورد تست می‌کند
-    pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71
+    pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71 aiohttp>=3.9.0
+    #    ابزارهای کمکی اجرا: پاکسازی فرایند مرورگر (psutil) و پیکربندی .env (python-dotenv)
+    pip install psutil>=5.9.0 python-dotenv>=1.0.0
 
     # 6) رندر مرورگر (اختیاری اما برای SPA و ضدبات)
     pip install playwright>=1.40.0 playwright-stealth>=1.0.6 selenium>=4.20.0 undetected-chromedriver>=3.5.5
@@ -83,6 +85,7 @@ Data: scraper4_data.json beside this file.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import csv
 import hashlib
@@ -103,6 +106,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
 import time
 import traceback
@@ -119,12 +123,13 @@ try:
     from flask import Flask, Response, jsonify, request
 except ImportError as exc:
     raise RuntimeError(
-        "Missing dependency. Run: pip install -r python-scraper4/requirements.txt  OR  pip install flask requests beautifulsoup4 lxml httpx curl_cffi cloudscraper playwright beautifulsoup4 lxml html5lib selectolax basalam-sdk"
+        "Missing dependency. Run: pip install -r python-scraper4/requirements.txt  OR  pip install flask requests beautifulsoup4 lxml httpx curl_cffi cloudscraper aiohttp playwright beautifulsoup4 lxml html5lib selectolax basalam-sdk psutil python-dotenv"
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.232"
+APP_VERSION = "10.233"
 CHANGELOG = [
+    {"version":"10.233","date":"2026-09-23","title":"تمام کتابخانه‌های مناسب فهرست به موتورهای استخراج متصل شدند","items":["موتور دریافت جدید aiohttp به زنجیرهٔ HTTP اضافه شد: کلاینت ناهمگام با حلقهٔ ریدایرکت دستی (محافظت مسیر خصوصی روی هر پرش)، ارسال کوکی‌های مشترک و جذب Set-Cookie به انبار تخت — در زنجیرهٔ خودکار، منوی ضدبات، بنچمارک و انتخابگر بصری مثل بقیهٔ موتورها","موتور مرورگری جدید Undetected-Chromedriver اضافه شد؛ کروم ضدتشخیص برای سایت‌هایی که Selenium معمولی را می‌شناسند — قابل انتخاب از منوی موتور ضدبات، تست سرعت و انتخابگر بصری؛ بدون کتابخانه پیام واضح می‌دهد و بی‌خطر از زنجیره کنار می‌رود","هر نشست Selenium/UC حالا پوشهٔ پروفایل موقت یکتا دارد و psutil بعد از quit هر فرایند کروم/کروم‌درایور بازماندهٔ همان نشست را پیدا و پاک می‌کند تا نشست‌های خراب/لغوشده رم سرور را انباشته نکنند؛ نبود psutil بی‌خطر رد می‌شود","python-dotenv پشتیبانی شد: فایل .env کنار پروژه (و ~/.scraper4.env) هنگام راه‌اندازی خوانده می‌شود (توکن، پروکسی، PLAYWRIGHT_BROWSERS_PATH و …)؛ متغیر محیط واقعی همیشه برتر است","beautifulsoup4 که از ابتدا در همهٔ مسیرهای استخراج هست حالا روی پارسر lxml اجرا می‌شود (نمونه‌گیری متن و بررسی صفحهٔ ضدبات سریع‌تر) و در نبود lxml همان html.parser قبلی","fastapi/uvicorn عمداً اضافه نشدند: چارچوب وب‌سرورند نه موتور دریافت/پارس؛ لایهٔ وب همین Flask/Gunicorn است و سرور دومی فقط وابستگی و سطح حمله اضافه می‌کرد","تست رگرسیون آفلاین جدید tools/test_extraction_engines_matrix.py: ترکیب زنجیرهٔ موتورها، دریافت واقعی aiohttp با کوکی/ریدایرکت روی سرور محلی، مسیریابی undetected در Fetcher و زنجیره‌ها، پاکسازی psutil با ماژول ساختگی و خواندن .env"]},
     {"version":"10.232","date":"2026-09-22","title":"دریافت کاتالوگ باسلام در هم‌زمانی با وظایف دیگر مقاوم شد","items":["ریشه خطاهای مغایرت‌گیری/تکراری‌یابی هنگام اجرای هم‌زمان وظایف پیدا شد: فهرست کاتالوگ باسلام تا ۲۰ صفحه را پشت‌سرهم و بدون فاصله می‌خواند و شکست یک صفحه (۴۲۹/۵xx در هم‌زمانی با کار استخراج یا ارسال) کل دریافت را با «SDK: … | REST API: …» نابود می‌کرد","حالا هر صفحه تا ۳ تلاش با وقفهٔ نمایی تکرار می‌شود، بین صفحه‌ها فاصلهٔ مؤدبانه ۰٫۳۵ ثانیه است و اگر صفحه‌ای بعد از صفحهٔ ۱ اصلاً نشد، همان بخش دریافت‌شده با ثبت خطا برگردانده می‌شود — مثل Node که فهرست را می‌ساخت و ادامه می‌داد","شکست صفحهٔ ۱ همچنان خطای واضح برمی‌گرداند تا توکن/شناسهٔ غرفهٔ خراب بی‌صدا از دست نرود","مسیر چند-غرفه‌ای مدیر مقصد (ui_bridge) هم دقیقاً همین منطق را گرفت تا دریافت چند غرفه در برابر محدودیت نرخ باسلام پایدار باشد"]},
     {"version":"10.231","date":"2026-09-22","title":"عنوان صفحهٔ دریافتی در لاگ: مدرک یک‌خطی صفحهٔ واقعی یا نسخهٔ کپی","items":["استخراج صفحه‌به‌صفحه از ابتدا همین کار ساده را می‌کند: صفحهٔ ۱ استخراج، سپس ~page~2، سپس صفحهٔ بعد؛ گزارش‌ها هم نشان می‌دهند صفحهٔ ۲ واقعاً خوانده می‌شود اما به‌جای محصولات جدید همان کپی صفحهٔ ۱ است","برای اینکه معلوم شود emalls در پاسخ به سرور شما چه چیزی می‌گذارد، عنوان (title) صفحهٔ دریافتی هر صفحه حالا در لاگ هر موتور، در عیب‌یابی و در pagination_stopped.served_titles ثبت می‌شود","صفحهٔ واقعی ۲ ایمالز عنوانش «صفحه ۲ از ۹۳۴۶ …» است؛ نسخهٔ جایگزین عنوان سادهٔ دسته را دارد — با یک نگاه در گزارش مشخص می‌شود مشکل سمت کلاینت است یا سمت پاسخ سایت"]},
     {"version":"10.230","date":"2026-09-22","title":"اثرانگشت کامل کروم برای curl_cffi و پشتیبان مرورگر واقعی برای صفحهٔ تکراری","items":["بررسی سمت ما نشان داد emalls صفحهٔ ۲ واقعی را حتی در درخواست‌های پشت‌سرهم به کلاینت سالم می‌دهد؛ یعنی تصمیم emalls دربارهٔ سرور شما اثرانگشتی است — و اسکرپر خودش اثرانگشت curl_cffi را خراب می‌کرد: هدرهای عمومی سشن (UA قدیمی Chrome/126 و Accept با application/json) روی مجموعهٔ کامل جعل هدر کروم می‌نشست","حالا curl_cffi با همان مجموعهٔ کامل مرورگر خودش (UA به‌روز، sec-ch-ua و Sec-Fetch-*) ارسال می‌شود و فقط Referer به آن اضافه می‌شود — همان رفتاری که در نسخه‌های قدیمی‌تر نتیجه می‌داد","اگر همهٔ موتورهای HTTP برای صفحهٔ ۲ به بعد فقط کپی صفحات قبل آوردند، همان صفحه با مرورگر واقعی (Playwright/Selenium نصب‌شده) رندر می‌شود؛ اولین منبعی که محصول تازه بیاورد صفحه‌بندی را ادامه می‌دهد","عیب‌یابی استخراج هم مرورگر را به‌عنوان آخرین پشتیبان زنجیرهٔ صفحه‌بندی امتحان می‌کند تا اگر مرورگر واقعی صفحهٔ ۲ را گرفت، لاگ صریح بگوید مشکل فقط اثرانگشت HTTP بوده است"]},
@@ -258,6 +263,27 @@ CHANGELOG = [
     {"version":"2.9.0","date":"2026-09-03","title":"وظایف زنده و نصب SDK","items":["استخراج زنده سرور‌ساید","نصب غیرهمزمان SDK از سه منبع رسمی","جزئیات زمانی عملیات"]},
 ]
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _load_dotenv_file() -> None:
+    """Optional .env support (python-dotenv) — the real environment always wins.
+
+    On VPS/shared hosts a .env next to the project (or ~/.scraper4.env) can
+    carry tokens, proxy variables or PLAYWRIGHT_BROWSERS_PATH without editing
+    service files. override=False: anything already present in the real
+    environment keeps precedence, so systemd units are never surprised.
+    Missing python-dotenv is a silent no-op — this must never block startup.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    for _cand in (os.path.join(BASE_DIR, ".env"), os.path.expanduser("~/.scraper4.env")):
+        if _cand and os.path.isfile(_cand):
+            try:
+                load_dotenv(_cand, override=False)
+            except Exception:
+                pass
+_load_dotenv_file()
 LOCAL_DEPS_DIR = os.path.join(BASE_DIR, ".runtime-deps")
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
     try:
@@ -990,10 +1016,12 @@ class Fetcher:
             if self.worker_key: headers["X-Proxy-Key"] = self.worker_key
         if accept_json:
             headers["Accept"] = "application/json,text/plain,*/*"
-        if engine in {"playwright", "selenium"}:
+        if engine in BROWSER_ENGINES:
             self.last_by_host[host] = time.monotonic()
             if engine == "playwright":
                 return render_playwright(target_url, self.timeout, 4, self.task_id)
+            if engine == "undetected":
+                return render_undetected(target_url, self.timeout, 4, self.task_id)
             return render_selenium(target_url, self.timeout, 4, self.task_id)
         last_error = ""
         for attempt in range(3):
@@ -1034,6 +1062,23 @@ class Fetcher:
                         if proxy: client_kw["proxies"]=proxy
                         with httpx.Client(**client_kw) as hx:
                             response=hx.get(request_url); body=response.content
+                elif engine=="aiohttp":
+                    # 10.233: async HTTP client driven from the sync Fetcher via a
+                    # short-lived event loop. Same session contract as httpx:
+                    # shared headers + flat-cookie Cookie header, manual redirect
+                    # loop (every hop passes public_http_url), proxy support and
+                    # Set-Cookie absorption through the shared _absorb_cookies.
+                    try:import aiohttp
+                    except ImportError as exc:raise FetchError("کتابخانه aiohttp نصب نیست") from exc
+                    merged={**dict(self.session.headers), **headers}
+                    _aio_cookie=self._cookie_header()
+                    if _aio_cookie:merged["Cookie"]=_aio_cookie
+                    _aio_proxy=None
+                    if self.session.proxies:
+                        _aio_proxy=self.session.proxies.get("https") or self.session.proxies.get("http")
+                    _aio_body,_aio_final,_aio_status,_aio_headers=_aiohttp_get(request_url,merged,self.effective_timeout(),self.verify,_aio_proxy)
+                    body=_aio_body
+                    response=types.SimpleNamespace(headers=_aio_headers,status_code=_aio_status,url=_aio_final,encoding="utf-8",content=_aio_body)
                 elif engine=="curl_cffi":
                     try:from curl_cffi import requests as curl_requests
                     except ImportError as exc:raise FetchError("کتابخانه curl_cffi نصب نیست") from exc
@@ -1064,7 +1109,7 @@ class Fetcher:
                 if len(body) > MAX_HTML_BYTES:
                     raise FetchError("پاسخ HTML بزرگ‌تر از سقف مجاز است")
                 encoding=getattr(response,"encoding",None) or getattr(response,"apparent_encoding",None) or "utf-8"
-                text = body.decode(encoding, errors="replace");sample=clean_text(BeautifulSoup(text[:200000],"html.parser").get_text(" ",strip=True)).lower()
+                text = body.decode(encoding, errors="replace");sample=clean_text(BeautifulSoup(text[:200000],_bs4_parser()).get_text(" ",strip=True)).lower()
                 blocked=any(x in sample for x in ("access denied","موقتا vpn خود را خاموش","temporarily blocked","captcha","درخواست شما مشکوک","دسترسی شما مسدود"))
                 if blocked:raise FetchError(f"{engine}: صفحه ضدبات/VPN به‌جای فهرست محصول برگشت؛ IP مسیر اتصال توسط سایت رد شده است (HTTP {response.status_code})")
                 if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
@@ -1203,7 +1248,7 @@ def selector_is_invalid(selector: str) -> bool:
         except Exception:
             return True
     try:
-        BeautifulSoup("", "html.parser").select(sel)
+        BeautifulSoup("", _bs4_parser()).select(sel)
         return False
     except Exception:
         return True
@@ -1620,7 +1665,7 @@ def parse_html(text: str, base: str, selectors: Optional[dict[str, str]] = None,
 
 
 def sanitize_rich_html(value: str) -> str:
-    fragment=BeautifulSoup(value or "","html.parser")
+    fragment=BeautifulSoup(value or "",_bs4_parser())
     for node in fragment.select("script,style,iframe,object,embed,form,input,button,link,meta"):node.decompose()
     for node in fragment.find_all(True):
         for attr in list(node.attrs):
@@ -2320,6 +2365,135 @@ def run_cancellable(fn: Callable[[], Any], task_id: str, label: str = "browser")
     return box["ok"]
 
 
+def _bs4_parser() -> str:
+    """BeautifulSoup backend: C-speed lxml when installed, else html.parser.
+
+    beautifulsoup4 itself powers every extraction path already (text samples,
+    anti-bot checks, card parsing); this only picks its fastest tree builder
+    everywhere consistently. parse_html pins lxml directly as before.
+    """
+    try:
+        import lxml  # noqa: F401
+        return "lxml"
+    except ImportError:
+        return "html.parser"
+
+
+_BROWSER_PROC_FRAGMENTS = ("chrome", "chromium", "chromedriver", "headless_shell")
+
+
+def reap_browser_orphans(tag: str = "") -> int:
+    """Terminate leftover Chromium/driver processes carrying our unique tag.
+
+    A crashed or force-stopped browser session (page-load timeout, cancel in
+    the middle of a render, driver.quit() raising) used to leak headless
+    chrome processes until the VPS ran out of memory. Selenium and UC sessions
+    now run with a unique temporary profile dir; after quit(), any
+    chrome/chromedriver process whose command line still references that tag
+    is an orphan and gets terminated. psutil missing -> silent no-op; without
+    a tag this does nothing.
+    """
+    if not tag:
+        return 0
+    try:
+        import psutil
+    except ImportError:
+        return 0
+    killed = 0
+    me = os.getpid()
+    for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+        try:
+            info = proc.info or {}
+            if info.get("pid") == me:
+                continue
+            name = str(info.get("name") or "").lower()
+            if not any(fragment in name for fragment in _BROWSER_PROC_FRAGMENTS):
+                continue
+            cmd = " ".join(str(part) for part in (info.get("cmdline") or []))
+            if tag in cmd:
+                proc.terminate()
+                killed += 1
+        except Exception:  # noqa: BLE001 - a pid dying between iter and read is normal
+            continue
+    return killed
+
+
+def _run_async(coro: Any) -> Any:
+    """asyncio.run for worker threads; isolate into a thread if a loop is live."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            box["ok"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 - re-raised below
+            box["err"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
+
+
+def _aiohttp_get(url: str, headers: dict[str, str], timeout: Any, verify: bool,
+                 proxy: Optional[str]) -> tuple[bytes, str, int, Any]:
+    """One page via aiohttp; returns (body, final_url, status, headers).
+
+    Manual redirect loop like curl_cffi so every hop passes the
+    public_http_url guard. The CIMultiDict response headers carry repeated
+    Set-Cookie entries, which the flat cookie store absorbs afterwards.
+    """
+    import aiohttp
+
+    class _MergedHeaders:
+        """Final response headers + Set-Cookie collected on redirect hops.
+
+        Sites routinely set their session cookie on the 302 itself; only the
+        flat store sees it if the intermediate headers travel with the result.
+        """
+
+        def __init__(self, final: Any, extra_setcookies: list[tuple[str, str]]):
+            self._final = final
+            self._extra = extra_setcookies
+
+        def get(self, key: str, default: Any = None) -> Any:
+            return self._final.get(key, default)
+
+        def items(self) -> list[tuple[str, str]]:
+            out = list(self._final.items())
+            out.extend(self._extra)
+            return out
+
+    async def _run() -> tuple[bytes, str, int, Any]:
+        timeout_cfg = aiohttp.ClientTimeout(total=max(5.0, float(timeout or 30)))
+        connector = aiohttp.TCPConnector(ssl=False if not verify else None)
+        async with aiohttp.ClientSession(timeout=timeout_cfg, headers=headers,
+                                         connector=connector, trust_env=False) as session:
+            current = url
+            extra_setcookies: list[tuple[str, str]] = []
+            for hop in range(6):
+                async with session.get(current, allow_redirects=False, proxy=proxy or None) as resp:
+                    location = resp.headers.get("Location")
+                    if resp.status in {301, 302, 303, 307, 308} and location:
+                        if hop >= 5:
+                            raise FetchError("تعداد تغییرمسیرهای HTTP بیش از حد مجاز است")
+                        extra_setcookies.extend(
+                            (str(key), str(value)) for key, value in resp.headers.items()
+                            if str(key).lower() == "set-cookie")
+                        current = public_http_url(urljoin(current, location))
+                        continue
+                    body = await resp.read()
+                    return body, str(resp.url), resp.status, _MergedHeaders(resp.headers, extra_setcookies)
+        raise FetchError("دریافت صفحه ناموفق بود")
+
+    return _run_async(_run())
+
+
 def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "") -> FetchResult:
     browser_path = configured_browser_path()
     if browser_path and os.path.isdir(browser_path):
@@ -2449,7 +2623,7 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                     html += '<script id="__NEXT_DATA__" type="application/json">'+blob+'</script>'
             except Exception:
                 pass
-            sample=clean_text(BeautifulSoup(html[:200000],"html.parser").get_text(" ",strip=True)).lower()
+            sample=clean_text(BeautifulSoup(html[:200000],_bs4_parser()).get_text(" ",strip=True)).lower()
             # 10.203 if Digikala returns shell 13-18KB with no products, log snippet for debug
             if digi and len(html) < 50000 and "product" not in sample:
                 try:
@@ -2497,6 +2671,10 @@ def render_selenium(url: str, timeout: int, scrolls: int = 4, task_id: str = "")
     chrome_bin = find_browser_executable(configured_browser_path())
     if chrome_bin:
         opts.binary_location = chrome_bin
+    # 10.233: unique profile dir per session — gives the psutil reaper a
+    # safe marker for orphaned chrome processes if quit() is never reached.
+    profile_dir = tempfile.mkdtemp(prefix="scraper4-sel-")
+    opts.add_argument(f"--user-data-dir={profile_dir}")
     driver = None
     try:
         if task_id and live_task_cancelled(task_id):
@@ -2530,10 +2708,76 @@ def render_selenium(url: str, timeout: int, scrolls: int = 4, task_id: str = "")
                 driver.quit()
             except Exception:
                 pass
-    sample = clean_text(BeautifulSoup(html[:200000], "html.parser").get_text(" ", strip=True)).lower()
+        reap_browser_orphans(profile_dir)
+        shutil.rmtree(profile_dir, ignore_errors=True)
+    sample = clean_text(BeautifulSoup(html[:200000], _bs4_parser()).get_text(" ", strip=True)).lower()
     if any(x in sample for x in ("access denied", "موقتا vpn خود را خاموش", "temporarily blocked", "captcha", "درخواست شما مشکوک", "دسترسی شما مسدود")):
         raise FetchError("Selenium نیز صفحه ضدبات/VPN دریافت کرد؛ IP مسیر اتصال توسط سایت رد شده است")
     return FetchResult(final_url, html, "text/html", 200, "selenium")
+
+
+def render_undetected(url: str, timeout: int, scrolls: int = 4, task_id: str = "") -> FetchResult:
+    """Chrome via undetected-chromedriver — the anti-detection Selenium sibling.
+
+    Vanilla Selenium is fingerprinted (navigator.webdriver, cdc_ bridge
+    variables, headless switches); undetected-chromedriver patches both the
+    driver binary and the browser. Same contract as render_selenium: real
+    Chromium, scroll loop, anti-bot sample check, psutil orphan sweep.
+    uc downloads/patches its own chromedriver, so only the chrome binary must
+    exist (see _browser_binary_probe).
+    """
+    public_http_url(url)
+    try:
+        import undetected_chromedriver as uc
+    except ImportError as exc:
+        raise FetchError("کتابخانه undetected-chromedriver نصب نیست (pip install undetected-chromedriver)") from exc
+    opts = uc.ChromeOptions()
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--lang=fa-IR")
+    opts.add_argument("--window-size=1366,768")
+    chrome_bin = find_browser_executable(configured_browser_path())
+    profile_dir = tempfile.mkdtemp(prefix="scraper4-uc-")
+    driver = None
+    try:
+        if task_id and live_task_cancelled(task_id):
+            raise CancelledError("استخراج با درخواست کاربر متوقف شد")
+        driver = uc.Chrome(options=opts, headless=True, use_subprocess=True,
+                           browser_executable_path=chrome_bin or None,
+                           user_data_dir=profile_dir)
+        driver.set_page_load_timeout(max(15, int(timeout)))
+        driver.get(outbound_browser_target(url))
+        for _ in range(max(0, min(12, scrolls))):
+            if task_id and live_task_cancelled(task_id):
+                raise CancelledError("استخراج با درخواست کاربر متوقف شد")
+            try:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+            except Exception:
+                break
+            time.sleep(0.7)
+        html = driver.page_source or ""
+        final_url = driver.current_url or url
+        if outbound_mode(load_data().get("network", {})) != "relay":
+            public_http_url(final_url)
+    except CancelledError:
+        # A stop request must unwind, not be reported as a UC failure.
+        raise
+    except Exception as exc:
+        raise FetchError(f"Undetected-Chromedriver: {exc}") from exc
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        reap_browser_orphans("scraper4-uc-")
+        shutil.rmtree(profile_dir, ignore_errors=True)
+    sample = clean_text(BeautifulSoup(html[:200000], _bs4_parser()).get_text(" ", strip=True)).lower()
+    if any(x in sample for x in ("access denied", "موقتا vpn خود را خاموش", "temporarily blocked", "captcha", "درخواست شما مشکوک", "دسترسی شما مسدود")):
+        raise FetchError("Undetected-Chromedriver نیز صفحه ضدبات/VPN دریافت کرد؛ IP مسیر اتصال توسط سایت رد شده است")
+    return FetchResult(final_url, html, "text/html", 200, "undetected")
 
 
 
@@ -2590,6 +2834,14 @@ def _browser_binary_probe(engine: str) -> bool:
                     "chromium", "chromium-browser")):
                 return True
             return bool(find_browser_executable(configured_browser_path()))
+        if engine == "undetected":
+            # undetected-chromedriver downloads/patches its own chromedriver;
+            # like the selenium probe, only a chrome binary must exist.
+            if any(shutil.which(x) for x in
+                   ("google-chrome", "google-chrome-stable", "chromium",
+                    "chromium-browser")):
+                return True
+            return bool(find_browser_executable(configured_browser_path()))
     except Exception:  # noqa: BLE001 - probing must never raise
         return False
     return True
@@ -2598,7 +2850,7 @@ def _browser_binary_probe(engine: str) -> bool:
 def fetch_engine_installed(engine: str) -> bool:
     if engine in {"requests", "request"}:
         return True
-    names = {"httpx": "httpx", "cloudscraper": "cloudscraper", "curl_cffi": "curl_cffi", "playwright": "playwright", "selenium": "selenium"}
+    names = {"httpx": "httpx", "cloudscraper": "cloudscraper", "curl_cffi": "curl_cffi", "aiohttp": "aiohttp", "playwright": "playwright", "selenium": "selenium", "undetected": "undetected_chromedriver"}
     mod = names.get(engine)
     if not mod:
         return True
@@ -2606,13 +2858,17 @@ def fetch_engine_installed(engine: str) -> bool:
         importlib.import_module(mod)
     except ImportError:
         return False
-    if engine in ("playwright", "selenium"):
+    if engine in BROWSER_ENGINES:
         return browser_binary_ready(engine)
     return True
 
 
-HTTP_ENGINE_ORDER = ("requests", "httpx", "curl_cffi", "cloudscraper")
-KNOWN_ENGINES = HTTP_ENGINE_ORDER + ("playwright", "selenium")
+HTTP_ENGINE_ORDER = ("requests", "httpx", "curl_cffi", "cloudscraper", "aiohttp")
+KNOWN_ENGINES = HTTP_ENGINE_ORDER + ("playwright", "selenium", "undetected")
+# Browser engines render JS with a real Chromium; every other fetch engine is
+# a plain HTTP client. Shared by _get_blocking dispatch, the scrape loop's
+# http/browser split and availability probes.
+BROWSER_ENGINES = frozenset({"playwright", "selenium", "undetected"})
 
 
 def engine_http_order() -> list[str]:
@@ -2644,14 +2900,19 @@ def engine_try_order(master: str, requested: str, mode: str) -> list[str]:
     """Fastest-first chain: master/pin at the front, the rest are backups."""
     http = engine_http_order()
     browsers = [e for e in ("playwright",) if fetch_engine_installed(e)]
-    if requested == "selenium" or master == "selenium":
-        if fetch_engine_installed("selenium"):
-            browsers.append("selenium")
+    # Selenium/undetected join only when explicitly requested/pinned: they are
+    # heavier (driver management, binary patching) than playwright, so the
+    # automatic chain never drags them in — same contract as before for
+    # selenium, extended to undetected.
+    for _browser_engine in ("selenium", "undetected"):
+        if _browser_engine in (requested, master) and _browser_engine not in browsers \
+                and fetch_engine_installed(_browser_engine):
+            browsers.append(_browser_engine)
     pin = requested if requested in KNOWN_ENGINES else ""
     head = pin or (master if master in KNOWN_ENGINES else "")
     if mode == "browser":
         chain = browsers + http
-    elif head in {"playwright", "selenium"}:
+    elif head in BROWSER_ENGINES:
         chain = [head] + [x for x in browsers if x != head] + http
     elif head in http:
         chain = [head] + [x for x in http if x != head] + browsers
@@ -2769,7 +3030,7 @@ def page_soup(page: Any) -> BeautifulSoup:
     try:
         return BeautifulSoup(text, "lxml")
     except Exception:
-        return BeautifulSoup(text, "html.parser")
+        return BeautifulSoup(text, _bs4_parser())
 
 
 def selector_values(root: Any, selector: str, kind: str, base: str) -> list[str]:
@@ -3162,7 +3423,7 @@ def auto_selectors(url: str, mode: str = "all") -> dict[str, Any]:
         result = picker_browser_fetch(source, fetcher.timeout, 4, errors)
     if result is None:
         raise FetchError("دریافت صفحه برای پیشنهاد سلکتور ناموفق بود" + ((" — " + " | ".join(errors[-3:])) if errors else ""))
-    soup = BeautifulSoup(result.text, "html.parser")
+    soup = BeautifulSoup(result.text, _bs4_parser())
     selectors: dict[str, str] = {}
     evidence: dict[str, Any] = {}
     if mode in ("list", "all"):
@@ -3262,6 +3523,19 @@ def picker_http_fetch(url: str, fetcher: "Fetcher", errors: list[str]) -> Any:
 
 
 def picker_browser_fetch(url: str, timeout: int, scrolls: int, errors: list[str], engine: str = "playwright") -> Any:
+    if engine=="undetected":
+        if fetch_engine_installed("undetected"):
+            try:
+                return render_undetected(url, timeout, scrolls)
+            except FetchError as exc:
+                errors.append(f"undetected: {clean_text(exc)}")
+        if fetch_engine_installed("playwright"):
+            try:
+                return render_playwright(url, timeout, scrolls)
+            except FetchError as exc:
+                if "نصب نیست" not in clean_text(exc):
+                    errors.append(f"playwright: {clean_text(exc)}")
+        return None
     if engine=="selenium":
         if fetch_engine_installed("selenium"):
             try:
@@ -3459,9 +3733,9 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             # 10.226: make the active chain visible — this is what differed
             # between the 3-page benchmark (per-engine) and the real run.
             report.logs.append("زنجیرهٔ موتورهای دریافت: " + " → ".join(order))
-        http_engines=[e for e in order if e not in {"playwright","selenium"}]
-        browser_engines=[e for e in order if e in {"playwright","selenium"}]
-        browser_first=bool(order and order[0] in {"playwright","selenium"})
+        http_engines=[e for e in order if e not in BROWSER_ENGINES]
+        browser_engines=[e for e in order if e in BROWSER_ENGINES]
+        browser_first=bool(order and order[0] in BROWSER_ENGINES)
         engine_errors=[]
         won_engine=""
         won_ms=0
@@ -3508,7 +3782,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             for bengine in browser_engines:
                 try:
                     if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+2),f"{'مستر' if bengine==master else 'پشتیبان'} {bengine} · صفحه {number} از {pages}","running",("HTML محصولی نداشت"+(" · "+fetch_error if fetch_error else "")+f"؛ {bengine}"),done=number-1,total=pages,extracted=len(report.products))
-                    snapp="snappshop.ir" in (urlparse(url).hostname or "").lower();scrolls=int(config.get("scrolls", 8 if snapp else 4));t0=time.monotonic();result = run_cancellable((lambda: render_playwright(url, fetcher.timeout, scrolls, task_id)) if bengine=="playwright" else (lambda: render_selenium(url, fetcher.timeout, scrolls, task_id)), task_id, bengine)
+                    snapp="snappshop.ir" in (urlparse(url).hostname or "").lower();scrolls=int(config.get("scrolls", 8 if snapp else 4));t0=time.monotonic();result = run_cancellable((lambda: render_playwright(url, fetcher.timeout, scrolls, task_id)) if bengine=="playwright" else ((lambda: render_undetected(url, fetcher.timeout, scrolls, task_id)) if bengine=="undetected" else (lambda: render_selenium(url, fetcher.timeout, scrolls, task_id))), task_id, bengine)
                     page_html=result.text
                     rows, soup, diag = parse_html(result.text, result.url, selectors, parse_strategy);diag={**diag,"engine":bengine,"attempts":diag.get("attempts",[])}
                     report.modes.add(bengine+"-dom")
@@ -3691,7 +3965,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                             raise ValueError("استخراج با درخواست کاربر متوقف شد")
                         try:
                             if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+2),f"صفحه {number} تکراری بود — رندر {_bengine}","running",url,done=number-1,total=pages,extracted=len(report.products))
-                            _bres = run_cancellable((lambda: render_playwright(url, fetcher.timeout, _bscrolls, task_id)) if _bengine=="playwright" else (lambda: render_selenium(url, fetcher.timeout, _bscrolls, task_id)), task_id, _bengine)
+                            _bres = run_cancellable((lambda: render_playwright(url, fetcher.timeout, _bscrolls, task_id)) if _bengine=="playwright" else ((lambda: render_undetected(url, fetcher.timeout, _bscrolls, task_id)) if _bengine=="undetected" else (lambda: render_selenium(url, fetcher.timeout, _bscrolls, task_id))), task_id, _bengine)
                             _b_rows, _b_soup, _b_diag = parse_html(_bres.text, _bres.url, selectors, parse_strategy)
                             _b_new = 0
                             for _row in _b_rows:
@@ -5282,7 +5556,7 @@ def api_picker_preview():
     # 10.203 picker: support ?render=playwright/selenium/browser/http/auto
     render_norm=render.lower().strip()
     if render_norm in ("playwright","selenium","browser"): render="browser"
-    elif render_norm in ("http","requests","curl_cffi","cloudscraper","httpx"): render="http"
+    elif render_norm in ("http","requests","curl_cffi","cloudscraper","httpx","aiohttp"): render="http"
     if render!="browser":
         result=picker_http_fetch(url,fetcher,errors)
         if result is None and fetcher.proxy_mode in {"relay","http"}:
@@ -5290,15 +5564,21 @@ def api_picker_preview():
             result=picker_http_fetch(url,_fetcher_direct(network),errors)
     # 10.208 handle explicit engine from pickerEngine
     picked_engine = clean_text(request.args.get("engine") or request.args.get("pickerEngine") or "")
-    if picked_engine in ("selenium","playwright"):
+    if picked_engine in ("selenium","playwright","undetected"):
         render = picked_engine
-    if result is None or spa or render in ("selenium","playwright"):
+    if result is None or spa or render in ("selenium","playwright","undetected"):
         # try requested engine first
         if render=="selenium":
             try:
                 browser=picker_browser_fetch(url,fetcher.timeout,scrolls,errors, engine="selenium")
             except Exception as _e:
                 errors.append(f"selenium not available: {_e}")
+                browser=None
+        elif render=="undetected":
+            try:
+                browser=picker_browser_fetch(url,fetcher.timeout,scrolls,errors, engine="undetected")
+            except Exception as _e:
+                errors.append(f"undetected not available: {_e}")
                 browser=None
         else:
             browser=picker_browser_fetch(url,fetcher.timeout,scrolls,errors, engine="playwright")
@@ -5676,7 +5956,7 @@ def api_deploy_dependencies():
     python_bin = runtime_python_bin()
     if not python_bin: return jsonify(ok=False, error="مفسر Python واقعی پیدا نشد؛ uWSGI برای نصب بسته قابل استفاده نیست"), 500
     if VPS_MODE:
-        packages = ["flask", "requests", "beautifulsoup4", "lxml", "playwright", "basalam-sdk", "cloudscraper", "curl_cffi", "httpx", "selenium", "playwright-stealth"]
+        packages = ["flask", "requests", "beautifulsoup4", "lxml", "playwright", "basalam-sdk", "cloudscraper", "curl_cffi", "httpx", "aiohttp", "selenium", "undetected-chromedriver", "playwright-stealth", "psutil", "python-dotenv"]
         env = dict(os.environ); env["PIP_NO_CACHE_DIR"] = "1"
         try:
             pip_run = subprocess.run([python_bin, "-m", "pip", "install", "--no-cache-dir", *packages], capture_output=True, text=True, timeout=720, env=env)
@@ -5690,7 +5970,7 @@ def api_deploy_dependencies():
         except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
             return jsonify(ok=False, error=f"نصب وابستگی‌های VPS ناموفق بود: {exc}"), 400
     # PythonAnywhere: keep the quota-safe headless-shell path.
-    packages = ["flask", "requests", "beautifulsoup4", "lxml", "playwright", "basalam-sdk", "cloudscraper", "curl_cffi"]
+    packages = ["flask", "requests", "beautifulsoup4", "lxml", "playwright", "basalam-sdk", "cloudscraper", "curl_cffi", "aiohttp", "psutil", "python-dotenv"]
     env = dict(os.environ); browser_root = os.path.join(BASE_DIR, "ms-playwright")
     env["PLAYWRIGHT_BROWSERS_PATH"] = browser_root
     env["PIP_NO_CACHE_DIR"] = "1"
@@ -8354,7 +8634,7 @@ button.linkish.danger{color:#fb7185!important}
 </div>
 <details class="start-more"><summary>پیشرفته</summary>
 <div class="more-grid">
-<div><label>موتور ضدبات</label><select id="fetch_engine" onchange="onFetchEngineChange()"><option value="auto">خودکار · مستر + پشتیبان</option><option value="requests">Requests</option><option value="httpx">httpx</option><option value="cloudscraper">Cloudscraper</option><option value="curl_cffi">curl_cffi</option><option value="playwright">Playwright</option><option value="selenium">Selenium</option></select><input type="hidden" id="fetch_engine_master"><div id="engineMasterHint" class="quiet" style="font-size:11px;margin-top:4px">استخراج اول سریع‌ترین موتور این سایت را مستر می‌کند</div></div>
+<div><label>موتور ضدبات</label><select id="fetch_engine" onchange="onFetchEngineChange()"><option value="auto">خودکار · مستر + پشتیبان</option><option value="requests">Requests</option><option value="httpx">httpx</option><option value="cloudscraper">Cloudscraper</option><option value="curl_cffi">curl_cffi</option><option value="aiohttp">aiohttp</option><option value="playwright">Playwright</option><option value="selenium">Selenium</option><option value="undetected">Undetected-Chromedriver</option></select><input type="hidden" id="fetch_engine_master"><div id="engineMasterHint" class="quiet" style="font-size:11px;margin-top:4px">استخراج اول سریع‌ترین موتور این سایت را مستر می‌کند</div></div>
 <div><label>صفحه‌بندی</label><select id="pagination"><option value="auto">خودکار (تشخیص هوشمند)</option><option value="query">Query</option><option value="path">مسیر</option><option value="full">URL کامل</option><option value="next">لینک بعد</option></select></div>
 <div><label>پارامتر صفحه</label><input id="page_value" value="page" dir="ltr" placeholder="page"></div>
 <script>window.updatePaginationPlaceholder=function(){var k=document.getElementById("pagination"),v=document.getElementById("page_value");if(!k||!v)return;var m=k.value;if(m==="path")v.placeholder="/page/{page}/  یا  ~page~{page} برای ایمالز";else if(m==="full")v.placeholder="https://example.com/page/{page}/";else if(m==="next")v.placeholder="a.next, a[rel=\"next\"]";else v.placeholder="page";};(function(){var s=document.getElementById("pagination");if(s){s.addEventListener("change",window.updatePaginationPlaceholder);window.updatePaginationPlaceholder();}})();</script>

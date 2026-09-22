@@ -90,8 +90,10 @@ ENGINE_CATALOGUE = (
     ("httpx", "HTTPX — HTTP/2، سریع", "fetch", "httpx"),
     ("curl_cffi", "curl_cffi — دور زدن اثرانگشت TLS/JA3", "fetch", "curl_cffi"),
     ("cloudscraper", "Cloudscraper — چالش‌های کلودفلر", "fetch", "cloudscraper"),
+    ("aiohttp", "aiohttp — کلاینت ناهمگام HTTP (async)", "fetch", "aiohttp"),
     ("playwright", "Playwright — رندر کامل جاوااسکریپت", "fetch", "playwright"),
     ("selenium", "Selenium — مرورگر واقعی (کندتر)", "fetch", "selenium"),
+    ("undetected", "Undetected-Chromedriver — کروم ضدتشخیص", "fetch", "undetected_chromedriver"),
     ("auto", "خودکار (همهٔ روش‌ها به ترتیب)", "parse", ""),
     ("lxml", "lxml — پایپ‌لاین کامل پیش‌فرض", "parse", "lxml"),
     ("selectolax", "selectolax — کارت محصول، پارس بسیار سریع", "parse", "selectolax"),
@@ -2929,14 +2931,14 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             note = ""
             if not installed:
                 note = ("مرورگر نصب نشده؛ اجرا کنید: playwright install chromium"
-                        if pkg and eid in ("playwright", "selenium")
+                        if pkg and eid in ("playwright", "selenium", "undetected")
                         else "کتابخانه نصب نیست")
             rows.append({
                 "id": eid, "label": label, "stage": stage,
                 "module": module, "installed": installed,
                 "package": pkg, "note": note,
                 # Browser engines additionally need a downloaded browser binary.
-                "needsBrowser": eid in ("playwright", "selenium"),
+                "needsBrowser": eid in ("playwright", "selenium", "undetected"),
             })
         return rows
 
@@ -2955,7 +2957,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         cmds = {
             "full": "pip install -r python-scraper4/requirements.txt",
             "core": "pip install flask>=3.0.0 gunicorn>=21.2.0 urllib3>=2.0.0 requests>=2.31.0",
-            "fetch": "pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71",
+            "fetch": "pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71 aiohttp>=3.9.0",
             "browser": "pip install playwright>=1.40.0 playwright-stealth>=1.0.6 selenium>=4.20.0 undetected-chromedriver>=3.5.5 && python -m playwright install --with-deps chromium",
             "browser_mirror_ir": "bash python-scraper4/tools/install_chromium_mirror.sh  # از ایران - آینه npmmirror (cdn.playwright.dev مسدود است)",
             "browser_ir_vps": "bash python-scraper4/tools/install_chromium_mirror.sh && systemctl restart scraper4",
@@ -2964,7 +2966,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "browser_ir_fallback": "sudo apt install -y chromium-browser && export SCRAPER_BROWSER_PATH=/usr/bin/chromium-browser",
             "parse": "pip install beautifulsoup4>=4.12.0 lxml>=5.0.0 html5lib>=1.1 selectolax>=0.3.21",
             "dest": "pip install basalam-sdk>=1.2.0",
-            "all_one_liner": "pip install flask gunicorn urllib3 requests httpx[http2] curl_cffi cloudscraper playwright playwright-stealth selenium undetected-chromedriver beautifulsoup4 lxml html5lib selectolax basalam-sdk",
+            "all_one_liner": "pip install flask gunicorn urllib3 requests httpx[http2] curl_cffi cloudscraper aiohttp playwright playwright-stealth selenium undetected-chromedriver beautifulsoup4 lxml html5lib selectolax basalam-sdk psutil python-dotenv",
             "system": "sudo apt update && sudo apt install -y python3 python3-venv python3-pip git curl chromium-browser",
             "venv": "python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade pip && pip install -r python-scraper4/requirements.txt",
         }
