@@ -69,6 +69,8 @@ class MockShop(BaseHTTPRequestHandler):
     mode "multi":   honest pages, but every response sends TWO Set-Cookie
                    headers with the SAME name - the 10.228 curl_cffi crash.
     mode "redirect": pages 2+ answer 302 back to page 1 (10.229 instrumentation).
+    mode "browserfix": EVERY HTTP client gets duplicates for page 2+, but a real
+                   browser render would get the true page (10.230 fallback).
     """
     mode = "honest"
     hits: dict = {}
@@ -103,6 +105,10 @@ class MockShop(BaseHTTPRequestHandler):
             cookie = (self.headers.get("Cookie") or "")
             if "sid=" not in cookie:
                 effective = 1  # cookieless client gets the page-1 fallback
+        elif MockShop.mode == "browserfix" and page > 1:
+            ua = (self.headers.get("User-Agent") or "") + "|" + (self.headers.get("Sec-Fetch-Dest") or "") + "|" + (self.headers.get("Sec-CH-UA") or "")
+            if "Playwright" not in ua:
+                effective = 1  # every HTTP fingerprint gets the page-1 fallback
         elif MockShop.mode == "redirect" and page > 1:
             self.send_response(302)
             self.send_header("Location", "/shop~Category~31424")
@@ -140,6 +146,14 @@ def start_shop(mode: str) -> None:
     if _server is None:
         _server = ThreadingHTTPServer(("127.0.0.1", PORT), MockShop)
         threading.Thread(target=_server.serve_forever, daemon=True).start()
+
+
+def page_body_for(path: str) -> str:
+    """Honest page HTML for a mock ~page~N path (used by the fake render)."""
+    m = re.search(r"~page~(\d+)", path)
+    page = int(m.group(1)) if m else 1
+    return (f'<!doctype html><html><head><meta charset="utf-8"></head><body>'
+            f'<ul class="products">{products_html(page)}</ul></body></html>')
 
 
 def scrape_cfg(pagination: str, page_value: str, pages, url: str | None = None) -> dict:
@@ -313,6 +327,38 @@ def main() -> int:
           str(pag_stage.get("summary"))[:120])
     check("diagnostic shows the redirect target in the details",
           any("ریدایرکت" in str(d) for d in pag_stage.get("details", [])), str(pag_stage.get("details"))[:240])
+
+    print("== M: HTTP fallbacks but real browser wins — v10.230 browser rescue ==")
+    start_shop("browserfix")
+    # simulate a real installed Chromium whose render emalls trusts
+    _orig_installed = core.fetch_engine_installed
+    _orig_pw = core.render_playwright
+    core.fetch_engine_installed = lambda e: True if e == "playwright" else _orig_installed(e)
+
+    def _fake_pw(url, timeout=25, scrolls=4, task_id=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(text=page_body_for(url), url=url, status=200)
+
+    core.render_playwright = _fake_pw
+    try:
+        rep = run_scrape("browserfix pages=5", pagination="path", page_value="~page~{page}", pages=5)
+        check("browser rescue breaks the HTTP fallback and walks all 5 pages",
+              len(rep.products) == TOTAL_PAGES * PER_PAGE, f"got {len(rep.products)}")
+        check("rescue credits the browser engine in the logs",
+              any("playwright" in x and "تازه" in x for x in rep.logs),
+              str([x for x in rep.logs if "playwright" in x][:1]))
+        save_profile("browserfix-site", "path_pattern", "~page~{page}", 0, "browserfix")
+        start_shop("browserfix")
+        diag = diagnostic_report("browserfix-site")
+        pag_stage = next((s for s in diag.get("stages", []) if s.get("name") == "pagination"), {})
+        check("diagnostic pagination stage passes via the browser probe",
+              pag_stage.get("ok") is True, str(pag_stage.get("summary"))[:200])
+        check("diagnostic names the browser as the winner",
+              any("playwright" in str(d) for d in pag_stage.get("details", [])),
+              str(pag_stage.get("details"))[:240])
+    finally:
+        core.fetch_engine_installed = _orig_installed
+        core.render_playwright = _orig_pw
 
     print("== E: dashboard parity — pages=0 must survive the round-trip ==")
     start_shop("dup")

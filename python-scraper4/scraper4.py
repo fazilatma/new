@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.229"
+APP_VERSION = "10.230"
 CHANGELOG = [
+    {"version":"10.230","date":"2026-09-22","title":"اثرانگشت کامل کروم برای curl_cffi و پشتیبان مرورگر واقعی برای صفحهٔ تکراری","items":["بررسی سمت ما نشان داد emalls صفحهٔ ۲ واقعی را حتی در درخواست‌های پشت‌سرهم به کلاینت سالم می‌دهد؛ یعنی تصمیم emalls دربارهٔ سرور شما اثرانگشتی است — و اسکرپر خودش اثرانگشت curl_cffi را خراب می‌کرد: هدرهای عمومی سشن (UA قدیمی Chrome/126 و Accept با application/json) روی مجموعهٔ کامل جعل هدر کروم می‌نشست","حالا curl_cffi با همان مجموعهٔ کامل مرورگر خودش (UA به‌روز، sec-ch-ua و Sec-Fetch-*) ارسال می‌شود و فقط Referer به آن اضافه می‌شود — همان رفتاری که در نسخه‌های قدیمی‌تر نتیجه می‌داد","اگر همهٔ موتورهای HTTP برای صفحهٔ ۲ به بعد فقط کپی صفحات قبل آوردند، همان صفحه با مرورگر واقعی (Playwright/Selenium نصب‌شده) رندر می‌شود؛ اولین منبعی که محصول تازه بیاورد صفحه‌بندی را ادامه می‌دهد","عیب‌یابی استخراج هم مرورگر را به‌عنوان آخرین پشتیبان زنجیرهٔ صفحه‌بندی امتحان می‌کند تا اگر مرورگر واقعی صفحهٔ ۲ را گرفت، لاگ صریح بگوید مشکل فقط اثرانگشت HTTP بوده است"]},
     {"version":"10.229","date":"2026-09-22","title":"رفع تداخل کوکی‌های هم‌نام و آشکارسازی ریدایرکت پنهان صفحه‌بندی","items":["گزارش جدید: curl_cffi با خطای «چند کوکی هم‌نام ASP.NET_SessionId» متوقف شد چون کوکی هر موتور در شیشهٔ چند-دامنه‌ای requests تکثیر می‌شد؛ کوکی‌ها حالا در یک انبار تخت {نام: مقدار} نگهداری و با همهٔ موتورها ارسال می‌شوند و Set-Cookie همهٔ موتورها همان‌جا ذخیره می‌شود — تداخل هم‌نام دیگر ممکن نیست","سه موتور دیگر هنوز برای صفحهٔ ۲ همان ۴۰ محصول تکراری را گرفتند حتی با کوکی؛ فاحش‌ترین مظنون ریدایرکت پنهان emalls به صفحهٔ ۱ است که بعد از دنبال‌کردن خودکار، مثل HTTP 200 عادی دیده می‌شود","حالا نتیجهٔ هر تلاش صفحهٔ ۲ در لاگ و عیب‌یابی، نشانی نهایی را هم نشان می‌دهد؛ اگر با ریدایرکت به صفحهٔ قبل مواجه شد، صریح نوشته می‌شود تا معلوم شود emalls برای این سرور صفحات عمیق را نمی‌دهد و باید از رله/پروکسی رفت"]},
     {"version":"10.228","date":"2026-09-22","title":"پیوستگی سشن/کوکی بین همهٔ موتورها و همهٔ صفحات","items":["گزارش عیب‌یابی نشان داد هر ۴ موتور برای صفحهٔ ۲ ایمالز همان ۴۰ محصول تکراری می‌گیرند؛ علت کوکی سشن بود: curl_cffi/cloudscraper/httpx برای هر درخواست کلاینت بی‌کوکی می‌ساختند و فقط requests کوکی نگه می‌داشت","حالا کوکی‌های سشن مشترک با همهٔ موتورها ارسال می‌شود (curl_cffi cookies=، cloudscraper cookies.update، httpx هدر Cookie) و Set-Cookie پاسخ هر موتور هم به سشن برمی‌گردد تا اجرای واقعی مثل یک مرورگر واحد رفتار کند","عیب‌یابی استخراج کل اجرا را با یک Fetcher واحد انجام می‌دهد؛ کوکی صفحهٔ ۱ به صفحات ۲ و ۳ می‌رسد — قبلاً صفحهٔ ۱ و ۲ با دو نشست متفاوت خوانده می‌شدند و سایت صفحهٔ ۲ را fallback می‌داد","تست رگرسیون جدید: سایتی که صفحهٔ ۲ به بعد را بدون کوکی سشن تکراری می‌دهد؛ اجرای واقعی و عیب‌یابی باید هر دو با پیوستگی کوکی عبور کنند"]},
     {"version":"10.227","date":"2026-09-22","title":"نجات صفحهٔ تکراری ایمالز با موتورهای جایگزین","items":["بررسی زنده ایمالز نشان داد صفحهٔ ۲ واقعی وجود دارد (صفحه ۲ از ۹۳۳۱ با محصولات متفاوت) اما بعضی اثرانگشت‌های درخواست پاسخ تکراری می‌گیرند؛ اگر صفحهٔ ۲ به بعد فقط کپی صفحات قبل بود، استخراج واقعی همان صفحه را با بقیهٔ موتورهای HTTP (اثرانگشت TLS متفاوت) دوباره می‌خواند و با اولین موتوری که محصول تازه آورد ادامه می‌دهد","همان منطق نجات در مرحلهٔ صفحه‌بندی عیب‌یابی هم فعال شد: صفحات ۲ و ۳ با یک Fetcher مشترک (حفظ کوکی سشن مثل اجرای واقعی) و همان زنجیرهٔ موتور اجرای واقعی خوانده می‌شوند و نتیجهٔ تک‌تک موتورها در جزئیات می‌آید","وقتی نجات موفق است لاگ می‌گوید کدام موتور محصول تازه آورد؛ وقتی شکست، تلاش همهٔ موتورها در pagination_stopped.engine_attempts ثبت می‌شود","سایت‌هایی که واقعاً فقط یک صفحه دارند بعد از یک پاس کوتاه موتورهای جایگزین همان‌جا تمام می‌شوند؛ رفتار پایان صفحه‌بندی تغییر نکرده است"]},
@@ -1038,8 +1039,14 @@ class Fetcher:
                     # 10.229: flat cookie store - a plain dict cannot carry the
                     # duplicate-name conflict that crashed 10.228's jar bridge.
                     _ck=dict(self._cookies) or None
+                    # 10.230: let curl_cffi speak with its OWN full Chrome
+                    # impersonation (current UA, sec-ch-ua, Sec-Fetch-*). The
+                    # old override forced the generic session headers (Chrome
+                    # 126 UA + json-ish Accept) onto an otherwise perfect
+                    # browser fingerprint — exactly what anti-bot edges flag.
+                    _curl_headers={"Referer":headers["Referer"]} if headers.get("Referer") else None
                     for redirect_hop in range(6):
-                        response=curl_requests.get(curl_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=False,verify=self.verify,impersonate="chrome",proxies=proxies,cookies=_ck)
+                        response=curl_requests.get(curl_url,headers=_curl_headers,timeout=self.effective_timeout(),allow_redirects=False,verify=self.verify,impersonate="chrome",proxies=proxies,cookies=_ck)
                         location=response.headers.get("Location") if getattr(response,"headers",None) else None
                         if response.status_code not in {301,302,303,307,308} or not location:break
                         if redirect_hop>=5:raise FetchError("تعداد تغییرمسیرهای HTTP بیش از حد مجاز است")
@@ -3669,7 +3676,38 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             if _retry_used:
                 report.logs.append(f"صفحه {number}: پاسخ تکراری بود؛ با موتور {_retry_used} {len(rows)} محصول و محصول تازه پیدا شد — صفحه‌بندی ادامه دارد")
             else:
-                report.logs.append(f"صفحه {number}: همهٔ موتورهای جایگزین هم پاسخ تکراری دادند ({len(engine_errors)} تلاش در این صفحه)")
+                # 10.230: HTTP fingerprints all got the fallback page — try a
+                # REAL browser render of the same URL before ending pagination.
+                if mode in ("auto", "browser"):
+                    _bscrolls=int(config.get("scrolls", 4))
+                    for _bengine in browser_engines:
+                        if not fetch_engine_installed(_bengine):
+                            continue
+                        if task_id and live_task_cancelled(task_id):
+                            raise ValueError("استخراج با درخواست کاربر متوقف شد")
+                        try:
+                            if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+2),f"صفحه {number} تکراری بود — رندر {_bengine}","running",url,done=number-1,total=pages,extracted=len(report.products))
+                            _bres = run_cancellable((lambda: render_playwright(url, fetcher.timeout, _bscrolls, task_id)) if _bengine=="playwright" else (lambda: render_selenium(url, fetcher.timeout, _bscrolls, task_id)), task_id, _bengine)
+                            _b_rows, _b_soup, _b_diag = parse_html(_bres.text, _bres.url, selectors, parse_strategy)
+                            _b_new = 0
+                            for _row in _b_rows:
+                                try:
+                                    if product_key(_row) not in _existing_keys: _b_new += 1
+                                except Exception:
+                                    _b_new += 1
+                            engine_errors.append(f"retry-{_bengine}: DOM={len(_b_rows)} · new={_b_new}")
+                            if _b_new > 0:
+                                rows, soup, page_html = _b_rows, _b_soup, _bres.text
+                                diag = {**diag, **_b_diag, "engine": _bengine, "duplicate_retry": True, "attempts": engine_errors}
+                                won_engine, _retry_used = _bengine, _bengine
+                                report.modes.add(_bengine + "-dom")
+                                break
+                        except (FetchError, ValueError) as _exc:
+                            engine_errors.append(f"retry-{_bengine}: {_exc}")
+                if _retry_used:
+                    report.logs.append(f"صفحه {number}: پاسخ تکراری بود؛ {_retry_used} محصول تازه آورد — صفحه‌بندی ادامه دارد")
+                else:
+                    report.logs.append(f"صفحه {number}: همهٔ موتورهای جایگزین و مرورگر هم پاسخ تکراری دادند ({len(engine_errors)} تلاش در این صفحه)")
 
         new_count = 0
         for row in rows:

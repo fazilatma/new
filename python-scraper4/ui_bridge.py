@@ -2130,6 +2130,33 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         attempts.append(f"{_eng}: HTTP {_r.status} · {len(_rr)} محصول · {_fresh} تازه{_redir}")
                         if _fresh > 0:
                             return _r, _rr, _rs, _eng, attempts
+                    # 10.230: last resort — a REAL browser render. If the browser
+                    # gets the true page while every HTTP engine got fallbacks,
+                    # the report says so explicitly.
+                    for _beng in ("playwright", "selenium"):
+                        if not core.fetch_engine_installed(_beng):
+                            continue
+                        try:
+                            _br = (core.render_playwright(target, 25, 3) if _beng == "playwright"
+                                   else core.render_selenium(target, 25, 3))
+                        except Exception as _exc:
+                            attempts.append(f"{_beng}: {_exc}")
+                            continue
+                        try:
+                            _rr, _rs, _st = core.parse_html(_br.text, _br.url, selectors, parse_engine)
+                        except Exception as _exc:
+                            attempts.append(f"{_beng}: تجزیه ناموفق {_exc}")
+                            continue
+                        _fresh = 0
+                        for _row in _rr:
+                            try:
+                                if core.product_key(_row) not in seen:
+                                    _fresh += 1
+                            except Exception:
+                                _fresh += 1
+                        attempts.append(f"{_beng}: DOM={len(_rr)} · {_fresh} تازه")
+                        if _fresh > 0:
+                            return _br, _rr, _rs, _beng, attempts
                     return None, [], None, "", attempts
 
                 # Try pages 2..diag_pages
