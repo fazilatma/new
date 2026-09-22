@@ -2190,9 +2190,8 @@ function cli_service(array $job): int {
 
                 $pkgsToInstall = [];
 
-                // Pattern 1: Exact ModuleNotFoundError / ImportError (e.g. "ModuleNotFoundError: No module named 'bs4'")
-                if (preg_match_all('/(?:ModuleNotFoundError:\s*No module named|ImportError:\s*No module named|cannot import name [^
-]+ from)\s*['"\]([a-zA-Z0-9_\-]+)['"\]/i', $logTail, $mpm)) {
+                // Pattern 1: Exact ModuleNotFoundError / ImportError
+                if (preg_match_all('/(?:ModuleNotFoundError|ImportError)[^\n]*No module named ['"]([a-zA-Z0-9_\-]+)['"]/i', $logTail, $mpm)) {
                     foreach (array_unique($mpm[1]) as $mName) {
                         $pName = $modMap[$mName] ?? $mName;
                         $pkgsToInstall[$pName] = true;
@@ -2200,18 +2199,16 @@ function cli_service(array $job): int {
                 }
 
                 // Pattern 2: Explicit dependency suggestions in RuntimeError/Exception
-                if (preg_match_all('/pip3?\s+install\s+([^"
-\(\)]+)/i', $logTail, $allPipMatches)) {
+                if (preg_match_all('/pip3?\s+install\s+([^\n\(\)"]+)/i', $logTail, $allPipMatches)) {
                     foreach ($allPipMatches[1] as $rawBlock) {
                         $tokens = preg_split('/[\s,;]+/', trim($rawBlock));
-                        foreach ($tokens as $token) {
-                            $token = trim($token, " 	
- "'\");
-                            if ($token === '' || in_array(strtolower($token), ['or', 'and', 'pip', 'pip3', 'install', '-r', 'run:', 'run', 'please'], true)) {
+                        foreach ($tokens as $tok) {
+                            $tok = trim($tok, " \t\n\r\0\x0B\"'\\");
+                            if ($tok === '' || in_array(strtolower($tok), ['or', 'and', 'pip', 'pip3', 'install', '-r', 'run:', 'run', 'please'], true)) {
                                 continue;
                             }
-                            if (preg_match('/^[a-zA-Z0-9_\-\.\[\]\<\>\=\!]+$/', $token)) {
-                                $mapped = $modMap[$token] ?? $token;
+                            if (preg_match('/^[a-zA-Z0-9_\-\.\[\]\<\>\=\!]+$/', $tok)) {
+                                $mapped = $modMap[$tok] ?? $tok;
                                 $pkgsToInstall[$mapped] = true;
                             }
                         }
@@ -2228,21 +2225,21 @@ function cli_service(array $job): int {
                         cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));
                         $depsAutoInstalled = true;
                     } else {
-                        cli_log("[auto-installer] Auto-installation failed (exit code {$pipRc}) for: " . implode(', ', $pkgList));
+                        cli_log("[auto-installer] Auto-installation failed (exit code " . $pipRc . ") for: " . implode(', ', $pkgList));
                     }
                 }
 
                 // Pattern 3: Node.js missing module
-                if (!$depsAutoInstalled && preg_match('/Cannot find module\s*['"\]([a-zA-Z0-9_\-\.\@\/]+)['"\]/i', $logTail, $npmM)) {
+                if (!$depsAutoInstalled && preg_match('/Cannot find module ['"]([a-zA-Z0-9_\-\.\@\/]+)['"]/i', $logTail, $npmM)) {
                     $nodePkg = trim($npmM[1]);
                     if ($nodePkg !== '' && $nodePkg[0] !== '.' && $nodePkg[0] !== '/') {
-                        cli_log("[auto-installer] Detected missing Node.js module: {$nodePkg}. Auto-installing via npm...");
+                        cli_log("[auto-installer] Detected missing Node.js module: " . $nodePkg . ". Auto-installing via npm...");
                         cli_run('cd ' . esc($deployDir) . ' && npm install ' . esc($nodePkg) . ' --no-audit --no-fund 2>&1', $npmRc);
                         if ($npmRc === 0) {
-                            cli_log("[auto-installer] Installed Node.js module: {$nodePkg}");
+                            cli_log("[auto-installer] Installed Node.js module: " . $nodePkg);
                             $depsAutoInstalled = true;
                         } else {
-                            cli_log("[auto-installer] npm install failed (exit code {$npmRc}) for: {$nodePkg}");
+                            cli_log("[auto-installer] npm install failed (exit code " . $npmRc . ") for: " . $nodePkg);
                         }
                     }
                 }
