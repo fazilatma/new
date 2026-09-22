@@ -4700,14 +4700,39 @@ setInterval(async()=>{
 </script></body></html>
 <?php return ob_get_clean();}
 /* CLI library mode is reserved for local validation; it is not an HTTP option. */
-$in = body();
-if (!empty($in['api'])) {
-    try { handle_api(); }
-    catch (Throwable $e) { jout(false, null, mask_url($e->getMessage()), 500); }
-    exit;
+try {
+     = body();
+    if (!empty(['api'])) {
+        try { handle_api(); }
+        catch (Throwable ) { jout(false, null, mask_url(->getMessage()), 500); }
+        exit;
+    }
+    header('X-Frame-Options: SAMEORIGIN');
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: same-origin');
+    header('Cache-Control: no-store');
+    if (!ip_allowed()) {
+        http_response_code(403);
+        echo 'IP is not allowed';
+        exit;
+    }
+    page_head();
+    echo render_css();
+    if (!wcp_logged()) {
+        echo '</head><body class="login-page">';
+        echo render_login(cfg()['pass_hash'] === '');
+        echo '</body></html>';
+        exit;
+    }
+    echo '</head><body>';
+    echo render_body();
+} catch (Throwable ) {
+    http_response_code(500);
+    echo '<!doctype html><html dir="ltr" lang="en"><head><meta charset="utf-8"><title>WebConsole Pro - Startup Diagnostic</title>';
+    echo '<style>body{font-family:system-ui,-apple-system,sans-serif;background:#090d16;color:#f8fafc;padding:30px;line-height:1.6}.card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:20px;max-width:800px;margin:auto}.err{color:#f87171;font-weight:bold}pre{background:#020617;padding:12px;border-radius:6px;overflow-x:auto;color:#cbd5e1;font-size:13px}</style></head><body>';
+    echo '<div class="card"><h2>⚠️ WebConsole Pro - Startup Diagnostic</h2>';
+    echo '<p class="err">Error: ' . htmlspecialchars(->getMessage()) . '</p>';
+    echo '<p><b>File:</b> ' . htmlspecialchars(->getFile()) . ' (Line ' . ->getLine() . ')</p>';
+    echo '<pre>' . htmlspecialchars(->getTraceAsString()) . '</pre>';
+    echo '</div></body></html>';
 }
-header('X-Frame-Options: SAMEORIGIN');header('X-Content-Type-Options: nosniff');header('Referrer-Policy: same-origin');header('Cache-Control: no-store');
-if(!ip_allowed()){http_response_code(403);echo 'IP is not allowed';exit;}
-page_head();echo render_css();
-if(!wcp_logged()){echo '</head><body class="login-page">';echo render_login(cfg()['pass_hash']==='');echo '</body></html>';exit;}
-echo '</head><body>';echo render_body();

@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
-echo -e "\n\e[34m🔄 Updating WebConsole Pro to latest version...\e[0m"
+echo -e "\n\e[34m🔄 Updating WebConsole Pro to the latest version...\e[0m"
 
 curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php -o /var/www/html/webconsole.php
 cp /var/www/html/webconsole.php /var/www/html/index.php
-rm -f /var/www/html/index.html 2>/dev/null || true
+rm -f /var/www/html/index.html /var/www/html/index.nginx-debian.html 2>/dev/null || true
 chown -R www-data:www-data /var/www/html
 chmod -R 775 /var/www/html
 
-# Robust Public IP detection
+# Restart web server and PHP to clear opcache
+systemctl restart php*-fpm 2>/dev/null || true
+systemctl restart apache2 2>/dev/null || true
+
+# Robust Public IP detection with multiple fallbacks
 get_public_ip() {
     local ip=""
     for provider in "https://api.ipify.org" "https://icanhazip.com" "https://ifconfig.io" "https://checkip.amazonaws.com" "https://ip.sb"; do
