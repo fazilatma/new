@@ -3267,10 +3267,13 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 continue
             with core.basalam_use_cfg(shop["cfg"]):
                 for page in range(1, getattr(core, "REMOTE_CATALOG_PAGES", 20) + 1):
-                    payload = core.basalam_request(
-                        "GET", f"/v1/vendors/{shop['vendor_id']}/products",
-                        params={"per_page": 100, "page": page},
-                    )
+                    # 10.232: same hardened fetch as the backend listing -
+                    # retries with backoff + polite page gap so reconcile /
+                    # dedup survive Basalam rate limits while other tasks run.
+                    payload = core._basalam_catalog_page(
+                        f"/v1/vendors/{shop['vendor_id']}/products", page)
+                    if payload is None:
+                        break
                     batch = core.basalam_api_rows(payload)
                     for raw in batch:
                         if isinstance(raw, dict):
@@ -3280,6 +3283,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                             rows.append(item)
                     if len(batch) < 100:
                         break
+                    if page < getattr(core, "REMOTE_CATALOG_PAGES", 20):
+                        time.sleep(getattr(core, "BASELAM_PAGE_GAP", 0.35))
         return rows, [{k: s[k] for k in ("id", "name", "primary")} for s in shops]
 
     def _nested(row: dict[str, Any], *names: str) -> Any:

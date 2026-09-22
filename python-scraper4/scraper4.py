@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.231"
+APP_VERSION = "10.232"
 CHANGELOG = [
+    {"version":"10.232","date":"2026-09-22","title":"دریافت کاتالوگ باسلام در هم‌زمانی با وظایف دیگر مقاوم شد","items":["ریشه خطاهای مغایرت‌گیری/تکراری‌یابی هنگام اجرای هم‌زمان وظایف پیدا شد: فهرست کاتالوگ باسلام تا ۲۰ صفحه را پشت‌سرهم و بدون فاصله می‌خواند و شکست یک صفحه (۴۲۹/۵xx در هم‌زمانی با کار استخراج یا ارسال) کل دریافت را با «SDK: … | REST API: …» نابود می‌کرد","حالا هر صفحه تا ۳ تلاش با وقفهٔ نمایی تکرار می‌شود، بین صفحه‌ها فاصلهٔ مؤدبانه ۰٫۳۵ ثانیه است و اگر صفحه‌ای بعد از صفحهٔ ۱ اصلاً نشد، همان بخش دریافت‌شده با ثبت خطا برگردانده می‌شود — مثل Node که فهرست را می‌ساخت و ادامه می‌داد","شکست صفحهٔ ۱ همچنان خطای واضح برمی‌گرداند تا توکن/شناسهٔ غرفهٔ خراب بی‌صدا از دست نرود","مسیر چند-غرفه‌ای مدیر مقصد (ui_bridge) هم دقیقاً همین منطق را گرفت تا دریافت چند غرفه در برابر محدودیت نرخ باسلام پایدار باشد"]},
     {"version":"10.231","date":"2026-09-22","title":"عنوان صفحهٔ دریافتی در لاگ: مدرک یک‌خطی صفحهٔ واقعی یا نسخهٔ کپی","items":["استخراج صفحه‌به‌صفحه از ابتدا همین کار ساده را می‌کند: صفحهٔ ۱ استخراج، سپس ~page~2، سپس صفحهٔ بعد؛ گزارش‌ها هم نشان می‌دهند صفحهٔ ۲ واقعاً خوانده می‌شود اما به‌جای محصولات جدید همان کپی صفحهٔ ۱ است","برای اینکه معلوم شود emalls در پاسخ به سرور شما چه چیزی می‌گذارد، عنوان (title) صفحهٔ دریافتی هر صفحه حالا در لاگ هر موتور، در عیب‌یابی و در pagination_stopped.served_titles ثبت می‌شود","صفحهٔ واقعی ۲ ایمالز عنوانش «صفحه ۲ از ۹۳۴۶ …» است؛ نسخهٔ جایگزین عنوان سادهٔ دسته را دارد — با یک نگاه در گزارش مشخص می‌شود مشکل سمت کلاینت است یا سمت پاسخ سایت"]},
     {"version":"10.230","date":"2026-09-22","title":"اثرانگشت کامل کروم برای curl_cffi و پشتیبان مرورگر واقعی برای صفحهٔ تکراری","items":["بررسی سمت ما نشان داد emalls صفحهٔ ۲ واقعی را حتی در درخواست‌های پشت‌سرهم به کلاینت سالم می‌دهد؛ یعنی تصمیم emalls دربارهٔ سرور شما اثرانگشتی است — و اسکرپر خودش اثرانگشت curl_cffi را خراب می‌کرد: هدرهای عمومی سشن (UA قدیمی Chrome/126 و Accept با application/json) روی مجموعهٔ کامل جعل هدر کروم می‌نشست","حالا curl_cffi با همان مجموعهٔ کامل مرورگر خودش (UA به‌روز، sec-ch-ua و Sec-Fetch-*) ارسال می‌شود و فقط Referer به آن اضافه می‌شود — همان رفتاری که در نسخه‌های قدیمی‌تر نتیجه می‌داد","اگر همهٔ موتورهای HTTP برای صفحهٔ ۲ به بعد فقط کپی صفحات قبل آوردند، همان صفحه با مرورگر واقعی (Playwright/Selenium نصب‌شده) رندر می‌شود؛ اولین منبعی که محصول تازه بیاورد صفحه‌بندی را ادامه می‌دهد","عیب‌یابی استخراج هم مرورگر را به‌عنوان آخرین پشتیبان زنجیرهٔ صفحه‌بندی امتحان می‌کند تا اگر مرورگر واقعی صفحهٔ ۲ را گرفت، لاگ صریح بگوید مشکل فقط اثرانگشت HTTP بوده است"]},
     {"version":"10.229","date":"2026-09-22","title":"رفع تداخل کوکی‌های هم‌نام و آشکارسازی ریدایرکت پنهان صفحه‌بندی","items":["گزارش جدید: curl_cffi با خطای «چند کوکی هم‌نام ASP.NET_SessionId» متوقف شد چون کوکی هر موتور در شیشهٔ چند-دامنه‌ای requests تکثیر می‌شد؛ کوکی‌ها حالا در یک انبار تخت {نام: مقدار} نگهداری و با همهٔ موتورها ارسال می‌شوند و Set-Cookie همهٔ موتورها همان‌جا ذخیره می‌شود — تداخل هم‌نام دیگر ممکن نیست","سه موتور دیگر هنوز برای صفحهٔ ۲ همان ۴۰ محصول تکراری را گرفتند حتی با کوکی؛ فاحش‌ترین مظنون ریدایرکت پنهان emalls به صفحهٔ ۱ است که بعد از دنبال‌کردن خودکار، مثل HTTP 200 عادی دیده می‌شود","حالا نتیجهٔ هر تلاش صفحهٔ ۲ در لاگ و عیب‌یابی، نشانی نهایی را هم نشان می‌دهد؛ اگر با ریدایرکت به صفحهٔ قبل مواجه شد، صریح نوشته می‌شود تا معلوم شود emalls برای این سرور صفحات عمیق را نمی‌دهد و باید از رله/پروکسی رفت"]},
@@ -7891,10 +7892,41 @@ def destination_remote_rows(destination: str) -> list[dict[str,Any]]:
     vendor=int(load_data().get("basalam",{}).get("vendor_id",0))
     if not vendor:raise ValueError("شناسه غرفه باسلام تنظیم نشده است")
     for page in range(1,REMOTE_CATALOG_PAGES+1):
-        payload=basalam_request("GET",f"/v1/vendors/{vendor}/products",params={"per_page":100,"page":page})
+        payload=_basalam_catalog_page(f"/v1/vendors/{vendor}/products",page,required=(page==1))
+        if payload is None:break
         batch=basalam_api_rows(payload);rows.extend(batch)
         if len(batch)<100:break
+        if page<REMOTE_CATALOG_PAGES:time.sleep(BASELAM_PAGE_GAP)
     return rows
+
+
+BASELAM_PAGE_GAP = 0.35
+
+
+def _basalam_catalog_page(path: str, page: int, per_page: int = 100,
+                          required: bool = False):
+    """One Basalam catalogue page with retries; None = give up politely.
+
+    The task manager runs reconcile/dedup/dispatch alongside extractions, so
+    the API is frequently hit from two workers at once and Basalam answers
+    with 429/5xx bursts. The old code fired up to 20 pages back-to-back and
+    one failed page aborted the whole listing (every fetch 'failed'). Listing
+    is a read: retry with backoff, pace the pages, and keep what we got.
+    ``required=True`` (page 1) still raises a clear error - a broken token or
+    vendor id must never turn into a silently empty catalogue.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            return basalam_request("GET", path, params={"per_page": per_page, "page": page})
+        except Exception as exc:  # noqa: BLE001 - listing must survive bursts
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(1.0 * (2 ** attempt))
+    report_error("basalam:catalog_page", last_exc, extra={"page": page})
+    if required and last_exc is not None:
+        raise FetchError(f"دریافت صفحهٔ ۱ کاتالوگ باسلام ناموفق بود: {last_exc}")
+    return None
 
 
 def remote_product_view(row: dict[str,Any], destination: str) -> dict[str,Any]:
