@@ -703,8 +703,22 @@
     );
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
+        const hadInnerLayer = Boolean(
+          document.querySelector(".admin-modal.open,.admin-sidebar.open"),
+        );
         closeModal("orderModal");
         closeModal("eventModal");
+        document.querySelector(".admin-sidebar")?.classList.remove("open");
+        $("adminOverlay").classList.remove("open");
+        if (
+          !hadInnerLayer &&
+          document.body.classList.contains("embedded-admin") &&
+          window.parent !== window
+        )
+          window.parent.postMessage(
+            { type: "scraper4:close-store-manager" },
+            location.origin,
+          );
       }
     });
   }

@@ -3,10 +3,10 @@
 The Node.js project (``cloudflare-scraper4`` on branch ``arena/01a0aa17-new``)
 ships a single-page dashboard built from two string constants inside
 ``worker-src/dashboard.ts``: ``DASHBOARD`` (the HTML shell, including all CSS)
-and ``DASHBOARD_JS`` (the client script). Those two payloads were extracted
-verbatim into ``ui/dashboard.html`` and ``ui/dashboard.js`` so the Python app
-renders a *pixel-identical* interface — same topbar, drawer, six-pane tab bar,
-theme tokens and Persian copy.
+and ``DASHBOARD_JS`` (the client script). Those payloads form the base of
+``ui/dashboard.html`` and ``ui/dashboard.js``; small Python-only integrations
+(such as the storefront-manager modal) are additive. The Python app therefore
+keeps the same topbar, drawer, six-pane tab bar, theme tokens and Persian copy.
 
 The dashboard talks to a Hono-style REST surface that does not exist in the
 Flask app (the Python UI used ``/api/profile``, ``/api/scrape`` … instead).
@@ -750,7 +750,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     # ── static dashboard shell ───────────────────────────────────────────
     @app.get("/ui")
     def node_dashboard():
-        """Serve the Node dashboard HTML verbatim."""
+        """Serve the Node-compatible dashboard with Python integrations."""
         return send_from_directory(UI_DIR, "dashboard.html")
 
     @app.get("/ui/")

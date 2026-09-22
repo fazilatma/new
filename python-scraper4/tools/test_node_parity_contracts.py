@@ -717,7 +717,32 @@ class NodeParityContracts(unittest.TestCase):
             self.assertTrue(core.is_public_storefront_request())
         with core.app.test_request_context("/api/store/admin/orders"):
             self.assertFalse(core.is_public_storefront_request())
-        self.assertIn("let products=[],profiles={}", self.client.get("/classic").get_data(as_text=True))
+        classic_html = self.client.get("/classic").get_data(as_text=True)
+        self.assertIn("let products=[],profiles={}", classic_html)
+        self.assertIn('id="storeManagerOpenClassic"', classic_html)
+        self.assertIn('id="storeManagerModalClassic"', classic_html)
+        self.assertIn("function openStoreManagerModal()", classic_html)
+        dashboard = self.client.get("/ui")
+        self.assertEqual(dashboard.status_code, 200)
+        dashboard_html = dashboard.get_data(as_text=True)
+        self.assertIn('id="storeManagerOpen"', dashboard_html)
+        self.assertIn('id="storeManagerModal"', dashboard_html)
+        dashboard.close()
+        dashboard_script = self.client.get("/ui/dashboard.js")
+        self.assertEqual(dashboard_script.status_code, 200)
+        self.assertIn(
+            "function openStoreManager()",
+            dashboard_script.get_data(as_text=True),
+        )
+        dashboard_script.close()
+        embedded_admin = self.client.get("/store-admin?embed=1")
+        self.assertEqual(embedded_admin.status_code, 200)
+        self.assertIn(
+            'class="embedded-admin"',
+            embedded_admin.get_data(as_text=True),
+        )
+        self.assertEqual(embedded_admin.headers["X-Frame-Options"], "SAMEORIGIN")
+        self.assertIn("frame-ancestors 'self'", embedded_admin.headers["Content-Security-Policy"])
         catalog = self.assert_ok(self.client.get("/api/store/products"))
         self.assertEqual(catalog["total"], 1)
         product = catalog["items"][0]

@@ -306,6 +306,11 @@ def _render_file(name: str, *, admin: bool = False) -> Response:
         "__STORE_VERSION__",
         escape(str(getattr(_core(), "APP_VERSION", "0")), quote=True),
     )
+    embedded_admin = name == "store-admin.html" and request.args.get("embed") == "1"
+    html = html.replace(
+        "__STORE_ADMIN_BODY_CLASS__",
+        "embedded-admin" if embedded_admin else "",
+    )
     response = Response(html, content_type="text/html; charset=utf-8")
     response.headers["Cache-Control"] = "no-store" if admin else "no-cache"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
