@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.227"
+APP_VERSION = "10.228"
 CHANGELOG = [
+    {"version":"10.228","date":"2026-09-22","title":"پیوستگی سشن/کوکی بین همهٔ موتورها و همهٔ صفحات","items":["گزارش عیب‌یابی نشان داد هر ۴ موتور برای صفحهٔ ۲ ایمالز همان ۴۰ محصول تکراری می‌گیرند؛ علت کوکی سشن بود: curl_cffi/cloudscraper/httpx برای هر درخواست کلاینت بی‌کوکی می‌ساختند و فقط requests کوکی نگه می‌داشت","حالا کوکی‌های سشن مشترک با همهٔ موتورها ارسال می‌شود (curl_cffi cookies=، cloudscraper cookies.update، httpx هدر Cookie) و Set-Cookie پاسخ هر موتور هم به سشن برمی‌گردد تا اجرای واقعی مثل یک مرورگر واحد رفتار کند","عیب‌یابی استخراج کل اجرا را با یک Fetcher واحد انجام می‌دهد؛ کوکی صفحهٔ ۱ به صفحات ۲ و ۳ می‌رسد — قبلاً صفحهٔ ۱ و ۲ با دو نشست متفاوت خوانده می‌شدند و سایت صفحهٔ ۲ را fallback می‌داد","تست رگرسیون جدید: سایتی که صفحهٔ ۲ به بعد را بدون کوکی سشن تکراری می‌دهد؛ اجرای واقعی و عیب‌یابی باید هر دو با پیوستگی کوکی عبور کنند"]},
     {"version":"10.227","date":"2026-09-22","title":"نجات صفحهٔ تکراری ایمالز با موتورهای جایگزین","items":["بررسی زنده ایمالز نشان داد صفحهٔ ۲ واقعی وجود دارد (صفحه ۲ از ۹۳۳۱ با محصولات متفاوت) اما بعضی اثرانگشت‌های درخواست پاسخ تکراری می‌گیرند؛ اگر صفحهٔ ۲ به بعد فقط کپی صفحات قبل بود، استخراج واقعی همان صفحه را با بقیهٔ موتورهای HTTP (اثرانگشت TLS متفاوت) دوباره می‌خواند و با اولین موتوری که محصول تازه آورد ادامه می‌دهد","همان منطق نجات در مرحلهٔ صفحه‌بندی عیب‌یابی هم فعال شد: صفحات ۲ و ۳ با یک Fetcher مشترک (حفظ کوکی سشن مثل اجرای واقعی) و همان زنجیرهٔ موتور اجرای واقعی خوانده می‌شوند و نتیجهٔ تک‌تک موتورها در جزئیات می‌آید","وقتی نجات موفق است لاگ می‌گوید کدام موتور محصول تازه آورد؛ وقتی شکست، تلاش همهٔ موتورها در pagination_stopped.engine_attempts ثبت می‌شود","سایت‌هایی که واقعاً فقط یک صفحه دارند بعد از یک پاس کوتاه موتورهای جایگزین همان‌جا تمام می‌شوند؛ رفتار پایان صفحه‌بندی تغییر نکرده است"]},
     {"version":"10.226","date":"2026-09-22","title":"موتور تأییدشدهٔ تست، رهبر استخراج واقعی ایمالز شد","items":["ترتیب ضدبات دیگر موتور مستر تأییدشده را به آخر زنجیره نمی‌راند؛ در ایمالز/دیجی‌کالا/ترب/باسلام موتوری که تست ۳ صفحه آن را تأیید کرده در استخراج واقعی هم اول است و بقیه پشت آن","تست سرعت حالا میزبان (host) پروفایل را هم همراه موتور برنده ذخیره می‌کند تا موتور آموخته‌شده با تغییر آدرس پروفایل بی‌اعتبار نشود","زنجیرهٔ موتورهای دریافت در ابتدای هر استخراج در لاگ ثبت می‌شود تا تفاوت تست و اجرای واقعی فوری دیده شود","اگر صفحهٔ ۲ به بعد خالی برگردد، تلاش همهٔ موتورها (نتیجه و خطای هرکدام) در diagnostics.pagination_stopped.engine_attempts ثبت می‌شود"]},
     {"version":"10.225","date":"2026-09-22","title":"هم‌خوانی کامل صفحه‌بندی استخراج واقعی با تست سه‌صفحه‌ای","items":["رفع ناهم‌خوانی واژگان صفحه‌بندی: پروفایلی که داشبورد با next_selector ذخیره می‌کند اکنون در استخراج واقعی هم مثل تست، واقعاً لینک «صفحهٔ بعد» را دنبال می‌کند و دیگر به ?page=N تنزل نمی‌یابد","اگر سلکتور سفارشی صفحهٔ بعد چیزی پیدا نکند، همان فهرست سلکتورهای پیش‌فرض تست (a[rel=next] و a.next و …) در استخراج واقعی هم امتحان می‌شود و سلکتور برنده در لاگ ثبت می‌گردد","pages=0 داشبورد («اتوماتیک») بالاخره در بک‌اند پایتون هم اتوماتیک است: تا صفحهٔ خالی یا پایان صفحه‌بندی ادامه می‌دهد با سقف ایمنی ۱۰۰ صفحه (سقف SCRAPER_MAX_PAGES هم به ۱۰۰ هم‌تراز داشبورد رسید)","none/scroll در استخراج واقعی تک‌صفحه‌ای است مثل تست؛ دیگر URL بی‌معنی ?page=2 ساخته نمی‌شود","اگر صفحهٔ ۲ به بعد خالی برگردد یا محصول تازه‌ای نداشته باشد، علت توقف با شماره صفحه و URL دقیق در diagnostics.pagination_stopped و پیام پایان کار ثبت می‌شود","تست سرعت ۳ صفحه‌ای و عیب‌یابی استخراج اکنون مثل استخراج واقعی فقط محصول «تازه» را می‌شمارند؛ صفحه‌ای که فقط کپی صفحه‌های قبل باشد دیگر تست را سبز نمی‌کند و با پیام واضح «هیچ محصول تازه‌ای نداشت» رد می‌شود"]},
@@ -894,6 +895,34 @@ class Fetcher:
                 return
             time.sleep(min(0.25, left))
 
+    def _absorb_cookies(self, response: Any) -> None:
+        """Fold Set-Cookie from any engine's response into the shared session.
+
+        Before 10.228 only the `requests` engine kept cookies; curl_cffi /
+        cloudscraper / httpx built a fresh cookie-less client per request, so
+        session-gated sites (emalls.ir serves page-1 fallback content to page
+        2+ without the session cookie) broke pagination for those engines.
+        """
+        try:
+            jar = getattr(response, "cookies", None)
+            if jar:
+                for k, v in jar.items():
+                    if k and v is not None:
+                        self.session.cookies.set(k, v)
+                return
+        except Exception:
+            pass
+        try:
+            get_list = response.headers.get_list
+            for sc in get_list("set-cookie"):
+                part = sc.split(";", 1)[0]
+                if "=" in part:
+                    name, _, value = part.partition("=")
+                    if name.strip():
+                        self.session.cookies.set(name.strip(), value.strip())
+        except Exception:
+            pass
+
     def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
         """Fetch a page, honouring a stop request within ~1 second.
 
@@ -964,13 +993,21 @@ class Fetcher:
                 if engine=="cloudscraper":
                     try:import cloudscraper
                     except ImportError as exc:raise FetchError("کتابخانه cloudscraper نصب نیست") from exc
-                    client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);client.hooks.setdefault("response",[]).append(self._validate_redirect);response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
+                    client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);client.hooks.setdefault("response",[]).append(self._validate_redirect)
+                    # 10.228: session cookies ride along (page-1 gate on emalls).
+                    try:client.cookies.update(self.session.cookies)
+                    except Exception:pass
+                    response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
+                    self._absorb_cookies(response)
                 elif engine=="httpx":
                     try:
                         import httpx
                     except ImportError as exc:
                         raise FetchError("کتابخانه httpx نصب نیست") from exc
                     merged={**dict(self.session.headers), **headers}
+                    # 10.228: session cookies ride along via the Cookie header.
+                    _cookie_header="; ".join(f"{k}={v}" for k,v in self.session.cookies.items())
+                    if _cookie_header:merged["Cookie"]=_cookie_header
                     proxy=None
                     if self.session.proxies:
                         proxy=self.session.proxies.get("https") or self.session.proxies.get("http")
@@ -992,15 +1029,21 @@ class Fetcher:
                     try:from curl_cffi import requests as curl_requests
                     except ImportError as exc:raise FetchError("کتابخانه curl_cffi نصب نیست") from exc
                     proxies=self.session.proxies or None;curl_url=request_url
+                    # 10.228: carry the shared session cookies — emalls-class
+                    # ASP.NET sites serve page-1 fallback content to page 2+
+                    # when the request arrives without the session cookie.
+                    _ck=dict(self.session.cookies) or None
                     for redirect_hop in range(6):
-                        response=curl_requests.get(curl_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=False,verify=self.verify,impersonate="chrome",proxies=proxies)
+                        response=curl_requests.get(curl_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=False,verify=self.verify,impersonate="chrome",proxies=proxies,cookies=_ck)
                         location=response.headers.get("Location") if getattr(response,"headers",None) else None
                         if response.status_code not in {301,302,303,307,308} or not location:break
                         if redirect_hop>=5:raise FetchError("تعداد تغییرمسیرهای HTTP بیش از حد مجاز است")
                         curl_url=public_http_url(urljoin(curl_url,location))
                     body=response.content
+                    self._absorb_cookies(response)
                 else:
                     response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
+                self._absorb_cookies(response)
                 self.last_by_host[host] = time.monotonic()
                 if len(body) > MAX_HTML_BYTES:
                     raise FetchError("پاسخ HTML بزرگ‌تر از سقف مجاز است")

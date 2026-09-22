@@ -64,6 +64,8 @@ class MockShop(BaseHTTPRequestHandler):
     mode "flaky":  pages 2+ serve DUPLICATES of page 1 on the first request and
                    the real page only on a retry - emalls' client-fingerprint
                    fallback behaviour (10.227).
+    mode "session": pages 2+ serve DUPLICATES unless the request carries the
+                   session cookie that page 1 sets (emalls ASP.NET gate, 10.228).
     """
     mode = "honest"
     hits: dict = {}
@@ -79,6 +81,7 @@ class MockShop(BaseHTTPRequestHandler):
                     f'<ul class="products">{rows}</ul></body></html>').encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Set-Cookie", "sid=emalls-session-1; Path=/")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -93,6 +96,10 @@ class MockShop(BaseHTTPRequestHandler):
             MockShop.hits[key] = MockShop.hits.get(key, 0) + 1
             if MockShop.hits[key] == 1:
                 effective = 1  # first ask: fallback duplicate of page 1
+        elif MockShop.mode == "session" and page > 1:
+            cookie = (self.headers.get("Cookie") or "")
+            if "sid=" not in cookie:
+                effective = 1  # cookieless client gets the page-1 fallback
         rows = products_html(effective)
         next_link = ""
         if MockShop.mode == "honest" and effective < TOTAL_PAGES and effective >= 1:
@@ -104,6 +111,7 @@ class MockShop(BaseHTTPRequestHandler):
                 f'<nav class="pagination">{nav}{next_link}</nav></body></html>').encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Set-Cookie", "sid=emalls-session-1; Path=/")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -252,6 +260,18 @@ def main() -> int:
           pag_stage.get("ok") is True, str(pag_stage.get("summary"))[:200])
     check("diagnostic mentions the fallback rescue", any("تازه آورد" in str(d) for d in pag_stage.get("details", [])),
           str(pag_stage.get("details"))[:200])
+
+    print("== J: session-gated site (emalls ASP.NET) — cookies must flow ==")
+    start_shop("session")
+    rep = run_scrape("session-gated pages=5", pagination="path", page_value="~page~{page}", pages=5)
+    check("real run keeps the session cookie and walks all 5 pages",
+          len(rep.products) == TOTAL_PAGES * PER_PAGE, f"got {len(rep.products)}")
+    save_profile("session-site", "path_pattern", "~page~{page}", 0, "session")
+    start_shop("session")  # fresh hit state is irrelevant here; cookie state is per-client
+    diag = diagnostic_report("session-site")
+    pag_stage = next((s for s in diag.get("stages", []) if s.get("name") == "pagination"), {})
+    check("diagnostic passes on the session-gated site via the shared fetcher",
+          pag_stage.get("ok") is True, str(pag_stage.get("summary"))[:200])
 
     print("== E: dashboard parity — pages=0 must survive the round-trip ==")
     start_shop("dup")

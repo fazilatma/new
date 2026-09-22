@@ -1344,7 +1344,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     # these run synchronously and return the finished report.
 
     def _diag_fetch(config: dict[str, Any], url: str, engine: str,
-                    probe_timeout: int = 0) -> Any:
+                    probe_timeout: int = 0, fetcher: Any = None) -> Any:
         """One page fetch with a specific engine, via the real Fetcher.
 
         Mirrors what scrape() does: when a relay/proxy gateway is configured
@@ -1362,7 +1362,11 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         network = dict(load().get("network") or {})
         if probe_timeout:
             network["timeout"] = probe_timeout
-        fetcher = core.Fetcher(network)
+        # 10.228: pass fetcher= to reuse one session (cookies persist) across
+        # the whole diagnostic — session-gated sites treat each fresh fetcher
+        # as a brand-new visitor.
+        if fetcher is None:
+            fetcher = core.Fetcher(network)
 
         def attempt() -> Any:
             try:
@@ -1831,6 +1835,10 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         # the dashboard's live panel is driven entirely by these.
         events: list[dict[str, Any]] = []
 
+        # 10.228: ONE Fetcher for this diagnostic run — page 1's session
+        # cookies must reach pages 2-3 exactly like the real extraction.
+        run_fetcher = core.Fetcher(dict(load().get("network") or {}))
+
         def stage(name: str, good: bool, summary: str, **extra: Any) -> None:
             stages.append({"name": name, "ok": good, "summary": summary, **extra})
             events.append({"type": "progress", "name": name,
@@ -1863,7 +1871,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         engine = _s(cfg.get("fetch_engine")) or "auto"
         res = None
         try:
-            res = _diag_fetch(cfg, url, engine if engine != "auto" else "requests")
+            res = _diag_fetch(cfg, url, engine if engine != "auto" else "requests", fetcher=run_fetcher)
             body = _s(getattr(res, "text", ""))
             stage("network", True,
                   f"HTTP {getattr(res, 'status', 200)} · {len(body):,} بایت "
@@ -1980,7 +1988,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             link = next((_s(r.get("link")) for r in rows if _s(r.get("link"))), "")
             if link:
                 try:
-                    dres = _diag_fetch(cfg, link, engine if engine != "auto" else "requests")
+                    dres = _diag_fetch(cfg, link, engine if engine != "auto" else "requests", fetcher=run_fetcher)
                     dsoup = core.BeautifulSoup(dres.text, "html.parser")
                     try:
                         ensured_detail = core.ensure_detail_selectors(
@@ -2076,7 +2084,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 # Sites like emalls.ir serve a duplicate-page fallback to some
                 # request fingerprints; the real run now retries the same page
                 # with the other engines, so the test must too.
-                _pag_fetcher = core.Fetcher(dict(load().get("network") or {}))
+                _pag_fetcher = run_fetcher
                 _pag_master = _s(cfg.get("fetch_engine_master") or "")
                 _pag_req = _s(cfg.get("fetch_engine") or "auto")
                 _pag_chain = core.engine_try_order(
