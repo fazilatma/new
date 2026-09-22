@@ -6,6 +6,7 @@
   const state = {
     config: null,
     products: [],
+    featuredProducts: [],
     productMap: new Map(),
     categories: [],
     profiles: [],
@@ -178,11 +179,23 @@
       if (sequence !== state.requestSeq) return;
       state.products = data.items || [];
       state.products.forEach((item) => state.productMap.set(item.id, item));
+      if (
+        !state.featuredProducts.length &&
+        state.page === 1 &&
+        !state.query &&
+        !state.category &&
+        !state.profile
+      ) {
+        const available = state.products.filter((item) => item.available);
+        const featured = available.length ? available : state.products;
+        state.featuredProducts = featured.slice(0, 8);
+      }
       state.categories = data.categories || [];
       state.profiles = data.profiles || [];
       state.total = Number(data.total || 0);
       state.totalPages = Number(data.total_pages || 1);
       renderProducts();
+      renderFeatured();
       renderFilters();
       renderPagination();
       if (scroll)
@@ -190,6 +203,7 @@
     } catch (error) {
       if (sequence !== state.requestSeq) return;
       $("productGrid").innerHTML = "";
+      $("offers")?.classList.add("hidden");
       $("emptyProducts").classList.remove("hidden");
       $("emptyProducts").querySelector("h3").textContent =
         "دریافت محصولات ناموفق بود";
@@ -247,6 +261,48 @@
       </div>
       <button class="add-button js-add" type="button" ${unavailable ? "disabled" : ""}>${unavailable ? "ناموجود" : "+ افزودن به سبد"}</button>
     </article>`;
+  }
+
+  function featuredCard(item) {
+    const comparison = Number(item.compare_price || 0);
+    const current = Number(item.price || 0);
+    const discount = Number(item.discount_percent || 0);
+    return `<article class="featured-product" data-id="${esc(item.id)}">
+      ${discount ? `<span class="featured-discount">${fa(discount)}٪</span>` : '<span class="featured-choice">منتخب</span>'}
+      <button class="featured-image js-featured-detail" type="button" aria-label="جزئیات ${esc(item.title)}">${imageMarkup(item)}</button>
+      <span class="featured-profile">${esc(item.profile || item.category || "پیشنهاد فروشگاه")}</span>
+      <h3 class="js-featured-detail">${esc(item.title)}</h3>
+      <div class="featured-price">
+        ${comparison > current ? `<del>${fa(comparison)}</del>` : ""}
+        <b>${fa(current)}</b><small>تومان</small>
+      </div>
+      <button class="featured-add js-featured-add" type="button" aria-label="افزودن ${esc(item.title)} به سبد" ${item.available ? "" : "disabled"}>${item.available ? "+" : "×"}</button>
+    </article>`;
+  }
+
+  function renderFeatured() {
+    const section = $("offers");
+    const rail = $("featuredRail");
+    if (!section || !rail) return;
+    if (!state.featuredProducts.length) {
+      section.classList.add("hidden");
+      rail.innerHTML = "";
+      return;
+    }
+    section.classList.remove("hidden");
+    rail.innerHTML = state.featuredProducts.map(featuredCard).join("");
+    bindImageFallbacks(rail);
+    rail.querySelectorAll(".featured-product").forEach((node) => {
+      const id = node.dataset.id;
+      node
+        .querySelectorAll(".js-featured-detail")
+        .forEach((button) =>
+          button.addEventListener("click", () => openProduct(id)),
+        );
+      node
+        .querySelector(".js-featured-add")
+        ?.addEventListener("click", () => addToCart(id));
+    });
   }
 
   function renderProducts() {

@@ -685,7 +685,34 @@ class NodeParityContracts(unittest.TestCase):
 
         root = self.client.get("/")
         self.assertEqual(root.status_code, 200)
-        self.assertIn("سبد خرید", root.get_data(as_text=True))
+        root_html = root.get_data(as_text=True)
+        self.assertIn("سبد خرید", root_html)
+        self.assertIn('id="storefront-critical-css"', root_html)
+        self.assertIn("visual refresh", root_html)
+        self.assertIn(
+            f'href="./store-assets/storefront.css?v={core.APP_VERSION}"', root_html,
+        )
+        self.assertIn(
+            f'src="./store-assets/storefront-hero.jpg?v={core.APP_VERSION}"', root_html,
+        )
+        self.assertNotIn("__STOREFRONT_CRITICAL_CSS__", root_html)
+        hero = self.client.get("/store-assets/storefront-hero.jpg")
+        self.assertEqual(hero.status_code, 200)
+        self.assertEqual(hero.mimetype, "image/jpeg")
+        hero.close()
+        # Direct Flask and Apache-style /put mounts must render the same shop.
+        if core.URL_PREFIX:
+            mounted = self.client.get(core.URL_PREFIX + "/")
+            self.assertEqual(mounted.status_code, 200)
+            self.assertIn('data-base="."', mounted.get_data(as_text=True))
+            mounted_hero = self.client.get(
+                core.URL_PREFIX + "/store-assets/storefront-hero.jpg",
+            )
+            self.assertEqual(mounted_hero.status_code, 200)
+            mounted_hero.close()
+            slash_redirect = self.client.get(core.URL_PREFIX)
+            self.assertEqual(slash_redirect.status_code, 308)
+            self.assertTrue(slash_redirect.headers["Location"].endswith(core.URL_PREFIX + "/"))
         with core.app.test_request_context("/api/store/orders/SH12345678/pay"):
             self.assertTrue(core.is_public_storefront_request())
         with core.app.test_request_context("/api/store/admin/orders"):

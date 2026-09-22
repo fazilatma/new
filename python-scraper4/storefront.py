@@ -266,14 +266,16 @@ def _safe_public_url(value: Any, *, allow_empty: bool = True) -> str:
 def _asset_response(filename: str) -> Response:
     allowed = {
         "storefront.css", "storefront.js", "store-admin.css", "store-admin.js",
-        "app-icon-192.png", "app-icon-512.png",
+        "storefront-hero.jpg", "app-icon-192.png", "app-icon-512.png",
     }
     if filename not in allowed:
         return Response("Not found", 404)
     response = send_from_directory(_UI_DIR, filename, conditional=True)
-    response.headers["Cache-Control"] = ("public, max-age=3600" if filename.endswith(".png")
-                                         else "no-cache, must-revalidate")
-    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = (
+        "public, max-age=3600"
+        if filename.endswith((".png", ".jpg", ".jpeg"))
+        else "no-cache, must-revalidate"
+    )
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
@@ -284,8 +286,26 @@ def _render_file(name: str, *, admin: bool = False) -> Response:
         html = path.read_text(encoding="utf-8")
     except OSError:
         return Response("Storefront UI is unavailable", 503)
-    base = str(getattr(_core(), "URL_PREFIX", "") or "").rstrip("/")
+    if "__STOREFRONT_CRITICAL_CSS__" in html:
+        try:
+            critical_css = (_UI_DIR / "storefront.css").read_text(encoding="utf-8")
+        except OSError:
+            critical_css = "body{font-family:sans-serif;direction:rtl;margin:0}"
+        # Prevent a future CSS string from terminating the raw-text style node.
+        critical_css = critical_css.replace("</style", "<\\/style")
+        html = html.replace("__STOREFRONT_CRITICAL_CSS__", critical_css)
+    if name == "storefront.html":
+        # Relative URLs resolve from the URL visible in the browser. This keeps
+        # one document valid both at / and behind an Apache /put mount, even
+        # when the proxy strips that prefix before forwarding to Flask.
+        base = "."
+    else:
+        base = str(request.script_root or getattr(_core(), "URL_PREFIX", "") or "").rstrip("/")
     html = html.replace("__STORE_BASE__", escape(base, quote=True))
+    html = html.replace(
+        "__STORE_VERSION__",
+        escape(str(getattr(_core(), "APP_VERSION", "0")), quote=True),
+    )
     response = Response(html, content_type="text/html; charset=utf-8")
     response.headers["Cache-Control"] = "no-store" if admin else "no-cache"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"

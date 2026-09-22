@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.221"
+APP_VERSION = "10.222"
 CHANGELOG = [
+    {"version":"10.222","date":"2026-09-22","title":"بازطراحی حرفه‌ای و پایدار ویترین عمومی","items":["نمای اصلی فروشگاه با تصویر اختصاصی محلی، تایپوگرافی پرقدرت، دکمه‌های خرید واضح و چیدمان حرفه‌ای دسکتاپ و موبایل بازطراحی شد","بخش پیشنهادهای ویژهٔ پویا با محصولات واقعی، قیمت نهایی، تخفیف، تصویر، جزئیات و افزودن مستقیم به سبد خرید به صفحه اضافه شد","کارت‌های محصول، دسته‌بندی‌ها، مزایای خرید، سرویس‌ها و بخش پیگیری سفارش با سطوح، فاصله‌گذاری، رنگ و تعامل غنی‌تر بازآرایی شدند","کل CSS حیاتی همراه HTML فروشگاه ارسال می‌شود تا حتی پشت پراکسی یا prefix و در صورت تأخیر asset صفحه هرگز بدون استایل رندر نشود؛ فایل مستقل cacheable نیز برای سازگاری باقی ماند","تصویر hero از asset امن محلی سرو می‌شود و همهٔ مسیرهای فروشگاه در root و prefix با سیاست CSP و MIME صحیح سازگار مانده‌اند"]},
     {"version":"10.221","date":"2026-09-22","title":"فروشگاه عمومی، سفارش امن، پرداخت چنددرگاهی و وب‌هوک باسلام","items":["ویترین فارسی واکنش‌گرا در مسیر ریشه با جست‌وجو، دسته‌بندی، جزئیات محصول، سبد خرید، تسویه و پیگیری سفارش اضافه شد و رابط کلاسیک در /classic حفظ شد","محصولات saved_products همه پروفایل‌ها با محاسبه دوباره قواعد قیمت پروفایل و ضریب اختصاصی فروشگاه نمایش داده می‌شوند؛ قیمت، موجودی و مبلغ نهایی سفارش همیشه سمت سرور محاسبه می‌شود","سفارش‌ها با کلید idempotency، توکن دسترسی هش‌شده، اعتبارسنجی مشتری، رزرو موجودی، تاریخچه وضعیت و پنل مدیریت پایدار ثبت می‌شوند","معماری پرداخت قابل توسعه با اتصال رسمی زرین‌پال و دیجی‌پی، قرارداد پیکربندی‌پذیر ترب‌پی/درگاه سفارشی، verify سمت سرور و callback مقاوم در برابر اجرای تکراری پیاده شد","کلیدهای درگاه در vault محلی AES-GCM یا متغیر محیطی نگهداری می‌شوند و هیچ credential در API عمومی یا JavaScript منتشر نمی‌شود","گیرنده وب‌هوک باسلام با URL محرمانه، Bearer اختیاری، محدودیت payload، deduplication رخدادها، صندوق رخداد مدیریت و ثبت خودکار مبتنی بر API رسمی اضافه شد","قیمت پایه مبدأ در مودال محصول از source_price واقعی نمایش داده می‌شود و نام‌های قدیمی/جدید درصد، ضریب، مبلغ ثابت و گردکردن پروفایل به‌صورت یکسان روی نتیجه و ویترین اعمال می‌شوند"]},
     {"version":"10.220","date":"2026-09-22","title":"دریافت سریع صفحه‌ای یا یک‌بارهٔ محصولات باسلام","items":["مدیریت محصولات باسلام اکنون دو روش دریافت دارد: صفحه‌ای سریع به‌عنوان پیش‌فرض و یک‌باره برای ساخت فهرست کامل","در روش صفحه‌ای فقط همان صفحه، جست‌وجو و وضعیت درخواستی مستقیماً به API باسلام فرستاده می‌شود و دیگر پیش از نمایش هر صفحه کل فهرست خوانده نمی‌شود","پیاده‌سازی صفحه‌ای با رفتار سریع نسخه Node همسان شد و اطلاعات total_count و total_page پاسخ باسلام برای صفحه‌بندی واقعی استفاده می‌شود","روش یک‌باره صفحات شناخته‌شده را با همزمانی محدود دریافت و فهرست را سه دقیقه cache می‌کند تا ورق‌زدن، جست‌وجو و فیلتر باعث دانلود دوبارهٔ همه صفحات نشود","رابط هنگام دریافت، روش فعال و استفاده از فهرست موقت را نمایش می‌دهد و گزینه پاک‌سازی دوباره روش صفحه‌ای را فعال می‌کند"]},
     {"version":"10.219","date":"2026-09-21","title":"انتخاب مستقیم SDK یا REST API در تنظیمات باسلام","items":["در منوی تنظیمات باسلام داشبورد جدید، انتخاب سه‌حالته REST مستقیم، فقط SDK و خودکار اضافه شد و تغییر آن فوراً و پایدار ذخیره می‌شود","حالت REST مستقیم تمام نصب، import و انتظار timeout مربوط به SDK را دور می‌زند تا دریافت محصولات بدون تأخیر SDK انجام شود","آدرس REST API در همان فرم قابل مشاهده و ویرایش است و دکمه تست دریافت محصول، حداکثر ۲۰ محصول نخست را با روش انتخاب‌شده آزمایش می‌کند","تست اتصال باسلام اکنون واقعاً روش انتخاب‌شده را اجرا و کلاینت استفاده‌شده را در گزارش اعلام می‌کند","اعتبارسنجی backend فقط مقادیر auto، sdk و api را می‌پذیرد و تنظیم انتخاب‌شده در vault و تنظیمات اصلی همگام می‌ماند"]},
@@ -266,6 +267,8 @@ if os.environ.get("SCRAPER_PLAYWRIGHT_PATH"):
 elif not VPS_MODE:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(BASE_DIR, "ms-playwright")
 URL_PREFIX = os.environ.get("SCRAPER_URL_PREFIX", "/put" if VPS_MODE else "").strip().rstrip("/")
+if URL_PREFIX and not URL_PREFIX.startswith("/"):
+    URL_PREFIX = "/" + URL_PREFIX
 try:
     with open(__file__, "rb") as _build_file:
         BUILD_ID = hashlib.sha256(_build_file.read()).hexdigest()[:12]
@@ -339,8 +342,43 @@ DATA_LOCK = threading.RLock()
 LIVE_TASK_LOCK = threading.RLock()
 LIVE_TASKS: dict[str,dict[str,Any]] = {}
 
+class _PrefixAliasMiddleware:
+    """Accept the configured mount path when Flask is served directly.
+
+    Apache deployments traditionally strip ``/put`` before reaching this app,
+    while the development server receives it unchanged. Supporting both forms
+    makes public assets and APIs behave identically in either topology.
+    """
+
+    def __init__(self, wrapped: Any, prefix: str):
+        self.wrapped = wrapped
+        self.prefix = prefix.rstrip("/")
+
+    def __call__(self, environ: dict[str, Any], start_response: Any) -> Any:
+        path = str(environ.get("PATH_INFO") or "/")
+        if self.prefix and path == self.prefix:
+            # A trailing slash is required for portable relative storefront
+            # URLs (./store-assets and ./api) to resolve inside the mount.
+            location = self.prefix + "/"
+            query = str(environ.get("QUERY_STRING") or "")
+            if query:
+                location += "?" + query
+            start_response(
+                "308 Permanent Redirect",
+                [("Location", location), ("Content-Length", "0")],
+            )
+            return [b""]
+        if self.prefix and path.startswith(self.prefix + "/"):
+            script_name = str(environ.get("SCRIPT_NAME") or "").rstrip("/")
+            environ["SCRIPT_NAME"] = script_name + self.prefix
+            environ["PATH_INFO"] = path[len(self.prefix):] or "/"
+        return self.wrapped(environ, start_response)
+
+
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
+if URL_PREFIX:
+    app.wsgi_app = _PrefixAliasMiddleware(app.wsgi_app, URL_PREFIX)
 application = app  # gunicorn / Apache WSGI alias
 
 _REDACT_SECRET = re.compile(r"(password|token|secret|authorization|bearer|key)[=:\s]+\S+", re.I)

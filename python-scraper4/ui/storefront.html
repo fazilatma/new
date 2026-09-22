@@ -14,8 +14,19 @@
     <title>فروشگاه آنلاین</title>
     <link rel="manifest" href="__STORE_BASE__/store.webmanifest" />
     <link rel="icon" href="__STORE_BASE__/store-assets/app-icon-192.png" />
-    <link rel="stylesheet" href="__STORE_BASE__/store-assets/storefront.css" />
-    <script defer src="__STORE_BASE__/store-assets/storefront.js"></script>
+    <!-- The critical stylesheet is embedded server-side so the storefront keeps its
+         complete layout behind reverse proxies that rewrite asset paths. -->
+    <style id="storefront-critical-css">
+__STOREFRONT_CRITICAL_CSS__
+    </style>
+    <link
+      rel="stylesheet"
+      href="__STORE_BASE__/store-assets/storefront.css?v=__STORE_VERSION__"
+    />
+    <script
+      defer
+      src="__STORE_BASE__/store-assets/storefront.js?v=__STORE_VERSION__"
+    ></script>
   </head>
   <body data-base="__STORE_BASE__">
     <a class="skip-link" href="#products">رفتن به محصولات</a>
@@ -99,6 +110,12 @@
 
     <main>
       <section class="hero shell" aria-label="پیشنهاد فروشگاه">
+        <img
+          class="hero-backdrop"
+          src="__STORE_BASE__/store-assets/storefront-hero.jpg?v=__STORE_VERSION__"
+          alt=""
+          fetchpriority="high"
+        />
         <div class="hero-copy">
           <span class="eyebrow">خرید راحت، انتخاب هوشمند</span>
           <h1 id="heroTitle">همه چیز برای یک خرید مطمئن</h1>
@@ -160,6 +177,24 @@
             ><small id="supportText">همراه شما تا دریافت سفارش</small>
           </div>
         </article>
+      </section>
+
+      <section class="featured-section shell" id="offers" aria-labelledby="offersTitle">
+        <div class="featured-showcase">
+          <div class="featured-intro">
+            <span class="featured-spark" aria-hidden="true">✦</span>
+            <small>انتخاب‌های امروز</small>
+            <h2 id="offersTitle">پیشنهادهای<br />ویژه فروشگاه</h2>
+            <p>کالاهای منتخب با قیمت نهایی و موجودی به‌روز</p>
+            <a href="#products">مشاهده همه <span aria-hidden="true">←</span></a>
+          </div>
+          <div id="featuredRail" class="featured-rail" aria-live="polite">
+            <div class="featured-skeleton"></div>
+            <div class="featured-skeleton"></div>
+            <div class="featured-skeleton"></div>
+            <div class="featured-skeleton"></div>
+          </div>
+        </div>
       </section>
 
       <section class="catalog shell" id="products">
@@ -246,6 +281,27 @@
             ></nav>
           </div>
         </div>
+      </section>
+
+      <section class="discovery shell" aria-label="مزایای تجربه خرید">
+        <a class="discovery-card discovery-card-dark" href="#products">
+          <span>انتخاب هوشمندانه</span>
+          <strong>همهٔ فروشنده‌ها،<br />یک ویترین منظم</strong>
+          <small>محصولات پروفایل‌ها را یک‌جا مقایسه کنید</small>
+          <b aria-hidden="true">←</b>
+        </a>
+        <a class="discovery-card discovery-card-light" href="#products">
+          <span>قیمت شفاف</span>
+          <strong>همان قیمت نهایی<br />که پرداخت می‌کنید</strong>
+          <small>محاسبه دقیق قوانین قیمت در سمت سرور</small>
+          <b aria-hidden="true">٪</b>
+        </a>
+        <a class="discovery-card discovery-card-mint" href="#track">
+          <span>همراه شما</span>
+          <strong>پیگیری آسان،<br />از خرید تا تحویل</strong>
+          <small>وضعیت سفارش همیشه در دسترس شماست</small>
+          <b aria-hidden="true">✓</b>
+        </a>
       </section>
 
       <section id="track" class="track-section">
