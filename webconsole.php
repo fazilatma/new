@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.1');
+define('WCP_VERSION', '1.6.2');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1293,12 +1293,33 @@ function sysinfo(): array {
         if(preg_match('/^SwapFree:\s+(\d+)/',$l,$m))$swap['free']=(int)$m[1]*1024;
     }
     $parse=function($s){if(!preg_match('/^cpu\s+(.+)$/m',(string)$s,$m))return null;$a=array_map('intval',preg_split('/\s+/',trim($m[1])));return [array_sum(array_slice($a,0,8)),($a[3]??0)+($a[4]??0)];};
-    $a=$parse(@file_get_contents('/proc/stat'));usleep(120000);$b=$parse(@file_get_contents('/proc/stat'));
+    $a=$parse(@file_get_contents('/proc/stat'));usleep(60000);$b=$parse(@file_get_contents('/proc/stat'));
     $cpu=$a&&$b&&$b[0]>$a[0]?round(100*(1-($b[1]-$a[1])/($b[0]-$a[0])),1):null;
     $load=sys_getloadavg()?:[0,0,0];
-    $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice']as$t)$tools[$t]=which($t);
+    $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice','pm2']as$t)$tools[$t]=which($t);
     $tools['mysqldump']=which('mysqldump')||which('mariadb-dump');
-    return ['host'=>gethostname(),'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),'php'=>PHP_VERSION,'user'=>sh_ok('id -un')?:get_current_user(),'cores'=>(int)sh_ok("grep -c '^processor' /proc/cpuinfo"),'load'=>array_map(fn($v)=>round($v,2),$load),'cpu_pct'=>$cpu,'mem'=>['total'=>$mem['total'],'used'=>$mem['total']-$mem['avail']],'swap'=>['total'=>$swap['total'],'used'=>$swap['total']-$swap['free']],'disk'=>['total'=>disk_total_space('/')?:0,'free'=>disk_free_space('/')?:0],'uptime'=>(int)(float)@file_get_contents('/proc/uptime'),'web'=>$_SERVER['SERVER_SOFTWARE']??'cli','term_mode'=>term_mode(),'ip'=>client_ip(),'tools'=>$tools,'tools_versions'=>['node'=>trim(sh_ok('node -v 2>/dev/null')),'npm'=>trim(sh_ok('npm -v 2>/dev/null')),'python'=>trim(sh_ok("python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")' 2>/dev/null")),'pm2'=>trim(sh_ok('pm2 -v 2>/dev/null | tail -n 1'))]];
+    $nodeVer = $tools['node'] ? trim((string)sh_ok('node -v 2>/dev/null')) : '';
+    $npmVer = $tools['npm'] ? trim((string)sh_ok('npm -v 2>/dev/null')) : '';
+    $pyVer = $tools['python3'] ? trim(preg_replace('/^Python\s*/i', '', (string)sh_ok('python3 -V 2>/dev/null'))) : '';
+    $pm2Ver = $tools['pm2'] ? trim((string)sh_ok('pm2 -v 2>/dev/null | tail -n 1')) : '';
+    return [
+        'host'=>gethostname()?:'localhost',
+        'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),
+        'php'=>PHP_VERSION,
+        'user'=>sh_ok('id -un')?:get_current_user(),
+        'cores'=>(int)sh_ok("grep -c '^processor' /proc/cpuinfo")?:1,
+        'load'=>array_map(fn($v)=>round((float)$v,2),$load),
+        'cpu_pct'=>$cpu,
+        'mem'=>['total'=>$mem['total'],'used'=>max(0,$mem['total']-$mem['avail'])],
+        'swap'=>['total'=>$swap['total'],'used'=>max(0,$swap['total']-$swap['free'])],
+        'disk'=>['total'=>@disk_total_space('/')?:0,'free'=>@disk_free_space('/')?:0],
+        'uptime'=>(int)(float)@file_get_contents('/proc/uptime'),
+        'web'=>$_SERVER['SERVER_SOFTWARE']??'cli',
+        'term_mode'=>term_mode(),
+        'ip'=>client_ip(),
+        'tools'=>$tools,
+        'tools_versions'=>['node'=>$nodeVer,'npm'=>$npmVer,'python'=>$pyVer,'pm2'=>$pm2Ver]
+    ];
 }
 
 function emergency_rescue(): array {
@@ -1375,13 +1396,6 @@ function check_file_syntax(string $path, string $content): array {
 
 function handle_api() {
     $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
-    // Passive background auto-update check (every 30s)
-    $lastCheckFile = CACHE_DIR . '/last_auto_poll_ts';
-    $lastTs = (int)@file_get_contents($lastCheckFile);
-    if (time() - $lastTs >= 30) {
-        @wcp_put_contents($lastCheckFile, (string)time());
-        proj_poll_auto_updates();
-    }
     if(!in_array($api,['auth.login','auth.setup'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
     switch($api){
     case 'auth.setup':
@@ -3365,51 +3379,61 @@ function buildNav(){for(const sel of ['#sidebar','#navbottom']){$(sel).innerHTML
 function switchTab(id){if(!TABS.some(t=>t[0]===id))return;curTab=id;$('#viewtitle').textContent=TABS.find(t=>t[0]===id)[1];$$('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+id));$$('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===id));if(INITS[id]&&!INITS[id].done){INITS[id].done=true;INITS[id].fn()}if(id==='term')setTimeout(fitTerm,80)}
 async function renderDash(){
   try{
-    const s=await api('sysinfo'),
-      m=s.mem.total?Math.round(s.mem.used/s.mem.total*100):0,
-      d=s.disk.total?Math.round((s.disk.total-s.disk.free)/s.disk.total*100):0,
-      cpuVal=s.cpu_pct!=null?s.cpu_pct:'—',
-      cpuNum=typeof s.cpu_pct==='number'?s.cpu_pct:0;
+    const s=await api('sysinfo');
+    if(!s) throw new Error('پاسخ نامعتبر از سرور دریافت شد');
+    const totalMem = s.mem?.total || 0,
+      usedMem = s.mem?.used || 0,
+      m = totalMem ? Math.min(100, Math.max(0, Math.round(usedMem/totalMem*100))) : 0,
+      totalDisk = s.disk?.total || 0,
+      freeDisk = s.disk?.free || 0,
+      usedDisk = totalDisk - freeDisk,
+      d = totalDisk ? Math.min(100, Math.max(0, Math.round(usedDisk/totalDisk*100))) : 0,
+      cpuVal = s.cpu_pct != null ? s.cpu_pct : '—',
+      cpuNum = typeof s.cpu_pct === 'number' ? s.cpu_pct : 0,
+      loadArr = Array.isArray(s.load) ? s.load : [0,0,0],
+      tools = s.tools || {},
+      toolsVer = s.tools_versions || {};
+
     $('#v-dash').innerHTML=`
       <div class="card dash-hero-card">
         <div class="dash-hero-header">
           <div class="dash-server-title">
             <span class="server-status-dot"></span>
             <div>
-              <h3>سرور: ${esc(s.host)}</h3>
+              <h3>سرور: ${esc(s.host || 'VPS')}</h3>
               <div class="dash-meta-tags">
-                <span class="tag acc">IP: ${esc(s.ip)}</span>
-                <span class="tag">کاربر: ${esc(s.user)}</span>
-                <span class="tag">PHP ${esc(s.php)}</span>
-                <span class="tag">مود ترمینال: ${esc(s.term_mode)}</span>
+                <span class="tag acc">IP: ${esc(s.ip || '—')}</span>
+                <span class="tag">کاربر: ${esc(s.user || '—')}</span>
+                <span class="tag">PHP ${esc(s.php || '—')}</span>
+                <span class="tag">مود ترمینال: ${esc(s.term_mode || '—')}</span>
               </div>
             </div>
           </div>
           <button class="btn sm pri" onclick="switchTab('term')" title="باز کردن شل ترمینال">⚡ باز کردن ترمینال</button>
         </div>
-        <p class="hint ltr sys-kernel-line">${esc(s.kernel)} · ${esc(s.web)}</p>
+        <p class="hint ltr sys-kernel-line">${esc(s.kernel || '')} · ${esc(s.web || '')}</p>
         <div class="grid4">
           <div class="stat stat-cpu">
-            <div class="stat-top"><span>پردازنده (CPU)</span><span class="badge-mini">${s.cores} هسته</span></div>
+            <div class="stat-top"><span>پردازنده (CPU)</span><span class="badge-mini">${s.cores || 1} هسته</span></div>
             <div class="v">${cpuVal}%</div>
             <div class="bar"><i style="width:${Math.min(100, Math.max(0, cpuNum))}%"></i></div>
-            <small class="ltr">Load: ${s.load.join(' / ')}</small>
+            <small class="ltr">Load: ${loadArr.join(' / ')}</small>
           </div>
           <div class="stat stat-ram">
             <div class="stat-top"><span>حافظه موقت (RAM)</span><span class="badge-mini">${m}%</span></div>
-            <div class="v">${fmtSize(s.mem.used)}</div>
+            <div class="v">${fmtSize(usedMem)}</div>
             <div class="bar"><i style="width:${m}%" class="${m>85?'err':''}"></i></div>
-            <small>از کل ${fmtSize(s.mem.total)}</small>
+            <small>از کل ${fmtSize(totalMem)}</small>
           </div>
           <div class="stat stat-disk">
             <div class="stat-top"><span>فضای دیسک (Disk)</span><span class="badge-mini">${d}%</span></div>
-            <div class="v">${fmtSize(s.disk.free)} <span class="v-sub">آزاد</span></div>
+            <div class="v">${fmtSize(freeDisk)} <span class="v-sub">آزاد</span></div>
             <div class="bar"><i style="width:${d}%" class="${d>90?'err':''}"></i></div>
-            <small>از کل ${fmtSize(s.disk.total)}</small>
+            <small>از کل ${fmtSize(totalDisk)}</small>
           </div>
           <div class="stat stat-uptime">
             <div class="stat-top"><span>مدت روشن بودن</span><span class="badge-mini ok">Online</span></div>
-            <div class="v ltr font-uptime">${fmtDur(s.uptime)}</div>
+            <div class="v ltr font-uptime">${fmtDur(s.uptime || 0)}</div>
             <div class="bar"><i style="width:100%" class="ok"></i></div>
             <small>وضعیت پایدار سرور</small>
           </div>
@@ -3424,11 +3448,11 @@ async function renderDash(){
           </div>
           <div class="row">
             <button class="btn sm ok" id="dash-rescue-btn" title="آزادسازی رم، تخلیه کش و پاک‌سازی پردازش‌های قفل‌شده">🧹 آزادسازی فوری رم و رفع قفل</button>
-            ${s.swap?.total===0?`<button class="btn sm pri" id="dash-swap-btn" title="ایجاد ۲ گیگابایت Swap جهت جلوگیری از هنگ هسته سرور">🚀 ایجاد ۲GB Swap</button>`:''}
+            ${(!s.swap || s.swap.total===0)?`<button class="btn sm pri" id="dash-swap-btn" title="ایجاد ۲ گیگابایت Swap جهت جلوگیری از هنگ هسته سرور">🚀 ایجاد ۲GB Swap</button>`:''}
           </div>
         </div>
         <div class="row" style="margin-top:10px">
-          <span class="tag ${s.swap?.total>0?'ok':'warn'}">حافظه مجازی (Swap): ${s.swap?.total>0?fmtSize(s.swap.used)+' / '+fmtSize(s.swap.total):'غیرفعال (خطر فریز هسته)'}</span>
+          <span class="tag ${(s.swap?.total||0)>0?'ok':'warn'}">حافظه مجازی (Swap): ${(s.swap?.total||0)>0?fmtSize(s.swap.used)+' / '+fmtSize(s.swap.total):'غیرفعال (خطر فریز هسته)'}</span>
           <span class="tag ok">اولویت‌بندی پردازشی: فعال (nice -n 10)</span>
           <span class="tag acc">دیده‌بان پایداری: فعال</span>
         </div>
@@ -3446,7 +3470,7 @@ async function renderDash(){
           <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
             <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
               <span>🟢 Node.js 20 LTS + PM2</span>
-              <span class="tag ${s.tools?.node?'ok':'warn'}">${s.tools?.node?'✓ '+(s.tools_versions?.node||'نصب شده'):'✗ نیاز به نصب'}</span>
+              <span class="tag ${tools.node?'ok':'warn'}">${tools.node?'✓ '+(toolsVer.node||'نصب شده'):'✗ نیاز به نصب'}</span>
             </div>
             <p class="hint" style="font-size:11px;margin:6px 0">Node.js 20, NPM, PM2, Yarn, PNPM</p>
             <button class="btn sm" style="width:100%" id="dash-inst-node">🚀 نصب / ارتقای Node.js 20</button>
@@ -3454,7 +3478,7 @@ async function renderDash(){
           <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
             <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
               <span>🐍 Python 3 + اسکرپینگ</span>
-              <span class="tag ${s.tools?.pip3||s.tools?.python3?'ok':'warn'}">${s.tools?.python3?'✓ '+(s.tools_versions?.python?'v'+s.tools_versions.python:'نصب شده'):'✗ نیاز به نصب'}</span>
+              <span class="tag ${tools.pip3||tools.python3?'ok':'warn'}">${tools.python3?'✓ '+(toolsVer.python?'v'+toolsVer.python:'نصب شده'):'✗ نیاز به نصب'}</span>
             </div>
             <p class="hint" style="font-size:11px;margin:6px 0">BeautifulSoup4, Requests, Curl_cffi, Playwright, Cloudscraper</p>
             <button class="btn sm" style="width:100%" id="dash-inst-py">🐍 نصب پکیج‌های پایتون</button>
@@ -3472,7 +3496,7 @@ async function renderDash(){
 
       <div class="card">
         <h3>ابزارهای آماده سرور</h3>
-        <div class="tools-grid">${Object.entries(s.tools).map(([k,v])=>`
+        <div class="tools-grid">${Object.entries(tools).map(([k,v])=>`
           <div class="tool-pill ${v?'installed':'missing'}">
             <span class="tool-ic">${v?'✓':'✗'}</span>
             <span class="tool-nm">${esc(k)}</span>
@@ -3497,7 +3521,7 @@ async function renderDash(){
         </div>
       </div>
     `;
-      const inNode=$('#dash-inst-node');if(inNode)inNode.onclick=async()=>{const d=await api('sys.install_component',{component:'node'});openJob(d.job,d.title);};
+    const inNode=$('#dash-inst-node');if(inNode)inNode.onclick=async()=>{const d=await api('sys.install_component',{component:'node'});openJob(d.job,d.title);};
     const inPy=$('#dash-inst-py');if(inPy)inPy.onclick=async()=>{const d=await api('sys.install_component',{component:'python_scrapers'});openJob(d.job,d.title);};
     const inBr=$('#dash-inst-browser');if(inBr)inBr.onclick=async()=>{const d=await api('sys.install_component',{component:'browser_deps'});openJob(d.job,d.title);};
     const inAll=$('#dash-inst-all');if(inAll)inAll.onclick=async()=>{if(!await confirmDlg('نصب کامل تمامی پکیج‌های Node 20، Python 3 و درایورهای مرورگر آغاز شود؟'))return;const d=await api('sys.install_component',{component:'all'});openJob(d.job,d.title);};
@@ -3506,7 +3530,7 @@ async function renderDash(){
       rBtn.disabled=true;rBtn.textContent='در حال پاک‌سازی...';
       try{
         const d=await api('sys.emergency_rescue');
-        toast(d.actions.join(' · ')||'آزادسازی حافظه انجام شد','ok');
+        toast(d.actions?.join(' · ')||'آزادسازی حافظه انجام شد','ok');
         renderDash();
       }catch(e){toast(e.message,'err')}
       finally{rBtn.disabled=false;rBtn.textContent='🧹 آزادسازی فوری رم و رفع قفل';}
@@ -3522,7 +3546,22 @@ async function renderDash(){
       }catch(e){toast(e.message,'err')}
       finally{sBtn.disabled=false;sBtn.textContent='🚀 ایجاد ۲GB Swap';}
     };
-  }catch(e){toast(e.message,'err')}
+  }catch(e){
+    console.error('renderDash error:', e);
+    toast('خطا در دریافت اطلاعات داشبورد: ' + (e.message || ''), 'err');
+    $('#v-dash').innerHTML=`
+      <div class="card" style="border-right:3px solid var(--err);padding:20px">
+        <h3 style="color:var(--err);display:flex;align-items:center;gap:8px"><span>⚠️</span> خطا در دریافت اطلاعات سرور</h3>
+        <p class="hint" style="margin:8px 0">${esc(e.message || 'پاسخ معتبری از وب‌سرور دریافت نشد.')}</p>
+        <div class="row" style="margin-top:14px;gap:8px;flex-wrap:wrap">
+          <button class="btn pri sm" onclick="renderDash()">🔄 تلاش مجدد</button>
+          <button class="btn sm" onclick="switchTab('term')">⌨ باز کردن ترمینال</button>
+          <button class="btn sm" onclick="switchTab('files')">📁 مرورگر فایل‌ها</button>
+          <button class="btn sm" onclick="switchTab('proc')">⚙ پردازش‌ها</button>
+        </div>
+      </div>
+    `;
+  }
 }
 
 async function openExportDlg() {
@@ -4606,8 +4645,7 @@ function compareProjectVersions(a,b){const x=parsedProjectVersion(a),y=parsedPro
 function branchVersion(row,path='*'){const apps=(row.apps||[]).filter(a=>path==='*'||a.subfolder===path);return apps.map(a=>a.version).filter(v=>parsedProjectVersion(v)).sort(compareProjectVersions)[0]||''}
 function sortedBranchRows(rows,path='*'){return [...rows].sort((a,b)=>compareProjectVersions(branchVersion(a,path),branchVersion(b,path))||a.name.localeCompare(b.name))}
 
-function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('
-'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div><button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
+function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div><button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
  const showTab=id=>{for(const tab of ['gh','man','json']){sh.querySelector('#'+tab+'-exp').classList.toggle('hide',tab!==id);sh.querySelector('#tab-'+tab).classList.toggle('pri',tab===id)}};
  const man=()=>showTab('man'),gh=()=>showTab('gh');sh.querySelector('#tab-man').onclick=man;sh.querySelector('#tab-gh').onclick=gh;sh.querySelector('#tab-json').onclick=()=>showTab('json');
  const jsonText=sh.querySelector('#jq-json-text'),jsonStatus=sh.querySelector('#jq-json-status');let jsonEpoch=0;
