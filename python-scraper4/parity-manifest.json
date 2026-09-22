@@ -10,7 +10,7 @@
   },
   "target": {
     "runtime": "python-scraper4",
-    "minimumVersion": "10.223"
+    "minimumVersion": "10.224"
   },
   "normalization": "Dynamic path parameters are represented as <>.",
   "requiredRoutes": [
@@ -739,6 +739,10 @@
     {
       "id": "watchdog",
       "test": "NodeParityContracts.test_watchdog_recovers_stale_task"
+    },
+    {
+      "id": "parallel-profile-extraction",
+      "test": "NodeParityContracts.test_playwright_job_does_not_block_http_profile"
     },
     {
       "id": "ai",

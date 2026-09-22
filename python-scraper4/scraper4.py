@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.223"
+APP_VERSION = "10.224"
 CHANGELOG = [
+    {"version":"10.224","date":"2026-09-22","title":"استخراج واقعاً مستقل و هم‌زمان پروفایل‌ها","items":["رابط کلاسیک پس از ثبت هر کار آزاد می‌شود تا هنگام انتظار Playwright بتوان استخراج HTTP پروفایل دیگری را هم‌زمان آغاز کرد","هر وظیفه نام پروفایل را به‌صورت snapshot تغییرناپذیر حمل می‌کند و تغییر پروفایل فعال دیگر نتیجه را به پروفایل اشتباه نمی‌فرستد","ذخیره موتور یادگرفته‌شده، سلکتورهای خودکار و صفحه‌بندی در چرخه اتمیک انجام می‌شود تا پایان هم‌زمان دو کار داده‌های یکدیگر را بازنویسی نکند","تکمیل کار پس‌زمینه در داشبورد یا رابط کلاسیک دیگر نمای نتایج پروفایلی را که کاربر در حال مشاهده آن است جابه‌جا نمی‌کند","تست بازگشتی Playwright مسدودشده را شبیه‌سازی می‌کند و ثابت می‌کند کار Requests پروفایل دوم پیش از آزادشدن مرورگر کامل و جداگانه ذخیره می‌شود"]},
     {"version":"10.223","date":"2026-09-22","title":"مدیریت فروشگاه داخل مودال تب نتایج اسکریپر","items":["دکمهٔ برجسته مدیریت فروشگاه به تب نتایج داشبورد اصلی و رابط کلاسیک اسکریپر اضافه شد","با زدن دکمه، پنل کامل مدیریت فروشگاه بدون خروج از اسکریپر در یک مودال تمام‌صفحه و واکنش‌گرا باز می‌شود","نمای کلی فروش، سفارش‌ها، تنظیمات ویترین، درگاه‌های پرداخت و وب‌هوک باسلام همگی داخل همان مودال در دسترس‌اند","مودال بارگذاری تنبل، وضعیت بارگذاری، تازه‌سازی مستقل، بستن با Escape و بازگشت فوکوس به دکمه آغازگر دارد","مسیر مستقل مدیریت برای سازگاری حفظ شده اما جریان اصلی مدیریت اکنون مستقیماً از تب نتایج انجام می‌شود"]},
     {"version":"10.222","date":"2026-09-22","title":"بازطراحی حرفه‌ای و پایدار ویترین عمومی","items":["نمای اصلی فروشگاه با تصویر اختصاصی محلی، تایپوگرافی پرقدرت، دکمه‌های خرید واضح و چیدمان حرفه‌ای دسکتاپ و موبایل بازطراحی شد","بخش پیشنهادهای ویژهٔ پویا با محصولات واقعی، قیمت نهایی، تخفیف، تصویر، جزئیات و افزودن مستقیم به سبد خرید به صفحه اضافه شد","کارت‌های محصول، دسته‌بندی‌ها، مزایای خرید، سرویس‌ها و بخش پیگیری سفارش با سطوح، فاصله‌گذاری، رنگ و تعامل غنی‌تر بازآرایی شدند","کل CSS حیاتی همراه HTML فروشگاه ارسال می‌شود تا حتی پشت پراکسی یا prefix و در صورت تأخیر asset صفحه هرگز بدون استایل رندر نشود؛ فایل مستقل cacheable نیز برای سازگاری باقی ماند","تصویر hero از asset امن محلی سرو می‌شود و همهٔ مسیرهای فروشگاه در root و prefix با سیاست CSP و MIME صحیح سازگار مانده‌اند"]},
     {"version":"10.221","date":"2026-09-22","title":"فروشگاه عمومی، سفارش امن، پرداخت چنددرگاهی و وب‌هوک باسلام","items":["ویترین فارسی واکنش‌گرا در مسیر ریشه با جست‌وجو، دسته‌بندی، جزئیات محصول، سبد خرید، تسویه و پیگیری سفارش اضافه شد و رابط کلاسیک در /classic حفظ شد","محصولات saved_products همه پروفایل‌ها با محاسبه دوباره قواعد قیمت پروفایل و ضریب اختصاصی فروشگاه نمایش داده می‌شوند؛ قیمت، موجودی و مبلغ نهایی سفارش همیشه سمت سرور محاسبه می‌شود","سفارش‌ها با کلید idempotency، توکن دسترسی هش‌شده، اعتبارسنجی مشتری، رزرو موجودی، تاریخچه وضعیت و پنل مدیریت پایدار ثبت می‌شوند","معماری پرداخت قابل توسعه با اتصال رسمی زرین‌پال و دیجی‌پی، قرارداد پیکربندی‌پذیر ترب‌پی/درگاه سفارشی، verify سمت سرور و callback مقاوم در برابر اجرای تکراری پیاده شد","کلیدهای درگاه در vault محلی AES-GCM یا متغیر محیطی نگهداری می‌شوند و هیچ credential در API عمومی یا JavaScript منتشر نمی‌شود","گیرنده وب‌هوک باسلام با URL محرمانه، Bearer اختیاری، محدودیت payload، deduplication رخدادها، صندوق رخداد مدیریت و ثبت خودکار مبتنی بر API رسمی اضافه شد","قیمت پایه مبدأ در مودال محصول از source_price واقعی نمایش داده می‌شود و نام‌های قدیمی/جدید درصد، ضریب، مبلغ ثابت و گردکردن پروفایل به‌صورت یکسان روی نتیجه و ویترین اعمال می‌شوند"]},
@@ -2601,17 +2602,22 @@ def persist_profile_master_engine(profile_name: str, engine: str, host: str = ""
     if not name or engine not in KNOWN_ENGINES:
         return
     try:
-        data = load_data()
-        prof = data.get("profiles", {}).get(name)
-        if not isinstance(prof, dict):
-            return
-        prof["fetch_engine_master"] = engine
-        if host:
-            prof["fetch_engine_host"] = host
-        if elapsed_ms:
-            prof["fetch_engine_ms"] = int(elapsed_ms)
-        prof["fetch_engine_learned_at"] = int(time.time())
-        save_data(data)
+        # Keep the complete read-modify-write cycle atomic.  Independent
+        # profile workers can finish milliseconds apart; locking only the
+        # individual load/save calls lets the later save resurrect a stale
+        # snapshot and erase the other worker's products or learned engine.
+        with DATA_LOCK:
+            data = load_data()
+            prof = data.get("profiles", {}).get(name)
+            if not isinstance(prof, dict):
+                return
+            prof["fetch_engine_master"] = engine
+            if host:
+                prof["fetch_engine_host"] = host
+            if elapsed_ms:
+                prof["fetch_engine_ms"] = int(elapsed_ms)
+            prof["fetch_engine_learned_at"] = int(time.time())
+            save_data(data)
     except Exception as exc:
         report_error("engine_master", exc)
 
@@ -3123,22 +3129,26 @@ def persist_profile_auto_selectors(profile_name: str,
     if not list_sel and not detail_sel:
         return {}
     try:
-        data = load_data()
-        prof = data.get("profiles", {}).get(name)
-        if not isinstance(prof, dict):
-            return {}
-        if list_sel:
-            current = prof.get("selectors") if isinstance(prof.get("selectors"), dict) else {}
-            prof["selectors"] = {**current, **list_sel}
-        if detail_sel:
-            current = prof.get("detail_selectors") if isinstance(prof.get("detail_selectors"), dict) else {}
-            merged = dict(current)
-            for key, value in detail_sel.items():
-                # discovered_detail already filtered to missing (empty/invalid/semantically empty), so overwrite those
-                merged[key] = value
-            prof["detail_selectors"] = merged
-        prof["selectors_autodiscovered_at"] = int(time.time())
-        save_data(data)
+        # Selector learning is another write performed by scrape workers.  It
+        # must merge into the latest profile state instead of saving the stale
+        # data snapshot that happened to be read before a parallel job ended.
+        with DATA_LOCK:
+            data = load_data()
+            prof = data.get("profiles", {}).get(name)
+            if not isinstance(prof, dict):
+                return {}
+            if list_sel:
+                current = prof.get("selectors") if isinstance(prof.get("selectors"), dict) else {}
+                prof["selectors"] = {**current, **list_sel}
+            if detail_sel:
+                current = prof.get("detail_selectors") if isinstance(prof.get("detail_selectors"), dict) else {}
+                merged = dict(current)
+                for key, value in detail_sel.items():
+                    # discovered_detail already filtered to missing (empty/invalid/semantically empty), so overwrite those
+                    merged[key] = value
+                prof["detail_selectors"] = merged
+            prof["selectors_autodiscovered_at"] = int(time.time())
+            save_data(data)
         return {"list": list_sel, "detail": detail_sel}
     except Exception as exc:
         report_error("auto_selectors", exc)
@@ -3282,12 +3292,13 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     try:
                         prof_name = clean_text(config.get("_profile_name"))
                         if prof_name:
-                            data_tmp = load_data()
-                            prof = data_tmp.get("profiles", {}).get(prof_name)
-                            if isinstance(prof, dict):
-                                prof["pagination"] = pag_kind
-                                prof["page_value"] = pag_value
-                                save_data(data_tmp)
+                            with DATA_LOCK:
+                                data_tmp = load_data()
+                                prof = data_tmp.get("profiles", {}).get(prof_name)
+                                if isinstance(prof, dict):
+                                    prof["pagination"] = pag_kind
+                                    prof["page_value"] = pag_value
+                                    save_data(data_tmp)
                     except Exception:
                         pass
                 else:
@@ -6253,7 +6264,12 @@ def profile_rename():
 def scrape_result(report: ScrapeReport, profile_name: str="") -> dict[str,Any]:
     products=list(report.products.values())
     with DATA_LOCK:
-        data=load_data();target=profile_name if profile_name in data.get("profiles",{}) else data.get("active_profile","");previous_rows=data.get("profiles",{}).get(target,{}).get("saved_products",data["last_result"]) if target else data["last_result"];previous={product_key(p):p for p in previous_rows if isinstance(p,dict)}
+        data=load_data();requested_profile=clean_text(profile_name);profiles=data.get("profiles",{})
+        # An explicitly named profile owns this result for the task's lifetime.
+        # If it was deleted meanwhile, never fall through to a different active
+        # profile and overwrite that profile's products.
+        target=requested_profile if requested_profile in profiles else ("" if requested_profile else data.get("active_profile",""))
+        previous_rows=profiles.get(target,{}).get("saved_products",data["last_result"]) if target else data["last_result"];previous={product_key(p):p for p in previous_rows if isinstance(p,dict)}
         rich_fields=("images","images_count","short_desc","short_desc_html","long_desc","long_desc_html","variation_groups","variations","variations_text","attributes","tags","brand","category","weight","stock","detail_status","detail_extracted_at")
         for product in products:
             old=previous.get(product_key(product),{})
@@ -6318,7 +6334,9 @@ def scrape_live_worker(task_id: str, config: dict[str,Any]) -> None:
         live_task_update(task_id,2,"اعتبارسنجی آدرس و تنظیمات","running","فاز سریع فهرست آغاز شد؛ جزئیات باعث انتظار این مرحله نمی‌شود",execution="parallel",stage="list");list_config.update({"job_id":task_id,"_live_task_id":task_id});report=scrape(list_config);live_task_update(task_id,94,"ذخیره سریع نتایج فهرست","running",f"{len(report.products)} محصول آماده شد",stage="save");result=scrape_result(report,clean_text(config.get("_profile_name")))
         detail_task=None
         if requested_details and result["products"]:
-            profile=clean_text(config.get("_profile_name"));detail_task=live_task_create("detail_extract","استخراج خودکار جزئیات"+(f" · {profile}" if profile else ""),private=False);detail_task["profile"]=profile;LIVE_TASKS[detail_task["id"]]=detail_task;live_task_disk_write(detail_task);result["detail_task"]={"id":detail_task["id"],"status":"waiting","total":len(result["products"])}
+            profile=clean_text(config.get("_profile_name"));detail_task=live_task_create("detail_extract","استخراج خودکار جزئیات"+(f" · {profile}" if profile else ""),private=False)
+            with LIVE_TASK_LOCK:detail_task["profile"]=profile;LIVE_TASKS[detail_task["id"]]=detail_task
+            live_task_disk_write(detail_task);result["detail_task"]={"id":detail_task["id"],"status":"waiting","total":len(result["products"])}
         live_task_update(task_id,100,"فهرست با سرعت بالا استخراج شد","completed",f"{result['total']} محصول"+("؛ جزئیات در وظیفه مستقل ادامه دارد" if detail_task else ""),result=result,done=result['pages'],total=result['pages'],extracted=result['total'],eta_seconds=0)
         if detail_task:threading.Thread(target=detail_live_worker,args=(detail_task["id"],config,result["products"],result["pages"]),name="detail-live",daemon=True).start()
         # "همگام‌سازی دستی" must continue all the way to the destinations. The
@@ -6335,10 +6353,38 @@ def scrape_live_worker(task_id: str, config: dict[str,Any]) -> None:
 
 @app.post("/api/scrape/start")
 def api_scrape_start():
-    config=request.get_json(silent=True) or {}
-    try:public_http_url(str(config.get("url","")))
-    except ValueError as exc:return jsonify(ok=False,error=str(exc)),400
-    active=load_data().get("active_profile","");config["_profile_name"]=active;title="استخراج محصولات"+(f" · {active}" if active else "");task=live_task_create("scrape",title,private=False);task["profile"]=active;LIVE_TASKS[task["id"]]=task;live_task_disk_write(task);threading.Thread(target=scrape_live_worker,args=(task["id"],config),name="scrape-live",daemon=True).start();return jsonify(ok=True,task=task)
+    config = request.get_json(silent=True) or {}
+    try:
+        public_http_url(str(config.get("url", "")))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    # Profile selection is mutable UI state.  Reading active_profile here made
+    # two near-simultaneous starts race: a Playwright task could be labelled or
+    # persisted as whichever HTTP profile the user selected afterwards.  The
+    # client now sends an immutable profile snapshot with each start request.
+    requested = clean_text(config.pop("profile", "") or "")
+    requested_name = clean_text(config.pop("profile_name", "") or "")
+    requested = requested or requested_name
+    config.pop("_profile_name", None)
+    data = load_data()
+    profiles = data.get("profiles", {})
+    if requested and requested not in profiles:
+        return jsonify(ok=False, error="پروفایل پیدا نشد"), 404
+    profile = requested or clean_text(data.get("active_profile", ""))
+    config["_profile_name"] = profile
+    title = "استخراج محصولات" + (f" · {profile}" if profile else "")
+    task = live_task_create("scrape", title, private=False)
+    with LIVE_TASK_LOCK:
+        task["profile"] = profile
+        LIVE_TASKS[task["id"]] = task
+    live_task_disk_write(task)
+    threading.Thread(
+        target=scrape_live_worker,
+        args=(task["id"], config),
+        name="scrape-live-" + (profile or "adhoc"),
+        daemon=True,
+    ).start()
+    return jsonify(ok=True, task=task)
 
 
 @app.post("/api/scrape")
@@ -8244,7 +8290,7 @@ window.addEventListener('message',event=>{
     $('pickerStatus').innerHTML='<span class="error">'+esc(d.error||'بارگذاری ناموفق بود')+'</span>';
     try{ if(typeof toast==='function') _pickerToast('❌ خطای رندر: '+(d.error||'مرورگر پاسخی نداد').slice(0,120), 'err'); }catch(e){}
   }if(d.type==='s4-picker-picked'){let field=$('pickerField').value,input=$(pickerInputId(field));if(input){input.value=d.selector;input.dispatchEvent(new Event('change'));$('pickerSelection').textContent=d.selector;$('pickerStatus').innerHTML='<span class="ok">✓ '+esc(d.tag)+' · '+d.matches+' تطابق · '+esc(d.text||'')+'</span>';renderPickerChips()}}});selectorTab('list');
-function config(){const g=id=>$(id)||{value:'',checked:false};const num=(id,d)=>{const n=+(g(id).value);return Number.isFinite(n)?n:d};let selectors={},detail_selectors={};['container','title','price','link','image','sku'].forEach(k=>selectors[k]=g('sel_'+k).value.trim());['gallery','variations','weight','category','price','stock','brand','sku','short_desc','long_desc','tags','attributes'].forEach(k=>detail_selectors[k]=g('det_'+k).value.trim());let profile_rules={title_prefix:g('rule_title_prefix').value.trim(),title_suffix:g('rule_title_suffix').value.trim(),price_mode:g('rule_price_mode').value||'none',price_value:num('rule_price_value',0),price_round:num('rule_price_round',0),default_stock:g('rule_default_stock').value,default_category:g('rule_default_category').value.trim(),bsl_category_id:num('rule_bsl_category_id',0),woo_category_id:num('rule_woo_category_id',0),woo_price_mode:g('rule_woo_price_mode').value||'none',woo_price_value:num('rule_woo_price_value',0),woo_price_round:num('rule_woo_price_round',0),bsl_price_mode:g('rule_bsl_price_mode').value||'none',bsl_price_value:num('rule_bsl_price_value',0),bsl_price_round:num('rule_bsl_price_round',0)};return {url:g('url').value.trim(),pages:Math.max(1,num('pages',1)),render:g('render').value||'auto',fetch_engine:g('fetch_engine').value||'auto',fetch_engine_master:g('fetch_engine_master').value||((profiles[activeProfile]&&profiles[activeProfile].fetch_engine_master)||''),fetch_engine_host:(profiles[activeProfile]&&profiles[activeProfile].fetch_engine_host)||'',pagination:g('pagination').value||'query',page_value:g('page_value').value.trim(),scrolls:num('scrolls',4),enrich:g('enrich').value!=='0',detail_scope:g('detail_scope').value||'missing',detail_limit:num('detail_limit',0),selectors,detail_selectors,profile_rules,display_name:(profiles[activeProfile]&&profiles[activeProfile].display_name)||'',gallery:{mode:g('galMode').value||'auto',box:g('galBox').value.trim(),selectors:g('galSelectors').value.trim(),pattern:g('galPattern').value.trim(),from:num('galFrom',1),to:num('galTo',10),skip_first:!!g('galSkipFirst').checked}}}
+function config(){const g=id=>$(id)||{value:'',checked:false};const num=(id,d)=>{const n=+(g(id).value);return Number.isFinite(n)?n:d};let selectors={},detail_selectors={};['container','title','price','link','image','sku'].forEach(k=>selectors[k]=g('sel_'+k).value.trim());['gallery','variations','weight','category','price','stock','brand','sku','short_desc','long_desc','tags','attributes'].forEach(k=>detail_selectors[k]=g('det_'+k).value.trim());let profile_rules={title_prefix:g('rule_title_prefix').value.trim(),title_suffix:g('rule_title_suffix').value.trim(),price_mode:g('rule_price_mode').value||'none',price_value:num('rule_price_value',0),price_round:num('rule_price_round',0),default_stock:g('rule_default_stock').value,default_category:g('rule_default_category').value.trim(),bsl_category_id:num('rule_bsl_category_id',0),woo_category_id:num('rule_woo_category_id',0),woo_price_mode:g('rule_woo_price_mode').value||'none',woo_price_value:num('rule_woo_price_value',0),woo_price_round:num('rule_woo_price_round',0),bsl_price_mode:g('rule_bsl_price_mode').value||'none',bsl_price_value:num('rule_bsl_price_value',0),bsl_price_round:num('rule_bsl_price_round',0)};return {profile:activeProfile||'',url:g('url').value.trim(),pages:Math.max(1,num('pages',1)),render:g('render').value||'auto',fetch_engine:g('fetch_engine').value||'auto',fetch_engine_master:g('fetch_engine_master').value||((profiles[activeProfile]&&profiles[activeProfile].fetch_engine_master)||''),fetch_engine_host:(profiles[activeProfile]&&profiles[activeProfile].fetch_engine_host)||'',pagination:g('pagination').value||'query',page_value:g('page_value').value.trim(),scrolls:num('scrolls',4),enrich:g('enrich').value!=='0',detail_scope:g('detail_scope').value||'missing',detail_limit:num('detail_limit',0),selectors,detail_selectors,profile_rules,display_name:(profiles[activeProfile]&&profiles[activeProfile].display_name)||'',gallery:{mode:g('galMode').value||'auto',box:g('galBox').value.trim(),selectors:g('galSelectors').value.trim(),pattern:g('galPattern').value.trim(),from:num('galFrom',1),to:num('galTo',10),skip_first:!!g('galSkipFirst').checked}}}
 function galModeChanged(){const m=$('galMode')?$('galMode').value:'auto';['galAutoBox','galManualBox','galNumberBox'].forEach(id=>{const e=$(id);if(!e)return;e.classList.toggle('hidden', (id==='galAutoBox'&&m!=='auto')||(id==='galManualBox'&&m!=='manual')||(id==='galNumberBox'&&m!=='number'))})}
 function apply(c){if(!c)return;
   // 10.209 auto-resume picker job if exists
@@ -8449,10 +8495,14 @@ function renderComparisonHistory(history=[]){$('comparisonHistory').innerHTML=hi
 function openChangeList(kind){let rows=kind==='all'?products:(lastComparison.lists?.[kind]||[]);$('changeModalTitle').textContent=changeLabels[kind]||'جزئیات';$('changeModalSub').textContent=rows.length+' محصول';$('changeModalList').innerHTML=rows.map((p,i)=>`<article class="change-product">${p.image?`<img src="${esc(p.image)}" loading="lazy" alt="">`:'<span></span>'}<div><b>${esc(p.title||'بدون عنوان')}</b><br><small>SKU: ${esc(p.sku||'—')} · موجودی: ${esc(p.stock??'—')}</small>${kind==='changed'&&p.changed_fields?.length?`<br><small class="ok">فیلدهای تغییرکرده: ${p.changed_fields.map(esc).join('، ')}</small>`:''}</div><div>${kind==='price_changed'?`<span class="price-before">${esc(p.previous_price||'—')}</span> ← <span class="price-after">${esc(p.price||'—')}</span>`:`<span class="price-after">${esc(p.price||'—')}</span>`}${p.link?`<br><a href="${esc(p.link)}" target="_blank" rel="noopener">مشاهده محصول ↗</a>`:''}</div></article>`).join('')||'<div class="note">محصولی در این گروه وجود ندارد.</div>';$('changeModal').classList.add('open');document.body.style.overflow='hidden'}
 function closeChangeList(){$('changeModal').classList.remove('open');if(!$('settingsPanel').classList.contains('open')&&!$('aiTestModal').classList.contains('open'))document.body.style.overflow=''}
 function renderExtractTask(t){$('extractLiveTask').style.display='block';$('extractTaskTitle').textContent=t.title||'استخراج';$('extractTaskPercent').textContent=toFa(Math.round(t.progress||0))+'٪';$('extractTaskBar').style.width=(t.progress||0)+'%';if($('extractTaskMetrics'))$('extractTaskMetrics').innerHTML=`<span><small>انجام</small><b>${toFa(t.done??'—')} / ${toFa(t.total??'—')}</b></span><span><small>محصول</small><b>${toFa(t.extracted??'—')}</b></span><span><small>سپری‌شده</small><b>${esc(shortDuration(t.elapsed_seconds))}</b></span>${t.eta_seconds?`<span><small>باقی‌مانده</small><b>≈ ${esc(shortDuration(t.eta_seconds))}</b></span>`:''}`;$('extractTaskStep').textContent=t.step||'';const events=compactTaskDetails(t.details);$('extractTaskDetails').innerHTML=events.map(x=>`<div class="live-detail"><b>${esc(x.at)}</b> · ${esc(clipTaskText(x.text))}${x.n>1?` ×${toFa(x.n)}`:''}</div>`).join('');$('extractTaskDetails').scrollTop=$('extractTaskDetails').scrollHeight}
-async function watchDetailTask(id){for(;;){try{let d=await api('/api/tasks/'+encodeURIComponent(id)),t=d.task;renderExtractTask(t);if(['completed','failed','cancelled','interrupted'].includes(t.status)){if(t.status==='completed'&&t.result){products=t.result.products||products;renderRows();renderComparisonCards(t.result.comparison||{});$('status').innerHTML='<span class="ok">✓ فهرست سریع آماده بود و اکنون جزئیات '+(t.result.diagnostics?.details?.completed||0)+' محصول نیز تکمیل شد.</span>'}else $('status').innerHTML+='<br><span class="error">وظیفه جزئیات: '+esc(t.error||t.step)+'</span>';loadTaskTopSummary();break}await new Promise(r=>setTimeout(r,1800))}catch(e){break}}}
+function isCurrentScrapeProfile(profile){return String(activeProfile||'')===String(profile||'')}
+async function watchDetailTask(id,profile=''){for(;;){try{let d=await api('/api/tasks/'+encodeURIComponent(id)),t=d.task,current=isCurrentScrapeProfile(profile);if(current)renderExtractTask(t);if(['completed','failed','cancelled','interrupted'].includes(t.status)){if(t.status==='completed'&&t.result){let rows=t.result.products||[];if(profile&&profiles[profile])profiles[profile].saved_products=rows;if(current){products=rows;renderRows();renderComparisonCards(t.result.comparison||{});$('status').innerHTML='<span class="ok">✓ فهرست سریع آماده بود و اکنون جزئیات '+(t.result.diagnostics?.details?.completed||0)+' محصول نیز تکمیل شد.</span>'}}else if(current)$('status').innerHTML+='<br><span class="error">وظیفه جزئیات: '+esc(t.error||t.step)+'</span>';loadTaskTopSummary();break}await new Promise(r=>setTimeout(r,1800))}catch(e){break}}}
 function updateEngineHint(){const el=$('engineMasterHint');if(!el)return;const m=(($('fetch_engine_master')||{}).value||'').trim();const pin=(($('fetch_engine')||{}).value||'auto');el.textContent=m?( (pin!=='auto'?'پین دستی: ':'مستر این سایت: ')+m+' · بقیه پشتیبان'):'هنوز مستر نیست؛ استخراج اول سریع‌ترین موتور موفق را ذخیره می‌کند'}
 function onFetchEngineChange(){const v=(($('fetch_engine')||{}).value||'auto');if(v&&v!=='auto'&&$('fetch_engine_master'))$('fetch_engine_master').value=v;updateEngineHint()}
-async function runScrape(){const btn=$('runBtn'),old=btn.innerHTML;if(!$('url').value.trim()){$('status').innerHTML='<span class="error">لطفاً آدرس صفحه را وارد کنید.</span>';$('url').focus();return}btn.disabled=true;lastComparison={lists:{}};renderComparisonCards({});btn.innerHTML='<span class="spinner"></span>در حال برداشت';$('status').innerHTML='<span class="progress-pulse">● وظیفه استخراج روی سرور اجرا می‌شود؛ جزئیات زنده پایین نمایش داده می‌شود.</span>';try{let started=await api('/api/scrape/start',{method:'POST',body:JSON.stringify(config())}),task;for(;;){let d=await api('/api/tasks/'+encodeURIComponent(started.task.id));task=d.task;renderExtractTask(task);if(['completed','failed','cancelled','interrupted'].includes(task.status))break;await new Promise(r=>setTimeout(r,750))}if(task.status!=='completed')throw Error(task.error||task.step||'استخراج کامل نشد');let d=task.result;products=d.products;if(d.diagnostics&&d.diagnostics.fetch_engine_master){if($('fetch_engine_master'))$('fetch_engine_master').value=d.diagnostics.fetch_engine_master;if(activeProfile&&profiles[activeProfile]){profiles[activeProfile].fetch_engine_master=d.diagnostics.fetch_engine_master;profiles[activeProfile].fetch_engine_ms=d.diagnostics.fetch_engine_ms||0}updateEngineHint()}renderRows();let c=d.comparison||{};renderComparisonCards(c);if(activeProfile&&profiles[activeProfile]){let p=profiles[activeProfile],summary={...c};delete summary.lists;p.last_comparison=c;p.comparison_history=[summary,...(p.comparison_history||[])].slice(0,10);renderComparisonHistory(p.comparison_history)}else renderComparisonHistory([c]);$('status').innerHTML=`<span class="ok">⚡ ${d.total} محصول از ${d.pages} صفحه با فاز سریع استخراج شد${d.diagnostics&&d.diagnostics.fetch_engine_master?(' · مستر '+d.diagnostics.fetch_engine_master):''}</span>\n${d.detail_task?'جزئیات به‌صورت مستقل در پس‌زمینه ادامه دارد؛ نتیجه فهرست منتظر آن نمی‌ماند.':'جدول کامل در تب «نتایج» است.'}\nروش: ${esc(d.modes.join(' · '))}`;if(d.detail_task)watchDetailTask(d.detail_task.id)}catch(e){$('status').innerHTML='<span class="error">✗ عملیات ناموفق بود\n'+esc(e.message)+'</span>'}finally{btn.disabled=false;btn.innerHTML=old}}
+const scrapeRuns=new Map(),latestScrapeByProfile=new Map();
+function paintScrapeButton(){const btn=$('runBtn'),count=scrapeRuns.size;if(!btn)return;btn.disabled=false;btn.innerHTML=count?`شروع برداشت دیگر · ${toFa(count)} فعال`:'شروع برداشت'}
+async function watchScrapeRun(id,profile){let task=null;try{for(;;){let response=await api('/api/tasks/'+encodeURIComponent(id));task=response.task;let current=isCurrentScrapeProfile(profile)&&latestScrapeByProfile.get(profile)===id;if(current)renderExtractTask(task);if(['completed','failed','cancelled','interrupted'].includes(task.status))break;await new Promise(r=>setTimeout(r,750))}if(task.status!=='completed')throw Error(task.error||task.step||'استخراج کامل نشد');let d=task.result||{},rows=d.products||[],c=d.comparison||{},p=profile&&profiles[profile];if(p){p.saved_products=rows;if(d.diagnostics&&d.diagnostics.fetch_engine_master){p.fetch_engine_master=d.diagnostics.fetch_engine_master;p.fetch_engine_ms=d.diagnostics.fetch_engine_ms||0}let summary={...c};delete summary.lists;p.last_comparison=c;p.comparison_history=[summary,...(p.comparison_history||[])].slice(0,10)}if(isCurrentScrapeProfile(profile)&&latestScrapeByProfile.get(profile)===id){products=rows;if(d.diagnostics&&d.diagnostics.fetch_engine_master&&$('fetch_engine_master'))$('fetch_engine_master').value=d.diagnostics.fetch_engine_master;updateEngineHint();renderRows();renderComparisonCards(c);renderComparisonHistory(p?p.comparison_history:[c]);$('status').innerHTML=`<span class="ok">⚡ ${d.total} محصول از ${d.pages} صفحه با فاز سریع استخراج شد${d.diagnostics&&d.diagnostics.fetch_engine_master?(' · مستر '+d.diagnostics.fetch_engine_master):''}</span>\n${d.detail_task?'جزئیات به‌صورت مستقل در پس‌زمینه ادامه دارد؛ نتیجه فهرست منتظر آن نمی‌ماند.':'جدول کامل در تب «نتایج» است.'}\nروش: ${esc((d.modes||[]).join(' · '))}`}if(d.detail_task)watchDetailTask(d.detail_task.id,profile)}catch(e){if(isCurrentScrapeProfile(profile)&&latestScrapeByProfile.get(profile)===id)$('status').innerHTML='<span class="error">✗ عملیات ناموفق بود\n'+esc(e.message)+'</span>'}finally{scrapeRuns.delete(id);if(latestScrapeByProfile.get(profile)===id)latestScrapeByProfile.delete(profile);paintScrapeButton();loadTaskTopSummary()}}
+async function runScrape(){const btn=$('runBtn');if(!$('url').value.trim()){$('status').innerHTML='<span class="error">لطفاً آدرس صفحه را وارد کنید.</span>';$('url').focus();return}const snapshot=config(),profile=snapshot.profile||'';let existing=[...scrapeRuns.entries()].find(([,run])=>run.profile===profile);if(existing){$('status').innerHTML='<span class="progress-pulse">● استخراج همین پروفایل از قبل فعال است؛ برای اجرای هم‌زمان، پروفایل دیگری را انتخاب کنید.</span>';return}btn.disabled=true;btn.innerHTML='<span class="spinner"></span>در حال ثبت';lastComparison={lists:{}};renderComparisonCards({});try{let started=await api('/api/scrape/start',{method:'POST',body:JSON.stringify(snapshot)}),id=started.task.id;scrapeRuns.set(id,{profile,startedAt:Date.now()});latestScrapeByProfile.set(profile,id);$('status').innerHTML='<span class="progress-pulse">● استخراج این پروفایل در پس‌زمینه آغاز شد؛ اکنون می‌توانید پروفایل دیگری را انتخاب و هم‌زمان اجرا کنید.</span>';renderExtractTask(started.task);watchScrapeRun(id,profile)}catch(e){$('status').innerHTML='<span class="error">✗ عملیات ناموفق بود\n'+esc(e.message)+'</span>'}finally{paintScrapeButton()}}
 function renderDetailCoverage(){let n=products.length,count=f=>products.filter(f).length,cards=[['توضیحات',count(p=>p.short_desc||p.long_desc)],['گالری چندتصویری',count(p=>(p.images||[]).length>1)],['تنوع‌ها',count(p=>(p.variation_groups||[]).length||p.variations_text)],['مشخصات',count(p=>(p.attributes||[]).length)],['جزئیات کامل',count(p=>p.detail_status==='complete')]];$('detailCoverage').innerHTML=cards.map(([name,value])=>`<div class="space-card coverage-card"><b>${value}</b><span>${name} · ${n?Math.round(value/n*100):0}٪</span></div>`).join('')}
 let storeManagerClassicReturnFocus=null;
 function storeManagerClassicUrl(refresh=false){let base=typeof BASE==='string'?BASE:'';return base+'/store-admin?embed=1'+(refresh?'&refresh='+Date.now():'')}

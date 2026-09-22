@@ -1303,14 +1303,16 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         else:
             config["enrich"] = True
             config["_dispatch_after"] = target if target != "none" else ""
-        data["active_profile"] = pid
-        save(data)
+        # Do not rewrite the global active-profile preference when a job starts.
+        # The worker already owns an immutable config/profile snapshot; saving
+        # the earlier `data` object here could overwrite results that a parallel
+        # Playwright/HTTP worker committed between this route's load and save.
         title = ("استخراج فهرست · " if list_only else "همگام‌سازی کامل · ") + pid
         task = core.live_task_create("scrape", title, private=False)
-        task["profile"] = pid
-        task["workflow"] = workflow
-        task["target"] = target
         with core.LIVE_TASK_LOCK:
+            task["profile"] = pid
+            task["workflow"] = workflow
+            task["target"] = target
             core.LIVE_TASKS[task["id"]] = task
         core.live_task_disk_write(task)
         core.threading.Thread(

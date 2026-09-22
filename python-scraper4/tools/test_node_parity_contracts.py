@@ -327,6 +327,95 @@ class NodeParityContracts(unittest.TestCase):
         self.assertNotIn("cs-secret", json.dumps(result))
         self.assertEqual(probe.call_args.kwargs["auth"], ("ck-secret", "cs-secret"))
 
+    def test_playwright_job_does_not_block_http_profile(self):
+        """A browser renderer may wait, but another profile's HTTP job must finish.
+
+        This uses the classic start endpoint as well as the real scrape workers:
+        the Playwright boundary is held behind an event while Requests returns a
+        tiny product page.  Besides timing, profile ownership is asserted so a
+        concurrent active-profile change cannot route either result to the
+        other profile.
+        """
+        product_html = lambda title: (  # noqa: E731 - compact fixture builder
+            '<div class="product"><a href="/p"><h2>' + title + '</h2></a>'
+            '<span class="price">1000</span></div>'
+        )
+        selectors = {"container": ".product", "title": "h2", "price": ".price",
+                     "link": "a", "image": "img", "sku": ""}
+        browser_cfg = {"url": "https://browser.example/list", "pages": 1,
+                       "render": "browser", "fetch_engine": "playwright",
+                       "selectors": selectors, "enrich": False}
+        http_cfg = {"url": "https://http.example/list", "pages": 1,
+                    "render": "auto", "fetch_engine": "requests",
+                    "selectors": selectors, "enrich": False}
+        data = self.data()
+        data["profiles"] = {"browser-profile": dict(browser_cfg),
+                            "http-profile": dict(http_cfg)}
+        data["active_profile"] = "browser-profile"
+        self.save(data)
+
+        browser_entered = threading.Event()
+        release_browser = threading.Event()
+
+        def fake_browser(url, timeout, scrolls=4, task_id=""):
+            browser_entered.set()
+            if not release_browser.wait(5):
+                raise RuntimeError("test browser renderer was not released")
+            return core.FetchResult(url, product_html("Browser product"),
+                                    "text/html", 200, "browser")
+
+        def fake_http(fetcher, url, **kwargs):
+            return core.FetchResult(url, product_html("HTTP product"),
+                                    "text/html", 200, "direct")
+
+        def wait_terminal(task_id, timeout=3):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                task = core.live_task_read(task_id)
+                if task.get("status") in {"completed", "failed", "cancelled"}:
+                    return task
+                time.sleep(0.02)
+            return core.live_task_read(task_id)
+
+        browser_task = http_task = None
+        try:
+            with patch.object(core, "public_http_url", side_effect=lambda url: str(url)), \
+                    patch.object(core, "fetch_engine_installed", return_value=True), \
+                    patch.object(core, "render_playwright", side_effect=fake_browser), \
+                    patch.object(core.Fetcher, "_get_blocking", autospec=True,
+                                 side_effect=fake_http):
+                browser_body = {**browser_cfg, "profile": "browser-profile"}
+                started = self.assert_ok(self.client.post("/api/scrape/start",
+                                                          json=browser_body))
+                browser_task = started["task"]["id"]
+                self.assertTrue(browser_entered.wait(2), "Playwright job did not enter renderer")
+
+                http_body = {**http_cfg, "profile": "http-profile"}
+                started = self.assert_ok(self.client.post("/api/scrape/start", json=http_body))
+                http_task = started["task"]["id"]
+                http_result = wait_terminal(http_task, 2)
+                self.assertEqual(http_result.get("status"), "completed", http_result)
+                self.assertFalse(release_browser.is_set())
+
+                release_browser.set()
+                browser_result = wait_terminal(browser_task, 3)
+                self.assertEqual(browser_result.get("status"), "completed", browser_result)
+        finally:
+            release_browser.set()
+
+        saved = self.data()["profiles"]
+        self.assertEqual(saved["http-profile"]["saved_products"][0]["title"], "HTTP product")
+        self.assertEqual(saved["browser-profile"]["saved_products"][0]["title"],
+                         "Browser product")
+        self.assertEqual(core.live_task_read(http_task)["profile"], "http-profile")
+        self.assertEqual(core.live_task_read(browser_task)["profile"], "browser-profile")
+        classic_source = (ROOT / "scraper4.py").read_text(encoding="utf-8")
+        self.assertIn("profile:activeProfile||''", classic_source)
+        self.assertIn("const scrapeRuns=new Map(),latestScrapeByProfile=new Map()", classic_source)
+        self.assertIn("اکنون می‌توانید پروفایل دیگری را انتخاب و هم‌زمان اجرا کنید", classic_source)
+        dashboard_source = (ROOT / "ui" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("watchJob(data.job.id,true)", dashboard_source)
+
     def test_watchdog_recovers_stale_task(self):
         data = self.data()
         data["profiles"]["p1"] = {"name": "One", "url": "https://example.com",
