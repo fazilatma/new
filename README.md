@@ -1,6 +1,6 @@
 # WebConsole Pro & VPS Server Auto-Installer
 
-Automated setup script optimized for modern Linux distributions (Ubuntu 26 / 24 / 22 / Debian 12) configuring **Apache2**, **PHP 8.x / PHP-FPM**, **Python 3**, **Node.js 20 LTS**, **Scraper & Cloudflare Bypass libraries**, headless browser dependencies, and the **WebConsole Pro** management suite.
+Automated setup script optimized for modern Linux distributions (Ubuntu 26 / 24 / 22 / Debian 12) configuring **Apache2**, **PHP-FPM**, **Python 3**, **Node.js 20 LTS**, **Scraper & Cloudflare Bypass libraries**, headless browser dependencies, and the **WebConsole Pro** management suite.
 
 ## 🚀 One-Line Installation (Supports Full & Minimal Modes)
 
@@ -18,7 +18,7 @@ curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo
 
 ## ⚡ Quick Update (Existing Server)
 
-To update WebConsole Pro to the latest version in 2 seconds:
+To update WebConsole Pro and fix webserver configurations in 2 seconds:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/update.sh | sudo bash
