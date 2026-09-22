@@ -1769,6 +1769,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 target = (fresh.get("profiles") or {}).get(pid)
                 if isinstance(target, dict):
                     target["fetch_engine_master"] = best
+                    # 10.226: the real run discards a learned master whose
+                    # saved host no longer matches the profile URL — save the
+                    # host here too so the proven engine actually survives.
+                    from urllib.parse import urlparse as _urlparse
+                    target["fetch_engine_host"] = (_urlparse(_s(target.get("url"))).hostname or "").lower()
+                    target["fetch_engine_learned_at"] = int(time.time())
                     save(fresh)
             report = {
                 "ok": True, "profile": pid, "best": best,

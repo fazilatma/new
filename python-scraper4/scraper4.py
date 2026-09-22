@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.225"
+APP_VERSION = "10.226"
 CHANGELOG = [
+    {"version":"10.226","date":"2026-09-22","title":"موتور تأییدشدهٔ تست، رهبر استخراج واقعی ایمالز شد","items":["ترتیب ضدبات دیگر موتور مستر تأییدشده را به آخر زنجیره نمی‌راند؛ در ایمالز/دیجی‌کالا/ترب/باسلام موتوری که تست ۳ صفحه آن را تأیید کرده در استخراج واقعی هم اول است و بقیه پشت آن","تست سرعت حالا میزبان (host) پروفایل را هم همراه موتور برنده ذخیره می‌کند تا موتور آموخته‌شده با تغییر آدرس پروفایل بی‌اعتبار نشود","زنجیرهٔ موتورهای دریافت در ابتدای هر استخراج در لاگ ثبت می‌شود تا تفاوت تست و اجرای واقعی فوری دیده شود","اگر صفحهٔ ۲ به بعد خالی برگردد، تلاش همهٔ موتورها (نتیجه و خطای هرکدام) در diagnostics.pagination_stopped.engine_attempts ثبت می‌شود"]},
     {"version":"10.225","date":"2026-09-22","title":"هم‌خوانی کامل صفحه‌بندی استخراج واقعی با تست سه‌صفحه‌ای","items":["رفع ناهم‌خوانی واژگان صفحه‌بندی: پروفایلی که داشبورد با next_selector ذخیره می‌کند اکنون در استخراج واقعی هم مثل تست، واقعاً لینک «صفحهٔ بعد» را دنبال می‌کند و دیگر به ?page=N تنزل نمی‌یابد","اگر سلکتور سفارشی صفحهٔ بعد چیزی پیدا نکند، همان فهرست سلکتورهای پیش‌فرض تست (a[rel=next] و a.next و …) در استخراج واقعی هم امتحان می‌شود و سلکتور برنده در لاگ ثبت می‌گردد","pages=0 داشبورد («اتوماتیک») بالاخره در بک‌اند پایتون هم اتوماتیک است: تا صفحهٔ خالی یا پایان صفحه‌بندی ادامه می‌دهد با سقف ایمنی ۱۰۰ صفحه (سقف SCRAPER_MAX_PAGES هم به ۱۰۰ هم‌تراز داشبورد رسید)","none/scroll در استخراج واقعی تک‌صفحه‌ای است مثل تست؛ دیگر URL بی‌معنی ?page=2 ساخته نمی‌شود","اگر صفحهٔ ۲ به بعد خالی برگردد یا محصول تازه‌ای نداشته باشد، علت توقف با شماره صفحه و URL دقیق در diagnostics.pagination_stopped و پیام پایان کار ثبت می‌شود","تست سرعت ۳ صفحه‌ای و عیب‌یابی استخراج اکنون مثل استخراج واقعی فقط محصول «تازه» را می‌شمارند؛ صفحه‌ای که فقط کپی صفحه‌های قبل باشد دیگر تست را سبز نمی‌کند و با پیام واضح «هیچ محصول تازه‌ای نداشت» رد می‌شود"]},
     {"version":"10.224","date":"2026-09-22","title":"استخراج واقعاً مستقل و هم‌زمان پروفایل‌ها","items":["رابط کلاسیک پس از ثبت هر کار آزاد می‌شود تا هنگام انتظار Playwright بتوان استخراج HTTP پروفایل دیگری را هم‌زمان آغاز کرد","هر وظیفه نام پروفایل را به‌صورت snapshot تغییرناپذیر حمل می‌کند و تغییر پروفایل فعال دیگر نتیجه را به پروفایل اشتباه نمی‌فرستد","ذخیره موتور یادگرفته‌شده، سلکتورهای خودکار و صفحه‌بندی در چرخه اتمیک انجام می‌شود تا پایان هم‌زمان دو کار داده‌های یکدیگر را بازنویسی نکند","تکمیل کار پس‌زمینه در داشبورد یا رابط کلاسیک دیگر نمای نتایج پروفایلی را که کاربر در حال مشاهده آن است جابه‌جا نمی‌کند","تست بازگشتی Playwright مسدودشده را شبیه‌سازی می‌کند و ثابت می‌کند کار Requests پروفایل دوم پیش از آزادشدن مرورگر کامل و جداگانه ذخیره می‌شود"]},
     {"version":"10.223","date":"2026-09-22","title":"مدیریت فروشگاه داخل مودال تب نتایج اسکریپر","items":["دکمهٔ برجسته مدیریت فروشگاه به تب نتایج داشبورد اصلی و رابط کلاسیک اسکریپر اضافه شد","با زدن دکمه، پنل کامل مدیریت فروشگاه بدون خروج از اسکریپر در یک مودال تمام‌صفحه و واکنش‌گرا باز می‌شود","نمای کلی فروش، سفارش‌ها، تنظیمات ویترین، درگاه‌های پرداخت و وب‌هوک باسلام همگی داخل همان مودال در دسترس‌اند","مودال بارگذاری تنبل، وضعیت بارگذاری، تازه‌سازی مستقل، بستن با Escape و بازگشت فوکوس به دکمه آغازگر دارد","مسیر مستقل مدیریت برای سازگاری حفظ شده اما جریان اصلی مدیریت اکنون مستقیماً از تب نتایج انجام می‌شود"]},
@@ -2566,10 +2567,16 @@ def engine_http_order() -> list[str]:
 def _prefer_anti_bot_order(url: str, order: list[str]) -> list[str]:
     host = (urlparse(url).hostname or "").lower()
     if any(x in host for x in ("digikala.com", "torob.com", "emalls.ir", "basalam.com")):
-        # move curl_cffi/cloudscraper to front if present
-        pref = [e for e in ("curl_cffi", "cloudscraper", "httpx") if e in order]
-        rest = [e for e in order if e not in pref]
-        return pref + rest
+        # move curl_cffi/cloudscraper to front if present.
+        # 10.226: the head of the chain (a pinned or benchmark-proven master
+        # engine) keeps the lead — demoting it to LAST made the real run probe
+        # emalls with 3-4 different TLS fingerprints per page while the 3-page
+        # benchmark had already proven one engine end-to-end. Fresh profiles
+        # (empty head) still get curl_cffi first.
+        head = order[:1]
+        pref = [e for e in ("curl_cffi", "cloudscraper", "httpx") if e in order and e not in head]
+        rest = [e for e in order[1:] if e not in pref]
+        return head + pref + rest
     return order
 
 
@@ -3388,6 +3395,10 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 order=_prefer_anti_bot_order(source, order)
         except Exception:
             pass
+        if number == start_page and order:
+            # 10.226: make the active chain visible — this is what differed
+            # between the 3-page benchmark (per-engine) and the real run.
+            report.logs.append("زنجیرهٔ موتورهای دریافت: " + " → ".join(order))
         http_engines=[e for e in order if e not in {"playwright","selenium"}]
         browser_engines=[e for e in order if e in {"playwright","selenium"}]
         browser_first=bool(order and order[0] in {"playwright","selenium"})
@@ -3577,9 +3588,11 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 # 10.225: an empty page 2+ IS the documented end of pagination
                 # for automatic mode — record where it stopped so the user can
                 # tell "the site really has one page" from "the pattern broke".
+                # 10.226: also record what every engine got on that page.
                 report.diagnostics["pagination_stopped"] = {"page": number, "url": url,
                     "reason": "empty-page", "reason_fa": f"صفحهٔ {number} هیچ محصولی نداشت",
-                    "pagination": f"{_effective_kind}:{pag_value}"}
+                    "pagination": f"{_effective_kind}:{pag_value}",
+                    "engine_attempts": list(engine_errors)[:8]}
             break
         if number > 1 and new_count == 0:
             report.logs.append(f"صفحه‌بندی متوقف شد: صفحهٔ {number} هیچ محصول تازه‌ای نداشت ({len(rows)} محصول، همه تکراری صفحات قبل) — URL: {url}")

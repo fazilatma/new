@@ -258,6 +258,25 @@ def main() -> int:
     details = row.get("pageDetails") or []
     check("per-page NEW product counts are reported",
           len(details) == 3 and all(d.get("new") == PER_PAGE for d in details), str(details))
+    stored = core.load_data()["profiles"]["honest-site"]
+    check("benchmark saved the winning engine as master", stored.get("fetch_engine_master") == "requests",
+          str(stored.get("fetch_engine_master")))
+    check("benchmark saved the profile host next to the master (10.226)",
+          stored.get("fetch_engine_host") == "127.0.0.1", str(stored.get("fetch_engine_host")))
+
+    print("== H: anti-bot reorder must respect the proven master (emalls, 10.226) ==")
+    plain = ["requests", "httpx", "curl_cffi", "cloudscraper"]
+    reordered = core._prefer_anti_bot_order("https://emalls.ir/لیست~Category~30268", list(plain))
+    check("proven master (requests) keeps the lead on emalls", reordered[0] == "requests", str(reordered))
+    check("anti-bot engines follow right after the master",
+          reordered[1:3] == ["curl_cffi", "cloudscraper"], str(reordered))
+    check("non-anti-bot hosts keep the untouched chain",
+          core._prefer_anti_bot_order("https://example.com/shop", list(plain)) == plain)
+    lead_cffi = core._prefer_anti_bot_order("https://emalls.ir/x", ["curl_cffi", "cloudscraper", "requests"])
+    check("a curl_cffi master stays first too", lead_cffi[0] == "curl_cffi", str(lead_cffi))
+    rep = run_scrape("chain visible in logs", pagination="path", page_value="~page~{page}", pages=2)
+    check("engine chain is logged at the start of a real run",
+          any("زنجیرهٔ موتورهای دریافت" in x for x in rep.logs))
 
     print(f"\nALL {PASS} CHECKS PASSED")
     return 0
