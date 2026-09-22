@@ -2310,8 +2310,19 @@ if (PHP_SAPI === 'cli') {
     wcp_cli($argv ?? []);
 }
 function page_head(){
-    =cfg();=['csrf'=>['wcp_csrf']??'','v'=>WCP_VERSION,'theme'=>['theme'],'layout'=>['layout'],'density'=>['density'],'fs_start'=>['fs_start'],'host'=>gethostname(),'term_mode'=>term_mode(),'setup'=>['pass_hash']===''];
-    echo '<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>وب‌کنسول Pro</title><script>const __BOOT='.json_encode(,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_UNESCAPED_UNICODE).';</script>';
+    $c = cfg();
+    $boot = [
+        'csrf' => $_SESSION['wcp_csrf'] ?? '',
+        'v' => WCP_VERSION,
+        'theme' => $c['theme'],
+        'layout' => $c['layout'],
+        'density' => $c['density'],
+        'fs_start' => $c['fs_start'],
+        'host' => gethostname(),
+        'term_mode' => term_mode(),
+        'setup' => $c['pass_hash'] === ''
+    ];
+    echo '<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>وب‌کنسول Pro</title><script>const __BOOT=' . json_encode($boot, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) . ';</script>';
 }
 function render_css(){ob_start();?>
 <style>
