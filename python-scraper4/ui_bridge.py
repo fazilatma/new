@@ -2122,7 +2122,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                     _fresh += 1
                             except Exception:
                                 _fresh += 1
-                        attempts.append(f"{_eng}: HTTP {_r.status} · {len(_rr)} محصول · {_fresh} تازه")
+                        # 10.229: surface the FINAL url - emalls-class sites can
+                        # silently 302 the pagination URL back to page 1, which
+                        # looks like an ordinary HTTP 200 after auto-following.
+                        _target = str(getattr(_r, "url", "") or target)
+                        _redir = "" if _target.rstrip("/") == target.rstrip("/") else f" · ریدایرکت به {_target[:90]}"
+                        attempts.append(f"{_eng}: HTTP {_r.status} · {len(_rr)} محصول · {_fresh} تازه{_redir}")
                         if _fresh > 0:
                             return _r, _rr, _rs, _eng, attempts
                     return None, [], None, "", attempts

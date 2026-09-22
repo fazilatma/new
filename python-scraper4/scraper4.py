@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.228"
+APP_VERSION = "10.229"
 CHANGELOG = [
+    {"version":"10.229","date":"2026-09-22","title":"رفع تداخل کوکی‌های هم‌نام و آشکارسازی ریدایرکت پنهان صفحه‌بندی","items":["گزارش جدید: curl_cffi با خطای «چند کوکی هم‌نام ASP.NET_SessionId» متوقف شد چون کوکی هر موتور در شیشهٔ چند-دامنه‌ای requests تکثیر می‌شد؛ کوکی‌ها حالا در یک انبار تخت {نام: مقدار} نگهداری و با همهٔ موتورها ارسال می‌شوند و Set-Cookie همهٔ موتورها همان‌جا ذخیره می‌شود — تداخل هم‌نام دیگر ممکن نیست","سه موتور دیگر هنوز برای صفحهٔ ۲ همان ۴۰ محصول تکراری را گرفتند حتی با کوکی؛ فاحش‌ترین مظنون ریدایرکت پنهان emalls به صفحهٔ ۱ است که بعد از دنبال‌کردن خودکار، مثل HTTP 200 عادی دیده می‌شود","حالا نتیجهٔ هر تلاش صفحهٔ ۲ در لاگ و عیب‌یابی، نشانی نهایی را هم نشان می‌دهد؛ اگر با ریدایرکت به صفحهٔ قبل مواجه شد، صریح نوشته می‌شود تا معلوم شود emalls برای این سرور صفحات عمیق را نمی‌دهد و باید از رله/پروکسی رفت"]},
     {"version":"10.228","date":"2026-09-22","title":"پیوستگی سشن/کوکی بین همهٔ موتورها و همهٔ صفحات","items":["گزارش عیب‌یابی نشان داد هر ۴ موتور برای صفحهٔ ۲ ایمالز همان ۴۰ محصول تکراری می‌گیرند؛ علت کوکی سشن بود: curl_cffi/cloudscraper/httpx برای هر درخواست کلاینت بی‌کوکی می‌ساختند و فقط requests کوکی نگه می‌داشت","حالا کوکی‌های سشن مشترک با همهٔ موتورها ارسال می‌شود (curl_cffi cookies=، cloudscraper cookies.update، httpx هدر Cookie) و Set-Cookie پاسخ هر موتور هم به سشن برمی‌گردد تا اجرای واقعی مثل یک مرورگر واحد رفتار کند","عیب‌یابی استخراج کل اجرا را با یک Fetcher واحد انجام می‌دهد؛ کوکی صفحهٔ ۱ به صفحات ۲ و ۳ می‌رسد — قبلاً صفحهٔ ۱ و ۲ با دو نشست متفاوت خوانده می‌شدند و سایت صفحهٔ ۲ را fallback می‌داد","تست رگرسیون جدید: سایتی که صفحهٔ ۲ به بعد را بدون کوکی سشن تکراری می‌دهد؛ اجرای واقعی و عیب‌یابی باید هر دو با پیوستگی کوکی عبور کنند"]},
     {"version":"10.227","date":"2026-09-22","title":"نجات صفحهٔ تکراری ایمالز با موتورهای جایگزین","items":["بررسی زنده ایمالز نشان داد صفحهٔ ۲ واقعی وجود دارد (صفحه ۲ از ۹۳۳۱ با محصولات متفاوت) اما بعضی اثرانگشت‌های درخواست پاسخ تکراری می‌گیرند؛ اگر صفحهٔ ۲ به بعد فقط کپی صفحات قبل بود، استخراج واقعی همان صفحه را با بقیهٔ موتورهای HTTP (اثرانگشت TLS متفاوت) دوباره می‌خواند و با اولین موتوری که محصول تازه آورد ادامه می‌دهد","همان منطق نجات در مرحلهٔ صفحه‌بندی عیب‌یابی هم فعال شد: صفحات ۲ و ۳ با یک Fetcher مشترک (حفظ کوکی سشن مثل اجرای واقعی) و همان زنجیرهٔ موتور اجرای واقعی خوانده می‌شوند و نتیجهٔ تک‌تک موتورها در جزئیات می‌آید","وقتی نجات موفق است لاگ می‌گوید کدام موتور محصول تازه آورد؛ وقتی شکست، تلاش همهٔ موتورها در pagination_stopped.engine_attempts ثبت می‌شود","سایت‌هایی که واقعاً فقط یک صفحه دارند بعد از یک پاس کوتاه موتورهای جایگزین همان‌جا تمام می‌شوند؛ رفتار پایان صفحه‌بندی تغییر نکرده است"]},
     {"version":"10.226","date":"2026-09-22","title":"موتور تأییدشدهٔ تست، رهبر استخراج واقعی ایمالز شد","items":["ترتیب ضدبات دیگر موتور مستر تأییدشده را به آخر زنجیره نمی‌راند؛ در ایمالز/دیجی‌کالا/ترب/باسلام موتوری که تست ۳ صفحه آن را تأیید کرده در استخراج واقعی هم اول است و بقیه پشت آن","تست سرعت حالا میزبان (host) پروفایل را هم همراه موتور برنده ذخیره می‌کند تا موتور آموخته‌شده با تغییر آدرس پروفایل بی‌اعتبار نشود","زنجیرهٔ موتورهای دریافت در ابتدای هر استخراج در لاگ ثبت می‌شود تا تفاوت تست و اجرای واقعی فوری دیده شود","اگر صفحهٔ ۲ به بعد خالی برگردد، تلاش همهٔ موتورها (نتیجه و خطای هرکدام) در diagnostics.pagination_stopped.engine_attempts ثبت می‌شود"]},
@@ -849,6 +850,11 @@ class Fetcher:
         self.worker_key = str(cfg.get("worker_key", "")).strip()
         if self.proxy_mode == "auto":
             self.proxy_mode = "relay" if ("workers.dev" in self.proxy.lower() or "{url}" in self.proxy or "?url=" in self.proxy) else ("http" if self.proxy else "direct")
+        # 10.229: flat cookie store - the single source of truth shared by
+        # every engine. requests' jar keeps one entry per (name, domain,
+        # path), so the same ASP.NET_SessionId arriving from several engines
+        # multiplied into duplicates and crashed curl_cffi's dict() bridge.
+        self._cookies: dict[str, str] = {}
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": USER_AGENT,
@@ -896,32 +902,32 @@ class Fetcher:
             time.sleep(min(0.25, left))
 
     def _absorb_cookies(self, response: Any) -> None:
-        """Fold Set-Cookie from any engine's response into the shared session.
+        """Parse Set-Cookie from any engine's response into the flat store.
 
-        Before 10.228 only the `requests` engine kept cookies; curl_cffi /
-        cloudscraper / httpx built a fresh cookie-less client per request, so
-        session-gated sites (emalls.ir serves page-1 fallback content to page
-        2+ without the session cookie) broke pagination for those engines.
+        A flat {name: value} map cannot hold the same cookie name twice, so
+        multi-domain duplicates (the 10.228 curl_cffi crash) are impossible.
+        Multiple Set-Cookie headers are preserved because urllib3's header
+        dict yields repeated keys from items().
         """
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return
         try:
-            jar = getattr(response, "cookies", None)
-            if jar:
-                for k, v in jar.items():
-                    if k and v is not None:
-                        self.session.cookies.set(k, v)
-                return
+            pairs = headers.items()
         except Exception:
-            pass
-        try:
-            get_list = response.headers.get_list
-            for sc in get_list("set-cookie"):
-                part = sc.split(";", 1)[0]
-                if "=" in part:
-                    name, _, value = part.partition("=")
-                    if name.strip():
-                        self.session.cookies.set(name.strip(), value.strip())
-        except Exception:
-            pass
+            return
+        for key, value in pairs:
+            if str(key).lower() != "set-cookie":
+                continue
+            part = str(value).split(";", 1)[0]
+            if "=" in part:
+                name, _, val = part.partition("=")
+                name = name.strip()
+                if name:
+                    self._cookies[name] = val.strip()
+
+    def _cookie_header(self) -> str:
+        return "; ".join(f"{k}={v}" for k, v in self._cookies.items())
 
     def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
         """Fetch a page, honouring a stop request within ~1 second.
@@ -994,8 +1000,8 @@ class Fetcher:
                     try:import cloudscraper
                     except ImportError as exc:raise FetchError("کتابخانه cloudscraper نصب نیست") from exc
                     client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);client.hooks.setdefault("response",[]).append(self._validate_redirect)
-                    # 10.228: session cookies ride along (page-1 gate on emalls).
-                    try:client.cookies.update(self.session.cookies)
+                    # 10.229: flat cookie store rides along (page-1 gate on emalls).
+                    try:client.cookies.update(self._cookies)
                     except Exception:pass
                     response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
                     self._absorb_cookies(response)
@@ -1005,8 +1011,8 @@ class Fetcher:
                     except ImportError as exc:
                         raise FetchError("کتابخانه httpx نصب نیست") from exc
                     merged={**dict(self.session.headers), **headers}
-                    # 10.228: session cookies ride along via the Cookie header.
-                    _cookie_header="; ".join(f"{k}={v}" for k,v in self.session.cookies.items())
+                    # 10.229: flat cookie store rides along via the Cookie header.
+                    _cookie_header=self._cookie_header()
                     if _cookie_header:merged["Cookie"]=_cookie_header
                     proxy=None
                     if self.session.proxies:
@@ -1029,10 +1035,9 @@ class Fetcher:
                     try:from curl_cffi import requests as curl_requests
                     except ImportError as exc:raise FetchError("کتابخانه curl_cffi نصب نیست") from exc
                     proxies=self.session.proxies or None;curl_url=request_url
-                    # 10.228: carry the shared session cookies — emalls-class
-                    # ASP.NET sites serve page-1 fallback content to page 2+
-                    # when the request arrives without the session cookie.
-                    _ck=dict(self.session.cookies) or None
+                    # 10.229: flat cookie store - a plain dict cannot carry the
+                    # duplicate-name conflict that crashed 10.228's jar bridge.
+                    _ck=dict(self._cookies) or None
                     for redirect_hop in range(6):
                         response=curl_requests.get(curl_url,headers={**dict(self.session.headers),**headers},timeout=self.effective_timeout(),allow_redirects=False,verify=self.verify,impersonate="chrome",proxies=proxies,cookies=_ck)
                         location=response.headers.get("Location") if getattr(response,"headers",None) else None
@@ -1042,6 +1047,8 @@ class Fetcher:
                     body=response.content
                     self._absorb_cookies(response)
                 else:
+                    _c_header=self._cookie_header()
+                    if _c_header:headers={**headers,"Cookie":_c_header}
                     response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
                 self._absorb_cookies(response)
                 self.last_by_host[host] = time.monotonic()
@@ -3465,7 +3472,9 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     try:
                         if task_id:live_task_update(task_id,max(3,round((number-1)/pages*88)+engine_index),f"{'مستر' if engine==master else 'پشتیبان'} {engine} · صفحه {number} از {pages}","running",f"{url}",done=number-1,total=pages,extracted=len(report.products),engine=engine)
                         t0=time.monotonic()
-                        result=active_fetcher.get(url,engine=engine);page_html=result.text;candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors,parse_strategy);engine_errors.append(f"{engine}: HTTP {result.status} · DOM={len(candidate_rows)}")
+                        result=active_fetcher.get(url,engine=engine);page_html=result.text;candidate_rows,candidate_soup,candidate_diag=parse_html(result.text,result.url,selectors,parse_strategy)
+                        _final=str(getattr(result,"url","") or url)
+                        engine_errors.append(f"{engine}: HTTP {result.status} · DOM={len(candidate_rows)}"+(f" · ریدایرکت به {_final[:100]}" if _final.rstrip('/') != url.rstrip('/') else ""))
                         if candidate_rows:
                             won_engine,won_ms=engine,int((time.monotonic()-t0)*1000)
                             rows,soup,diag=candidate_rows,candidate_soup,{**candidate_diag,"engine":engine,"attempts":engine_errors};report.modes.add("dom-"+engine);report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM با {engine} ({won_ms}ms)");return

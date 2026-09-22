@@ -66,6 +66,9 @@ class MockShop(BaseHTTPRequestHandler):
                    fallback behaviour (10.227).
     mode "session": pages 2+ serve DUPLICATES unless the request carries the
                    session cookie that page 1 sets (emalls ASP.NET gate, 10.228).
+    mode "multi":   honest pages, but every response sends TWO Set-Cookie
+                   headers with the SAME name - the 10.228 curl_cffi crash.
+    mode "redirect": pages 2+ answer 302 back to page 1 (10.229 instrumentation).
     """
     mode = "honest"
     hits: dict = {}
@@ -100,6 +103,12 @@ class MockShop(BaseHTTPRequestHandler):
             cookie = (self.headers.get("Cookie") or "")
             if "sid=" not in cookie:
                 effective = 1  # cookieless client gets the page-1 fallback
+        elif MockShop.mode == "redirect" and page > 1:
+            self.send_response(302)
+            self.send_header("Location", "/shop~Category~31424")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         rows = products_html(effective)
         next_link = ""
         if MockShop.mode == "honest" and effective < TOTAL_PAGES and effective >= 1:
@@ -112,6 +121,10 @@ class MockShop(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Set-Cookie", "sid=emalls-session-1; Path=/")
+        if MockShop.mode == "multi":
+            # the 10.228 crash: same cookie name arriving twice per response
+            self.send_header("Set-Cookie", "ASP.NET_SessionId=AAA; Path=/")
+            self.send_header("Set-Cookie", "ASP.NET_SessionId=BBB; Domain=127.0.0.1; Path=/")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -272,6 +285,34 @@ def main() -> int:
     pag_stage = next((s for s in diag.get("stages", []) if s.get("name") == "pagination"), {})
     check("diagnostic passes on the session-gated site via the shared fetcher",
           pag_stage.get("ok") is True, str(pag_stage.get("summary"))[:200])
+
+    print("== K: same-name cookie pair must not crash any engine ==")
+    start_shop("multi")
+    rep = run_scrape("multi-cookie pages=5 (curl_cffi pinned)",
+                     pagination="path", page_value="~page~{page}", pages=5)
+    check("duplicate Set-Cookie names are collapsed, curl_cffi works",
+          len(rep.products) == TOTAL_PAGES * PER_PAGE, f"got {len(rep.products)}")
+    check("no cookie-conflict error in the logs",
+          not any("multiple cookies" in x or "تعدادی" in x for x in rep.logs))
+
+    print("== L: silent redirect of page 2 must be visible, not 'HTTP 200' ==")
+    start_shop("redirect")
+    rep = run_scrape("redirecting pages=5", pagination="path", page_value="~page~{page}", pages=5)
+    check("run stops after page 1 when page 2 redirects back",
+          len(rep.products) == PER_PAGE, f"got {len(rep.products)}")
+    stop = rep.diagnostics.get("pagination_stopped") or {}
+    check("stop reason is no-new-products with engine attempts",
+          stop.get("reason") == "no-new-products" and bool(stop.get("engine_attempts")), str(stop)[:160])
+    check("the redirect is recorded in the attempt lines",
+          any("ریدایرکت" in str(a) for a in (stop.get("engine_attempts") or [])), str(stop.get("engine_attempts"))[:200])
+    save_profile("redirect-site", "path_pattern", "~page~{page}", 0, "redirect")
+    start_shop("redirect")
+    diag = diagnostic_report("redirect-site")
+    pag_stage = next((s for s in diag.get("stages", []) if s.get("name") == "pagination"), {})
+    check("diagnostic fails on the redirecting site", pag_stage.get("ok") is False,
+          str(pag_stage.get("summary"))[:120])
+    check("diagnostic shows the redirect target in the details",
+          any("ریدایرکت" in str(d) for d in pag_stage.get("details", [])), str(pag_stage.get("details"))[:240])
 
     print("== E: dashboard parity — pages=0 must survive the round-trip ==")
     start_shop("dup")
