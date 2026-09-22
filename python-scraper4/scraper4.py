@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.226"
+APP_VERSION = "10.227"
 CHANGELOG = [
+    {"version":"10.227","date":"2026-09-22","title":"نجات صفحهٔ تکراری ایمالز با موتورهای جایگزین","items":["بررسی زنده ایمالز نشان داد صفحهٔ ۲ واقعی وجود دارد (صفحه ۲ از ۹۳۳۱ با محصولات متفاوت) اما بعضی اثرانگشت‌های درخواست پاسخ تکراری می‌گیرند؛ اگر صفحهٔ ۲ به بعد فقط کپی صفحات قبل بود، استخراج واقعی همان صفحه را با بقیهٔ موتورهای HTTP (اثرانگشت TLS متفاوت) دوباره می‌خواند و با اولین موتوری که محصول تازه آورد ادامه می‌دهد","همان منطق نجات در مرحلهٔ صفحه‌بندی عیب‌یابی هم فعال شد: صفحات ۲ و ۳ با یک Fetcher مشترک (حفظ کوکی سشن مثل اجرای واقعی) و همان زنجیرهٔ موتور اجرای واقعی خوانده می‌شوند و نتیجهٔ تک‌تک موتورها در جزئیات می‌آید","وقتی نجات موفق است لاگ می‌گوید کدام موتور محصول تازه آورد؛ وقتی شکست، تلاش همهٔ موتورها در pagination_stopped.engine_attempts ثبت می‌شود","سایت‌هایی که واقعاً فقط یک صفحه دارند بعد از یک پاس کوتاه موتورهای جایگزین همان‌جا تمام می‌شوند؛ رفتار پایان صفحه‌بندی تغییر نکرده است"]},
     {"version":"10.226","date":"2026-09-22","title":"موتور تأییدشدهٔ تست، رهبر استخراج واقعی ایمالز شد","items":["ترتیب ضدبات دیگر موتور مستر تأییدشده را به آخر زنجیره نمی‌راند؛ در ایمالز/دیجی‌کالا/ترب/باسلام موتوری که تست ۳ صفحه آن را تأیید کرده در استخراج واقعی هم اول است و بقیه پشت آن","تست سرعت حالا میزبان (host) پروفایل را هم همراه موتور برنده ذخیره می‌کند تا موتور آموخته‌شده با تغییر آدرس پروفایل بی‌اعتبار نشود","زنجیرهٔ موتورهای دریافت در ابتدای هر استخراج در لاگ ثبت می‌شود تا تفاوت تست و اجرای واقعی فوری دیده شود","اگر صفحهٔ ۲ به بعد خالی برگردد، تلاش همهٔ موتورها (نتیجه و خطای هرکدام) در diagnostics.pagination_stopped.engine_attempts ثبت می‌شود"]},
     {"version":"10.225","date":"2026-09-22","title":"هم‌خوانی کامل صفحه‌بندی استخراج واقعی با تست سه‌صفحه‌ای","items":["رفع ناهم‌خوانی واژگان صفحه‌بندی: پروفایلی که داشبورد با next_selector ذخیره می‌کند اکنون در استخراج واقعی هم مثل تست، واقعاً لینک «صفحهٔ بعد» را دنبال می‌کند و دیگر به ?page=N تنزل نمی‌یابد","اگر سلکتور سفارشی صفحهٔ بعد چیزی پیدا نکند، همان فهرست سلکتورهای پیش‌فرض تست (a[rel=next] و a.next و …) در استخراج واقعی هم امتحان می‌شود و سلکتور برنده در لاگ ثبت می‌گردد","pages=0 داشبورد («اتوماتیک») بالاخره در بک‌اند پایتون هم اتوماتیک است: تا صفحهٔ خالی یا پایان صفحه‌بندی ادامه می‌دهد با سقف ایمنی ۱۰۰ صفحه (سقف SCRAPER_MAX_PAGES هم به ۱۰۰ هم‌تراز داشبورد رسید)","none/scroll در استخراج واقعی تک‌صفحه‌ای است مثل تست؛ دیگر URL بی‌معنی ?page=2 ساخته نمی‌شود","اگر صفحهٔ ۲ به بعد خالی برگردد یا محصول تازه‌ای نداشته باشد، علت توقف با شماره صفحه و URL دقیق در diagnostics.pagination_stopped و پیام پایان کار ثبت می‌شود","تست سرعت ۳ صفحه‌ای و عیب‌یابی استخراج اکنون مثل استخراج واقعی فقط محصول «تازه» را می‌شمارند؛ صفحه‌ای که فقط کپی صفحه‌های قبل باشد دیگر تست را سبز نمی‌کند و با پیام واضح «هیچ محصول تازه‌ای نداشت» رد می‌شود"]},
     {"version":"10.224","date":"2026-09-22","title":"استخراج واقعاً مستقل و هم‌زمان پروفایل‌ها","items":["رابط کلاسیک پس از ثبت هر کار آزاد می‌شود تا هنگام انتظار Playwright بتوان استخراج HTTP پروفایل دیگری را هم‌زمان آغاز کرد","هر وظیفه نام پروفایل را به‌صورت snapshot تغییرناپذیر حمل می‌کند و تغییر پروفایل فعال دیگر نتیجه را به پروفایل اشتباه نمی‌فرستد","ذخیره موتور یادگرفته‌شده، سلکتورهای خودکار و صفحه‌بندی در چرخه اتمیک انجام می‌شود تا پایان هم‌زمان دو کار داده‌های یکدیگر را بازنویسی نکند","تکمیل کار پس‌زمینه در داشبورد یا رابط کلاسیک دیگر نمای نتایج پروفایلی را که کاربر در حال مشاهده آن است جابه‌جا نمی‌کند","تست بازگشتی Playwright مسدودشده را شبیه‌سازی می‌کند و ثابت می‌کند کار Requests پروفایل دوم پیش از آزادشدن مرورگر کامل و جداگانه ذخیره می‌شود"]},
@@ -3572,6 +3573,52 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     report.logs.append(f"صفحه‌بندی next: هیچ سلکتوری (حتی پیش‌فرض‌ها) لینک صفحهٔ بعد را پیدا نکرد")
                 next_url = ""
 
+        # 10.227: a continuation page that returns rows but zero NEW products
+        # is how client-fingerprint-sensitive sites (emalls.ir) serve a
+        # fallback instead of the real next page. Before declaring the
+        # catalogue ended, re-ask the SAME page URL with the remaining HTTP
+        # engines (different TLS fingerprints); the real page 2 often arrives
+        # through one of them. One bounded pass per page, stop honoured.
+        _existing_keys = {product_key(p) for p in report.products.values()}
+        _rows_new = 0
+        for row in rows:
+            try:
+                if product_key(row) not in _existing_keys:
+                    _rows_new += 1
+            except Exception:
+                _rows_new += 1
+        if number > start_page and _rows_new == 0 and rows:
+            _retry_used = ""
+            for _engine in [e for e in http_engines if e != won_engine]:
+                if _engine != "requests" and not fetch_engine_installed(_engine):
+                    continue
+                if task_id and live_task_cancelled(task_id):
+                    raise ValueError("استخراج با درخواست کاربر متوقف شد")
+                try:
+                    if task_id:live_task_update(task_id,max(4,round((number-1)/pages*88)+1),f"صفحه {number} تکراری بود — امتحان {_engine}","running",url,done=number-1,total=pages,extracted=len(report.products))
+                    _res = fetcher.get(url, engine=_engine)
+                    _r_rows, _r_soup, _r_diag = parse_html(_res.text, _res.url, selectors, parse_strategy)
+                    _r_new = 0
+                    for _row in _r_rows:
+                        try:
+                            if product_key(_row) not in _existing_keys:
+                                _r_new += 1
+                        except Exception:
+                            _r_new += 1
+                    engine_errors.append(f"retry-{_engine}: HTTP {_res.status} · DOM={len(_r_rows)} · new={_r_new}")
+                    if _r_new > 0:
+                        rows, soup, page_html = _r_rows, _r_soup, _res.text
+                        diag = {**diag, **_r_diag, "engine": _engine, "duplicate_retry": True, "attempts": engine_errors}
+                        won_engine, _retry_used = _engine, _engine
+                        report.modes.add("dom-" + _engine)
+                        break
+                except (FetchError, ValueError) as _exc:
+                    engine_errors.append(f"retry-{_engine}: {_exc}")
+            if _retry_used:
+                report.logs.append(f"صفحه {number}: پاسخ تکراری بود؛ با موتور {_retry_used} {len(rows)} محصول و محصول تازه پیدا شد — صفحه‌بندی ادامه دارد")
+            else:
+                report.logs.append(f"صفحه {number}: همهٔ موتورهای جایگزین هم پاسخ تکراری دادند ({len(engine_errors)} تلاش در این صفحه)")
+
         new_count = 0
         for row in rows:
             before = len(report.products)
@@ -3599,7 +3646,8 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             report.diagnostics["pagination_stopped"] = {"page": number, "url": url,
                 "reason": "no-new-products",
                 "reason_fa": f"صفحهٔ {number} همان محصولات صفحات قبل را برگرداند ({len(rows)} تکراری)",
-                "duplicates": len(rows), "pagination": f"{_effective_kind}:{pag_value}"}
+                "duplicates": len(rows), "pagination": f"{_effective_kind}:{pag_value}",
+                "engine_attempts": list(engine_errors)[:12]}
             break
 
     if not report.products:

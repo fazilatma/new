@@ -2070,6 +2070,55 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                             pag_next_url = "" if _candidate.rstrip("/") == getattr(res, "url", url).rstrip("/") else _candidate
                     except Exception:
                         pag_next_url = ""
+                # 10.227: fetch continuation pages exactly like the real run —
+                # ONE shared Fetcher (session cookies persist) walking the same
+                # engine chain (learned master first, anti-bot reorder applied).
+                # Sites like emalls.ir serve a duplicate-page fallback to some
+                # request fingerprints; the real run now retries the same page
+                # with the other engines, so the test must too.
+                _pag_fetcher = core.Fetcher(dict(load().get("network") or {}))
+                _pag_master = _s(cfg.get("fetch_engine_master") or "")
+                _pag_req = _s(cfg.get("fetch_engine") or "auto")
+                _pag_chain = core.engine_try_order(
+                    _pag_master, _pag_req if _pag_req in core.KNOWN_ENGINES else "", "auto")
+                try:
+                    _pag_chain = core._prefer_anti_bot_order(url, _pag_chain)
+                except Exception:
+                    pass
+                if engine in core.KNOWN_ENGINES:
+                    _pag_chain = [engine] + [e for e in _pag_chain if e != engine]
+
+                def _pag_fetch_new(target: str, seen: set) -> tuple:
+                    """Fetch `target` through the real-run engine chain until one
+                    engine returns at least one NEW product."""
+                    attempts: list[str] = []
+                    for _eng in _pag_chain:
+                        if _eng in {"playwright", "selenium"}:
+                            continue
+                        if _eng != "requests" and not core.fetch_engine_installed(_eng):
+                            continue
+                        try:
+                            _r = _pag_fetcher.get(target, engine=_eng)
+                        except Exception as _exc:
+                            attempts.append(f"{_eng}: {_exc}")
+                            continue
+                        try:
+                            _rr, _rs, _st = core.parse_html(_r.text, _r.url, selectors, parse_engine)
+                        except Exception as _exc:
+                            attempts.append(f"{_eng}: تجزیه ناموفق {_exc}")
+                            continue
+                        _fresh = 0
+                        for _row in _rr:
+                            try:
+                                if core.product_key(_row) not in seen:
+                                    _fresh += 1
+                            except Exception:
+                                _fresh += 1
+                        attempts.append(f"{_eng}: HTTP {_r.status} · {len(_rr)} محصول · {_fresh} تازه")
+                        if _fresh > 0:
+                            return _r, _rr, _rs, _eng, attempts
+                    return None, [], None, "", attempts
+
                 # Try pages 2..diag_pages
                 for _pn in range(2, _diag_pages + 1):
                     if eff_norm in ("next", "next_selector", "link"):
@@ -2094,61 +2143,51 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                             pag_ok = False
                             pag_details.append(f"صفحهٔ {_pn}: URL تکراری ({_cur_url[:80]}) — الگو نادرست")
                             break
-                    # Fetch next page
-                    try:
-                        _pres = _diag_fetch(cfg, _cur_url, engine if engine != "auto" else "requests")
-                    except Exception as _fe:
+                    # Fetch next page — engine chain with duplicate fallback
+                    _pres, _prows, _psoup, _pag_engine, _pag_attempts = _pag_fetch_new(_cur_url, _pag_seen)
+                    if _pres is None:
                         pag_ok = False
-                        pag_details.append(f"صفحهٔ {_pn}: دریافت ناموفق ({_cur_url[:60]}) — {_fe}")
+                        _why = "؛ ".join(_pag_attempts[:4]) if _pag_attempts else "دریافتی انجام نشد"
+                        pag_details.append(f"صفحهٔ {_pn}: هیچ موتوری محصول تازه نیاورد — {_why}"[:400])
                         break
-                    # Parse next page
-                    try:
-                        _prows, _psoup, _pstats = core.parse_html(_pres.text, _pres.url, selectors, parse_engine)
-                    except Exception as _pe:
+                    if len(_pag_attempts) > 1:
+                        pag_details.append(f"صفحهٔ {_pn}: پاسخ تکراری با موتورهای اول؛ موتور {_pag_engine} محصول تازه آورد")
+                    _page_new = 0
+                    for _r in _prows:
+                        try:
+                            _k = core.product_key(_r)
+                        except Exception:
+                            _k = _s(_r.get("url") or _r.get("title"))
+                        if _k and _k not in _pag_seen:
+                            _pag_seen.add(_k)
+                            _page_new += 1
+                    if _page_new == 0:
+                        # 10.225: same verdict as the real scrape — a page
+                        # that only replays earlier products is broken paging.
                         pag_ok = False
-                        pag_details.append(f"صفحهٔ {_pn}: تجزیه ناموفق — {_pe}")
+                        pag_details.append(f"صفحهٔ {_pn} هیچ محصول تازه‌ای نداشت ({len(_prows)} محصول، همه تکراری) — سایت الگوی {eff_kind}:{eff_value} را نادیده می‌گیرد (URL: {_cur_url[:60]})")
                         break
-                    if not _prows:
-                        pag_ok = False
-                        pag_details.append(f"صفحهٔ {_pn} خالی برگشت (URL: {_cur_url[:60]}) — احتمالاً الگوی {eff_kind}:{eff_value} نادرست است")
-                        break
-                    else:
-                        _page_new = 0
-                        for _r in _prows:
-                            try:
-                                _k = core.product_key(_r)
-                            except Exception:
-                                _k = _s(_r.get("url") or _r.get("title"))
-                            if _k and _k not in _pag_seen:
-                                _pag_seen.add(_k)
-                                _page_new += 1
-                        if _page_new == 0:
-                            # 10.225: same verdict as the real scrape — a page
-                            # that only replays earlier products is broken paging.
-                            pag_ok = False
-                            pag_details.append(f"صفحهٔ {_pn} هیچ محصول تازه‌ای نداشت ({len(_prows)} محصول، همه تکراری) — سایت الگوی {eff_kind}:{eff_value} را نادیده می‌گیرد (URL: {_cur_url[:60]})")
-                            break
-                        pag_details.append(f"صفحهٔ {_pn}: {_page_new} محصول تازه (از {len(_prows)}) ✓")
-                        # Prepare next for next iteration if next pagination
-                        if eff_norm in ("next", "next_selector", "link"):
-                            try:
-                                _nxt2 = None
-                                # 10.225: profile selector first, then defaults.
-                                for _sel in ([eff_value.strip()] if eff_value.strip() else []) + ['a[rel="next"]', 'a.next', '.pagination a.next']:
-                                    try:
-                                        _nxt2 = _psoup.select_one(_sel)
-                                        if _nxt2 and _nxt2.get("href"):
-                                            break
-                                    except Exception:
-                                        continue
-                                if _nxt2 and _nxt2.get("href"):
-                                    from urllib.parse import urljoin as _urljoin
-                                    _cand2 = _urljoin(_pres.url, _nxt2.get("href"))
-                                    pag_next_url = "" if _cand2.rstrip("/") == _pres.url.rstrip("/") else _cand2
-                                else:
-                                    pag_next_url = ""
-                            except Exception:
+                    pag_details.append(f"صفحهٔ {_pn}: {_page_new} محصول تازه (از {len(_prows)}) ✓")
+                    # Prepare next for next iteration if next pagination
+                    if eff_norm in ("next", "next_selector", "link"):
+                        try:
+                            _nxt2 = None
+                            # 10.225: profile selector first, then defaults.
+                            for _sel in ([eff_value.strip()] if eff_value.strip() else []) + ['a[rel="next"]', 'a.next', '.pagination a.next']:
+                                try:
+                                    _nxt2 = _psoup.select_one(_sel)
+                                    if _nxt2 and _nxt2.get("href"):
+                                        break
+                                except Exception:
+                                    continue
+                            if _nxt2 and _nxt2.get("href"):
+                                from urllib.parse import urljoin as _urljoin
+                                _cand2 = _urljoin(_pres.url, _nxt2.get("href"))
+                                pag_next_url = "" if _cand2.rstrip("/") == _pres.url.rstrip("/") else _cand2
+                            else:
                                 pag_next_url = ""
+                        except Exception:
+                            pag_next_url = ""
                 stage("pagination", pag_ok,
                       ("صفحه‌بندی سالم: " + "، ".join(pag_details) if pag_ok else "خطای صفحه‌بندی: " + "؛ ".join(pag_details)),
                       kind=eff_kind, value=eff_value, pages=_diag_pages, details=pag_details, auto=_is_auto_pag)

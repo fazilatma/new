@@ -61,8 +61,12 @@ class MockShop(BaseHTTPRequestHandler):
                    carries <a class="next"> to the following page.
     mode "dup":    the site IGNORES the ~page~ suffix and always serves page 1.
     mode "single": one page, no pagination markup at all.
+    mode "flaky":  pages 2+ serve DUPLICATES of page 1 on the first request and
+                   the real page only on a retry - emalls' client-fingerprint
+                   fallback behaviour (10.227).
     """
     mode = "honest"
+    hits: dict = {}
 
     def log_message(self, *a):  # silence
         pass
@@ -81,7 +85,14 @@ class MockShop(BaseHTTPRequestHandler):
             return
         m = re.search(r"~page~(\d+)", path)
         page = int(m.group(1)) if m else 1
-        effective = 1 if (MockShop.mode == "dup" and page > 1) else page
+        effective = page
+        if MockShop.mode == "dup" and page > 1:
+            effective = 1
+        elif MockShop.mode == "flaky" and page > 1:
+            key = path.split("?")[0]
+            MockShop.hits[key] = MockShop.hits.get(key, 0) + 1
+            if MockShop.hits[key] == 1:
+                effective = 1  # first ask: fallback duplicate of page 1
         rows = products_html(effective)
         next_link = ""
         if MockShop.mode == "honest" and effective < TOTAL_PAGES and effective >= 1:
@@ -104,6 +115,7 @@ _server = None
 def start_shop(mode: str) -> None:
     global _server
     MockShop.mode = mode
+    MockShop.hits = {}
     if _server is None:
         _server = ThreadingHTTPServer(("127.0.0.1", PORT), MockShop)
         threading.Thread(target=_server.serve_forever, daemon=True).start()
@@ -223,6 +235,24 @@ def main() -> int:
     stop = rep.diagnostics.get("pagination_stopped") or {}
     check("single-page stop is recorded", stop.get("reason") == "single-page-mode", str(stop))
 
+    print("== I: emalls-style flaky fingerprint — retry rescues page 2+ ==")
+    start_shop("flaky")
+    rep = run_scrape("flaky site pages=5", pagination="path", page_value="~page~{page}", pages=5)
+    check("real run retries a duplicate page and walks all 5 pages",
+          len(rep.products) == TOTAL_PAGES * PER_PAGE, f"got {len(rep.products)}")
+    check("rescue is logged with the winning engine",
+          any("محصول تازه پیدا شد" in x for x in rep.logs), str([x for x in rep.logs if "تازه" in x][:1]))
+    check("no pagination_stopped diagnostic on a fully walked run",
+          "pagination_stopped" not in rep.diagnostics)
+    save_profile("flaky-site", "path_pattern", "~page~{page}", 0, "flaky")
+    start_shop("flaky")  # reset hit counters so the diagnostic sees the fallback too
+    diag = diagnostic_report("flaky-site")
+    pag_stage = next((s for s in diag.get("stages", []) if s.get("name") == "pagination"), {})
+    check("diagnostic pagination stage passes via the engine-chain fallback",
+          pag_stage.get("ok") is True, str(pag_stage.get("summary"))[:200])
+    check("diagnostic mentions the fallback rescue", any("تازه آورد" in str(d) for d in pag_stage.get("details", [])),
+          str(pag_stage.get("details"))[:200])
+
     print("== E: dashboard parity — pages=0 must survive the round-trip ==")
     start_shop("dup")
     save_profile("dup-site", "path_pattern", "~page~{page}", 0, "dup")
@@ -259,8 +289,9 @@ def main() -> int:
     check("per-page NEW product counts are reported",
           len(details) == 3 and all(d.get("new") == PER_PAGE for d in details), str(details))
     stored = core.load_data()["profiles"]["honest-site"]
-    check("benchmark saved the winning engine as master", stored.get("fetch_engine_master") == "requests",
-          str(stored.get("fetch_engine_master")))
+    check("benchmark saved its winning engine as master",
+          stored.get("fetch_engine_master") == bench.get("best"),
+          f"stored={stored.get('fetch_engine_master')} best={bench.get('best')}")
     check("benchmark saved the profile host next to the master (10.226)",
           stored.get("fetch_engine_host") == "127.0.0.1", str(stored.get("fetch_engine_host")))
 
