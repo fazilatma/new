@@ -2178,51 +2178,72 @@ function cli_service(array $job): int {
 
             // A) Check for missing Python/Node dependencies
             if ($code !== 0) {
-                // Pattern 1: Explicit missing dependency suggestions (e.g. "Missing dependency. Run: pip3 install flask requests beautifulsoup4 lxml")
-                if (preg_match('/(?:Missing dependency\.?\s*(?:Run:?)?|Please run:?)\s*pip3?\s+install\s+([^\r\n]+)/i', $logTail, $dpm)) {
-                    $rawPkgs = trim($dpm[1]);
-                    if ($rawPkgs !== '') {
-                        cli_log("[auto-installer] Detected missing dependencies from application error: {$rawPkgs}. Installing via pip3...");
-                        $pipCmd = 'pip3 install --break-system-packages --no-warn-script-location ' . $rawPkgs . ' 2>&1 || pip3 install --user --no-warn-script-location ' . $rawPkgs . ' 2>&1 || pip3 install --no-warn-script-location ' . $rawPkgs . ' 2>&1 || pip install ' . $rawPkgs . ' 2>&1';
-                        cli_run($pipCmd);
-                        cli_log("[auto-installer] Successfully installed: {$rawPkgs}");
-                        $depsAutoInstalled = true;
-                    }
-                }
-                // Pattern 2: ModuleNotFoundError / ImportError (e.g. "ModuleNotFoundError: No module named 'requests'")
-                if (!$depsAutoInstalled && preg_match_all('/(?:ModuleNotFoundError:\s*No module named|ImportError:\s*No module named|cannot import name [^\r\n]+ from)\s*[\'"]([a-zA-Z0-9_\-]+)[\'"]/i', $logTail, $mpm)) {
-                    $modMap = [
-                        'bs4' => 'beautifulsoup4', 'dotenv' => 'python-dotenv', 'python_dotenv' => 'python-dotenv',
-                        'yaml' => 'pyyaml', 'PIL' => 'pillow', 'telebot' => 'pyTelegramBotAPI',
-                        'telegram' => 'python-telegram-bot', 'jwt' => 'pyjwt', 'cv2' => 'opencv-python-headless',
-                        'sklearn' => 'scikit-learn', 'psycopg2' => 'psycopg2-binary', 'MySQLdb' => 'mysqlclient',
-                        'dateutil' => 'python-dateutil', 'magic' => 'python-magic', 'Crypto' => 'pycryptodome',
-                        'cryptography' => 'cryptography', 'jose' => 'python-jose', 'multipart' => 'python-multipart',
-                        'docx' => 'python-docx', 'pptx' => 'python-pptx', 'openpyxl' => 'openpyxl', 'xlsxwriter' => 'xlsxwriter'
-                    ];
-                    $missingMods = array_unique($mpm[1]);
-                    $pkgsToInstall = [];
-                    foreach ($missingMods as $mName) {
+                $modMap = [
+                    'bs4' => 'beautifulsoup4', 'dotenv' => 'python-dotenv', 'python_dotenv' => 'python-dotenv',
+                    'yaml' => 'pyyaml', 'PIL' => 'pillow', 'telebot' => 'pyTelegramBotAPI',
+                    'telegram' => 'python-telegram-bot', 'jwt' => 'pyjwt', 'cv2' => 'opencv-python-headless',
+                    'sklearn' => 'scikit-learn', 'psycopg2' => 'psycopg2-binary', 'MySQLdb' => 'mysqlclient',
+                    'dateutil' => 'python-dateutil', 'magic' => 'python-magic', 'Crypto' => 'pycryptodome',
+                    'cryptography' => 'cryptography', 'jose' => 'python-jose', 'multipart' => 'python-multipart',
+                    'docx' => 'python-docx', 'pptx' => 'python-pptx', 'openpyxl' => 'openpyxl', 'xlsxwriter' => 'xlsxwriter'
+                ];
+
+                $pkgsToInstall = [];
+
+                // Pattern 1: Exact ModuleNotFoundError / ImportError (e.g. "ModuleNotFoundError: No module named 'bs4'")
+                if (preg_match_all('/(?:ModuleNotFoundError:\s*No module named|ImportError:\s*No module named|cannot import name [^
+]+ from)\s*['"\]([a-zA-Z0-9_\-]+)['"\]/i', $logTail, $mpm)) {
+                    foreach (array_unique($mpm[1]) as $mName) {
                         $pName = $modMap[$mName] ?? $mName;
-                        $pkgsToInstall[] = escapeshellarg($pName);
-                    }
-                    if (!empty($pkgsToInstall)) {
-                        $pkgStr = implode(' ', $pkgsToInstall);
-                        cli_log("[auto-installer] Detected missing Python module(s): " . implode(', ', $missingMods) . " (packages: {$pkgStr}). Auto-installing via pip3...");
-                        $pipCmd = 'pip3 install --break-system-packages --no-warn-script-location ' . $pkgStr . ' 2>&1 || pip3 install --user --no-warn-script-location ' . $pkgStr . ' 2>&1 || pip3 install --no-warn-script-location ' . $pkgStr . ' 2>&1 || pip install ' . $pkgStr . ' 2>&1';
-                        cli_run($pipCmd);
-                        cli_log("[auto-installer] Installation completed for: {$pkgStr}");
-                        $depsAutoInstalled = true;
+                        $pkgsToInstall[$pName] = true;
                     }
                 }
-                // Pattern 3: Node.js missing module (e.g. "Cannot find module 'express'")
-                if (!$depsAutoInstalled && preg_match('/Cannot find module\s*[\'"]([a-zA-Z0-9_\-\.\@\/]+)[\'"]/i', $logTail, $npmM)) {
+
+                // Pattern 2: Explicit dependency suggestions in RuntimeError/Exception
+                if (preg_match_all('/pip3?\s+install\s+([^"
+\(\)]+)/i', $logTail, $allPipMatches)) {
+                    foreach ($allPipMatches[1] as $rawBlock) {
+                        $tokens = preg_split('/[\s,;]+/', trim($rawBlock));
+                        foreach ($tokens as $token) {
+                            $token = trim($token, " 	
+ "'\");
+                            if ($token === '' || in_array(strtolower($token), ['or', 'and', 'pip', 'pip3', 'install', '-r', 'run:', 'run', 'please'], true)) {
+                                continue;
+                            }
+                            if (preg_match('/^[a-zA-Z0-9_\-\.\[\]\<\>\=\!]+$/', $token)) {
+                                $mapped = $modMap[$token] ?? $token;
+                                $pkgsToInstall[$mapped] = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!empty($pkgsToInstall)) {
+                    $pkgList = array_keys($pkgsToInstall);
+                    $pkgArgs = implode(' ', array_map('escapeshellarg', $pkgList));
+                    cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing with sudo & break-system-packages...");
+                    $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; (sudo -n pip3 install --break-system-packages ' . $pkgArgs . ' 2>&1 || sudo -n pip install --break-system-packages ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages ' . $pkgArgs . ' 2>&1)';
+                    cli_run($pipCmd, $pipRc);
+                    if ($pipRc === 0) {
+                        cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));
+                        $depsAutoInstalled = true;
+                    } else {
+                        cli_log("[auto-installer] Auto-installation failed (exit code {$pipRc}) for: " . implode(', ', $pkgList));
+                    }
+                }
+
+                // Pattern 3: Node.js missing module
+                if (!$depsAutoInstalled && preg_match('/Cannot find module\s*['"\]([a-zA-Z0-9_\-\.\@\/]+)['"\]/i', $logTail, $npmM)) {
                     $nodePkg = trim($npmM[1]);
                     if ($nodePkg !== '' && $nodePkg[0] !== '.' && $nodePkg[0] !== '/') {
                         cli_log("[auto-installer] Detected missing Node.js module: {$nodePkg}. Auto-installing via npm...");
-                        cli_run('cd ' . esc($deployDir) . ' && npm install ' . esc($nodePkg) . ' --no-audit --no-fund 2>&1');
-                        cli_log("[auto-installer] Installed Node.js module: {$nodePkg}");
-                        $depsAutoInstalled = true;
+                        cli_run('cd ' . esc($deployDir) . ' && npm install ' . esc($nodePkg) . ' --no-audit --no-fund 2>&1', $npmRc);
+                        if ($npmRc === 0) {
+                            cli_log("[auto-installer] Installed Node.js module: {$nodePkg}");
+                            $depsAutoInstalled = true;
+                        } else {
+                            cli_log("[auto-installer] npm install failed (exit code {$npmRc}) for: {$nodePkg}");
+                        }
                     }
                 }
             }
