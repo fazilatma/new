@@ -2,12 +2,22 @@
 
 Automated setup script for Linux servers (Ubuntu/Debian) configuring **Apache2**, **PHP**, **Python 3**, **Node.js 20 LTS**, **Scraper & Cloudflare Bypass libraries**, headless browser dependencies, and the **WebConsole Pro** management suite.
 
-## 🚀 One-Line Fast Installation
+## 🚀 One-Line Fast Installation (Fresh Server)
 
 Run the following command as `root` (or with `sudo`) on any fresh VPS:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo bash
+```
+
+---
+
+## ⚡ Quick Update (Existing Server)
+
+To update only WebConsole Pro to the latest version in 2 seconds:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/update.sh | sudo bash
 ```
 
 ---
