@@ -1,10 +1,10 @@
-# WebConsole Pro & Server Auto-Installer
+# WebConsole Pro & VPS Server Auto-Installer
 
-اسکریپت نصب و راه‌اندازی خودکار سرور لینوکس (اوبونتو / دبیان) به همراه وب‌سرور Nginx، پی‌اچ‌پی، پایتون ۳، نود ۲۰، ابزارهای اسکرپینگ، بای‌پس کلودفلر و پنل مدیریت سرور **WebConsole Pro**.
+Automated setup script for Linux servers (Ubuntu/Debian) configuring **Nginx**, **PHP-FPM**, **Python 3**, **Node.js 20 LTS**, **Scraper & Cloudflare Bypass libraries**, headless browser dependencies, and the **WebConsole Pro** management suite.
 
-## 🚀 دستور نصب سریع (تک‌خطی)
+## 🚀 One-Line Fast Installation
 
-کافی است با دسترسی `root` دستور زیر را در ترمینال سرور اجرا کنید:
+Run the following command as `root` (or with `sudo`) on any fresh VPS:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo bash
@@ -12,11 +12,11 @@ curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo
 
 ---
 
-### 📦 امکانات و پکیج‌های نصب‌شده خودکار:
-- **Node.js 20.x LTS + PM2 + Yarn + PNPM** (بدون تداخل پکیج‌های قدیمی اوبونتو)
-- **Python 3 + Pip + Dev tools**
-- **پکیج‌های اسکرپینگ پیشرفته پایتون:** `curl_cffi`, `cloudscraper`, `undetected-chromedriver`, `requests`, `playwright`, `selenium`, `beautifulsoup4`, `lxml`, `fastapi`, `uvicorn`, `aiohttp`
-- **پیش‌نیازهای مرورگرهای بدون سر (Headless Browsers):** کتابخانه‌های سیستمی کامل برای اجرای بدون خطای Puppeteer و Playwright
-- **Nginx + PHP-FPM + ماژول‌های PHP:** پیکربندی کامل وب‌سرور روی پورت 80
-- **دسترسی NOPASSWD:** دسترسی روت بدون پسورد برای کاربر `www-data` جهت اجرای دستورات سیستمی، ری‌استارت سرویس‌ها و دیپلوی پروژه‌ها
-- **WebConsole Pro v1.5.9:** نصب مستقیم در `/var/www/html/webconsole.php` و `/var/www/html/index.php`
+### 📦 Installed & Preconfigured Components:
+- **Node.js 20.x LTS + PM2 + Yarn + PNPM** (Clean install without distro package conflicts)
+- **Python 3 + Pip + Build Tools**
+- **Advanced Scraping & Automation Packages:** `curl_cffi`, `cloudscraper`, `undetected-chromedriver`, `requests`, `playwright`, `selenium`, `beautifulsoup4`, `lxml`, `fastapi`, `uvicorn`, `aiohttp`
+- **Headless Browser Dependencies:** Full Linux libraries for Puppeteer, Playwright & Chrome
+- **Nginx Web Server + PHP-FPM:** Configured on port 80 with high timeout (300s) and 100MB upload size
+- **NOPASSWD Sudo Privileges:** Sudo access for `www-data` for seamless task execution and service restarts
+- **WebConsole Pro v1.5.9:** Deployed at `/var/www/html/webconsole.php` and `/var/www/html/index.php`
