@@ -290,11 +290,19 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "bsl_category_id": _int(node.get("basalamCategoryId")),
             "bsl_fallback_cat_ids": node.get("basalamFallbackCategoryIds") or [],
         })
+        # 10.225: pages=0 is the dashboard's "اتوماتیک" (automatic: keep going
+        # until the pagination ends, cap 100). It used to be clamped to 1 here,
+        # which made a real extraction stop after page 1 while the 3-page
+        # benchmark (which ignores `pages`) happily scanned 3 pages.
+        if node.get("pages") is None:
+            cfg_pages = max(0, _int(cfg.get("pages"), 0))
+        else:
+            cfg_pages = max(0, _int(node.get("pages"), 0))
         cfg.update({
             "display_name": _s(node.get("name")),
             "url": _s(node.get("url")),
             "enabled": node.get("enabled", True) is not False,
-            "pages": max(1, _int(node.get("pages"), 1)),
+            "pages": cfg_pages,
             "pagination": PAG_NODE_TO_PY.get(_s(node.get("pagination")), "query"),
             "page_value": _s(node.get("paginationValue")) or "page",
             "fetch_engine": _s(node.get("extractionEngine")) or "auto",
@@ -1586,6 +1594,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                     next_url = ""
                     first_text = ""
                     first_url = ""
+                    # 10.225: mirror the real scrape() exactly — it stops when a
+                    # page adds no NEW product. Count keys per page so a page
+                    # that only replays page 1 (site ignoring the pattern) can
+                    # no longer turn the test green while the real run stops.
+                    seen_keys: set[str] = set()
+                    page_details: list[dict[str, Any]] = []
                     for pn in range(1, pages_to_try + 1):
                         # Determine effective pagination for this page
                         if pn == 1:
@@ -1637,7 +1651,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                             if (detected_kind if _is_auto and detected_kind else pag_kind_raw).lower() in ("next", "next_selector", "link"):
                                 try:
                                     nxt = None
-                                    for sel in ['a[rel="next"]', 'a.next', '.pagination a.next', '.pagination .next a', '.pager a.next', 'a[aria-label*="next" i]', 'a[aria-label*="بعدی" i]']:
+                                    # 10.225: the profile's own selector first —
+                                    # same order as the real scrape().
+                                    for sel in ([pag_value_raw.strip()] if pag_value_raw.strip() else []) + ['a[rel="next"]', 'a.next', '.pagination a.next', '.pagination .next a', '.pager a.next', 'a[aria-label*="next" i]', 'a[aria-label*="بعدی" i]']:
                                         try:
                                             nxt = _soup.select_one(sel)
                                             if nxt and nxt.get("href"):
@@ -1647,7 +1663,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                     if nxt and nxt.get("href"):
                                         href = nxt.get("href")
                                         from urllib.parse import urljoin as _urljoin
-                                        next_url = _urljoin(res.url, href)
+                                        _candidate = _urljoin(res.url, href)
+                                        # A self-link would replay the same page.
+                                        next_url = "" if _candidate.rstrip("/") == res.url.rstrip("/") else _candidate
                                 except Exception:
                                     next_url = ""
                         else:
@@ -1655,7 +1673,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                             if (detected_kind if _is_auto and detected_kind else pag_kind_raw).lower() in ("next", "next_selector", "link"):
                                 try:
                                     nxt = None
-                                    for sel in ['a[rel="next"]', 'a.next', '.pagination a.next']:
+                                    # 10.225: profile selector first, then defaults.
+                                    for sel in ([pag_value_raw.strip()] if pag_value_raw.strip() else []) + ['a[rel="next"]', 'a.next', '.pagination a.next']:
                                         try:
                                             nxt = _soup.select_one(sel)
                                             if nxt and nxt.get("href"):
@@ -1664,28 +1683,44 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                             continue
                                     if nxt and nxt.get("href"):
                                         from urllib.parse import urljoin as _urljoin
-                                        next_url = _urljoin(res.url, nxt.get("href"))
+                                        _candidate = _urljoin(res.url, nxt.get("href"))
+                                        next_url = "" if _candidate.rstrip("/") == res.url.rstrip("/") else _candidate
                                     else:
                                         next_url = ""
                                 except Exception:
                                     next_url = ""
                         # Accumulate
+                        new_count = 0
+                        for _row in rows or []:
+                            try:
+                                _key = core.product_key(_row)
+                            except Exception:
+                                _key = _s(_row.get("url") or _row.get("title"))
+                            if _key and _key not in seen_keys:
+                                seen_keys.add(_key)
+                                new_count += 1
                         if rows:
                             total_rows.extend(rows)
+                        page_details.append({"page": pn, "products": len(rows or []), "new": new_count, "url": cur_url[:200]})
                         pages_scanned += 1
                         # If pagination returned 0 products on page 2/3, treat as pagination failure
                         if pn > 1 and not rows:
                             pagination_error = f"صفحهٔ {pn} با صفحه‌بندی {(detected_kind if _is_auto and detected_kind else pag_kind_raw)}:{(detected_value if _is_auto and detected_value else pag_value_raw)} خالی برگشت — احتمالاً الگو نادرست است (URL: {cur_url[:100]})"
+                        elif pn > 1 and new_count == 0:
+                            # 10.225: same rule as the real run — a page that
+                            # only replays earlier products is a broken pattern
+                            # (site ignoring ?page=/~page~ suffix or next self-link).
+                            pagination_error = f"صفحهٔ {pn} هیچ محصول تازه‌ای نداشت ({len(rows or [])} محصول، همه تکراری صفحات قبل) — سایت الگوی {(detected_kind if _is_auto and detected_kind else pag_kind_raw)}:{(detected_value if _is_auto and detected_value else pag_value_raw)} را نادیده می‌گیرد (URL: {cur_url[:100]})"
                     elapsed = max(1, int((time.time() - started) * 1000))
                     if pagination_error:
                         # Report pagination failure explicitly; don't mark as successful engine if no products at all
-                        row.update(ok=False, pagesScanned=pages_scanned, products=len(total_rows), elapsedMs=elapsed, productsPerMinute=0, error=pagination_error, paginationError=pagination_error)
+                        row.update(ok=False, pagesScanned=pages_scanned, products=len(total_rows), elapsedMs=elapsed, productsPerMinute=0, error=pagination_error, paginationError=pagination_error, pageDetails=page_details)
                         summary = pagination_error[:110]
                         # Don't count as network failure for consecutive skipping
                         consecutive_failures = 0
                     else:
                         rate = round(len(total_rows) / (elapsed / 60000.0), 1) if total_rows else 0
-                        row.update(ok=True, pagesScanned=pages_scanned, products=len(total_rows), elapsedMs=elapsed, productsPerMinute=rate)
+                        row.update(ok=True, pagesScanned=pages_scanned, products=len(total_rows), elapsedMs=elapsed, productsPerMinute=rate, pageDetails=page_details)
                         if rate > best_rate:
                             best, best_rate = engine, rate
                         if not best_text and first_text:
@@ -1976,8 +2011,13 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             _pag_kind = _s(cfg.get("pagination") or "query")
             _pag_value = _s(cfg.get("page_value") or "page")
             _is_auto_pag = _pag_kind.lower() in ("auto", "automatic", "detect", "")
-            _pages_cfg = int(cfg.get("pages") or 1)
-            _diag_pages = 3 if _pages_cfg >= 3 else 2
+            # 10.225: pages=0 is the dashboard's "automatic" — the stage still
+            # probes 3 real pages instead of collapsing to 2.
+            try:
+                _pages_cfg = int(cfg.get("pages") or 0)
+            except (TypeError, ValueError):
+                _pages_cfg = 0
+            _diag_pages = 3 if _pages_cfg >= 3 or _pages_cfg <= 0 else 2
             if _pag_kind.lower() in ("none", "scroll"):
                 stage("pagination", True, "صفحه‌بندی روی scroll/none است — تک‌صفحه‌ای و نیازی به صفحه بعد نیست", kind=_pag_kind, pages=1)
             elif not rows:
@@ -1998,11 +2038,20 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 pag_ok = True
                 pag_details: list[str] = []
                 pag_next_url = ""
+                # 10.225: mirror the real run — a page that only replays
+                # products of earlier pages must fail the stage.
+                _pag_seen: set[str] = set()
+                for _r in rows or []:
+                    try:
+                        _pag_seen.add(core.product_key(_r))
+                    except Exception:
+                        pass
                 # Prepare next_url if pagination is next (from first page)
                 if eff_norm in ("next", "next_selector", "link"):
                     try:
                         _nxt = None
-                        for _sel in ['a[rel="next"]', 'a.next', '.pagination a.next', '.pagination .next a', '.pager a.next', 'a[aria-label*="next" i]', 'a[aria-label*="بعدی" i]']:
+                        # 10.225: profile selector first, then the defaults.
+                        for _sel in ([eff_value.strip()] if eff_value.strip() else []) + ['a[rel="next"]', 'a.next', '.pagination a.next', '.pagination .next a', '.pager a.next', 'a[aria-label*="next" i]', 'a[aria-label*="بعدی" i]']:
                             try:
                                 _nxt = soup.select_one(_sel)
                                 if _nxt and _nxt.get("href"):
@@ -2011,7 +2060,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                 continue
                         if _nxt and _nxt.get("href"):
                             from urllib.parse import urljoin as _urljoin
-                            pag_next_url = _urljoin(getattr(res, "url", url), _nxt.get("href"))
+                            _candidate = _urljoin(getattr(res, "url", url), _nxt.get("href"))
+                            pag_next_url = "" if _candidate.rstrip("/") == getattr(res, "url", url).rstrip("/") else _candidate
                     except Exception:
                         pag_next_url = ""
                 # Try pages 2..diag_pages
@@ -2057,12 +2107,28 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                         pag_details.append(f"صفحهٔ {_pn} خالی برگشت (URL: {_cur_url[:60]}) — احتمالاً الگوی {eff_kind}:{eff_value} نادرست است")
                         break
                     else:
-                        pag_details.append(f"صفحهٔ {_pn}: {_prows.__len__()} محصول ✓")
+                        _page_new = 0
+                        for _r in _prows:
+                            try:
+                                _k = core.product_key(_r)
+                            except Exception:
+                                _k = _s(_r.get("url") or _r.get("title"))
+                            if _k and _k not in _pag_seen:
+                                _pag_seen.add(_k)
+                                _page_new += 1
+                        if _page_new == 0:
+                            # 10.225: same verdict as the real scrape — a page
+                            # that only replays earlier products is broken paging.
+                            pag_ok = False
+                            pag_details.append(f"صفحهٔ {_pn} هیچ محصول تازه‌ای نداشت ({len(_prows)} محصول، همه تکراری) — سایت الگوی {eff_kind}:{eff_value} را نادیده می‌گیرد (URL: {_cur_url[:60]})")
+                            break
+                        pag_details.append(f"صفحهٔ {_pn}: {_page_new} محصول تازه (از {len(_prows)}) ✓")
                         # Prepare next for next iteration if next pagination
                         if eff_norm in ("next", "next_selector", "link"):
                             try:
                                 _nxt2 = None
-                                for _sel in ['a[rel="next"]', 'a.next', '.pagination a.next']:
+                                # 10.225: profile selector first, then defaults.
+                                for _sel in ([eff_value.strip()] if eff_value.strip() else []) + ['a[rel="next"]', 'a.next', '.pagination a.next']:
                                     try:
                                         _nxt2 = _psoup.select_one(_sel)
                                         if _nxt2 and _nxt2.get("href"):
@@ -2071,7 +2137,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                                         continue
                                 if _nxt2 and _nxt2.get("href"):
                                     from urllib.parse import urljoin as _urljoin
-                                    pag_next_url = _urljoin(_pres.url, _nxt2.get("href"))
+                                    _cand2 = _urljoin(_pres.url, _nxt2.get("href"))
+                                    pag_next_url = "" if _cand2.rstrip("/") == _pres.url.rstrip("/") else _cand2
                                 else:
                                     pag_next_url = ""
                             except Exception:

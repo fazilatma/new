@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.224"
+APP_VERSION = "10.225"
 CHANGELOG = [
+    {"version":"10.225","date":"2026-09-22","title":"هم‌خوانی کامل صفحه‌بندی استخراج واقعی با تست سه‌صفحه‌ای","items":["رفع ناهم‌خوانی واژگان صفحه‌بندی: پروفایلی که داشبورد با next_selector ذخیره می‌کند اکنون در استخراج واقعی هم مثل تست، واقعاً لینک «صفحهٔ بعد» را دنبال می‌کند و دیگر به ?page=N تنزل نمی‌یابد","اگر سلکتور سفارشی صفحهٔ بعد چیزی پیدا نکند، همان فهرست سلکتورهای پیش‌فرض تست (a[rel=next] و a.next و …) در استخراج واقعی هم امتحان می‌شود و سلکتور برنده در لاگ ثبت می‌گردد","pages=0 داشبورد («اتوماتیک») بالاخره در بک‌اند پایتون هم اتوماتیک است: تا صفحهٔ خالی یا پایان صفحه‌بندی ادامه می‌دهد با سقف ایمنی ۱۰۰ صفحه (سقف SCRAPER_MAX_PAGES هم به ۱۰۰ هم‌تراز داشبورد رسید)","none/scroll در استخراج واقعی تک‌صفحه‌ای است مثل تست؛ دیگر URL بی‌معنی ?page=2 ساخته نمی‌شود","اگر صفحهٔ ۲ به بعد خالی برگردد یا محصول تازه‌ای نداشته باشد، علت توقف با شماره صفحه و URL دقیق در diagnostics.pagination_stopped و پیام پایان کار ثبت می‌شود","تست سرعت ۳ صفحه‌ای و عیب‌یابی استخراج اکنون مثل استخراج واقعی فقط محصول «تازه» را می‌شمارند؛ صفحه‌ای که فقط کپی صفحه‌های قبل باشد دیگر تست را سبز نمی‌کند و با پیام واضح «هیچ محصول تازه‌ای نداشت» رد می‌شود"]},
     {"version":"10.224","date":"2026-09-22","title":"استخراج واقعاً مستقل و هم‌زمان پروفایل‌ها","items":["رابط کلاسیک پس از ثبت هر کار آزاد می‌شود تا هنگام انتظار Playwright بتوان استخراج HTTP پروفایل دیگری را هم‌زمان آغاز کرد","هر وظیفه نام پروفایل را به‌صورت snapshot تغییرناپذیر حمل می‌کند و تغییر پروفایل فعال دیگر نتیجه را به پروفایل اشتباه نمی‌فرستد","ذخیره موتور یادگرفته‌شده، سلکتورهای خودکار و صفحه‌بندی در چرخه اتمیک انجام می‌شود تا پایان هم‌زمان دو کار داده‌های یکدیگر را بازنویسی نکند","تکمیل کار پس‌زمینه در داشبورد یا رابط کلاسیک دیگر نمای نتایج پروفایلی را که کاربر در حال مشاهده آن است جابه‌جا نمی‌کند","تست بازگشتی Playwright مسدودشده را شبیه‌سازی می‌کند و ثابت می‌کند کار Requests پروفایل دوم پیش از آزادشدن مرورگر کامل و جداگانه ذخیره می‌شود"]},
     {"version":"10.223","date":"2026-09-22","title":"مدیریت فروشگاه داخل مودال تب نتایج اسکریپر","items":["دکمهٔ برجسته مدیریت فروشگاه به تب نتایج داشبورد اصلی و رابط کلاسیک اسکریپر اضافه شد","با زدن دکمه، پنل کامل مدیریت فروشگاه بدون خروج از اسکریپر در یک مودال تمام‌صفحه و واکنش‌گرا باز می‌شود","نمای کلی فروش، سفارش‌ها، تنظیمات ویترین، درگاه‌های پرداخت و وب‌هوک باسلام همگی داخل همان مودال در دسترس‌اند","مودال بارگذاری تنبل، وضعیت بارگذاری، تازه‌سازی مستقل، بستن با Escape و بازگشت فوکوس به دکمه آغازگر دارد","مسیر مستقل مدیریت برای سازگاری حفظ شده اما جریان اصلی مدیریت اکنون مستقیماً از تب نتایج انجام می‌شود"]},
     {"version":"10.222","date":"2026-09-22","title":"بازطراحی حرفه‌ای و پایدار ویترین عمومی","items":["نمای اصلی فروشگاه با تصویر اختصاصی محلی، تایپوگرافی پرقدرت، دکمه‌های خرید واضح و چیدمان حرفه‌ای دسکتاپ و موبایل بازطراحی شد","بخش پیشنهادهای ویژهٔ پویا با محصولات واقعی، قیمت نهایی، تخفیف، تصویر، جزئیات و افزودن مستقیم به سبد خرید به صفحه اضافه شد","کارت‌های محصول، دسته‌بندی‌ها، مزایای خرید، سرویس‌ها و بخش پیگیری سفارش با سطوح، فاصله‌گذاری، رنگ و تعامل غنی‌تر بازآرایی شدند","کل CSS حیاتی همراه HTML فروشگاه ارسال می‌شود تا حتی پشت پراکسی یا prefix و در صورت تأخیر asset صفحه هرگز بدون استایل رندر نشود؛ فایل مستقل cacheable نیز برای سازگاری باقی ماند","تصویر hero از asset امن محلی سرو می‌شود و همهٔ مسیرهای فروشگاه در root و prefix با سیاست CSP و MIME صحیح سازگار مانده‌اند"]},
@@ -324,7 +325,9 @@ ERROR_LOG_PATH = os.environ.get("SCRAPER_ERROR_LOG", os.path.join(BASE_DIR, "scr
 ERROR_LOG_LOCK = threading.Lock()
 PASSWORD = os.environ.get("SCRAPER_PASSWORD", "")
 DEPLOY_PASSWORD = os.environ.get("SCRAPER_DEPLOY_PASSWORD", "")
-MAX_PAGES_HARD = _env_int("SCRAPER_MAX_PAGES", 10000 if VPS_MODE else 50, 1, 100000)
+# 10.225: 100 (not 50) so the dashboard promise holds: its page count input is
+# capped at 100 and "0 = automatic (safety cap 100 pages)". Env can still override.
+MAX_PAGES_HARD = _env_int("SCRAPER_MAX_PAGES", 10000 if VPS_MODE else 100, 1, 100000)
 MAX_PRODUCTS_HARD = _env_int("SCRAPER_MAX_PRODUCTS", 100000 if VPS_MODE else 2000, 1, 500000)
 MAX_HTML_BYTES = _env_int("SCRAPER_MAX_HTML_BYTES", (32 if VPS_MODE else 12) * 1024 * 1024, 1024 * 1024, 128 * 1024 * 1024)
 STALL_AFTER = _env_int("SCRAPER_STALL_AFTER", 300, 60, 86400)
@@ -3227,18 +3230,48 @@ def picker_browser_fetch(url: str, timeout: int, scrolls: int, errors: list[str]
 
 def scrape(config: dict[str, Any]) -> ScrapeReport:
     source = public_http_url(str(config.get("url", "")))
+    # 10.225: pages<=0 is the dashboard's "اتوماتیک" (0 = automatic): keep
+    # walking pages until the pagination ends (empty page / no new products)
+    # with MAX_PAGES_HARD as the safety cap. It used to collapse to 1 page.
+    _auto_pages = False
     try:
-        pages = max(1, min(MAX_PAGES_HARD, int(config.get("pages") or 1)))
+        _raw_pages = int(config.get("pages") or 0)
     except (TypeError, ValueError):
-        pages = 1
+        _raw_pages = 0
+    if _raw_pages <= 0:
+        pages = MAX_PAGES_HARD
+        _auto_pages = True
+    else:
+        pages = max(1, min(MAX_PAGES_HARD, _raw_pages))
     mode = str(config.get("render", "auto"))
     selectors = config.get("selectors") if isinstance(config.get("selectors"), dict) else {}
     detail_selectors = config.get("detail_selectors") if isinstance(config.get("detail_selectors"), dict) else {}
     gallery_cfg = config.get("gallery") if isinstance(config.get("gallery"), dict) else {"mode":"auto"}
     pag_kind = str(config.get("pagination", "query")).strip() or "query"
     pag_value = str(config.get("page_value", "page"))
+    # 10.225: canonicalize the pagination vocabulary ONCE, exactly like the
+    # dashboard tests do. The Node dashboard stores e.g. "next_selector" /
+    # "path_pattern" / "query_page"; scrape() only ever compared the literal
+    # "next", so next-selector profiles silently degraded to ?page=N URLs while
+    # the 3-page benchmark followed the real next link — the exact reason a
+    # 3-page test passed while a real extraction stopped after page 1.
+    _kind_l = pag_kind.strip().lower()
+    if _kind_l in ("next", "next_selector", "link"):
+        pag_kind = "next"
+    elif _kind_l in ("path", "path_page", "path_pattern", "pattern_path"):
+        pag_kind = "path"
+    elif _kind_l in ("full", "full_pattern", "pattern", "custom_full"):
+        pag_kind = "full"
+    elif _kind_l in ("query", "query_page", "query_custom", "param", "custom", "query_string"):
+        pag_kind = "query"
+    elif _kind_l in ("none", "off", "no"):
+        pag_kind = "none"
+    elif _kind_l in ("scroll", "scrolloffset", "scroll_mode"):
+        pag_kind = "scroll"
+    elif _kind_l in ("auto", "automatic", "detect"):
+        pag_kind = "auto"
     # Auto-detect pagination if requested or if configured value looks generic
-    _auto_pagination = pag_kind.lower() in ("auto", "automatic", "detect", "")
+    _auto_pagination = pag_kind == "auto"
     _detected_kind = ""
     _detected_value = ""
     enrich = bool(config.get("enrich", False))
@@ -3277,6 +3310,8 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
 
     for number in range(start_page, pages + 1):
         if task_id and live_task_cancelled(task_id):raise ValueError("استخراج با درخواست کاربر متوقف شد")
+        if _auto_pages and number == start_page:
+            report.logs.append(f"تعداد صفحات «اتوماتیک»: تا پایان صفحه‌بندی (صفحهٔ خالی یا بی‌محصول تازه) ادامه می‌دهد؛ سقف ایمنی {pages} صفحه")
         # Auto pagination: after first page is fetched, detect from its HTML
         if _auto_pagination and number == 2 and page_html:
             try:
@@ -3304,13 +3339,26 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 else:
                     # No pagination detected, treat as single page
                     report.logs.append("صفحه‌بندی خودکار: صفحه‌بندی پیدا نشد — تک‌صفحه")
+                    # 10.225: mean it — switching to "none" makes the loop stop
+                    # after page 1 instead of inventing ?page=2 URLs.
+                    pag_kind, pag_value = "none", ""
             except Exception as _e:
                 report.logs.append(f"خطای تشخیص صفحه‌بندی: {_e}")
         # Normalize 'auto' that somehow remains (e.g., detection failed)
         _effective_kind = "query" if pag_kind.lower() in ("auto", "automatic", "detect", "") else pag_kind
+        # 10.225: none/scroll pagination is single-page by definition (the
+        # dashboard tests treat it the same way). Building ?page=N URLs for
+        # them produced a duplicate of page 1 and a pointless extra fetch.
+        if number > start_page and _effective_kind in ("none", "scroll"):
+            report.logs.append(f"صفحه‌بندی {_effective_kind} تک‌صفحه‌ای است — پس از صفحهٔ {number-1} صفحهٔ بیشتری درخواست نمی‌شود")
+            report.diagnostics["pagination_stopped"] = {"page": number - 1, "url": source, "reason": "single-page-mode",
+                "reason_fa": f"صفحه‌بندی {_effective_kind} فقط یک صفحه دارد", "configured_pages": config.get("pages")}
+            break
         if _effective_kind == "next" and number > 1:
             if not next_url:
                 report.logs.append("صفحه‌بندی متوقف شد: لینک صفحه بعد پیدا نشد")
+                report.diagnostics["pagination_stopped"] = {"page": number - 1, "reason": "next-link-missing",
+                    "reason_fa": "لینک «صفحهٔ بعد» در آخرین صفحه پیدا نشد", "selector": pag_value}
                 break
             url = next_url
         else:
@@ -3481,11 +3529,37 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
 
         _effective_kind2 = "query" if str(pag_kind).lower() in ("auto", "automatic", "detect", "") else pag_kind
         if _effective_kind2 == "next" and soup is not None:
-            try:
-                next_node = soup.select_one(pag_value or "a[rel='next']")
-                next_url = absolute_url(next_node.get("href"), url) if next_node else ""
-            except Exception as exc:
-                raise ValueError(f"سلکتور صفحه بعد نامعتبر است: {exc}") from exc
+            # 10.225: the profile's own selector is tried first (it used to be
+            # the only one); when it misses, the same default candidates the
+            # benchmark uses are probed so test and real extraction agree.
+            _next_node = None
+            _next_sel_used = ""
+            for _sel in ([pag_value.strip()] if pag_value.strip() else []) + [
+                    "a[rel='next']", "a.next", ".pagination a.next", ".pagination .next a",
+                    ".pager a.next", "a[aria-label*='next' i]", "a[aria-label*='بعدی' i]"]:
+                try:
+                    _node = soup.select_one(_sel)
+                except Exception:
+                    continue
+                if _node is not None and _node.get("href"):
+                    _next_node = _node
+                    _next_sel_used = _sel
+                    break
+            if _next_node is not None:
+                _next_url = absolute_url(_next_node.get("href"), url)
+                if _next_url and _next_url.rstrip("/") == url.rstrip("/"):
+                    # Selector matched a self-link (e.g. the current page
+                    # number); following it would re-fetch the same content.
+                    report.logs.append(f"صفحه‌بندی next: سلکتور {_next_sel_used} به لینک همین صفحه اشاره می‌کند — لینک معتبر صفحهٔ بعد پیدا نشد")
+                    next_url = ""
+                else:
+                    if _next_sel_used != pag_value.strip() and pag_value.strip():
+                        report.logs.append(f"صفحه‌بندی next: سلکتور پروفایل چیزی پیدا نکرد؛ سلکتور پیش‌فرض {_next_sel_used} استفاده شد")
+                    next_url = _next_url
+            else:
+                if pag_value.strip():
+                    report.logs.append(f"صفحه‌بندی next: هیچ سلکتوری (حتی پیش‌فرض‌ها) لینک صفحهٔ بعد را پیدا نکرد")
+                next_url = ""
 
         new_count = 0
         for row in rows:
@@ -3499,9 +3573,20 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             report.logs.append(f"صفحه {number}: محصولی پیدا نشد" + (f" — {fetch_error}" if fetch_error else ""))
             if number == 1 and fetch_error:
                 report.diagnostics["error"] = fetch_error
+            if number > start_page:
+                # 10.225: an empty page 2+ IS the documented end of pagination
+                # for automatic mode — record where it stopped so the user can
+                # tell "the site really has one page" from "the pattern broke".
+                report.diagnostics["pagination_stopped"] = {"page": number, "url": url,
+                    "reason": "empty-page", "reason_fa": f"صفحهٔ {number} هیچ محصولی نداشت",
+                    "pagination": f"{_effective_kind}:{pag_value}"}
             break
         if number > 1 and new_count == 0:
-            report.logs.append("صفحه‌بندی متوقف شد: محصول تازه‌ای نبود")
+            report.logs.append(f"صفحه‌بندی متوقف شد: صفحهٔ {number} هیچ محصول تازه‌ای نداشت ({len(rows)} محصول، همه تکراری صفحات قبل) — URL: {url}")
+            report.diagnostics["pagination_stopped"] = {"page": number, "url": url,
+                "reason": "no-new-products",
+                "reason_fa": f"صفحهٔ {number} همان محصولات صفحات قبل را برگرداند ({len(rows)} تکراری)",
+                "duplicates": len(rows), "pagination": f"{_effective_kind}:{pag_value}"}
             break
 
     if not report.products:
@@ -6337,7 +6422,14 @@ def scrape_live_worker(task_id: str, config: dict[str,Any]) -> None:
             profile=clean_text(config.get("_profile_name"));detail_task=live_task_create("detail_extract","استخراج خودکار جزئیات"+(f" · {profile}" if profile else ""),private=False)
             with LIVE_TASK_LOCK:detail_task["profile"]=profile;LIVE_TASKS[detail_task["id"]]=detail_task
             live_task_disk_write(detail_task);result["detail_task"]={"id":detail_task["id"],"status":"waiting","total":len(result["products"])}
-        live_task_update(task_id,100,"فهرست با سرعت بالا استخراج شد","completed",f"{result['total']} محصول"+("؛ جزئیات در وظیفه مستقل ادامه دارد" if detail_task else ""),result=result,done=result['pages'],total=result['pages'],extracted=result['total'],eta_seconds=0)
+        # 10.225: tell the user WHERE pagination stopped and why, right in the
+        # task summary — a real extraction that ends after 1 page must never
+        # look like a mystery when the 3-page test passed.
+        _stop=(report.diagnostics or {}).get("pagination_stopped") or {}
+        _stop_note=""
+        if _stop.get("page") is not None:
+            _stop_note=f" · صفحه‌بندی در صفحه {_stop.get('page')} متوقف شد: {_stop.get('reason_fa','')}"
+        live_task_update(task_id,100,"فهرست با سرعت بالا استخراج شد","completed",f"{result['total']} محصول از {result['pages']} صفحه"+_stop_note+("؛ جزئیات در وظیفه مستقل ادامه دارد" if detail_task else ""),result=result,done=result['pages'],total=result['pages'],extracted=result['total'],eta_seconds=0)
         if detail_task:threading.Thread(target=detail_live_worker,args=(detail_task["id"],config,result["products"],result["pages"]),name="detail-live",daemon=True).start()
         # "همگام‌سازی دستی" must continue all the way to the destinations. The
         # list-only button leaves _dispatch_after empty and stops here.
