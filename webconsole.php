@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.0');
+define('WCP_VERSION', '1.6.1');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1298,7 +1298,7 @@ function sysinfo(): array {
     $load=sys_getloadavg()?:[0,0,0];
     $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice']as$t)$tools[$t]=which($t);
     $tools['mysqldump']=which('mysqldump')||which('mariadb-dump');
-    return ['host'=>gethostname(),'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),'php'=>PHP_VERSION,'user'=>sh_ok('id -un')?:get_current_user(),'cores'=>(int)sh_ok("grep -c '^processor' /proc/cpuinfo"),'load'=>array_map(fn($v)=>round($v,2),$load),'cpu_pct'=>$cpu,'mem'=>['total'=>$mem['total'],'used'=>$mem['total']-$mem['avail']],'swap'=>['total'=>$swap['total'],'used'=>$swap['total']-$swap['free']],'disk'=>['total'=>disk_total_space('/')?:0,'free'=>disk_free_space('/')?:0],'uptime'=>(int)(float)@file_get_contents('/proc/uptime'),'web'=>$_SERVER['SERVER_SOFTWARE']??'cli','term_mode'=>term_mode(),'ip'=>client_ip(),'tools'=>$tools];
+    return ['host'=>gethostname(),'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),'php'=>PHP_VERSION,'user'=>sh_ok('id -un')?:get_current_user(),'cores'=>(int)sh_ok("grep -c '^processor' /proc/cpuinfo"),'load'=>array_map(fn($v)=>round($v,2),$load),'cpu_pct'=>$cpu,'mem'=>['total'=>$mem['total'],'used'=>$mem['total']-$mem['avail']],'swap'=>['total'=>$swap['total'],'used'=>$swap['total']-$swap['free']],'disk'=>['total'=>disk_total_space('/')?:0,'free'=>disk_free_space('/')?:0],'uptime'=>(int)(float)@file_get_contents('/proc/uptime'),'web'=>$_SERVER['SERVER_SOFTWARE']??'cli','term_mode'=>term_mode(),'ip'=>client_ip(),'tools'=>$tools,'tools_versions'=>['node'=>trim(sh_ok('node -v 2>/dev/null')),'npm'=>trim(sh_ok('npm -v 2>/dev/null')),'python'=>trim(sh_ok("python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")' 2>/dev/null")),'pm2'=>trim(sh_ok('pm2 -v 2>/dev/null | tail -n 1'))]];
 }
 
 function emergency_rescue(): array {
@@ -1398,6 +1398,18 @@ function handle_api() {
     case 'auth.change':
         if(!password_verify((string)($in['old']??''),cfg()['pass_hash']))jout(false,null,'رمز فعلی اشتباه است');if(strlen((string)($in['new']??''))<8)jout(false,null,'رمز حداقل ۸ کاراکتر باشد');cfg_save(['pass_hash'=>password_hash($in['new'],PASSWORD_DEFAULT)]);jout(true);
     case 'ping': jout(true,['v'=>WCP_VERSION,'user'=>$_SESSION['wcp_user']??'']);
+    case 'sys.install_component':
+        $comp = trim((string)($in['component'] ?? 'all'));
+        $titles = [
+            'node' => 'نصب و ارتقای Node.js 20 LTS و PM2',
+            'python_scrapers' => 'نصب Python 3 و پکیج‌های اسکرپینگ',
+            'browser_deps' => 'نصب نیازمندی‌های مرورگرهای بدون سر (Puppeteer / Playwright)',
+            'all' => 'نصب کامل تمامی پیش‌نیازها و محیط‌های اجرایی سرور'
+        ];
+        $title = $titles[$comp] ?? 'نصب پیش‌نیازهای سرور';
+        $job = job_create('install_component', $title, ['component' => $comp]);
+        job_start($job);
+        jout(true, ['job' => $job['id'], 'title' => $title]);
     case 'sysinfo': jout(true,sysinfo());
     case 'sys.emergency_rescue': jout(true,emergency_rescue());
     case 'sys.create_swap': jout(true,create_swap((int)($in['size_mb']??2048)));
@@ -2296,6 +2308,60 @@ function cli_service(array $job): int {
         @unlink(JOBS_DIR . '/' . $job['id'] . '.child_pid');
     }
 }
+function cli_install_component(array $job): int {
+    $comp = $job['params']['component'] ?? 'all';
+    cli_log("=================================================");
+    cli_log("Starting Component Installation: " . $comp);
+    cli_log("=================================================");
+    
+    $runCmd = function(string $cmd) {
+        $fullCmd = 'export DEBIAN_FRONTEND=noninteractive; export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; ' . $cmd;
+        cli_run($fullCmd, $rc);
+        return $rc;
+    };
+
+    if ($comp === 'node' || $comp === 'all') {
+        cli_log("[Node.js 20] Purging conflicting legacy packages...");
+        $runCmd("sudo -n apt-get purge -y libnode-dev libnode72 2>/dev/null || true");
+        cli_log("[Node.js 20] Installing NodeSource 20 LTS repository & package...");
+        $runCmd("sudo -n curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -n bash - 2>/dev/null || true");
+        $runCmd("sudo -n apt-get update -y && sudo -n apt-get install -y nodejs");
+        
+        $nodeCheck = trim(sh_ok('node -v 2>/dev/null'));
+        $npmCheck = trim(sh_ok('npm -v 2>/dev/null'));
+        if ($nodeCheck === '' || $npmCheck === '') {
+            cli_log("[Node.js 20] Installing official standalone Node.js 20 LTS prebuilt binary...");
+            $arch = trim(sh_ok('uname -m'));
+            $nArch = ($arch === 'aarch64') ? 'arm64' : 'x64';
+            $runCmd("curl -fsSL https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-{$nArch}.tar.xz -o /tmp/node20.tar.xz && sudo -n tar -xJf /tmp/node20.tar.xz -C /usr/local --strip-components=1 && rm -f /tmp/node20.tar.xz");
+        }
+        cli_log("[Node.js 20] Installing global tools (PM2, Yarn, PNPM)...");
+        $runCmd("sudo -n npm install -g pm2 yarn pnpm nodemon");
+        $runCmd("sudo -n pm2 startup systemd -u root --hp /root 2>/dev/null || true");
+        cli_log("✓ Node.js " . trim(sh_ok('node -v 2>/dev/null')) . " & NPM " . trim(sh_ok('npm -v 2>/dev/null')) . " ready.");
+    }
+
+    if ($comp === 'browser_deps' || $comp === 'all') {
+        cli_log("[Browser Drivers] Installing headless browser system packages (Chrome / Puppeteer / Playwright)...");
+        $runCmd("sudo -n apt-get update -y && sudo -n apt-get install -y --no-install-recommends libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 libx11-xcb1 libxcb-dri3-0 libxshmfence1 fonts-liberation fonts-noto-color-emoji fonts-dejavu-core fonts-freefont-ttf");
+        cli_log("✓ Headless browser dependencies installed.");
+    }
+
+    if ($comp === 'python_scrapers' || $comp === 'all') {
+        cli_log("[Python] Installing Python 3, Pip & Dev build tools...");
+        $runCmd("sudo -n apt-get update -y && sudo -n apt-get install -y python3 python3-pip python3-venv python3-dev build-essential");
+        $runCmd("sudo -n python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || sudo -n python3 -m pip install --upgrade pip");
+        cli_log("[Python] Installing advanced scraping & automation libraries...");
+        $runCmd("sudo -n pip3 install --break-system-packages requests curl_cffi cloudscraper undetected-chromedriver playwright selenium beautifulsoup4 lxml aiohttp httpx fastapi uvicorn python-dotenv fake-useragent basalam-sdk selectolax html5lib psutil");
+        cli_log("✓ Python scraping packages installed successfully.");
+    }
+
+    cli_log("=================================================");
+    cli_log("Component installation completed: " . $comp);
+    cli_log("=================================================");
+    return 0;
+}
+
 function wcp_cli(array $argv) {
     if (in_array('--auto-update', $argv, true)) {
         @set_time_limit(300);
@@ -2317,7 +2383,7 @@ function wcp_cli(array $argv) {
             wcp_put_contents(JOBS_DIR . '/' . $id . '.pid', getmypid() . "\n", false);
         }
         @set_time_limit(0);ini_set('memory_limit','512M');$code=1;cli_log('WebConsole job '.$id.' ('.$job['type'].')');
-        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;default:throw new RuntimeException('Unknown job type');}}
+        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;default:throw new RuntimeException('Unknown job type');}}
         catch(Throwable $e){cli_log('ERROR: '.mask_url($e->getMessage()));$code=1;}
         $exit=JOBS_DIR.'/'.$id.'.exit';if(!is_file($exit))wcp_put_contents($exit,$code."\n",false);exit($code);
     }
@@ -3368,6 +3434,42 @@ async function renderDash(){
         </div>
       </div>
 
+      <div class="card" style="border-right: 3px solid var(--pri)">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <h3 style="margin:0">🧰 مدیریت و نصب پیش‌نیازهای سرور (Environment & Packages)</h3>
+            <p class="hint" style="margin:4px 0">نصب و ارتقای یک‌کلیکه نود جی‌اس، پایتون و درایورهای مرورگر بدون نیاز به کار با ترمینال SSH</p>
+          </div>
+          <button class="btn pri sm" id="dash-inst-all" title="نصب کامل تمامی پکیج‌های نود، پایتون و درایورها">⚡ نصب همگانی پیش‌نیازها</button>
+        </div>
+        <div class="grid3" style="gap:10px;margin-top:12px">
+          <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
+            <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
+              <span>🟢 Node.js 20 LTS + PM2</span>
+              <span class="tag ${s.tools?.node?'ok':'warn'}">${s.tools?.node?'✓ '+(s.tools_versions?.node||'نصب شده'):'✗ نیاز به نصب'}</span>
+            </div>
+            <p class="hint" style="font-size:11px;margin:6px 0">Node.js 20, NPM, PM2, Yarn, PNPM</p>
+            <button class="btn sm" style="width:100%" id="dash-inst-node">🚀 نصب / ارتقای Node.js 20</button>
+          </div>
+          <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
+            <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
+              <span>🐍 Python 3 + اسکرپینگ</span>
+              <span class="tag ${s.tools?.pip3||s.tools?.python3?'ok':'warn'}">${s.tools?.python3?'✓ '+(s.tools_versions?.python?'v'+s.tools_versions.python:'نصب شده'):'✗ نیاز به نصب'}</span>
+            </div>
+            <p class="hint" style="font-size:11px;margin:6px 0">BeautifulSoup4, Requests, Curl_cffi, Playwright, Cloudscraper</p>
+            <button class="btn sm" style="width:100%" id="dash-inst-py">🐍 نصب پکیج‌های پایتون</button>
+          </div>
+          <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
+            <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
+              <span>🌐 پیش‌نیازهای مرورگر</span>
+              <span class="tag ok">درایورهای لینوکس</span>
+            </div>
+            <p class="hint" style="font-size:11px;margin:6px 0">کتابخانه‌های Headless Chrome و دورزدن Cloudflare</p>
+            <button class="btn sm" style="width:100%" id="dash-inst-browser">🌐 نصب درایورهای مرورگر</button>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <h3>ابزارهای آماده سرور</h3>
         <div class="tools-grid">${Object.entries(s.tools).map(([k,v])=>`
@@ -3395,7 +3497,11 @@ async function renderDash(){
         </div>
       </div>
     `;
-      const rBtn=$('#dash-rescue-btn');
+      const inNode=$('#dash-inst-node');if(inNode)inNode.onclick=async()=>{const d=await api('sys.install_component',{component:'node'});openJob(d.job,d.title);};
+    const inPy=$('#dash-inst-py');if(inPy)inPy.onclick=async()=>{const d=await api('sys.install_component',{component:'python_scrapers'});openJob(d.job,d.title);};
+    const inBr=$('#dash-inst-browser');if(inBr)inBr.onclick=async()=>{const d=await api('sys.install_component',{component:'browser_deps'});openJob(d.job,d.title);};
+    const inAll=$('#dash-inst-all');if(inAll)inAll.onclick=async()=>{if(!await confirmDlg('نصب کامل تمامی پکیج‌های Node 20، Python 3 و درایورهای مرورگر آغاز شود؟'))return;const d=await api('sys.install_component',{component:'all'});openJob(d.job,d.title);};
+    const rBtn=$('#dash-rescue-btn');
     if(rBtn)rBtn.onclick=async()=>{
       rBtn.disabled=true;rBtn.textContent='در حال پاک‌سازی...';
       try{

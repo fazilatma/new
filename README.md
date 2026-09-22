@@ -2,31 +2,24 @@
 
 Automated setup script for Linux servers (Ubuntu/Debian) configuring **Apache2**, **PHP**, **Python 3**, **Node.js 20 LTS**, **Scraper & Cloudflare Bypass libraries**, headless browser dependencies, and the **WebConsole Pro** management suite.
 
-## 🚀 One-Line Fast Installation (Fresh Server)
+## 🚀 One-Line Installation (Supports Full & Minimal Modes)
 
-Run the following command as `root` (or with `sudo`) on any fresh VPS:
+Run the following command as `root` (or with `sudo`):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo bash
 ```
 
+### 🎯 Installation Modes:
+- **[1] Full Setup:** Installs Apache2 + PHP + WebConsole + Node 20 LTS + PM2 + Python 3 Scraper libraries + Browser headless drivers.
+- **[2] Minimal Setup (10s):** Installs Apache2 + PHP + WebConsole Pro immediately; all other runtimes (Node 20, Python, Scrapers) can be installed inside the WebConsole UI with 1 click.
+
 ---
 
 ## ⚡ Quick Update (Existing Server)
 
-To update only WebConsole Pro to the latest version in 2 seconds:
+To update WebConsole Pro to the latest version in 2 seconds:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/update.sh | sudo bash
 ```
-
----
-
-### 📦 Installed & Preconfigured Components:
-- **Apache2 Web Server + PHP:** Rock-solid native PHP execution without fragile socket configurations
-- **Node.js 20.x LTS + PM2 + Yarn + PNPM** (Clean install without distro package conflicts)
-- **Python 3 + Pip + Build Tools**
-- **Advanced Scraping & Automation Packages:** `curl_cffi`, `cloudscraper`, `undetected-chromedriver`, `requests`, `playwright`, `selenium`, `beautifulsoup4`, `lxml`, `fastapi`, `uvicorn`, `aiohttp`
-- **Headless Browser Dependencies:** Full Linux libraries for Puppeteer, Playwright & Chrome
-- **NOPASSWD Sudo Privileges:** Sudo access for `www-data` for seamless task execution and service restarts
-- **WebConsole Pro v1.6.0:** Deployed at `/var/www/html/webconsole.php` and `/var/www/html/index.php`
