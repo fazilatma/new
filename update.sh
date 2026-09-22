@@ -9,7 +9,7 @@ rm -f /var/www/html/index.html /var/www/html/index.nginx-debian.html 2>/dev/null
 chown -R www-data:www-data /var/www/html
 chmod -R 775 /var/www/html
 
-# Restart web server and PHP to clear opcache
+# Restart PHP-FPM and Apache2 to apply changes
 systemctl restart php*-fpm 2>/dev/null || true
 systemctl restart apache2 2>/dev/null || true
 
