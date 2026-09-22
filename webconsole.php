@@ -2203,7 +2203,7 @@ function cli_service(array $job): int {
                 $pkgsToInstall = [];
 
                 // Pattern 1: Exact ModuleNotFoundError / ImportError
-                if (preg_match_all('/(?:ModuleNotFoundError|ImportError)[^\n]*No module named ['"]([a-zA-Z0-9_\-]+)['"]/i', $logTail, $mpm)) {
+                if (preg_match_all('/(?:ModuleNotFoundError|ImportError)[^\r\n]*No module named [\x22\x27]([a-zA-Z0-9_\-]+)[\x22\x27]/i', $logTail, $mpm)) {
                     foreach (array_unique($mpm[1]) as $mName) {
                         $pName = $modMap[$mName] ?? $mName;
                         $pkgsToInstall[$pName] = true;
@@ -2211,7 +2211,7 @@ function cli_service(array $job): int {
                 }
 
                 // Pattern 2: Explicit dependency suggestions in RuntimeError/Exception
-                if (preg_match_all('/pip3?\s+install\s+([^\n\(\)"]+)/i', $logTail, $allPipMatches)) {
+                if (preg_match_all('/pip3?\s+install\s+([^\r\n\(\)\x22\x27]+)/i', $logTail, $allPipMatches)) {
                     foreach ($allPipMatches[1] as $rawBlock) {
                         $tokens = preg_split('/[\s,;]+/', trim($rawBlock));
                         foreach ($tokens as $tok) {
@@ -2242,7 +2242,7 @@ function cli_service(array $job): int {
                 }
 
                 // Pattern 3: Node.js missing module
-                if (!$depsAutoInstalled && preg_match('/Cannot find module ['"]([a-zA-Z0-9_\-\.\@\/]+)['"]/i', $logTail, $npmM)) {
+                if (!$depsAutoInstalled && preg_match('/Cannot find module [\x22\x27]([a-zA-Z0-9_\-\.\@\/]+)[\x22\x27]/i', $logTail, $npmM)) {
                     $nodePkg = trim($npmM[1]);
                     if ($nodePkg !== '' && $nodePkg[0] !== '.' && $nodePkg[0] !== '/') {
                         cli_log("[auto-installer] Detected missing Node.js module: " . $nodePkg . ". Auto-installing via npm...");
@@ -4701,10 +4701,10 @@ setInterval(async()=>{
 <?php return ob_get_clean();}
 /* CLI library mode is reserved for local validation; it is not an HTTP option. */
 try {
-     = body();
-    if (!empty(['api'])) {
+    $in = body();
+    if (!empty($in['api'])) {
         try { handle_api(); }
-        catch (Throwable ) { jout(false, null, mask_url(->getMessage()), 500); }
+        catch (Throwable $e) { jout(false, null, mask_url($e->getMessage()), 500); }
         exit;
     }
     header('X-Frame-Options: SAMEORIGIN');
@@ -4726,13 +4726,13 @@ try {
     }
     echo '</head><body>';
     echo render_body();
-} catch (Throwable ) {
+} catch (Throwable $e) {
     http_response_code(500);
     echo '<!doctype html><html dir="ltr" lang="en"><head><meta charset="utf-8"><title>WebConsole Pro - Startup Diagnostic</title>';
     echo '<style>body{font-family:system-ui,-apple-system,sans-serif;background:#090d16;color:#f8fafc;padding:30px;line-height:1.6}.card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:20px;max-width:800px;margin:auto}.err{color:#f87171;font-weight:bold}pre{background:#020617;padding:12px;border-radius:6px;overflow-x:auto;color:#cbd5e1;font-size:13px}</style></head><body>';
     echo '<div class="card"><h2>⚠️ WebConsole Pro - Startup Diagnostic</h2>';
-    echo '<p class="err">Error: ' . htmlspecialchars(->getMessage()) . '</p>';
-    echo '<p><b>File:</b> ' . htmlspecialchars(->getFile()) . ' (Line ' . ->getLine() . ')</p>';
-    echo '<pre>' . htmlspecialchars(->getTraceAsString()) . '</pre>';
+    echo '<p class="err">Error: ' . htmlspecialchars($e->getMessage()) . '</p>';
+    echo '<p><b>File:</b> ' . htmlspecialchars($e->getFile()) . ' (Line ' . $e->getLine() . ')</p>';
+    echo '<pre>' . htmlspecialchars($e->getTraceAsString()) . '</pre>';
     echo '</div></body></html>';
 }

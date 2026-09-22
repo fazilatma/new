@@ -18,7 +18,7 @@ curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo
 
 ## ⚡ Quick Update (Existing Server)
 
-To update WebConsole Pro and fix webserver configurations in 2 seconds:
+To update WebConsole Pro to the latest version in 2 seconds:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/update.sh | sudo bash
