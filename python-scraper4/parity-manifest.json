@@ -10,7 +10,7 @@
   },
   "target": {
     "runtime": "python-scraper4",
-    "minimumVersion": "10.220"
+    "minimumVersion": "10.221"
   },
   "normalization": "Dynamic path parameters are represented as <>.",
   "requiredRoutes": [
@@ -723,6 +723,14 @@
     {
       "id": "basalam-catalog-fetch-modes",
       "test": "NodeParityContracts.test_basalam_paged_and_one_shot_catalogs"
+    },
+    {
+      "id": "public-storefront-commerce",
+      "test": "NodeParityContracts.test_storefront_order_payment_and_webhook_contracts"
+    },
+    {
+      "id": "digipay-payment-adapter",
+      "test": "NodeParityContracts.test_digipay_official_payment_adapter_contract"
     },
     {
       "id": "reconciliation-photo-dedup",

@@ -34,6 +34,7 @@ import importlib.metadata
 import importlib.util
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -135,6 +136,24 @@ def _num(value: Any, fallback: float = 0) -> float:
         return fallback
 
 
+def _price_num(value: Any, fallback: float = 0) -> float:
+    """Parse saved/display prices without turning ``12500.0`` into 125000."""
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if math.isfinite(number) else fallback
+    text = str(value or "").translate(str.maketrans(
+        "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"
+    )).replace(",", "").replace("٬", "").replace("٫", ".")
+    match = re.search(r"[+-]?\d+(?:\.\d+)?", text)
+    try:
+        number = float(match.group()) if match else fallback
+        return number if math.isfinite(number) else fallback
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
+
 def _int(value: Any, fallback: int = 0) -> int:
     return int(_num(value, fallback))
 
@@ -182,6 +201,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         if gallery.get("selectors"):
             selectors["gallery"] = _s(gallery.get("selectors"))
         rules = cfg.get("profile_rules") if isinstance(cfg.get("profile_rules"), dict) else {}
+        raw_price_mode = _s(rules.get("price_mode") or rules.get("priceMode") or "none")
+        node_price_mode = {"multiplier": "multiply", "fixed": "add"}.get(raw_price_mode, raw_price_mode)
         pag = PAG_PY_TO_NODE.get(_s(cfg.get("pagination")) or "query", "query_page")
         engine = _s(cfg.get("fetch_engine")) or "auto"
         products = cfg.get("saved_products")
@@ -202,9 +223,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "selectors": selectors,
             "gallery": gallery or None,
             "titleSuffix": _s(rules.get("title_suffix")),
-            "priceMode": _s(rules.get("price_mode")) or "none",
-            "priceValue": _num(rules.get("price_val")),
-            "roundPrice": _num(rules.get("round_price")),
+            "priceMode": node_price_mode or "none",
+            "priceValue": _num(rules.get("price_value", rules.get("price_val", rules.get("priceValue", 0)))),
+            "roundPrice": _num(rules.get("price_round", rules.get("round_price", rules.get("roundPrice", 0)))),
             "minPrice": _num(rules.get("min_price")),
             "wooCategoryId": _int(rules.get("woo_category_id")),
             "basalamCategoryId": _int(rules.get("bsl_category_id")),
@@ -251,11 +272,19 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 continue
             detail["image" if key == "detailImage" else key] = _s(value)
         rules = dict(cfg.get("profile_rules") or {})
+        node_price_mode = _s(node.get("priceMode")) or "none"
+        price_mode = {"multiply": "multiplier", "add": "fixed"}.get(node_price_mode, node_price_mode)
+        price_value = _num(node.get("priceValue"))
+        price_round = _num(node.get("roundPrice"))
         rules.update({
             "title_suffix": _s(node.get("titleSuffix")),
-            "price_mode": _s(node.get("priceMode")) or "none",
-            "price_val": _num(node.get("priceValue")),
-            "round_price": _num(node.get("roundPrice")),
+            "price_mode": price_mode,
+            # Canonical Python fields are mirrored to the old bridge aliases so
+            # profiles written by either dashboard remain lossless.
+            "price_value": price_value,
+            "price_val": price_value,
+            "price_round": price_round,
+            "round_price": price_round,
             "min_price": _num(node.get("minPrice")),
             "woo_category_id": _int(node.get("wooCategoryId")),
             "bsl_category_id": _int(node.get("basalamCategoryId")),
@@ -294,11 +323,39 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         if image and image not in images:
             images.insert(0, image)
         price = row.get("final_price", row.get("price"))
+        raw_result_base = row.get("resultBase") if isinstance(row.get("resultBase"), dict) else row.get("result_base")
+        result_base = dict(raw_result_base) if isinstance(raw_result_base, dict) else {}
+        source_raw = row.get("source_price")
+        if source_raw in (None, ""):
+            source_raw = row.get("sourcePrice")
+        if source_raw in (None, ""):
+            source_raw = result_base.get("price")
+        if source_raw in (None, ""):
+            source_raw = row.get("price_before_adjust", row.get("original_price"))
+        source_price = None if source_raw in (None, "") else _price_num(source_raw)
+        if source_price is not None:
+            result_base.update({
+                "price": source_price,
+                "priceText": _s(row.get("source_price_text") or row.get("sourcePriceText") or
+                                result_base.get("priceText") or source_raw),
+            })
+        raw_result_applied = row.get("resultApplied") if isinstance(row.get("resultApplied"), dict) else row.get("result_applied")
+        result_applied = dict(raw_result_applied) if isinstance(raw_result_applied, dict) else {}
+        applied_mode = _s(result_applied.get("priceMode") or result_applied.get("price_mode"))
+        if applied_mode:
+            result_applied["priceMode"] = {"multiplier": "multiply", "fixed": "add"}.get(applied_mode, applied_mode)
+        if "priceValue" not in result_applied and "price_value" in result_applied:
+            result_applied["priceValue"] = _num(result_applied.get("price_value"))
+        if "roundPrice" not in result_applied and "price_round" in result_applied:
+            result_applied["roundPrice"] = _num(result_applied.get("price_round"))
         return {
             "sourceKey": _s(row.get("source_key") or row.get("sourceKey") or row.get("url") or index),
             "title": _s(row.get("title")),
-            "price": _num(price),
+            "price": _price_num(price),
             "priceText": _s(row.get("price_text") or row.get("priceText") or price),
+            "sourcePrice": source_price,
+            "resultBase": result_base or None,
+            "resultApplied": result_applied or None,
             "url": _s(row.get("url") or row.get("link")),
             "image": image,
             "images": images,
@@ -317,8 +374,41 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "scrapedAt": _s(row.get("scraped_at") or row.get("scrapedAt")) or _iso(),
         }
 
-    def profile_products(name: str) -> list[dict[str, Any]]:
-        data = load()
+    def product_with_profile_price(product: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
+        """Present current profile pricing even for rows saved by older bridges."""
+        source = product.get("sourcePrice")
+        if source in (None, ""):
+            return product
+        raw_mode = _s(rules.get("price_mode") or rules.get("priceMode") or "none")
+        mode = {"multiplier": "multiply", "fixed": "add"}.get(raw_mode, raw_mode)
+        value = _num(rules.get("price_value", rules.get("price_val", rules.get("priceValue", 0))))
+        rounding = max(0, _int(rules.get("price_round", rules.get("round_price", rules.get("roundPrice", 0)))))
+        minimum = max(0, _num(rules.get("min_price", rules.get("minPrice", 0))))
+        if mode == "none" and not rounding and not minimum:
+            return product
+        amount = _price_num(source)
+        if amount <= 0:
+            return product
+        if mode == "percent":
+            amount *= 1 + value / 100
+        elif mode == "multiply" and value > 0:
+            amount *= value
+        elif mode == "add":
+            amount += value
+        if rounding:
+            amount = round(amount / rounding) * rounding
+        amount = max(minimum, round(amount))
+        current_applied = dict(product.get("resultApplied")) if isinstance(product.get("resultApplied"), dict) else {}
+        current_applied.update({
+            "priceMode": mode, "priceValue": value,
+            "roundPrice": rounding, "minPrice": minimum,
+        })
+        product["price"] = amount
+        product["resultApplied"] = current_applied
+        return product
+
+    def profile_products(name: str, data: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+        data = data or load()
         cfg = data.get("profiles", {}).get(name) or {}
         rows = cfg.get("saved_products")
         if not isinstance(rows, list) or not rows:
@@ -1129,11 +1219,17 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         limit = min(500, _int(request.args.get("limit"), 100) or 100)
         offset = max(0, _int(request.args.get("offset")))
         query = _s(request.args.get("q")).strip().lower()
-        rows = profile_products(pid)
+        data = load()
+        profile = data.get("profiles", {}).get(pid) or {}
+        rules = profile.get("profile_rules") if isinstance(profile.get("profile_rules"), dict) else {}
+        rows = profile_products(pid, data)
         if query:
             rows = [r for r in rows if query in _s(r.get("title")).lower()]
         total = len(rows)
-        page = [product_to_node(r, offset + i) for i, r in enumerate(rows[offset:offset + limit])]
+        page = [
+            product_with_profile_price(product_to_node(row, offset + index), rules)
+            for index, row in enumerate(rows[offset:offset + limit])
+        ]
         return ok(products=page, total=total, limit=limit, offset=offset)
 
     @app.delete("/api/profiles/<path:pid>/products")
@@ -1308,15 +1404,20 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         # Resolve current rules from profile
         rules = cfg.get("profile_rules") if isinstance(cfg.get("profile_rules"), dict) else {}
         new_suffix = _s(rules.get("title_suffix") or rules.get("titleSuffix") or "")
-        price_mode = _s(rules.get("price_mode") or rules.get("priceMode") or "none")
+        raw_price_mode = _s(rules.get("price_mode") or rules.get("priceMode") or "none")
+        price_mode = {"multiply": "multiplier", "add": "fixed"}.get(raw_price_mode, raw_price_mode)
         try:
-            price_val = float(rules.get("price_value", rules.get("priceValue", 0)) or 0)
-        except:
+            price_val = float(rules.get("price_value", rules.get("price_val", rules.get("priceValue", 0))) or 0)
+        except (TypeError, ValueError):
             price_val = 0
         try:
-            round_price = int(float(rules.get("round_price", rules.get("roundPrice", 0)) or 0))
-        except:
+            round_price = int(float(rules.get("price_round", rules.get("round_price", rules.get("roundPrice", 0))) or 0))
+        except (TypeError, ValueError):
             round_price = 0
+        try:
+            minimum_price = max(0, float(rules.get("min_price", rules.get("minPrice", 0)) or 0))
+        except (TypeError, ValueError):
+            minimum_price = 0
 
         rows = cfg.get("saved_products")
         if not isinstance(rows, list):
@@ -1331,7 +1432,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         # Parse pagination cursor: after is index string
         try:
             start = int(after) if after else 0
-        except:
+        except (TypeError, ValueError):
             start = 0
         batch = 200  # process in chunks to keep response small; dashboard loops with after/next
         end = min(start + batch, total)
@@ -1339,59 +1440,64 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         conflicts = 0  # kept for API compatibility; Python has no concurrent edits
         for idx in range(start, end):
             r = valid[idx]
+            row_changed = False
             orig_title = _s(r.get("title"))
             new_title = orig_title
-            # Remove previous suffix if it was previously applied
+            # Remove previous suffix if it was previously applied.
             if previous_suffix and new_title.endswith(previous_suffix):
                 new_title = new_title[: -len(previous_suffix)].rstrip()
-            # Apply new suffix if not already present
             if new_suffix and not new_title.endswith(new_suffix):
                 new_title = (new_title + " " + new_suffix).strip() if new_title else new_suffix
             if new_title != orig_title:
                 r["title"] = new_title
-                changed += 1
-            # Price transform: use source_price as base if available, else current price as base
-            # Try multiple possible base fields: source_price, price_before_adjust, original_price, price
+                row_changed = True
+
+            # Price transform: always start from the immutable source amount.
             base_raw = r.get("source_price")
-            if base_raw is None:
-                base_raw = r.get("resultBase", {}).get("price") if isinstance(r.get("resultBase"), dict) else None
-            if base_raw is None:
+            if base_raw in (None, ""):
+                base_raw = r.get("sourcePrice")
+            if base_raw in (None, ""):
+                raw_base = r.get("resultBase") if isinstance(r.get("resultBase"), dict) else r.get("result_base")
+                base_raw = raw_base.get("price") if isinstance(raw_base, dict) else None
+            if base_raw in (None, ""):
+                base_raw = r.get("price_before_adjust", r.get("original_price"))
+            if base_raw in (None, ""):
                 base_raw = r.get("price")
-            try:
-                base = float(str(base_raw).replace(",", "").strip() or 0)
-            except:
-                base = 0
-            # If base is 0, skip price logic
-            new_price = base
+            base = _price_num(base_raw)
+            # Legacy/imported rows often had the base only in resultBase/current
+            # price. Persist it now so later rule changes cannot compound.
+            if base > 0 and r.get("source_price") in (None, ""):
+                r["source_price"] = str(int(base)) if base.is_integer() else str(base)
+                row_changed = True
+
             if base > 0:
+                new_price = base
                 if price_mode == "percent":
                     new_price = base * (1 + price_val / 100)
-                elif price_mode in ("multiplier", "multiply"):
-                    if price_val > 0:
-                        new_price = base * price_val
-                elif price_mode in ("fixed", "add"):
+                elif price_mode == "multiplier" and price_val > 0:
+                    new_price = base * price_val
+                elif price_mode == "fixed":
                     new_price = base + price_val
-                # round handling
-                if round_price and round_price > 0:
+                if round_price > 0:
                     new_price = round(new_price / round_price) * round_price
-                new_price = max(0, round(new_price))
-                # Compare with current stored price
-                try:
-                    cur = float(str(r.get("price") or 0).replace(",", "") or 0)
-                except:
-                    cur = 0
-                if int(new_price) != int(cur):
+                new_price = max(minimum_price, round(new_price))
+                current_price = _price_num(r.get("price"))
+                if int(new_price) != int(current_price):
                     r["price"] = str(int(new_price))
-                    # also keep resultApplied for UI
-                    if not isinstance(r.get("resultApplied"), dict):
-                        r["resultApplied"] = {}
-                    r["resultApplied"].update({"priceMode": price_mode, "priceValue": price_val, "roundPrice": round_price})
-                    if changed == 0 or r["title"] != orig_title:
-                        pass
-                    # Count as changed if price changed and not already counted for title
-                    if new_title == orig_title:
-                        changed += 1
-                    # if both title and price changed, count once (already counted)
+                    row_changed = True
+                applied = {
+                    "priceMode": {"multiplier": "multiply", "fixed": "add"}.get(price_mode, price_mode),
+                    "priceValue": price_val,
+                    "roundPrice": round_price,
+                    "minPrice": minimum_price,
+                }
+                current_applied = dict(r.get("resultApplied")) if isinstance(r.get("resultApplied"), dict) else {}
+                if any(current_applied.get(key) != value for key, value in applied.items()):
+                    current_applied.update(applied)
+                    r["resultApplied"] = current_applied
+                    row_changed = True
+            if row_changed:
+                changed += 1
         # Persist if any changes
         if changed:
             # Ensure we write back to the correct storage location

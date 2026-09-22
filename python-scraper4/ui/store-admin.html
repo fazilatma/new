@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>مدیریت فروشگاه</title>
+    <link rel="icon" href="__STORE_BASE__/store-assets/app-icon-192.png" />
+    <link rel="stylesheet" href="__STORE_BASE__/store-assets/store-admin.css" />
+    <script defer src="__STORE_BASE__/store-assets/store-admin.js"></script>
+  </head>
+  <body data-base="__STORE_BASE__">
+    <aside class="admin-sidebar">
+      <a class="admin-logo" href="__STORE_BASE__/store-admin"
+        ><span>ف</span>
+        <div><b>مدیریت فروشگاه</b><small>Scraper4 Commerce</small></div></a
+      >
+      <nav>
+        <button class="nav-item active" data-view="overview" type="button">
+          <i>◫</i><span>نمای کلی</span>
+        </button>
+        <button class="nav-item" data-view="orders" type="button">
+          <i>▤</i><span>سفارش‌ها</span><b id="navOrderCount">۰</b>
+        </button>
+        <button class="nav-item" data-view="settings" type="button">
+          <i>⚙</i><span>تنظیمات فروشگاه</span>
+        </button>
+        <button class="nav-item" data-view="payments" type="button">
+          <i>◇</i><span>درگاه‌های پرداخت</span>
+        </button>
+        <button class="nav-item" data-view="webhooks" type="button">
+          <i>⌁</i><span>وب‌هوک باسلام</span><b id="navWebhookCount">۰</b>
+        </button>
+      </nav>
+      <div class="sidebar-links">
+        <a href="__STORE_BASE__/" target="_blank">↗ مشاهده فروشگاه</a
+        ><a href="__STORE_BASE__/ui">داشبورد اصلی</a
+        ><a href="__STORE_BASE__/classic">رابط کلاسیک</a>
+      </div>
+    </aside>
+
+    <main class="admin-main">
+      <header class="admin-header">
+        <button id="sidebarToggle" type="button">☰</button>
+        <div>
+          <h1 id="pageTitle">نمای کلی فروشگاه</h1>
+          <p id="pageSubtitle">فروش، سفارش‌ها و وضعیت اتصال‌ها در یک نگاه</p>
+        </div>
+        <span class="status-dot"><i></i> فروشگاه فعال</span
+        ><button
+          id="refreshPage"
+          class="icon-button"
+          type="button"
+          title="تازه‌سازی"
+        >
+          ↻
+        </button>
+      </header>
+
+      <section id="view-overview" class="admin-view active">
+        <div class="stats-grid">
+          <article>
+            <span class="stat-icon products">▦</span>
+            <div>
+              <small>محصول قابل نمایش</small><b id="statProducts">—</b
+              ><em>از همه پروفایل‌ها</em>
+            </div>
+          </article>
+          <article>
+            <span class="stat-icon orders">▤</span>
+            <div>
+              <small>کل سفارش‌ها</small><b id="statOrders">—</b
+              ><em id="statPaid">— پرداخت‌شده</em>
+            </div>
+          </article>
+          <article>
+            <span class="stat-icon revenue">◇</span>
+            <div>
+              <small>فروش ثبت‌شده</small><b id="statRevenue">—</b><em>تومان</em>
+            </div>
+          </article>
+          <article>
+            <span class="stat-icon events">⌁</span>
+            <div>
+              <small>رخداد باسلام</small><b id="statEvents">—</b
+              ><em>ثبت idempotent</em>
+            </div>
+          </article>
+        </div>
+        <div class="dashboard-grid">
+          <article class="panel recent-panel">
+            <div class="panel-head">
+              <div>
+                <h2>سفارش‌های اخیر</h2>
+                <p>آخرین سفارش‌های ثبت‌شده در فروشگاه</p>
+              </div>
+              <button data-go="orders" type="button">مشاهده همه</button>
+            </div>
+            <div id="recentOrders" class="order-table"></div>
+          </article>
+          <aside class="panel readiness">
+            <div class="panel-head">
+              <div>
+                <h2>آمادگی فروشگاه</h2>
+                <p>موارد مهم پیش از شروع فروش</p>
+              </div>
+            </div>
+            <div id="readinessList"></div>
+          </aside>
+        </div>
+        <div class="quick-actions">
+          <button data-go="settings" type="button">
+            <i>⚙</i
+            ><span
+              ><b>ویرایش ظاهر فروشگاه</b
+              ><small>نام، رنگ، ارسال و قیمت</small></span
+            ></button
+          ><button data-go="payments" type="button">
+            <i>◇</i
+            ><span
+              ><b>اتصال درگاه پرداخت</b
+              ><small>زرین‌پال، دیجی‌پی و ترب‌پی</small></span
+            ></button
+          ><button data-go="webhooks" type="button">
+            <i>⌁</i
+            ><span
+              ><b>راه‌اندازی وب‌هوک</b><small>پیام و رویداد باسلام</small></span
+            >
+          </button>
+        </div>
+      </section>
+
+      <section id="view-orders" class="admin-view">
+        <article class="panel">
+          <div class="panel-head order-tools">
+            <div>
+              <h2>سفارش‌های فروشگاه</h2>
+              <p id="orderTotal">—</p>
+            </div>
+            <div>
+              <input
+                id="orderSearch"
+                type="search"
+                placeholder="شماره سفارش، نام یا موبایل"
+              /><select id="orderStatus">
+                <option value="">همه وضعیت‌ها</option>
+                <option value="awaiting_payment">در انتظار پرداخت</option>
+                <option value="confirmed">تأیید شده</option>
+                <option value="processing">آماده‌سازی</option>
+                <option value="shipped">ارسال شده</option>
+                <option value="delivered">تحویل شده</option>
+                <option value="payment_failed">پرداخت ناموفق</option>
+                <option value="needs_review">نیازمند بررسی</option>
+                <option value="cancelled">لغو شده</option></select
+              ><button id="orderFilter" type="button">جست‌وجو</button>
+            </div>
+          </div>
+          <div id="ordersTable" class="order-table large"></div>
+          <div id="ordersPagination" class="admin-pagination"></div>
+        </article>
+      </section>
+
+      <section id="view-settings" class="admin-view">
+        <form id="storeSettings" class="settings-layout">
+          <div class="settings-main">
+            <article class="panel form-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>هویت فروشگاه</h2>
+                  <p>اطلاعاتی که در ویترین عمومی دیده می‌شود</p>
+                </div>
+                <label class="switch"
+                  ><input name="enabled" type="checkbox" /><span></span
+                  >فعال</label
+                >
+              </div>
+              <div class="form-grid">
+                <label
+                  ><span>نام فروشگاه</span
+                  ><input name="brand_name" maxlength="80" /></label
+                ><label
+                  ><span>شعار کوتاه</span
+                  ><input name="tagline" maxlength="160" /></label
+                ><label class="full"
+                  ><span>توضیح فروشگاه</span
+                  ><textarea
+                    name="description"
+                    rows="3"
+                    maxlength="500"
+                  ></textarea></label
+                ><label
+                  ><span>شماره پشتیبانی</span
+                  ><input name="support_phone" dir="ltr" /></label
+                ><label
+                  ><span>رنگ اصلی</span>
+                  <div class="color-input">
+                    <input name="accent" type="color" /><input
+                      name="accent_text"
+                      dir="ltr"
+                      maxlength="7"
+                    /></div></label
+                ><label class="full"
+                  ><span>نوار اطلاع‌رسانی</span
+                  ><input name="announcement" maxlength="180" /></label
+                ><label class="full"
+                  ><span>آدرس عمومی HTTPS (برای callback پرداخت)</span
+                  ><input
+                    name="public_url"
+                    dir="ltr"
+                    placeholder="https://shop.example.com"
+                  /><small
+                    >در محیط عملیاتی حتماً دامنه HTTPS واقعی را وارد
+                    کنید.</small
+                  ></label
+                >
+              </div>
+            </article>
+            <article class="panel form-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>ارسال سفارش</h2>
+                  <p>هزینه و زمان تقریبی ارسال</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label
+                  ><span>عنوان روش ارسال</span
+                  ><input name="shipping_label" /></label
+                ><label
+                  ><span>زمان تقریبی</span><input name="shipping_eta" /></label
+                ><label
+                  ><span>هزینه ثابت (تومان)</span
+                  ><input name="flat_fee" type="number" min="0" /></label
+                ><label
+                  ><span>ارسال رایگان از مبلغ</span
+                  ><input name="free_over" type="number" min="0" /></label
+                ><label
+                  ><span>حداقل مبلغ سفارش</span
+                  ><input name="minimum_order" type="number" min="0"
+                /></label>
+              </div>
+            </article>
+            <article class="panel form-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>قیمت و موجودی ویترین</h2>
+                  <p>پس از قواعد قیمت هر پروفایل اعمال می‌شود</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label
+                  ><span>نوع تعدیل سراسری</span
+                  ><select name="price_mode">
+                    <option value="none">بدون تعدیل اضافه</option>
+                    <option value="percent">درصد</option>
+                    <option value="multiplier">ضریب</option>
+                    <option value="fixed">مبلغ ثابت</option>
+                  </select></label
+                ><label
+                  ><span>مقدار تعدیل</span
+                  ><input name="price_value" type="number" step="0.01" /></label
+                ><label
+                  ><span>گرد کردن قیمت</span
+                  ><input name="price_round" type="number" min="0" /></label
+                ><label
+                  ><span>موجودی پیش‌فرض</span
+                  ><input name="default_stock" type="number" min="0" /></label
+                ><label class="check"
+                  ><input name="show_profiles" type="checkbox" /> نمایش نام
+                  پروفایل در کارت محصول</label
+                >
+              </div>
+            </article>
+          </div>
+          <aside>
+            <article class="panel save-panel">
+              <h3>انتشار تغییرات</h3>
+              <p>
+                تغییرات پس از ذخیره، بلافاصله در ویترین عمومی اعمال می‌شوند.
+              </p>
+              <button class="primary" type="submit">
+                ذخیره تنظیمات فروشگاه</button
+              ><a href="__STORE_BASE__/" target="_blank"
+                >پیش‌نمایش فروشگاه ↗</a
+              >
+              <div id="settingsStatus" class="form-status"></div>
+            </article>
+          </aside>
+        </form>
+      </section>
+
+      <section id="view-payments" class="admin-view">
+        <div class="notice security">
+          <b>🔒 نگهداری امن اطلاعات درگاه</b>
+          <p>
+            Credentialها با AES-GCM در vault محلی رمز می‌شوند (یا از متغیر محیطی
+            خوانده می‌شوند) و هرگز در API عمومی یا JavaScript فروشگاه بازگردانده
+            نمی‌شوند. فیلد خالی مقدار فعلی را حفظ می‌کند.
+          </p>
+        </div>
+        <form id="paymentSettings" class="gateway-list">
+          <article class="panel gateway-card">
+            <div class="gateway-head">
+              <span class="gateway-logo zarin">Z</span>
+              <div>
+                <h2>زرین‌پال</h2>
+                <p>اتصال مستقیم بر پایه API v4 رسمی</p>
+              </div>
+              <label class="switch"
+                ><input name="zarinpal_enabled" type="checkbox" /><span></span
+              ></label>
+            </div>
+            <div class="form-grid">
+              <label class="full"
+                ><span>Merchant ID</span
+                ><input
+                  name="zarinpal_merchant"
+                  dir="ltr"
+                  placeholder="خالی = حفظ مقدار فعلی" /><small
+                  id="zarinpalConfigured"
+                ></small></label
+              ><label class="check"
+                ><input name="zarinpal_sandbox" type="checkbox" /> محیط آزمایشی
+                Sandbox</label
+              ><label
+                ><span>واحد مبلغ</span
+                ><select name="zarinpal_currency">
+                  <option value="IRT">تومان (IRT)</option>
+                  <option value="IRR">ریال (IRR)</option>
+                </select></label
+              >
+            </div>
+          </article>
+          <article class="panel gateway-card">
+            <div class="gateway-head">
+              <span class="gateway-logo digi">D</span>
+              <div>
+                <h2>دیجی‌پی</h2>
+                <p>OAuth، تیکت خرید و verify رسمی UPG</p>
+              </div>
+              <label class="switch"
+                ><input name="digipay_enabled" type="checkbox" /><span></span
+              ></label>
+            </div>
+            <div class="form-grid">
+              <label
+                ><span>Client ID</span
+                ><input
+                  name="digipay_client_id"
+                  dir="ltr"
+                  placeholder="خالی = حفظ" /></label
+              ><label
+                ><span>Client Secret</span
+                ><input
+                  name="digipay_client_secret"
+                  type="password"
+                  dir="ltr"
+                  placeholder="خالی = حفظ" /></label
+              ><label
+                ><span>نام کاربری</span
+                ><input
+                  name="digipay_username"
+                  dir="ltr"
+                  placeholder="خالی = حفظ" /></label
+              ><label
+                ><span>رمز عبور</span
+                ><input
+                  name="digipay_password"
+                  type="password"
+                  dir="ltr"
+                  placeholder="خالی = حفظ" /></label
+              ><label
+                ><span>ضریب تبدیل مبلغ</span
+                ><input
+                  name="digipay_multiplier"
+                  type="number"
+                  min="0.0001"
+                  step="0.0001" /></label
+              ><label
+                ><span>درگاه ترجیحی</span
+                ><select name="digipay_preferred">
+                  <option value="">صفحه انتخاب دیجی‌پی</option>
+                  <option value="2">IPG مستقیم</option>
+                  <option value="0">Wallet مستقیم</option>
+                </select></label
+              ><label class="check full"
+                ><input name="digipay_sandbox" type="checkbox" /> محیط تست
+                UAT</label
+              ><small id="digipayConfigured" class="full configured"></small>
+            </div>
+          </article>
+          <article class="panel gateway-card">
+            <div class="gateway-head">
+              <span class="gateway-logo torob">ت</span>
+              <div>
+                <h2>ترب‌پی</h2>
+                <p>
+                  آداپتور قراردادی؛ endpointهای تحویلی پنل پذیرنده را وارد کنید
+                </p>
+              </div>
+              <label class="switch"
+                ><input name="torobpay_enabled" type="checkbox" /><span></span
+              ></label>
+            </div>
+            <div class="form-grid">
+              <label class="full"
+                ><span>Request URL</span
+                ><input
+                  name="torobpay_request_url"
+                  dir="ltr"
+                  placeholder="https://..." /></label
+              ><label class="full"
+                ><span>Verify URL</span
+                ><input
+                  name="torobpay_verify_url"
+                  dir="ltr"
+                  placeholder="https://..." /></label
+              ><label
+                ><span>API Token</span
+                ><input
+                  name="torobpay_token"
+                  type="password"
+                  dir="ltr"
+                  placeholder="خالی = حفظ" /></label
+              ><label
+                ><span>ضریب تبدیل مبلغ</span
+                ><input
+                  name="torobpay_multiplier"
+                  type="number"
+                  min="0.0001"
+                  step="0.0001" /></label
+              ><label class="full"
+                ><span>Checkout URL Template (در صورت نبود URL در پاسخ)</span
+                ><input
+                  name="torobpay_checkout"
+                  dir="ltr"
+                  placeholder="https://.../{token}"
+              /></label>
+              <details class="full">
+                <summary>قالب پیشرفته قرارداد JSON</summary>
+                <label
+                  ><span>Request template</span
+                  ><textarea
+                    name="torobpay_request_template"
+                    dir="ltr"
+                    rows="7"
+                  ></textarea></label
+                ><label
+                  ><span>Verify template</span
+                  ><textarea
+                    name="torobpay_verify_template"
+                    dir="ltr"
+                    rows="6"
+                  ></textarea>
+                </label>
+                <p>
+                  جای‌گذاری‌ها: {amount}، {order_id}، {callback_url}، {mobile} و
+                  {token}
+                </p>
+              </details>
+              <small id="torobpayConfigured" class="full configured"></small>
+            </div>
+          </article>
+          <article class="panel gateway-card">
+            <div class="gateway-head">
+              <span class="gateway-logo custom">+</span>
+              <div>
+                <h2>درگاه سفارشی</h2>
+                <p>افزودن ارائه‌دهنده دیگر با قرارداد request/verify</p>
+              </div>
+              <label class="switch"
+                ><input name="custom_enabled" type="checkbox" /><span></span
+              ></label>
+            </div>
+            <div class="form-grid">
+              <label class="full"
+                ><span>Request URL</span
+                ><input
+                  name="custom_request_url"
+                  dir="ltr"
+                  placeholder="https://..." /></label
+              ><label class="full"
+                ><span>Verify URL</span
+                ><input
+                  name="custom_verify_url"
+                  dir="ltr"
+                  placeholder="https://..." /></label
+              ><label
+                ><span>API Token</span
+                ><input
+                  name="custom_token"
+                  type="password"
+                  dir="ltr"
+                  placeholder="خالی = حفظ" /></label
+              ><label
+                ><span>ضریب تبدیل مبلغ</span
+                ><input
+                  name="custom_multiplier"
+                  type="number"
+                  min="0.0001"
+                  step="0.0001" /></label
+              ><label class="full"
+                ><span>Checkout URL Template</span
+                ><input
+                  name="custom_checkout"
+                  dir="ltr"
+                  placeholder="https://.../{token}"
+              /></label>
+              <details class="full">
+                <summary>قالب پیشرفته قرارداد JSON</summary>
+                <label
+                  ><span>Request template</span
+                  ><textarea
+                    name="custom_request_template"
+                    dir="ltr"
+                    rows="7"
+                  ></textarea></label
+                ><label
+                  ><span>Verify template</span
+                  ><textarea
+                    name="custom_verify_template"
+                    dir="ltr"
+                    rows="6"
+                  ></textarea>
+                </label>
+                <p>
+                  جای‌گذاری‌ها: {amount}، {order_id}، {callback_url}، {mobile} و
+                  {token}
+                </p>
+              </details>
+              <small id="customConfigured" class="full configured"></small>
+            </div>
+          </article>
+          <article class="panel gateway-card compact">
+            <div class="gateway-head">
+              <span class="gateway-logo cod">⌂</span>
+              <div>
+                <h2>پرداخت هنگام تحویل</h2>
+                <p>ثبت سفارش بدون انتقال به درگاه آنلاین</p>
+              </div>
+              <label class="switch"
+                ><input name="cod_enabled" type="checkbox" /><span></span
+              ></label>
+            </div>
+          </article>
+          <div class="payment-save">
+            <button class="primary" type="submit">ذخیره تنظیمات درگاه‌ها</button
+            ><span id="paymentStatus" class="form-status"></span>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-webhooks" class="admin-view">
+        <div class="webhook-grid">
+          <div>
+            <article class="panel form-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>گیرنده وب‌هوک باسلام</h2>
+                  <p>دریافت امن پیام، سفارش، محصول و رخداد غرفه</p>
+                </div>
+                <span id="webhookState" class="badge">—</span>
+              </div>
+              <div class="webhook-credentials">
+                <label
+                  ><span>Callback URL محرمانه</span>
+                  <div>
+                    <input id="webhookUrl" dir="ltr" readonly /><button
+                      data-copy="webhookUrl"
+                      type="button"
+                    >
+                      کپی
+                    </button>
+                  </div></label
+                ><label
+                  ><span>Authorization header</span>
+                  <div>
+                    <input id="webhookAuth" dir="ltr" readonly /><button
+                      data-copy="webhookAuth"
+                      type="button"
+                    >
+                      کپی
+                    </button>
+                  </div></label
+                >
+              </div>
+              <label class="check"
+                ><input id="webhookRequireHeader" type="checkbox" /> علاوه بر
+                URL محرمانه، هدر Bearer نیز اجباری باشد</label
+              >
+              <div class="webhook-actions">
+                <button id="saveWebhook" type="button">
+                  ذخیره حالت احراز هویت</button
+                ><button id="registerWebhook" class="primary" type="button">
+                  ثبت خودکار در باسلام</button
+                ><button id="rotateWebhook" class="danger" type="button">
+                  چرخش Secretها
+                </button>
+              </div>
+              <p class="hint">
+                در سناریوی پنل توسعه‌دهندگان، URL و هدر بالا را ثبت کنید. ثبت
+                خودکار مطابق API رسمی با register_me انجام می‌شود و برای آن حالت
+                «هدر اجباری» باید خاموش باشد.
+              </p>
+              <div id="webhookStatus" class="form-status"></div>
+            </article>
+            <article class="panel event-selector">
+              <div class="panel-head">
+                <div>
+                  <h2>رخدادهای فعال</h2>
+                  <p>شناسه‌های رسمی سرویس webhook باسلام</p>
+                </div>
+              </div>
+              <div id="eventTypes"></div>
+            </article>
+          </div>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>رخدادهای دریافتی</h2>
+                <p>تحویل‌های تکراری به‌صورت idempotent ادغام می‌شوند</p>
+              </div>
+              <button id="refreshWebhooks" type="button">تازه‌سازی</button>
+            </div>
+            <div id="webhookEvents" class="event-list"></div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <div id="adminOverlay" class="admin-overlay"></div>
+    <section id="orderModal" class="admin-modal" aria-hidden="true">
+      <div class="admin-modal-card">
+        <button id="orderModalClose" type="button">×</button>
+        <div id="orderDetail"></div>
+      </div>
+    </section>
+    <section id="eventModal" class="admin-modal" aria-hidden="true">
+      <div class="admin-modal-card">
+        <button id="eventModalClose" type="button">×</button>
+        <div id="eventDetail"></div>
+      </div>
+    </section>
+    <div id="adminToasts" class="admin-toasts"></div>
+  </body>
+</html>

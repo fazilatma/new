@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#ef4056" />
+    <meta
+      name="description"
+      content="فروشگاه آنلاین؛ جست‌وجو، خرید امن و پیگیری سفارش"
+    />
+    <title>فروشگاه آنلاین</title>
+    <link rel="manifest" href="__STORE_BASE__/store.webmanifest" />
+    <link rel="icon" href="__STORE_BASE__/store-assets/app-icon-192.png" />
+    <link rel="stylesheet" href="__STORE_BASE__/store-assets/storefront.css" />
+    <script defer src="__STORE_BASE__/store-assets/storefront.js"></script>
+  </head>
+  <body data-base="__STORE_BASE__">
+    <a class="skip-link" href="#products">رفتن به محصولات</a>
+    <div id="announcement" class="announcement">
+      <span>خرید امن و ارسال مطمئن</span>
+    </div>
+
+    <header class="site-header" id="top">
+      <div class="header-main shell">
+        <a class="brand" href="__STORE_BASE__/" aria-label="صفحه اصلی فروشگاه">
+          <span class="brand-mark" aria-hidden="true">ف</span>
+          <span
+            ><strong id="brandName">فروشگاه من</strong
+            ><small id="brandTagline">انتخاب مطمئن، خرید آسان</small></span
+          >
+        </a>
+        <form id="searchForm" class="search" role="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="m21 21-4.3-4.3m2.3-5.2a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"
+            />
+          </svg>
+          <input
+            id="searchInput"
+            type="search"
+            autocomplete="off"
+            placeholder="جست‌وجو در میان محصولات…"
+            aria-label="جست‌وجوی محصول"
+          />
+          <button
+            type="button"
+            id="clearSearch"
+            class="clear-search"
+            aria-label="پاک کردن جست‌وجو"
+          >
+            ×
+          </button>
+        </form>
+        <div class="header-actions">
+          <button class="header-button" id="trackOpen" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M3 7h11v10H3zm11 3h4l3 3v4h-7zM7 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm10 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"
+              />
+            </svg>
+            <span>پیگیری سفارش</span>
+          </button>
+          <button
+            class="cart-button"
+            id="cartOpen"
+            type="button"
+            aria-label="مشاهده سبد خرید"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M3 4h2l2 11h10l3-8H6m3 12a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm8 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"
+              />
+            </svg>
+            <span>سبد خرید</span><b id="cartCount">۰</b>
+          </button>
+        </div>
+      </div>
+      <nav class="main-nav shell" aria-label="دسته‌بندی‌های فروشگاه">
+        <button class="category-menu-button" id="categoryOpen" type="button">
+          <span class="hamburger">☰</span> دسته‌بندی کالاها
+        </button>
+        <div id="quickCategories" class="quick-categories"></div>
+        <a href="#services">مزایای خرید</a>
+        <a href="#track" id="navTrack">پیگیری</a>
+        <span class="nav-spacer"></span>
+        <span class="delivery-location"
+          ><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 21s7-6 7-12a7 7 0 1 0-14 0c0 6 7 12 7 12Zm0-9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+            />
+          </svg>
+          ارسال به سراسر ایران</span
+        >
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero shell" aria-label="پیشنهاد فروشگاه">
+        <div class="hero-copy">
+          <span class="eyebrow">خرید راحت، انتخاب هوشمند</span>
+          <h1 id="heroTitle">همه چیز برای یک خرید مطمئن</h1>
+          <p id="heroDescription">
+            محصولات منتخب با قیمت به‌روز، پرداخت امن و امکان پیگیری لحظه‌ای
+            سفارش.
+          </p>
+          <div class="hero-actions">
+            <a class="primary-button" href="#products">مشاهده محصولات</a
+            ><button id="heroTrack" class="ghost-button" type="button">
+              پیگیری سفارش
+            </button>
+          </div>
+          <div class="hero-trust">
+            <span>✓ قیمت نهایی شفاف</span><span>✓ ثبت امن سفارش</span
+            ><span>✓ پشتیبانی خرید</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <span class="orb orb-one"></span><span class="orb orb-two"></span>
+          <div class="hero-card card-a">
+            <span>ارسال سریع</span><b>به سراسر ایران</b>
+          </div>
+          <div class="hero-card card-b">
+            <span>پرداخت امن</span><b>چند درگاه معتبر</b>
+          </div>
+          <div class="hero-package">
+            <i></i><strong>خرید<br />دلنشین</strong>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="services"
+        class="service-strip shell"
+        aria-label="خدمات فروشگاه"
+      >
+        <article>
+          <span class="service-icon">⌁</span>
+          <div>
+            <b>ارسال مطمئن</b
+            ><small id="shippingEta"
+              >زمان ارسال در تسویه نمایش داده می‌شود</small
+            >
+          </div>
+        </article>
+        <article>
+          <span class="service-icon">◇</span>
+          <div><b>پرداخت امن</b><small>تأیید پرداخت فقط در سرور</small></div>
+        </article>
+        <article>
+          <span class="service-icon">↻</span>
+          <div><b>پیگیری ساده</b><small>با شماره سفارش و موبایل</small></div>
+        </article>
+        <article>
+          <span class="service-icon">☏</span>
+          <div>
+            <b>پشتیبانی خرید</b
+            ><small id="supportText">همراه شما تا دریافت سفارش</small>
+          </div>
+        </article>
+      </section>
+
+      <section class="catalog shell" id="products">
+        <div class="section-title">
+          <div>
+            <span class="eyebrow">ویترین فروشگاه</span>
+            <h2>محصولات پیشنهادی برای شما</h2>
+          </div>
+          <span id="resultCount" class="result-count"
+            >در حال دریافت محصولات…</span
+          >
+        </div>
+        <div
+          class="category-chips"
+          id="categoryChips"
+          aria-label="فیلتر دسته‌بندی"
+        ></div>
+        <div class="catalog-layout">
+          <aside class="filters" id="filters">
+            <div class="filter-head">
+              <b>فیلترها</b
+              ><button id="resetFilters" type="button">حذف فیلترها</button>
+            </div>
+            <section class="filter-section">
+              <h3>دسته‌بندی</h3>
+              <div id="categoryFilters" class="filter-options"></div>
+            </section>
+            <section class="filter-section" id="profileFilterSection">
+              <h3>فروشنده / پروفایل</h3>
+              <div id="profileFilters" class="filter-options"></div>
+            </section>
+            <label class="available-filter"
+              ><input id="availableOnly" type="checkbox" /> فقط کالاهای
+              موجود</label
+            >
+            <div class="secure-note">
+              <span>⌾</span>
+              <p>
+                <b>خرید با خیال راحت</b
+                ><small
+                  >مبلغ سفارش در سرور محاسبه و پرداخت در درگاه معتبر تأیید
+                  می‌شود.</small
+                >
+              </p>
+            </div>
+          </aside>
+          <div class="product-area">
+            <div class="catalog-toolbar">
+              <button
+                id="mobileFilterOpen"
+                class="mobile-filter-button"
+                type="button"
+              >
+                ☰ فیلترها
+              </button>
+              <div class="sort-options" aria-label="مرتب‌سازی">
+                <b>مرتب‌سازی:</b>
+                <button data-sort="featured" class="active" type="button">
+                  پیشنهادی
+                </button>
+                <button data-sort="price-asc" type="button">ارزان‌ترین</button>
+                <button data-sort="price-desc" type="button">گران‌ترین</button>
+                <button data-sort="title" type="button">نام کالا</button>
+              </div>
+            </div>
+            <div id="productGrid" class="product-grid" aria-live="polite">
+              <div class="product-skeleton"></div>
+              <div class="product-skeleton"></div>
+              <div class="product-skeleton"></div>
+              <div class="product-skeleton"></div>
+            </div>
+            <div id="emptyProducts" class="empty-state hidden">
+              <span>⌕</span>
+              <h3>محصولی پیدا نشد</h3>
+              <p>عبارت جست‌وجو یا فیلترها را تغییر دهید.</p>
+              <button id="emptyReset" class="primary-button" type="button">
+                نمایش همه محصولات
+              </button>
+            </div>
+            <nav
+              id="pagination"
+              class="pagination"
+              aria-label="صفحه‌بندی محصولات"
+            ></nav>
+          </div>
+        </div>
+      </section>
+
+      <section id="track" class="track-section">
+        <div class="shell track-card">
+          <div>
+            <span class="eyebrow">از ثبت تا تحویل</span>
+            <h2>سفارشت کجاست؟</h2>
+            <p>شماره سفارش و شماره همراه ثبت‌شده هنگام خرید را وارد کنید.</p>
+          </div>
+          <form id="trackForm" class="track-form">
+            <label
+              ><span>شماره سفارش</span
+              ><input
+                id="trackOrderId"
+                dir="ltr"
+                required
+                placeholder="SF-20260922-ABC123"
+            /></label>
+            <label
+              ><span>شماره همراه</span
+              ><input
+                id="trackMobile"
+                dir="ltr"
+                inputmode="tel"
+                required
+                placeholder="09123456789"
+            /></label>
+            <button class="primary-button" type="submit">نمایش وضعیت</button>
+          </form>
+          <div id="trackResult" class="track-result hidden"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-main">
+        <div class="footer-brand">
+          <span class="brand-mark">ف</span>
+          <div>
+            <b id="footerName">فروشگاه من</b>
+            <p id="footerDescription">خرید آنلاین امن و آسان</p>
+          </div>
+        </div>
+        <div>
+          <b>دسترسی سریع</b><a href="#products">محصولات</a
+          ><a href="#track">پیگیری سفارش</a
+          ><button id="footerCart" type="button">سبد خرید</button>
+        </div>
+        <div>
+          <b>راهنمای خرید</b><span>انتخاب محصول</span><span>تکمیل نشانی</span
+          ><span>پرداخت و پیگیری</span>
+        </div>
+        <div>
+          <b>اطمینان خرید</b><span>محاسبه قیمت در سرور</span
+          ><span>پرداخت قابل تأیید</span><span>حفاظت از اطلاعات درگاه</span>
+        </div>
+      </div>
+      <div class="shell footer-bottom">
+        <span>تمام حقوق این فروشگاه محفوظ است.</span
+        ><a href="__STORE_BASE__/store-admin" rel="nofollow">مدیریت فروشگاه</a>
+      </div>
+    </footer>
+
+    <nav class="mobile-nav" aria-label="منوی موبایل">
+      <a href="#top"><span>⌂</span>خانه</a
+      ><a href="#products"><span>▦</span>محصولات</a>
+      <button id="mobileCart" type="button">
+        <span>🛒</span>سبد <b id="mobileCartCount">۰</b>
+      </button>
+      <button id="mobileTrack" type="button"><span>⌖</span>پیگیری</button>
+    </nav>
+
+    <div id="overlay" class="overlay" tabindex="-1"></div>
+
+    <aside
+      id="categoryDrawer"
+      class="drawer category-drawer"
+      aria-hidden="true"
+      aria-label="دسته‌بندی محصولات"
+    >
+      <div class="drawer-head">
+        <div>
+          <small>مرور محصولات</small>
+          <h2>دسته‌بندی‌ها</h2>
+        </div>
+        <button class="drawer-close" type="button" aria-label="بستن">×</button>
+      </div>
+      <div id="drawerCategories" class="drawer-categories"></div>
+    </aside>
+
+    <aside
+      id="cartDrawer"
+      class="drawer cart-drawer"
+      aria-hidden="true"
+      aria-label="سبد خرید"
+    >
+      <div class="drawer-head">
+        <div>
+          <small>خرید شما</small>
+          <h2>سبد خرید <span id="cartTitleCount"></span></h2>
+        </div>
+        <button class="drawer-close" type="button" aria-label="بستن">×</button>
+      </div>
+      <div id="cartItems" class="cart-items"></div>
+      <div id="cartEmpty" class="cart-empty">
+        <span>🛒</span>
+        <h3>سبد خرید خالی است</h3>
+        <p>محصول دلخواهتان را به سبد اضافه کنید.</p>
+        <button class="ghost-button drawer-close" type="button">
+          بازگشت به فروشگاه
+        </button>
+      </div>
+      <div id="cartSummary" class="cart-summary hidden">
+        <div><span>مبلغ کالاها</span><b id="cartSubtotal">۰ تومان</b></div>
+        <div>
+          <span>هزینه ارسال</span><small>در مرحله تسویه محاسبه می‌شود</small>
+        </div>
+        <div class="summary-total">
+          <span>جمع سبد</span><b id="cartTotal">۰ تومان</b>
+        </div>
+        <button id="checkoutOpen" class="primary-button wide" type="button">
+          ادامه و ثبت سفارش
+        </button>
+        <p>قیمت و موجودی پیش از ثبت، دوباره در سرور بررسی می‌شود.</p>
+      </div>
+    </aside>
+
+    <section
+      id="productModal"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="productModalTitle"
+      aria-hidden="true"
+    >
+      <div class="modal-card product-modal-card">
+        <button class="modal-close" type="button" aria-label="بستن">×</button>
+        <div id="productModalBody" class="product-modal-body"></div>
+      </div>
+    </section>
+
+    <section
+      id="checkoutModal"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="checkoutTitle"
+      aria-hidden="true"
+    >
+      <div class="modal-card checkout-card">
+        <button class="modal-close" type="button" aria-label="بستن">×</button>
+        <div class="checkout-head">
+          <div>
+            <small>تکمیل خرید</small>
+            <h2 id="checkoutTitle">اطلاعات ارسال و پرداخت</h2>
+          </div>
+          <div class="checkout-steps">
+            <span class="active">۱</span><i></i><span>۲</span>
+          </div>
+        </div>
+        <form id="checkoutForm">
+          <div class="checkout-grid">
+            <div class="customer-fields">
+              <h3>مشخصات تحویل‌گیرنده</h3>
+              <div class="form-grid">
+                <label class="span-2"
+                  ><span>نام و نام خانوادگی *</span
+                  ><input
+                    name="name"
+                    autocomplete="name"
+                    required
+                    maxlength="100"
+                /></label>
+                <label
+                  ><span>شماره همراه *</span
+                  ><input
+                    name="mobile"
+                    dir="ltr"
+                    inputmode="tel"
+                    autocomplete="tel"
+                    required
+                    placeholder="09123456789"
+                /></label>
+                <label
+                  ><span>ایمیل (اختیاری)</span
+                  ><input
+                    name="email"
+                    dir="ltr"
+                    type="email"
+                    autocomplete="email"
+                /></label>
+                <label
+                  ><span>استان *</span
+                  ><input
+                    name="province"
+                    autocomplete="address-level1"
+                    required
+                /></label>
+                <label
+                  ><span>شهر *</span
+                  ><input name="city" autocomplete="address-level2" required
+                /></label>
+                <label class="span-2"
+                  ><span>نشانی کامل *</span
+                  ><textarea
+                    name="address"
+                    autocomplete="street-address"
+                    required
+                    rows="3"
+                  ></textarea>
+                </label>
+                <label
+                  ><span>کد پستی</span
+                  ><input
+                    name="postal_code"
+                    dir="ltr"
+                    inputmode="numeric"
+                    maxlength="10"
+                /></label>
+                <label
+                  ><span>توضیح سفارش</span
+                  ><input
+                    name="note"
+                    maxlength="500"
+                    placeholder="مثلاً ساعت مناسب تحویل"
+                /></label>
+              </div>
+              <h3 class="payment-heading">روش پرداخت</h3>
+              <div id="paymentMethods" class="payment-methods"></div>
+            </div>
+            <aside class="checkout-summary">
+              <h3>خلاصه سفارش</h3>
+              <div id="checkoutItems"></div>
+              <div class="checkout-totals">
+                <div>
+                  <span>مبلغ کالاها</span><b id="checkoutSubtotal">—</b>
+                </div>
+                <div><span>ارسال</span><b id="checkoutShipping">—</b></div>
+                <div class="final">
+                  <span>مبلغ قابل پرداخت</span><b id="checkoutTotal">—</b>
+                </div>
+              </div>
+              <div class="checkout-secure">
+                🔒 اطلاعات درگاه فقط در سرور نگهداری می‌شود.
+              </div>
+            </aside>
+          </div>
+          <div id="checkoutError" class="form-error hidden"></div>
+          <button
+            id="placeOrder"
+            class="primary-button wide checkout-submit"
+            type="submit"
+          >
+            <span>ثبت سفارش و ادامه پرداخت</span><i class="button-loader"></i>
+          </button>
+        </form>
+        <div id="orderSuccess" class="order-success hidden">
+          <span>✓</span>
+          <h2>سفارش شما ثبت شد</h2>
+          <p id="successMessage"></p>
+          <div class="success-order">
+            <small>شماره سفارش</small><b id="successOrderId" dir="ltr"></b
+            ><button id="copyOrderId" type="button">کپی</button>
+          </div>
+          <a id="payNow" class="primary-button wide hidden" href="#"
+            >ورود به صفحه پرداخت</a
+          ><button id="successClose" class="ghost-button wide" type="button">
+            بازگشت به فروشگاه
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+  </body>
+</html>

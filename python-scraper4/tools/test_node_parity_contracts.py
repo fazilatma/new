@@ -21,6 +21,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 TMP = Path(tempfile.mkdtemp(prefix="scraper4-contracts-"))
@@ -33,6 +34,7 @@ os.environ.update({
 })
 sys.path.insert(0, str(ROOT))
 import scraper4 as core  # noqa: E402
+import storefront as store  # noqa: E402
 
 
 class FakeResponse:
@@ -151,17 +153,42 @@ class NodeParityContracts(unittest.TestCase):
 
     def test_profile_import_and_product_sync(self):
         self.assert_ok(self.client.post("/api/profiles", json={
-            "id": "p1", "name": "One", "url": "https://example.com"}))
+            "id": "p1", "name": "One", "url": "https://example.com",
+            "priceMode": "multiply", "priceValue": 1.2, "roundPrice": 100}))
         imported = self.assert_ok(self.client.post("/api/profiles/p1/import", json={"rows": [
             {"sourceKey": "sku/a", "title": "A", "price": "12,500", "sku": "A-1"},
             {"sourceKey": "bad", "title": "No price", "price": ""},
         ]}))
         self.assertEqual(imported["imported"], 1)
         self.assertEqual(imported["skipped"], 1)
+        preview_products = self.assert_ok(self.client.get("/api/profiles/p1/products"))["products"]
+        self.assertEqual(preview_products[0]["sourcePrice"], 12500)
+        self.assertEqual(preview_products[0]["price"], 15000)
+        self.assertEqual(preview_products[0]["resultApplied"]["priceMode"], "multiply")
+        applied = self.assert_ok(self.client.post("/api/profiles/p1/results/apply", json={}))
+        self.assertEqual(applied["changed"], 1)
+        products = self.assert_ok(self.client.get("/api/profiles/p1/products"))["products"]
+        self.assertEqual(products[0]["sourcePrice"], 12500)
+        self.assertEqual(products[0]["resultBase"]["price"], 12500)
+        self.assertEqual(products[0]["price"], 15000)
+        self.assertEqual(products[0]["resultApplied"]["priceMode"], "multiply")
+        profile = self.assert_ok(self.client.get("/api/profiles"))["profiles"][0]
+        self.assertEqual(profile["priceMode"], "multiply")
+        self.assertEqual(profile["priceValue"], 1.2)
+        self.assertEqual(profile["roundPrice"], 100)
+        stored_rules = self.data()["profiles"]["p1"]["profile_rules"]
+        self.assertEqual(stored_rules["price_mode"], "multiplier")
+        self.assertEqual(stored_rules["price_value"], 1.2)
+        self.assertEqual(stored_rules["price_round"], 100)
+        storefront_product = self.assert_ok(self.client.get("/api/store/products"))["items"][0]
+        self.assertEqual(storefront_product["price"], 15000)
+        dashboard = (ROOT / "ui" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("p.resultBase?.price??p.sourcePrice", dashboard)
         with patch.object(core, "woo_send_one", return_value={"id": 91}) as send:
             result = self.assert_ok(self.client.post("/api/products/p1/sku%2Fa/sync/woo"))
         self.assertEqual(result["result"]["id"], 91)
         send.assert_called_once()
+        self.assertEqual(send.call_args.args[0]["price"], "15000")
 
     def test_destination_and_duplicate_contracts(self):
         data = self.data()
@@ -568,6 +595,267 @@ class NodeParityContracts(unittest.TestCase):
         self.assertIn('id="destFetchMode"', html)
         self.assertIn("صفحه‌ای — سریع و پیش‌فرض", html)
         self.assertIn("fetch_mode:fetchMode", dashboard)
+
+    def test_digipay_official_payment_adapter_contract(self):
+        data = self.data()
+        data["profiles"]["digital"] = {
+            "name": "Digital",
+            "profile_rules": {"price_mode": "none", "default_stock": 2},
+            "saved_products": [{"source_key": "digi-1", "title": "Digi item",
+                                "source_price": "15000", "price": "15000", "stock": 2}],
+        }
+        self.save(data)
+        configured = self.assert_ok(self.client.put("/api/store/admin/settings", json={"settings": {
+            "gateways": {"digipay": {
+                "enabled": True, "sandbox": True, "amount_multiplier": 10,
+                "client_id": "client-id", "client_secret": "client-secret",
+                "username": "merchant-user", "password": "merchant-password",
+            }}
+        }}))["settings"]["gateways"]["digipay"]
+        self.assertTrue(configured["ready"])
+        store._DIGIPAY_TOKEN.update(key="", token="", expires_at=0)
+        product = self.assert_ok(self.client.get("/api/store/products"))["items"][0]
+        callback_urls = []
+        calls = []
+
+        def digipay(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if url.endswith("/oauth/token"):
+                self.assertEqual(kwargs["files"]["grant_type"], (None, "password"))
+                self.assertTrue(kwargs["headers"]["Authorization"].startswith("Basic "))
+                return FakeResponse({"access_token": "access-token", "expires_in": 3599})
+            if "/tickets/business?type=11" in url:
+                payload = kwargs["json"]
+                self.assertEqual(payload["amount"], 150000)
+                self.assertEqual(payload["cellNumber"], "09123456789")
+                callback_urls.append(payload["callbackUrl"])
+                return FakeResponse({"result": {"status": 0, "message": "OK"},
+                                     "ticket": "ticket-one",
+                                     "redirectUrl": "https://1.1.1.1/pay/ticket-one"})
+            if "/purchases/verify?type=0" in url:
+                self.assertEqual(kwargs["json"]["trackingCode"], "tracking-one")
+                return FakeResponse({"result": {"status": 0, "message": "OK"},
+                                     "trackingCode": "tracking-one",
+                                     "providerId": kwargs["json"]["providerId"],
+                                     "amount": 150000, "paymentGateway": 0})
+            raise AssertionError(url)
+
+        body = {"idempotency_key": "digipay-order-key-0001",
+                "customer": {"name": "علی رضایی", "mobile": "09123456789",
+                             "province": "تهران", "city": "تهران",
+                             "address": "خیابان نمونه پلاک ده"},
+                "items": [{"id": product["id"], "quantity": 1}],
+                "payment_method": "digipay"}
+        with patch.object(core, "outbound_request", side_effect=digipay):
+            order = self.assert_ok(self.client.post(
+                "/api/store/orders", json=body), status=201)["order"]
+            callback = urlsplit(callback_urls[0])
+            callback_path = callback.path
+            if core.URL_PREFIX and callback_path.startswith(core.URL_PREFIX):
+                callback_path = callback_path[len(core.URL_PREFIX):]
+            response = self.client.post(
+                callback_path + "?" + callback.query,
+                data={"amount": "150000", "providerId": order["id"],
+                      "trackingCode": "tracking-one", "result": "SUCCESS", "type": "0"})
+            self.assertEqual(response.status_code, 200)
+            second = self.client.post(
+                callback_path + "?" + callback.query,
+                data={"amount": "150000", "providerId": order["id"],
+                      "trackingCode": "tracking-one", "result": "SUCCESS", "type": "0"})
+            self.assertEqual(second.status_code, 200)
+        self.assertEqual(sum("/oauth/token" in url for _, url, _ in calls), 1)
+        self.assertEqual(sum("/purchases/verify" in url for _, url, _ in calls), 1)
+        saved = self.data()["store_orders"][order["id"]]
+        self.assertEqual(saved["payment"]["status"], "paid")
+        self.assertEqual(saved["payment"]["reference_id"], "tracking-one")
+
+    def test_storefront_order_payment_and_webhook_contracts(self):
+        data = self.data()
+        data["profiles"]["shop-a"] = {
+            "name": "فروشنده نمونه",
+            "profile_rules": {"price_mode": "percent", "price_value": 20,
+                              "price_round": 100, "default_stock": 5},
+            "saved_products": [{
+                "source_key": "sku-1", "title": "کالای فروشگاهی",
+                "source_price": "10000", "price": "12000", "stock": 5,
+                "category": "آزمایشی", "image": "https://cdn.example/item.jpg",
+            }],
+        }
+        self.save(data)
+
+        root = self.client.get("/")
+        self.assertEqual(root.status_code, 200)
+        self.assertIn("سبد خرید", root.get_data(as_text=True))
+        with core.app.test_request_context("/api/store/orders/SH12345678/pay"):
+            self.assertTrue(core.is_public_storefront_request())
+        with core.app.test_request_context("/api/store/admin/orders"):
+            self.assertFalse(core.is_public_storefront_request())
+        self.assertIn("let products=[],profiles={}", self.client.get("/classic").get_data(as_text=True))
+        catalog = self.assert_ok(self.client.get("/api/store/products"))
+        self.assertEqual(catalog["total"], 1)
+        product = catalog["items"][0]
+        self.assertEqual(product["price"], 12000)  # current profile rule, exactly once
+        self.assertTrue(product["price_adjusted"])
+
+        customer = {"name": "علی رضایی", "mobile": "09123456789", "province": "تهران",
+                    "city": "تهران", "address": "خیابان نمونه، پلاک ده",
+                    "postal_code": "1234567890"}
+        cod_body = {"idempotency_key": "cod-order-key-00000001", "customer": customer,
+                    "items": [{"id": product["id"], "quantity": 2}],
+                    "payment_method": "cod"}
+        created = self.assert_ok(self.client.post("/api/store/orders", json=cod_body), status=201)["order"]
+        self.assertEqual(created["total"], 24000)
+        self.assertEqual(created["payment_status"], "cod")
+        self.assertTrue(created["access_token"])
+        repeated = self.assert_ok(self.client.post("/api/store/orders", json=cod_body), status=201)["order"]
+        self.assertEqual(repeated["id"], created["id"])
+        mismatch = dict(cod_body, items=[{"id": product["id"], "quantity": 1}])
+        self.assertEqual(self.client.post("/api/store/orders", json=mismatch).status_code, 409)
+        status = self.assert_ok(self.client.get(
+            f"/api/store/orders/{created['id']}",
+            headers={"Authorization": "Bearer " + created["access_token"]}))
+        self.assertEqual(status["order"]["status"], "confirmed")
+        tracked = self.assert_ok(self.client.post("/api/store/orders/track", json={
+            "order_id": created["id"], "mobile": customer["mobile"]}))
+        self.assertNotIn("address", json.dumps(tracked, ensure_ascii=False))
+        remaining = self.assert_ok(self.client.get("/api/store/products"))["items"][0]
+        self.assertEqual(remaining["stock"], 3)
+
+        configured = self.assert_ok(self.client.put("/api/store/admin/settings", json={"settings": {
+            "gateways": {"zarinpal": {"enabled": True, "sandbox": True,
+                                           "currency": "IRT", "merchant_id": "merchant-secret"}}
+        }}))["settings"]
+        self.assertTrue(configured["gateways"]["zarinpal"]["ready"])
+        self.assertNotIn("merchant-secret", json.dumps(self.data(), ensure_ascii=False))
+        self.assertNotIn("merchant", json.dumps(self.assert_ok(
+            self.client.get("/api/store/config"))["store"], ensure_ascii=False).lower())
+
+        callbacks = []
+        verify_calls = []
+
+        def zarinpal(method, url, **kwargs):
+            if url.endswith("/payment/request.json"):
+                callbacks.append(kwargs["json"]["callback_url"])
+                self.assertEqual(kwargs["json"]["amount"], 12000)
+                return FakeResponse({"data": {"code": 100, "authority": "AUTH-ONE"}, "errors": []})
+            if url.endswith("/payment/verify.json"):
+                verify_calls.append(kwargs["json"])
+                return FakeResponse({"data": {"code": 100, "ref_id": 98765}, "errors": []})
+            raise AssertionError(url)
+
+        online_body = {"idempotency_key": "online-order-key-00001", "customer": customer,
+                       "items": [{"id": product["id"], "quantity": 1}],
+                       "payment_method": "zarinpal"}
+        with patch.object(core, "outbound_request", side_effect=zarinpal):
+            online = self.assert_ok(self.client.post(
+                "/api/store/orders", json=online_body), status=201)["order"]
+            self.assertTrue(online["redirect_url"].endswith("/AUTH-ONE"))
+            # Verification must use the encrypted initiation snapshot, not later
+            # credential/currency changes made by an administrator.
+            self.assert_ok(self.client.put("/api/store/admin/settings", json={"settings": {
+                "gateways": {"zarinpal": {"merchant_id": "rotated-secret", "currency": "IRR"}}
+            }}))
+            callback = urlsplit(callbacks[0])
+            callback_path = callback.path
+            if core.URL_PREFIX and callback_path.startswith(core.URL_PREFIX):
+                callback_path = callback_path[len(core.URL_PREFIX):]
+            callback_query = dict(parse_qsl(callback.query))
+            callback_query.update(Status="OK", Authority="AUTH-ONE")
+            callback_url = callback_path + "?" + urlencode(callback_query)
+            verified = self.client.get(callback_url)
+            self.assertEqual(verified.status_code, 200)
+            self.assertIn("پرداخت موفق", verified.get_data(as_text=True))
+            again = self.client.get(callback_url)
+            self.assertEqual(again.status_code, 200)
+        self.assertEqual(len(verify_calls), 1, "idempotent callback must verify only once")
+        self.assertEqual(verify_calls[0]["merchant_id"], "merchant-secret")
+        self.assertEqual(verify_calls[0]["amount"], 12000)
+        persisted_after_verify = self.data()
+        self.assertNotIn("merchant-secret", json.dumps(persisted_after_verify, ensure_ascii=False))
+        self.assertNotIn("rotated-secret", json.dumps(persisted_after_verify, ensure_ascii=False))
+        paid = persisted_after_verify["store_orders"][online["id"]]
+        self.assertEqual(paid["payment"]["status"], "paid")
+        self.assertEqual(paid["payment"]["reference_id"], "98765")
+        admin_order = self.assert_ok(self.client.get(
+            f"/api/store/admin/orders/{online['id']}"))["order"]
+        self.assertNotIn("verification_config_enc", json.dumps(admin_order))
+
+        # TorobPay uses the merchant-provided generic request/verify contract;
+        # no undocumented endpoint or response shape is hard-coded.
+        torob_settings = self.assert_ok(self.client.put("/api/store/admin/settings", json={"settings": {
+            "gateways": {"torobpay": {
+                "enabled": True, "amount_multiplier": 1,
+                "request_url": "https://1.1.1.1/torob/request",
+                "verify_url": "https://1.1.1.1/torob/verify",
+                "api_token": "torob-contract-secret",
+            }}
+        }}))["settings"]
+        self.assertTrue(torob_settings["gateways"]["torobpay"]["ready"])
+        torob_callbacks = []
+        torob_verify_calls = []
+
+        def torobpay(method, url, **kwargs):
+            self.assertEqual(method, "POST")
+            self.assertEqual(kwargs["headers"]["Authorization"], "Bearer torob-contract-secret")
+            if url.endswith("/torob/request"):
+                self.assertIsInstance(kwargs["json"]["amount"], int)
+                torob_callbacks.append(kwargs["json"]["callbackUrl"])
+                return FakeResponse({"token": "torob-token", "redirectUrl": "https://1.1.1.1/pay/torob-token"})
+            if url.endswith("/torob/verify"):
+                torob_verify_calls.append(kwargs["json"])
+                return FakeResponse({"status": "SUCCESS", "trackingCode": "torob-reference",
+                                     "amount": kwargs["json"]["amount"],
+                                     "orderId": kwargs["json"]["orderId"]})
+            raise AssertionError(url)
+
+        torob_body = {"idempotency_key": "torob-order-key-000001", "customer": customer,
+                      "items": [{"id": product["id"], "quantity": 1}],
+                      "payment_method": "torobpay"}
+        with patch.object(core, "outbound_request", side_effect=torobpay):
+            torob_order = self.assert_ok(self.client.post(
+                "/api/store/orders", json=torob_body), status=201)["order"]
+            torob_callback = urlsplit(torob_callbacks[0])
+            torob_path = torob_callback.path
+            if core.URL_PREFIX and torob_path.startswith(core.URL_PREFIX):
+                torob_path = torob_path[len(core.URL_PREFIX):]
+            torob_query = dict(parse_qsl(torob_callback.query))
+            torob_query.update(status="SUCCESS", token="torob-token")
+            self.assertEqual(self.client.get(
+                torob_path + "?" + urlencode(torob_query)).status_code, 200)
+        self.assertEqual(len(torob_verify_calls), 1)
+        self.assertEqual(self.data()["store_orders"][torob_order["id"]]["payment"]["reference_id"],
+                         "torob-reference")
+        self.assertNotIn("torob-contract-secret", json.dumps(self.data(), ensure_ascii=False))
+
+        setup = self.assert_ok(self.client.get("/api/store/admin/webhooks/setup"))["webhook"]
+        webhook_path = urlsplit(setup["url"]).path
+        persisted_webhook = json.dumps(self.data(), ensure_ascii=False)
+        self.assertNotIn(webhook_path.rsplit("/", 1)[-1], persisted_webhook)
+        self.assertNotIn(setup["authorization"].split(" ", 1)[-1], persisted_webhook)
+        if core.URL_PREFIX and webhook_path.startswith(core.URL_PREFIX):
+            webhook_path = webhook_path[len(core.URL_PREFIX):]
+        event = {"event_id": 1, "event_uuid": "evt-unique-1",
+                 "data": {"chat_id": 10, "message": {"text": "سلام"}}}
+        first = self.client.post(webhook_path, json=event)
+        second = self.client.post(webhook_path, json=event)
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(first.get_json()["duplicate"])
+        self.assertTrue(second.get_json()["duplicate"])
+        events = self.data()["store_webhook_events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(next(iter(events.values()))["deliveries"], 2)
+        self.assertEqual(self.client.post(
+            "/api/store/webhooks/basalam/wrong", json=event).status_code, 401)
+
+        self.assert_ok(self.client.put(
+            "/api/store/admin/settings", json={"settings": {"enabled": False}}))
+        self.assertEqual(self.client.get("/").status_code, 503)
+        self.assertEqual(self.client.get("/api/store/products").status_code, 503)
+        # Existing customers can still inspect an order while checkout is paused.
+        self.assertEqual(self.client.get(
+            f"/api/store/orders/{created['id']}",
+            headers={"Authorization": "Bearer " + created["access_token"]}).status_code, 200)
 
     def test_persistent_category_run(self):
         data = self.data()

@@ -382,14 +382,17 @@ def install_parity_extensions(app: Any, core: Any, helpers: dict[str, Any]) -> N
                     raise ValueError("title is empty")
                 price_text = _s(row.get("price") or row.get("priceText"))
                 price = _num(re.sub(r"[^\d.-]", "", price_text))
+                if isinstance(price, float) and price.is_integer():
+                    price = int(price)
                 if price <= 0 and body.get("skipMissingPrice", True):
                     skipped += 1
                     continue
                 key = _safe_source_key(row, index)
                 image = _s(row.get("image") or row.get("photo"))
                 product = {
-                    "source_key": key, "title": title, "price": price,
-                    "price_text": price_text, "url": _s(row.get("url") or row.get("link")),
+                    "source_key": key, "title": title, "price": price, "source_price": price,
+                    "price_text": price_text, "source_price_text": price_text,
+                    "url": _s(row.get("url") or row.get("link")),
                     "image": image, "images": [image] if image else [],
                     "sku": _s(row.get("sku")), "brand": _s(row.get("brand")),
                     "category": _s(row.get("category")), "short_desc": _s(row.get("shortDesc")),
@@ -435,11 +438,13 @@ def install_parity_extensions(app: Any, core: Any, helpers: dict[str, Any]) -> N
             return jsonify(ok=False, error="Product/profile not found"), 404
         try:
             key = dest_key(target)
+            rules = profile.get("profile_rules") if isinstance(profile.get("profile_rules"), dict) else {}
+            prepared = core.product_for_destination(product, rules, key)
             if key == "woocommerce":
-                result = core.woo_send_one(product,
+                result = core.woo_send_one(prepared,
                                            _s(product.get("destination_status") or "draft"), True)
             else:
-                result = core.basalam_fanout_send(product)
+                result = core.basalam_fanout_send(prepared)
             return ok(result=result)
         except Exception as exc:  # noqa: BLE001
             return jsonify(ok=False, error=str(exc)), 400

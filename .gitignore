@@ -13,6 +13,8 @@ python-scraper4/data/
 python-scraper4/live-tasks/
 python-scraper4/*.log
 python-scraper4/scraper4-errors.jsonl
+python-scraper4/*.store-key
+python-scraper4/*.store.lock
 python-scraper4/reports/
 python-scraper4/.playwright/
 

@@ -123,8 +123,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.220"
+APP_VERSION = "10.221"
 CHANGELOG = [
+    {"version":"10.221","date":"2026-09-22","title":"فروشگاه عمومی، سفارش امن، پرداخت چنددرگاهی و وب‌هوک باسلام","items":["ویترین فارسی واکنش‌گرا در مسیر ریشه با جست‌وجو، دسته‌بندی، جزئیات محصول، سبد خرید، تسویه و پیگیری سفارش اضافه شد و رابط کلاسیک در /classic حفظ شد","محصولات saved_products همه پروفایل‌ها با محاسبه دوباره قواعد قیمت پروفایل و ضریب اختصاصی فروشگاه نمایش داده می‌شوند؛ قیمت، موجودی و مبلغ نهایی سفارش همیشه سمت سرور محاسبه می‌شود","سفارش‌ها با کلید idempotency، توکن دسترسی هش‌شده، اعتبارسنجی مشتری، رزرو موجودی، تاریخچه وضعیت و پنل مدیریت پایدار ثبت می‌شوند","معماری پرداخت قابل توسعه با اتصال رسمی زرین‌پال و دیجی‌پی، قرارداد پیکربندی‌پذیر ترب‌پی/درگاه سفارشی، verify سمت سرور و callback مقاوم در برابر اجرای تکراری پیاده شد","کلیدهای درگاه در vault محلی AES-GCM یا متغیر محیطی نگهداری می‌شوند و هیچ credential در API عمومی یا JavaScript منتشر نمی‌شود","گیرنده وب‌هوک باسلام با URL محرمانه، Bearer اختیاری، محدودیت payload، deduplication رخدادها، صندوق رخداد مدیریت و ثبت خودکار مبتنی بر API رسمی اضافه شد","قیمت پایه مبدأ در مودال محصول از source_price واقعی نمایش داده می‌شود و نام‌های قدیمی/جدید درصد، ضریب، مبلغ ثابت و گردکردن پروفایل به‌صورت یکسان روی نتیجه و ویترین اعمال می‌شوند"]},
     {"version":"10.220","date":"2026-09-22","title":"دریافت سریع صفحه‌ای یا یک‌بارهٔ محصولات باسلام","items":["مدیریت محصولات باسلام اکنون دو روش دریافت دارد: صفحه‌ای سریع به‌عنوان پیش‌فرض و یک‌باره برای ساخت فهرست کامل","در روش صفحه‌ای فقط همان صفحه، جست‌وجو و وضعیت درخواستی مستقیماً به API باسلام فرستاده می‌شود و دیگر پیش از نمایش هر صفحه کل فهرست خوانده نمی‌شود","پیاده‌سازی صفحه‌ای با رفتار سریع نسخه Node همسان شد و اطلاعات total_count و total_page پاسخ باسلام برای صفحه‌بندی واقعی استفاده می‌شود","روش یک‌باره صفحات شناخته‌شده را با همزمانی محدود دریافت و فهرست را سه دقیقه cache می‌کند تا ورق‌زدن، جست‌وجو و فیلتر باعث دانلود دوبارهٔ همه صفحات نشود","رابط هنگام دریافت، روش فعال و استفاده از فهرست موقت را نمایش می‌دهد و گزینه پاک‌سازی دوباره روش صفحه‌ای را فعال می‌کند"]},
     {"version":"10.219","date":"2026-09-21","title":"انتخاب مستقیم SDK یا REST API در تنظیمات باسلام","items":["در منوی تنظیمات باسلام داشبورد جدید، انتخاب سه‌حالته REST مستقیم، فقط SDK و خودکار اضافه شد و تغییر آن فوراً و پایدار ذخیره می‌شود","حالت REST مستقیم تمام نصب، import و انتظار timeout مربوط به SDK را دور می‌زند تا دریافت محصولات بدون تأخیر SDK انجام شود","آدرس REST API در همان فرم قابل مشاهده و ویرایش است و دکمه تست دریافت محصول، حداکثر ۲۰ محصول نخست را با روش انتخاب‌شده آزمایش می‌کند","تست اتصال باسلام اکنون واقعاً روش انتخاب‌شده را اجرا و کلاینت استفاده‌شده را در گزارش اعلام می‌کند","اعتبارسنجی backend فقط مقادیر auto، sdk و api را می‌پذیرد و تنظیم انتخاب‌شده در vault و تنظیمات اصلی همگام می‌ماند"]},
     {"version":"10.218","date":"2026-09-21","title":"رفع خطای HTTP 500 مسیرهای باسلام و fallback ایمن","items":["همه مسیرهای محصول، دسته‌بندی، گفت‌وگو و سفارش باسلام از wrapper مشترک SDK-first استفاده می‌کنند و فقط در حالت مجاز به REST برمی‌گردند","Base URLهای دارای /v1 بدون ساخت آدرس تکراری /v1/v1 نرمال می‌شوند و خطای REST اکنون method و endpoint واقعی را گزارش می‌کند","فیلدهای ویرایش محصول داشبورد مانند title، price و short_description پیش از ارسال به نام‌های رسمی name، primary_price و brief تبدیل می‌شوند","برای درخواست‌های تغییردهنده پس از timeout یا HTTP 5xx مبهم، fallback تکراری متوقف می‌شود تا محصول یا پیام دوباره ساخته/ویرایش نشود","تست‌های regression آفلاین برای اولویت SDK، fallback خواندنی، جلوگیری از retry تغییردهنده و نرمال‌سازی URL افزوده شد"]},
@@ -487,6 +488,12 @@ def default_data() -> dict[str, Any]:
         "autoreply_rules": [],
         "import_history": [],
         "ui_settings": {},
+        # Public storefront state lives in storefront.py. Declaring these keys
+        # here makes backups/restores and forward-compatible merges explicit.
+        "store": {},
+        "store_orders": {},
+        "store_webhook_events": {},
+        "store_idempotency": {},
     }
 
 
@@ -575,9 +582,31 @@ def deploy_auth_error():
     return jsonify(ok=False, error="رمز مدیریت نصب نادرست است"), 401
 
 
+def is_public_storefront_request() -> bool:
+    """Keep only the customer/payment/webhook surface outside Basic auth.
+
+    Store administration, the classic UI and every pre-existing scraper API
+    remain protected exactly as before. Order routes enforce their own opaque
+    access token and payment/webhook routes verify server-side state/secrets.
+    """
+    path = request.path.rstrip("/") or "/"
+    if path in {"/", "/store.webmanifest", "/api/store/config", "/api/store/products",
+                "/api/store/orders", "/api/store/orders/track"}:
+        return True
+    if path.startswith(("/store-assets/", "/api/store/products/")):
+        return True
+    if re.fullmatch(r"/api/store/orders/SH[A-Z0-9]{8,38}(?:/pay)?", path):
+        return True
+    if re.fullmatch(r"/api/store/payments/(?:zarinpal|digipay|torobpay|custom)/callback", path):
+        return True
+    if re.fullmatch(r"/api/store/webhooks/basalam/[A-Za-z0-9_-]{20,160}", path):
+        return True
+    return False
+
+
 @app.before_request
 def require_password():
-    if request.path in {"/health", "/api/errors"} or authorized():
+    if request.path in {"/health", "/api/errors"} or is_public_storefront_request() or authorized():
         return None
     return Response("Authentication required", 401, {"WWW-Authenticate": 'Basic realm="Scraper4"'})
 
@@ -3523,18 +3552,19 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
         report.diagnostics["details"]={"requested":attempted,"completed":enriched,"failed":len(detail_failures),"errors":detail_failures[:20]}
         report.logs.append(f"جزئیات خودکار {enriched} محصول تکمیل شد"+(f"؛ {len(detail_failures)} خطا" if detail_failures else ""))
     rules=config.get("profile_rules") if isinstance(config.get("profile_rules"),dict) else {}
-    suffix=clean_text(rules.get("title_suffix"));prefix=clean_text(rules.get("title_prefix"));mode=str(rules.get("price_mode","none"));value=float(rules.get("price_value",0) or 0);step=max(0,int(rules.get("price_round",0) or 0));default_stock=clean_text(rules.get("default_stock"));default_category=clean_text(rules.get("default_category"))
+    suffix=clean_text(rules.get("title_suffix"));prefix=clean_text(rules.get("title_prefix"));mode=str(rules.get("price_mode","none"));mode={"multiply":"multiplier","add":"fixed"}.get(mode,mode);value=float(rules.get("price_value",rules.get("price_val",0)) or 0);step=max(0,int(rules.get("price_round",rules.get("round_price",0)) or 0));minimum=max(0,float(rules.get("min_price",0) or 0));default_stock=clean_text(rules.get("default_stock"));default_category=clean_text(rules.get("default_category"))
     for product in report.products.values():
         title=clean_text(product.get("title"))
         if prefix and not title.startswith(prefix):title=prefix+" "+title
         if suffix and not title.endswith(suffix):title=title+" "+suffix
         product["title"]=title
         raw=woo_price(product.get("source_price") or product.get("price"));product["source_price"]=raw
-        price=float(raw or 0)
+        price=float(raw or 0);had_source_price=price>0
         if mode=="percent":price*=1+value/100
         elif mode=="multiplier":price*=value
         elif mode=="fixed":price+=value
         if step:price=round(price/step)*step
+        if had_source_price:price=max(minimum,price)
         if price>0:product["price"]=str(max(0,round(price)))
         if default_stock and product.get("stock") in (None,""):product["stock"]=default_stock
         if default_category and not product.get("category"):product["category"]=default_category
@@ -3560,13 +3590,38 @@ def woo_request(method: str, endpoint: str, payload: Any = None) -> requests.Res
 
 
 def woo_price(value: Any) -> str:
-    digits = re.sub(r"[^0-9]", "", clean_text(value))
+    if isinstance(value, bool):
+        return "0"
+    if isinstance(value, int):
+        return str(max(0, value))
+    if isinstance(value, float):
+        return str(max(0, round(value))) if value == value and abs(value) != float("inf") else "0"
+    text = clean_text(value)
+    # JSON adapters may serialize an integer amount as ``12500.0``. Treat only
+    # an all-zero decimal tail this way; dots in localized prices remain group
+    # separators as in the legacy normalizer.
+    decimal_integer = re.fullmatch(r"\s*([0-9]+)\.0+\s*", text)
+    if decimal_integer:
+        return decimal_integer.group(1).lstrip("0") or "0"
+    digits = re.sub(r"[^0-9]", "", text)
     return digits.lstrip("0") or "0"
 
 
 def product_for_destination(product: dict[str,Any], rules: dict[str,Any], destination: str) -> dict[str,Any]:
-    """Apply the PHP-compatible destination-specific adjustment after profile pricing."""
-    out=dict(product);prefix="woo" if destination=="woocommerce" else "bsl";mode=clean_text(rules.get(prefix+"_price_mode","none"));value=float(rules.get(prefix+"_price_value",0) or 0);step=max(0,int(rules.get(prefix+"_price_round",0) or 0));base=float(woo_price(product.get("price")) or 0);price=base
+    """Apply current profile pricing, then the destination-specific adjustment."""
+    out=dict(product)
+    base=float(woo_price(product.get("price")) or 0)
+    source=product.get("source_price")
+    if source not in (None,""):
+        base=float(woo_price(source) or 0);had_source_amount=base>0
+        profile_mode=clean_text(rules.get("price_mode","none"));profile_mode={"multiply":"multiplier","add":"fixed"}.get(profile_mode,profile_mode)
+        profile_value=float(rules.get("price_value",rules.get("price_val",0)) or 0);profile_step=max(0,int(rules.get("price_round",rules.get("round_price",0)) or 0));minimum=max(0,float(rules.get("min_price",0) or 0))
+        if profile_mode=="percent":base*=1+profile_value/100
+        elif profile_mode=="multiplier" and profile_value>0:base*=profile_value
+        elif profile_mode=="fixed":base+=profile_value
+        if profile_step:base=round(base/profile_step)*profile_step
+        if had_source_amount:base=max(minimum,base)
+    prefix="woo" if destination=="woocommerce" else "bsl";mode=clean_text(rules.get(prefix+"_price_mode","none"));value=float(rules.get(prefix+"_price_value",0) or 0);step=max(0,int(rules.get(prefix+"_price_round",0) or 0));price=base
     if base>0:
         if mode=="percent":price=base*(1+max(-99.0,min(10000.0,value))/100)
         elif mode=="multiplier" and value>0:price=base*value
@@ -4776,6 +4831,8 @@ def health():
                    auto_update=enabled, auto_update_interval=interval, update_error=AUTO_UPDATE_STATE["error"],
                    ui_bridge=globals().get("UI_BRIDGE_READY", False),
                    ui_bridge_error=globals().get("UI_BRIDGE_ERROR", "bridge block missing from this file"),
+                   storefront=globals().get("STOREFRONT_READY", False),
+                   storefront_error=globals().get("STOREFRONT_ERROR", "storefront block missing from this file"),
                    last_error=(recent_errors(1)[-1] if recent_errors(1) else None), error_log=ERROR_LOG_PATH)
 
 
@@ -4816,7 +4873,14 @@ def render_index() -> str:
 
 @app.get("/")
 def index():
-    return Response(render_index(), mimetype="text/html; charset=utf-8")
+    """Public storefront; the former classic interface remains at /classic."""
+    try:
+        import storefront as _storefront
+
+        return _storefront.render_storefront()
+    except Exception as exc:  # noqa: BLE001 - report loudly instead of a blank root
+        report_error("storefront.render", exc)
+        return Response("Storefront is temporarily unavailable", 503, mimetype="text/plain")
 
 
 
@@ -6299,6 +6363,7 @@ def mapped_import_products(rows: list[dict[str, str]], mapping: dict[str, str], 
         product["title"] = clean_text(" ".join(x for x in (prefix, product.get("title", ""), suffix) if x))[:300]
         if product.get("price"):
             number = woo_price(product["price"])
+            product["source_price"] = number
             product["price"] = str(max(0, round(float(number) * multiplier + addition)))
         if product.get("images"):
             product["images"] = [clean_text(x) for x in re.split(r"[|,\n]+", product["images"]) if clean_text(x)][:20]
@@ -8349,7 +8414,7 @@ function updateEngineHint(){const el=$('engineMasterHint');if(!el)return;const m
 function onFetchEngineChange(){const v=(($('fetch_engine')||{}).value||'auto');if(v&&v!=='auto'&&$('fetch_engine_master'))$('fetch_engine_master').value=v;updateEngineHint()}
 async function runScrape(){const btn=$('runBtn'),old=btn.innerHTML;if(!$('url').value.trim()){$('status').innerHTML='<span class="error">لطفاً آدرس صفحه را وارد کنید.</span>';$('url').focus();return}btn.disabled=true;lastComparison={lists:{}};renderComparisonCards({});btn.innerHTML='<span class="spinner"></span>در حال برداشت';$('status').innerHTML='<span class="progress-pulse">● وظیفه استخراج روی سرور اجرا می‌شود؛ جزئیات زنده پایین نمایش داده می‌شود.</span>';try{let started=await api('/api/scrape/start',{method:'POST',body:JSON.stringify(config())}),task;for(;;){let d=await api('/api/tasks/'+encodeURIComponent(started.task.id));task=d.task;renderExtractTask(task);if(['completed','failed','cancelled','interrupted'].includes(task.status))break;await new Promise(r=>setTimeout(r,750))}if(task.status!=='completed')throw Error(task.error||task.step||'استخراج کامل نشد');let d=task.result;products=d.products;if(d.diagnostics&&d.diagnostics.fetch_engine_master){if($('fetch_engine_master'))$('fetch_engine_master').value=d.diagnostics.fetch_engine_master;if(activeProfile&&profiles[activeProfile]){profiles[activeProfile].fetch_engine_master=d.diagnostics.fetch_engine_master;profiles[activeProfile].fetch_engine_ms=d.diagnostics.fetch_engine_ms||0}updateEngineHint()}renderRows();let c=d.comparison||{};renderComparisonCards(c);if(activeProfile&&profiles[activeProfile]){let p=profiles[activeProfile],summary={...c};delete summary.lists;p.last_comparison=c;p.comparison_history=[summary,...(p.comparison_history||[])].slice(0,10);renderComparisonHistory(p.comparison_history)}else renderComparisonHistory([c]);$('status').innerHTML=`<span class="ok">⚡ ${d.total} محصول از ${d.pages} صفحه با فاز سریع استخراج شد${d.diagnostics&&d.diagnostics.fetch_engine_master?(' · مستر '+d.diagnostics.fetch_engine_master):''}</span>\n${d.detail_task?'جزئیات به‌صورت مستقل در پس‌زمینه ادامه دارد؛ نتیجه فهرست منتظر آن نمی‌ماند.':'جدول کامل در تب «نتایج» است.'}\nروش: ${esc(d.modes.join(' · '))}`;if(d.detail_task)watchDetailTask(d.detail_task.id)}catch(e){$('status').innerHTML='<span class="error">✗ عملیات ناموفق بود\n'+esc(e.message)+'</span>'}finally{btn.disabled=false;btn.innerHTML=old}}
 function renderDetailCoverage(){let n=products.length,count=f=>products.filter(f).length,cards=[['توضیحات',count(p=>p.short_desc||p.long_desc)],['گالری چندتصویری',count(p=>(p.images||[]).length>1)],['تنوع‌ها',count(p=>(p.variation_groups||[]).length||p.variations_text)],['مشخصات',count(p=>(p.attributes||[]).length)],['جزئیات کامل',count(p=>p.detail_status==='complete')]];$('detailCoverage').innerHTML=cards.map(([name,value])=>`<div class="space-card coverage-card"><b>${value}</b><span>${name} · ${n?Math.round(value/n*100):0}٪</span></div>`).join('')}
-function openProductDetail(i){let p=products[i];if(!p)return;$('productDetailTitle').textContent=p.title||'جزئیات محصول';$('productDetailMeta').textContent='SKU: '+(p.sku||'—')+' · '+(p.detail_status==='complete'?'استخراج تفصیلی کامل':'اطلاعات موجود');let imgs=(p.images||[p.image]).filter(Boolean),groups=p.variation_groups||[],attrs=p.attributes||[];let rules=(profiles[activeProfile]&&profiles[activeProfile].profile_rules)||{};let shops=(typeof bslAllShopEntries==='function'?bslAllShopEntries():[]);let baseDigits=(v=>{let s=String(v||'');let d=s.replace(/[^0-9]/g,'');return d?parseInt(d,10):0;})(p.price);function fmtPrice(n){if(!n) return '—';let s=String(n);return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',')+' تومان';}function adjPrice(base,mode,val,round){let v=Number(val)||0;let r=Number(round)||0;let price=base;if(mode==='percent'&&base>0)price=base*(1+v/100);else if(mode==='multiplier'&&v>0)price=base*v;else if(mode==='fixed')price=base+v;if(r)price=Math.round((price+r/2)/r)*r;return Math.max(1,Math.round(price));}let wooMode=String(rules.woo_price_mode||'none'),wooVal=Number(rules.woo_price_value||0),wooRound=Number(rules.woo_price_round||0);let bslMode=String(rules.bsl_price_mode||'none'),bslVal=Number(rules.bsl_price_value||0),bslRound=Number(rules.bsl_price_round||0);let wooAdj=(wooMode==='none'||!baseDigits)?baseDigits:adjPrice(baseDigits,wooMode,wooVal,wooRound);let bslAdj=(bslMode==='none'||!baseDigits)?baseDigits:adjPrice(baseDigits,bslMode,bslVal,bslRound);let coefLabel=(mode,val)=>{if(mode==='none')return 'بدون تعدیل';if(mode==='percent')return (val>0?'+':'')+val+'٪';if(mode==='multiplier')return '×'+val;if(mode==='fixed')return (val>0?'+':'')+fmtPrice(val);return mode;};let shopRows=shops.map(sh=>{let sm=String(sh.price_mode||'none');let sv=Number(sh.price_val||0);let isInherit=sm==='none';let effPrice=isInherit?bslAdj:adjPrice(baseDigits,sm,sv,0);let label=isInherit?('ارث از باسلام ('+coefLabel(bslMode,bslVal)+')'):coefLabel(sm,sv);return `<div class="attribute-row"><b>${esc(sh.shop_name||('غرفه '+sh.vendor_id))} <small style="opacity:.7">#${sh.vendor_id}${sh.is_default?' · پیش‌فرض':''}</small></b><span>${fmtPrice(effPrice)} <small style="color:var(--muted)">(${esc(label)})</small></span></div>`;}).join('')||'<div class="note">غرفه فعالی یافت نشد — ابتدا غرفه دوم را در «اتصال باسلام» ذخیره کنید و «ذخیره اتصال» بزنید.</div>';let destCard=`<section class="detail-section"><h3>💲 تعدیل قیمت پروفایل</h3><div class="attribute-row"><b>قیمت پایه (استخراج)</b><span>${fmtPrice(baseDigits)} <small>${esc(p.price||'')}</small></span></div><div class="attribute-row"><b>ووکامرس</b><span>${fmtPrice(wooAdj)} <small>(${esc(coefLabel(wooMode,wooVal))}${wooRound?' · گرد:'+wooRound:''})</small></span></div><div class="attribute-row"><b>باسلام (کلی)</b><span>${fmtPrice(bslAdj)} <small>(${esc(coefLabel(bslMode,bslVal))}${bslRound?' · گرد:'+bslRound:''})</small></span></div></section><section class="detail-section"><h3>🏪 غرفه‌های باسلام و قیمت هر غرفه</h3><div style="display:grid;gap:6px">${shopRows}</div><small style="color:var(--muted);display:block;margin-top:6px">تعداد غرفه فعال: ${shops.length} · حالت ارسال: ${esc((profiles[activeProfile]&&profiles[activeProfile].send_mode)||'parallel')} · فرمول هر غرفه = قیمت پایه + تعدیل کلی باسلام + تعدیل اختصاصی غرفه</small></section>`;$('productDetailBody').innerHTML=`<div class="product-detail-grid"><div><section class="detail-section"><h3>📝 توضیح کوتاه</h3><div class="rich-description">${esc(p.short_desc||'استخراج نشده')}</div></section><section class="detail-section"><h3>📄 توضیحات کامل</h3><div class="rich-description">${esc(p.long_desc||'استخراج نشده')}</div></section><section class="detail-section"><h3>🎨 تنوع‌ها</h3>${groups.map(g=>`<div class="variation-group"><b>${esc(g.name)}</b><div class="variation-values">${(g.values||[]).map(v=>`<i>${esc(v)}</i>`).join('')}</div></div>`).join('')||esc(p.variations_text||'استخراج نشده')}</section><section class="detail-section"><h3>📋 مشخصات</h3>${attrs.map(a=>`<div class="attribute-row"><b>${esc(a.name)}</b><span>${esc(a.value)}</span></div>`).join('')||'استخراج نشده'}</section></div><aside><section class="detail-section"><h3>🖼 گالری (${imgs.length})</h3><div class="product-gallery">${imgs.map(x=>`<a href="${esc(x)}" target="_blank" rel="noopener"><img src="${esc(x)}" loading="lazy" alt=""></a>`).join('')||'تصویری نیست'}</div></section><section class="detail-section"><h3>اطلاعات پایه</h3><div class="attribute-row"><b>قیمت</b><span>${esc(p.price||'—')}</span></div><div class="attribute-row"><b>موجودی</b><span>${esc(p.stock||'—')}</span></div><div class="attribute-row"><b>برند</b><span>${esc(p.brand||'—')}</span></div><div class="attribute-row"><b>وزن</b><span>${esc(p.weight||'—')}</span></div><div class="attribute-row"><b>دسته</b><span>${esc(p.category||'—')}</span></div></section>${destCard}</aside></div>`;$('productDetailModal').classList.add('open');document.body.style.overflow='hidden'}
+function openProductDetail(i){let p=products[i];if(!p)return;$('productDetailTitle').textContent=p.title||'جزئیات محصول';$('productDetailMeta').textContent='SKU: '+(p.sku||'—')+' · '+(p.detail_status==='complete'?'استخراج تفصیلی کامل':'اطلاعات موجود');let imgs=(p.images||[p.image]).filter(Boolean),groups=p.variation_groups||[],attrs=p.attributes||[];let rules=(profiles[activeProfile]&&profiles[activeProfile].profile_rules)||{};let shops=(typeof bslAllShopEntries==='function'?bslAllShopEntries():[]);let sourceDigits=(v=>{let s=String(v||'');let d=s.replace(/[^0-9]/g,'');return d?parseInt(d,10):0;})(p.source_price||p.price),baseDigits=(v=>{let s=String(v||'');let d=s.replace(/[^0-9]/g,'');return d?parseInt(d,10):0;})(p.price);function fmtPrice(n){if(!n) return '—';let s=String(n);return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',')+' تومان';}function adjPrice(base,mode,val,round){let v=Number(val)||0;let r=Number(round)||0;let price=base;if(mode==='percent'&&base>0)price=base*(1+v/100);else if((mode==='multiplier'||mode==='multiply')&&v>0)price=base*v;else if(mode==='fixed'||mode==='add')price=base+v;if(r)price=Math.round((price+r/2)/r)*r;return Math.max(1,Math.round(price));}let profileMode=String(rules.price_mode||'none'),profileVal=Number(rules.price_value??rules.price_val??0),profileRound=Number(rules.price_round??rules.round_price??0);if(profileMode==='multiplier')profileMode='multiply';if(profileMode==='fixed')profileMode='add';let wooMode=String(rules.woo_price_mode||'none'),wooVal=Number(rules.woo_price_value||0),wooRound=Number(rules.woo_price_round||0);let bslMode=String(rules.bsl_price_mode||'none'),bslVal=Number(rules.bsl_price_value||0),bslRound=Number(rules.bsl_price_round||0);let wooAdj=(wooMode==='none'||!baseDigits)?baseDigits:adjPrice(baseDigits,wooMode,wooVal,wooRound);let bslAdj=(bslMode==='none'||!baseDigits)?baseDigits:adjPrice(baseDigits,bslMode,bslVal,bslRound);let coefLabel=(mode,val)=>{if(mode==='none')return 'بدون تعدیل';if(mode==='percent')return (val>0?'+':'')+val+'٪';if(mode==='multiplier'||mode==='multiply')return '×'+val;if(mode==='fixed'||mode==='add')return (val>0?'+':'')+fmtPrice(val);return mode;};let shopRows=shops.map(sh=>{let sm=String(sh.price_mode||'none');let sv=Number(sh.price_val||0);let isInherit=sm==='none';let effPrice=isInherit?bslAdj:adjPrice(baseDigits,sm,sv,0);let label=isInherit?('ارث از باسلام ('+coefLabel(bslMode,bslVal)+')'):coefLabel(sm,sv);return `<div class="attribute-row"><b>${esc(sh.shop_name||('غرفه '+sh.vendor_id))} <small style="opacity:.7">#${sh.vendor_id}${sh.is_default?' · پیش‌فرض':''}</small></b><span>${fmtPrice(effPrice)} <small style="color:var(--muted)">(${esc(label)})</small></span></div>`;}).join('')||'<div class="note">غرفه فعالی یافت نشد — ابتدا غرفه دوم را در «اتصال باسلام» ذخیره کنید و «ذخیره اتصال» بزنید.</div>';let destCard=`<section class="detail-section"><h3>💲 تعدیل قیمت پروفایل</h3><div class="attribute-row"><b>قیمت پایهٔ مبدأ</b><span>${fmtPrice(sourceDigits)} <small>${esc(p.source_price||p.price||'')}</small></span></div><div class="attribute-row"><b>پس از تعدیل پروفایل</b><span>${fmtPrice(baseDigits)} <small>(${esc(coefLabel(profileMode,profileVal))}${profileRound?' · گرد:'+profileRound:''})</small></span></div><div class="attribute-row"><b>ووکامرس</b><span>${fmtPrice(wooAdj)} <small>(${esc(coefLabel(wooMode,wooVal))}${wooRound?' · گرد:'+wooRound:''})</small></span></div><div class="attribute-row"><b>باسلام (کلی)</b><span>${fmtPrice(bslAdj)} <small>(${esc(coefLabel(bslMode,bslVal))}${bslRound?' · گرد:'+bslRound:''})</small></span></div></section><section class="detail-section"><h3>🏪 غرفه‌های باسلام و قیمت هر غرفه</h3><div style="display:grid;gap:6px">${shopRows}</div><small style="color:var(--muted);display:block;margin-top:6px">تعداد غرفه فعال: ${shops.length} · حالت ارسال: ${esc((profiles[activeProfile]&&profiles[activeProfile].send_mode)||'parallel')} · فرمول هر غرفه = قیمت پایه + تعدیل کلی باسلام + تعدیل اختصاصی غرفه</small></section>`;$('productDetailBody').innerHTML=`<div class="product-detail-grid"><div><section class="detail-section"><h3>📝 توضیح کوتاه</h3><div class="rich-description">${esc(p.short_desc||'استخراج نشده')}</div></section><section class="detail-section"><h3>📄 توضیحات کامل</h3><div class="rich-description">${esc(p.long_desc||'استخراج نشده')}</div></section><section class="detail-section"><h3>🎨 تنوع‌ها</h3>${groups.map(g=>`<div class="variation-group"><b>${esc(g.name)}</b><div class="variation-values">${(g.values||[]).map(v=>`<i>${esc(v)}</i>`).join('')}</div></div>`).join('')||esc(p.variations_text||'استخراج نشده')}</section><section class="detail-section"><h3>📋 مشخصات</h3>${attrs.map(a=>`<div class="attribute-row"><b>${esc(a.name)}</b><span>${esc(a.value)}</span></div>`).join('')||'استخراج نشده'}</section></div><aside><section class="detail-section"><h3>🖼 گالری (${imgs.length})</h3><div class="product-gallery">${imgs.map(x=>`<a href="${esc(x)}" target="_blank" rel="noopener"><img src="${esc(x)}" loading="lazy" alt=""></a>`).join('')||'تصویری نیست'}</div></section><section class="detail-section"><h3>اطلاعات پایه</h3><div class="attribute-row"><b>قیمت</b><span>${esc(p.price||'—')}</span></div><div class="attribute-row"><b>موجودی</b><span>${esc(p.stock||'—')}</span></div><div class="attribute-row"><b>برند</b><span>${esc(p.brand||'—')}</span></div><div class="attribute-row"><b>وزن</b><span>${esc(p.weight||'—')}</span></div><div class="attribute-row"><b>دسته</b><span>${esc(p.category||'—')}</span></div></section>${destCard}</aside></div>`;$('productDetailModal').classList.add('open');document.body.style.overflow='hidden'}
 function closeProductDetail(){$('productDetailModal').classList.remove('open');document.body.style.overflow=''}
 function renderRows(){if($('resultCountBadge'))$('resultCountBadge').textContent=toFa(products.length)+' محصول';renderDetailCoverage();renderResultAlternatives();if(!products.length){$('rows').innerHTML='<tr><td class="empty" colspan="7">محصولی پیدا نشد. آدرس، روش محتوا یا سلکتورها را بررسی کنید.</td></tr>';return}$('rows').innerHTML=products.map((p,i)=>`<tr><td data-label="ردیف">${toFa(i+1)}</td><td data-label="تصویر">${p.image?`<img src="${esc(p.image)}" loading="lazy" alt="">`:''}</td><td data-label="عنوان">${esc(p.title)}</td><td data-label="قیمت" dir="ltr">${esc(p.price)}</td><td data-label="SKU">${esc(p.sku)}</td><td data-label="جزئیات"><button class="gray" onclick="openProductDetail(${i})">${p.detail_status==='complete'?'✓ مشاهده':'مشاهده'}</button></td><td data-label="لینک">${p.link?`<a href="${esc(p.link)}" target="_blank" rel="noopener">مشاهده ↗</a>`:''}</td></tr>`).join('')}
 
@@ -8474,6 +8539,25 @@ except Exception as _ui_exc:  # noqa: BLE001 - optional layer, never fatal
     app.logger.error(
         "Node dashboard bridge FAILED to load (/ui will return 404): %s\n%s",
         UI_BRIDGE_ERROR, _ui_traceback.format_exc(),
+    )
+
+
+# Public commerce is an additive module, registered after the parity bridge so
+# its customer routes can never shadow a Node-compatible management endpoint.
+try:
+    import storefront as _storefront
+
+    _storefront.register(sys.modules[__name__])
+    STOREFRONT_READY = True
+    STOREFRONT_ERROR = ""
+except Exception as _store_exc:  # noqa: BLE001 - keep diagnostics/legacy UI alive
+    import traceback as _store_traceback
+
+    STOREFRONT_READY = False
+    STOREFRONT_ERROR = f"{type(_store_exc).__name__}: {_store_exc}"
+    app.logger.error(
+        "Storefront FAILED to load (/ will return 503): %s\n%s",
+        STOREFRONT_ERROR, _store_traceback.format_exc(),
     )
 
 
