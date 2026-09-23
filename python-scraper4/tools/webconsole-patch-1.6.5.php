@@ -26,6 +26,9 @@
  * Usage (on the server, in the folder containing webconsole.php):
  *   cp webconsole.php webconsole.php.mybackup      # your own safety copy
  *   php patch_webconsole_1.6.5.php webconsole.php
+ *   php patch_webconsole_1.6.5.php --check webconsole.php   # read-only: reports
+ *        the console version, every anchor match count and pip-smart markers
+ *        without touching anything — send this output if patching is refused.
  *
  * Safety: the patcher refuses to write unless every anchor matches exactly
  * once, creates a timestamped .bak-1.6.4 backup, verifies the result with
@@ -35,7 +38,12 @@
 
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit("CLI only\n"); }
 
-$target = isset($argv[1]) ? $argv[1] : 'webconsole.php';
+$checkOnly = false;
+$target = 'webconsole.php';
+foreach (array_slice($argv, 1) as $arg) {
+    if ($arg === '--check' || $arg === '-c') { $checkOnly = true; }
+    else { $target = $arg; }
+}
 if (!is_file($target)) { fwrite(STDERR, "ERROR: file not found: {$target}\n"); exit(1); }
 $src = file_get_contents($target);
 if ($src === false) { fwrite(STDERR, "ERROR: cannot read {$target}\n"); exit(1); }
@@ -44,8 +52,10 @@ if (strpos($src, "define('WCP_VERSION', '1.6.5')") !== false) {
     echo "Already patched (WebConsole Pro 1.6.5). Nothing to do.\n";
     exit(0);
 }
-if (strpos($src, "define('WCP_VERSION', '1.6.4')") === false) {
+$is164 = strpos($src, "define('WCP_VERSION', '1.6.4')") !== false;
+if (!$checkOnly && !$is164) {
     fwrite(STDERR, "ERROR: this patcher targets WebConsole Pro 1.6.4; your file reports another version. Patch aborted, nothing written.\n");
+    fwrite(STDERR, "Run: php " . basename(__FILE__) . " --check " . escapeshellarg($target) . "  — then send that output so the patcher can be re-targeted.\n");
     exit(1);
 }
 
@@ -250,6 +260,22 @@ $patches = [
     ['default_install_cmd python fallback ships the full engine list',
      $oldC, $newC],
 ];
+
+if ($checkOnly) {
+    echo "CHECK MODE (read-only, nothing written) — {$target}\n";
+    preg_match("/define\('WCP_VERSION', '([^']+)'\)/", $src, $m);
+    echo "  WCP_VERSION: " . (isset($m[1]) ? $m[1] : 'NOT FOUND') . ($is164 ? "  (patchable)" : "  (NOT 1.6.4 — patcher must be re-targeted)") . "\n";
+    $ready = $is164;
+    foreach ($patches as $i => $patch) {
+        $count = substr_count($src, $patch[1]);
+        if ($count !== 1) { $ready = false; $mark = 'PROBLEM'; } else { $mark = 'OK'; }
+        printf("  anchor #%d: %-7s found %d time(s) — %s\n", $i + 1, $mark, $count, $patch[0]);
+    }
+    $smart = substr_count($src, 'pip-smart');
+    echo "  'pip-smart' references in the console: {$smart}" . ($smart ? "  (a smart-installer is wired in; it hid the real pip errors in your deploy log)" : "") . "\n";
+    echo $ready ? "VERDICT: READY — run the patcher without --check to apply.\n" : "VERDICT: NOT READY — send this output so a re-targeted patcher can be built.\n";
+    exit($ready ? 0 : 1);
+}
 
 $applied = 0;
 $failed = [];

@@ -521,3 +521,30 @@ ss -ltnp | grep 8000
 ```bash
 systemctl restart scraper4
 ```
+
+## WebConsole companion: make the deploy button install Playwright + Chromium
+
+`tools/webconsole-patch-1.6.5.php` upgrades a WebConsole Pro **1.6.4**
+(`webconsole.php`) to **1.6.5** so the project «نصب / به‌روزرسانی» button
+installs the full Python engine set **plus Playwright + a real Chromium**
+(official CDN → inline Iran mirrors → system browser, idempotent, non-fatal).
+
+```bash
+cp /var/www/html/webconsole.php /var/www/html/webconsole.php.mybackup
+php tools/webconsole-patch-1.6.5.php /var/www/html/webconsole.php
+```
+
+Safety: all 6 anchors are verified before anything is written, a timestamped
+`.bak-1.6.4-*` backup is created, the result is lint-checked with `php -l`,
+and a failed lint rolls the file back automatically. Re-running is a no-op.
+
+If patching is refused (your console is not 1.6.4), run the read-only check
+and send the output — it reports the console version, every anchor match
+count, and whether a pip-smart installer is wired into the console:
+
+```bash
+php tools/webconsole-patch-1.6.5.php --check /var/www/html/webconsole.php
+```
+
+Chromium lands in `/var/www/html/.wconsole_data/cache/ms-playwright`, which
+`configured_browser_path()` in `scraper4.py` already scans — no extra config.
