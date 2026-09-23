@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.3');
+define('WCP_VERSION', '1.6.4');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -2050,7 +2050,7 @@ function cli_service(array $job): int {
             if (!empty($currentP['port']) && ctype_digit((string)$currentP['port'])) {
                 $portsToFree[] = (int)$currentP['port'];
             }
-            if (preg_match_all('/(?:--port|-p|\:)\s*(\d{2,5})|\bPORT\s*=\s*(\d{2,5})/i', $startCmd, $pm)) {
+            if (preg_match_all('/(?:--port|-p|\:)\s*(\d{2,5})|PORT\s*=\s*(\d{2,5})/i', $startCmd, $pm)) {
                 foreach (array_merge($pm[1], $pm[2]) as $detectedPort) {
                     if ($detectedPort && ctype_digit($detectedPort)) $portsToFree[] = (int)$detectedPort;
                 }
@@ -2114,7 +2114,8 @@ function cli_service(array $job): int {
                 }
             }
 
-                        // Auto-synchronize .env file in project directory with chosen port
+            // Auto-synchronize .env file in project directory with chosen port
+            $chosenPort = !empty($currentP['port']) ? $currentP['port'] : (!empty($portsToFree) ? reset($portsToFree) : '');
             if (is_dir($deployDir) && !empty($chosenPort)) {
                 $envFile = $deployDir . '/.env';
                 $existingEnv = is_file($envFile) ? (string)@file_get_contents($envFile) : '';
@@ -2131,10 +2132,11 @@ function cli_service(array $job): int {
 
             $runner = CACHE_DIR . '/svc-run-' . $job['id'] . '.sh';
             $script = "#!/bin/bash\nset -e\ncd " . esc($deployDir) . "\nexport NODE_ENV=production\nexport PYTHONUNBUFFERED=1\n";
-            $script .= "export PYTHONUSERBASE=/var/www/.local\nexport PIP_CACHE_DIR=/tmp/pip_cache\n";
-            $script .= "export PYTHONPATH=\"/usr/local/lib/python3.14/dist-packages:/usr/local/lib/python3.13/dist-packages:/usr/local/lib/python3.12/dist-packages:/usr/local/lib/python3.11/dist-packages:/usr/local/lib/python3.10/dist-packages:/tmp/.local/lib/python3.14/site-packages:/tmp/.local/lib/python3.13/site-packages:/tmp/.local/lib/python3.12/site-packages:/tmp/.local/lib/python3.11/site-packages:/tmp/.local/lib/python3.10/site-packages:/var/www/.local/lib/python3.14/site-packages:/var/www/.local/lib/python3.13/site-packages:/var/www/.local/lib/python3.12/site-packages:/var/www/.local/lib/python3.11/site-packages:/var/www/.local/lib/python3.10/site-packages:\\$HOME/.local/lib/python3.14/site-packages:\\$HOME/.local/lib/python3.13/site-packages:\\$HOME/.local/lib/python3.12/site-packages:\\$HOME/.local/lib/python3.11/site-packages:\\$HOME/.local/lib/python3.10/site-packages:\\$PYTHONPATH\"\n";
+            $script .= 'export PYTHONUSERBASE=/var/www/.local' . "\n";
+            $script .= 'export PIP_CACHE_DIR=/tmp/pip_cache' . "\n";
+            $pySysPaths = '/usr/local/lib/python3.14/dist-packages:/usr/local/lib/python3.13/dist-packages:/usr/local/lib/python3.12/dist-packages:/usr/local/lib/python3.11/dist-packages:/usr/local/lib/python3.10/dist-packages:/tmp/.local/lib/python3.14/site-packages:/tmp/.local/lib/python3.13/site-packages:/tmp/.local/lib/python3.12/site-packages:/tmp/.local/lib/python3.11/site-packages:/tmp/.local/lib/python3.10/site-packages:/var/www/.local/lib/python3.14/site-packages:/var/www/.local/lib/python3.13/site-packages:/var/www/.local/lib/python3.12/site-packages:/var/www/.local/lib/python3.11/site-packages:/var/www/.local/lib/python3.10/site-packages';
+            $script .= 'export PYTHONPATH="' . $pySysPaths . ':${HOME}/.local/lib/python3.14/site-packages:${HOME}/.local/lib/python3.12/site-packages:${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"' . "\n";
             foreach (proj_runtime_env($currentP) as $k => $v) $script .= "export " . esc($k . '=' . $v) . "\n";
-            $chosenPort = !empty($currentP['port']) ? $currentP['port'] : (!empty($portsToFree) ? reset($portsToFree) : '');
             if (!empty($chosenPort)) {
                 $script .= "export PORT=" . esc($chosenPort) . "\n";
                 $script .= "export APP_PORT=" . esc($chosenPort) . "\n";
@@ -2143,7 +2145,7 @@ function cli_service(array $job): int {
                 $script .= "export SCRAPER_PORT=" . esc($chosenPort) . "\n";
                 $script .= "export DEPLOYER_UI_PORT=" . esc($chosenPort) . "\n";
                 $script .= "export UVICORN_PORT=" . esc($chosenPort) . "\n";
-                $script .= "if [ -n \"\$PORT\" ]; then (fuser -k -9 \"\$PORT/tcp\" 2>/dev/null || true); (lsof -ti :\"\$PORT\" 2>/dev/null | xargs -r kill -9 2>/dev/null || true); fi\n";
+                $script .= 'if [ -n "$PORT" ]; then (fuser -k -9 "$PORT/tcp" 2>/dev/null || true); (lsof -ti :"$PORT" 2>/dev/null | xargs -r kill -9 2>/dev/null || true); fi' . "\n";
             }
             $script .= str_replace(["\r\n", "\r"], "\n", $startCmd) . "\n";
             $script = str_replace(["\r\n", "\r"], "\n", $script);

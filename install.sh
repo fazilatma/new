@@ -6,13 +6,13 @@ echo -e "\n\e[1;36m=============================================================
 echo -e "\e[1;37m🚀 WebConsole Pro Server Setup - Installation Mode Selection\e[0m"
 echo -e "\e[1;36m===================================================================\e[0m"
 echo -e "  \e[1;32m[1] Full Installation (Recommended)\e[0m"
-echo -e "      • Apache2 + Universal PHP-FPM + WebConsole Pro v1.6.3 + NOPASSWD"
+echo -e "      • Apache2 + Universal PHP-FPM + WebConsole Pro v1.6.4 + NOPASSWD"
 echo -e "      • Node.js 20.x LTS + PM2 + Yarn + PNPM"
 echo -e "      • Python 3 + Pip + Advanced Scraper Libraries (BS4, Requests, ...)"
 echo -e "      • Headless Browser Dependencies (Puppeteer / Playwright / Chrome)"
 echo -e ""
 echo -e "  \e[1;33m[2] Minimal Fast Setup (~10 seconds)\e[0m"
-echo -e "      • Apache2 + Universal PHP-FPM + WebConsole Pro v1.6.3 + NOPASSWD"
+echo -e "      • Apache2 + Universal PHP-FPM + WebConsole Pro v1.6.4 + NOPASSWD"
 echo -e "      • Node.js, Python & Browser drivers can be installed anytime via WebConsole UI"
 echo -e "\e[1;36m===================================================================\e[0m"
 
@@ -141,7 +141,7 @@ chmod 0440 /etc/sudoers.d/99-webconsole-nopasswd
 
 mkdir -p /var/www/html
 
-echo -e "\n\e[34m📦 Installing WebConsole Pro v1.6.3...\e[0m"
+echo -e "\n\e[34m📦 Installing WebConsole Pro v1.6.4...\e[0m"
 if ! curl -fsSL --connect-timeout 10 https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php -o /var/www/html/webconsole.php 2>/dev/null; then
     echo -e "\e[33mExtracting built-in WebConsole package...\e[0m"
     cat << 'WCP_FALLBACK' | base64 -d | gzip -d > /var/www/html/webconsole.php
@@ -181,7 +181,7 @@ echo -e "\n\e[32m===============================================================
 echo -e "\e[32m🎉 WebConsole Pro & Apache2 Server Setup Completed Successfully!\e[0m"
 echo -e "\e[32m===================================================================\e[0m"
 echo -e "🔹 Web Server:    \e[32mApache2 (with Universal PHP FastCGI Bridge)\e[0m"
-echo -e "🔹 WebConsole:    \e[32mv1.6.3 deployed (/var/www/html/webconsole.php)\e[0m"
+echo -e "🔹 WebConsole:    \e[32mv1.6.4 deployed (/var/www/html/webconsole.php)\e[0m"
 echo -e "🔹 PHP Version:   \e[33mPHP ${PHP_VER_DISP}\e[0m"
 echo -e "🔹 Python:        \e[33m${PY_VER_DISP}\e[0m"
 echo -e "🔹 Node.js:       \e[33m${NODE_VER_DISP}\e[0m"
