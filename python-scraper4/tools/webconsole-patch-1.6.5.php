@@ -117,7 +117,7 @@ else
     if [ -n "$CFT_VER" ] && [ -n "$CH_BUILD" ]; then
       MIRROR_TMP="$(mktemp -d 2>/dev/null || echo /tmp/wcp-mirror-$$)"
       mkdir -p "$MIRROR_TMP"
-      command -v unzip >/dev/null 2>&1 || { apt-get install -y unzip >/dev/null 2>&1 || sudo -n apt-get install -y unzip >/dev/null 2>&1 || true; }
+      command -v unzip >/dev/null 2>&1 || { wcp_apt_update; wcp_apt unzip || true; }
       wcp_fetch() { curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 600 -o "$2" "$1" >/dev/null 2>&1; }
       wcp_grab() {
         GRAB_DEST="$BP/$2"

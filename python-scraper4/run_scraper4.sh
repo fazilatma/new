@@ -204,10 +204,14 @@ install_chromium_mirror_inline() (
     fi
   fi
   echo "  Installing OS libraries Chromium needs ..."
+  apt-get update -qq >/dev/null 2>&1 || sudo -n apt-get update -qq >/dev/null 2>&1 || true
   "$PY" -m playwright install-deps chromium >/dev/null 2>&1 \
-    || apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
-         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-         libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 >/dev/null 2>&1 \
+    || { apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+           libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+           libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 >/dev/null 2>&1 \
+         || sudo -n apt-get install -y libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+              libcups2t64 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+              libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 >/dev/null 2>&1; } \
     || echo "  (could not install system libs automatically)"
   echo "  Verifying launch ..."
   "$PY" - <<'PYLAUNCH'
