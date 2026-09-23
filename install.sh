@@ -123,6 +123,21 @@ if [ -n "$EXTRACTED_DOMAIN" ]; then
     CODESPACE_DOMAIN="$EXTRACTED_DOMAIN"
 fi
 
+# Capture GitHub Token for gh CLI authorization in root shell
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+if [ -z "$GITHUB_TOKEN" ]; then
+    GITHUB_TOKEN=$(extract_cs_var "GITHUB_TOKEN")
+fi
+if [ -z "$GITHUB_TOKEN" ]; then
+    GITHUB_TOKEN=$(extract_cs_var "GH_TOKEN")
+fi
+if [ -n "$GITHUB_TOKEN" ]; then
+    export GITHUB_TOKEN="$GITHUB_TOKEN"
+    export GH_TOKEN="$GITHUB_TOKEN"
+    log_ok "Captured GitHub Token for Codespaces CLI port forwarding."
+fi
+
+
 if [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/workspaces" ] || [ -d "/.codespaces" ]; then
     IS_CODESPACES=true
     if [ -z "$CODESPACE_NAME" ]; then
@@ -516,10 +531,32 @@ for svc in nginx apache2 httpd php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-f
     service $svc restart 2>/dev/null || systemctl restart $svc 2>/dev/null || true
 done
 
-# Start lightweight supervised PHP background server on port 8888 (Guaranteed high-port for Codespaces/Containers)
+# Start lightweight, robust background PHP servers on ports 8888 and 8000 (Guaranteed high-ports)
 pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
-nohup php -S 0.0.0.0:8888 -t /var/www/html /var/www/html/index.php >/tmp/webconsole-php-8888.log 2>&1 &
-sleep 1
+pkill -f 'php -S 0.0.0.0:8000' 2>/dev/null || true
+
+nohup php -S 0.0.0.0:8888 -t /var/www/html >/tmp/webconsole-php-8888.log 2>&1 &
+nohup php -S 0.0.0.0:8000 -t /var/www/html >/tmp/webconsole-php-8000.log 2>&1 &
+sleep 2
+
+# Also auto-configure .devcontainer / VS Code port attributes if inside workspace
+for ws_dir in /workspaces/*; do
+    if [ -d "$ws_dir" ]; then
+        mkdir -p "$ws_dir/.vscode" 2>/dev/null || true
+        cat << 'VSCODE_PORTS_JSON' > "$ws_dir/.vscode/ports.json" 2>/dev/null || true
+{
+    "portsAttributes": {
+        "8888": { "label": "WebConsole Pro (Primary)", "onAutoForward": "openBrowser", "visibility": "public" },
+        "8000": { "label": "WebConsole Pro (Alternate)", "visibility": "public" },
+        "8080": { "label": "WebConsole Pro (Nginx)", "visibility": "public" },
+        "3000": { "label": "Node.js Application", "visibility": "public" },
+        "5000": { "label": "Node.js / Python API", "visibility": "public" },
+        "8081": { "label": "Python Scraper Service", "visibility": "public" }
+    }
+}
+VSCODE_PORTS_JSON
+    fi
+done
 
 if command -v php >/dev/null 2>&1; then
     php -l /var/www/html/webconsole.php >/dev/null 2>&1 && log_ok "PHP syntax validation passed."
@@ -539,22 +576,29 @@ ALL_PORTS="8888 8000 8080 80 3000 3001 5000 8081 8790"
 if [ "$IS_CODESPACES" = "true" ]; then
     log_info "Forwarding and setting public visibility for WebConsole & application ports..."
     
-    # 1. Forward and make public using gh CLI as root
+    # Try multiple CLI tools: gh, ghcs, and su
     for p in $ALL_PORTS; do
+        # Method A: gh CLI with token
         if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
             gh codespace ports forward "${p}:${p}" -c "$CODESPACE_NAME" 2>/dev/null || true
             gh codespace ports visibility "${p}:public" -c "$CODESPACE_NAME" 2>/dev/null || true
+            gh codespace ports visibility "${p}:public" 2>/dev/null || true
         else
             gh codespace ports visibility "${p}:public" 2>/dev/null || true
         fi
+        
+        # Method B: ghcs internal binary if available
+        if [ -x "/.codespaces/bin/ghcs" ]; then
+            /.codespaces/bin/ghcs port forward "$p" 2>/dev/null || true
+            /.codespaces/bin/ghcs port visibility "$p:public" 2>/dev/null || true
+        fi
     done
 
-    # 2. Forward and make public using gh CLI as SSH / sudo user (vscode or codespace)
+    # Method C: Execute as SSH user (vscode/codespace)
     if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
         for p in $ALL_PORTS; do
             if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
-                su - "$SUDO_USER" -c "gh codespace ports forward ${p}:${p} -c \"$CODESPACE_NAME\"" 2>/dev/null || true
-                su - "$SUDO_USER" -c "gh codespace ports visibility ${p}:public -c \"$CODESPACE_NAME\"" 2>/dev/null || true
+                su - "$SUDO_USER" -c "export GITHUB_TOKEN='$GITHUB_TOKEN'; gh codespace ports forward ${p}:${p} -c '$CODESPACE_NAME' 2>/dev/null || true; gh codespace ports visibility ${p}:public -c '$CODESPACE_NAME' 2>/dev/null || true" 2>/dev/null || true
             fi
         done
     fi
