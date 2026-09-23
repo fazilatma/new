@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.240"
+APP_VERSION = "10.241"
 CHANGELOG = [
+    {"version":"10.241","date":"2026-09-23","title":"قیمت محصولات تخفیف‌دار، یادگیری سلکتورهای دستی و پنجره انتخاب بصری قوی‌تر","items":["باگ قیمت دوتایی اصلاح شد: در محصولات تخفیف‌دار که قیمت اصلی و قیمت واقعی پشت هم هستند، دیگر دو عدد به هم نمی‌چسبند و عدد غول‌آسا تولید نمی‌شود؛ همهٔ موتورها حالا قیمت واقعی (آخرین عدد) را برمی‌دارند — هم وقتی دو عدد با یک «تومان» می‌آیند و هم وقتی هرکدام «تومان» خودشان را دارند و هم مسیر بدون واحد پول","بعد از استخراج موفق با هر موتوری (پلی‌رایت، curl_cffi، requests و…)، سلکتورهای دستی پروفایل از روی همان صفحهٔ تأییدشده به‌روزرسانی می‌شوند: فقط مجموعهٔ کامل و راستی‌آزمایی‌شده نوشته می‌شود، مجموعهٔ همان ساختار دوباره ننوشته می‌شود و صفحهٔ بی‌محصول چیزی یاد نمی‌گیرد؛ در لاگ و عیب‌یابی با selector-refresh-success ثبت می‌شود","رندر پلی‌رایت در برابر تبلیغات مقاوم شد: پنجره‌های پاپ‌آپ تبلیغاتی بلافاصله بسته می‌شوند، دیالوگ‌های alert/confirm رد می‌شوند و window.open خنثی است؛ پنجره انتخاب بصری حالا لایه‌های تمام‌صفحهٔ تبلیغاتی (کوکی، خبرنامه، مودال) را قبل از گرفتن تصویر برمی‌دارد تا کلیک کاربر روی محصول‌ها بخورد هدف برخورد نکند","تست رگرسیون جدید tools/test_price_dual_and_learning.py: ۲۵ بررسی برای قیمت دوتایی (ارقام فارسی/لاتین، بازهٔ قیمت، هزارگان فضاخته)، یادگیری دستی سلکتورها و گاردهای پاپ‌آپ/اورلی پلی‌رایت"]},
     {"version":"10.240","date":"2026-09-23","title":"سازگاری اوبونتو ۲۶.۰۴ — کتابخانه‌های t64، اسنپ و apt-get update","items":["فهرست کتابخانه‌های سیستمی کرومیوم در هر سه نصب‌کننده (پچر وب‌کنسول، run_scraper4.sh، نصب‌کنندهٔ VPS) برای اوبونتو ۲۴.۰۴ به بعد گسترش یافت: اگر نام‌های کلاسیک نصب نشدند، نام‌های t64 (libasound2t64، libatk1.0-0t64، libatk-bridge2.0-0t64، libcups2t64) امتحان می‌شوند","پیش از هر نصب apt یک بار apt-get update اجرا می‌شود تا سرور تازه‌بالاآمده دچار خطای ایندکس خالی نشود","مسیر آخر، نصب کرومیوم با snap را هم با sudo -n تلاش می‌کند (اوبونتو فقط بستهٔ اسنپ دارد) و نبودن snapd را تحمل می‌کند","بوت‌استرپ در نبود pip همیشه اول ensurepip و بعد python3-pip را تلاش می‌کند (رفتار نسخهٔ قبل، حفظ شد)"]},
     {"version":"10.239","date":"2026-09-23","title":"حالت --check برای پچر وب‌کنسول و مستندات INSTALL.md","items":["پچر webconsole-patch-1.6.5.php حالت فقط‌خواندنی --check گرفت: نسخهٔ کنسول، تعداد تطابق هر ۶ لنگر و وجود اسکریپت pip-smart را گزارش می‌کند و هیچ چیز را نمی‌نویسد","اگر پچ روی سرور رد شود، خروجی همین حالت را بفرستید تا پچر برای نسخهٔ واقعی فایل شما بازنویسی شود","بخش راهنمای وب‌کنسول (پچر، پشتیبان‌گیری، مسیر کش مرورگر) به INSTALL.md اضافه شد"]},
     {"version":"10.238","date":"2026-09-23","title":"پچر وب‌کنسول ۱.۶.۵ — بوت‌استرپ pip پیش از نصب پلی‌رایت","items":["در گام مرورگر پچر webconsole-patch-1.6.5.php اگر pip برای python3 در دسترس نباشد، ابتدا ensurepip و سپس python3-pip تلاش می‌شود","تحلیل لاگ استقرار واقعی سرور: پیام‌های pip-smart هیچ بسته‌ای نصب نکرده بودند (همه با برچسب اشتباه ناسازگاری رد شده بودند) — علت محتمل PEP 668 در پایتون ۳.۱۴ است و فرمان درست با --break-system-packages به کاربر داده شد","هشدار rsync برای پوشهٔ قدیمی .git-cache بی‌ضرر است؛ آن پوشه دیگر در مخزن وجود ندارد و پاک‌سازی دستی یک‌خطی پیشنهاد شد"]},
@@ -1207,7 +1208,15 @@ def image_value(value: Any, base: str) -> str:
 
 
 def extract_price(value: Any) -> str:
-    """Normalize visible price text using scraper4.php's currency-aware rules."""
+    """Normalize visible price text using scraper4.php's currency-aware rules.
+
+    10.241: discounted products render TWO prices (struck-through original +
+    actual). A single number blob that swallowed both ("1,500,000 1,200,000
+    تومان" — group separators include spaces) or consecutive currency matches
+    ("1,500,000 تومان … 1,200,000 تومان") must resolve to the ACTUAL price —
+    the LAST real number — never their concatenation (an absurdly huge
+    integer) and no longer the max (which picked the old original price).
+    """
     text = clean_text(value)
     if not text:
         return ""
@@ -1215,17 +1224,34 @@ def extract_price(value: Any) -> str:
     number = r"\d(?:[\d,،٬.٫\s]*\d)?"
     matches = re.findall(rf"(?:({number})\s*({currency})|({currency})\s*({number}))", text, re.I)
     if matches:
-        choices = []
+        chosen = ""
         for left, right_cur, left_cur, right in matches:
             raw, cur = (left, right_cur) if left else (right, left_cur)
             digits = re.sub(r"\D", "", raw)
-            if digits:
-                choices.append((len(digits), clean_text(f"{cur} {raw}" if left_cur else f"{raw} {cur}")))
-        if choices:
-            return max(choices, key=lambda item: item[0])[1]
+            if not digits:
+                continue
+            # One match can hold several true numbers when the element carried
+            # the old and the actual price side by side; space-separated
+            # thousands ("1 500 000") have no separator marks and stay whole.
+            parts = re.findall(r"\d{1,3}(?:[,،٬.٫]\d{3})+|\d{4,}", raw)
+            if len(parts) >= 2:
+                raw = parts[-1]
+                digits = re.sub(r"\D", "", raw)
+            chosen = clean_text(f"{cur} {raw}" if left_cur else f"{raw} {cur}")
+        return chosen
     grouped = re.findall(r"\d{1,3}(?:[,،٬\s]\d{3})+", text)
     if grouped:
-        return max(grouped, key=lambda item: len(re.sub(r"\D", "", item))) + " تومان"
+        # Same dual-price rule for the no-currency fallback: a blob holding two
+        # complete grouped numbers keeps only the last one (the actual price).
+        tokens = []
+        for blob in grouped:
+            chunks = [c for c in re.split(r"\s+", blob)
+                      if re.fullmatch(r"\d{1,3}[,،٬.٫]\d{3}(?:[,،٬.٫]\d{3})*|\d{4,}", c)]
+            tokens.append(chunks[-1] if len(chunks) >= 2 else blob)
+        # Multiple grouped numbers = original + actual side by side: last wins.
+        if len(tokens) >= 2:
+            return tokens[-1] + " تومان"
+        return (tokens[0] + " تومان") if tokens else ""
     nums = [x for x in re.findall(r"\d{4,}", text) if int(x) >= 1000]
     return (max(nums, key=int) + " تومان") if nums else ""
 
@@ -2527,7 +2553,7 @@ def _aiohttp_get(url: str, headers: dict[str, str], timeout: Any, verify: bool,
     return _run_async(_run())
 
 
-def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "") -> FetchResult:
+def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "", strip_overlays: bool = False) -> FetchResult:
     browser_path = configured_browser_path()
     if browser_path and os.path.isdir(browser_path):
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browser_path
@@ -2581,6 +2607,24 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
             if task_id and live_task_cancelled(task_id):
                 raise CancelledError("استخراج با درخواست کاربر متوقف شد")
             browser = pw.chromium.launch(**launch_options);page = browser.new_page(user_agent=USER_AGENT,locale="fa-IR",viewport={"width":1366,"height":768},timezone_id="Asia/Tehran")
+            # 10.241: ad popups and JS dialogs must never break a render or the
+            # visual picker — popup tabs are closed immediately, alert/confirm
+            # dialogs are dismissed, and window.open is disarmed at the source.
+            def _s4_popup_guard(popup):
+                try:
+                    popup.close()
+                except Exception:
+                    pass
+            def _s4_dialog_guard(dialog):
+                try:
+                    dialog.dismiss()
+                except Exception:
+                    pass
+            try:
+                page.context.on("page", _s4_popup_guard)
+                page.on("dialog", _s4_dialog_guard)
+            except Exception:
+                pass
             def _guard_browser_request(route: Any) -> None:
                 candidate=str(route.request.url)
                 try:
@@ -2593,6 +2637,7 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                     route.abort()
             page.route("**/*", _guard_browser_request)
             page.add_init_script("""Object.defineProperty(navigator,'webdriver',{get:()=>undefined});Object.defineProperty(navigator,'languages',{get:()=>['fa-IR','fa','en-US','en']});Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});window.chrome=window.chrome||{runtime:{}};""")
+            page.add_init_script("window.open=function(){return null};")
             try:
                 from playwright_stealth import stealth_sync
                 stealth_sync(page)
@@ -2649,6 +2694,27 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                 except Exception:
                     pass
             if _stop_requested():_abort(browser)
+            if strip_overlays:
+                # 10.241 visual picker: ad overlays (cookie walls, promo modals,
+                # newsletter popups) sit on top of the page and eat the user's
+                # clicks. Remove full-viewport fixed/absolute overlays and
+                # obvious ad containers before snapshotting.
+                try:
+                    page.evaluate("""() => { const vw=innerWidth||1366, vh=innerHeight||768; let n=0;
+                      document.querySelectorAll('body *').forEach(el=>{
+                        if(el.id==='__s4bar') return;
+                        let cs; try{cs=getComputedStyle(el)}catch(e){return}
+                        if(!cs || (cs.position!=='fixed' && cs.position!=='absolute')) return;
+                        const r=el.getBoundingClientRect();
+                        if(r.width<vw*0.55 || r.height<vh*0.45) return;
+                        const zi=parseInt(cs.zIndex||'0',10)||0;
+                        const sig=(String((el.className&&el.className.baseVal!==undefined)?el.className.baseVal:el.className||'')+' '+String(el.id||'')).toLowerCase();
+                        if(zi>99 || /cookie|consent|modal|popup|advert|ads?[-_]|banner|overlay|subscribe|newsletter/.test(sig)){ el.remove(); n++; }
+                      });
+                      document.querySelectorAll('ins.adsbygoogle,iframe[src*="doubleclick"],iframe[src*="googlesyndication"],div[id^="div-gpt-ad"]').forEach(el=>{el.remove();n++;});
+                      return n; }""")
+                except Exception:
+                    pass
             html = page.content();final_url = url if network_mode=="relay" else page.url
             try:
                 blob=page.evaluate("() => {try{const n=window.__NEXT_DATA__||window.__NUXT__||window.__NUXT_DATA__;return n?JSON.stringify(n):'';}catch(e){return '';}}")
@@ -3474,6 +3540,37 @@ def auto_selectors(url: str, mode: str = "all") -> dict[str, Any]:
     return {"url": result.url, "mode": mode, "selectors": selectors, "evidence": evidence}
 
 
+def refresh_manual_selectors_after_success(profile_name: str, base: str, page: Any,
+                                           current: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """10.241: refresh the profile's MANUAL list selectors after a successful extraction.
+
+    Any engine that just produced products verified the page structure; re-discover
+    it and, when a complete verified set exists and differs from the stored manual
+    fields, write it back (site redesigns are picked up on the next run). Partial or
+    unverifiable proposals never overwrite anything.
+    """
+    name = clean_text(profile_name)
+    if not name or page is None:
+        return {}
+    try:
+        found = discover_list_selectors(page, base)
+        found_sel = {k: clean_text(v) for k, v in (found.get("selectors") or {}).items() if clean_text(v)}
+        if str(found.get("method") or "none") == "none" or not found_sel.get("container") or not found_sel.get("title"):
+            return {}
+        if not verify_list_selectors(page, base, found_sel).get("ok"):
+            return {}
+        stored = {k: clean_text(v) for k, v in dict(current or {}).items()}
+        if stored and all(found_sel.get(k) == stored.get(k) for k in found_sel):
+            return {}
+        saved = persist_profile_auto_selectors(name, found_sel)
+        if not saved:
+            return {}
+        return {"selectors": found_sel, "method": found.get("method"), "saved": True}
+    except Exception as exc:
+        report_error("selector_refresh_success", exc)
+        return {}
+
+
 def persist_profile_auto_selectors(profile_name: str,
                                    discovered_list: Optional[dict[str, str]] = None,
                                    discovered_detail: Optional[dict[str, str]] = None) -> dict[str, Any]:
@@ -3564,7 +3661,7 @@ def picker_browser_fetch(url: str, timeout: int, scrolls: int, errors: list[str]
                 errors.append(f"undetected: {clean_text(exc)}")
         if fetch_engine_installed("playwright"):
             try:
-                return render_playwright(url, timeout, scrolls)
+                return render_playwright(url, timeout, scrolls, strip_overlays=True)
             except FetchError as exc:
                 if "نصب نیست" not in clean_text(exc):
                     errors.append(f"playwright: {clean_text(exc)}")
@@ -3577,14 +3674,14 @@ def picker_browser_fetch(url: str, timeout: int, scrolls: int, errors: list[str]
                 errors.append(f"selenium: {clean_text(exc)}")
         if fetch_engine_installed("playwright"):
             try:
-                return render_playwright(url, timeout, scrolls)
+                return render_playwright(url, timeout, scrolls, strip_overlays=True)
             except FetchError as exc:
                 if "نصب نیست" not in clean_text(exc):
                     errors.append(f"playwright: {clean_text(exc)}")
         return None
     if fetch_engine_installed("playwright"):
         try:
-            return render_playwright(url, timeout, scrolls)
+            return render_playwright(url, timeout, scrolls, strip_overlays=True)
         except FetchError as exc:
             msg = clean_text(exc)
             if "نصب نیست" not in msg:
@@ -3896,6 +3993,15 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 if len(retry_rows)>len(rows):
                     rows=retry_rows
                     report.logs.append(f"صفحه {number}: {len(rows)} محصول با سلکتورهای کشف‌شده")
+            if not discovered and rows:
+                # 10.241: the stored (manual) selectors just yielded products — learn
+                # from this page as well so the manual set follows today's DOM.
+                refreshed=refresh_manual_selectors_after_success(profile_name,url,page_html,selectors)
+                if refreshed.get("saved"):
+                    report.modes.add("selector-refresh-success")
+                    report.diagnostics["selector_refresh"]={"method":refreshed.get("method"),"selectors":refreshed.get("selectors")}
+                    _pairs="، ".join(f"{k}={v}" for k,v in refreshed["selectors"].items())
+                    report.logs.append(f"صفحه {number}: استخراج موفق بود؛ سلکتورهای دستی از ساختار امروز صفحه به‌روزرسانی شد: {_pairs}")
 
         if won_engine and (not master or master!=won_engine):
             master=won_engine
