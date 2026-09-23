@@ -562,3 +562,21 @@ free -m                                      # verify the Swap: line
 
 The patcher itself can also apply it directly:
 `php tools/webconsole-patch.php --swap-apply 4096`.
+
+**Console self-update + GitHub file explorer (console 1.6.7):** the patcher
+installs a companion page `webconsole-tools.php` next to `webconsole.php`
+(access key printed after patching, stored in `webconsole-tools.key`):
+
+- **به‌روزرسانی کنسول** — pick any repo/branch (defaults to
+  `fazilatma/new` @ `arena/01a0c9ea-new`), check the remote `WCP_VERSION`,
+  then apply: `php -l` gate + timestamped backup + atomic replace. The
+  defaults are saved to `.wconsole_data/selfupdate.conf` and are also used
+  by the console's own `selfupdate_check` / `selfupdate_apply` components.
+- **فایل‌های گیت‌هاب** — browse any repo/branch, view and edit a file, save a
+  copy into `.wconsole_data/github-files/…` (visible/editable in the
+  console's own file explorer) or commit straight back to GitHub with a
+  personal access token (used once, never stored).
+
+Re-install or refresh just the companion:
+`php tools/webconsole-patch.php --tools /var/www/html/webconsole.php`
+For the key: `php /var/www/html/webconsole-tools.php --key`.
