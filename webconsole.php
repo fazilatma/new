@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.5');
+define('WCP_VERSION', '1.6.6');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -2396,8 +2396,10 @@ function cli_service(array $job): int {
             $script = "#!/bin/bash\nset -e\ncd " . esc($deployDir) . "\nexport NODE_ENV=production\nexport PYTHONUNBUFFERED=1\n";
             $script .= 'export PYTHONUSERBASE=/var/www/.local' . "\n";
             $script .= 'export PIP_CACHE_DIR=/tmp/pip_cache' . "\n";
-            $pySysPaths = '/usr/local/lib/python3.14/dist-packages:/usr/local/lib/python3.13/dist-packages:/usr/local/lib/python3.12/dist-packages:/usr/local/lib/python3.11/dist-packages:/usr/local/lib/python3.10/dist-packages:/tmp/.local/lib/python3.14/site-packages:/tmp/.local/lib/python3.13/site-packages:/tmp/.local/lib/python3.12/site-packages:/tmp/.local/lib/python3.11/site-packages:/tmp/.local/lib/python3.10/site-packages:/var/www/.local/lib/python3.14/site-packages:/var/www/.local/lib/python3.13/site-packages:/var/www/.local/lib/python3.12/site-packages:/var/www/.local/lib/python3.11/site-packages:/var/www/.local/lib/python3.10/site-packages';
-            $script .= 'export PYTHONPATH="' . $pySysPaths . ':${HOME}/.local/lib/python3.14/site-packages:${HOME}/.local/lib/python3.12/site-packages:${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"' . "\n";
+            $script .= 'for pdir in /usr/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages /home/*/.local/lib/python3*/site-packages /root/.local/lib/python3*/site-packages /var/www/.local/lib/python3*/site-packages /tmp/.local/lib/python3*/site-packages /opt/conda/lib/python3*/site-packages /opt/python/*/lib/python3*/site-packages; do' . "\n";
+            $script .= '    if [ -d "$pdir" ]; then export PYTHONPATH="${pdir}:${PYTHONPATH:-}"; fi' . "\n";
+            $script .= 'done' . "\n";
+            $script .= 'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/opt/conda/bin:${HOME}/.local/bin:${PATH:-}"' . "\n";
             foreach (proj_runtime_env($currentP) as $k => $v) $script .= "export " . esc($k . '=' . $v) . "\n";
             if (!empty($chosenPort)) {
                 $script .= "export PORT=" . esc($chosenPort) . "\n";
