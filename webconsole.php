@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.4');
+define('WCP_VERSION', '1.6.5');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1338,13 +1338,268 @@ function emergency_rescue(): array {
     return ['actions'=>$actions,'killed'=>$killed];
 }
 
+function resize_swap(int $sizeMb = 2048): array {
+    $sizeMb = max(256, min(65536, $sizeMb));
+    sh("sudo -n swapoff -a 2>/dev/null || true");
+    sh("sudo -n rm -f /swapfile 2>/dev/null || true");
+    $cmd = "sudo -n fallocate -l {$sizeMb}M /swapfile 2>/dev/null || sudo -n dd if=/dev/zero of=/swapfile bs=1M count={$sizeMb} 2>/dev/null";
+    sh($cmd);
+    sh("sudo -n chmod 600 /swapfile 2>/dev/null; sudo -n mkswap /swapfile 2>/dev/null; sudo -n swapon /swapfile 2>/dev/null");
+    @sh("grep -q '/swapfile' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' | sudo -n tee -a /etc/fstab >/dev/null 2>&1 || true");
+    
+    $total = 0; $used = 0; $free = 0;
+    foreach (@file('/proc/meminfo') ?: [] as $l) {
+        if (preg_match('/^SwapTotal:\s+(\d+)/', $l, $m)) $total = (int)$m[1] * 1024;
+        if (preg_match('/^SwapFree:\s+(\d+)/', $l, $m)) $free = (int)$m[1] * 1024;
+    }
+    $used = max(0, $total - $free);
+    return ['total' => $total, 'used' => $used, 'free' => $free, 'size_mb' => $sizeMb, 'ok' => $total > 0];
+}
+
 function create_swap(int $sizeMb = 2048): array {
-    if(!is_file('/swapfile')){
-        $cmd="sudo -n fallocate -l {$sizeMb}M /swapfile 2>/dev/null || sudo -n dd if=/dev/zero of=/swapfile bs=1M count={$sizeMb} 2>/dev/null";
-        sh($cmd);sh("sudo -n chmod 600 /swapfile 2>/dev/null; sudo -n mkswap /swapfile 2>/dev/null; sudo -n swapon /swapfile 2>/dev/null");
-    }else{sh("sudo -n swapon /swapfile 2>/dev/null");}
-    $total=0;foreach(@file('/proc/meminfo')?:[]as$l){if(preg_match('/^SwapTotal:\s+(\d+)/',$l,$m))$total=(int)$m[1]*1024;}
-    return ['total'=>$total,'ok'=>$total>0];
+    return resize_swap($sizeMb);
+}
+
+function console_check_update(string $repo = 'fazilatma/new', string $branch = 'main', string $token = ''): array {
+    $parts = explode('/', trim($repo, '/'));
+    if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است (الگو: owner/repo)');
+    [$owner, $repoName] = $parts;
+    $branch = trim($branch) ?: 'main';
+    $token = $token ?: (string)(cfg()['gh_token'] ?? '');
+    
+    // 1. Fetch remote commit info from GitHub API
+    $commitData = gh_http_get("https://api.github.com/repos/{$owner}/{$repoName}/commits/" . rawurlencode($branch), $token);
+    $commitSha = $commitData['sha'] ?? 'unknown';
+    $commitShort = substr($commitSha, 0, 7);
+    $commitMsg = trim(explode("\n", (string)($commitData['commit']['message'] ?? ''))[0]);
+    $commitDate = (string)($commitData['commit']['author']['date'] ?? '');
+    $commitAuthor = (string)($commitData['commit']['author']['name'] ?? 'fazilatma');
+    
+    // 2. Fetch remote webconsole.php content to detect version
+    $rawPhp = gh_raw_get($owner, $repoName, $branch, 'webconsole.php', $token);
+    $remoteVersion = WCP_VERSION;
+    if ($rawPhp && preg_match("/define\(['\"]WCP_VERSION['\"],\s*['\"]([^'\"]+)['\"]\)/", $rawPhp, $vm)) {
+        $remoteVersion = $vm[1];
+    }
+    
+    $hasUpdate = version_compare($remoteVersion, WCP_VERSION, '>') || ($rawPhp && md5_file(__FILE__) !== md5($rawPhp));
+    return [
+        'current_version' => WCP_VERSION,
+        'remote_version' => $remoteVersion,
+        'has_update' => (bool)$hasUpdate,
+        'repo' => $repo,
+        'branch' => $branch,
+        'commit_sha' => $commitSha,
+        'commit_short' => $commitShort,
+        'commit_msg' => $commitMsg,
+        'commit_author' => $commitAuthor,
+        'commit_date' => $commitDate
+    ];
+}
+
+function console_self_update(string $repo = 'fazilatma/new', string $branch = 'main', string $token = ''): array {
+    $parts = explode('/', trim($repo, '/'));
+    if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است (الگو: owner/repo)');
+    [$owner, $repoName] = $parts;
+    $branch = trim($branch) ?: 'main';
+    $token = $token ?: (string)(cfg()['gh_token'] ?? '');
+    
+    $rawPhp = gh_raw_get($owner, $repoName, $branch, 'webconsole.php', $token);
+    if (!$rawPhp || strlen($rawPhp) < 10000 || strpos($rawPhp, '<?php') === false) {
+        $apiUrl = "https://api.github.com/repos/{$owner}/{$repoName}/contents/webconsole.php?ref=" . rawurlencode($branch);
+        $fileJson = gh_http_get($apiUrl, $token);
+        if (!empty($fileJson['content']) && ($fileJson['encoding'] ?? '') === 'base64') {
+            $rawPhp = base64_decode($fileJson['content']);
+        }
+    }
+    
+    if (!$rawPhp || strlen($rawPhp) < 10000 || strpos($rawPhp, '<?php') === false) {
+        throw new RuntimeException('دریافت فایل webconsole.php از گیت‌هاب با شکست مواجه شد. لطفاً توکن یا نام مخزن و شاخه را بررسی کنید.');
+    }
+    
+    $newVer = WCP_VERSION;
+    if (preg_match("/define\(['\"]WCP_VERSION['\"],\s*['\"]([^'\"]+)['\"]\)/", $rawPhp, $vm)) {
+        $newVer = $vm[1];
+    }
+    
+    $tmpFile = CACHE_DIR . '/wcp-update-' . time() . '.php';
+    wcp_put_contents($tmpFile, $rawPhp, false);
+    
+    if (which('php')) {
+        $lintOut = sh_ok('php -l ' . esc($tmpFile) . ' 2>&1');
+        if (strpos($lintOut, 'No syntax errors detected') === false && strpos($lintOut, 'syntax error') !== false) {
+            @unlink($tmpFile);
+            throw new RuntimeException('خطای نحوی در فایل دریافتی شناسایی شد: ' . $lintOut);
+        }
+    }
+    
+    $targetFile = __FILE__;
+    $indexFile = dirname($targetFile) . '/index.php';
+    
+    $ok1 = @copy($tmpFile, $targetFile);
+    if (!$ok1) {
+        sh('sudo -n cp ' . esc($tmpFile) . ' ' . esc($targetFile) . ' 2>/dev/null');
+    }
+    
+    if (is_file($indexFile)) {
+        @copy($tmpFile, $indexFile);
+        sh('sudo -n cp ' . esc($tmpFile) . ' ' . esc($indexFile) . ' 2>/dev/null || true');
+    }
+    
+    sh('sudo -n chown -R www-data:www-data ' . esc(dirname($targetFile)) . ' 2>/dev/null || true');
+    sh('sudo -n chmod 775 ' . esc($targetFile) . ' ' . esc($indexFile) . ' 2>/dev/null || true');
+    @unlink($tmpFile);
+    
+    act_log("Console self-updated to v{$newVer} from {$repo}@{$branch}");
+    return [
+        'ok' => true,
+        'old_version' => WCP_VERSION,
+        'new_version' => $newVer,
+        'message' => "وب‌کنسول با موفقیت به نسخه v{$newVer} ارتقا یافت."
+    ];
+}
+
+function gh_list_contents(string $repo, string $branch = 'main', string $path = '', string $token = ''): array {
+    $parts = explode('/', trim($repo, '/'));
+    if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است (الگو: owner/repo)');
+    [$owner, $repoName] = $parts;
+    $branch = trim($branch) ?: 'main';
+    $cleanPath = trim($path, '/');
+    $token = $token ?: (string)(cfg()['gh_token'] ?? '');
+    
+    $url = "https://api.github.com/repos/{$owner}/{$repoName}/contents/" . ($cleanPath !== '' ? rawurlencode($cleanPath) : '') . '?ref=' . rawurlencode($branch);
+    $data = gh_http_get($url, $token);
+    if (!is_array($data)) throw new RuntimeException('خطا در دریافت لیست فایل‌ها از گیت‌هاب. ریپازیتوری یا شاخه را بررسی کنید.');
+    
+    $items = [];
+    foreach ($data as $item) {
+        if (!isset($item['name'])) continue;
+        $items[] = [
+            'name' => $item['name'],
+            'path' => $item['path'],
+            'type' => $item['type'] === 'dir' ? 'dir' : 'file',
+            'size' => $item['size'] ?? 0,
+            'sha' => $item['sha'] ?? '',
+            'download_url' => $item['download_url'] ?? ''
+        ];
+    }
+    usort($items, function($a, $b) {
+        if ($a['type'] !== $b['type']) return $a['type'] === 'dir' ? -1 : 1;
+        return strcasecmp($a['name'], $b['name']);
+    });
+    
+    return [
+        'repo' => $repo,
+        'branch' => $branch,
+        'path' => $cleanPath,
+        'items' => $items
+    ];
+}
+
+function gh_get_file_content(string $repo, string $branch, string $path, string $token = ''): array {
+    $parts = explode('/', trim($repo, '/'));
+    if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است');
+    [$owner, $repoName] = $parts;
+    $branch = trim($branch) ?: 'main';
+    $cleanPath = trim($path, '/');
+    $token = $token ?: (string)(cfg()['gh_token'] ?? '');
+    
+    $url = "https://api.github.com/repos/{$owner}/{$repoName}/contents/" . rawurlencode($cleanPath) . '?ref=' . rawurlencode($branch);
+    $data = gh_http_get($url, $token);
+    
+    $content = '';
+    $sha = '';
+    if (!empty($data['content']) && ($data['encoding'] ?? '') === 'base64') {
+        $content = base64_decode($data['content']);
+        $sha = $data['sha'] ?? '';
+    } else {
+        $raw = gh_raw_get($owner, $repoName, $branch, $cleanPath, $token);
+        if ($raw !== null) {
+            $content = $raw;
+            $sha = $data['sha'] ?? '';
+        } else {
+            throw new RuntimeException('محتوای فایل در گیت‌هاب یافت نشد.');
+        }
+    }
+    
+    return [
+        'repo' => $repo,
+        'branch' => $branch,
+        'path' => $cleanPath,
+        'name' => basename($cleanPath),
+        'content' => $content,
+        'sha' => $sha,
+        'size' => strlen($content)
+    ];
+}
+
+function gh_put_file_content(string $repo, string $branch, string $path, string $content, string $sha, string $message, string $token = ''): array {
+    $parts = explode('/', trim($repo, '/'));
+    if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است');
+    [$owner, $repoName] = $parts;
+    $token = $token ?: (string)(cfg()['gh_token'] ?? '');
+    if ($token === '') throw new RuntimeException('برای ثبت و کامیت روی گیت‌هاب، توکن گیت‌هاب (Personal Access Token) با دسترسی write/repo الزامی است.');
+    
+    $cleanPath = trim($path, '/');
+    $url = "https://api.github.com/repos/{$owner}/{$repoName}/contents/" . rawurlencode($cleanPath);
+    
+    $payload = [
+        'message' => $message ?: "Update {$cleanPath} via WebConsole Pro",
+        'content' => base64_encode($content),
+        'branch' => $branch ?: 'main'
+    ];
+    if ($sha !== '') {
+        $payload['sha'] = $sha;
+    }
+    
+    $headers = [
+        'User-Agent: WebConsole-Pro/' . WCP_VERSION,
+        'Accept: application/vnd.github+json',
+        'Authorization: Bearer ' . $token,
+        'Content-Type: application/json'
+    ];
+    
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_CUSTOMREQUEST => 'PUT',
+            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+        $res = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'PUT',
+                'header' => implode("\r\n", $headers) . "\r\n",
+                'content' => json_encode($payload),
+                'timeout' => 30,
+                'ignore_errors' => true
+            ]
+        ]);
+        $res = @file_get_contents($url, false, $ctx);
+        $statusLine = $http_response_header[0] ?? '';
+        preg_match('#HTTP/\S+\s+(\d+)#', $statusLine, $m);
+        $code = (int)($m[1] ?? 500);
+    }
+    
+    $json = json_decode((string)$res, true);
+    if ($code < 200 || $code >= 300) {
+        $errMsg = $json['message'] ?? "GitHub API error (HTTP {$code})";
+        throw new RuntimeException("خطا در کامیت گیت‌هاب: {$errMsg}");
+    }
+    
+    return [
+        'ok' => true,
+        'commit_sha' => $json['commit']['sha'] ?? '',
+        'new_sha' => $json['content']['sha'] ?? '',
+        'message' => 'فایل با موفقیت در گیت‌هاب کامیت و ذخیره شد.'
+    ];
 }
 function check_file_syntax(string $path, string $content): array {
     $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
@@ -1426,7 +1681,14 @@ function handle_api() {
         jout(true, ['job' => $job['id'], 'title' => $title]);
     case 'sysinfo': jout(true,sysinfo());
     case 'sys.emergency_rescue': jout(true,emergency_rescue());
-    case 'sys.create_swap': jout(true,create_swap((int)($in['size_mb']??2048)));
+    case 'sys.swap_info': jout(true, sysinfo()['swap']);
+    case 'sys.create_swap':
+    case 'sys.resize_swap': jout(true, resize_swap((int)($in['size_mb'] ?? 2048)));
+    case 'console.check_update': jout(true, console_check_update((string)($in['repo'] ?? 'fazilatma/new'), (string)($in['branch'] ?? 'main'), (string)($in['token'] ?? '')));
+    case 'console.self_update': jout(true, console_self_update((string)($in['repo'] ?? 'fazilatma/new'), (string)($in['branch'] ?? 'main'), (string)($in['token'] ?? '')));
+    case 'gh.list_contents': jout(true, gh_list_contents((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['token'] ?? '')));
+    case 'gh.get_file': jout(true, gh_get_file_content((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['token'] ?? '')));
+    case 'gh.put_file': jout(true, gh_put_file_content((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['content'] ?? ''), (string)($in['sha'] ?? ''), (string)($in['message'] ?? ''), (string)($in['token'] ?? '')));
             case 'ports.disable_service':
         $unit = trim((string)($in['unit'] ?? ''));
         if ($unit === '' || !preg_match('/^[a-zA-Z0-9_\-\.\@]+\.service$/', $unit)) {
@@ -3466,7 +3728,7 @@ async function renderDash(){
           </div>
           <div class="row">
             <button class="btn sm ok" id="dash-rescue-btn" title="آزادسازی رم، تخلیه کش و پاک‌سازی پردازش‌های قفل‌شده">🧹 آزادسازی فوری رم و رفع قفل</button>
-            ${(!s.swap || s.swap.total===0)?`<button class="btn sm pri" id="dash-swap-btn" title="ایجاد ۲ گیگابایت Swap جهت جلوگیری از هنگ هسته سرور">🚀 ایجاد ۲GB Swap</button>`:''}
+            <button class="btn sm pri" id="dash-swap-btn" title="مدیریت، افزایش و تنظیم حافظه مجازی Swap">🚀 افزایش و مدیریت Swap</button>
           </div>
         </div>
         <div class="row" style="margin-top:10px">
@@ -3554,16 +3816,7 @@ async function renderDash(){
       finally{rBtn.disabled=false;rBtn.textContent='🧹 آزادسازی فوری رم و رفع قفل';}
     };
     const sBtn=$('#dash-swap-btn');
-    if(sBtn)sBtn.onclick=async()=>{
-      if(!await confirmDlg('۲ گیگابایت حافظه مجازی Swap برای سرور ایجاد شود؟ (مانع از فریز شدن سرور در بار ۱۰۰٪ می‌شود)'))return;
-      sBtn.disabled=true;sBtn.textContent='در حال ساخت Swap...';
-      try{
-        const d=await api('sys.create_swap',{size_mb:2048});
-        toast(d.ok?'فایل Swap با موفقیت ایجاد و فعال شد':'ایجاد Swap نیازمند دسترسی sudo است','ok');
-        renderDash();
-      }catch(e){toast(e.message,'err')}
-      finally{sBtn.disabled=false;sBtn.textContent='🚀 ایجاد ۲GB Swap';}
-    };
+    if(sBtn)sBtn.onclick=()=>swapManagerDlg();
   }catch(e){
     console.error('renderDash error:', e);
     toast('خطا در دریافت اطلاعات داشبورد: ' + (e.message || ''), 'err');
@@ -3579,6 +3832,249 @@ async function renderDash(){
         </div>
       </div>
     `;
+  }
+}
+
+async function swapManagerDlg() {
+  try {
+    toast('در حال ارزیابی حافظه...', 'acc', 1000);
+    const s = await api('sysinfo');
+    const swap = s.swap || {total:0, used:0};
+    const mem = s.mem || {total:0, used:0};
+    
+    const sh = openSheet(sheetHead('🚀 مدیریت و افزایش حافظه مجازی (Swap Manager)') + `
+      <p class="appearance-note">حافظه مجازی (Swap) به سیستم‌عامل اجازه می‌دهد هنگام مصرف ۱۰۰٪ رم، از حافظه دیسک به عنوان پشتیبان استفاده کند تا از فریز شدن سرور و از دسترس خارج‌شدن وب‌کنسول جلوگیری شود.</p>
+      
+      <div class="grid2" style="gap:10px;margin-bottom:14px">
+        <div style="padding:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px">
+          <div class="hint" style="font-size:11px">وضعیت فعلی Swap</div>
+          <div style="font-size:1.3rem;font-weight:700;margin:4px 0">${swap.total>0 ? fmtSize(swap.used)+' / '+fmtSize(swap.total) : 'غیرفعال (خطر فریز هسته)'}</div>
+          <span class="tag ${swap.total>0?'ok':'warn'}">${swap.total>0?'فعال در /swapfile':'نیاز به راه‌اندازی'}</span>
+        </div>
+        <div style="padding:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px">
+          <div class="hint" style="font-size:11px">حافظه فیزیکی (RAM)</div>
+          <div style="font-size:1.3rem;font-weight:700;margin:4px 0">${fmtSize(mem.used)} / ${fmtSize(mem.total)}</div>
+          <span class="tag ok">${s.cores || 1} هسته پردازنده</span>
+        </div>
+      </div>
+
+      <label class="lb">انتخاب ظرفیت جدید Swap:</label>
+      <div class="grid3" style="gap:8px;margin-bottom:12px" id="swap-presets">
+        <button class="btn sm" data-sz="1024">📦 ۱ گیگابایت (1 GB)</button>
+        <button class="btn sm pri" data-sz="2048">🚀 ۲ گیگابایت (پیشنهادی)</button>
+        <button class="btn sm" data-sz="4096">⚡ ۴ گیگابایت (4 GB)</button>
+        <button class="btn sm" data-sz="8192">🔥 ۸ گیگابایت (8 GB)</button>
+        <button class="btn sm" data-sz="16384">💎 ۱۶ گیگابایت (16 GB)</button>
+      </div>
+
+      <label class="lb">یا ظرفیت سفارشی (برحسب مگابایت MB):</label>
+      <input class="inp ltr" type="number" id="swap-custom-sz" value="2048" min="256" max="65536" step="512">
+      
+      <p class="hint">عملیات افزایش Swap به طور خودکار فایل قبلی را بازنشانی کرده، فضای جدید را با دسترسی امن تخصیص داده و در <code>/etc/fstab</code> ثبت دائمی می‌کند.</p>
+
+      <div class="row" style="gap:8px;margin-top:14px">
+        <button class="btn ok" id="swap-apply-btn" style="flex:1">🚀 افزایش و تنظیم Swap</button>
+      </div>
+    `);
+
+    let selectedSize = 2048;
+    sh.querySelectorAll('#swap-presets button').forEach(b => {
+      b.onclick = () => {
+        sh.querySelectorAll('#swap-presets button').forEach(x => x.classList.remove('pri'));
+        b.classList.add('pri');
+        selectedSize = parseInt(b.dataset.sz, 10);
+        sh.querySelector('#swap-custom-sz').value = selectedSize;
+      };
+    });
+
+    sh.querySelector('#swap-custom-sz').oninput = e => {
+      selectedSize = parseInt(e.target.value, 10) || 2048;
+    };
+
+    sh.querySelector('#swap-apply-btn').onclick = async () => {
+      const applyBtn = sh.querySelector('#swap-apply-btn');
+      applyBtn.disabled = true;
+      applyBtn.textContent = 'در حال تخصیص و فعال‌سازی Swap...';
+      try {
+        const d = await api('sys.resize_swap', { size_mb: selectedSize });
+        __closeSheet();
+        toast(`حافظه مجازی Swap با موفقیت به ${fmtSize(d.total || selectedSize*1024*1024)} افزایش یافت.`, 'ok');
+        if (curTab === 'dash') renderDash();
+      } catch (e) {
+        toast(e.message, 'err');
+        applyBtn.disabled = false;
+        applyBtn.textContent = '🚀 افزایش و تنظیم Swap';
+      }
+    };
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function openGitHubExplorer(initialRepo = '', initialBranch = 'main', initialPath = '') {
+  try {
+    let curRepo = initialRepo || __BOOT.gh_repo || 'fazilatma/new';
+    let curBranch = initialBranch || 'main';
+    let curPath = initialPath || '';
+    
+    const renderGhBrowser = async () => {
+      const sh = openSheet(sheetHead('🌐 کاوشگر و ویرایشگر فایل‌های گیت‌هاب (GitHub Explorer)') + `
+        <div class="grid2" style="gap:8px;margin-bottom:10px">
+          <div>
+            <label class="lb" style="margin:0 0 2px">مخزن گیت‌هاب (owner/repo)</label>
+            <div class="row" style="gap:4px">
+              <input class="inp ltr" id="gh-exp-repo" value="${esc(curRepo)}" placeholder="owner/repo">
+              <button class="btn sm pri" id="gh-exp-load-repo">دریافت</button>
+            </div>
+          </div>
+          <div>
+            <label class="lb" style="margin:0 0 2px">شاخه (Branch)</label>
+            <input class="inp ltr" id="gh-exp-branch" value="${esc(curBranch)}" placeholder="main">
+          </div>
+        </div>
+
+        <div id="gh-exp-crumb" class="crumb" style="margin-bottom:8px"></div>
+        <div id="gh-exp-list" class="tblwrap" style="max-height:48vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px">
+          <div class="row" style="padding:16px;align-items:center;justify-content:center"><span class="spin">⏳</span> در حال دریافت ساختار مخزن از گیت‌هاب...</div>
+        </div>
+        <div class="row" style="gap:6px;margin-top:10px;justify-content:space-between">
+          <span class="hint" style="font-size:11px">برای ویرایش، روی هر فایل کلیک کنید تا در ادیتور وب‌کنسول باز شود.</span>
+          <button class="btn sm" onclick="__closeSheet()">بستن</button>
+        </div>
+      `);
+
+      const loadFiles = async () => {
+        const listBox = sh.querySelector('#gh-exp-list');
+        const crumbBox = sh.querySelector('#gh-exp-crumb');
+        listBox.innerHTML = '<div class="row" style="padding:16px;align-items:center;justify-content:center"><span class="spin">⏳</span> در حال دریافت لیست فایل‌ها...</div>';
+        
+        // Crumb bar
+        let acc = '';
+        const pathParts = curPath.split('/').filter(Boolean);
+        crumbBox.innerHTML = `<a href="#" data-gh-p="">/ (Root)</a> ` + pathParts.map(x => {
+          acc += (acc ? '/' : '') + x;
+          return ` / <a href="#" data-gh-p="${esc(acc)}">${esc(x)}</a>`;
+        }).join('');
+        
+        crumbBox.querySelectorAll('[data-gh-p]').forEach(a => {
+          a.onclick = (e) => {
+            e.preventDefault();
+            curPath = a.dataset.ghP;
+            loadFiles();
+          };
+        });
+
+        try {
+          const res = await api('gh.list_contents', {
+            repo: curRepo,
+            branch: curBranch,
+            path: curPath
+          });
+          
+          if (!res.items || res.items.length === 0) {
+            listBox.innerHTML = '<div class="empty" style="padding:20px">این پوشه خالی است.</div>';
+            return;
+          }
+
+          listBox.innerHTML = res.items.map((it, idx) => `
+            <div class="frow" style="cursor:pointer;padding:8px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px" data-gh-idx="${idx}">
+              <div style="display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden">
+                <span>${it.type==='dir'?'📁':'📄'}</span>
+                <span class="nm ltr" style="font-weight:${it.type==='dir'?'700':'400'};text-align:left;overflow:hidden;text-overflow:ellipsis">${esc(it.name)}</span>
+              </div>
+              <div class="row" style="gap:6px;flex-shrink:0">
+                <span class="sz">${it.type==='dir'?'—':fmtSize(it.size)}</span>
+                ${it.type==='file'?`<button class="btn sm pri" data-gh-edit="${idx}" title="مشاهده و ویرایش مستقیم">✍️ ویرایش</button><button class="btn sm" data-gh-dl="${idx}" title="دانلود به سرور محلی">📥 دانلود</button>`:''}
+              </div>
+            </div>
+          `).join('');
+
+          listBox.querySelectorAll('[data-gh-idx]').forEach(row => {
+            const idx = parseInt(row.dataset.ghIdx, 10);
+            const item = res.items[idx];
+            row.onclick = (e) => {
+              if (e.target.closest('button')) return;
+              if (item.type === 'dir') {
+                curPath = item.path;
+                loadFiles();
+              } else {
+                __closeSheet();
+                openGitHubFile(curRepo, curBranch, item.path, item.sha);
+              }
+            };
+          });
+
+          listBox.querySelectorAll('[data-gh-edit]').forEach(btn => {
+            btn.onclick = (e) => {
+              e.stopPropagation();
+              const idx = parseInt(btn.dataset.ghEdit, 10);
+              const item = res.items[idx];
+              __closeSheet();
+              openGitHubFile(curRepo, curBranch, item.path, item.sha);
+            };
+          });
+
+          listBox.querySelectorAll('[data-gh-dl]').forEach(btn => {
+            btn.onclick = async (e) => {
+              e.stopPropagation();
+              const idx = parseInt(btn.dataset.ghDl, 10);
+              const item = res.items[idx];
+              btn.disabled = true;
+              btn.textContent = 'در حال دریافت...';
+              try {
+                const fileData = await api('gh.get_file', { repo: curRepo, branch: curBranch, path: item.path });
+                const destPath = joinPath(F.path, item.name);
+                await api('fs.create', { path: destPath, type: 'file' });
+                await api('fs.write', { path: destPath, content: fileData.content });
+                toast(`فایل «${item.name}» با موفقیت در پوشه جاری سرور ذخیره شد.`, 'ok');
+                renderFm();
+              } catch(err) {
+                toast(err.message, 'err');
+              } finally {
+                btn.disabled = false;
+                btn.textContent = '📥 دانلود';
+              }
+            };
+          });
+
+        } catch(e) {
+          listBox.innerHTML = `<div class="card" style="border-right:3px solid var(--err);margin:12px;padding:12px"><h4 style="color:var(--err);margin:0">خطا در دریافت لیست</h4><p class="hint">${esc(e.message)}</p></div>`;
+        }
+      };
+
+      sh.querySelector('#gh-exp-load-repo').onclick = () => {
+        curRepo = sh.querySelector('#gh-exp-repo').value.trim() || curRepo;
+        curBranch = sh.querySelector('#gh-exp-branch').value.trim() || 'main';
+        curPath = '';
+        loadFiles();
+      };
+
+      sh.querySelector('#gh-exp-repo').onkeydown = (e) => { if (e.key === 'Enter') sh.querySelector('#gh-exp-load-repo').click(); };
+      sh.querySelector('#gh-exp-branch').onkeydown = (e) => { if (e.key === 'Enter') sh.querySelector('#gh-exp-load-repo').click(); };
+
+      loadFiles();
+    };
+
+    renderGhBrowser();
+  } catch(e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function openGitHubFile(repo, branch, filePath, sha = '') {
+  try {
+    toast('در حال دریافت فایل از گیت‌هاب...', 'acc');
+    const d = await api('gh.get_file', { repo, branch, path: filePath });
+    openEditor(filePath, false, {
+      type: 'github',
+      repo: repo,
+      branch: branch,
+      path: filePath,
+      sha: d.sha || sha,
+      originalContent: d.content
+    }, d.content);
+  } catch(e) {
+    toast('خطا در بارگذاری فایل از گیت‌هاب: ' + e.message, 'err');
   }
 }
 
@@ -3855,7 +4351,7 @@ const F={path:__BOOT.fs_start||'/',items:[],sort:'name-1',hidden:false,sel:new S
 function joinPath(a,b){return (a.replace(/\/+$/,'')+'/'+b).replace(/\/+/g,'/')}
 function parentDir(p){p=p.replace(/\/+$/,'');return p.slice(0,p.lastIndexOf('/'))||'/'}
 function navFm(p){F.path=p||'/';F.sel.clear();renderFm()}
-INITS.files={fn(){for(const[id,fn]of Object.entries({upbtn:()=>navFm(parentDir(F.path)),refbtn:renderFm,newfbtn:newItemDlg,uploadbtn:()=>$('#fileinput').click(),searchbtn:searchDlg,hiddenbtn:()=>{F.hidden=!F.hidden;renderFm()},selclear:()=>{F.sel.clear();renderFm()}}))$('#'+id).onclick=fn;$('#sortsel').onchange=e=>{F.sort=e.target.value;renderFm()};$('#fileinput').onchange=e=>{uploadFiles([...e.target.files]);e.target.value=''};actions($('#selbar'),'data-op',selOp);const v=$('#v-files');v.ondragover=e=>e.preventDefault();v.ondrop=e=>{e.preventDefault();uploadFiles([...e.dataTransfer.files])};renderFm()}};
+INITS.files={fn(){const ghBtn=$('#gh-exp-btn');if(ghBtn)ghBtn.onclick=()=>openGitHubExplorer();for(const[id,fn]of Object.entries({upbtn:()=>navFm(parentDir(F.path)),refbtn:renderFm,newfbtn:newItemDlg,uploadbtn:()=>$('#fileinput').click(),searchbtn:searchDlg,hiddenbtn:()=>{F.hidden=!F.hidden;renderFm()},selclear:()=>{F.sel.clear();renderFm()}}))$('#'+id).onclick=fn;$('#sortsel').onchange=e=>{F.sort=e.target.value;renderFm()};$('#fileinput').onchange=e=>{uploadFiles([...e.target.files]);e.target.value=''};actions($('#selbar'),'data-op',selOp);const v=$('#v-files');v.ondragover=e=>e.preventDefault();v.ondrop=e=>{e.preventDefault();uploadFiles([...e.dataTransfer.files])};renderFm()}};
 async function renderFm(){try{const[sort,asc]=F.sort.split('-');const d=await api('fs.list',{path:F.path,sort,asc:asc==='1',hidden:F.hidden});F.path=d.path;F.items=d.items;$('#hiddenbtn').classList.toggle('pri',F.hidden);let acc='';$('#crumb').innerHTML='<a href="#" data-p="/">/</a> '+F.path.split('/').filter(Boolean).map(x=>{acc+='/'+x;return `<a href="#" data-p="${esc(acc)}">${esc(x)}</a>`}).join(' / ');actions($('#crumb'),'data-p',navFm);$('#quick').innerHTML=F.quick.map(p=>`<button class="btn sm" data-p="${esc(p)}">${esc(p)}</button>`).join('');actions($('#quick'),'data-p',navFm);$('#fmlist').innerHTML=d.items.length?d.items.map((it,i)=>`<div class="frow ${F.sel.has(it.name)?'sel':''}"><input class="chk" data-select="${i}" type="checkbox" ${F.sel.has(it.name)?'checked':''}><span class="nm" data-open="${i}">${it.dir?'📁':'📄'} ${esc(it.name)}<small class="ltr">${it.perms} · ${esc(it.owner)}:${esc(it.group)} · ${fmtDate(it.mtime)}</small></span><span class="sz">${it.dir?'—':fmtSize(it.size)}</span><button class="btn sm" data-more="${i}">⋯</button></div>`).join(''):'<div class="empty">پوشه خالی است</div>';actions($('#fmlist'),'data-open',i=>{const it=F.items[i];it.dir?navFm(joinPath(F.path,it.name)):openEditor(joinPath(F.path,it.name))});actions($('#fmlist'),'data-more',i=>itemMenu(F.items[i]));$('#fmlist').querySelectorAll('[data-select]').forEach(c=>c.onchange=()=>{const n=F.items[c.dataset.select].name;c.checked?F.sel.add(n):F.sel.delete(n);c.closest('.frow').classList.toggle('sel',c.checked);paintSel()});paintSel();const filter=()=>$('#fmlist').querySelectorAll('.frow').forEach(row=>row.classList.toggle('hide',!row.querySelector('.nm').textContent.toLowerCase().includes($('#file-filter').value.trim().toLowerCase())));$('#file-filter').oninput=filter;filter()}catch(e){toast(e.message,'err')}}
 function paintSel(){$('#selbar').classList.toggle('on',F.sel.size>0);$('#selcnt').textContent=F.sel.size+' انتخاب'}
 function selPaths(){return [...F.sel].map(n=>joinPath(F.path,n))}
@@ -3893,10 +4389,10 @@ function cmMode(n){
 let edDirty=false;
 window.addEventListener('beforeunload',e=>{if(edDirty){e.preventDefault();e.returnValue='تغییرات ذخیره‌نشده دارید.';}});
 
-async function openEditor(path,isNew=false){
+async function openEditor(path,isNew=false,ghMeta=null,ghContent=null){
   try{
-    let fileData={path:path,name:path.split('/').pop(),content:'',size:0,mtime:Date.now()/1000,is_writable:true,perms:'0644',line_count:1,is_truncated:false,line_ending:'LF'};
-    if(!isNew){
+    let fileData={path:path,name:path.split('/').pop(),content:ghContent!==null?ghContent:'',size:ghContent!==null?ghContent.length:0,mtime:Date.now()/1000,is_writable:true,perms:'0644',line_count:1,is_truncated:false,line_ending:'LF'};
+    if(!isNew && ghContent===null){
       try{
         const d=await api('fs.read',{path,allow_large:true});
         fileData=Object.assign(fileData,d);
@@ -3919,7 +4415,7 @@ async function openEditor(path,isNew=false){
     const html=`
       <div class="ed-head">
         <div style="display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;flex:1">
-          <span style="font-size:15px;flex-shrink:0">📝</span>
+          ${ghMeta?'<span class="tag acc" style="font-size:11px;flex-shrink:0">🌐 GitHub: '+esc(ghMeta.repo)+'@'+esc(ghMeta.branch)+'</span>':'<span style="font-size:15px;flex-shrink:0">📝</span>'}
           <span class="ltr" style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(path)}">${esc(fileData.name||path)}</span>
           <span id="ed-dirty-tag" class="tag ${isDirty?'ed-badge-dirty':'ok'}" style="font-size:10.5px;flex-shrink:0">${isDirty?'● تغییر یافته':'ذخیره‌شده'}</span>
           <span class="tag" style="font-size:10.5px;flex-shrink:0">${fmtSize(fileData.size)}</span>
@@ -3933,7 +4429,7 @@ async function openEditor(path,isNew=false){
       </div>
 
       <div class="ed-toolbar">
-        <button class="btn sm pri" id="ed-btn-save" title="ذخیره فایل (Ctrl+S)">💾 ذخیره</button>
+        ${ghMeta?`<button class="btn sm ok" id="ed-btn-gh-commit" title="ثبت و کامیت تغییرات روی گیت‌هاب">💾 کامیت روی گیت‌هاب</button><button class="btn sm" id="ed-btn-gh-savelocal" title="ذخیره این فایل گیت‌هاب در پوشه جاری سرور محلی">📥 ذخیره در سرور محلی</button>`:`<button class="btn sm pri" id="ed-btn-save" title="ذخیره فایل (Ctrl+S)">💾 ذخیره</button><button class="btn sm" id="ed-btn-gh-push" title="ارسال و کامیت این فایل محلی روی مخزن گیت‌هاب">⬆️ ارسال به گیت‌هاب</button>`}
         <label class="hint" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;font-size:11px">
           <input type="checkbox" id="ed-chk-bak" checked> بکاپ (.bak)
         </label>
@@ -4164,6 +4660,80 @@ async function openEditor(path,isNew=false){
       updateLinesCount(newVal);
     };
 
+    const commitToGitHub = async () => {
+      const msg = await promptDlg('پیام کامیت گیت‌هاب (Commit Message):', `Update ${ghMeta.path} via WebConsole Pro`);
+      if (!msg) return;
+      const ghBtn = sh.querySelector('#ed-btn-gh-commit');
+      if (ghBtn) { ghBtn.disabled = true; ghBtn.textContent = 'در حال کامیت...'; }
+      try {
+        const text = getContent();
+        const res = await api('gh.put_file', {
+          repo: ghMeta.repo,
+          branch: ghMeta.branch,
+          path: ghMeta.path,
+          content: text,
+          sha: ghMeta.sha,
+          message: msg
+        });
+        ghMeta.sha = res.new_sha;
+        initialContent = text;
+        setDirtyState(false);
+        toast(res.message || 'فایل با موفقیت در گیت‌هاب کامیت شد.', 'ok');
+      } catch(e) {
+        toast(e.message, 'err');
+      } finally {
+        if (ghBtn) { ghBtn.disabled = false; ghBtn.textContent = '💾 کامیت روی گیت‌هاب'; }
+      }
+    };
+
+    const saveGhToLocal = async () => {
+      try {
+        const fileName = ghMeta.path.split('/').pop();
+        const dest = await promptDlg('مسیر ذخیره در سرور محلی:', joinPath(F.path, fileName));
+        if (!dest) return;
+        await api('fs.create', { path: dest, type: 'file' });
+        await api('fs.write', { path: dest, content: getContent() });
+        toast(`فایل با موفقیت در «${dest}» ذخیره شد.`, 'ok');
+        if (curTab === 'files') renderFm();
+      } catch(e) { toast(e.message, 'err'); }
+    };
+
+    const pushLocalToGitHub = async () => {
+      try {
+        const repo = await promptDlg('مخزن مقصد در گیت‌هاب (owner/repo):', __BOOT.gh_repo || 'fazilatma/new');
+        if (!repo) return;
+        const branch = await promptDlg('شاخه مقصد (Branch):', 'main');
+        if (!branch) return;
+        const remotePath = await promptDlg('مسیر فایل در گیت‌هاب:', fileData.name || path.split('/').pop());
+        if (!remotePath) return;
+        const msg = await promptDlg('پیام کامیت (Commit message):', `Add/Update ${remotePath} from WebConsole`);
+        if (!msg) return;
+        
+        toast('در حال ارسال فایل به گیت‌هاب...', 'acc');
+        let sha = '';
+        try {
+          const curFile = await api('gh.get_file', { repo, branch, path: remotePath });
+          sha = curFile.sha || '';
+        } catch(e) {}
+        
+        const res = await api('gh.put_file', {
+          repo,
+          branch,
+          path: remotePath,
+          content: getContent(),
+          sha,
+          message: msg
+        });
+        toast('✅ فایل با موفقیت در گیت‌هاب ثبت و ذخیره شد.', 'ok');
+      } catch(e) { toast(e.message, 'err'); }
+    };
+
+    const ghCommitBtn = sh.querySelector('#ed-btn-gh-commit');
+    if (ghCommitBtn) ghCommitBtn.onclick = commitToGitHub;
+    const ghLocalBtn = sh.querySelector('#ed-btn-gh-savelocal');
+    if (ghLocalBtn) ghLocalBtn.onclick = saveGhToLocal;
+    const ghPushBtn = sh.querySelector('#ed-btn-gh-push');
+    if (ghPushBtn) ghPushBtn.onclick = pushLocalToGitHub;
     const saveFile=async()=>{
       const btn=sh.querySelector('#ed-btn-save');
       const bak=sh.querySelector('#ed-chk-bak').checked;
@@ -4696,7 +5266,35 @@ INITS.jobs={fn(){renderJobs();setInterval(()=>{if(curTab==='jobs'&&!document.hid
 let jobText="",jobState="";
 async function renderJobs(){try{const d=await api('jobs.list'),v=$('#v-jobs');v.innerHTML='<div class="card"><h3>کارهای پس‌زمینه و خطاهای راه‌اندازی</h3><button class="btn sm" id="jobs-ref">به‌روزرسانی</button></div>'+'<div class="view-tools"><input class="inp" id="job-filter" aria-label="جستجوی کارها" placeholder="فیلتر کارها…" value="'+esc(jobText)+'"><select class="mini" id="job-state">'+[['','همه وضعیت‌ها'],['running','در حال اجرا'],['failed','ناموفق'],['done','کامل'],['dead','قطع شده']].map(([k,t])=>'<option value="'+k+'" '+(jobState===k?'selected':'')+'>'+t+'</option>').join('')+'</select></div>'+d.jobs.map(j=>`<div class="li job-row" data-state="${esc(j.status.status)}"><span class="t"><b>${esc(j.name)}</b><small>${fmtDate(j.created)} · ${esc(j.type)} · ${esc(j.status.status)} ${j.status.exit??''}</small></span><button class="btn sm" data-log="${esc(j.id)}">لاگ</button><button class="btn sm pri" data-copylog="${esc(j.id)}" title="کپی سریع متن لاگ">📋 کپی لاگ</button>${j.status.status==='running'?`<button class="btn danger sm" data-stop="${esc(j.id)}">توقف</button>`:''}</div>`).join('');const filter=()=>v.querySelectorAll('.job-row').forEach(row=>row.classList.toggle('hide',!(row.textContent.toLowerCase().includes(jobText.toLowerCase())&&(!jobState||row.dataset.state===jobState))));$('#job-filter').oninput=e=>{jobText=e.target.value;filter()};$('#job-state').onchange=e=>{jobState=e.target.value;filter()};filter();$('#jobs-ref').onclick=renderJobs;actions(v,'data-log',id=>openJob(id,d.jobs.find(j=>j.id===id).name));actions(v,'data-copylog',async jid=>{try{toast('در حال دریافت لاگ...','acc');const dj=await api('jobs.log',{id:jid,offset:0});const txt=dj.b64?decode(dj.b64):'';await copyText(txt,'لاگ کار با موفقیت کپی شد');}catch(e){toast(e.message,'err')}});actions(v,'data-stop',async id=>{if(await confirmDlg('متوقف شود؟')){await api('jobs.stop',{id});renderJobs()}})}catch(e){toast(e.message,'err')}}
 INITS.set={fn:renderSet};
-async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>🛡️ پروکسی کلودفلر و رفع تحریم پکیج‌ها (Proxy & Anti-Sanction)</h3><p class="hint">تنظیم حالت عبور ترافیک، کلون مخازن گیت، دانلود پکیج‌ها (Pip / Npm / Composer / Git) و وب‌هوک‌ها از طریق Cloudflare Worker جهت دورزدن تحریم‌ها و فیلترینگ.</p><label class="lb">حالت اتصال پروکسی (Proxy Mode)</label><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="direct" ${s.proxy_mode==='direct'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🌐 مستقیم (Direct)</div><div class="hint" style="font-size:12px;margin:0">اتصال بدون پروکسی (برای سرورهای خارج از کشور یا اینترنت بدون فیلتر و تحریم)</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="auto" ${s.proxy_mode==='auto'||!s.proxy_mode?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">⚡ خودکار و هوشمند (Auto / Smart Fallback) — پیشنهادی</div><div class="hint" style="font-size:12px;margin:0">تلاش اتصال مستقیم؛ در صورت خطا، مسدودی، تحریم یا HTTP 403 به طور خودکار از ورکر کلودفلر عبور می‌کند</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="cf_proxy" ${s.proxy_mode==='cf_proxy'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🛡️ پروکسی کلودفلر (Cloudflare Worker Proxy)</div><div class="hint" style="font-size:12px;margin:0">هدایت اجباری تمامی درخواست‌های مخازن، دیپلوی، دانلودها و ارتباطات خارجی از طریق ورکر کلودفلر</div></div></label></div><label class="lb">آدرس ورکر پروکسی کلودفلر (Worker Proxy URL)</label><input class="inp ltr" id="st_proxy_cf_url" placeholder="https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page" value="${esc(s.proxy_cf_url||'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page')}"><p class="hint">می‌توانید ورکر پیش‌فرض را استفاده کنید یا آدرس Cloudflare Worker اختصاصی خودتان را وارد فرمایید.</p><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="st_proxy_save_btn">💾 ذخیره تنظیمات پروکسی</button><button class="btn" id="st_proxy_test_btn">🔍 تست اتصال و سلامت پروکسی</button></div><div id="proxy-test-box" style="margin-top:10px;display:none"></div></div><div class="card">
+async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" style="border-right: 3px solid var(--acc)">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <h3 style="margin:0">🔄 به‌روزرسانی و سلف‌آپدیت وب‌کنسول (Console Self-Update)</h3>
+      <p class="hint" style="margin:4px 0">ارتقای نسخه وب‌کنسول مستقیماً از مخزن و شاخه گیت‌هاب با تست خودکار سلامت نحوی PHP</p>
+    </div>
+    <span class="tag ok" style="font-weight:700">نسخه فعلی: v${esc(__BOOT.v)}</span>
+  </div>
+  
+  <div class="grid2" style="gap:10px;margin-top:10px">
+    <div>
+      <label class="lb">مخزن گیت‌هاب (GitHub Repository)</label>
+      <input class="inp ltr" id="wcp_up_repo" value="${esc(s.gh_repo || 'fazilatma/new')}">
+    </div>
+    <div>
+      <label class="lb">شاخه (Branch)</label>
+      <input class="inp ltr" id="wcp_up_branch" value="${esc(s.gh_branch || 'main')}">
+    </div>
+  </div>
+
+  <label class="lb">توکن گیت‌هاب (Personal Access Token - اختیاری برای مخازن خصوصی)</label>
+  <input class="inp ltr" type="password" id="wcp_up_token" placeholder="${s.gh_token?'توکن ذخیره شده است (برای تغییر تایپ کنید)':''}">
+
+  <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+    <button class="btn sm" id="wcp_check_up_btn">🔍 بررسی نسخه جدید (Check Updates)</button>
+    <button class="btn sm pri" id="wcp_self_up_btn">⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)</button>
+  </div>
+  <div id="wcp_up_status" style="margin-top:10px;display:none"></div>
+</div><div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>🛡️ پروکسی کلودفلر و رفع تحریم پکیج‌ها (Proxy & Anti-Sanction)</h3><p class="hint">تنظیم حالت عبور ترافیک، کلون مخازن گیت، دانلود پکیج‌ها (Pip / Npm / Composer / Git) و وب‌هوک‌ها از طریق Cloudflare Worker جهت دورزدن تحریم‌ها و فیلترینگ.</p><label class="lb">حالت اتصال پروکسی (Proxy Mode)</label><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="direct" ${s.proxy_mode==='direct'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🌐 مستقیم (Direct)</div><div class="hint" style="font-size:12px;margin:0">اتصال بدون پروکسی (برای سرورهای خارج از کشور یا اینترنت بدون فیلتر و تحریم)</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="auto" ${s.proxy_mode==='auto'||!s.proxy_mode?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">⚡ خودکار و هوشمند (Auto / Smart Fallback) — پیشنهادی</div><div class="hint" style="font-size:12px;margin:0">تلاش اتصال مستقیم؛ در صورت خطا، مسدودی، تحریم یا HTTP 403 به طور خودکار از ورکر کلودفلر عبور می‌کند</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="cf_proxy" ${s.proxy_mode==='cf_proxy'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🛡️ پروکسی کلودفلر (Cloudflare Worker Proxy)</div><div class="hint" style="font-size:12px;margin:0">هدایت اجباری تمامی درخواست‌های مخازن، دیپلوی، دانلودها و ارتباطات خارجی از طریق ورکر کلودفلر</div></div></label></div><label class="lb">آدرس ورکر پروکسی کلودفلر (Worker Proxy URL)</label><input class="inp ltr" id="st_proxy_cf_url" placeholder="https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page" value="${esc(s.proxy_cf_url||'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page')}"><p class="hint">می‌توانید ورکر پیش‌فرض را استفاده کنید یا آدرس Cloudflare Worker اختصاصی خودتان را وارد فرمایید.</p><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="st_proxy_save_btn">💾 ذخیره تنظیمات پروکسی</button><button class="btn" id="st_proxy_test_btn">🔍 تست اتصال و سلامت پروکسی</button></div><div id="proxy-test-box" style="margin-top:10px;display:none"></div></div><div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <div>
       <h3 style="margin:0">📦 درون‌ریزی و برون‌بری تنظیمات (Import / Export)</h3>
@@ -4707,7 +5305,42 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
       <button class="btn ok" id="st_import_btn">📤 درون‌ریزی تنظیمات (Import JSON)</button>
     </div>
   </div>
-</div><div class="card"><h3>تغییر رمز</h3><label class="lb">رمز فعلی</label><input class="inp" type="password" id="pwold"><label class="lb">رمز جدید</label><input class="inp" type="password" id="pwnew"><button class="btn pri" id="pwok">تغییر رمز</button></div><div class="card"><h3>تنظیمات عمومی</h3><button class="btn" onclick="projectStorageDlg()">فضای نصب پروژه‌ها</button><label class="lb">پوشه شروع</label><input class="inp ltr" id="stfs" value="${esc(s.fs_start)}"><label class="lb">مدت نشست (دقیقه)</label><input class="inp" type="number" id="stses" value="${s.session_minutes}"><label class="lb">IP/CIDR مجاز؛ هر خط یک مورد، خالی یعنی همه</label><textarea class="inp ltr" id="stip">${esc(s.allowed_ips)}</textarea><p class="hint">محدودیت IP از REMOTE_ADDR استفاده می‌کند. در پشت پراکسی، آدرس واقعی را در تنظیمات مورداعتماد وب‌سرور تنظیم کنید.</p><button class="btn pri" id="stok">ذخیره</button>${s.noexec?'<p class="hint">PHP exec غیرفعال است</p>':''}</div><div class="card"><h3>گزارش فعالیت</h3><button class="btn" id="actbtn">مشاهده</button></div><div class="card hint">وب‌کنسول Pro ${esc(__BOOT.v)} · ترمینال، فایل منیجر، بکاپ، مدیریت پردازش و پروژه.<br>داده‌ها در .wconsole_data نگه‌داری می‌شوند. دسترسی HTTP به این پوشه را در وب‌سرور ببندید. این ابزار را به‌عنوان root اجرا نکنید.</div>`;$('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
+</div><div class="card"><h3>تغییر رمز</h3><label class="lb">رمز فعلی</label><input class="inp" type="password" id="pwold"><label class="lb">رمز جدید</label><input class="inp" type="password" id="pwnew"><button class="btn pri" id="pwok">تغییر رمز</button></div><div class="card"><h3>تنظیمات عمومی</h3><div class="row" style="gap:6px;margin-bottom:10px;flex-wrap:wrap"><button class="btn" onclick="projectStorageDlg()">📁 فضای نصب پروژه‌ها</button><button class="btn ok" onclick="swapManagerDlg()">🚀 افزایش و مدیریت Swap</button></div><label class="lb">پوشه شروع</label><input class="inp ltr" id="stfs" value="${esc(s.fs_start)}"><label class="lb">مدت نشست (دقیقه)</label><input class="inp" type="number" id="stses" value="${s.session_minutes}"><label class="lb">IP/CIDR مجاز؛ هر خط یک مورد، خالی یعنی همه</label><textarea class="inp ltr" id="stip">${esc(s.allowed_ips)}</textarea><p class="hint">محدودیت IP از REMOTE_ADDR استفاده می‌کند. در پشت پراکسی، آدرس واقعی را در تنظیمات مورداعتماد وب‌سرور تنظیم کنید.</p><button class="btn pri" id="stok">ذخیره</button>${s.noexec?'<p class="hint">PHP exec غیرفعال است</p>':''}</div><div class="card"><h3>گزارش فعالیت</h3><button class="btn" id="actbtn">مشاهده</button></div><div class="card hint">وب‌کنسول Pro ${esc(__BOOT.v)} · ترمینال، فایل منیجر، بکاپ، مدیریت پردازش و پروژه.<br>داده‌ها در .wconsole_data نگه‌داری می‌شوند. دسترسی HTTP به این پوشه را در وب‌سرور ببندید. این ابزار را به‌عنوان root اجرا نکنید.</div>`;$('#wcp_check_up_btn').onclick=async()=>{
+    const box=$('#wcp_up_status');
+    box.style.display='block';
+    box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال بررسی آخرین کامیت و نسخه روی گیت‌هاب...</div>';
+    try{
+      const repo=$('#wcp_up_repo').value.trim()||'fazilatma/new';
+      const branch=$('#wcp_up_branch').value.trim()||'main';
+      const token=$('#wcp_up_token').value.trim();
+      const d=await api('console.check_update',{repo,branch,token});
+      let html=`<div style="padding:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px">`;
+      html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-weight:700">نسخه روی گیت‌هاب: v${esc(d.remote_version)}</span><span class="tag ${d.has_update?'warn':'ok'}">${d.has_update?'🚀 نسخه جدید در دسترس است':'✓ کنسول شما به‌روز است'}</span></div>`;
+      html+=`<p class="hint ltr" style="margin:2px 0"><b>Commit:</b> ${esc(d.commit_short)} · ${esc(d.commit_msg)}</p>`;
+      html+=`<p class="hint" style="margin:2px 0;font-size:11px">نویسنده: ${esc(d.commit_author)} · تاریخ: ${fmtDate(d.commit_date)}</p>`;
+      html+=`</div>`;
+      box.innerHTML=html;
+      if(d.has_update)toast('نسخه جدید در مخزن شناسایی شد!','acc');
+      else toast('وب‌کنسول با آخرین نسخه گیت‌هاب همگام است','ok');
+    }catch(e){box.innerHTML=`<div class="card" style="border-right:3px solid var(--err);padding:10px"><span style="color:var(--err)">خطا: ${esc(e.message)}</span></div>`;toast(e.message,'err');}
+  };
+  $('#wcp_self_up_btn').onclick=async()=>{
+    const repo=$('#wcp_up_repo').value.trim()||'fazilatma/new';
+    const branch=$('#wcp_up_branch').value.trim()||'main';
+    const token=$('#wcp_up_token').value.trim();
+    if(!await confirmDlg(`آیا از به‌روزرسانی آنی وب‌کنسول به آخرین کامیت شاخه ${branch} از مخزن ${repo} اطمینان دارید؟`))return;
+    const btn=$('#wcp_self_up_btn');
+    btn.disabled=true;btn.textContent='در حال به‌روزرسانی و تست سلامت PHP...';
+    try{
+      const res=await api('console.self_update',{repo,branch,token});
+      toast(res.message||'وب‌کنسول با موفقیت ارتقا یافت! در حال بارگذاری مجدد...','ok');
+      setTimeout(()=>location.reload(),1200);
+    }catch(e){
+      btn.disabled=false;btn.textContent='⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)';
+      toast(e.message,'err');
+    }
+  };
+  $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
 const SCRAPER4_PRESET={"name":"Scraper4 + Deployer","type":"node","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0aa17-new","subfolder":"cloudflare-scraper4","deploy_path":"","port":"8790","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"}};
 const SKINS=[['dark','نیمه‌شب','#101828','#6366f1'],['light','کاغذ روشن','#eef2f9','#5146c7'],['ocean','اقیانوس','#0e253d','#70dbff'],['forest','جنگل','#102b24','#75e5ba'],['amber','کهربا','#302419','#ffd17a']];
 const LAYOUTS=[['classic','کلاسیک','منوی کناری و فضای آشنای کنسول'],['studio','استودیو','نوار ناوبری بالا و محتوای متمرکز'],['focus','تمرکز','نوار آیکون باریک و فضای کاری بزرگ']];
