@@ -53,25 +53,87 @@ echo "==========================================================================
 echo -e "${CLR_RESET}"
 
 # ------------------------------------------------------------------------------
-# 1. Environment & Codespaces Detection
+# 1. Environment & Codespaces Detection (Multi-Source Deep Extraction)
 # ------------------------------------------------------------------------------
-log_step "1/9" "Detecting Environment, Linux Distro & GitHub Codespaces..."
+log_step "1/9" "Detecting Environment, Linux Distro & GitHub Codespaces Name..."
 
 IS_CODESPACES=false
 CODESPACE_NAME="${CODESPACE_NAME:-}"
 CODESPACE_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
 
-# Extract CODESPACE_NAME from /etc/environment if connected via plain SSH
-if [ -z "$CODESPACE_NAME" ] && [ -f /etc/environment ]; then
-    CODESPACE_NAME=$(grep -E '^CODESPACE_NAME=' /etc/environment 2>/dev/null | cut -d'=' -f2 | tr -d '"' || true)
+# Function to extract an environment variable across all deep container sources
+extract_cs_var() {
+    local var_name="$1"
+    local val=""
+
+    # A. Check PID 1 environ (Container Root Init)
+    if [ -r /proc/1/environ ]; then
+        val=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -E "^${var_name}=" | head -n 1 | cut -d'=' -f2- | tr -d '"\r\n' || true)
+        if [ -n "$val" ]; then echo "$val"; return; fi
+    fi
+
+    # B. Check all parent / sibling processes in /proc/*/environ
+    for env_file in /proc/[0-9]*/environ; do
+        if [ -r "$env_file" ]; then
+            val=$(tr '\0' '\n' < "$env_file" 2>/dev/null | grep -E "^${var_name}=" | head -n 1 | cut -d'=' -f2- | tr -d '"\r\n' || true)
+            if [ -n "$val" ]; then echo "$val"; return; fi
+        fi
+    done
+
+    # C. Check Codespaces shared JSON metadata
+    for json_file in /workspaces/.codespaces/shared/environment-variables.json \
+                     /workspaces/.codespaces/.persistedshare/environment-variables.json \
+                     /tmp/codespaces-environment.json \
+                     /.codespaces/shared/environment-variables.json; do
+        if [ -f "$json_file" ]; then
+            val=$(grep -E "\"${var_name}\"" "$json_file" 2>/dev/null | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' | head -n 1 || true)
+            if [ -n "$val" ]; then echo "$val"; return; fi
+        fi
+    done
+
+    # D. Check system environments and shell configs
+    for f in /etc/environment \
+             /etc/profile.d/*codespaces*.sh \
+             /home/vscode/.bashrc \
+             /home/codespace/.bashrc \
+             /root/.bashrc \
+             /etc/profile; do
+        if [ -f "$f" ]; then
+            val=$(grep -E "^(export[[:space:]]+)?${var_name}=" "$f" 2>/dev/null | head -n 1 | cut -d'=' -f2- | tr -d '"\r\n' | tr -d "'" || true)
+            if [ -n "$val" ]; then echo "$val"; return; fi
+        fi
+    done
+
+    # E. Check GitHub CLI if authenticated
+    if [ "$var_name" = "CODESPACE_NAME" ] && command -v gh >/dev/null 2>&1; then
+        val=$(gh codespace list --json name -q '.[0].name' 2>/dev/null || true)
+        if [ -n "$val" ]; then echo "$val"; return; fi
+    fi
+
+    echo ""
+}
+
+# Perform deep extraction
+if [ -z "$CODESPACE_NAME" ] || [ "$CODESPACE_NAME" = "codespace" ] || [ "$CODESPACE_NAME" = "localhost" ]; then
+    CODESPACE_NAME=$(extract_cs_var "CODESPACE_NAME")
+fi
+
+EXTRACTED_DOMAIN=$(extract_cs_var "GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN")
+if [ -n "$EXTRACTED_DOMAIN" ]; then
+    CODESPACE_DOMAIN="$EXTRACTED_DOMAIN"
 fi
 
 if [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/workspaces" ] || [ -d "/.codespaces" ]; then
     IS_CODESPACES=true
     if [ -z "$CODESPACE_NAME" ]; then
-        CODESPACE_NAME=$(hostname 2>/dev/null || echo "codespace")
+        HN=$(hostname 2>/dev/null || echo "")
+        if [[ "$HN" =~ ^codespaces-[a-z0-9]+ ]] || [[ "$HN" =~ [-a-z0-9]{8,} ]]; then
+            CODESPACE_NAME="$HN"
+        else
+            CODESPACE_NAME="codespace"
+        fi
     fi
-    log_ok "GitHub Codespaces detected! (Name: ${CODESPACE_NAME}, Domain: ${CODESPACE_DOMAIN})"
+    log_ok "GitHub Codespaces Detected! -> Name: ${CLR_BOLD}${CODESPACE_NAME}${CLR_RESET} (Domain: ${CODESPACE_DOMAIN})"
 else
     log_info "Standard VPS / Dedicated Server environment detected."
 fi
@@ -197,7 +259,6 @@ elif [ "$OS_FAMILY" = "arch" ]; then
     WEB_GROUP="http"
 fi
 
-# In Codespaces, grant vscode / codespace user access as well
 if id -u vscode >/dev/null 2>&1; then
     usermod -aG $WEB_GROUP vscode 2>/dev/null || true
 fi
@@ -321,7 +382,6 @@ elif [ "$OS_FAMILY" = "arch" ]; then
     pacman -S --noconfirm --needed nginx php php-fpm php-gd php-sqlite
 fi
 
-# Detect PHP-FPM Socket
 PHP_SOCK=""
 for sock in /run/php/php*-fpm.sock /var/run/php/php*-fpm.sock /var/run/php-fpm/www.sock /run/php-fpm/www.sock /var/run/php82-fpm.sock /var/run/php-fpm.sock; do
     if [ -e "$sock" ] || [ -d "$(dirname "$sock")" ]; then
@@ -336,7 +396,6 @@ fi
 
 log_info "Detected FastCGI Socket: ${PHP_SOCK}"
 
-# Configure Nginx Virtual Host on BOTH Port 80 and Port 8080 (Crucial for Codespaces & Rootless containers)
 mkdir -p /var/www/html /var/www/projects
 
 if [ "$OS_FAMILY" = "debian" ]; then
@@ -404,14 +463,12 @@ server {
 NGINX_CONF
 fi
 
-# Start services using both systemctl and service commands (compatible with systemd and init/container scripts)
 service nginx restart 2>/dev/null || systemctl restart nginx 2>/dev/null || nginx 2>/dev/null || true
 
 for fpm in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
     service $fpm restart 2>/dev/null || systemctl restart $fpm 2>/dev/null || true
 done
 
-# SELinux support for RHEL/CentOS
 if command -v setsebool >/dev/null 2>&1; then
     setsebool -P httpd_can_network_connect 1 2>/dev/null || true
     setsebool -P httpd_unified 1 2>/dev/null || true
@@ -435,7 +492,6 @@ codespace ALL=(ALL) NOPASSWD: ALL
 SUDOERS_CONF
 chmod 0440 /etc/sudoers.d/99-webconsole-nopasswd
 
-# Download latest WebConsole Pro from GitHub
 log_info "Fetching latest WebConsole Pro v1.6.5 from GitHub (fazilatma/new)..."
 WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
 curl -fsSL "$WCP_URL" -o /var/www/html/webconsole.php || \
@@ -443,12 +499,10 @@ wget -qO /var/www/html/webconsole.php "$WCP_URL"
 
 cp -f /var/www/html/webconsole.php /var/www/html/index.php
 
-# Set ownership and permissions
 chown -R ${WEB_USER}:${WEB_GROUP} /var/www/html /var/www/projects 2>/dev/null || true
 chmod -R 775 /var/www/html /var/www/projects 2>/dev/null || true
 touch /var/www/html/webconsole.php /var/www/html/index.php 2>/dev/null || true
 
-# Reload PHP-FPM / Web servers to clear opcode caches
 for svc in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm nginx apache2 httpd; do
     service $svc reload 2>/dev/null || systemctl reload $svc 2>/dev/null || true
 done
@@ -462,7 +516,6 @@ fi
 # ------------------------------------------------------------------------------
 log_step "9/9" "Configuring Codespaces Port Forwarding & Public Visibility..."
 
-# Standard ports for PHP, Node.js and Python
 PORTS_PHP="80 8080"
 PORTS_NODE="3000 3001 5000"
 PORTS_PYTHON="8000 8081 8790"
@@ -470,24 +523,25 @@ ALL_PORTS="$PORTS_PHP $PORTS_NODE $PORTS_PYTHON"
 
 if [ "$IS_CODESPACES" = "true" ]; then
     log_info "Configuring public visibility for PHP, Node.js, and Python ports in Codespaces..."
-    
-    # Try using gh CLI to set public visibility
-    if command -v gh >/dev/null 2>&1; then
+    for p in $ALL_PORTS; do
+        if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
+            gh codespace ports visibility "${p}:public" -c "$CODESPACE_NAME" 2>/dev/null || \
+            gh codespace ports visibility "${p}:public" 2>/dev/null || true
+        else
+            gh codespace ports visibility "${p}:public" 2>/dev/null || true
+        fi
+    done
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
         for p in $ALL_PORTS; do
-            if [ -n "$CODESPACE_NAME" ]; then
-                gh codespace ports visibility "${p}:public" -c "$CODESPACE_NAME" 2>/dev/null || \
-                gh codespace ports visibility "${p}:public" 2>/dev/null || true
-            else
-                gh codespace ports visibility "${p}:public" 2>/dev/null || true
+            if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
+                su - "$SUDO_USER" -c "gh codespace ports visibility ${p}:public -c '$CODESPACE_NAME'" 2>/dev/null || \
+                su - "$SUDO_USER" -c "gh codespace ports visibility ${p}:public" 2>/dev/null || true
             fi
         done
-        log_ok "Ports set to public visibility via GitHub CLI."
-    else
-        log_info "GitHub CLI not found in root path; ports are forwarded on standard endpoints."
     fi
+    log_ok "Port public visibility commands dispatched for ports: 80, 8080, 3000, 5000, 8000, 8081."
 fi
 
-# Determine Access URLs
 SERVER_IP=$(curl -s4m 4 ifconfig.me || curl -s4m 4 api.ipify.org || curl -s4m 4 icanhazip.com || hostname -I | awk '{print $1}' || echo "127.0.0.1")
 
 echo ""
@@ -496,17 +550,18 @@ echo "          🎉 WebConsole Pro v1.6.5 Installation Completed Successfully! 
 echo "================================================================================${CLR_RESET}"
 echo ""
 
-if [ "$IS_CODESPACES" = "true" ] && [ -n "$CODESPACE_NAME" ]; then
+if [ "$IS_CODESPACES" = "true" ]; then
     echo -e "  🌐 ${CLR_BOLD}GitHub Codespaces Public Access Links:${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (PHP Port 80):${CLR_RESET}   ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-80.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (PHP Port 8080):${CLR_RESET} ${CLR_CYAN}https://${CODESPACE_NAME}-8080.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🟢 ${CLR_BOLD}Node.js Service (Port 3000):${CLR_RESET} ${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🟢 ${CLR_BOLD}Node.js Service (Port 5000):${CLR_RESET} ${CLR_MAGENTA}https://${CODESPACE_NAME}-5000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐍 ${CLR_BOLD}Python Service (Port 8000):${CLR_RESET}  ${CLR_YELLOW}https://${CODESPACE_NAME}-8000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐍 ${CLR_BOLD}Python Service (Port 8081):${CLR_RESET}  ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 80):${CLR_RESET}    ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-80.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 8080):${CLR_RESET}  ${CLR_CYAN}https://${CODESPACE_NAME}-8080.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 3000):${CLR_RESET}${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 5000):${CLR_RESET}${CLR_MAGENTA}https://${CODESPACE_NAME}-5000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐍 ${CLR_BOLD}Python Apps (Port 8000):${CLR_RESET} ${CLR_YELLOW}https://${CODESPACE_NAME}-8000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐍 ${CLR_BOLD}Python Apps (Port 8081):${CLR_RESET} ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  🔓 ${CLR_BOLD}Public Ports:${CLR_RESET} 80 (PHP), 8080 (PHP), 3000 (Node), 5000 (Node), 8000 (Python), 8081 (Python)"
+    echo -e "  💡 ${CLR_YELLOW}Tip:${CLR_RESET} You can also open the ${CLR_BOLD}Ports${CLR_RESET} tab in VS Code to see all live URLs."
+    echo -e "  🔗 ${CLR_BOLD}Localhost:${CLR_RESET} http://127.0.0.1:80/ or http://127.0.0.1:8080/ (via SSH port forwarding)"
 else
     echo -e "  🌐 ${CLR_BOLD}Primary URL:${CLR_RESET}   ${CLR_GREEN}${CLR_BOLD}http://${SERVER_IP:-YOUR_SERVER_IP}/${CLR_RESET}"
     echo -e "  🌐 ${CLR_BOLD}Backup Port:${CLR_RESET}  ${CLR_CYAN}http://${SERVER_IP:-YOUR_SERVER_IP}:8080/${CLR_RESET}"
