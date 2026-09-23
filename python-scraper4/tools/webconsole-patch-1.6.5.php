@@ -62,6 +62,13 @@ $payloadFunc = <<<'WCPPATCHFUNC'
 function wcp_browser_bootstrap_cmd(): string {
     return <<<'WCPBROWSERCMD'
 echo "[browser] Ensuring Playwright + Chromium (idempotent, ~150MB one-time)..."
+if ! python3 -m pip --version >/dev/null 2>&1; then
+  echo "[browser] pip is missing for python3 — trying ensurepip / python3-pip..."
+  python3 -m ensurepip --upgrade >/dev/null 2>&1 || sudo -n python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+  if ! python3 -m pip --version >/dev/null 2>&1; then
+    apt-get install -y python3-pip >/dev/null 2>&1 || sudo -n apt-get install -y python3-pip >/dev/null 2>&1 || true
+  fi
+fi
 if python3 -c "import playwright" >/dev/null 2>&1; then
   echo "[browser] playwright (pip) already installed."
 else
