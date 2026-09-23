@@ -254,7 +254,8 @@ if [[ -f "${REPO_DIR}/requirements.txt" ]]; then
 else
   "$VENV/bin/pip" install \
     playwright cloudscraper curl_cffi httpx selectolax selenium \
-    playwright-stealth basalam-sdk || true
+    playwright-stealth basalam-sdk aiohttp undetected-chromedriver \
+    psutil python-dotenv || true
 fi
 # cdn.playwright.dev is geo-blocked for Iranian IPs, so the normal
 # "playwright install chromium" fails there. Try the official path first, and

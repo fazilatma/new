@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.234"
+APP_VERSION = "10.235"
 CHANGELOG = [
+    {"version":"10.235","date":"2026-09-23","title":"بازگشت جریان کوکی ایمالز، رفع مسیر دوتایی کش مرورگر و نصب خودکار Chromium در فایل نصب","items":["دروازهٔ بدون‌کوکی ۱۰.۲۳۴ برای ایمالز حذف شد: اجرای واقعی نشان داد صفحات ۲ به بعد بدون کوکی سشن صفحهٔ ۱، دوباره کپی برمی‌گردانند؛ حالا کوکی‌های سشن مثل ۱۰.۲۲۸ تا ۱۰.۲۳۱ با همهٔ موتورها و همهٔ صفحات می‌روند و همان جریان تأییدشده «نجات مرورگر → سشن معتبر → ادامه با موتورهای ساده» برقرار است","ارتقاهای درست ۱۰.۲۳۴ حفظ شد: User-Agent کروم ۱۳۱ دقیقاً مثل نود ۱.۱۸۳، Accept دقیق نود، و سیاست جدید «شیشهٔ داخلی سشن requests هرگز کوکی ذخیره نمی‌کند» تا انبار تخت تنها منبع کوکی بماند","باگ مسیر دوتایی اصلاح شد: مسیر پشتیبان کش مرورگر به‌جای ‎.wconsole_data/.wconsole_data/cache/ms-playwright‎ حالا ‎.wconsole_data/cache/ms-playwright‎ را برمی‌گرداند؛ پیام خطای مرورگر دیگر مسیر اشتباه و گمراه‌کننده نشان نمی‌دهد","run_scraper4.sh (نصب/به‌روزرسانی یک‌دستی سرور و ترموکس) حالا روی VPS/سرور، نصب کامل موتورها (aiohttp، undetected-chromedriver، psutil، python-dotenv، selectolax، basalam-sdk، playwright و…)، سپس نصب Chromium پلی‌رایت از مسیر رسمی و در صورت فیلترینگ از آینهٔ npmmirror و در پایان تأیید مرورگر را خودش انجام می‌دهد — سرور تازه دیگر بدون مرورگر نمی‌ماند؛ ترموکس مثل قبل بدون مرورگر می‌ماند","نصب‌کنندهٔ VPS (tools/vps-live/install_scraper4_vps.sh) هم aiohttp و undetected-chromedriver و psutil و python-dotenv را نصب می‌کند","تست رگرسیون جدید tools/test_emalls_session_and_browser.py: جریان کوکی ایمالز (قرارداد ۱۰.۲۲۸)، ممنوعیت ذخیره در شیشهٔ سشن، هدرهای دقیق کروم ۱۳۱/نود روی هر پنج موتور، مسیر کش بدون دوتایی و وجود بوت‌استرپ مرورگر در فایل نصب"]},
     {"version":"10.234","date":"2026-09-23","title":"دستور موفق نود ۱.۱۸۳ برای ایمالز منتقل شد: صفحهٔ بدون کوکی با اثرانگشت کروم ۱۳۱","items":["نسخهٔ ۱.۱۸۳ نود جی‌اس در همین ریپو ایمالز را بدون پلی‌رایت و بدون هیچ هک اختصاصی می‌خواند؛ بررسی کد نشان داد راز آن عمومی است: هر صفحه یک درخواست تازهٔ بدون کوکی با هدرهای مرورگری ساده است (UA کروم ۱۳۱، Accept مرورگری، بدون Referer و بدون هیچ کوکی)","همان دستور به پایتون منتقل شد: User-Agent از کروم قدیمی ۱۲۶ به کروم ۱۳۱ و Accept به مقدار دقیق نود ارتقا یافت — همهٔ موتورهای HTTP سود می‌برند؛ curl_cffi مثل ۱۰.۲۳۰ مجموعهٔ کامل خودش را نگه می‌دارد","برای ایمالز کوکی‌های سشن دیگر روی صفحات فرستاده نمی‌شود تا وقتی سشن توسط مرورگر واقعی معتبر شود؛ کپی صفحهٔ ۱ که به سشن تازه‌ساخت چسبیده بود دیگر به کلاینت نمی‌رسد","هر جا مرورگر واقعی صفحه‌ای را در همان اجرا نجات داد، اجرا «معتبر» علامت می‌خورد و از آن پس کوکی‌های سشن دوباره با موتورهای HTTP ساده ارسال می‌شوند — رفتار تأییدشدهٔ ۱۰.۲۲۸ به بعد دست‌نخورده ماند","تست رگرسیون آفلاین جدید tools/test_emalls_node183_recipe.py: پنج موتور HTTP روی سرور محلی بدون کوکی می‌روند، پس از معتبرشدن سشن کوکی می‌فرستند، هدرهای دقیق کروم ۱۳۱/نود تأیید و میزبان‌های غیرایمالز از این تغییر مصون می‌مانند"]},
     {"version":"10.233","date":"2026-09-23","title":"تمام کتابخانه‌های مناسب فهرست به موتورهای استخراج متصل شدند","items":["موتور دریافت جدید aiohttp به زنجیرهٔ HTTP اضافه شد: کلاینت ناهمگام با حلقهٔ ریدایرکت دستی (محافظت مسیر خصوصی روی هر پرش)، ارسال کوکی‌های مشترک و جذب Set-Cookie به انبار تخت — در زنجیرهٔ خودکار، منوی ضدبات، بنچمارک و انتخابگر بصری مثل بقیهٔ موتورها","موتور مرورگری جدید Undetected-Chromedriver اضافه شد؛ کروم ضدتشخیص برای سایت‌هایی که Selenium معمولی را می‌شناسند — قابل انتخاب از منوی موتور ضدبات، تست سرعت و انتخابگر بصری؛ بدون کتابخانه پیام واضح می‌دهد و بی‌خطر از زنجیره کنار می‌رود","هر نشست Selenium/UC حالا پوشهٔ پروفایل موقت یکتا دارد و psutil بعد از quit هر فرایند کروم/کروم‌درایور بازماندهٔ همان نشست را پیدا و پاک می‌کند تا نشست‌های خراب/لغوشده رم سرور را انباشته نکنند؛ نبود psutil بی‌خطر رد می‌شود","python-dotenv پشتیبانی شد: فایل .env کنار پروژه (و ~/.scraper4.env) هنگام راه‌اندازی خوانده می‌شود (توکن، پروکسی، PLAYWRIGHT_BROWSERS_PATH و …)؛ متغیر محیط واقعی همیشه برتر است","beautifulsoup4 که از ابتدا در همهٔ مسیرهای استخراج هست حالا روی پارسر lxml اجرا می‌شود (نمونه‌گیری متن و بررسی صفحهٔ ضدبات سریع‌تر) و در نبود lxml همان html.parser قبلی","fastapi/uvicorn عمداً اضافه نشدند: چارچوب وب‌سرورند نه موتور دریافت/پارس؛ لایهٔ وب همین Flask/Gunicorn است و سرور دومی فقط وابستگی و سطح حمله اضافه می‌کرد","تست رگرسیون آفلاین جدید tools/test_extraction_engines_matrix.py: ترکیب زنجیرهٔ موتورها، دریافت واقعی aiohttp با کوکی/ریدایرکت روی سرور محلی، مسیریابی undetected در Fetcher و زنجیره‌ها، پاکسازی psutil با ماژول ساختگی و خواندن .env"]},
     {"version":"10.232","date":"2026-09-22","title":"دریافت کاتالوگ باسلام در هم‌زمانی با وظایف دیگر مقاوم شد","items":["ریشه خطاهای مغایرت‌گیری/تکراری‌یابی هنگام اجرای هم‌زمان وظایف پیدا شد: فهرست کاتالوگ باسلام تا ۲۰ صفحه را پشت‌سرهم و بدون فاصله می‌خواند و شکست یک صفحه (۴۲۹/۵xx در هم‌زمانی با کار استخراج یا ارسال) کل دریافت را با «SDK: … | REST API: …» نابود می‌کرد","حالا هر صفحه تا ۳ تلاش با وقفهٔ نمایی تکرار می‌شود، بین صفحه‌ها فاصلهٔ مؤدبانه ۰٫۳۵ ثانیه است و اگر صفحه‌ای بعد از صفحهٔ ۱ اصلاً نشد، همان بخش دریافت‌شده با ثبت خطا برگردانده می‌شود — مثل Node که فهرست را می‌ساخت و ادامه می‌داد","شکست صفحهٔ ۱ همچنان خطای واضح برمی‌گرداند تا توکن/شناسهٔ غرفهٔ خراب بی‌صدا از دست نرود","مسیر چند-غرفه‌ای مدیر مقصد (ui_bridge) هم دقیقاً همین منطق را گرفت تا دریافت چند غرفه در برابر محدودیت نرخ باسلام پایدار باشد"]},
@@ -919,9 +920,6 @@ class Fetcher:
         if self.proxy and self.proxy_mode == "http":
             self.session.proxies.update({"http": self.proxy, "https": self.proxy})
         self.last_by_host: dict[str, float] = {}
-        # Set once a real browser engine renders a page for this run in the
-        # scrape loop — the session then counts as trusted (see _send_cookie_store).
-        self._browser_blessed = False
 
     @staticmethod
     def _validate_redirect(response: Any, *args: Any, **kwargs: Any) -> Any:
@@ -984,21 +982,6 @@ class Fetcher:
 
     def _cookie_header(self) -> str:
         return "; ".join(f"{k}={v}" for k, v in self._cookies.items())
-
-    def _send_cookie_store(self, host: str) -> bool:
-        """Should this request carry the accumulated session cookies?
-
-        Node 1.183 never had a cookie jar and still read every emalls page,
-        while the Python engines holding a just-minted session kept receiving
-        page-1 copies. So on emalls the store rides only after a real browser
-        has blessed this run (duplicate-page rescue); everywhere else the
-        10.229 behaviour is unchanged.
-        """
-        if not self._cookies:
-            return False
-        if not any(host == h or host.endswith("." + h) for h in STATELESS_COOKIE_HOSTS):
-            return True
-        return bool(getattr(self, "_browser_blessed", False))
 
     def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
         """Fetch a page, honouring a stop request within ~1 second.
@@ -1074,10 +1057,8 @@ class Fetcher:
                     except ImportError as exc:raise FetchError("کتابخانه cloudscraper نصب نیست") from exc
                     client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);client.hooks.setdefault("response",[]).append(self._validate_redirect)
                     # 10.229: flat cookie store rides along (page-1 gate on emalls).
-                    # 10.234: on emalls only once the session is browser-trusted.
-                    if self._send_cookie_store(host):
-                        try:client.cookies.update(self._cookies)
-                        except Exception:pass
+                    try:client.cookies.update(self._cookies)
+                    except Exception:pass
                     response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
                     self._absorb_cookies(response)
                 elif engine=="httpx":
@@ -1087,8 +1068,7 @@ class Fetcher:
                         raise FetchError("کتابخانه httpx نصب نیست") from exc
                     merged={**dict(self.session.headers), **headers}
                     # 10.229: flat cookie store rides along via the Cookie header.
-                    # 10.234: emalls pages stay cookie-less until browser-trusted.
-                    _cookie_header=self._cookie_header() if self._send_cookie_store(host) else ""
+                    _cookie_header=self._cookie_header()
                     if _cookie_header:merged["Cookie"]=_cookie_header
                     proxy=None
                     if self.session.proxies:
@@ -1116,7 +1096,7 @@ class Fetcher:
                     try:import aiohttp
                     except ImportError as exc:raise FetchError("کتابخانه aiohttp نصب نیست") from exc
                     merged={**dict(self.session.headers), **headers}
-                    _aio_cookie=self._cookie_header() if self._send_cookie_store(host) else ""
+                    _aio_cookie=self._cookie_header()
                     if _aio_cookie:merged["Cookie"]=_aio_cookie
                     _aio_proxy=None
                     if self.session.proxies:
@@ -1130,7 +1110,7 @@ class Fetcher:
                     proxies=self.session.proxies or None;curl_url=request_url
                     # 10.229: flat cookie store - a plain dict cannot carry the
                     # duplicate-name conflict that crashed 10.228's jar bridge.
-                    _ck=(dict(self._cookies) or None) if self._send_cookie_store(host) else None
+                    _ck=dict(self._cookies) or None
                     # 10.230: let curl_cffi speak with its OWN full Chrome
                     # impersonation (current UA, sec-ch-ua, Sec-Fetch-*). The
                     # old override forced the generic session headers (Chrome
@@ -1146,7 +1126,7 @@ class Fetcher:
                     body=response.content
                     self._absorb_cookies(response)
                 else:
-                    _c_header=self._cookie_header() if self._send_cookie_store(host) else ""
+                    _c_header=self._cookie_header()
                     if _c_header:headers={**headers,"Cookie":_c_header}
                     response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
                 self._absorb_cookies(response)
@@ -2317,7 +2297,10 @@ def configured_browser_path() -> str:
         pass
     # Fallback: try BASE_DIR/ms-playwright but also check wc cache even if not isdir yet (will be created)
     try:
-        _wc_fallback = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "..", ".wconsole_data", "cache", "ms-playwright"))
+        # 10.235 fix: dirname(BASE_DIR) is .../.wconsole_data/projects for the
+        # WebConsole deploy layout, so "/.." already lands on .wconsole_data —
+        # appending it again produced .wconsole_data/.wconsole_data/cache/….
+        _wc_fallback = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "..", "cache", "ms-playwright"))
         if "wconsole_data" in _wc_fallback:
             return _wc_fallback
     except Exception:
@@ -2914,14 +2897,6 @@ KNOWN_ENGINES = HTTP_ENGINE_ORDER + ("playwright", "selenium", "undetected")
 # a plain HTTP client. Shared by _get_blocking dispatch, the scrape loop's
 # http/browser split and availability probes.
 BROWSER_ENGINES = frozenset({"playwright", "selenium", "undetected"})
-# Node 1.183 contract, ported: the Node build read every emalls page with a
-# plain stateless Chrome-shaped request — no cookie jar, no Referer. emalls'
-# "page-1 copy" fallback rides on a freshly-minted ASP.NET session, so
-# replaying an untrusted session store invites the copy. On these hosts the
-# Fetcher fetches pages cookie-less until a real browser rescues a page in
-# the same run; from that moment the session is trusted and the cookies ride
-# along again (the 10.229 shared-store behaviour, gated by trust).
-STATELESS_COOKIE_HOSTS = ("emalls.ir",)
 
 
 def engine_http_order() -> list[str]:
@@ -3786,13 +3761,6 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             # 10.226: make the active chain visible — this is what differed
             # between the 3-page benchmark (per-engine) and the real run.
             report.logs.append("زنجیرهٔ موتورهای دریافت: " + " → ".join(order))
-            try:
-                if (urlparse(source).hostname or "").endswith("emalls.ir"):
-                    # 10.234: ported Node 1.183 strategy — pages go out
-                    # cookie-less; a browser rescue upgrades the session.
-                    report.logs.append("ایمالز: مثل نسخهٔ موفق Node 1.183 هر صفحه ابتدا بدون کوکی خوانده می‌شود؛ اگر مرورگر واقعی صفحه‌ای را نجات داد، سشن معتبرش با موتورهای HTTP ادامه می‌یابد")
-            except Exception:
-                pass
         http_engines=[e for e in order if e not in BROWSER_ENGINES]
         browser_engines=[e for e in order if e in BROWSER_ENGINES]
         browser_first=bool(order and order[0] in BROWSER_ENGINES)
@@ -3849,11 +3817,6 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     if rows:
                         won_engine,won_ms=bengine,int((time.monotonic()-t0)*1000)
                         report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM رندرشده با {bengine} ({won_ms}ms)")
-                        # 10.234: a real Chromium just served this run — the
-                        # session counts as trusted from here on (cookies ride).
-                        if not getattr(fetcher, "_browser_blessed", False):
-                            fetcher._browser_blessed = True
-                            report.logs.append("سشن مرورگر واقعی این اجرا را معتبر کرد؛ از این پس کوکی‌های سشن هم با موتورهای HTTP ارسال می‌شود")
                         break
                     report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM رندرشده با {bengine}")
                 except (FetchError, ValueError) as exc:
@@ -4044,11 +4007,6 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                                 diag = {**diag, **_b_diag, "engine": _bengine, "duplicate_retry": True, "attempts": engine_errors}
                                 won_engine, _retry_used = _bengine, _bengine
                                 report.modes.add(_bengine + "-dom")
-                                # 10.234: the browser broke the shell — trust the
-                                # session it touched for the remaining pages.
-                                if not getattr(fetcher, "_browser_blessed", False):
-                                    fetcher._browser_blessed = True
-                                    report.logs.append("مرورگر واقعی پوستهٔ تکراری را شکست؛ سشن معتبر شد و کوکی‌ها دوباره با موتورهای HTTP ارسال می‌شوند")
                                 break
                         except (FetchError, ValueError) as _exc:
                             engine_errors.append(f"retry-{_bengine}: {_exc}")

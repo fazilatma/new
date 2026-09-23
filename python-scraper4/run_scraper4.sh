@@ -129,6 +129,42 @@ fetch_latest() {
   fi
 }
 
+ensure_browser() {
+  # A fresh server used to stay browser-less: without a real Chromium the
+  # extraction could never fall back to a browser render, so anti-bot pages
+  # and emalls' duplicate-page shell stayed unrescued. One-time download.
+  "$PY" -c "import playwright" 2>/dev/null || { echo "playwright (pip) missing - cannot install Chromium"; return 0; }
+  local BP="${PLAYWRIGHT_BROWSERS_PATH:-}"
+  if [ -z "$BP" ]; then
+    if [ -d /var/www/html/.wconsole_data/cache ]; then
+      BP=/var/www/html/.wconsole_data/cache/ms-playwright   # WebConsole persistent cache
+    else
+      BP="${HOME}/.cache/ms-playwright"                     # default the app also scans on VPS
+    fi
+  fi
+  export PLAYWRIGHT_BROWSERS_PATH="$BP"
+  if [ -n "$(find "$BP" -mindepth 2 -maxdepth 4 -type f -name chrome 2>/dev/null | head -n1)" ]; then
+    echo "Chromium already installed at ${BP}"
+    return 0
+  fi
+  echo "Installing Playwright Chromium into ${BP} (one-time download)..."
+  if ! PLAYWRIGHT_BROWSERS_PATH="$BP" "$PY" -m playwright install chromium; then
+    echo "Official download failed (cdn.playwright.dev is blocked in Iran) - trying the npmmirror installer..."
+    local MIRROR="${SRC}/python-scraper4/tools/install_chromium_mirror.sh"
+    [ -f "$MIRROR" ] || MIRROR="${SRC}/tools/install_chromium_mirror.sh"
+    if [ -f "$MIRROR" ]; then
+      PLAYWRIGHT_BROWSERS_PATH="$BP" bash "$MIRROR" || echo "  Mirror install failed - run manually: PLAYWRIGHT_BROWSERS_PATH=${BP} bash ${MIRROR}"
+    else
+      echo "  Mirror script not found; manual: PLAYWRIGHT_BROWSERS_PATH=${BP} python3 -m playwright install chromium"
+    fi
+  fi
+  if [ -n "$(find "$BP" -mindepth 2 -maxdepth 4 -type f -name chrome 2>/dev/null | head -n1)" ]; then
+    echo "Chromium OK at ${BP}"
+  else
+    echo "WARNING: no Chromium binary found - browser rendering stays unavailable. A system Chrome also works: sudo apt install -y chromium-browser"
+  fi
+}
+
 ensure_venv() {
   mkdir -p "$RUN"
   command -v python3 >/dev/null 2>&1 || fail "python3 is missing"
@@ -159,6 +195,45 @@ ensure_venv() {
       echo "  ${mod}: skipped (no wheel/build on this device)"
     fi
   done
+  echo "pip optional engines/helpers (aiohttp, dotenv, psutil, selectolax, basalam-sdk)"
+  for spec in aiohttp python-dotenv psutil selectolax basalam-sdk; do
+    case "$spec" in
+      python-dotenv) mod=dotenv ;;
+      basalam-sdk) mod=basalam_sdk ;;
+      *) mod="$spec" ;;
+    esac
+    if "$PY" -c "import ${mod}" 2>/dev/null; then
+      echo "  ${mod}: already installed"
+      continue
+    fi
+    echo "  pip install ${spec}"
+    if "$PY" -m pip install "$spec"; then
+      echo "  ${mod}: OK"
+    else
+      echo "  ${mod}: skipped (no wheel/build on this device)"
+    fi
+  done
+  # Browser rendering stack (VPS / shared server only): Playwright/Selenium/UC
+  # need a desktop Chromium, which Termux cannot run.
+  if ! is_termux; then
+    echo "pip browser engines (playwright, selenium, undetected-chromedriver)"
+    for spec in playwright playwright-stealth selenium undetected-chromedriver; do
+      case "$spec" in
+        undetected-chromedriver) mod=undetected_chromedriver ;;
+        playwright-stealth) mod=playwright_stealth ;;
+        *) mod="$spec" ;;
+      esac
+      if "$PY" -c "import ${mod}" 2>/dev/null; then
+        echo "  ${mod}: already installed"
+        continue
+      fi
+      echo "  pip install ${spec}"
+      "$PY" -m pip install "$spec" || echo "  ${spec}: skipped (no wheel/build on this device)"
+    done
+    ensure_browser
+  else
+    echo "Termux: browser engines skipped (no desktop Chromium on Android)"
+  fi
   if ! "$PY" -c "import pywebpush,cryptography" 2>/dev/null; then
     echo "pip optional Web Push (pywebpush, cryptography)"
     "$PY" -m pip install pywebpush cryptography \
