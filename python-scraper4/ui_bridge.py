@@ -237,6 +237,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "syncWoo": _truthy(cfg.get("sync_woo")),
             "syncBasalam": _truthy(cfg.get("sync_basalam")),
             "aiDescriptions": cfg.get("ai_descriptions", True) is not False,
+            "detailExtract": cfg.get("detail_extract", True) is not False,
             "intervalMinutes": _int(cfg.get("interval_minutes")),
             "lastRunAt": cfg.get("last_run_at") or None,
             "createdAt": cfg.get("created_at") or _iso(),
@@ -318,6 +319,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "sync_woo": _truthy(node.get("syncWoo")),
             "sync_basalam": _truthy(node.get("syncBasalam")),
             "ai_descriptions": node.get("aiDescriptions", True) is not False,
+            "detail_extract": node.get("detailExtract", True) is not False,
             "interval_minutes": _int(node.get("intervalMinutes")),
             "created_at": cfg.get("created_at") or _iso(),
             "updated_at": _iso(),
@@ -1311,7 +1313,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             config["enrich"] = False
             config["_dispatch_after"] = ""
         else:
-            config["enrich"] = True
+            # 10.244: per-profile sub-steps — a profile may opt out of detail
+            # extraction in the full sync (تنظیمات پروفایل → استخراج جزئیات).
+            config["enrich"] = cfg.get("detail_extract", True) is not False
             config["_dispatch_after"] = target if target != "none" else ""
         # Do not rewrite the global active-profile preference when a job starts.
         # The worker already owns an immutable config/profile snapshot; saving
@@ -1529,6 +1533,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.route("/api/profiles/<path:pid>/ai-descriptions", methods=["GET", "POST", "PUT", "PATCH"])
     def node_profile_ai_descriptions(pid: str):
+        data = load()
+        cfg = (data.get("profiles") or {}).get(pid)
+        if isinstance(cfg, dict) and cfg.get("ai_descriptions", True) is False:
+            # 10.244: per-profile sub-step toggle — the profile opted out.
+            return ok(ok=True, filled=0, candidates=0, failed=0, model="", failures=[],
+                      skipped=True, note="توضیح‌ساز برای این پروفایل در تنظیمات خاموش است.")
         # Stub for AI description generation - prevents 405 when dashboard calls it
         # Real AI is optional; return empty result so UI shows no error
         return ok(ok=True, filled=0, candidates=0, failed=0, model="", failures=[])
@@ -2370,8 +2380,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         kind = _s(body.get("type")) or "text"
         if not url or not selector:
             return jsonify(ok=False, error="آدرس و سلکتور لازم است."), 400
+        render = _s(body.get("render") or request.args.get("render")).lower() or "auto"
         try:
-            result = core.preview_selector(url, selector, kind)
+            result = core.preview_selector(url, selector, kind, render)
         except AttributeError:
             try:
                 html = core.fetch_html(url)
@@ -2390,8 +2401,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         if not url:
             return jsonify(ok=False, error="آدرس لازم است."), 400
         mode = _s(body.get("mode") or request.args.get("mode")).lower() or "all"
+        render = _s(body.get("render") or request.args.get("render")).lower() or "auto"
         try:
-            result = core.auto_selectors(url, mode)
+            result = core.auto_selectors(url, mode, render)
         except AttributeError:
             return ok(selectors={}, note="پیشنهاد خودکار در این نسخه در دسترس نیست.")
         except Exception as exc:  # noqa: BLE001
@@ -4738,6 +4750,10 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                 if model and (not only_candidates or key in wanted or model in wanted):
                     rows.append({"key": key, "provider": _s(pid), "model": model,
                                  "providerName": _s(provider.get("name") or pid)})
+        if only_candidates and not rows:
+            # 10.244: «فقط مدل‌های کاندید» با فهرست کاندید خالی نباید کل اجرا را
+            # به یک مدل پیش‌فرض فرو بکاهد — همهٔ مدل‌های فعال آزمایش می‌شوند.
+            return _ai_run_models(False)
         ai = data.get("ai") if isinstance(data.get("ai"), dict) else {}
         if not rows and _s(ai.get("model")):
             pid, model = _s(ai.get("provider")) or "default", _s(ai.get("model"))
@@ -4829,37 +4845,87 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             results = list(results) if isinstance(results, list) else []
             cursor = min(len(models), max(0, _int(run.get("cursor"))))
             delay = max(0, min(60000, _int(run.get("delayMs")))) / 1000
-            for index in range(cursor, len(models)):
-                latest = _ai_run_get() or run
-                if latest.get("stopRequested"):
-                    run.update(status="paused", phase="paused", cursor=index,
-                               processed=index, updatedAt=_iso())
-                    _ai_run_save(run)
-                    return
-                row = models[index]
-                run.update(currentKey=row.get("key"), currentStartedAt=_iso(),
-                           processed=index, cursor=index, updatedAt=_iso())
-                if not _ai_run_save(run):
-                    return
-                result = _ai_test_message(row, run["prompt"])
-                if run.get("categoryTitle"):
-                    result["categoryTitle"] = run["categoryTitle"]
-                    result["categoryResult"] = _ai_test_category(
-                        row, run["categoryTitle"], categories)
-                results = [old for old in results if old.get("key") != row.get("key")]
-                results.append(result)
-                payload = {"ok": True, "prompt": run["prompt"],
-                           "categoryTitle": run.get("categoryTitle", ""),
-                           "results": results, "total": len(models),
-                           "tested": index + 1, "okCount": sum(bool(x.get("ok")) for x in results),
-                           "failed": sum(not bool(x.get("ok")) for x in results),
-                           "categoryListAvailable": bool(categories), "done": False}
-                run.update(result=payload, cursor=index + 1, processed=index + 1,
-                           updatedAt=_iso(), currentKey="")
-                if not _ai_run_save(run):
-                    return
-                if delay and index + 1 < len(models):
-                    time.sleep(delay)
+            # 10.244: models are tested CONCURRENTLY (the Node twin already did
+            # round-robin batches) — a 415-model run one-at-a-time took hours.
+            # stop/delay semantics survive: stop is honored at every completion,
+            # delayMs only paces when concurrency is 1, and a model that exceeds
+            # skipTimeoutMs is marked skipped so the queue never stalls.
+            concurrency = max(1, min(16, _int(run.get("concurrency")) or 6))
+            skip_timeout = max(1.0, min(300.0, (_int(run.get("skipTimeoutMs")) or 30000) / 1000.0))
+            run.update(concurrency=concurrency, skipTimeoutMs=int(skip_timeout * 1000), updatedAt=_iso())
+            if not _ai_run_save(run):
+                return
+            pending_models = list(models[cursor:])
+            cursor0 = cursor
+
+            def _one(row: dict[str, str]) -> dict[str, Any]:
+                def _call() -> dict[str, Any]:
+                    out = _ai_test_message(row, run["prompt"])
+                    if run.get("categoryTitle"):
+                        out["categoryTitle"] = run["categoryTitle"]
+                        out["categoryResult"] = _ai_test_category(
+                            row, run["categoryTitle"], categories)
+                    return out
+                box: dict[str, Any] = {}
+
+                def _run() -> None:
+                    try:
+                        box["r"] = _call()
+                    except BaseException as exc:  # noqa: BLE001 - surfaced below
+                        box["r"] = {**row, "ok": False, "text": "", "error": str(exc)[:600]}
+
+                th = threading.Thread(target=_run, name="ai-test-model", daemon=True)
+                th.start()
+                th.join(skip_timeout)
+                if "r" not in box:
+                    return {**row, "ok": False, "skipped": True, "text": "",
+                            "error": f"پاسخی در {int(skip_timeout)} ثانیه نیامد — رد شد (مهلت رد مدل گیرکرده)"}
+                return box["r"]
+
+            done_count = 0
+            with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ai-test") as pool:
+                futures = {pool.submit(_one, row): row for row in pending_models}
+                try:
+                    for fut in as_completed(futures):
+                        latest = _ai_run_get() or run
+                        if latest.get("stopRequested"):
+                            for other in futures:
+                                other.cancel()
+                            run.update(status="paused", phase="paused",
+                                       cursor=min(len(models), cursor0 + done_count),
+                                       processed=min(len(models), cursor0 + done_count),
+                                       updatedAt=_iso(), currentKey="")
+                            _ai_run_save(run)
+                            return
+                        row = futures[fut]
+                        try:
+                            result = fut.result()
+                        except Exception as exc:  # noqa: BLE001
+                            result = {**row, "ok": False, "text": "", "error": str(exc)[:600]}
+                        done_count += 1
+                        results = [old for old in results if old.get("key") != row.get("key")]
+                        results.append(result)
+                        payload = {"ok": True, "prompt": run["prompt"],
+                                   "categoryTitle": run.get("categoryTitle", ""),
+                                   "results": results, "total": len(models),
+                                   "tested": len(results),
+                                   "okCount": sum(bool(x.get("ok")) for x in results),
+                                   "failed": sum(not bool(x.get("ok")) for x in results),
+                                   "categoryListAvailable": bool(categories), "done": False}
+                        run.update(result=payload,
+                                   cursor=min(len(models), cursor0 + done_count),
+                                   processed=min(len(models), cursor0 + done_count),
+                                   updatedAt=_iso(), currentKey=_s(row.get("key")))
+                        if not _ai_run_save(run):
+                            for other in futures:
+                                other.cancel()
+                            return
+                        if delay and concurrency == 1:
+                            time.sleep(delay)
+                except BaseException:
+                    for other in futures:
+                        other.cancel()
+                    raise
             successful = [_s(row.get("key")) for row in results if row.get("ok")]
             data = load()
             existing = [_s(value) for value in data.get("ai_candidates") or [] if _s(value)]
@@ -4894,6 +4960,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         run = {"id": "ai-" + secrets.token_hex(8), "status": "queued", "phase": "queued",
                "prompt": prompt, "categoryTitle": title, "onlyCandidates": bool(body.get("onlyCandidates")),
                "delayMs": max(0, min(60000, _int(body.get("delayMs")))),
+               "concurrency": max(1, min(16, _int(body.get("concurrency")) or 6)),
+               "skipTimeoutMs": max(1000, min(300000, _int(body.get("skipTimeoutMs")) or 30000)),
                "models": models, "total": len(models), "processed": 0, "cursor": 0,
                "stopRequested": False, "createdAt": _iso(), "updatedAt": _iso(),
                "result": {"ok": True, "prompt": prompt, "categoryTitle": title,

@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.243"
+APP_VERSION = "10.244"
 CHANGELOG = [
+    {"version":"10.244","date":"2026-09-23","title":"پیشنهاد/تست سلکتور با پلی‌رایت، تست همزمان مدل‌های هوش مصنوعی و مراحل فرعی هر پروفایل","items":["دکمهٔ پیشنهاد خودکار سلکتورها و تست سلکتورها حالا به حالت رندر احترام می‌گذارند: با انتخاب Playwright صفحه اول با زنجیرهٔ مرورگر رندر می‌شود (DOM ساخته‌شده با جاوااسکریپت دیده می‌شود) و بعد سلکتورها کشف/آزمایش می‌شوند؛ حالت HTTP همان HTML خام و خودکار مثل قبل؛ تابع preview_selector هم برای نخستین‌بار در هستهٔ پایتون پیاده شد (قبلاً تست سلکتور همیشه HTTP خام بود)","تست مدل‌های هوش مصنوعی همزمان شد (پیش‌فرض ۶ مدل در لحظه، قابل تغییر ۱ تا ۱۶): اجرای ۴۱۵مدلی که قبلاً پشت‌سرهم ساعت‌ها طول می‌کشید حالا چند برابر سریع‌تر است؛ مدل گیرکرده بعد از «مهلت رد مدل گیرکرده» بدون فلج‌کردن صف رد می‌شود و توقف/ادامه و ذخیرهٔ تدریجی نتایج مثل قبل کار می‌کند","رفع دیده‌نشدن مدل‌ها: اگر «فقط مدل‌های کاندید» روشن باشد ولی فهرست کاندید خالی یا بی‌ربط باشد، به‌جای تست فقط مدل پیش‌فرض، همهٔ مدل‌های فعال آزمایش می‌شوند","مراحل فرعی استخراج برای هر پروفایل قابل خاموش‌کردن شد: در تنظیمات پروفایل «استخراج جزئیات محصول در همگام‌سازی» اضافه شد (همگام‌سازی کامل جزئیات را رد می‌زند) و توضیح‌ساز با همان کلید قبلی در همهٔ مسیرها (دکمهٔ توضیح‌ساز پروفایل و مرکز هوش مصنوعی با منبع پروفایل) واقعاً رعایت می‌شود","تست جدید tools/test_steps_render_airun.py با ۲۶ بررسی برای پارامتر رندر، دروازه‌های پروفایل و ورکِر همزمان"]},
     {"version":"10.243","date":"2026-09-23","title":"وب‌کنسول ۱.۶.۷ — سلف‌آپدیت کنسول با انتخاب مخزن/برنچ و مرورگر فایل‌های گیت‌هاب","items":["پچر وب‌کنسول حالا مسیرهای ۱.۶.۴ / ۱.۶.۵ / ۱.۶.۶ را همگی به ۱.۶.۷ ارتقا می‌دهد و صفحهٔ همراه webconsole-tools.php را کنار کنسول نصب می‌کند (کلید دسترسی چاپ و در webconsole-tools.key ذخیره می‌شود)","سلف‌آپدیت کنسول: انتخاب مخزن و برنچ و مسیر فایل، مقایسهٔ نسخهٔ ریموت با محلی، نصب با دروازهٔ php -l و بکاپ زمان‌دار و جایگزینی اتمی؛ پیش‌فرض‌ها در .wconsole_data/selfupdate.conf ذخیره می‌شود و مؤلفه‌های تازهٔ selfupdate_check / selfupdate_apply داخل خود کنسول هم همان را می‌خوانند","مرورگر فایل‌های گیت‌هاب: پیمایش پوشه‌ها از GitHub Trees API، مشاهده و ویرایش هر فایل، ذخیرهٔ نسخه در .wconsole_data/github-files/… (از فایل اکسپلورر خود کنسول هم قابل ویرایش) یا ثبت مستقیم در گیت‌هاب با توکن شخصی (توکن فقط یک‌بار استفاده و هرگز ذخیره نمی‌شود)","امنیت صفحهٔ همراه: کلید تصادفی با مقایسهٔ زمان‌ثابت، پاک‌سازی ورودی‌های مخزن/برنچ/مسیر و ممنوعیت ..؛ php -l هنگام نصب صفحه را هم بررسی می‌کند و در خطا آن را حذف می‌کند (خود پچ سالم می‌ماند)","اجرای --tools فقط صفحهٔ همراه را نصب/به‌روز می‌کند و به کنسول دست نمی‌زند؛ تست‌های پچر به ۵۰ بررسی رسید: ماتریس سه مسیر ارتقا، پارس bash سه payload و برابری صفحهٔ همراه جاسازی‌شده با فایل مخزن"]},
     {"version":"10.242","date":"2026-09-23","title":"مدیریت حافظهٔ سواپ در وب‌کنسول (۱.۶.۶) و اسکریپت مستقل","items":["پچر وب‌کنسول به tools/webconsole-patch.php تغییر نام یافت و حالا کنسول را به ۱.۶.۶ ارتقا می‌دهد: مؤلفه‌های نصب swap_2g / swap_4g / swap_8g / swap_16g به کنسول اضافه می‌شود","راه‌انداز سواپ همواند و امن است: اگر سواپ کافی موجود باشد کاری نمی‌کند، سواپ‌فایل کوچک‌تر در جا بزرگ می‌شود، با fstab پس از ری‌بوت می‌ماند و vm.swappiness=20 را تنظیم می‌کند؛ در کانتینرهای بدون مجوز سواپ با پیام روشن رد می‌شود","اجرای فوری بدون کنسول: sudo bash tools/enable_swap_server.sh 4096 یا php webconsole-patch.php --swap-apply 4096 — روی سندباکس واقعی آزمایش شد (تخصیص، mkswap، swapon و fstab موفق)","پچر مسیر ارتقای ۱.۶.۵ به ۱.۶.۶ را هم می‌شناسد: اگر نسخهٔ قبلی پچ را گرفته باشد، فقط مجموعهٔ سواپ اضافه می‌شود؛ حالت --check هم وضعیت نسخه و لنگرهای سواپ را گزارش می‌کند","تست جدید tools/test_webconsole_patcher.py با ۲۷ بررسی برای ساختار پچر، پارس bash/dash هر دو payload و منطق سواپ"]},
     {"version":"10.241","date":"2026-09-23","title":"قیمت محصولات تخفیف‌دار، یادگیری سلکتورهای دستی و پنجره انتخاب بصری قوی‌تر","items":["باگ قیمت دوتایی اصلاح شد: در محصولات تخفیف‌دار که قیمت اصلی و قیمت واقعی پشت هم هستند، دیگر دو عدد به هم نمی‌چسبند و عدد غول‌آسا تولید نمی‌شود؛ همهٔ موتورها حالا قیمت واقعی (آخرین عدد) را برمی‌دارند — هم وقتی دو عدد با یک «تومان» می‌آیند و هم وقتی هرکدام «تومان» خودشان را دارند و هم مسیر بدون واحد پول","بعد از استخراج موفق با هر موتوری (پلی‌رایت، curl_cffi، requests و…)، سلکتورهای دستی پروفایل از روی همان صفحهٔ تأییدشده به‌روزرسانی می‌شوند: فقط مجموعهٔ کامل و راستی‌آزمایی‌شده نوشته می‌شود، مجموعهٔ همان ساختار دوباره ننوشته می‌شود و صفحهٔ بی‌محصول چیزی یاد نمی‌گیرد؛ در لاگ و عیب‌یابی با selector-refresh-success ثبت می‌شود","رندر پلی‌رایت در برابر تبلیغات مقاوم شد: پنجره‌های پاپ‌آپ تبلیغاتی بلافاصله بسته می‌شوند، دیالوگ‌های alert/confirm رد می‌شوند و window.open خنثی است؛ پنجره انتخاب بصری حالا لایه‌های تمام‌صفحهٔ تبلیغاتی (کوکی، خبرنامه، مودال) را قبل از گرفتن تصویر برمی‌دارد تا کلیک کاربر روی محصول‌ها بخورد هدف برخورد نکند","تست رگرسیون جدید tools/test_price_dual_and_learning.py: ۲۵ بررسی برای قیمت دوتایی (ارقام فارسی/لاتین، بازهٔ قیمت، هزارگان فضاخته)، یادگیری دستی سلکتورها و گاردهای پاپ‌آپ/اورلی پلی‌رایت"]},
@@ -3506,7 +3507,76 @@ def ensure_detail_selectors(page: Any, base: str, selectors: Optional[dict[str, 
             "evidence": {k: suggested["evidence"][k] for k in discovered}}
 
 
-def auto_selectors(url: str, mode: str = "all") -> dict[str, Any]:
+def preview_selector(url: str, selector: str, kind: str = "text", render: str = "auto") -> dict[str, Any]:
+    """10.244: engine-aware selector TEST behind /api/test-selector.
+
+    render=playwright/browser renders the page with the browser chain first
+    (needed when the DOM is built by JavaScript), render=http tests the raw
+    HTML only, auto tries HTTP then the browser. Returns the Node-dashboard
+    shape: {count, values[], engine, selector}.
+    """
+    source = public_http_url(str(url or ""))
+    sel = clean_text(selector)
+    if not sel:
+        raise ValueError("سلکتور خالی است")
+    if selector_is_invalid(sel):
+        raise ValueError("سلکتور نامعتبر است: " + sel[:120])
+    kind = clean_text(kind).lower() or "text"
+    cfg = load_data()
+    fetcher = Fetcher(dict(cfg.get("network") or {}))
+    errors: list[str] = []
+    used = "http"
+    result = None
+
+    def _browser() -> Any:
+        if fetch_engine_installed("playwright"):
+            got = picker_browser_fetch(source, fetcher.timeout, 4, errors)
+            if got is not None:
+                return got, "playwright"
+        if fetch_engine_installed("selenium"):
+            got = picker_browser_fetch(source, fetcher.timeout, 4, errors, engine="selenium")
+            if got is not None:
+                return got, "selenium"
+        return None, ""
+
+    rl = clean_text(render).lower()
+    if rl in ("playwright", "browser"):
+        result, used = _browser()
+        if result is None:
+            result = picker_http_fetch(source, fetcher, errors)
+            used = "http"
+    elif rl == "http":
+        result = picker_http_fetch(source, fetcher, errors)
+    else:
+        result = picker_http_fetch(source, fetcher, errors)
+        if result is None:
+            result, used = _browser()
+        else:
+            used = "http"
+    if result is None:
+        raise FetchError("دریافت صفحه برای تست سلکتور ناموفق بود" + ((" — " + " | ".join(errors[-2:])) if errors else ""))
+    soup = BeautifulSoup(result.text, _bs4_parser())
+    nodes = query_nodes(soup, sel)
+    values: list[str] = []
+    for node in nodes:
+        if len(values) >= 10:
+            break
+        get = getattr(node, "get", None)
+        if kind == "link" and callable(get):
+            value = absolute_url(node.get("href") or node.get("data-href") or "", result.url)
+        elif kind == "image" and callable(get):
+            value = absolute_url(node.get("src") or node.get("data-src") or node.get("data-original") or "", result.url)
+        else:
+            try:
+                value = clean_text(node.get_text(" ", strip=True))
+            except Exception:
+                value = clean_text(str(node))
+        if value:
+            values.append(value[:300])
+    return {"count": len(nodes), "values": values, "engine": used, "selector": sel}
+
+
+def auto_selectors(url: str, mode: str = "all", render: str = "auto") -> dict[str, Any]:
     """Real fetch + discovery behind POST /api/suggest-selectors.
 
     Returns Node-dashboard field ids (shortDesc/longDesc/detailImage) because
@@ -3519,9 +3589,20 @@ def auto_selectors(url: str, mode: str = "all") -> dict[str, Any]:
     cfg = load_data()
     fetcher = Fetcher(dict(cfg.get("network") or {}))
     errors: list[str] = []
-    result = picker_http_fetch(source, fetcher, errors)
-    if result is None and fetch_engine_installed("playwright"):
-        result = picker_browser_fetch(source, fetcher.timeout, 4, errors)
+    # 10.244: the suggest button honors the selected render — playwright/browser
+    # renders the page with the browser chain FIRST (JS-built DOMs), http tests
+    # raw HTML only, auto keeps the classic order (HTTP then browser fallback).
+    rl = clean_text(render).lower()
+    if rl in ("playwright", "browser"):
+        result = picker_browser_fetch(source, fetcher.timeout, 4, errors) if fetch_engine_installed("playwright") else None
+        if result is None:
+            result = picker_http_fetch(source, fetcher, errors)
+    elif rl == "http":
+        result = picker_http_fetch(source, fetcher, errors)
+    else:
+        result = picker_http_fetch(source, fetcher, errors)
+        if result is None and fetch_engine_installed("playwright"):
+            result = picker_browser_fetch(source, fetcher.timeout, 4, errors)
     if result is None:
         raise FetchError("دریافت صفحه برای پیشنهاد سلکتور ناموفق بود" + ((" — " + " | ".join(errors[-3:])) if errors else ""))
     soup = BeautifulSoup(result.text, _bs4_parser())
@@ -6778,6 +6859,15 @@ def ai_content_worker(task_id: str, mode: str, scope: str, limit: int, only_miss
     label = titles.get(mode, "هوش مصنوعی")
     try:
         live_task_update(task_id, 2, "آماده‌سازی فهرست محصولات", "running", f"{label} · منبع {scope}")
+        if scope == "profile":
+            # 10.244: per-profile sub-step toggle — a profile with
+            # ai_descriptions=false is skipped with a clear message.
+            _pname = clean_text(load_data().get("active_profile"))
+            _prof = (load_data().get("profiles") or {}).get(_pname) if _pname else None
+            if isinstance(_prof, dict) and _prof.get("ai_descriptions", True) is False:
+                live_task_update(task_id, 100, "توضیح‌ساز خاموش است", "done",
+                                 "این پروفایل توضیح‌ساز هوش مصنوعی را در تنظیمات پروفایل خاموش کرده است")
+                return
         items = ai_collect_products(scope)
         selected: list[dict[str, Any]] = []
         for item in items:
