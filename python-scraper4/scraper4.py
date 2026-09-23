@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.244"
+APP_VERSION = "10.245"
 CHANGELOG = [
+    {"version":"10.245","date":"2026-09-23","title":"خودترمیمی پلی‌رایت در گیت‌هاب کداسپیس و پیام خطای همراه با دستور نصب","items":["در GitHub Codespaces و حالت‌های devcontainer (کشف خودکار با CODESPACES/CODESPACE_NAME/REMOTE_CONTAINERS/DEVCONTAINER)، اگر پلی‌رایت نصب نبود استخراج یک‌بار خودش آن را نصب می‌کند: pip install playwright و سپس دانلود کرومیوم (با --with-deps وقتی sudo بی‌رمز در دسترس است، مثل کداسپیس) و ادامهٔ همان استخراج","دروازهٔ امن: فقط در کداسپیس/کانتینر توسعه فعال است؛ روی هاست اشتراکی و www-data هرگز کاری نمی‌کند؛ با SCRAPER4_AUTO_INSTALL=0 خاموش و با =1 همه‌جا اجباری می‌شود؛ هر پروسه فقط یک تلاش می‌کند تا کندی صفحه‌ها","پیام خطای «Playwright نصب نیست» حالا خود دستورهای نصب را دارد (pip3 install playwright و python3 -m playwright install --with-deps chromium) تا در هر محیطی قابل کپی باشد؛ مسیر انتخابگر بصری/پیشنهاد سلکتور هم قبل از انصراف، خودترمیمی را امتحان می‌کند","تست جدید tools/test_codespace_autofix.py با ۲۰ بررسی: کشف محیط، دروازه‌ها (بدون هیچ subprocess خارج از محیط مجاز)، کش یک‌بارمصرف و زنجیرهٔ نصب اجباری"]},
     {"version":"10.244","date":"2026-09-23","title":"پیشنهاد/تست سلکتور با پلی‌رایت، تست همزمان مدل‌های هوش مصنوعی و مراحل فرعی هر پروفایل","items":["دکمهٔ پیشنهاد خودکار سلکتورها و تست سلکتورها حالا به حالت رندر احترام می‌گذارند: با انتخاب Playwright صفحه اول با زنجیرهٔ مرورگر رندر می‌شود (DOM ساخته‌شده با جاوااسکریپت دیده می‌شود) و بعد سلکتورها کشف/آزمایش می‌شوند؛ حالت HTTP همان HTML خام و خودکار مثل قبل؛ تابع preview_selector هم برای نخستین‌بار در هستهٔ پایتون پیاده شد (قبلاً تست سلکتور همیشه HTTP خام بود)","تست مدل‌های هوش مصنوعی همزمان شد (پیش‌فرض ۶ مدل در لحظه، قابل تغییر ۱ تا ۱۶): اجرای ۴۱۵مدلی که قبلاً پشت‌سرهم ساعت‌ها طول می‌کشید حالا چند برابر سریع‌تر است؛ مدل گیرکرده بعد از «مهلت رد مدل گیرکرده» بدون فلج‌کردن صف رد می‌شود و توقف/ادامه و ذخیرهٔ تدریجی نتایج مثل قبل کار می‌کند","رفع دیده‌نشدن مدل‌ها: اگر «فقط مدل‌های کاندید» روشن باشد ولی فهرست کاندید خالی یا بی‌ربط باشد، به‌جای تست فقط مدل پیش‌فرض، همهٔ مدل‌های فعال آزمایش می‌شوند","مراحل فرعی استخراج برای هر پروفایل قابل خاموش‌کردن شد: در تنظیمات پروفایل «استخراج جزئیات محصول در همگام‌سازی» اضافه شد (همگام‌سازی کامل جزئیات را رد می‌زند) و توضیح‌ساز با همان کلید قبلی در همهٔ مسیرها (دکمهٔ توضیح‌ساز پروفایل و مرکز هوش مصنوعی با منبع پروفایل) واقعاً رعایت می‌شود","تست جدید tools/test_steps_render_airun.py با ۲۶ بررسی برای پارامتر رندر، دروازه‌های پروفایل و ورکِر همزمان"]},
     {"version":"10.243","date":"2026-09-23","title":"وب‌کنسول ۱.۶.۷ — سلف‌آپدیت کنسول با انتخاب مخزن/برنچ و مرورگر فایل‌های گیت‌هاب","items":["پچر وب‌کنسول حالا مسیرهای ۱.۶.۴ / ۱.۶.۵ / ۱.۶.۶ را همگی به ۱.۶.۷ ارتقا می‌دهد و صفحهٔ همراه webconsole-tools.php را کنار کنسول نصب می‌کند (کلید دسترسی چاپ و در webconsole-tools.key ذخیره می‌شود)","سلف‌آپدیت کنسول: انتخاب مخزن و برنچ و مسیر فایل، مقایسهٔ نسخهٔ ریموت با محلی، نصب با دروازهٔ php -l و بکاپ زمان‌دار و جایگزینی اتمی؛ پیش‌فرض‌ها در .wconsole_data/selfupdate.conf ذخیره می‌شود و مؤلفه‌های تازهٔ selfupdate_check / selfupdate_apply داخل خود کنسول هم همان را می‌خوانند","مرورگر فایل‌های گیت‌هاب: پیمایش پوشه‌ها از GitHub Trees API، مشاهده و ویرایش هر فایل، ذخیرهٔ نسخه در .wconsole_data/github-files/… (از فایل اکسپلورر خود کنسول هم قابل ویرایش) یا ثبت مستقیم در گیت‌هاب با توکن شخصی (توکن فقط یک‌بار استفاده و هرگز ذخیره نمی‌شود)","امنیت صفحهٔ همراه: کلید تصادفی با مقایسهٔ زمان‌ثابت، پاک‌سازی ورودی‌های مخزن/برنچ/مسیر و ممنوعیت ..؛ php -l هنگام نصب صفحه را هم بررسی می‌کند و در خطا آن را حذف می‌کند (خود پچ سالم می‌ماند)","اجرای --tools فقط صفحهٔ همراه را نصب/به‌روز می‌کند و به کنسول دست نمی‌زند؛ تست‌های پچر به ۵۰ بررسی رسید: ماتریس سه مسیر ارتقا، پارس bash سه payload و برابری صفحهٔ همراه جاسازی‌شده با فایل مخزن"]},
     {"version":"10.242","date":"2026-09-23","title":"مدیریت حافظهٔ سواپ در وب‌کنسول (۱.۶.۶) و اسکریپت مستقل","items":["پچر وب‌کنسول به tools/webconsole-patch.php تغییر نام یافت و حالا کنسول را به ۱.۶.۶ ارتقا می‌دهد: مؤلفه‌های نصب swap_2g / swap_4g / swap_8g / swap_16g به کنسول اضافه می‌شود","راه‌انداز سواپ همواند و امن است: اگر سواپ کافی موجود باشد کاری نمی‌کند، سواپ‌فایل کوچک‌تر در جا بزرگ می‌شود، با fstab پس از ری‌بوت می‌ماند و vm.swappiness=20 را تنظیم می‌کند؛ در کانتینرهای بدون مجوز سواپ با پیام روشن رد می‌شود","اجرای فوری بدون کنسول: sudo bash tools/enable_swap_server.sh 4096 یا php webconsole-patch.php --swap-apply 4096 — روی سندباکس واقعی آزمایش شد (تخصیص، mkswap، swapon و fstab موفق)","پچر مسیر ارتقای ۱.۶.۵ به ۱.۶.۶ را هم می‌شناسد: اگر نسخهٔ قبلی پچ را گرفته باشد، فقط مجموعهٔ سواپ اضافه می‌شود؛ حالت --check هم وضعیت نسخه و لنگرهای سواپ را گزارش می‌کند","تست جدید tools/test_webconsole_patcher.py با ۲۷ بررسی برای ساختار پچر، پارس bash/dash هر دو payload و منطق سواپ"]},
@@ -2556,6 +2557,72 @@ def _aiohttp_get(url: str, headers: dict[str, str], timeout: Any, verify: bool,
     return _run_async(_run())
 
 
+_PLAYWRIGHT_AUTOFIX_LOCK = threading.Lock()
+_PLAYWRIGHT_AUTOFIX_STATE = {"done": False, "ok": False}
+
+
+def codespace_env() -> bool:
+    """10.245: GitHub Codespaces / devcontainer / Gitpod-style environment."""
+    env = os.environ
+    if clean_text(env.get("CODESPACE_NAME")):
+        return True
+    for key in ("CODESPACES", "REMOTE_CONTAINERS", "DEVCONTAINER"):
+        if clean_text(env.get(key)).lower() in ("true", "1"):
+            return True
+    return False
+
+
+def ensure_playwright_runtime() -> bool:
+    """10.245: one-shot self-heal of a missing Playwright install.
+
+    Only runs in GitHub Codespaces / devcontainers (or when
+    SCRAPER4_AUTO_INSTALL=1) — shared hosting / www-data is never touched.
+    Installs the pip package, then downloads Chromium (`--with-deps` when
+    passwordless sudo works, which Codespaces grants). One attempt per
+    process; the result is cached so a failure cannot slow every page down.
+    """
+    if _PLAYWRIGHT_AUTOFIX_STATE["done"]:
+        return _PLAYWRIGHT_AUTOFIX_STATE["ok"]
+    with _PLAYWRIGHT_AUTOFIX_LOCK:
+        if _PLAYWRIGHT_AUTOFIX_STATE["done"]:
+            return _PLAYWRIGHT_AUTOFIX_STATE["ok"]
+        _PLAYWRIGHT_AUTOFIX_STATE["done"] = True
+        mode = clean_text(os.environ.get("SCRAPER4_AUTO_INSTALL")).lower()
+        if mode == "0" or (mode != "1" and not codespace_env()):
+            return False
+        import shutil
+
+        py = sys.executable or shutil.which("python3") or "python3"
+
+        def _run(cmd: list, wait: int = 900) -> bool:
+            try:
+                proc = subprocess.run(cmd, timeout=wait, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+                    print("[browser-autofix] " + " ".join(cmd[:4]) + " -> failed" + (" :: " + tail[-1][:160] if tail else ""))
+                return proc.returncode == 0
+            except Exception as exc:
+                print("[browser-autofix] " + " ".join(cmd[:4]) + " -> error: " + str(exc)[:160])
+                return False
+
+        print("[browser-autofix] Playwright is missing — installing it now (Codespaces/devcontainer)…")
+        ok = _run([py, "-m", "pip", "install", "playwright"], 600) \
+            or _run([py, "-m", "pip", "install", "--break-system-packages", "playwright"], 600)
+        if not ok:
+            print("[browser-autofix] pip could not install playwright — see the commands in the error message.")
+            return False
+        sudo_ok = _run(["sudo", "-n", "true"], 15)
+        args = [py, "-m", "playwright", "install"] + (["--with-deps"] if sudo_ok else []) + ["chromium"]
+        print("[browser-autofix] downloading Chromium (~150MB, one-time)…")
+        ok = _run(args, 1200)
+        _PLAYWRIGHT_AUTOFIX_STATE["ok"] = ok
+        if ok:
+            print("[browser-autofix] done — retrying with Playwright.")
+        else:
+            print("[browser-autofix] failed — run manually: python3 -m playwright install --with-deps chromium")
+        return ok
+
+
 def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "", strip_overlays: bool = False) -> FetchResult:
     browser_path = configured_browser_path()
     if browser_path and os.path.isdir(browser_path):
@@ -2564,8 +2631,20 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
         os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     try:
         from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise FetchError("Playwright نصب نیست؛ از بخش به‌روزرسانی «نصب وابستگی‌ها» را اجرا کنید") from exc
+    except ImportError:
+        # 10.245: in Codespaces/devcontainers try to self-heal once, then retry.
+        ensure_playwright_runtime()
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            where = " (GitHub Codespaces)" if codespace_env() else ""
+            raise FetchError(
+                "Playwright نصب نیست" + where + ". دستورهای نصب:\n"
+                "  pip3 install playwright\n"
+                "  python3 -m playwright install --with-deps chromium\n"
+                "یا یک‌خطی کامل:\n"
+                "  pip3 install -r requirements.txt && python3 -m playwright install --with-deps chromium"
+            ) from exc
     public_http_url(url)
     try:
         with sync_playwright() as pw:
@@ -3736,6 +3815,9 @@ def picker_http_fetch(url: str, fetcher: "Fetcher", errors: list[str]) -> Any:
 
 
 def picker_browser_fetch(url: str, timeout: int, scrolls: int, errors: list[str], engine: str = "playwright") -> Any:
+    if not fetch_engine_installed("playwright"):
+        # 10.245: self-heal once in Codespaces/devcontainers before giving up.
+        ensure_playwright_runtime()
     if engine=="undetected":
         if fetch_engine_installed("undetected"):
             try:
