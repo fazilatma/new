@@ -90,7 +90,10 @@ def main() -> int:
           js.count("render:$('extractionEngine')?.value||'auto'") == 5,
           str(js.count("render:$('extractionEngine')?.value||'auto'")))
     check("profile field set includes detailExtract",
-          "'aiDescriptions','detailExtract','galMode'" in js)
+          "'aiDescriptions','detailExtract'" in js and "'galMode'" in js)
+    # 10.248: the per-profile GitHub branch rides the same field set.
+    check("profile field set includes githubBranch",
+          "'detailExtract','githubBranch'" in js)
     check("clearForm/editProfile/profileBody wire detailExtract",
           "if($('detailExtract'))$('detailExtract').checked=true;" in js
           and "$('detailExtract').checked=p.detailExtract!==false;" in js

@@ -2115,6 +2115,232 @@ window.addEventListener('message',e=>{if(e.source!==parent||e.data?.channel!==ch
     def parity_branch_push_status():
         return ok(last=load().get("branch_push_status"))
 
+    # ── 10.248: per-profile products push/pull on a GitHub branch ─────────
+    def github_products_repo(body: dict[str, Any], data: dict[str, Any]) -> str:
+        """Repo for the products file: request override → backup scheduler
+        setting → deploy config → the default repo."""
+        settings = data.get("ui_settings") if isinstance(data.get("ui_settings"), dict) else {}
+        sched = settings.get("branchPush") if isinstance(settings.get("branchPush"), dict) else {}
+        deploy = data.get("deploy") if isinstance(data.get("deploy"), dict) else {}
+        return (_s(body.get("repo")) or _s(sched.get("repo"))
+                or _s(deploy.get("repo")) or _s(deploy.get("repo_name"))
+                or _s(getattr(core, "DEPLOY_DEFAULT_REPO", "")) or "fazilatma/new")
+
+    def products_remote_path(pid: str, folder: str) -> str:
+        """One stable JSON path per profile inside the branch.
+
+        Persian profile ids are slugified (unicode letters kept) and a short
+        digest of the raw id is appended, so two profiles never collide and
+        no path traversal is possible — "/" and ".." are stripped by the
+        slug regex before this ever reaches GitHub.
+        """
+        slug = re.sub(r"[^0-9A-Za-z\u0600-\u06FF._-]+", "-", _s(pid).strip())
+        slug = slug.replace("..", "-").strip("-.")[:80] or "profile"
+        digest = hashlib.sha1(_s(pid).encode("utf-8")).hexdigest()[:8]
+        return safe_backup_path(folder) + "/" + slug + "-" + digest + ".json"
+
+    def push_profile_products(pid: str, body: dict[str, Any],
+                              emit: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+        """Save the profile's extracted products as ONE json file on the
+        branch, with the same atomic commit chain as the settings backup
+        (blob → tree → commit → ref update, never a half-written state)."""
+        token = github_token()
+        if not token:
+            raise ValueError("توکن GitHub برای پوش تنظیم نشده است.")
+        data = load()
+        profile = (data.get("profiles") or {}).get(pid)
+        if not isinstance(profile, dict):
+            raise ValueError("پروفایل پیدا نشد.")
+        repo = github_products_repo(body, data)
+        branch = _s(body.get("branch")) or _s(profile.get("github_branch"))
+        if not branch:
+            raise ValueError("برنچ گیت‌هاب برای این پروفایل انتخاب نشده است؛ ابتدا آن را در همین صفحه انتخاب و ذخیره کنید.")
+        repo, branch = validate_repo_branch(repo, branch)
+        folder = safe_backup_path(body.get("path") or "scraper4-products")
+        products = [dict(x) for x in (profile.get("saved_products") or [])[:core.MAX_PRODUCTS_HARD]
+                    if isinstance(x, dict)]
+        if not products:
+            raise ValueError("این پروفایل محصول ذخیره‌شده‌ای برای پوش ندارد؛ ابتدا استخراج کنید.")
+        payload = {"kind": "scraper4-products", "format": "scraper4-products-1",
+                   "app": "scraper4-python", "version": _s(core.APP_VERSION),
+                   "profile": pid, "profile_name": _s(profile.get("name")) or pid,
+                   "pushed_at": _now_iso(), "count": len(products),
+                   "products": products}
+        raw = json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8")
+        if len(raw) > 48 * 1024 * 1024:
+            raise ValueError("حجم فایل محصولات بیشتر از سقف ۴۸ مگابایت است.")
+        path = products_remote_path(pid, folder)
+        emit({"stage": "reading"})
+        ref = github_request("GET", repo, "git/ref/heads/" + quote(branch, safe=""), token)
+        parent_sha = _s((ref.get("object") or {}).get("sha"))
+        if not parent_sha:
+            raise ValueError("GitHub branch ref has no commit SHA.")
+        commit = github_request("GET", repo, "git/commits/" + parent_sha, token)
+        base_tree = _s((commit.get("tree") or {}).get("sha"))
+        if not base_tree:
+            raise ValueError("GitHub commit has no tree SHA.")
+        emit({"stage": "uploading", "bytes": 0})
+        blob = github_request("POST", repo, "git/blobs", token,
+                              {"content": base64.b64encode(raw).decode("ascii"),
+                               "encoding": "base64"})
+        blob_sha = _s(blob.get("sha"))
+        if not blob_sha:
+            raise ValueError("GitHub did not create the products blob.")
+        emit({"stage": "uploading", "bytes": len(raw)})
+        tree = github_request("POST", repo, "git/trees", token,
+                              {"base_tree": base_tree,
+                               "tree": [{"path": path, "mode": "100644",
+                                         "type": "blob", "sha": blob_sha}]})
+        tree_sha = _s(tree.get("sha"))
+        if not tree_sha:
+            raise ValueError("GitHub did not create the products tree.")
+        created = github_request("POST", repo, "git/commits", token,
+                                 {"message": f"products: {pid} ({len(products)})",
+                                  "tree": tree_sha, "parents": [parent_sha]})
+        commit_sha = _s(created.get("sha"))
+        if not commit_sha:
+            raise ValueError("GitHub did not create the products commit.")
+        github_request("PATCH", repo, "git/refs/heads/" + quote(branch, safe=""), token,
+                       {"sha": commit_sha, "force": False})
+        # Remember the last push on the profile so the dashboard can show it.
+        data = load()
+        prof = (data.get("profiles") or {}).get(pid)
+        if isinstance(prof, dict):
+            prof["products_push"] = {"at": _now_iso(), "repo": repo, "branch": branch,
+                                     "path": path, "sha": commit_sha,
+                                     "count": len(products), "bytes": len(raw)}
+            save(data)
+        return {"ok": True, "repo": repo, "branch": branch, "path": path,
+                "sha": commit_sha, "commit": commit_sha, "count": len(products),
+                "bytes": len(raw), "updated": True}
+
+    def github_get_raw(repo: str, path: str, ref: str, token: str) -> bytes:
+        """Fetch a file's raw bytes. The plain contents API refuses files
+        above 1 MB, so the raw media type is used (works up to 100 MB)."""
+        url = (f"https://api.github.com/repos/{repo}/contents/"
+               + quote(path, safe="/") + "?ref=" + quote(ref, safe=""))
+        headers = {"accept": "application/vnd.github.raw",
+                   "x-github-api-version": "2022-11-28",
+                   "user-agent": f"scraper4-python/{core.APP_VERSION}",
+                   "authorization": "Bearer " + token}
+        response = core.outbound_request("GET", url, headers=headers, timeout=120)
+        if response.status_code == 404:
+            raise ValueError(f"فایل محصولات روی این برنچ پیدا نشد: {path}")
+        if response.status_code in {401, 403}:
+            raise ValueError("توکن GitHub نامعتبر است یا دسترسی ندارد.")
+        if not response.ok:
+            raise ValueError(f"GitHub HTTP {response.status_code}")
+        return response.content or b""
+
+    def pull_profile_products(pid: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Read the products file back from the branch, store it as the
+        profile's saved products, and (optionally) dispatch straight to the
+        destinations — the same worker a normal profile sync uses."""
+        token = github_token()
+        if not token:
+            raise ValueError("توکن GitHub برای دریافت تنظیم نشده است.")
+        data = load()
+        profile = (data.get("profiles") or {}).get(pid)
+        if not isinstance(profile, dict):
+            raise ValueError("پروفایل پیدا نشد.")
+        repo = github_products_repo(body, data)
+        branch = _s(body.get("branch")) or _s(profile.get("github_branch"))
+        if not branch:
+            raise ValueError("برنچ گیت‌هاب برای این پروفایل انتخاب نشده است؛ ابتدا آن را در همین صفحه انتخاب و ذخیره کنید.")
+        repo, branch = validate_repo_branch(repo, branch)
+        folder = safe_backup_path(body.get("path") or "scraper4-products")
+        path = products_remote_path(pid, folder)
+        raw = github_get_raw(repo, path, branch, token)
+        try:
+            payload = json.loads(raw.decode("utf-8-sig"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError("فایل محصولات روی برنچ قابل خواندن نیست.") from exc
+        if not isinstance(payload, dict) or payload.get("kind") != "scraper4-products":
+            raise ValueError("این فایل فایل محصولات Scraper4 نیست.")
+        products = [dict(x) for x in (payload.get("products") or [])[:core.MAX_PRODUCTS_HARD]
+                    if isinstance(x, dict)]
+        meta = {"repo": repo, "branch": branch, "path": path,
+                "count": len(products), "bytes": len(raw),
+                "pushed_at": _s(payload.get("pushed_at")) or None,
+                "version": _s(payload.get("version")) or None,
+                "profile": _s(payload.get("profile")) or None}
+        if bool(body.get("dryRun")):
+            return {"ok": True, "exists": True, "dryRun": True, **meta}
+        if not products:
+            raise ValueError("فایل محصولات روی برنچ خالی است.")
+        data = load()
+        prof = (data.get("profiles") or {}).get(pid)
+        if not isinstance(prof, dict):
+            raise ValueError("پروفایل پیدا نشد.")
+        replaced = len(prof.get("saved_products") or [])
+        prof["saved_products"] = products
+        prof["products_pull"] = {"at": _now_iso(), "replaced_count": replaced, **meta}
+        save(data)
+        result: dict[str, Any] = {"ok": True, "saved": True,
+                                  "replaced": replaced, **meta}
+        if bool(body.get("dispatch")):
+            targets = body.get("destinations")
+            if not isinstance(targets, list):
+                targets = []
+            targets = [t for t in ("woocommerce", "basalam") if t in targets] \
+                or ["woocommerce", "basalam"]
+            task = core.start_profile_dispatch(pid, {
+                "destinations": targets,
+                "woo_status": _s(body.get("wooStatus")) or "draft"})
+            result["destinations"] = targets
+            result["task"] = task
+        return result
+
+    @app.post("/api/profiles/<path:pid>/products-push")
+    def parity_products_push(pid: str):
+        """Push this profile's saved products to its GitHub branch (10.248).
+
+        ``?live=1`` streams the same NDJSON frames the branch backup uses
+        (stage events + the final report) so the dashboard can show progress.
+        """
+        body = _body()
+        live = _s(request.args.get("live")) in {"1", "true", "yes"}
+        if not live:
+            try:
+                return jsonify(**push_profile_products(pid, body, lambda frame: None))
+            except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+                return jsonify(ok=False, error=str(exc)[:600]), 400
+
+        def generate():
+            events: queue.Queue[Optional[dict[str, Any]]] = queue.Queue()
+
+            def worker() -> None:
+                try:
+                    events.put(push_profile_products(pid, body, events.put))
+                except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+                    events.put({"ok": False, "error": str(exc)[:600]})
+                finally:
+                    events.put(None)
+
+            threading.Thread(target=worker, name="products-branch-push", daemon=True).start()
+            t0 = time.monotonic()
+            while True:
+                frame = events.get()
+                if frame is None:
+                    break
+                if "stage" in frame:
+                    yield json.dumps({"type": "progress", "summary": _s(frame.get("stage")),
+                                      "ok": True, "elapsedMs": int((time.monotonic() - t0) * 1000)},
+                                     ensure_ascii=False) + "\n"
+                else:
+                    yield json.dumps({"type": "result", "report": frame},
+                                     ensure_ascii=False) + "\n"
+
+        return Response(stream_with_context(generate()), mimetype="application/x-ndjson",
+                        headers={"cache-control": "no-store", "x-accel-buffering": "no"})
+
+    @app.post("/api/profiles/<path:pid>/products-pull")
+    def parity_products_pull(pid: str):
+        try:
+            return jsonify(**pull_profile_products(pid, _body()))
+        except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+            return jsonify(ok=False, error=str(exc)[:600]), 400
+
     branch_schedule_lock = threading.Lock()
 
     def branch_schedule_tick() -> None:
