@@ -405,6 +405,10 @@ server {
     listen [::]:80 default_server;
     listen 8080 default_server;
     listen [::]:8080 default_server;
+    listen 8000 default_server;
+    listen [::]:8000 default_server;
+    listen 8888 default_server;
+    listen [::]:8888 default_server;
     server_name _;
     root /var/www/html;
     index index.php index.html index.htm;
@@ -436,6 +440,10 @@ server {
     listen [::]:80 default_server;
     listen 8080 default_server;
     listen [::]:8080 default_server;
+    listen 8000 default_server;
+    listen [::]:8000 default_server;
+    listen 8888 default_server;
+    listen [::]:8888 default_server;
     server_name _;
     root /var/www/html;
     index index.php index.html index.htm;
@@ -503,9 +511,15 @@ chown -R ${WEB_USER}:${WEB_GROUP} /var/www/html /var/www/projects 2>/dev/null ||
 chmod -R 775 /var/www/html /var/www/projects 2>/dev/null || true
 touch /var/www/html/webconsole.php /var/www/html/index.php 2>/dev/null || true
 
-for svc in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm nginx apache2 httpd; do
-    service $svc reload 2>/dev/null || systemctl reload $svc 2>/dev/null || true
+# Ensure services are up and running
+for svc in nginx apache2 httpd php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
+    service $svc restart 2>/dev/null || systemctl restart $svc 2>/dev/null || true
 done
+
+# Start lightweight supervised PHP background server on port 8888 (Guaranteed high-port for Codespaces/Containers)
+pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
+nohup php -S 0.0.0.0:8888 -t /var/www/html /var/www/html/index.php >/tmp/webconsole-php-8888.log 2>&1 &
+sleep 1
 
 if command -v php >/dev/null 2>&1; then
     php -l /var/www/html/webconsole.php >/dev/null 2>&1 && log_ok "PHP syntax validation passed."
@@ -516,31 +530,42 @@ fi
 # ------------------------------------------------------------------------------
 log_step "9/9" "Configuring Codespaces Port Forwarding & Public Visibility..."
 
-PORTS_PHP="80 8080"
+# Ports to forward and expose
+PORTS_PHP="8888 8000 8080 80"
 PORTS_NODE="3000 3001 5000"
-PORTS_PYTHON="8000 8081 8790"
-ALL_PORTS="$PORTS_PHP $PORTS_NODE $PORTS_PYTHON"
+PORTS_PYTHON="8081 8790"
+ALL_PORTS="8888 8000 8080 80 3000 3001 5000 8081 8790"
 
 if [ "$IS_CODESPACES" = "true" ]; then
-    log_info "Configuring public visibility for PHP, Node.js, and Python ports in Codespaces..."
+    log_info "Forwarding and setting public visibility for WebConsole & application ports..."
+    
+    # 1. Forward and make public using gh CLI as root
     for p in $ALL_PORTS; do
         if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
-            gh codespace ports visibility "${p}:public" -c "$CODESPACE_NAME" 2>/dev/null || \
-            gh codespace ports visibility "${p}:public" 2>/dev/null || true
+            gh codespace ports forward "${p}:${p}" -c "$CODESPACE_NAME" 2>/dev/null || true
+            gh codespace ports visibility "${p}:public" -c "$CODESPACE_NAME" 2>/dev/null || true
         else
             gh codespace ports visibility "${p}:public" 2>/dev/null || true
         fi
     done
+
+    # 2. Forward and make public using gh CLI as SSH / sudo user (vscode or codespace)
     if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
         for p in $ALL_PORTS; do
             if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
-                su - "$SUDO_USER" -c "gh codespace ports visibility ${p}:public -c '$CODESPACE_NAME'" 2>/dev/null || \
-                su - "$SUDO_USER" -c "gh codespace ports visibility ${p}:public" 2>/dev/null || true
+                su - "$SUDO_USER" -c "gh codespace ports forward ${p}:${p} -c \"$CODESPACE_NAME\"" 2>/dev/null || true
+                su - "$SUDO_USER" -c "gh codespace ports visibility ${p}:public -c \"$CODESPACE_NAME\"" 2>/dev/null || true
             fi
         done
     fi
-    log_ok "Port public visibility commands dispatched for ports: 80, 8080, 3000, 5000, 8000, 8081."
+    log_ok "Codespaces ports forwarded and marked PUBLIC: 8888, 8000, 8080, 80, 3000, 5000, 8081."
 fi
+
+# Local health verification
+log_info "Testing local WebConsole HTTP response..."
+STATUS_8888=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/ || echo "err")
+STATUS_80=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:80/ || echo "err")
+log_ok "Local HTTP Status -> Port 8888: [${STATUS_8888}], Port 80: [${STATUS_80}]" 
 
 SERVER_IP=$(curl -s4m 4 ifconfig.me || curl -s4m 4 api.ipify.org || curl -s4m 4 icanhazip.com || hostname -I | awk '{print $1}' || echo "127.0.0.1")
 
@@ -553,15 +578,17 @@ echo ""
 if [ "$IS_CODESPACES" = "true" ]; then
     echo -e "  🌐 ${CLR_BOLD}GitHub Codespaces Public Access Links:${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 80):${CLR_RESET}    ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-80.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 8080):${CLR_RESET}  ${CLR_CYAN}https://${CODESPACE_NAME}-8080.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 3000):${CLR_RESET}${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 5000):${CLR_RESET}${CLR_MAGENTA}https://${CODESPACE_NAME}-5000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐍 ${CLR_BOLD}Python Apps (Port 8000):${CLR_RESET} ${CLR_YELLOW}https://${CODESPACE_NAME}-8000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐍 ${CLR_BOLD}Python Apps (Port 8081):${CLR_RESET} ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Primary Port 8888):${CLR_RESET}  ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-8888.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Alternate Port 8000):${CLR_RESET}${CLR_CYAN}https://${CODESPACE_NAME}-8000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 8080):${CLR_RESET}          ${CLR_CYAN}https://${CODESPACE_NAME}-8080.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 80):${CLR_RESET}            ${CLR_CYAN}https://${CODESPACE_NAME}-80.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 3000):${CLR_RESET}        ${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 5000):${CLR_RESET}        ${CLR_MAGENTA}https://${CODESPACE_NAME}-5000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐍 ${CLR_BOLD}Python Apps (Port 8081):${CLR_RESET}         ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  💡 ${CLR_YELLOW}Tip:${CLR_RESET} You can also open the ${CLR_BOLD}Ports${CLR_RESET} tab in VS Code to see all live URLs."
-    echo -e "  🔗 ${CLR_BOLD}Localhost:${CLR_RESET} http://127.0.0.1:80/ or http://127.0.0.1:8080/ (via SSH port forwarding)"
+    echo -e "  💡 ${CLR_YELLOW}Notice:${CLR_RESET} In Codespaces, Port 8888 and 8000 are recommended because low ports (80)"
+    echo -e "     are often restricted by container tunneling. If you see 404 on port 80, open Port 8888!"
+    echo -e "  🔗 ${CLR_BOLD}VS Code Ports Tab:${CLR_RESET} You can click the 🌐 globe icon next to Port 8888 in VS Code."
 else
     echo -e "  🌐 ${CLR_BOLD}Primary URL:${CLR_RESET}   ${CLR_GREEN}${CLR_BOLD}http://${SERVER_IP:-YOUR_SERVER_IP}/${CLR_RESET}"
     echo -e "  🌐 ${CLR_BOLD}Backup Port:${CLR_RESET}  ${CLR_CYAN}http://${SERVER_IP:-YOUR_SERVER_IP}:8080/${CLR_RESET}"
