@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.246"
+APP_VERSION = "10.247"
 CHANGELOG = [
+    {"version":"10.247","date":"2026-09-23","title":"دکمهٔ نصب مرورگر در داشبورد — Playwright و کرومیوم بدون ترمینال نصب می‌شوند","items":["دکمهٔ جدید «🧩 نصب مرورگر» کنار تست سرعت و عیب‌یابی صفحهٔ اصلی: همان دستورهایی که تا حالا باید دستی در ترمینال اجرا می‌شدند با یک کلیک روی خود سرور اجرا می‌شوند — pip با پرچم‌های درست همین محیط (PEP 668 و ‎--user‎ برای حساب‌هایی مثل www-data) و سپس دانلود کرومیوم؛ پس از نصب فهرست موتورهای داشبورد خودکار تازه‌سازی می‌شود","پیشرفت زندهٔ نصب: هر خط خروجی pip و دانلود در پنجرهٔ داشبورد جریان می‌یابد (همان جریان NDJSON عیب‌یابی)؛ نصب همزمان دوباره ممکن نیست (قفل تک‌نصب) و نصب بی‌اثر (idempotent) است — اگر همه‌چیز از قبل باشد سریع «از قبل نصب است» برمی‌گردد","مسیر دانلود هوشمند: اول CDN رسمی playwright؛ اگر پاسخ نداد (مثل IPهای ایران) منطق اسکریپت آینه داخل خود اسکریپر بازنویسی شد — خواندن نسخه‌های لازم از dry-run، دانلود Chrome-for-Testing از آینه‌های npmmirror/huaweicloud/nju و چیدمان دقیق کش playwright با نشانک INSTALLATION_COMPLETE؛ کش در مسیر مشترک WebConsole می‌نشیند تا rsync پاکش نکند و ‎--with-deps‎ فقط با root اجرا می‌شود","پس از نصب همان پروسهٔ در حال اجرا پکیج را می‌بیند (به‌روزرسانی مسیرهای import و user-site) و نیازی به ری‌استارت سرویس نیست؛ در پایان مسیر فایل اجرایی و نتیجهٔ تست راه‌اندازی headless گزارش می‌شود","تست جدید tools/test_browser_install_button.py: زنجیرهٔ pip در محیط‌های مختلف، بازنویسی آینه (دانلود با requests و پشتیبان curl، اعتبارسنجی zip، چیدمان، نشانک)، مسیرهای موفق/شکست/مشغول، رفتار واقعی endpoint با کلاینت Flask و سیم‌کازی داشبورد؛ مسیر نصب یک‌بار زنده در محیط PEP 668 غیر root اجرا شد: زنجیرهٔ pip با ‎--user‎ واقعاً نصب کرد، جریان NDJSON و گزارش صادق مراحل تأیید شد و پشتیبان curl برای دانلود آینه‌ها اضافه گردید"]},
     {"version":"10.246","date":"2026-09-23","title":"گزارش صادق عیب‌یابی، بازگشت به موتورهای HTTP وقتی مرورگر نصب نیست و دستور نصب سازگار با PEP 668","items":["عیب‌یابی استخراج دیگر هیچ‌وقت شکست را «OK» گزارش نمی‌کند: فیلد ok سلامت مراحل را عینه منعکس می‌کند و productCount، durationMs، url و usedEngine همیشه در گزارش هستند؛ خروجی «کپی گزارش کامل» و لاگ WebConsole به‌جای «result: OK · products: 0 · durationMs: 0» وضعیت واقعی را نشان می‌دهد","پروفایلِ قفل‌شده روی موتور مرورگریِ نصب‌نشده (مثل playwright)، عیب‌یابی را در همان صفحهٔ اول متوقف نمی‌کند: مثل استخراج واقعی (۱۰.۱۹۸) زنجیرهٔ موتورهای HTTP ساده امتحان می‌شود؛ مرحلهٔ «دریافت شبکه» موتورِ واقعیِ به‌کاررفته و دلیل بازگشت را صریح می‌نویسد و دستور نصب موتور غایب در «راهکار پیشنهادی» می‌آید — ایمالز که مسیر تأییدشده‌اش HTTP با کوکی سشن است، بدون نصب مرورگر هم واقعاً آزموده می‌شود","پیام «Playwright نصب نیست» دستورهای نصبِ همین محیط را می‌دهد: روی پایتون‌های EXTERNALLY-MANAGED (مثل اوبونتو ۲۶.۰۴) پرچم ‎--break-system-packages‎، برای حساب سرویس غیر root (مثل www-data) ترکیب ‎--user‎ مثل پچر وب‌کنسول، داخل venv بدون ‎--user‎، و ‎--with-deps‎ فقط وقتی root هستیم؛ دستورهای pip پنل نصب داشبورد هم با همین پرچم ساخته می‌شوند","استخراج واقعی وقتی کتابخانهٔ مرورگر نصب نیست (نه فقط فایل اجرایی) هم پیام «بازگشت خودکار به موتورهای HTTP» را در لاگ ثبت می‌کند و رویدادهای زندهٔ عیب‌یابی زمان سپری‌شدهٔ هر مرحله (elapsedMs) را دارند","تست جدید tools/test_diag_fallback_hint.py: سازندهٔ دستور نصب در چهار ترکیب محیط، رفتار واقعی عیب‌یابی با کلاینت فلَسک (بازگشت از playwright به موتور HTTP، گزارش شکست صادق با attempts و پیشنهادها) و پرچم PEP 668 پنل نصب"]},
     {"version":"10.245","date":"2026-09-23","title":"خودترمیمی پلی‌رایت در گیت‌هاب کداسپیس و پیام خطای همراه با دستور نصب","items":["در GitHub Codespaces و حالت‌های devcontainer (کشف خودکار با CODESPACES/CODESPACE_NAME/REMOTE_CONTAINERS/DEVCONTAINER)، اگر پلی‌رایت نصب نبود استخراج یک‌بار خودش آن را نصب می‌کند: pip install playwright و سپس دانلود کرومیوم (با --with-deps وقتی sudo بی‌رمز در دسترس است، مثل کداسپیس) و ادامهٔ همان استخراج","دروازهٔ امن: فقط در کداسپیس/کانتینر توسعه فعال است؛ روی هاست اشتراکی و www-data هرگز کاری نمی‌کند؛ با SCRAPER4_AUTO_INSTALL=0 خاموش و با =1 همه‌جا اجباری می‌شود؛ هر پروسه فقط یک تلاش می‌کند تا کندی صفحه‌ها","پیام خطای «Playwright نصب نیست» حالا خود دستورهای نصب را دارد (pip3 install playwright و python3 -m playwright install --with-deps chromium) تا در هر محیطی قابل کپی باشد؛ مسیر انتخابگر بصری/پیشنهاد سلکتور هم قبل از انصراف، خودترمیمی را امتحان می‌کند","تست جدید tools/test_codespace_autofix.py با ۲۰ بررسی: کشف محیط، دروازه‌ها (بدون هیچ subprocess خارج از محیط مجاز)، کش یک‌بارمصرف و زنجیرهٔ نصب اجباری"]},
     {"version":"10.244","date":"2026-09-23","title":"پیشنهاد/تست سلکتور با پلی‌رایت، تست همزمان مدل‌های هوش مصنوعی و مراحل فرعی هر پروفایل","items":["دکمهٔ پیشنهاد خودکار سلکتورها و تست سلکتورها حالا به حالت رندر احترام می‌گذارند: با انتخاب Playwright صفحه اول با زنجیرهٔ مرورگر رندر می‌شود (DOM ساخته‌شده با جاوااسکریپت دیده می‌شود) و بعد سلکتورها کشف/آزمایش می‌شوند؛ حالت HTTP همان HTML خام و خودکار مثل قبل؛ تابع preview_selector هم برای نخستین‌بار در هستهٔ پایتون پیاده شد (قبلاً تست سلکتور همیشه HTTP خام بود)","تست مدل‌های هوش مصنوعی همزمان شد (پیش‌فرض ۶ مدل در لحظه، قابل تغییر ۱ تا ۱۶): اجرای ۴۱۵مدلی که قبلاً پشت‌سرهم ساعت‌ها طول می‌کشید حالا چند برابر سریع‌تر است؛ مدل گیرکرده بعد از «مهلت رد مدل گیرکرده» بدون فلج‌کردن صف رد می‌شود و توقف/ادامه و ذخیرهٔ تدریجی نتایج مثل قبل کار می‌کند","رفع دیده‌نشدن مدل‌ها: اگر «فقط مدل‌های کاندید» روشن باشد ولی فهرست کاندید خالی یا بی‌ربط باشد، به‌جای تست فقط مدل پیش‌فرض، همهٔ مدل‌های فعال آزمایش می‌شوند","مراحل فرعی استخراج برای هر پروفایل قابل خاموش‌کردن شد: در تنظیمات پروفایل «استخراج جزئیات محصول در همگام‌سازی» اضافه شد (همگام‌سازی کامل جزئیات را رد می‌زند) و توضیح‌ساز با همان کلید قبلی در همهٔ مسیرها (دکمهٔ توضیح‌ساز پروفایل و مرکز هوش مصنوعی با منبع پروفایل) واقعاً رعایت می‌شود","تست جدید tools/test_steps_render_airun.py با ۲۶ بررسی برای پارامتر رندر، دروازه‌های پروفایل و ورکِر همزمان"]},
@@ -2675,6 +2676,386 @@ def playwright_install_hint(requirements: str = "requirements.txt") -> str:
     if not root:
         lines.append("وابستگی‌های سیستم (apt) فقط با root: sudo python3 -m playwright install --with-deps chromium")
     return "\n".join(lines)
+
+
+
+# ── 10.247: in-app browser installer (the dashboard's install button) ─────
+BROWSER_INSTALL_LOCK = threading.Lock()
+BROWSER_INSTALL_STATE: dict[str, Any] = {"running": False, "started_at": 0.0,
+                                         "last": None}
+
+
+def browser_install_pip_commands() -> list[list[str]]:
+    """pip command attempts for installing playwright on THIS host (10.247).
+
+    First the plain module call, then ``--user`` (PEP 668 hosts and non-root
+    service accounts like www-data), then the ``pip3`` binary — the chain the
+    WebConsole patcher bootstrap uses, so the button works where a bare
+    ``pip3 install playwright`` is refused.
+    """
+    py = sys.executable or "python3"
+    brk = ["--break-system-packages"] if pip_break_system() else []
+    common = ["--disable-pip-version-check", "--no-warn-script-location"]
+    cmds = [
+        [py, "-m", "pip", "install", *common, *brk, "playwright"],
+        [py, "-m", "pip", "install", *common, *brk, "--user", "playwright"],
+    ]
+    if os.path.basename(py) not in ("pip3",):
+        cmds.append(["pip3", "install", *common, *brk, "playwright"])
+    out: list[list[str]] = []
+    seen: set[str] = set()
+    for cmd in cmds:
+        key = " ".join(cmd)
+        if key not in seen:
+            seen.add(key)
+            out.append(cmd)
+    return out
+
+
+def browser_download_mirrors() -> list[str]:
+    """Base mirrors carrying the playwright / Chrome-for-Testing artifacts.
+
+    Same list as tools/install_chromium_mirror.sh, kept in sync for hosts
+    whose IPs are blocked from cdn.playwright.dev.
+    """
+    return [
+        "https://cdn.npmmirror.com/binaries",
+        "https://registry.npmmirror.com/-/binary",
+        "https://mirrors.huaweicloud.com",
+        "https://mirror.nju.edu.cn",
+    ]
+
+
+def _browser_run(cmd: list[str], env: dict[str, str] | None, timeout: int,
+                 progress) -> tuple[bool, str]:
+    """Run ``cmd`` streaming every output line to ``progress()``.
+
+    Bounded by ``timeout`` as a whole: a stalled download cannot pin the
+    install button forever — the process is killed at the deadline.
+    """
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                text=True, env=env)
+    except (OSError, ValueError) as exc:
+        progress(f"اجرای {' '.join(cmd[:3])} ممکن نبود: {exc}")
+        return False, str(exc)
+    lines: list[str] = []
+
+    def _pump() -> None:
+        try:
+            if proc.stdout is not None:
+                for raw in proc.stdout:
+                    lines.append(raw.rstrip("\n"))
+            proc.wait()
+        except Exception:  # noqa: BLE001 - reader thread must never raise
+            pass
+
+    reader = threading.Thread(target=_pump, name="browser-install-cmd", daemon=True)
+    reader.start()
+    shown = 0
+    deadline = time.monotonic() + timeout
+    while True:
+        reader.join(0.4)
+        while shown < len(lines):
+            line = lines[shown]
+            shown += 1
+            if line.strip():
+                progress(line[:300])
+        if not reader.is_alive():
+            break
+        if time.monotonic() > deadline:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            progress(f"مهلت {timeout} ثانیه تمام شد — فرایند متوقف شد")
+            return False, "\n".join(lines[-4:])
+    return proc.returncode == 0, "\n".join(lines[-4:])
+
+
+def _browser_fetch_requests(url: str, dest: str, progress) -> bool:
+    """Download ``url`` to ``dest`` with requests, streaming progress.
+
+    Returns True only when the body is non-empty AND a valid zip — a mirror
+    that answers 200 with an HTML error page must not count as a success.
+    """
+    try:
+        with requests.get(url, stream=True, timeout=(20, 900)) as resp:
+            if resp.status_code != 200:
+                return False
+            total = int(resp.headers.get("content-length") or 0)
+            done = 0
+            with open(dest, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=1 << 20):
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if total and done % (50 << 20) < (1 << 20):
+                        progress(f"    {done >> 20} از {total >> 20} مگابایت")
+        return done > 0 and zipfile.is_zipfile(dest)
+    except Exception:  # noqa: BLE001 - the curl fallback or next mirror
+        return False
+
+
+def _browser_fetch_curl(url: str, dest: str) -> bool:
+    """curl fallback — the exact command tools/install_chromium_mirror.sh
+    proved on Iranian servers (some hosts kill python-TLS but allow curl)."""
+    try:
+        proc = subprocess.run(
+            ["curl", "-fL", "--retry", "2", "--retry-delay", "2",
+             "--connect-timeout", "20", "--max-time", "900", "-o", dest, url],
+            timeout=960, stdin=subprocess.DEVNULL)
+        return proc.returncode == 0 and os.path.getsize(dest) > 0 \
+            and zipfile.is_zipfile(dest)
+    except Exception:  # noqa: BLE001 - next mirror
+        return False
+
+
+def _browser_mirror_install(cache: str, progress) -> list[str]:
+    """Python port of tools/install_chromium_mirror.sh (10.247).
+
+    Playwright >= 1.58 fetches Chromium from ``builds/cft/...`` which the
+    usual PLAYWRIGHT_DOWNLOAD_HOST mirrors do not carry; npmmirror hosts the
+    identical Chrome-for-Testing zips under a different prefix, so we download
+    them ourselves and lay them out exactly like the playwright cache,
+    INSTALLATION_COMPLETE markers included. Returns the failure list (empty
+    == success). Versions are read from ``playwright install --dry-run``, so
+    nothing is hardcoded.
+    """
+    import importlib.util  # noqa: F401 - find_spec used by the caller
+    py = sys.executable or "python3"
+    try:
+        proc = subprocess.run([py, "-m", "playwright", "install", "--dry-run",
+                               "chromium"], capture_output=True, text=True,
+                              timeout=180)
+        plan = (proc.stdout or "") + (proc.stderr or "")
+    except Exception as exc:  # noqa: BLE001 - reported to the caller
+        return [f"اجرای dry-run ممکن نشد: {exc}"]
+    cft = re.search(r"Chrome for Testing ([0-9][0-9.]*)", plan)
+    build = re.search(r"playwright chromium v(\d+)", plan)
+    shell = re.search(r"playwright chromium-headless-shell v(\d+)", plan)
+    ffmpeg = re.search(r"playwright ffmpeg v(\d+)", plan)
+    if not (cft and build):
+        return ["نسخهٔ لازم از خروجی dry-run خوانده نشد: " + clean_text(plan)[:160]]
+    cft_ver, chromium_build = cft.group(1), build.group(1)
+    shell_build = shell.group(1) if shell else chromium_build
+    progress(f"لازم: Chrome for Testing {cft_ver} (بیلد {chromium_build})")
+    root = cache or os.path.expanduser("~/.cache/ms-playwright")
+    failures: list[str] = []
+    artifacts = [
+        (f"chrome-for-testing/{cft_ver}/linux64/chrome-linux64.zip",
+         f"chromium-{chromium_build}", "chrome-linux64", "chrome", True),
+        (f"chrome-for-testing/{cft_ver}/linux64/chrome-headless-shell-linux64.zip",
+         f"chromium_headless_shell-{shell_build}",
+         "chrome-headless-shell-linux64", "chrome-headless-shell", True),
+    ]
+    if ffmpeg:
+        artifacts.append((f"playwright/builds/ffmpeg/{ffmpeg.group(1)}/ffmpeg-linux.zip",
+                          f"ffmpeg-{ffmpeg.group(1)}", "", "ffmpeg-linux", False))
+    for rel, dirname, inner, marker, required in artifacts:
+        dest = os.path.join(root, dirname)
+        present = (os.path.isfile(os.path.join(dest, inner, marker)) if inner
+                   else os.path.isfile(os.path.join(dest, marker)))
+        if present:
+            progress(f"  از قبل موجود: {dirname}")
+            continue
+        fd, ztmp = tempfile.mkstemp(prefix="s4-cft-", suffix=".zip")
+        os.close(fd)
+        try:
+            got = False
+            for base in browser_download_mirrors():
+                url = base.rstrip("/") + "/" + rel
+                progress(f"  دانلود {dirname} از {base} …")
+                if _browser_fetch_requests(url, ztmp, progress) \
+                        or _browser_fetch_curl(url, ztmp):
+                    got = True
+                    break
+            if not got:
+                if required:
+                    failures.append(f"{dirname}: هیچ آینه‌ای پاسخ نداد ({rel})")
+                else:
+                    progress(f"  {dirname} اختیاری بود و نصب نشد")
+                continue
+            os.makedirs(dest, exist_ok=True)
+            try:
+                with zipfile.ZipFile(ztmp) as zf:
+                    zf.extractall(dest)
+            except Exception as exc:  # noqa: BLE001 - bad zip
+                failures.append(f"{dirname}: باز کردن بستهٔ zip ناموفق ({exc})")
+                continue
+            # Playwright marks a browser as complete with this file; without
+            # it the installer considers the download unfinished.
+            with open(os.path.join(dest, "INSTALLATION_COMPLETE"), "w"):
+                pass
+            try:
+                for dirpath, _dirnames, filenames in os.walk(dest):
+                    os.chmod(dirpath, 0o755)
+                    for name in filenames:
+                        os.chmod(os.path.join(dirpath, name), 0o755)
+            except OSError:
+                pass
+            check_target = (os.path.join(dest, inner, marker) if inner
+                            else os.path.join(dest, marker))
+            if os.path.isfile(check_target):
+                progress(f"  نصب شد: {check_target}")
+            elif required:
+                failures.append(f"{dirname}: فایل مورد انتظار {inner or ''}/{marker} داخل بسته نبود")
+        finally:
+            try:
+                os.remove(ztmp)
+            except OSError:
+                pass
+    return failures
+
+
+def install_browser_runtime(progress=None) -> dict[str, Any]:
+    """The dashboard's browser-install button (10.247).
+
+    Installs playwright (pip with THIS host's flags) and Chromium (official
+    CDN first, then the Iranian mirrors with the exact playwright cache
+    layout), then verifies the executable and a headless launch. Single
+    flight and idempotent — pressing the button again is always safe.
+    """
+    import importlib.util
+
+    def say(msg: str) -> None:
+        if progress:
+            try:
+                progress(clean_text(msg)[:400])
+            except Exception:  # noqa: BLE001 - UI callback must not break install
+                pass
+
+    if not BROWSER_INSTALL_LOCK.acquire(blocking=False):
+        return {"ok": False, "busy": True, "steps": [],
+                "message": "یک نصب مرورگر همین حالا در حال اجراست؛ چند لحظه بعد دوباره امتحان کنید."}
+    steps: list[dict[str, Any]] = []
+    started = time.time()
+    try:
+        BROWSER_INSTALL_STATE.update(running=True, started_at=started, last=None)
+
+        def step(name: str, ok: bool, detail: str = "") -> bool:
+            steps.append({"step": name, "ok": bool(ok),
+                          "detail": clean_text(detail)[:400]})
+            say(("✓ " if ok else "✗ ") + name + ((" — " + detail) if detail else ""))
+            return bool(ok)
+
+        try:
+            is_root = os.geteuid() == 0
+        except AttributeError:
+            is_root = False
+        in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+        say("محیط: python " + sys.version.split()[0]
+            + (" · root" if is_root else " · غیر root")
+            + (" · venv" if in_venv else " · system-site")
+            + (" · PEP 668" if pip_break_system() else ""))
+
+        # 1) the library
+        if importlib.util.find_spec("playwright") is not None:
+            step("کتابخانهٔ Playwright از قبل نصب است", True)
+        else:
+            pip_ok = False
+            for cmd in browser_install_pip_commands():
+                say("$ " + " ".join(cmd))
+                ok, _tail = _browser_run(cmd, None, 900, say)
+                if ok:
+                    pip_ok = True
+                    step("نصب کتابخانهٔ Playwright", True, " ".join(cmd))
+                    break
+                say("با همین ترکیب نصب نشد — ترکیب بعدی…")
+            if not pip_ok:
+                step("نصب کتابخانهٔ Playwright", False,
+                     playwright_install_hint().replace("\n", " · "))
+                return {"ok": False, "steps": steps, "elapsed_s": int(time.time() - started),
+                        "message": "pip نتوانست playwright را نصب کند؛ دستورهای پیشنهادی در گزارش است."}
+            # Make the fresh package visible to THIS process too (user-site
+            # dirs can be brand new): no service restart needed.
+            importlib.invalidate_caches()
+            try:
+                importlib.import_module("playwright")
+            except Exception:  # noqa: BLE001 - retried via user-site below
+                try:
+                    import site as _site
+                    _user_dir = _site.getusersitepackages()
+                    if _user_dir and os.path.isdir(_user_dir) and _user_dir not in sys.path:
+                        sys.path.insert(0, _user_dir)
+                        importlib.invalidate_caches()
+                        importlib.import_module("playwright")
+                except Exception:  # noqa: BLE001 - verification will report it
+                    pass
+
+        # 2) the browser binary — shared WebConsole cache when applicable
+        cache = configured_browser_path()
+        if not (cache and os.path.isdir(cache)):
+            _wc = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "..",
+                                               "cache", "ms-playwright"))
+            if "wconsole_data" in _wc:
+                try:
+                    os.makedirs(_wc, exist_ok=True)
+                    if os.access(_wc, os.W_OK):
+                        cache = _wc
+                except OSError:
+                    pass
+        env = dict(os.environ)
+        if cache:
+            env["PLAYWRIGHT_BROWSERS_PATH"] = cache
+        say("مسیر کش مرورگر: " + (cache or "(پیش‌فرض playwright)"))
+        args = [sys.executable or "python3", "-m", "playwright", "install"]
+        if is_root:
+            args.append("--with-deps")
+        args.append("chromium")
+        say("$ " + " ".join(args))
+        ok, _tail = _browser_run(args, env, 1800, say)
+        if ok:
+            step("دانلود کرومیوم", True, "CDN رسمی playwright")
+        else:
+            say("CDN رسمی پاسخ نداد — تلاش با آینه‌های ایرانی (npmmirror/huaweicloud/nju)…")
+            failures = _browser_mirror_install(cache, say)
+            if failures:
+                step("دانلود کرومیوم از آینه‌ها", False, "؛ ".join(failures)[:350])
+                return {"ok": False, "steps": steps, "elapsed_s": int(time.time() - started),
+                        "message": "کرومیوم دانلود نشد. گزینه‌ها: bash tools/install_chromium_mirror.sh روی سرور، یا مرورگر سیستم (sudo apt install -y chromium) و SCRAPER_BROWSER_PATH=/usr/bin/chromium."}
+            step("دانلود کرومیوم از آینه‌های ایرانی", True)
+
+        # 3) verification — executable + a real headless launch
+        executable = find_browser_executable(cache)
+        launch_ok, launch_err = False, ""
+        if cache and os.path.isdir(cache):
+            # Same contract as render_playwright: point playwright's own
+            # resolution at the cache we just installed into.
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = cache
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as pw:
+                expected = str(pw.chromium.executable_path)
+                if expected and os.path.isfile(expected):
+                    executable = expected
+                browser = pw.chromium.launch(headless=True, args=[
+                    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+                page = browser.new_page()
+                page.set_content("<h1>ok</h1>")
+                launch_ok = page.inner_text("h1") == "ok"
+                browser.close()
+        except Exception as exc:  # noqa: BLE001 - reported as a step
+            launch_err = str(exc)[:300]
+        if not executable:
+            step("بررسی فایل اجرایی مرورگر", False,
+                 launch_err or "فایل اجرایی مرورگر پیدا نشد")
+            return {"ok": False, "steps": steps, "elapsed_s": int(time.time() - started),
+                    "message": "کتابخانه نصب شد اما فایل اجرایی مرورگر پیدا نشد؛ مراحل گزارش را ببینید."}
+        step("بررسی فایل اجرایی مرورگر", True, executable)
+        if launch_ok:
+            step("تست راه‌اندازی headless", True, "صفحهٔ آزمایشی رندر شد")
+        else:
+            step("تست راه‌اندازی headless", False,
+                 (launch_err or "راه‌اندازی انجام نشد")
+                 + " — اگر کتابخانه‌های سیستم کم است، با root: sudo python3 -m playwright install --with-deps chromium")
+        return {"ok": True, "steps": steps, "executable": executable,
+                "browsers_path": cache or "", "elapsed_s": int(time.time() - started),
+                "message": "Playwright و کرومیوم آماده‌اند."
+                + ("" if launch_ok else " (تست راه‌اندازی کامل نشد؛ پیام مراحل را ببینید — استخراج ممکن است کار کند)")}
+    finally:
+        BROWSER_INSTALL_STATE.update(running=False, last=steps)
+        BROWSER_INSTALL_LOCK.release()
 
 
 def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "", strip_overlays: bool = False) -> FetchResult:

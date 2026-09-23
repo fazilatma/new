@@ -36,6 +36,7 @@ import io
 import json
 import math
 import os
+import queue
 import re
 import secrets
 import subprocess
@@ -3071,6 +3072,47 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "venv": "python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade pip && pip install -r python-scraper4/requirements.txt",
         }
         return ok(commands=cmds, requirements="python-scraper4/requirements.txt", pip_flags=_brk)
+
+    @app.post("/api/browser/install")
+    def node_browser_install():
+        """10.247 — the dashboard's browser-install button.
+
+        Runs the env-aware pip chain and the Chromium download (official CDN,
+        then the Iranian mirrors) on the server, streaming each output line
+        as NDJSON when ?live=1 — the same stream the diagnostic panel reads.
+        Protected by the dashboard's existing password gate like every other
+        mutating route.
+        """
+        live = _s(request.args.get("live")) in ("1", "true", "yes")
+        if not live:
+            return jsonify(**(core.install_browser_runtime(None)))
+        q = queue.SimpleQueue()
+        t0 = time.monotonic()
+
+        def progress(message: str) -> None:
+            q.put({"type": "progress", "name": "browser-install",
+                   "summary": message, "ok": True,
+                   "elapsedMs": int((time.monotonic() - t0) * 1000)})
+
+        def worker() -> None:
+            try:
+                report = core.install_browser_runtime(progress)
+            except BaseException as exc:  # noqa: BLE001 - surfaced to the UI
+                report = {"ok": False, "steps": [],
+                          "error": f"{type(exc).__name__}: {exc}"[:400]}
+            q.put({"type": "result", "report": report})
+            q.put(None)
+
+        threading.Thread(target=worker, name="browser-install", daemon=True).start()
+
+        def run() -> Any:
+            while True:
+                item = q.get()
+                if item is None:
+                    break
+                yield item
+
+        return _ndjson(run())
 
     @app.get("/api/engines")
     def node_engines():
