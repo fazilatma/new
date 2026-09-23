@@ -243,7 +243,10 @@ WEB_USER="www-data"
 WEB_GROUP="www-data"
 
 if [ "$OS_FAMILY" = "debian" ]; then
-    apt-get update -y
+    # Clean up conflicting / duplicated repository lists (e.g. NodeSource gpg key collisions on Ubuntu 24.04)
+    rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources 2>/dev/null || true
+    rm -f /etc/apt/keyrings/nodesource*.gpg /usr/share/keyrings/nodesource*.gpg 2>/dev/null || true
+    apt-get update -y || true
     apt-get purge -y libnode-dev libnode72 2>/dev/null || true
     apt-get install -y --no-install-recommends \
         curl wget git unzip zip tar tmux htop jq ufw build-essential \
@@ -290,11 +293,17 @@ log_ok "Base utilities and build dependencies installed."
 log_step "4/9" "Installing Node.js 20 LTS, PM2, PNPM, Yarn & Nodemon..."
 
 if [ "$OS_FAMILY" = "debian" ]; then
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes 2>/dev/null || true
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
-    apt-get update -y
-    apt-get install -y nodejs
+    NODE_CUR_MAJOR=$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -n 1 || echo "0")
+    if [ "${NODE_CUR_MAJOR:-0}" -lt 20 ]; then
+        rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources 2>/dev/null || true
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes 2>/dev/null || true
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+        apt-get update -y || true
+        apt-get install -y nodejs || true
+    else
+        log_ok "Node.js $(node -v) is already up-to-date."
+    fi
 elif [ "$OS_FAMILY" = "rhel" ]; then
     curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - 2>/dev/null || true
     if command -v dnf >/dev/null 2>&1; then
