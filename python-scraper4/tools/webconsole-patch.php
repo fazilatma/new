@@ -1,6 +1,7 @@
 <?php
 /**
- * WebConsole Pro patcher: 1.6.4 -> 1.6.5
+ * WebConsole Pro patcher: 1.6.4 / 1.6.5 -> 1.6.6
+ * (browser bootstrap + swap management + full pip fallback list)
  * ======================================
  * Makes the "نصب / به‌روزرسانی" (deploy) button install the full Python
  * scraping stack AND a real Chromium automatically:
@@ -25,10 +26,17 @@
  *
  * Usage (on the server, in the folder containing webconsole.php):
  *   cp webconsole.php webconsole.php.mybackup      # your own safety copy
- *   php patch_webconsole_1.6.5.php webconsole.php
- *   php patch_webconsole_1.6.5.php --check webconsole.php   # read-only: reports
+ *   php webconsole-patch.php webconsole.php
+ *   php webconsole-patch.php --check webconsole.php   # read-only: reports
  *        the console version, every anchor match count and pip-smart markers
  *        without touching anything — send this output if patching is refused.
+ *   php webconsole-patch.php --swap-apply 4096        # configure a 4 GB
+ *        swapfile right now (root or passwordless sudo), no patching involved.
+ *
+ * Swap (1.6.6): the console's install components gain swap_2g / swap_4g /
+ * swap_8g / swap_16g entries backed by wcp_swap_setup_cmd(): an idempotent,
+ * sudo-aware swapfile setup that resizes in place, persists via /etc/fstab,
+ * sets vm.swappiness=20 and degrades gracefully inside containers.
  *
  * Safety: the patcher refuses to write unless every anchor matches exactly
  * once, creates a timestamped .bak-1.6.4 backup, verifies the result with
@@ -39,25 +47,40 @@
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit("CLI only\n"); }
 
 $checkOnly = false;
+$swapApplyMb = 0;
 $target = 'webconsole.php';
 foreach (array_slice($argv, 1) as $arg) {
     if ($arg === '--check' || $arg === '-c') { $checkOnly = true; }
+    elseif ($arg === '--swap-apply') { $swapApplyMb = -1; }
+    elseif ($swapApplyMb === -1 && ctype_digit($arg)) { $swapApplyMb = (int)$arg; }
     else { $target = $arg; }
+}
+if ($swapApplyMb === -1) { fwrite(STDERR, "--swap-apply needs a size in MB, e.g. --swap-apply 4096\n"); exit(1); }
+if ($swapApplyMb > 0) {
+    // 1.6.6: configure the swapfile right now (root or passwordless sudo).
+    $f = tempnam(sys_get_temp_dir(), 'wcp-swap-');
+    file_put_contents($f, wcp_swap_setup_cmd($swapApplyMb));
+    passthru('bash ' . escapeshellarg($f));
+    exit(0);
 }
 if (!is_file($target)) { fwrite(STDERR, "ERROR: file not found: {$target}\n"); exit(1); }
 $src = file_get_contents($target);
 if ($src === false) { fwrite(STDERR, "ERROR: cannot read {$target}\n"); exit(1); }
 
-if (strpos($src, "define('WCP_VERSION', '1.6.5')") !== false) {
-    echo "Already patched (WebConsole Pro 1.6.5). Nothing to do.\n";
+$ver = '';
+if (strpos($src, "define('WCP_VERSION', '1.6.4')") !== false) { $ver = '1.6.4'; }
+elseif (strpos($src, "define('WCP_VERSION', '1.6.5')") !== false) { $ver = '1.6.5'; }
+elseif (strpos($src, "define('WCP_VERSION', '1.6.6')") !== false) { $ver = '1.6.6'; }
+if ($ver === '1.6.6') {
+    echo "Already patched (WebConsole Pro 1.6.6: browser bootstrap + swap). Nothing to do.\n";
     exit(0);
 }
-$is164 = strpos($src, "define('WCP_VERSION', '1.6.4')") !== false;
-if (!$checkOnly && !$is164) {
-    fwrite(STDERR, "ERROR: this patcher targets WebConsole Pro 1.6.4; your file reports another version. Patch aborted, nothing written.\n");
+if (!$checkOnly && $ver === '') {
+    fwrite(STDERR, "ERROR: this patcher targets WebConsole Pro 1.6.4/1.6.5; your file reports another version. Patch aborted, nothing written.\n");
     fwrite(STDERR, "Run: php " . basename(__FILE__) . " --check " . escapeshellarg($target) . "  — then send that output so the patcher can be re-targeted.\n");
     exit(1);
 }
+$is164 = ($ver === '1.6.4');
 
 $payloadFunc = <<<'WCPPATCHFUNC'
 /**
@@ -194,6 +217,48 @@ WCPBROWSERCMD;
 
 WCPPATCHFUNC;
 
+$payloadSwap = <<<'WCPPATCHSWAP'
+/**
+ * 1.6.6 — Idempotent swapfile setup bash for the execution account.
+ * Root is required; falls back to passwordless sudo (www-data). Safe to
+ * re-run: enough swap already present is a no-op, a smaller /swapfile is
+ * resized in place. Persists via /etc/fstab, tunes vm.swappiness and
+ * degrades gracefully inside containers that forbid swap.
+ */
+function wcp_swap_setup_cmd(int $mb): string {
+    $mb = max(256, min(65536, $mb));
+    return str_replace('__MB__', (string)$mb, <<<'WCPSWAPCMD'
+TARGET_MB=__MB__
+SWAP_FILE=/swapfile
+if [ "$(id -u)" = "0" ]; then SUDO=""; else SUDO="sudo -n"; fi
+CUR_MB=$(free -m 2>/dev/null | awk '/^Swap:/{print $2}' | head -n1)
+echo "[swap] current swap: ${CUR_MB:-0} MB, target: ${TARGET_MB} MB"
+if [ "${CUR_MB:-0}" -ge "$TARGET_MB" ] 2>/dev/null; then
+  echo "[swap] already satisfied — nothing to do."; exit 0
+fi
+if [ -f /proc/user_beancounters ]; then
+  echo "[swap WARNING] OpenVZ-style container: swap cannot be managed from inside."; exit 0
+fi
+if [ -f "$SWAP_FILE" ]; then $SUDO swapoff "$SWAP_FILE" >/dev/null 2>&1 || true; fi
+$SUDO rm -f "$SWAP_FILE" >/dev/null 2>&1 || true
+if command -v fallocate >/dev/null 2>&1 && $SUDO fallocate -l "${TARGET_MB}M" "$SWAP_FILE" >/dev/null 2>&1; then
+  echo "[swap] allocated ${TARGET_MB} MB via fallocate"
+else
+  $SUDO dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$TARGET_MB" status=none >/dev/null 2>&1 || { echo "[swap ERROR] allocation failed (need root or passwordless sudo)"; exit 0; }
+fi
+$SUDO chmod 600 "$SWAP_FILE" >/dev/null 2>&1 || true
+$SUDO mkswap -f "$SWAP_FILE" >/dev/null 2>&1 || { echo "[swap ERROR] mkswap failed"; exit 0; }
+$SUDO swapon "$SWAP_FILE" >/dev/null 2>&1 || { echo "[swap WARNING] swapon refused (container without swap privileges?)"; exit 0; }
+grep -q '^/swapfile ' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' | $SUDO tee -a /etc/fstab >/dev/null 2>&1 || true
+if [ -d /etc/sysctl.d ] && ! grep -qs 'vm.swappiness' /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null; then
+  echo 'vm.swappiness=20' | $SUDO tee /etc/sysctl.d/99-s4-swap.conf >/dev/null 2>&1 && $SUDO sysctl -q -p /etc/sysctl.d/99-s4-swap.conf >/dev/null 2>&1 || true
+fi
+echo "[swap] active: $(free -m 2>/dev/null | awk '/^Swap:/{print $2}' | head -n1) MB — survives reboot via /etc/fstab"
+WCPSWAPCMD);
+}
+
+WCPPATCHSWAP;
+
 $oldD = <<<'WCPPATCHD'
     foreach (['install' => ($p['install_cmd'] ?: default_install_cmd($p['type'])), 'build' => $p['build_cmd']] as $label => $cmd) {
         if (trim($cmd) === '') continue;
@@ -245,9 +310,9 @@ $newC = <<<'WCPPATCHCN'
 WCPPATCHCN;
 
 $patches = [
-    ['version bump 1.6.4 -> 1.6.5',
+    ['version bump 1.6.4 -> 1.6.6',
      "define('WCP_VERSION', '1.6.4');",
-     "define('WCP_VERSION', '1.6.5');"],
+     "define('WCP_VERSION', '1.6.6');"],
     ['insert wcp_browser_bootstrap_cmd() before default_install_cmd()',
      'function default_install_cmd(string $type): string {',
      $payloadFunc . 'function default_install_cmd(string $type): string {'],
@@ -261,11 +326,40 @@ $patches = [
      $oldC, $newC],
 ];
 
+// ---- 1.6.6: swap management (idempotent swapfile, sudo-aware) ----
+$swapBranch = <<<'WCPPATCHSWAPB'
+    if ($name === 'swap_2g' || $name === 'swap_4g' || $name === 'swap_8g' || $name === 'swap_16g') {
+        $mb = ((int)substr($name, 5)) * 1024;
+        cli_log("[Swap] Configuring {$mb} MB swapfile (idempotent)...");
+        cli_checked(wcp_swap_setup_cmd($mb));
+        cli_log("✓ Swap configured ({$mb} MB).");
+        return;
+    }
+WCPPATCHSWAPB;
+$swapPatches = [
+    ['cli_install_component understands the swap_2g/4g/8g/16g components',
+     "    if (\$name === 'python_scrapers') {",
+     $swapBranch . "    if (\$name === 'python_scrapers') {"],
+    ['insert wcp_swap_setup_cmd() helper',
+     'function default_install_cmd(string $type): string {',
+     $payloadSwap . 'function default_install_cmd(string $type): string {'],
+];
+if ($ver === '1.6.5') {
+    // Browser bootstrap (1.6.5) is already on the file — only add swap + bump.
+    $patches = [
+        ['version bump 1.6.5 -> 1.6.6', "define('WCP_VERSION', '1.6.5');", "define('WCP_VERSION', '1.6.6');"],
+    ];
+    foreach ($swapPatches as $sp) { $patches[] = $sp; }
+} else {
+    foreach ($swapPatches as $sp) { $patches[] = $sp; }
+}
+
 if ($checkOnly) {
     echo "CHECK MODE (read-only, nothing written) — {$target}\n";
-    preg_match("/define\('WCP_VERSION', '([^']+)'\)/", $src, $m);
-    echo "  WCP_VERSION: " . (isset($m[1]) ? $m[1] : 'NOT FOUND') . ($is164 ? "  (patchable)" : "  (NOT 1.6.4 — patcher must be re-targeted)") . "\n";
-    $ready = $is164;
+    echo "  WCP_VERSION: " . ($ver !== '' ? $ver : 'NOT FOUND') . ($ver !== '' ? "" : "  (unrecognized — patcher must be re-targeted)") . "\n";
+    if ($ver === '1.6.5') { echo "  browser bootstrap (1.6.5): already applied — the swap set will be added\n"; }
+    if ($ver === '1.6.6') { echo "  already 1.6.6 — nothing to do\n"; exit(0); }
+    $ready = ($ver !== '');
     foreach ($patches as $i => $patch) {
         $count = substr_count($src, $patch[1]);
         if ($count !== 1) { $ready = false; $mark = 'PROBLEM'; } else { $mark = 'OK'; }
@@ -320,6 +414,7 @@ if (!@rename($tmp, $target)) {
     exit(1);
 }
 echo "OK: {$applied} patch site(s) applied. Backup: {$backup}\n";
-echo "WebConsole Pro is now 1.6.5 — the deploy button installs the full Python stack\n";
+echo "WebConsole Pro is now 1.6.6 — the deploy button installs the full Python stack\n";
+echo "and swap_2g/4g/8g/16g components are available (idempotent swapfile setup).\n";
 echo "plus Playwright + Chromium automatically (official CDN, Iran mirrors, system\n";
 echo "browser fallback). No service restart is needed for the console itself.\n";
