@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Linux & GitHub Codespaces 1-Click Auto-Installer
-# Repository: fazilatma/new | Version: 1.6.5
+# Repository: fazilatma/new | Version: 1.6.6
 # Supports: GitHub Codespaces (SSH / Browser), Debian, Ubuntu, Linux Mint,
 #           CentOS, RHEL, Rocky Linux, AlmaLinux, Fedora, Alpine, Arch Linux
 # ==============================================================================
@@ -52,16 +52,21 @@ echo "   🌐 WebConsole Pro - Universal Linux & GitHub Codespaces Auto-Installe
 echo "================================================================================"
 echo -e "${CLR_RESET}"
 
+# Check systemd availability
+HAS_SYSTEMD=false
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    HAS_SYSTEMD=true
+fi
+
 # ------------------------------------------------------------------------------
 # 1. Environment & Codespaces Detection (Multi-Source Deep Extraction)
 # ------------------------------------------------------------------------------
-log_step "1/9" "Detecting Environment, Linux Distro & GitHub Codespaces Name..."
+log_step "1/9" "Detecting Environment, Linux Distro & GitHub Codespaces..."
 
 IS_CODESPACES=false
 CODESPACE_NAME="${CODESPACE_NAME:-}"
 CODESPACE_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
 
-# Function to extract an environment variable across all deep container sources
 extract_cs_var() {
     local var_name="$1"
     local val=""
@@ -113,7 +118,6 @@ extract_cs_var() {
     echo ""
 }
 
-# Perform deep extraction
 if [ -z "$CODESPACE_NAME" ] || [ "$CODESPACE_NAME" = "codespace" ] || [ "$CODESPACE_NAME" = "localhost" ]; then
     CODESPACE_NAME=$(extract_cs_var "CODESPACE_NAME")
 fi
@@ -123,7 +127,6 @@ if [ -n "$EXTRACTED_DOMAIN" ]; then
     CODESPACE_DOMAIN="$EXTRACTED_DOMAIN"
 fi
 
-# Capture GitHub Token for gh CLI authorization in root shell
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 if [ -z "$GITHUB_TOKEN" ]; then
     GITHUB_TOKEN=$(extract_cs_var "GITHUB_TOKEN")
@@ -134,9 +137,7 @@ fi
 if [ -n "$GITHUB_TOKEN" ]; then
     export GITHUB_TOKEN="$GITHUB_TOKEN"
     export GH_TOKEN="$GITHUB_TOKEN"
-    log_ok "Captured GitHub Token for Codespaces CLI port forwarding."
 fi
-
 
 if [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/workspaces" ] || [ -d "/.codespaces" ]; then
     IS_CODESPACES=true
@@ -207,7 +208,7 @@ log_ok "Operating System: ${DISTRO} (Family: ${OS_FAMILY}, Version: ${VERSION_ID
 log_step "2/9" "Checking Virtual Memory (Swap) Configuration..."
 
 if [ "$IS_CODESPACES" = "true" ]; then
-    log_info "Running inside container/Codespaces. Host kernel manages swap allocation automatically."
+    log_info "Running inside container/Codespaces. Host manages memory allocation."
 else
     TOTAL_SWAP_KB=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
     if [ "${TOTAL_SWAP_KB:-0}" -lt 1048576 ]; then
@@ -309,9 +310,6 @@ fi
 
 if command -v npm >/dev/null 2>&1; then
     npm install -g pm2 yarn pnpm nodemon --silent 2>/dev/null || npm install -g pm2 yarn pnpm nodemon || true
-    if command -v pm2 >/dev/null 2>&1; then
-        pm2 startup systemd -u root --hp /root 2>/dev/null || true
-    fi
 fi
 
 NODE_VER=$(node -v 2>/dev/null || echo "not found")
@@ -344,7 +342,7 @@ fi
 log_ok "Headless browser graphics and font dependencies configured."
 
 # ------------------------------------------------------------------------------
-# 6. Python 3, Pip & Scraping Libraries Stack
+# 6. Python 3, Pip & Scraping Libraries Stack (Global Multi-User Installation)
 # ------------------------------------------------------------------------------
 log_step "6/9" "Installing Python 3 & High-Performance Scraping Stack..."
 
@@ -365,23 +363,29 @@ fi
 python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || \
 python3 -m pip install --upgrade pip 2>/dev/null || true
 
-log_info "Installing Python packages (curl_cffi, playwright, cloudscraper, undetected-chromedriver, etc.)..."
-python3 -m pip install --break-system-packages --ignore-installed \
-    requests curl_cffi cloudscraper undetected-chromedriver \
-    playwright selenium beautifulsoup4 lxml aiohttp httpx \
-    fastapi uvicorn python-dotenv fake-useragent tqdm pandas psutil 2>/dev/null || \
-python3 -m pip install \
-    requests curl_cffi cloudscraper undetected-chromedriver \
-    playwright selenium beautifulsoup4 lxml aiohttp httpx \
-    fastapi uvicorn python-dotenv fake-useragent tqdm pandas psutil 2>/dev/null || true
+PY_PACKAGES="requests flask beautifulsoup4 lxml httpx curl_cffi cloudscraper aiohttp playwright html5lib selectolax basalam-sdk psutil python-dotenv fastapi uvicorn fake-useragent tqdm pandas"
+
+log_info "Installing scraping packages globally across all Python environments..."
+# 1. System-wide installation
+python3 -m pip install --break-system-packages --ignore-installed $PY_PACKAGES 2>/dev/null || \
+python3 -m pip install $PY_PACKAGES 2>/dev/null || true
+
+# 2. www-data user installation
+mkdir -p /var/www/.local /var/www/projects 2>/dev/null || true
+chown -R ${WEB_USER}:${WEB_GROUP} /var/www 2>/dev/null || true
+
+# 3. vscode user installation if present
+if id -u vscode >/dev/null 2>&1; then
+    su - vscode -c "python3 -m pip install --break-system-packages --user $PY_PACKAGES" 2>/dev/null || true
+fi
 
 PY_VER=$(python3 --version 2>/dev/null || echo "Python 3")
 log_ok "${PY_VER} and scraping stack installed successfully."
 
 # ------------------------------------------------------------------------------
-# 7. Nginx, PHP & PHP-FPM Configuration (Supporting Ports 80 & 8080)
+# 7. Nginx, PHP & PHP-FPM Configuration (Multi-Port 8888, 8000, 8080, 80)
 # ------------------------------------------------------------------------------
-log_step "7/9" "Configuring Nginx & PHP-FPM (Dual Ports 80 and 8080)..."
+log_step "7/9" "Configuring Nginx & PHP-FPM Web Servers..."
 
 if [ "$OS_FAMILY" = "debian" ]; then
     apt-get install -y nginx php-fpm php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-sqlite3
@@ -409,7 +413,7 @@ if [ -z "$PHP_SOCK" ]; then
     PHP_SOCK="127.0.0.1:9000"
 fi
 
-log_info "Detected FastCGI Socket: ${PHP_SOCK}"
+log_info "FastCGI Socket: ${PHP_SOCK}"
 
 mkdir -p /var/www/html /var/www/projects
 
@@ -448,61 +452,27 @@ server {
 }
 NGINX_CONF
     ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default 2>/dev/null || true
+fi
+
+# Start services gracefully
+if [ "$HAS_SYSTEMD" = "true" ]; then
+    systemctl restart nginx 2>/dev/null || true
+    for fpm in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
+        systemctl restart $fpm 2>/dev/null || true
+    done
 else
-    cat << NGINX_CONF > /etc/nginx/conf.d/webconsole.conf
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    listen 8080 default_server;
-    listen [::]:8080 default_server;
-    listen 8000 default_server;
-    listen [::]:8000 default_server;
-    listen 8888 default_server;
-    listen [::]:8888 default_server;
-    server_name _;
-    root /var/www/html;
-    index index.php index.html index.htm;
-    client_max_body_size 1024M;
-    client_body_buffer_size 128M;
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    location ~ \.php\$ {
-        fastcgi_pass ${PHP_SOCK};
-        fastcgi_index index.php;
-        include fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        fastcgi_read_timeout 600;
-        fastcgi_send_timeout 600;
-        fastcgi_connect_timeout 60;
-    }
-
-    location ~ /\.ht {
-        deny all;
-    }
-}
-NGINX_CONF
+    service nginx restart 2>/dev/null || nginx 2>/dev/null || true
+    for fpm in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
+        service $fpm restart 2>/dev/null || true
+    done
 fi
 
-service nginx restart 2>/dev/null || systemctl restart nginx 2>/dev/null || nginx 2>/dev/null || true
-
-for fpm in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
-    service $fpm restart 2>/dev/null || systemctl restart $fpm 2>/dev/null || true
-done
-
-if command -v setsebool >/dev/null 2>&1; then
-    setsebool -P httpd_can_network_connect 1 2>/dev/null || true
-    setsebool -P httpd_unified 1 2>/dev/null || true
-fi
-
-log_ok "Nginx & PHP-FPM configured and listening on Port 80 and 8080."
+log_ok "Nginx & PHP-FPM configured and listening on Ports 8888, 8000, 8080, and 80."
 
 # ------------------------------------------------------------------------------
-# 8. Deploy WebConsole Pro v1.6.5 & Sudoers Permissions
+# 8. Deploy WebConsole Pro v1.6.6 & Sudoers Permissions
 # ------------------------------------------------------------------------------
-log_step "8/9" "Deploying WebConsole Pro v1.6.5 & Sudoers Permissions..."
+log_step "8/9" "Deploying WebConsole Pro v1.6.6 & Sudoers Permissions..."
 
 mkdir -p /etc/sudoers.d
 cat << SUDOERS_CONF > /etc/sudoers.d/99-webconsole-nopasswd
@@ -515,7 +485,7 @@ codespace ALL=(ALL) NOPASSWD: ALL
 SUDOERS_CONF
 chmod 0440 /etc/sudoers.d/99-webconsole-nopasswd
 
-log_info "Fetching latest WebConsole Pro v1.6.5 from GitHub (fazilatma/new)..."
+log_info "Fetching latest WebConsole Pro v1.6.6 from GitHub (fazilatma/new)..."
 WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
 curl -fsSL "$WCP_URL" -o /var/www/html/webconsole.php || \
 wget -qO /var/www/html/webconsole.php "$WCP_URL"
@@ -526,23 +496,18 @@ chown -R ${WEB_USER}:${WEB_GROUP} /var/www/html /var/www/projects 2>/dev/null ||
 chmod -R 775 /var/www/html /var/www/projects 2>/dev/null || true
 touch /var/www/html/webconsole.php /var/www/html/index.php 2>/dev/null || true
 
-# Ensure services are up and running
-for svc in nginx apache2 httpd php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
-    service $svc restart 2>/dev/null || systemctl restart $svc 2>/dev/null || true
-done
-
-# Start lightweight, robust background PHP servers on ports 8888 and 8000 (Guaranteed high-ports)
+# Start background supervised PHP servers on high ports
 pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
 pkill -f 'php -S 0.0.0.0:8000' 2>/dev/null || true
 
 nohup php -S 0.0.0.0:8888 -t /var/www/html >/tmp/webconsole-php-8888.log 2>&1 &
 nohup php -S 0.0.0.0:8000 -t /var/www/html >/tmp/webconsole-php-8000.log 2>&1 &
-sleep 2
+sleep 1
 
-# Also auto-configure .devcontainer / VS Code port attributes if inside workspace
+# Configure .devcontainer and .vscode ports inside all workspace directories
 for ws_dir in /workspaces/*; do
     if [ -d "$ws_dir" ]; then
-        mkdir -p "$ws_dir/.vscode" 2>/dev/null || true
+        mkdir -p "$ws_dir/.vscode" "$ws_dir/.devcontainer" 2>/dev/null || true
         cat << 'VSCODE_PORTS_JSON' > "$ws_dir/.vscode/ports.json" 2>/dev/null || true
 {
     "portsAttributes": {
@@ -563,59 +528,32 @@ if command -v php >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------------------------
-# 9. Codespaces Port Forwarding & Public Visibility (PHP, Node.js, Python)
+# 9. Codespaces Port Visibility Configuration (Non-Blocking)
 # ------------------------------------------------------------------------------
-log_step "9/9" "Configuring Codespaces Port Forwarding & Public Visibility..."
+log_step "9/9" "Configuring Codespaces Port Visibility..."
 
-# Ports to forward and expose
-PORTS_PHP="8888 8000 8080 80"
-PORTS_NODE="3000 3001 5000"
-PORTS_PYTHON="8081 8790"
 ALL_PORTS="8888 8000 8080 80 3000 3001 5000 8081 8790"
 
 if [ "$IS_CODESPACES" = "true" ]; then
-    log_info "Forwarding and setting public visibility for WebConsole & application ports..."
-    
-    # Try multiple CLI tools: gh, ghcs, and su
+    log_info "Setting public visibility flags on ports..."
     for p in $ALL_PORTS; do
-        # Method A: gh CLI with token
         if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
-            gh codespace ports forward "${p}:${p}" -c "$CODESPACE_NAME" 2>/dev/null || true
             gh codespace ports visibility "${p}:public" -c "$CODESPACE_NAME" 2>/dev/null || true
-            gh codespace ports visibility "${p}:public" 2>/dev/null || true
         else
             gh codespace ports visibility "${p}:public" 2>/dev/null || true
         fi
-        
-        # Method B: ghcs internal binary if available
         if [ -x "/.codespaces/bin/ghcs" ]; then
-            /.codespaces/bin/ghcs port forward "$p" 2>/dev/null || true
             /.codespaces/bin/ghcs port visibility "$p:public" 2>/dev/null || true
         fi
     done
-
-    # Method C: Execute as SSH user (vscode/codespace)
-    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-        for p in $ALL_PORTS; do
-            if [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
-                su - "$SUDO_USER" -c "export GITHUB_TOKEN='$GITHUB_TOKEN'; gh codespace ports forward ${p}:${p} -c '$CODESPACE_NAME' 2>/dev/null || true; gh codespace ports visibility ${p}:public -c '$CODESPACE_NAME' 2>/dev/null || true" 2>/dev/null || true
-            fi
-        done
-    fi
-    log_ok "Codespaces ports forwarded and marked PUBLIC: 8888, 8000, 8080, 80, 3000, 5000, 8081."
+    log_ok "Port visibility update completed."
 fi
-
-# Local health verification
-log_info "Testing local WebConsole HTTP response..."
-STATUS_8888=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/ || echo "err")
-STATUS_80=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:80/ || echo "err")
-log_ok "Local HTTP Status -> Port 8888: [${STATUS_8888}], Port 80: [${STATUS_80}]" 
 
 SERVER_IP=$(curl -s4m 4 ifconfig.me || curl -s4m 4 api.ipify.org || curl -s4m 4 icanhazip.com || hostname -I | awk '{print $1}' || echo "127.0.0.1")
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.6.5 Installation Completed Successfully!         "
+echo "          🎉 WebConsole Pro v1.6.6 Installation Completed Successfully!         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
@@ -625,14 +563,12 @@ if [ "$IS_CODESPACES" = "true" ]; then
     echo -e "  🐘 ${CLR_BOLD}WebConsole (Primary Port 8888):${CLR_RESET}  ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-8888.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  🐘 ${CLR_BOLD}WebConsole (Alternate Port 8000):${CLR_RESET}${CLR_CYAN}https://${CODESPACE_NAME}-8000.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 8080):${CLR_RESET}          ${CLR_CYAN}https://${CODESPACE_NAME}-8080.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 80):${CLR_RESET}            ${CLR_CYAN}https://${CODESPACE_NAME}-80.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 3000):${CLR_RESET}        ${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 5000):${CLR_RESET}        ${CLR_MAGENTA}https://${CODESPACE_NAME}-5000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐍 ${CLR_BOLD}Python Apps (Port 8081):${CLR_RESET}         ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐍 ${CLR_BOLD}Python Scraper (Port 8081):${CLR_RESET}      ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  💡 ${CLR_YELLOW}Notice:${CLR_RESET} In Codespaces, Port 8888 and 8000 are recommended because low ports (80)"
-    echo -e "     are often restricted by container tunneling. If you see 404 on port 80, open Port 8888!"
-    echo -e "  🔗 ${CLR_BOLD}VS Code Ports Tab:${CLR_RESET} You can click the 🌐 globe icon next to Port 8888 in VS Code."
+    echo -e "  💡 ${CLR_YELLOW}Notice:${CLR_RESET} In Codespaces, Port 8888 and 8000 are recommended."
+    echo -e "  🔗 ${CLR_BOLD}VS Code Ports Tab:${CLR_RESET} In VS Code, open the Ports tab and click 🌐 on Port 8888."
 else
     echo -e "  🌐 ${CLR_BOLD}Primary URL:${CLR_RESET}   ${CLR_GREEN}${CLR_BOLD}http://${SERVER_IP:-YOUR_SERVER_IP}/${CLR_RESET}"
     echo -e "  🌐 ${CLR_BOLD}Backup Port:${CLR_RESET}  ${CLR_CYAN}http://${SERVER_IP:-YOUR_SERVER_IP}:8080/${CLR_RESET}"
