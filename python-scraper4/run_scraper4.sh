@@ -129,10 +129,120 @@ fetch_latest() {
   fi
 }
 
+# install_chromium_mirror_inline <cache-dir> — self-contained mirror fallback.
+# cdn.playwright.dev is geo-blocked for Iranian IPs. This reads the exact
+# versions `playwright install --dry-run` asks for and downloads the identical
+# Chrome-for-Testing builds from mirrors that work from Iran, placing them in
+# the cache with the layout Playwright expects. Nothing external is sourced:
+# the whole logic lives in this installer on purpose.
+install_chromium_mirror_inline() (
+  set -uo pipefail
+  CACHE="$1"
+  PY="$2"
+  MIRRORS=("https://cdn.npmmirror.com/binaries" "https://registry.npmmirror.com/-/binary" "https://mirrors.huaweicloud.com" "https://mirror.nju.edu.cn")
+  if [ -n "${MIRROR:-}" ]; then MIRRORS=("$MIRROR"); fi
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+  command -v unzip >/dev/null 2>&1 || { apt-get install -y unzip >/dev/null 2>&1 || true; }
+  echo "Mirror fallback: mirrors = ${MIRRORS[*]}"
+  PLAN="$("$PY" -m playwright install --dry-run chromium 2>/dev/null)"
+  if [ -z "$PLAN" ]; then
+    echo "  ERROR: 'playwright install --dry-run' produced no plan." >&2
+    return 1
+  fi
+  CFT_VER="$(printf '%s' "$PLAN" | grep -oP 'Chrome for Testing \K[0-9.]+' | head -1)"
+  CHROMIUM_BUILD="$(printf '%s' "$PLAN" | grep -oP 'playwright chromium v\K[0-9]+' | head -1)"
+  SHELL_BUILD="$(printf '%s' "$PLAN" | grep -oP 'playwright chromium-headless-shell v\K[0-9]+' | head -1)"
+  FFMPEG_BUILD="$(printf '%s' "$PLAN" | grep -oP 'playwright ffmpeg v\K[0-9]+' | head -1)"
+  : "${SHELL_BUILD:=$CHROMIUM_BUILD}"
+  if [ -z "$CFT_VER" ] || [ -z "$CHROMIUM_BUILD" ]; then
+    echo "  ERROR: could not parse the required versions. Raw plan:" >&2
+    printf '%s\n' "$PLAN" >&2
+    return 1
+  fi
+  echo "  Required: Chrome for Testing $CFT_VER (build $CHROMIUM_BUILD)"
+  fetch() { curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 -o "$2" "$1" 2>/dev/null; }
+  install_zip() {
+    url="$1"; dirname="$2"; inner="$3"; marker="$4"
+    dest="$CACHE/$dirname"
+    if [ -f "$dest/$inner/$marker" ]; then echo "  already present: $dirname"; return 0; fi
+    echo "  downloading $dirname ..."
+    zip="$TMP/$dirname.zip"; got=0
+    for base in "${MIRRORS[@]}"; do
+      if fetch "${base}/${url}" "$zip"; then got=1; break; fi
+    done
+    if [ "$got" -ne 1 ]; then echo "    FAILED on every mirror: $url" >&2; return 1; fi
+    mkdir -p "$dest"
+    unzip -q -o "$zip" -d "$dest" || { echo "    unzip failed" >&2; return 1; }
+    rm -f "$zip"
+    # Playwright marks a finished download with this marker file.
+    : > "$dest/INSTALLATION_COMPLETE"
+    chmod -R a+rX "$dest" 2>/dev/null || true
+    [ -f "$dest/$inner/$marker" ] && chmod +x "$dest/$inner/$marker" 2>/dev/null || true
+    if [ -f "$dest/$inner/$marker" ]; then echo "    ok -> $dest/$inner/$marker"; return 0; fi
+    echo "    WARNING: expected $inner/$marker inside the archive" >&2
+    return 1
+  }
+  FAILED=0
+  install_zip "chrome-for-testing/$CFT_VER/linux64/chrome-linux64.zip" \
+    "chromium-$CHROMIUM_BUILD" "chrome-linux64" "chrome" || FAILED=1
+  install_zip "chrome-for-testing/$CFT_VER/linux64/chrome-headless-shell-linux64.zip" \
+    "chromium_headless_shell-$SHELL_BUILD" "chrome-headless-shell-linux64" \
+    "chrome-headless-shell" || FAILED=1
+  if [ -n "$FFMPEG_BUILD" ]; then
+    dest="$CACHE/ffmpeg-$FFMPEG_BUILD"
+    if [ ! -e "$dest/ffmpeg-linux" ]; then
+      echo "  downloading ffmpeg-$FFMPEG_BUILD (optional) ..."
+      ffok=0
+      for base in "${MIRRORS[@]}"; do
+        fetch "$base/playwright/builds/ffmpeg/$FFMPEG_BUILD/ffmpeg-linux.zip" "$TMP/ff.zip" && { ffok=1; break; }
+      done
+      if [ "$ffok" -eq 1 ]; then
+        mkdir -p "$dest" && unzip -q -o "$TMP/ff.zip" -d "$dest" && \
+          : > "$dest/INSTALLATION_COMPLETE" && chmod +x "$dest/ffmpeg-linux" 2>/dev/null
+      fi
+    fi
+  fi
+  echo "  Installing OS libraries Chromium needs ..."
+  "$PY" -m playwright install-deps chromium >/dev/null 2>&1 \
+    || apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+         libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 >/dev/null 2>&1 \
+    || echo "  (could not install system libs automatically)"
+  echo "  Verifying launch ..."
+  "$PY" - <<'PYLAUNCH'
+import sys
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("  playwright is not installed"); sys.exit(1)
+try:
+    with sync_playwright() as pw:
+        b = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        p = b.new_page(); p.set_content("<h1>ok</h1>")
+        ok = p.inner_text("h1") == "ok"; b.close()
+        print("  launch test:", "PASS" if ok else "unexpected")
+        sys.exit(0 if ok else 3)
+except Exception as exc:
+    print("  launch test: FAILED -", str(exc)[:160]); sys.exit(3)
+PYLAUNCH
+  rc=$?
+  [ "$rc" -eq 0 ] && [ "$FAILED" -eq 0 ] && return 0
+  echo "  Mirrors did not produce a working browser - trying the system Chromium..."
+  apt-get install -y chromium >/dev/null 2>&1 || apt-get install -y chromium-browser >/dev/null 2>&1 \
+    || snap install chromium >/dev/null 2>&1 || true
+  for cand in /usr/bin/chromium /usr/bin/chromium-browser /snap/bin/chromium \
+              /usr/bin/google-chrome-stable /usr/bin/google-chrome; do
+    [ -x "$cand" ] && { echo "  found system browser: $cand (the app picks it up automatically)"; return 0; }
+  done
+  return 1
+)
+
 ensure_browser() {
   # A fresh server used to stay browser-less: without a real Chromium the
   # extraction could never fall back to a browser render, so anti-bot pages
-  # and emalls' duplicate-page shell stayed unrescued. One-time download.
+  # and emalls' duplicate-page shell stayed unrescued. Fully self-contained:
+  # official CDN first, inline mirror fallback, system Chromium last.
   "$PY" -c "import playwright" 2>/dev/null || { echo "playwright (pip) missing - cannot install Chromium"; return 0; }
   local BP="${PLAYWRIGHT_BROWSERS_PATH:-}"
   if [ -z "$BP" ]; then
@@ -143,25 +253,21 @@ ensure_browser() {
     fi
   fi
   export PLAYWRIGHT_BROWSERS_PATH="$BP"
-  if [ -n "$(find "$BP" -mindepth 2 -maxdepth 4 -type f -name chrome 2>/dev/null | head -n1)" ]; then
+  if [ -n "$(find "$BP" -mindepth 2 -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) 2>/dev/null | head -n1)" ]; then
     echo "Chromium already installed at ${BP}"
     return 0
   fi
   echo "Installing Playwright Chromium into ${BP} (one-time download)..."
-  if ! PLAYWRIGHT_BROWSERS_PATH="$BP" "$PY" -m playwright install chromium; then
-    echo "Official download failed (cdn.playwright.dev is blocked in Iran) - trying the npmmirror installer..."
-    local MIRROR="${SRC}/python-scraper4/tools/install_chromium_mirror.sh"
-    [ -f "$MIRROR" ] || MIRROR="${SRC}/tools/install_chromium_mirror.sh"
-    if [ -f "$MIRROR" ]; then
-      PLAYWRIGHT_BROWSERS_PATH="$BP" bash "$MIRROR" || echo "  Mirror install failed - run manually: PLAYWRIGHT_BROWSERS_PATH=${BP} bash ${MIRROR}"
-    else
-      echo "  Mirror script not found; manual: PLAYWRIGHT_BROWSERS_PATH=${BP} python3 -m playwright install chromium"
-    fi
+  PLAYWRIGHT_BROWSERS_PATH="$BP" "$PY" -m playwright install chromium \
+    || echo "Official download failed (cdn.playwright.dev is blocked in Iran) - switching to mirrors..."
+  if [ -z "$(find "$BP" -mindepth 2 -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) 2>/dev/null | head -n1)" ]; then
+    install_chromium_mirror_inline "$BP" "$PY" || true
   fi
-  if [ -n "$(find "$BP" -mindepth 2 -maxdepth 4 -type f -name chrome 2>/dev/null | head -n1)" ]; then
+  if [ -n "$(find "$BP" -mindepth 2 -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) 2>/dev/null | head -n1)" ]; then
     echo "Chromium OK at ${BP}"
   else
-    echo "WARNING: no Chromium binary found - browser rendering stays unavailable. A system Chrome also works: sudo apt install -y chromium-browser"
+    echo "WARNING: no Chromium binary found - browser rendering stays unavailable."
+    echo "  Last resort: sudo apt install -y chromium-browser  (the app also accepts a system Chrome)"
   fi
 }
 

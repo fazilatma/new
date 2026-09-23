@@ -157,14 +157,22 @@ check("run_scraper4.sh exists", os.path.isfile(run_sh), run_sh)
 src_sh = open(run_sh, encoding="utf-8").read()
 parsed = subprocess.run(["bash", "-n", run_sh], capture_output=True, text=True)
 check("run_scraper4.sh parses", parsed.returncode == 0, parsed.stderr[:160])
-for needle in ("-m playwright install chromium", "install_chromium_mirror.sh",
-               "undetected-chromedriver", "aiohttp", "psutil", "python-dotenv"):
+for needle in ("-m playwright install chromium", "undetected-chromedriver",
+               "aiohttp", "psutil", "python-dotenv"):
     check(f"run_scraper4.sh mentions {needle!r}", needle in src_sh)
+check("mirror logic is INLINE in run_scraper4.sh (no separate file)",
+      "cdn.npmmirror.com" in src_sh and "playwright install --dry-run" in src_sh
+      and "INSTALLATION_COMPLETE" in src_sh)
+check("run_scraper4.sh no longer calls the separate mirror script",
+      "install_chromium_mirror.sh" not in src_sh)
+check("system-Chromium last resort present", "apt install -y chromium-browser" in src_sh)
 check("Termux stays browser-less by design", "is_termux; then" in src_sh and "no desktop Chromium on Android" in src_sh)
 vps_sh = os.path.join(ROOT, "tools", "vps-live", "install_scraper4_vps.sh")
 vps_src = open(vps_sh, encoding="utf-8").read()
 check("vps-live installer ships the new libraries",
       all(x in vps_src for x in ("aiohttp", "undetected-chromedriver", "psutil", "python-dotenv")))
+check("vps-live mirror logic is inline too",
+      "cdn.npmmirror.com" in vps_src and "install_chromium_mirror.sh" not in vps_src)
 
 print()
 if FAIL:

@@ -258,14 +258,56 @@ else
     psutil python-dotenv || true
 fi
 # cdn.playwright.dev is geo-blocked for Iranian IPs, so the normal
-# "playwright install chromium" fails there. Try the official path first, and
-# fall back to the mirror installer, which reads the exact versions Playwright
-# wants and fetches the identical Chrome-for-Testing builds from npmmirror.
+# "playwright install chromium" fails there. The mirror fallback below is
+# intentionally INLINE (no separate script): it reads the exact versions
+# Playwright wants from --dry-run and fetches the identical Chrome-for-Testing
+# builds from mirrors reachable from Iran.
 apt-get install -y chromium-browser || apt-get install -y chromium || true
 snap install chromium || true
+install_chromium_mirror_inline() (
+  set -uo pipefail
+  CACHE="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
+  PY="$VENV/bin/python"; [ -x "$PY" ] || PY="$(command -v python3)"
+  MIRRORS=("https://cdn.npmmirror.com/binaries" "https://registry.npmmirror.com/-/binary" "https://mirrors.huaweicloud.com" "https://mirror.nju.edu.cn")
+  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  command -v unzip >/dev/null 2>&1 || { apt-get install -y unzip >/dev/null 2>&1 || true; }
+  PLAN="$("$PY" -m playwright install --dry-run chromium 2>/dev/null)"
+  [ -z "$PLAN" ] && { echo "  no dry-run plan; cannot mirror-install"; return 1; }
+  CFT_VER="$(printf '%s' "$PLAN" | grep -oP 'Chrome for Testing \K[0-9.]+' | head -1)"
+  CHROMIUM_BUILD="$(printf '%s' "$PLAN" | grep -oP 'playwright chromium v\K[0-9]+' | head -1)"
+  SHELL_BUILD="$(printf '%s' "$PLAN" | grep -oP 'playwright chromium-headless-shell v\K[0-9]+' | head -1)"
+  : "${SHELL_BUILD:=$CHROMIUM_BUILD}"
+  [ -z "$CFT_VER" ] || [ -z "$CHROMIUM_BUILD" ] && { echo "  version parse failed"; return 1; }
+  fetch() { curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 -o "$2" "$1" 2>/dev/null; }
+  install_zip() {
+    url="$1"; dirname="$2"; inner="$3"; marker="$4"; dest="$CACHE/$dirname"
+    [ -f "$dest/$inner/$marker" ] && { echo "  already present: $dirname"; return 0; }
+    echo "  downloading $dirname ..."
+    zip="$TMP/$dirname.zip"; got=0
+    for base in "${MIRRORS[@]}"; do fetch "${base}/${url}" "$zip" && { got=1; break; }; done
+    [ "$got" -eq 1 ] || { echo "    FAILED on every mirror: $url"; return 1; }
+    mkdir -p "$dest"; unzip -q -o "$zip" -d "$dest" || return 1; rm -f "$zip"
+    : > "$dest/INSTALLATION_COMPLETE"; chmod -R a+rX "$dest" 2>/dev/null || true
+    [ -f "$dest/$inner/$marker" ] && chmod +x "$dest/$inner/$marker" 2>/dev/null || true
+    [ -f "$dest/$inner/$marker" ] && { echo "    ok"; return 0; }
+    echo "    WARNING: $inner/$marker missing"; return 1
+  }
+  FAILED=0
+  install_zip "chrome-for-testing/$CFT_VER/linux64/chrome-linux64.zip" \
+    "chromium-$CHROMIUM_BUILD" "chrome-linux64" "chrome" || FAILED=1
+  install_zip "chrome-for-testing/$CFT_VER/linux64/chrome-headless-shell-linux64.zip" \
+    "chromium_headless_shell-$SHELL_BUILD" "chrome-headless-shell-linux64" \
+    "chrome-headless-shell" || FAILED=1
+  echo "  Installing OS libraries ..."
+  "$PY" -m playwright install-deps chromium >/dev/null 2>&1 \
+    || apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+         libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+         libgbm1 libpango-1.0-0 libcairo2 libasound2 >/dev/null 2>&1 || true
+  return $FAILED
+)
 if ! "$VENV/bin/python" -m playwright install --with-deps chromium 2>/dev/null; then
-  echo "Playwright CDN unreachable — switching to the mirror installer…"
-  VENV="$VENV" bash "${REPO_DIR}/tools/install_chromium_mirror.sh" || \
+  echo "Playwright CDN unreachable — switching to the inline mirror installer..."
+  install_chromium_mirror_inline || \
     echo "Mirror install did not finish; a system Chromium will be used if present."
 fi
 echo "Optional engines done."
