@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.2');
+define('WCP_VERSION', '1.6.3');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1798,7 +1798,7 @@ function default_install_cmd(string $type): string {
         case 'node':
             return 'if [ -f package-lock.json ]; then (npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund); elif [ -f package.json ]; then npm install --include=dev --no-audit --no-fund; fi';
         case 'python':
-            return 'if [ -f requirements.txt ]; then if ! (pip3 install --break-system-packages -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --user -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install -r requirements.txt --no-warn-script-location 2>/dev/null); then echo "[deploy-installer] Bulk install failed. Installing packages line-by-line..."; while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then if ! (pip3 install --break-system-packages "$pkg" --no-warn-script-location 2>/dev/null || pip3 install --user "$pkg" --no-warn-script-location 2>/dev/null || pip3 install "$pkg" --no-warn-script-location 2>/dev/null); then echo "[deploy-installer WARNING] Skipped incompatible package: $pkg"; fi; fi; done < requirements.txt; echo "[deploy-installer] Resilient installation completed."; fi; elif [ -f setup.py ] || [ -f pyproject.toml ]; then (pip3 install --break-system-packages . --no-warn-script-location 2>/dev/null || pip3 install --user . --no-warn-script-location 2>/dev/null || pip3 install . --no-warn-script-location 2>/dev/null); elif [ -f scraper4.py ] || [ -f app.py ]; then (pip3 install --break-system-packages flask requests beautifulsoup4 lxml python-dotenv --no-warn-script-location 2>/dev/null || pip3 install --user flask requests beautifulsoup4 lxml python-dotenv --no-warn-script-location 2>/dev/null || pip3 install flask requests beautifulsoup4 lxml python-dotenv --no-warn-script-location 2>/dev/null || true); fi';
+            return 'if [ -f requirements.txt ]; then if ! (pip3 install --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null); then echo "[deploy-installer] Bulk install failed. Installing packages line-by-line..."; while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then if ! (pip3 install --break-system-packages --ignore-installed "$pkg" --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages "$pkg" --no-warn-script-location 2>/dev/null); then echo "[deploy-installer WARNING] Skipped incompatible package: $pkg"; fi; fi; done < requirements.txt; echo "[deploy-installer] Resilient installation completed."; fi; elif [ -f setup.py ] || [ -f pyproject.toml ]; then (pip3 install --break-system-packages --ignore-installed . --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages . --no-warn-script-location 2>/dev/null); elif [ -f scraper4.py ] || [ -f app.py ]; then (pip3 install --break-system-packages --ignore-installed flask requests beautifulsoup4 lxml python-dotenv basalam-sdk selectolax html5lib psutil --no-warn-script-location 2>/dev/null || true); fi';
         default:return '';
     }
 }
@@ -2131,6 +2131,8 @@ function cli_service(array $job): int {
 
             $runner = CACHE_DIR . '/svc-run-' . $job['id'] . '.sh';
             $script = "#!/bin/bash\nset -e\ncd " . esc($deployDir) . "\nexport NODE_ENV=production\nexport PYTHONUNBUFFERED=1\n";
+            $script .= "export PYTHONUSERBASE=/var/www/.local\nexport PIP_CACHE_DIR=/tmp/pip_cache\n";
+            $script .= "export PYTHONPATH=\"/usr/local/lib/python3.14/dist-packages:/usr/local/lib/python3.13/dist-packages:/usr/local/lib/python3.12/dist-packages:/usr/local/lib/python3.11/dist-packages:/usr/local/lib/python3.10/dist-packages:/tmp/.local/lib/python3.14/site-packages:/tmp/.local/lib/python3.13/site-packages:/tmp/.local/lib/python3.12/site-packages:/tmp/.local/lib/python3.11/site-packages:/tmp/.local/lib/python3.10/site-packages:/var/www/.local/lib/python3.14/site-packages:/var/www/.local/lib/python3.13/site-packages:/var/www/.local/lib/python3.12/site-packages:/var/www/.local/lib/python3.11/site-packages:/var/www/.local/lib/python3.10/site-packages:\\$HOME/.local/lib/python3.14/site-packages:\\$HOME/.local/lib/python3.13/site-packages:\\$HOME/.local/lib/python3.12/site-packages:\\$HOME/.local/lib/python3.11/site-packages:\\$HOME/.local/lib/python3.10/site-packages:\\$PYTHONPATH\"\n";
             foreach (proj_runtime_env($currentP) as $k => $v) $script .= "export " . esc($k . '=' . $v) . "\n";
             $chosenPort = !empty($currentP['port']) ? $currentP['port'] : (!empty($portsToFree) ? reset($portsToFree) : '');
             if (!empty($chosenPort)) {
@@ -2243,15 +2245,29 @@ function cli_service(array $job): int {
 
                 if (!empty($pkgsToInstall)) {
                     $pkgList = array_keys($pkgsToInstall);
-                    $pkgArgs = implode(' ', array_map('escapeshellarg', $pkgList));
-                    cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing with sudo & break-system-packages...");
-                    $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; (sudo -n pip3 install --break-system-packages ' . $pkgArgs . ' 2>&1 || sudo -n pip install --break-system-packages ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages ' . $pkgArgs . ' 2>&1)';
-                    cli_run($pipCmd, $pipRc);
-                    if ($pipRc === 0) {
-                        cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));
-                        $depsAutoInstalled = true;
+                    $currPkgHash = implode(',', $pkgList);
+                    if (!isset($lastAutoInstallHash)) { $lastAutoInstallHash = ''; $autoInstallRepeatCount = 0; }
+                    if ($currPkgHash === $lastAutoInstallHash) {
+                        $autoInstallRepeatCount++;
                     } else {
-                        cli_log("[auto-installer] Auto-installation failed (exit code " . $pipRc . ") for: " . implode(', ', $pkgList));
+                        $lastAutoInstallHash = $currPkgHash;
+                        $autoInstallRepeatCount = 1;
+                    }
+
+                    if ($autoInstallRepeatCount > 2) {
+                        cli_log("[auto-installer WARNING] Package(s) " . implode(', ', $pkgList) . " were installed but Python runtime still cannot locate them. Halting auto-restart loop.");
+                        $depsAutoInstalled = false;
+                    } else {
+                        $pkgArgs = implode(' ', array_map('escapeshellarg', $pkgList));
+                        cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing with sudo & ignore-installed...");
+                        $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; (sudo -n python3 -m pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || python3 -m pip install --break-system-packages --ignore-installed --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1)';
+                        cli_run($pipCmd, $pipRc);
+                        if ($pipRc === 0) {
+                            cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));
+                            $depsAutoInstalled = true;
+                        } else {
+                            cli_log("[auto-installer] Auto-installation failed (exit code " . $pipRc . ") for: " . implode(', ', $pkgList));
+                        }
                     }
                 }
 
@@ -2366,7 +2382,7 @@ function cli_install_component(array $job): int {
         $runCmd("sudo -n apt-get update -y && sudo -n apt-get install -y python3 python3-pip python3-venv python3-dev build-essential");
         $runCmd("sudo -n python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || sudo -n python3 -m pip install --upgrade pip");
         cli_log("[Python] Installing advanced scraping & automation libraries...");
-        $runCmd("sudo -n pip3 install --break-system-packages requests curl_cffi cloudscraper undetected-chromedriver playwright selenium beautifulsoup4 lxml aiohttp httpx fastapi uvicorn python-dotenv fake-useragent basalam-sdk selectolax html5lib psutil");
+        $runCmd("sudo -n python3 -m pip install --break-system-packages --ignore-installed requests curl_cffi cloudscraper undetected-chromedriver playwright selenium beautifulsoup4 lxml aiohttp httpx fastapi uvicorn python-dotenv fake-useragent basalam-sdk selectolax html5lib psutil 2>&1 || sudo -n pip3 install --break-system-packages --ignore-installed requests curl_cffi cloudscraper undetected-chromedriver playwright selenium beautifulsoup4 lxml aiohttp httpx fastapi uvicorn python-dotenv fake-useragent basalam-sdk selectolax html5lib psutil");
         cli_log("✓ Python scraping packages installed successfully.");
     }
 
