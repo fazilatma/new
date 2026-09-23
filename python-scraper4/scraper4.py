@@ -90,6 +90,7 @@ import base64
 import csv
 import hashlib
 import hmac
+import http.cookiejar
 import io
 import ipaddress
 import importlib
@@ -127,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.233"
+APP_VERSION = "10.234"
 CHANGELOG = [
+    {"version":"10.234","date":"2026-09-23","title":"دستور موفق نود ۱.۱۸۳ برای ایمالز منتقل شد: صفحهٔ بدون کوکی با اثرانگشت کروم ۱۳۱","items":["نسخهٔ ۱.۱۸۳ نود جی‌اس در همین ریپو ایمالز را بدون پلی‌رایت و بدون هیچ هک اختصاصی می‌خواند؛ بررسی کد نشان داد راز آن عمومی است: هر صفحه یک درخواست تازهٔ بدون کوکی با هدرهای مرورگری ساده است (UA کروم ۱۳۱، Accept مرورگری، بدون Referer و بدون هیچ کوکی)","همان دستور به پایتون منتقل شد: User-Agent از کروم قدیمی ۱۲۶ به کروم ۱۳۱ و Accept به مقدار دقیق نود ارتقا یافت — همهٔ موتورهای HTTP سود می‌برند؛ curl_cffi مثل ۱۰.۲۳۰ مجموعهٔ کامل خودش را نگه می‌دارد","برای ایمالز کوکی‌های سشن دیگر روی صفحات فرستاده نمی‌شود تا وقتی سشن توسط مرورگر واقعی معتبر شود؛ کپی صفحهٔ ۱ که به سشن تازه‌ساخت چسبیده بود دیگر به کلاینت نمی‌رسد","هر جا مرورگر واقعی صفحه‌ای را در همان اجرا نجات داد، اجرا «معتبر» علامت می‌خورد و از آن پس کوکی‌های سشن دوباره با موتورهای HTTP ساده ارسال می‌شوند — رفتار تأییدشدهٔ ۱۰.۲۲۸ به بعد دست‌نخورده ماند","تست رگرسیون آفلاین جدید tools/test_emalls_node183_recipe.py: پنج موتور HTTP روی سرور محلی بدون کوکی می‌روند، پس از معتبرشدن سشن کوکی می‌فرستند، هدرهای دقیق کروم ۱۳۱/نود تأیید و میزبان‌های غیرایمالز از این تغییر مصون می‌مانند"]},
     {"version":"10.233","date":"2026-09-23","title":"تمام کتابخانه‌های مناسب فهرست به موتورهای استخراج متصل شدند","items":["موتور دریافت جدید aiohttp به زنجیرهٔ HTTP اضافه شد: کلاینت ناهمگام با حلقهٔ ریدایرکت دستی (محافظت مسیر خصوصی روی هر پرش)، ارسال کوکی‌های مشترک و جذب Set-Cookie به انبار تخت — در زنجیرهٔ خودکار، منوی ضدبات، بنچمارک و انتخابگر بصری مثل بقیهٔ موتورها","موتور مرورگری جدید Undetected-Chromedriver اضافه شد؛ کروم ضدتشخیص برای سایت‌هایی که Selenium معمولی را می‌شناسند — قابل انتخاب از منوی موتور ضدبات، تست سرعت و انتخابگر بصری؛ بدون کتابخانه پیام واضح می‌دهد و بی‌خطر از زنجیره کنار می‌رود","هر نشست Selenium/UC حالا پوشهٔ پروفایل موقت یکتا دارد و psutil بعد از quit هر فرایند کروم/کروم‌درایور بازماندهٔ همان نشست را پیدا و پاک می‌کند تا نشست‌های خراب/لغوشده رم سرور را انباشته نکنند؛ نبود psutil بی‌خطر رد می‌شود","python-dotenv پشتیبانی شد: فایل .env کنار پروژه (و ~/.scraper4.env) هنگام راه‌اندازی خوانده می‌شود (توکن، پروکسی، PLAYWRIGHT_BROWSERS_PATH و …)؛ متغیر محیط واقعی همیشه برتر است","beautifulsoup4 که از ابتدا در همهٔ مسیرهای استخراج هست حالا روی پارسر lxml اجرا می‌شود (نمونه‌گیری متن و بررسی صفحهٔ ضدبات سریع‌تر) و در نبود lxml همان html.parser قبلی","fastapi/uvicorn عمداً اضافه نشدند: چارچوب وب‌سرورند نه موتور دریافت/پارس؛ لایهٔ وب همین Flask/Gunicorn است و سرور دومی فقط وابستگی و سطح حمله اضافه می‌کرد","تست رگرسیون آفلاین جدید tools/test_extraction_engines_matrix.py: ترکیب زنجیرهٔ موتورها، دریافت واقعی aiohttp با کوکی/ریدایرکت روی سرور محلی، مسیریابی undetected در Fetcher و زنجیره‌ها، پاکسازی psutil با ماژول ساختگی و خواندن .env"]},
     {"version":"10.232","date":"2026-09-22","title":"دریافت کاتالوگ باسلام در هم‌زمانی با وظایف دیگر مقاوم شد","items":["ریشه خطاهای مغایرت‌گیری/تکراری‌یابی هنگام اجرای هم‌زمان وظایف پیدا شد: فهرست کاتالوگ باسلام تا ۲۰ صفحه را پشت‌سرهم و بدون فاصله می‌خواند و شکست یک صفحه (۴۲۹/۵xx در هم‌زمانی با کار استخراج یا ارسال) کل دریافت را با «SDK: … | REST API: …» نابود می‌کرد","حالا هر صفحه تا ۳ تلاش با وقفهٔ نمایی تکرار می‌شود، بین صفحه‌ها فاصلهٔ مؤدبانه ۰٫۳۵ ثانیه است و اگر صفحه‌ای بعد از صفحهٔ ۱ اصلاً نشد، همان بخش دریافت‌شده با ثبت خطا برگردانده می‌شود — مثل Node که فهرست را می‌ساخت و ادامه می‌داد","شکست صفحهٔ ۱ همچنان خطای واضح برمی‌گرداند تا توکن/شناسهٔ غرفهٔ خراب بی‌صدا از دست نرود","مسیر چند-غرفه‌ای مدیر مقصد (ui_bridge) هم دقیقاً همین منطق را گرفت تا دریافت چند غرفه در برابر محدودیت نرخ باسلام پایدار باشد"]},
     {"version":"10.231","date":"2026-09-22","title":"عنوان صفحهٔ دریافتی در لاگ: مدرک یک‌خطی صفحهٔ واقعی یا نسخهٔ کپی","items":["استخراج صفحه‌به‌صفحه از ابتدا همین کار ساده را می‌کند: صفحهٔ ۱ استخراج، سپس ~page~2، سپس صفحهٔ بعد؛ گزارش‌ها هم نشان می‌دهند صفحهٔ ۲ واقعاً خوانده می‌شود اما به‌جای محصولات جدید همان کپی صفحهٔ ۱ است","برای اینکه معلوم شود emalls در پاسخ به سرور شما چه چیزی می‌گذارد، عنوان (title) صفحهٔ دریافتی هر صفحه حالا در لاگ هر موتور، در عیب‌یابی و در pagination_stopped.served_titles ثبت می‌شود","صفحهٔ واقعی ۲ ایمالز عنوانش «صفحه ۲ از ۹۳۴۶ …» است؛ نسخهٔ جایگزین عنوان سادهٔ دسته را دارد — با یک نگاه در گزارش مشخص می‌شود مشکل سمت کلاینت است یا سمت پاسخ سایت"]},
@@ -371,9 +373,13 @@ DEST_QUEUE_KEEP = _env_int("SCRAPER_DEST_QUEUE_KEEP", 200 if VPS_MODE else 10, 4
 REMOTE_CATALOG_PAGES = _env_int("SCRAPER_REMOTE_PAGES", 200 if VPS_MODE else 11, 1, 2000)
 REQUEST_TIMEOUT_CAP = _env_int("SCRAPER_TIMEOUT_CAP", 600 if VPS_MODE else 120, 30, 3600)
 FETCH_TIMEOUT_CAP = _env_int("SCRAPER_FETCH_TIMEOUT_CAP", 300 if VPS_MODE else 90, 15, 1800)
+# Node 1.183 (arena/01a0aa17-new) extracted every emalls page with plain
+# stateless fetches stamped Chrome/131 — that exact build is proven against
+# emalls, while the old Chrome/126 stamp aged into a WAF red flag. Keep the
+# two runtimes on the same browser version.
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 DATA_LOCK = threading.RLock()
@@ -735,6 +741,20 @@ def public_http_url(url: str) -> str:
     return url
 
 
+class _RejectCookieStorage(http.cookiejar.DefaultCookiePolicy):
+    """Cookie policy that never stores anything in the requests session jar.
+
+    The flat {name: value} store is the single source of truth (10.229); a
+    session that silently keeps its own jar would replay session cookies past
+    the emalls cookie gate (10.234) and resurrect the duplicate-page
+    behaviour the store was built to fix — exactly the 10.228 finding where
+    "only requests kept cookies".
+    """
+
+    def set_ok(self, cookie: Any, request: Any) -> bool:
+        return False
+
+
 class FetchError(RuntimeError):
     pass
 
@@ -885,9 +905,13 @@ class Fetcher:
         # multiplied into duplicates and crashed curl_cffi's dict() bridge.
         self._cookies: dict[str, str] = {}
         self.session = requests.Session()
+        # Nothing is ever kept in the session jar; cookies live in the flat
+        # store and ride via the explicit Cookie header when allowed.
+        self.session.cookies.set_policy(_RejectCookieStorage())
         self.session.headers.update({
             "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+            # Node 1.183's exact scrape Accept (render-src/network.ts).
+            "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5",
             "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6",
             "Cache-Control": "no-cache",
         })
@@ -895,6 +919,9 @@ class Fetcher:
         if self.proxy and self.proxy_mode == "http":
             self.session.proxies.update({"http": self.proxy, "https": self.proxy})
         self.last_by_host: dict[str, float] = {}
+        # Set once a real browser engine renders a page for this run in the
+        # scrape loop — the session then counts as trusted (see _send_cookie_store).
+        self._browser_blessed = False
 
     @staticmethod
     def _validate_redirect(response: Any, *args: Any, **kwargs: Any) -> Any:
@@ -957,6 +984,21 @@ class Fetcher:
 
     def _cookie_header(self) -> str:
         return "; ".join(f"{k}={v}" for k, v in self._cookies.items())
+
+    def _send_cookie_store(self, host: str) -> bool:
+        """Should this request carry the accumulated session cookies?
+
+        Node 1.183 never had a cookie jar and still read every emalls page,
+        while the Python engines holding a just-minted session kept receiving
+        page-1 copies. So on emalls the store rides only after a real browser
+        has blessed this run (duplicate-page rescue); everywhere else the
+        10.229 behaviour is unchanged.
+        """
+        if not self._cookies:
+            return False
+        if not any(host == h or host.endswith("." + h) for h in STATELESS_COOKIE_HOSTS):
+            return True
+        return bool(getattr(self, "_browser_blessed", False))
 
     def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
         """Fetch a page, honouring a stop request within ~1 second.
@@ -1032,8 +1074,10 @@ class Fetcher:
                     except ImportError as exc:raise FetchError("کتابخانه cloudscraper نصب نیست") from exc
                     client=cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False});client.headers.update(self.session.headers);client.proxies.update(self.session.proxies);client.hooks.setdefault("response",[]).append(self._validate_redirect)
                     # 10.229: flat cookie store rides along (page-1 gate on emalls).
-                    try:client.cookies.update(self._cookies)
-                    except Exception:pass
+                    # 10.234: on emalls only once the session is browser-trusted.
+                    if self._send_cookie_store(host):
+                        try:client.cookies.update(self._cookies)
+                        except Exception:pass
                     response=client.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify);body=response.content
                     self._absorb_cookies(response)
                 elif engine=="httpx":
@@ -1043,7 +1087,8 @@ class Fetcher:
                         raise FetchError("کتابخانه httpx نصب نیست") from exc
                     merged={**dict(self.session.headers), **headers}
                     # 10.229: flat cookie store rides along via the Cookie header.
-                    _cookie_header=self._cookie_header()
+                    # 10.234: emalls pages stay cookie-less until browser-trusted.
+                    _cookie_header=self._cookie_header() if self._send_cookie_store(host) else ""
                     if _cookie_header:merged["Cookie"]=_cookie_header
                     proxy=None
                     if self.session.proxies:
@@ -1071,7 +1116,7 @@ class Fetcher:
                     try:import aiohttp
                     except ImportError as exc:raise FetchError("کتابخانه aiohttp نصب نیست") from exc
                     merged={**dict(self.session.headers), **headers}
-                    _aio_cookie=self._cookie_header()
+                    _aio_cookie=self._cookie_header() if self._send_cookie_store(host) else ""
                     if _aio_cookie:merged["Cookie"]=_aio_cookie
                     _aio_proxy=None
                     if self.session.proxies:
@@ -1085,7 +1130,7 @@ class Fetcher:
                     proxies=self.session.proxies or None;curl_url=request_url
                     # 10.229: flat cookie store - a plain dict cannot carry the
                     # duplicate-name conflict that crashed 10.228's jar bridge.
-                    _ck=dict(self._cookies) or None
+                    _ck=(dict(self._cookies) or None) if self._send_cookie_store(host) else None
                     # 10.230: let curl_cffi speak with its OWN full Chrome
                     # impersonation (current UA, sec-ch-ua, Sec-Fetch-*). The
                     # old override forced the generic session headers (Chrome
@@ -1101,7 +1146,7 @@ class Fetcher:
                     body=response.content
                     self._absorb_cookies(response)
                 else:
-                    _c_header=self._cookie_header()
+                    _c_header=self._cookie_header() if self._send_cookie_store(host) else ""
                     if _c_header:headers={**headers,"Cookie":_c_header}
                     response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
                 self._absorb_cookies(response)
@@ -2869,6 +2914,14 @@ KNOWN_ENGINES = HTTP_ENGINE_ORDER + ("playwright", "selenium", "undetected")
 # a plain HTTP client. Shared by _get_blocking dispatch, the scrape loop's
 # http/browser split and availability probes.
 BROWSER_ENGINES = frozenset({"playwright", "selenium", "undetected"})
+# Node 1.183 contract, ported: the Node build read every emalls page with a
+# plain stateless Chrome-shaped request — no cookie jar, no Referer. emalls'
+# "page-1 copy" fallback rides on a freshly-minted ASP.NET session, so
+# replaying an untrusted session store invites the copy. On these hosts the
+# Fetcher fetches pages cookie-less until a real browser rescues a page in
+# the same run; from that moment the session is trusted and the cookies ride
+# along again (the 10.229 shared-store behaviour, gated by trust).
+STATELESS_COOKIE_HOSTS = ("emalls.ir",)
 
 
 def engine_http_order() -> list[str]:
@@ -3733,6 +3786,13 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             # 10.226: make the active chain visible — this is what differed
             # between the 3-page benchmark (per-engine) and the real run.
             report.logs.append("زنجیرهٔ موتورهای دریافت: " + " → ".join(order))
+            try:
+                if (urlparse(source).hostname or "").endswith("emalls.ir"):
+                    # 10.234: ported Node 1.183 strategy — pages go out
+                    # cookie-less; a browser rescue upgrades the session.
+                    report.logs.append("ایمالز: مثل نسخهٔ موفق Node 1.183 هر صفحه ابتدا بدون کوکی خوانده می‌شود؛ اگر مرورگر واقعی صفحه‌ای را نجات داد، سشن معتبرش با موتورهای HTTP ادامه می‌یابد")
+            except Exception:
+                pass
         http_engines=[e for e in order if e not in BROWSER_ENGINES]
         browser_engines=[e for e in order if e in BROWSER_ENGINES]
         browser_first=bool(order and order[0] in BROWSER_ENGINES)
@@ -3789,6 +3849,11 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                     if rows:
                         won_engine,won_ms=bengine,int((time.monotonic()-t0)*1000)
                         report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM رندرشده با {bengine} ({won_ms}ms)")
+                        # 10.234: a real Chromium just served this run — the
+                        # session counts as trusted from here on (cookies ride).
+                        if not getattr(fetcher, "_browser_blessed", False):
+                            fetcher._browser_blessed = True
+                            report.logs.append("سشن مرورگر واقعی این اجرا را معتبر کرد؛ از این پس کوکی‌های سشن هم با موتورهای HTTP ارسال می‌شود")
                         break
                     report.logs.append(f"صفحه {number}: {len(rows)} محصول از DOM رندرشده با {bengine}")
                 except (FetchError, ValueError) as exc:
@@ -3979,6 +4044,11 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                                 diag = {**diag, **_b_diag, "engine": _bengine, "duplicate_retry": True, "attempts": engine_errors}
                                 won_engine, _retry_used = _bengine, _bengine
                                 report.modes.add(_bengine + "-dom")
+                                # 10.234: the browser broke the shell — trust the
+                                # session it touched for the remaining pages.
+                                if not getattr(fetcher, "_browser_blessed", False):
+                                    fetcher._browser_blessed = True
+                                    report.logs.append("مرورگر واقعی پوستهٔ تکراری را شکست؛ سشن معتبر شد و کوکی‌ها دوباره با موتورهای HTTP ارسال می‌شوند")
                                 break
                         except (FetchError, ValueError) as _exc:
                             engine_errors.append(f"retry-{_bengine}: {_exc}")
