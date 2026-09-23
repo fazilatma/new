@@ -1850,16 +1850,31 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         # 10.228: ONE Fetcher for this diagnostic run — page 1's session
         # cookies must reach pages 2-3 exactly like the real extraction.
         run_fetcher = core.Fetcher(dict(load().get("network") or {}))
+        t0 = time.monotonic()
 
         def stage(name: str, good: bool, summary: str, **extra: Any) -> None:
             stages.append({"name": name, "ok": good, "summary": summary, **extra})
             events.append({"type": "progress", "name": name,
                            "summary": summary, "ok": good,
-                           "done": len(stages)})
+                           "done": len(stages),
+                           "elapsedMs": int((time.monotonic() - t0) * 1000)})
 
         def finish(**payload: Any) -> Any:
-            """Return the report, streaming the stage events when ?live=1."""
-            report = {"ok": True, **payload}
+            """Return the report, streaming the stage events when ?live=1.
+
+            10.246: ``ok`` mirrors the pipeline's health — a failed network
+            fetch used to come back ok=true, so every consumer (the
+            dashboard's copy-report, the WebConsole job log) printed
+            «result: OK · products: 0 · durationMs: 0» on a dead run. The
+            fields that copy format reads (productCount, durationMs, url,
+            usedEngine) are always present now.
+            """
+            payload.setdefault("productCount", 0)
+            payload.setdefault("usedEngine", "")
+            report = {"ok": bool(payload.get("healthy", True)),
+                      "profile": pid, "url": url,
+                      "durationMs": int((time.monotonic() - t0) * 1000),
+                      **payload}
             if _s(request.args.get("live")) not in ("1", "true", "yes"):
                 return jsonify(**report)
             def run() -> Any:
@@ -1881,18 +1896,79 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
                       summary="آدرس پروفایل تنظیم نشده است.")
 
         engine = _s(cfg.get("fetch_engine")) or "auto"
+        recommendations: list[str] = []
+
+        # 10.246: a profile pinned to a browser engine that is not installed
+        # must not end the diagnostic at page 1 — the real scrape falls back
+        # to the plain HTTP chain (10.198), and for session-cookie sites
+        # (emalls) plain HTTP is the confirmed-good path. The stage now says
+        # which engine actually served the page, and the report carries a
+        # copy-pasteable install command for the missing engine.
+        _missing_markers = ("نصب نیست", "No module named", "Executable doesn't exist",
+                            "فایل اجرایی مرورگر پیدا نشد")
+
+        def _fetch_with_http_fallback(target: str, eng: str) -> tuple[Any, str]:
+            """(result, used_engine) — plain-HTTP fallback for a browser
+            engine that is not installed, mirroring scrape()."""
+            attempts: list[str] = []
+            try:
+                return _diag_fetch(cfg, target, eng, fetcher=run_fetcher), eng
+            except Exception as exc:  # noqa: BLE001
+                attempts.append(f"{eng}: {exc}")
+                if eng not in core.BROWSER_ENGINES or not any(
+                        m in str(exc) for m in _missing_markers):
+                    raise core.FetchError(" | ".join(attempts)) from exc
+            chain: list[str] = []
+            try:
+                chain = [e for e in core.engine_try_order(
+                    _s(cfg.get("fetch_engine_master") or ""), "", "auto")
+                    if e not in core.BROWSER_ENGINES]
+            except Exception:
+                chain = []
+            try:
+                chain = core._prefer_anti_bot_order(target, chain)
+            except Exception:
+                pass
+            for cand in chain:
+                if cand != "requests" and not core.fetch_engine_installed(cand):
+                    continue
+                try:
+                    return _diag_fetch(cfg, target, cand, fetcher=run_fetcher), cand
+                except Exception as exc:  # noqa: BLE001
+                    attempts.append(f"{cand}: {exc}")
+            raise core.FetchError(" | ".join(attempts))
+
         res = None
+        used_engine = ""
         try:
-            res = _diag_fetch(cfg, url, engine if engine != "auto" else "requests", fetcher=run_fetcher)
-            body = _s(getattr(res, "text", ""))
-            stage("network", True,
-                  f"HTTP {getattr(res, 'status', 200)} · {len(body):,} بایت "
-                  f"· موتور {engine}", bytes=len(body),
-                  finalUrl=_s(getattr(res, "url", url)))
+            res, used_engine = _fetch_with_http_fallback(
+                url, engine if engine != "auto" else "requests")
         except Exception as exc:  # noqa: BLE001
-            stage("network", False, f"دریافت صفحه ناموفق بود: {exc}"[:300])
+            stage("network", False, f"دریافت صفحه ناموفق بود: {exc}"[:600],
+                  attempts=[part[:200] for part in str(exc).split(" | ")])
+            try:
+                recommendations.append(
+                    "نصب Playwright: " + core.playwright_install_hint().replace("\n", " · "))
+            except Exception:
+                pass
             return finish(profile=pid, stages=stages, healthy=False,
-                      summary="صفحه دریافت نشد؛ موتور یا پروکسی را بررسی کنید.")
+                      summary="صفحه دریافت نشد؛ موتور یا پروکسی را بررسی کنید.",
+                      recommendations=recommendations, finalUrl="", usedEngine="")
+        fallback_from = engine if engine != "auto" and used_engine != engine else ""
+        if fallback_from:
+            try:
+                recommendations.append(
+                    f"موتور {fallback_from} نصب نیست — این آزمون با موتور {used_engine} ادامه یافت. "
+                    "برای رندر کامل: " + core.playwright_install_hint().replace("\n", " · "))
+            except Exception:
+                pass
+        body = _s(getattr(res, "text", ""))
+        stage("network", True,
+              f"HTTP {getattr(res, 'status', 200)} · {len(body):,} بایت "
+              f"· موتور {used_engine}"
+              + (f" (به‌جای {fallback_from} که نصب نیست)" if fallback_from else ""),
+              bytes=len(body), engine=used_engine, fallbackFrom=fallback_from,
+              finalUrl=_s(getattr(res, "url", url)))
 
         parse_engine = _s(cfg.get("parse_engine")) or "auto"
         try:
@@ -1901,7 +1977,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         except Exception as exc:  # noqa: BLE001
             stage("list-extraction", False, f"خطای تجزیهٔ صفحه: {exc}"[:300])
             return finish(profile=pid, stages=stages, healthy=False,
-                      summary="صفحه تجزیه نشد.")
+                      summary="صفحه تجزیه نشد.",
+                      finalUrl=_s(getattr(res, "url", url)), usedEngine=used_engine)
         stage("list-extraction", bool(rows),
               f"{len(rows)} محصول با موتور خواندن «{parse_engine}» استخراج شد"
               + ("" if rows else " · هیچ محصولی پیدا نشد"),
@@ -2000,7 +2077,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             link = next((_s(r.get("link")) for r in rows if _s(r.get("link"))), "")
             if link:
                 try:
-                    dres = _diag_fetch(cfg, link, engine if engine != "auto" else "requests", fetcher=run_fetcher)
+                    dres, _detail_engine = _fetch_with_http_fallback(link, engine if engine != "auto" else "requests")
                     dsoup = core.BeautifulSoup(dres.text, "html.parser")
                     try:
                         ensured_detail = core.ensure_detail_selectors(
@@ -2254,6 +2331,8 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
         healthy = all(s["ok"] for s in stages)
         return finish(profile=pid, stages=stages, healthy=healthy,
+                  productCount=len(rows), recommendations=recommendations,
+                  finalUrl=_s(getattr(res, "url", url)), usedEngine=used_engine,
                   summary=("همه‌چیز سالم است."
                            if healthy else
                            "مشکل در: " + "، ".join(
@@ -2966,23 +3045,32 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
     @app.get("/api/install-commands")
     def node_install_commands():
         """Return all pip install commands for dependencies (also stored inside scraper4.py header)."""
+        # 10.246: PEP 668 hosts (Ubuntu 26.04's system Python) refuse bare
+        # pip installs — emit the same flag the WebConsole patcher bootstrap
+        # uses so these commands are copy-pasteable everywhere.
+        _brk = "--break-system-packages" if core.pip_break_system() else ""
+
+        def _pip(cmd: str) -> str:
+            return cmd.replace("pip install", "pip install " + _brk, 1) \
+                if _brk and cmd.startswith("pip install") else cmd
+
         cmds = {
-            "full": "pip install -r python-scraper4/requirements.txt",
-            "core": "pip install flask>=3.0.0 gunicorn>=21.2.0 urllib3>=2.0.0 requests>=2.31.0",
-            "fetch": "pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71 aiohttp>=3.9.0",
-            "browser": "pip install playwright>=1.40.0 playwright-stealth>=1.0.6 selenium>=4.20.0 undetected-chromedriver>=3.5.5 && python -m playwright install --with-deps chromium",
+            "full": _pip("pip install -r python-scraper4/requirements.txt"),
+            "core": _pip("pip install flask>=3.0.0 gunicorn>=21.2.0 urllib3>=2.0.0 requests>=2.31.0"),
+            "fetch": _pip("pip install httpx[http2]>=0.27.0 curl_cffi>=0.7.0 cloudscraper>=1.2.71 aiohttp>=3.9.0"),
+            "browser": _pip("pip install playwright>=1.40.0 playwright-stealth>=1.0.6 selenium>=4.20.0 undetected-chromedriver>=3.5.5 && python -m playwright install --with-deps chromium"),
             "browser_mirror_ir": "bash python-scraper4/tools/install_chromium_mirror.sh  # از ایران - آینه npmmirror (cdn.playwright.dev مسدود است)",
             "browser_ir_vps": "bash python-scraper4/tools/install_chromium_mirror.sh && systemctl restart scraper4",
-            "browser_ir_pythonanywhere": "pip install --user -U playwright && PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium",
+            "browser_ir_pythonanywhere": _pip("pip install --user -U playwright && PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium"),
             "browser_ir_pythonanywhere_headless": "PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright python -m playwright install chromium-headless-shell",
             "browser_ir_fallback": "sudo apt install -y chromium-browser && export SCRAPER_BROWSER_PATH=/usr/bin/chromium-browser",
-            "parse": "pip install beautifulsoup4>=4.12.0 lxml>=5.0.0 html5lib>=1.1 selectolax>=0.3.21",
-            "dest": "pip install basalam-sdk>=1.2.0",
-            "all_one_liner": "pip install flask gunicorn urllib3 requests httpx[http2] curl_cffi cloudscraper aiohttp playwright playwright-stealth selenium undetected-chromedriver beautifulsoup4 lxml html5lib selectolax basalam-sdk psutil python-dotenv",
+            "parse": _pip("pip install beautifulsoup4>=4.12.0 lxml>=5.0.0 html5lib>=1.1 selectolax>=0.3.21"),
+            "dest": _pip("pip install basalam-sdk>=1.2.0"),
+            "all_one_liner": _pip("pip install flask gunicorn urllib3 requests httpx[http2] curl_cffi cloudscraper aiohttp playwright playwright-stealth selenium undetected-chromedriver beautifulsoup4 lxml html5lib selectolax basalam-sdk psutil python-dotenv"),
             "system": "sudo apt update && sudo apt install -y python3 python3-venv python3-pip git curl chromium-browser",
             "venv": "python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade pip && pip install -r python-scraper4/requirements.txt",
         }
-        return ok(commands=cmds, requirements="python-scraper4/requirements.txt")
+        return ok(commands=cmds, requirements="python-scraper4/requirements.txt", pip_flags=_brk)
 
     @app.get("/api/engines")
     def node_engines():

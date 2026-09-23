@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.245"
+APP_VERSION = "10.246"
 CHANGELOG = [
+    {"version":"10.246","date":"2026-09-23","title":"گزارش صادق عیب‌یابی، بازگشت به موتورهای HTTP وقتی مرورگر نصب نیست و دستور نصب سازگار با PEP 668","items":["عیب‌یابی استخراج دیگر هیچ‌وقت شکست را «OK» گزارش نمی‌کند: فیلد ok سلامت مراحل را عینه منعکس می‌کند و productCount، durationMs، url و usedEngine همیشه در گزارش هستند؛ خروجی «کپی گزارش کامل» و لاگ WebConsole به‌جای «result: OK · products: 0 · durationMs: 0» وضعیت واقعی را نشان می‌دهد","پروفایلِ قفل‌شده روی موتور مرورگریِ نصب‌نشده (مثل playwright)، عیب‌یابی را در همان صفحهٔ اول متوقف نمی‌کند: مثل استخراج واقعی (۱۰.۱۹۸) زنجیرهٔ موتورهای HTTP ساده امتحان می‌شود؛ مرحلهٔ «دریافت شبکه» موتورِ واقعیِ به‌کاررفته و دلیل بازگشت را صریح می‌نویسد و دستور نصب موتور غایب در «راهکار پیشنهادی» می‌آید — ایمالز که مسیر تأییدشده‌اش HTTP با کوکی سشن است، بدون نصب مرورگر هم واقعاً آزموده می‌شود","پیام «Playwright نصب نیست» دستورهای نصبِ همین محیط را می‌دهد: روی پایتون‌های EXTERNALLY-MANAGED (مثل اوبونتو ۲۶.۰۴) پرچم ‎--break-system-packages‎، برای حساب سرویس غیر root (مثل www-data) ترکیب ‎--user‎ مثل پچر وب‌کنسول، داخل venv بدون ‎--user‎، و ‎--with-deps‎ فقط وقتی root هستیم؛ دستورهای pip پنل نصب داشبورد هم با همین پرچم ساخته می‌شوند","استخراج واقعی وقتی کتابخانهٔ مرورگر نصب نیست (نه فقط فایل اجرایی) هم پیام «بازگشت خودکار به موتورهای HTTP» را در لاگ ثبت می‌کند و رویدادهای زندهٔ عیب‌یابی زمان سپری‌شدهٔ هر مرحله (elapsedMs) را دارند","تست جدید tools/test_diag_fallback_hint.py: سازندهٔ دستور نصب در چهار ترکیب محیط، رفتار واقعی عیب‌یابی با کلاینت فلَسک (بازگشت از playwright به موتور HTTP، گزارش شکست صادق با attempts و پیشنهادها) و پرچم PEP 668 پنل نصب"]},
     {"version":"10.245","date":"2026-09-23","title":"خودترمیمی پلی‌رایت در گیت‌هاب کداسپیس و پیام خطای همراه با دستور نصب","items":["در GitHub Codespaces و حالت‌های devcontainer (کشف خودکار با CODESPACES/CODESPACE_NAME/REMOTE_CONTAINERS/DEVCONTAINER)، اگر پلی‌رایت نصب نبود استخراج یک‌بار خودش آن را نصب می‌کند: pip install playwright و سپس دانلود کرومیوم (با --with-deps وقتی sudo بی‌رمز در دسترس است، مثل کداسپیس) و ادامهٔ همان استخراج","دروازهٔ امن: فقط در کداسپیس/کانتینر توسعه فعال است؛ روی هاست اشتراکی و www-data هرگز کاری نمی‌کند؛ با SCRAPER4_AUTO_INSTALL=0 خاموش و با =1 همه‌جا اجباری می‌شود؛ هر پروسه فقط یک تلاش می‌کند تا کندی صفحه‌ها","پیام خطای «Playwright نصب نیست» حالا خود دستورهای نصب را دارد (pip3 install playwright و python3 -m playwright install --with-deps chromium) تا در هر محیطی قابل کپی باشد؛ مسیر انتخابگر بصری/پیشنهاد سلکتور هم قبل از انصراف، خودترمیمی را امتحان می‌کند","تست جدید tools/test_codespace_autofix.py با ۲۰ بررسی: کشف محیط، دروازه‌ها (بدون هیچ subprocess خارج از محیط مجاز)، کش یک‌بارمصرف و زنجیرهٔ نصب اجباری"]},
     {"version":"10.244","date":"2026-09-23","title":"پیشنهاد/تست سلکتور با پلی‌رایت، تست همزمان مدل‌های هوش مصنوعی و مراحل فرعی هر پروفایل","items":["دکمهٔ پیشنهاد خودکار سلکتورها و تست سلکتورها حالا به حالت رندر احترام می‌گذارند: با انتخاب Playwright صفحه اول با زنجیرهٔ مرورگر رندر می‌شود (DOM ساخته‌شده با جاوااسکریپت دیده می‌شود) و بعد سلکتورها کشف/آزمایش می‌شوند؛ حالت HTTP همان HTML خام و خودکار مثل قبل؛ تابع preview_selector هم برای نخستین‌بار در هستهٔ پایتون پیاده شد (قبلاً تست سلکتور همیشه HTTP خام بود)","تست مدل‌های هوش مصنوعی همزمان شد (پیش‌فرض ۶ مدل در لحظه، قابل تغییر ۱ تا ۱۶): اجرای ۴۱۵مدلی که قبلاً پشت‌سرهم ساعت‌ها طول می‌کشید حالا چند برابر سریع‌تر است؛ مدل گیرکرده بعد از «مهلت رد مدل گیرکرده» بدون فلج‌کردن صف رد می‌شود و توقف/ادامه و ذخیرهٔ تدریجی نتایج مثل قبل کار می‌کند","رفع دیده‌نشدن مدل‌ها: اگر «فقط مدل‌های کاندید» روشن باشد ولی فهرست کاندید خالی یا بی‌ربط باشد، به‌جای تست فقط مدل پیش‌فرض، همهٔ مدل‌های فعال آزمایش می‌شوند","مراحل فرعی استخراج برای هر پروفایل قابل خاموش‌کردن شد: در تنظیمات پروفایل «استخراج جزئیات محصول در همگام‌سازی» اضافه شد (همگام‌سازی کامل جزئیات را رد می‌زند) و توضیح‌ساز با همان کلید قبلی در همهٔ مسیرها (دکمهٔ توضیح‌ساز پروفایل و مرکز هوش مصنوعی با منبع پروفایل) واقعاً رعایت می‌شود","تست جدید tools/test_steps_render_airun.py با ۲۶ بررسی برای پارامتر رندر، دروازه‌های پروفایل و ورکِر همزمان"]},
     {"version":"10.243","date":"2026-09-23","title":"وب‌کنسول ۱.۶.۷ — سلف‌آپدیت کنسول با انتخاب مخزن/برنچ و مرورگر فایل‌های گیت‌هاب","items":["پچر وب‌کنسول حالا مسیرهای ۱.۶.۴ / ۱.۶.۵ / ۱.۶.۶ را همگی به ۱.۶.۷ ارتقا می‌دهد و صفحهٔ همراه webconsole-tools.php را کنار کنسول نصب می‌کند (کلید دسترسی چاپ و در webconsole-tools.key ذخیره می‌شود)","سلف‌آپدیت کنسول: انتخاب مخزن و برنچ و مسیر فایل، مقایسهٔ نسخهٔ ریموت با محلی، نصب با دروازهٔ php -l و بکاپ زمان‌دار و جایگزینی اتمی؛ پیش‌فرض‌ها در .wconsole_data/selfupdate.conf ذخیره می‌شود و مؤلفه‌های تازهٔ selfupdate_check / selfupdate_apply داخل خود کنسول هم همان را می‌خوانند","مرورگر فایل‌های گیت‌هاب: پیمایش پوشه‌ها از GitHub Trees API، مشاهده و ویرایش هر فایل، ذخیرهٔ نسخه در .wconsole_data/github-files/… (از فایل اکسپلورر خود کنسول هم قابل ویرایش) یا ثبت مستقیم در گیت‌هاب با توکن شخصی (توکن فقط یک‌بار استفاده و هرگز ذخیره نمی‌شود)","امنیت صفحهٔ همراه: کلید تصادفی با مقایسهٔ زمان‌ثابت، پاک‌سازی ورودی‌های مخزن/برنچ/مسیر و ممنوعیت ..؛ php -l هنگام نصب صفحه را هم بررسی می‌کند و در خطا آن را حذف می‌کند (خود پچ سالم می‌ماند)","اجرای --tools فقط صفحهٔ همراه را نصب/به‌روز می‌کند و به کنسول دست نمی‌زند؛ تست‌های پچر به ۵۰ بررسی رسید: ماتریس سه مسیر ارتقا، پارس bash سه payload و برابری صفحهٔ همراه جاسازی‌شده با فایل مخزن"]},
@@ -2623,6 +2624,59 @@ def ensure_playwright_runtime() -> bool:
         return ok
 
 
+def pip_break_system() -> bool:
+    """True when this interpreter's pip is PEP 668 externally-managed.
+
+    Ubuntu/Debian system Pythons (e.g. 3.14 on 26.04) ship an
+    EXTERNALLY-MANAGED marker next to the stdlib; a bare ``pip3 install``
+    then dies with externally-managed-environment — on exactly the hosts
+    that need copy-pasteable install commands the most.
+    """
+    try:
+        import sysconfig
+        return os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED"))
+    except Exception:
+        return False
+
+
+def playwright_install_hint(requirements: str = "requirements.txt") -> str:
+    """Install commands that actually run in THIS environment (10.246).
+
+    Mirrors the WebConsole patcher bootstrap: ``--break-system-packages``
+    on PEP 668 hosts, ``--user`` for non-root service accounts (www-data)
+    outside virtualenvs, and ``--with-deps`` only where apt is reachable
+    (root). The old generic commands failed on precisely the servers that
+    needed them most.
+    """
+    brk = "--break-system-packages" if pip_break_system() else ""
+    try:
+        root = os.geteuid() == 0
+    except AttributeError:
+        root = False  # non-POSIX (Windows): plain pip
+    in_venv = bool(getattr(sys, "base_prefix", sys.prefix) and sys.prefix != sys.base_prefix)
+
+    def _pip(target: str) -> str:
+        parts = ["pip3", "install"]
+        if brk:
+            parts.append(brk)
+        if not root and not in_venv:
+            parts.append("--user")
+        parts.append(target)
+        return " ".join(parts)
+
+    browser_cmd = "python3 -m playwright install" + (" --with-deps" if root else "") + " chromium"
+    lines = [
+        "دستورهای نصب:",
+        "  " + _pip("playwright"),
+        "  " + browser_cmd,
+        "یا یک‌خطی کامل:",
+        "  " + _pip("-r " + requirements) + " && " + browser_cmd,
+    ]
+    if not root:
+        lines.append("وابستگی‌های سیستم (apt) فقط با root: sudo python3 -m playwright install --with-deps chromium")
+    return "\n".join(lines)
+
+
 def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "", strip_overlays: bool = False) -> FetchResult:
     browser_path = configured_browser_path()
     if browser_path and os.path.isdir(browser_path):
@@ -2638,12 +2692,10 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             where = " (GitHub Codespaces)" if codespace_env() else ""
+            # 10.246: commands must run on THIS host — PEP 668 flag for
+            # Ubuntu 26.04-style system Pythons, --user for www-data.
             raise FetchError(
-                "Playwright نصب نیست" + where + ". دستورهای نصب:\n"
-                "  pip3 install playwright\n"
-                "  python3 -m playwright install --with-deps chromium\n"
-                "یا یک‌خطی کامل:\n"
-                "  pip3 install -r requirements.txt && python3 -m playwright install --with-deps chromium"
+                "Playwright نصب نیست" + where + ". " + playwright_install_hint()
             ) from exc
     public_http_url(url)
     try:
@@ -2672,8 +2724,7 @@ def render_playwright(url: str, timeout: int, scrolls: int = 4, task_id: str = "
                     hint = f"PLAYWRIGHT_BROWSERS_PATH=/var/www/html/.wconsole_data/cache/ms-playwright bash tools/install_chromium_mirror.sh  # PLAYWRIGHT_BROWSERS_PATH={_proj}"
                 else:
                     hint = ("نصب کامل:\n"
-                            "  pip install -r python-scraper4/requirements.txt\n"
-                            "  python -m playwright install --with-deps chromium\n"
+                            "  " + playwright_install_hint("python-scraper4/requirements.txt") + "\n"
                             "از ایران (cdn مسدود):\n"
                             "  bash python-scraper4/tools/install_chromium_mirror.sh\n"
                             "تست: curl -s http://127.0.0.1:8000/api/engines | grep -A2 playwright")
@@ -4092,7 +4143,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
         if not rows and browser_first and mode!="browser" and http_engines:
             # If browser failed due to missing binary, also try HTTP fallback before giving up (Digikala case)
             _last_err = clean_text(fetch_error).lower()
-            if "executable doesn't exist" in _last_err or "فایل اجرایی مرورگر پیدا نشد" in fetch_error:
+            if "executable doesn't exist" in _last_err or "نصب نیست" in _last_err or "فایل اجرایی مرورگر پیدا نشد" in fetch_error:
                 report.logs.append("مرورگر نصب نیست — بازگشت خودکار به موتورهای HTTP (curl_cffi/cloudscraper)")
             
             engines=http_engines

@@ -310,8 +310,20 @@ def main() -> int:
         resp = client.post("/api/profiles/diag/extraction-diagnostic", json={})
         payload = resp.get_json() or {}
         stages = {s["name"]: s for s in payload.get("stages") or []}
-        check("diagnostic responds", resp.status_code == 200 and payload.get("ok"),
+        # 10.246: ok mirrors the pipeline's health (a failing pagination stage
+        # on this fixture used to be masked by a hardcoded ok=true).
+        check("diagnostic responds (ok mirrors stage health since 10.246)",
+              resp.status_code == 200 and bool(payload.get("stages"))
+              and payload.get("ok") == all(s.get("ok") for s in payload["stages"]),
               f"{resp.status_code} {str(payload)[:200]}")
+        check("diagnostic report carries the copy-format fields",
+              isinstance(payload.get("productCount"), int)
+              and payload.get("productCount", 0) > 0
+              and isinstance(payload.get("durationMs"), int)
+              and payload.get("url") == base
+              and isinstance(payload.get("usedEngine"), str),
+              f"{payload.get('productCount')} {payload.get('durationMs')} "
+              f"{payload.get('url')} {payload.get('usedEngine')}")
         check("selector-discovery stage", stages.get("selector-discovery", {}).get("ok"),
               json.dumps(stages.get("selector-discovery"), ensure_ascii=False))
         check("selectors-auto-saved stage",
