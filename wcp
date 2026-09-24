@@ -40,8 +40,52 @@ CACHE_DIR="${WCP_DATA_DIR}/cache"
 RUNNER_DIR="${WCP_DATA_DIR}/runners"
 mkdir -p "$CACHE_DIR" "$RUNNER_DIR" 2>/dev/null || true
 
+get_wcp_port() {
+    if [ -f "${WCP_DATA_DIR}/wcp_port.txt" ]; then
+        local p=$(cat "${WCP_DATA_DIR}/wcp_port.txt" 2>/dev/null | tr -d '\r\n ')
+        if [ -n "$p" ]; then echo "$p"; return; fi
+    fi
+    echo "8888"
+}
+
+cmd_set_port() {
+    local new_port="${1:-}"
+    if [ -z "$new_port" ]; then
+        echo -e "${CLR_BOLD}Current WebConsole port:${CLR_RESET} $(get_wcp_port)"
+        echo -e "To change port: ${CLR_YELLOW}wcp port <number>${CLR_RESET} (e.g. wcp port 8888 or wcp port 9999)"
+        return 0
+    fi
+    
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+        echo -e "${CLR_RED}Invalid port number: ${new_port}. Must be 1-65535.${CLR_RESET}"
+        return 1
+    fi
+    
+    echo -e "${CLR_BLUE}Switching WebConsole port to ${new_port}...${CLR_RESET}"
+    local old_port=$(get_wcp_port)
+    pkill -f 'php -S 0.0.0.0' 2>/dev/null || true
+    fuser -k "${old_port}/tcp" 2>/dev/null || true
+    fuser -k "${new_port}/tcp" 2>/dev/null || true
+    sleep 0.5
+    
+    echo "$new_port" > "${WCP_DATA_DIR}/wcp_port.txt" 2>/dev/null || true
+    cmd_serve "$new_port"
+    
+    # Codespaces public visibility
+    local cs_name="${CODESPACE_NAME:-}"
+    if [ -z "$cs_name" ] && [ -r /proc/1/environ ]; then
+        cs_name=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -E '^CODESPACE_NAME=' | cut -d'=' -f2- | tr -d '"\r\n' || true)
+    fi
+    if [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
+        gh codespace ports visibility "${new_port}:public" -c "$cs_name" 2>/dev/null || true
+    fi
+    
+    echo -e "${CLR_GREEN}✓ WebConsole port changed to ${new_port} successfully.${CLR_RESET}"
+    cmd_url "$new_port"
+}
+
 cmd_serve() {
-    local port="${1:-8888}"
+    local port="${1:-$(get_wcp_port)}"
     local doc="${HOME}/webconsole"
     for d in /workspaces/* /var/www/html "${HOME}/webconsole"; do
         if [ -f "$d/webconsole.php" ] || [ -f "$d/index.php" ]; then
@@ -87,7 +131,7 @@ check_auto_serve() {
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.7.8)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.8.0)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
@@ -162,21 +206,18 @@ cmd_url() {
     local cs_domain="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
     local ip=$(curl -s4m 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
 
+    local w_port="${1:-$(get_wcp_port)}"
     if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; then
         echo -e "${CLR_BOLD}📱 Android Termux Access Endpoints:${CLR_RESET}"
-        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://localhost:8888/${CLR_RESET} (or ${CLR_CYAN}http://127.0.0.1:8888/${CLR_RESET})"
-        echo -e "  🐘 ${CLR_CYAN}http://localhost:8000/${CLR_RESET}"
+        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://localhost:${w_port}/${CLR_RESET} (or ${CLR_CYAN}http://127.0.0.1:${w_port}/${CLR_RESET})"
     elif [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
         echo -e "${CLR_BOLD}🌐 GitHub Codespaces Access Endpoints:${CLR_RESET}"
-        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-8888.${cs_domain}/${CLR_RESET} (Primary WebConsole)"
-        echo -e "  🐘 ${CLR_CYAN}https://${cs_name}-8000.${cs_domain}/${CLR_RESET} (Alternate WebConsole)"
-        echo -e "  🟢 ${CLR_MAGENTA}https://${cs_name}-3000.${cs_domain}/${CLR_RESET} (Node.js Application)"
-        echo -e "  🐍 ${CLR_YELLOW}https://${cs_name}-8081.${cs_domain}/${CLR_RESET} (Python Scraper Service)"
+        echo -e "  🐘 WebConsole:   ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-${w_port}.${cs_domain}/${CLR_RESET}"
+        echo -e "  🟢 Node.js Apps:  ${CLR_MAGENTA}https://${cs_name}-3000.${cs_domain}/${CLR_RESET}"
+        echo -e "  🐍 Python Apps:   ${CLR_YELLOW}https://${cs_name}-9000.${cs_domain}/${CLR_RESET} (or -8000 / -8081)"
     else
         echo -e "${CLR_BOLD}🌐 Server Access Endpoints:${CLR_RESET}"
-        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://${ip}:8888/${CLR_RESET}"
-        echo -e "  🐘 ${CLR_CYAN}http://${ip}:8000/${CLR_RESET}"
-        echo -e "  🐘 ${CLR_CYAN}http://${ip}/${CLR_RESET}"
+        echo -e "  🐘 WebConsole:   ${CLR_GREEN}${CLR_BOLD}http://${ip}:${w_port}/${CLR_RESET}"
     fi
     echo ""
 }
@@ -570,6 +611,9 @@ cmd_rebuild() {
 
 # Main command dispatcher
 case "${1:-}" in
+    port|setport|change-port)
+        cmd_set_port "${2:-}"
+        ;;
     serve|server)
         cmd_serve "${2:-8888}"
         ;;
