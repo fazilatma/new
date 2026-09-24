@@ -3,7 +3,7 @@
 # WebConsole Pro - Universal Linux & GitHub Codespaces 1-Click Auto-Installer
 # Web Server: Apache2 & Universal Multi-Port PHP (Ports 8888, 8000, 8080, 80)
 # Workspace Integration: Auto-deploys to /workspaces for instant VS Code visibility
-# Repository: fazilatma/new | Version: 1.6.7
+# Repository: fazilatma/new | Version: 1.7.0
 # ==============================================================================
 
 set -euo pipefail
@@ -458,9 +458,9 @@ fi
 log_ok "Apache2 configured and listening on Ports 8888, 8000, 8080, and 80 (DocumentRoot: ${DOC_ROOT})."
 
 # ------------------------------------------------------------------------------
-# 8. Deploy WebConsole Pro v1.6.7 to DocumentRoot & Workspace Explorer
+# 8. Deploy WebConsole Pro v1.7.0 to DocumentRoot & Workspace Explorer
 # ------------------------------------------------------------------------------
-log_step "8/9" "Deploying WebConsole Pro v1.6.7 to Workspace Explorer & WebRoot..."
+log_step "8/9" "Deploying WebConsole Pro v1.7.0 to Workspace Explorer & WebRoot..."
 
 mkdir -p /etc/sudoers.d
 cat << SUDOERS_CONF > /etc/sudoers.d/99-webconsole-nopasswd
@@ -473,7 +473,7 @@ codespace ALL=(ALL) NOPASSWD: ALL
 SUDOERS_CONF
 chmod 0440 /etc/sudoers.d/99-webconsole-nopasswd
 
-log_info "Fetching latest WebConsole Pro v1.6.7 from GitHub (fazilatma/new)..."
+log_info "Fetching latest WebConsole Pro v1.7.0 from GitHub (fazilatma/new)..."
 WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
 curl -fsSL "$WCP_URL" -o /tmp/webconsole_latest.php || \
 wget -qO /tmp/webconsole_latest.php "$WCP_URL"
@@ -580,7 +580,7 @@ SERVER_IP=$(curl -s4m 4 ifconfig.me || curl -s4m 4 api.ipify.org || curl -s4m 4 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.6.7 (Apache2 Edition) Installed Successfully!    "
+echo "          🎉 WebConsole Pro v1.7.0 (Apache2 Edition) Installed Successfully!    "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
