@@ -46,7 +46,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from flask import (
     Response, jsonify, redirect, request, send_from_directory,
@@ -239,6 +239,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "syncBasalam": _truthy(cfg.get("sync_basalam")),
             "aiDescriptions": cfg.get("ai_descriptions", True) is not False,
             "detailExtract": cfg.get("detail_extract", True) is not False,
+            "reconcile": cfg.get("reconcile") is True,
             "githubBranch": _s(cfg.get("github_branch")),
             "productsPush": cfg.get("products_push") if isinstance(cfg.get("products_push"), dict) else None,
             "productsPull": cfg.get("products_pull") if isinstance(cfg.get("products_pull"), dict) else None,
@@ -324,6 +325,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "sync_basalam": _truthy(node.get("syncBasalam")),
             "ai_descriptions": node.get("aiDescriptions", True) is not False,
             "detail_extract": node.get("detailExtract", True) is not False,
+            "reconcile": node.get("reconcile") is True,
             "github_branch": _s(node.get("githubBranch")),
             "interval_minutes": _int(node.get("intervalMinutes")),
             "created_at": cfg.get("created_at") or _iso(),
@@ -485,6 +487,12 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         # to show the stage plan because job.log was never sent, so
         # jobEventRows() always filtered an empty array.
         log: list[dict[str, Any]] = []
+        # 10.249: live per-product events recorded by the dispatch worker —
+        # they make the counters clickable WHILE the job is still running.
+        for row in (task.get("log") or [])[:800]:
+            if isinstance(row, dict) and isinstance(row.get("item"), dict):
+                log.append({"event": _s(row.get("event")) or "sync-created",
+                            "item": row["item"], "message": _s(row.get("message"))})
         lists = comparison.get("lists") if isinstance(comparison.get("lists"), dict) else {}
 
         def as_item(row: Any) -> dict[str, Any]:
@@ -2496,17 +2504,183 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
 
     @app.post("/api/source-test")
     def node_source_test():
+        """10.249 — comprehensive connection diagnostics for one source URL.
+
+        Measures DNS (all IPs + timing), TCP connect, the TLS handshake
+        (version, cipher, issuer, expiry), TTFB and full download, captures
+        the key response headers, content signals (title, anti-bot markers,
+        JSON-LD/__NEXT_DATA__) and the installed engines. In relay mode the
+        socket probes target the Worker itself and the alternative path
+        (direct vs relay) is also attempted, so both routes are compared.
+        """
+        import socket
+        import ssl as _ssl
+        from datetime import datetime as _dt
+
         body = _body()
-        url = _s(body.get("url"))
-        if not url:
+        raw_url = _s(body.get("url"))
+        if not raw_url:
             return jsonify(ok=False, error="آدرس لازم است."), 400
-        started = time.time()
+        t_start = time.monotonic()
         try:
-            core.public_http_url(url)
-            html = core.fetch_html(url) if hasattr(core, "fetch_html") else ""
-            return ok(status=200, bytes=len(html or ""), ms=int((time.time() - started) * 1000))
+            url = core.public_http_url(raw_url)
         except Exception as exc:  # noqa: BLE001
-            return jsonify(ok=False, error=str(exc)), 400
+            return jsonify(ok=False, error=str(exc), url=raw_url), 400
+        network = dict(load().get("network") or {})
+        mode = core.outbound_mode(network)
+        proxy = _s(network.get("proxy"))
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        def _probe(target_host: str, target_port: int, https: bool) -> dict[str, Any]:
+            out: dict[str, Any] = {"host": target_host, "port": target_port}
+            t = time.monotonic()
+            try:
+                infos = socket.getaddrinfo(target_host, target_port, proto=socket.IPPROTO_TCP)
+                ips = sorted({i[4][0] for i in infos})
+                out["dns"] = {"ms": int((time.monotonic() - t) * 1000),
+                              "ips": ips[:6], "count": len(ips)}
+            except Exception as exc:  # noqa: BLE001
+                out["dns"] = {"ms": int((time.monotonic() - t) * 1000),
+                              "error": str(exc)[:200]}
+                return out
+            ip = next((i for i in ips if ":" not in i), ips[0])
+            t = time.monotonic()
+            try:
+                with socket.create_connection((ip, target_port), timeout=6) as sock:
+                    out["tcp"] = {"ms": int((time.monotonic() - t) * 1000), "ip": ip}
+                    if https:
+                        t2 = time.monotonic()
+                        ctx = _ssl.create_default_context()
+                        with ctx.wrap_socket(sock, server_hostname=target_host) as tls_sock:
+                            cert = tls_sock.getpeercert() or {}
+
+                            def _name(field: str) -> str:
+                                parts = cert.get(field) or []
+                                return ", ".join("=".join(p) for p in parts)[:180] if parts else ""
+
+                            expires = _s(cert.get("notAfter"))
+                            days: Any = None
+                            try:
+                                exp = _dt.strptime(expires, "%b %d %H:%M:%S %Y %Z")
+                                days = (exp - _dt.now(_dt.timezone.utc).replace(tzinfo=None)).days
+                            except Exception:  # noqa: BLE001
+                                pass
+                            out["tls"] = {"ms": int((time.monotonic() - t2) * 1000),
+                                          "version": tls_sock.version(),
+                                          "cipher": (tls_sock.cipher() or [""])[0],
+                                          "issuer": _name("issuer"), "subject": _name("subject"),
+                                          "expires": expires, "daysLeft": days}
+            except Exception as exc:  # noqa: BLE001
+                out["tcp"] = {"ms": int((time.monotonic() - t) * 1000),
+                              "error": str(exc)[:200]}
+            return out
+
+        # In relay mode the Worker makes the real connection — probe IT.
+        probe_host, probe_port, probe_https = host, port, parsed.scheme == "https"
+        if mode == "relay" and proxy:
+            relay_parsed = urlparse(proxy.replace("{url}", "https://x/"))
+            if relay_parsed.hostname:
+                probe_host = relay_parsed.hostname
+                probe_port = relay_parsed.port or (443 if relay_parsed.scheme == "https" else 80)
+                probe_https = relay_parsed.scheme == "https"
+        probe = _probe(probe_host, probe_port, probe_https)
+
+        def _fetch(label: str, forced_mode: str = "", connect_timeout: int = 10,
+                   read_timeout: int = 40) -> dict[str, Any]:
+            t0 = time.monotonic()
+            entry: dict[str, Any] = {"path": label}
+            try:
+                kwargs: dict[str, Any] = {"stream": True, "timeout": (connect_timeout, read_timeout)}
+                if forced_mode:
+                    kwargs["_scraper4_mode"] = forced_mode
+                resp = core.outbound_request(
+                    "GET", url,
+                    headers={"User-Agent": core.USER_AGENT,
+                             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                             "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8"},
+                    **kwargs)
+                ttfb = int((time.monotonic() - t0) * 1000)
+                chunks: list[bytes] = []
+                size = 0
+                for chunk in resp.iter_content(chunk_size=1 << 16):
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > 3_000_000:
+                        break
+                text = b"".join(chunks).decode("utf-8", errors="replace")
+                headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
+                keep = ("server", "content-type", "content-length", "content-encoding",
+                        "cache-control", "cf-ray", "cf-cache-status", "alt-svc",
+                        "x-frame-options", "location")
+                shown = {k: str(headers[k])[:180] for k in keep if k in headers}
+                cookies = sum(1 for k in headers if k == "set-cookie")
+                if cookies:
+                    shown["set-cookie"] = f"{cookies} مورد"
+                sample = core.clean_text(
+                    core.BeautifulSoup(text[:200000], "html.parser").get_text(" ", strip=True)).lower()
+                blocked = any(x in sample for x in (
+                    "access denied", "موقتا vpn خود را خاموش", "temporarily blocked",
+                    "captcha", "درخواست شما مشکوک", "دسترسی شما مسدود"))
+                title_match = re.search(r"<title[^>]*>(.*?)</title>", text[:60000], re.S | re.I)
+                entry.update({
+                    "ok": 200 <= resp.status_code < 400 and not blocked,
+                    "status": resp.status_code,
+                    "bytes": size,
+                    "finalUrl": str(getattr(resp, "url", url) or url),
+                    "ttfbMs": ttfb,
+                    "totalMs": int((time.monotonic() - t0) * 1000),
+                    "headers": shown,
+                    "content": {
+                        "title": core.clean_text(title_match.group(1))[:160] if title_match else "",
+                        "blocked": blocked,
+                        "html": bool(size) and "<" in text[:2000],
+                        "images": text.count("<img"),
+                        "links": text.count("href="),
+                        "jsonLd": "application/ld+json" in text,
+                        "nextData": "__NEXT_DATA__" in text,
+                    },
+                })
+            except Exception as exc:  # noqa: BLE001 - diagnostics must report it
+                entry.update({"ok": False, "error": str(exc)[:400],
+                              "totalMs": int((time.monotonic() - t0) * 1000)})
+            return entry
+
+        main = _fetch("gateway")
+        # Alternative route: direct when a relay is active, relay when direct.
+        alt: Optional[dict[str, Any]] = None
+        if mode == "relay":
+            alt = _fetch("direct", forced_mode="direct", connect_timeout=6, read_timeout=15)
+        elif mode in ("direct", "http") and proxy:
+            alt = _fetch("relay", forced_mode="relay", connect_timeout=6, read_timeout=15)
+
+        try:
+            engines = [e for e in ("requests", "httpx", "curl_cffi", "cloudscraper",
+                                   "aiohttp", "playwright", "selenium", "undetected")
+                       if core.fetch_engine_installed(e)]
+        except Exception:  # noqa: BLE001
+            engines = []
+        timing = {"dnsMs": (probe.get("dns") or {}).get("ms"),
+                  "connectMs": (probe.get("tcp") or {}).get("ms"),
+                  "tlsMs": (probe.get("tls") or {}).get("ms"),
+                  "ttfbMs": main.get("ttfbMs"), "totalMs": main.get("totalMs")}
+        report = {
+            "ok": bool(main.get("ok")), "url": url, "host": host,
+            "gateway": {"mode": mode, "proxy": proxy or "",
+                        "workerKey": bool(network.get("worker_key")),
+                        "verifyTls": bool(network.get("verify_tls", True)),
+                        "probedHost": probe_host if mode == "relay" else ""},
+            "probe": probe, "timing": timing, "main": main, "altPath": alt,
+            "engines": engines,
+            "status": main.get("status"), "bytes": main.get("bytes") or 0,
+            "finalUrl": main.get("finalUrl") or url,
+            "headers": main.get("headers") or {},
+            "content": main.get("content") or {},
+            "error": main.get("error") or "",
+            "durationMs": int((time.monotonic() - t_start) * 1000),
+        }
+        return jsonify(**report)
 
     @app.post("/api/test-connection/<target>")
     def node_test_connection(target: str):

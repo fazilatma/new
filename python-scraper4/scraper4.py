@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.248"
+APP_VERSION = "10.249"
 CHANGELOG = [
+    {"version":"10.249","date":"2026-09-23","title":"تست جامع دسترسی به منبع، شمارنده‌های زندهٔ کلیک‌شو و مغایرت‌گیری خودکار پس از همگام‌سازی","items":["دکمهٔ «آزمایش دسترسی» حالا گزارش واقعی و جامع اتصال می‌دهد: اندازه‌گیری جداگانهٔ DNS (همهٔ IPها و زمان)، اتصال TCP (IP و پورت و زمان)، دست‌دادن TLS (نسخه، رمزنگار، صادرکننده و انقضای گواهی با روز باقی‌مانده)، زمان اولین بایت و دانلود، هدرهای کلیدی پاسخ، عنوان صفحه، نشانه‌های ضدبات و JSON-LD/NEXT_DATA، موتورهای نصب‌شده و مسیر دروازه (رله/مستقیم/پروکسی)","در حالت رله، سنجش DNS/TCP/TLS روی خود Worker انجام می‌شود (هدف واقعی از سرور شما دیده نمی‌شود) و مسیر جایگزین هم آزموده می‌شود: با رله فعال، یک اتصال مستقیم هم امتحان می‌شود و با اتصال مستقیم، اگر Worker تنظیم باشد رله هم — نتیجهٔ هر دو مسیر کنار هم نمایش داده می‌شود","پنجرهٔ نتیجهٔ تست دسترسی بازنویسی شد: به‌جای چند خط JSON، بخش‌بندی خوانا (مسیر اتصال، زمان‌بندی، گواهی TLS، پاسخ سرور، مسیر جایگزین) به‌همراه JSON خام در انتها","شمارنده‌های کار ارسال (انجام‌شده/جدید/آپدیت/خطا/ارسال موفق) حالا در حین اجرا کلیک‌شو هستند: هر محصول که ارسال می‌شود رویداد ساختاریافته‌اش (عنوان، قیمت، مقصد، خطا) روی همان کار ثبت می‌شود و با کلیک روی هر شمارنده، فهرست زندهٔ همان دسته باز می‌شود و تا پایان کار خودکار تازه می‌شود — دیگر لازم نیست تا پایان مرحلهٔ ارسال منتظر بمانید","تیک جدید «مغایرت‌گیری خودکار پس از همگام‌سازی» در رفتار پروفایل: بعد از پایان ارسال کامل همان پروفایل، کار مغایرت‌گیری برای هر مقصدی که ارسال شده به‌صورت خودکار در صف قرار می‌گیرد و در جزئیات کار هم اعلام می‌شود","تست جدید tools/test_source_test_live_counters.py: گزارش تست دسترسی با سرور محلی واقعی (DNS/TCP/هدر/عنوان/حالت رله و مسیر جایگزین)، رویدادهای زندهٔ ارسال و شمارنده‌ها از طریق کلاینت Flask، مغایرت‌گیری خودکار پس از ارسال و رفت‌وبرگشت فیلد تیک؛ jobEventRows حالا رویدادهای sync-created/sync-updated را در شمارنده‌های جدید/آپدیت هم می‌شناسد"]},
     {"version":"10.248","date":"2026-09-23","title":"پوش محصولات هر پروفایل به برنچ گیت‌هاب و دریافت از آن برنچ برای ارسال به غرفه‌ها و ووکامرس","items":["تنظیمات پروفایل جدید «برنچ گیت‌هاب» + کارت «گیت‌هاب محصولات» در صفحه تنظیمات: دکمهٔ پوش محصولات استخراج‌شدهٔ همان پروفایل به‌صورت یک فایل JSON روی برنچ انتخابی، دکمهٔ بررسی برنچ (تعداد محصول، زمان پوش، نسخه، حجم بدون تغییر دادن چیزی) و دکمهٔ دریافت از برنچ با انتخاب مقصد (ووکامرس/باسلام/هر دو/فقط ذخیره)","فایل محصولات هر پروفایل در مسیر ثابت scraper4-products/نام-امن-پروفایل.json با ساختار خوانا (kind، نسخه، زمان، تعداد و آرایهٔ محصولات) ذخیره می‌شود؛ نام فارسی پروفایل به‌سلامت اسلاگ می‌شود و هش کوچکی برای بی‌برخورد بودن پروفایل‌ها اضافه می‌شود","پوش با همان زنجیرهٔ اتمی بکاپ (blob ← tree ← commit ← به‌روزرسانی ref، هرگز حالت نیمه‌نوشته) انجام می‌شود و پیشرفت آن زنده در داشبورد جریان می‌یابد؛ توکن و ریپو همان‌های بخش بکاپ/برنچ است و پرچم ندارد","دریافت فایل‌های بزرگ‌تر از ۱ مگابایت با هدر raw محتوای گیت‌هاب انجام می‌شود (API معمولی از ۱ مگابایت به بالا content نمی‌دهد)؛ بعد از دریافت، محصولات جای محصولات فعلی پروفایل می‌نشیند و با همان worker ارسال پروفایل به مقاصد انتخابی می‌رود — یعنی یک نصب استخراج می‌کند و نصب دیگر فقط دریافت و ارسال می‌کند","وضعیت آخرین پوش/دریافت روی پروفایل ذخیره و در کارت نمایش داده می‌شود؛ فهرست برنچ‌ها با کلیک روی منوی انتخاب از همان اسکن برنچ‌های داشبورد خوانده می‌شود","تست جدید tools/test_github_products_sync.py: زنجیرهٔ کامیت اتمی با API ساختگی، خواندن raw، اعتبارسنجی فایل، dry-run، جایگزینی محصولات، ارسال با مقاصد دلخواه، خطاهای توکن/برنچ/فایل، ایمنی مسیر و رفتار واقعی هر دو endpoint با کلاینت Flask"]},
     {"version":"10.247","date":"2026-09-23","title":"دکمهٔ نصب مرورگر در داشبورد — Playwright و کرومیوم بدون ترمینال نصب می‌شوند","items":["دکمهٔ جدید «🧩 نصب مرورگر» کنار تست سرعت و عیب‌یابی صفحهٔ اصلی: همان دستورهایی که تا حالا باید دستی در ترمینال اجرا می‌شدند با یک کلیک روی خود سرور اجرا می‌شوند — pip با پرچم‌های درست همین محیط (PEP 668 و ‎--user‎ برای حساب‌هایی مثل www-data) و سپس دانلود کرومیوم؛ پس از نصب فهرست موتورهای داشبورد خودکار تازه‌سازی می‌شود","پیشرفت زندهٔ نصب: هر خط خروجی pip و دانلود در پنجرهٔ داشبورد جریان می‌یابد (همان جریان NDJSON عیب‌یابی)؛ نصب همزمان دوباره ممکن نیست (قفل تک‌نصب) و نصب بی‌اثر (idempotent) است — اگر همه‌چیز از قبل باشد سریع «از قبل نصب است» برمی‌گردد","مسیر دانلود هوشمند: اول CDN رسمی playwright؛ اگر پاسخ نداد (مثل IPهای ایران) منطق اسکریپت آینه داخل خود اسکریپر بازنویسی شد — خواندن نسخه‌های لازم از dry-run، دانلود Chrome-for-Testing از آینه‌های npmmirror/huaweicloud/nju و چیدمان دقیق کش playwright با نشانک INSTALLATION_COMPLETE؛ کش در مسیر مشترک WebConsole می‌نشیند تا rsync پاکش نکند و ‎--with-deps‎ فقط با root اجرا می‌شود","پس از نصب همان پروسهٔ در حال اجرا پکیج را می‌بیند (به‌روزرسانی مسیرهای import و user-site) و نیازی به ری‌استارت سرویس نیست؛ در پایان مسیر فایل اجرایی و نتیجهٔ تست راه‌اندازی headless گزارش می‌شود","تست جدید tools/test_browser_install_button.py: زنجیرهٔ pip در محیط‌های مختلف، بازنویسی آینه (دانلود با requests و پشتیبان curl، اعتبارسنجی zip، چیدمان، نشانک)، مسیرهای موفق/شکست/مشغول، رفتار واقعی endpoint با کلاینت Flask و سیم‌کازی داشبورد؛ مسیر نصب یک‌بار زنده در محیط PEP 668 غیر root اجرا شد: زنجیرهٔ pip با ‎--user‎ واقعاً نصب کرد، جریان NDJSON و گزارش صادق مراحل تأیید شد و پشتیبان curl برای دانلود آینه‌ها اضافه گردید"]},
     {"version":"10.246","date":"2026-09-23","title":"گزارش صادق عیب‌یابی، بازگشت به موتورهای HTTP وقتی مرورگر نصب نیست و دستور نصب سازگار با PEP 668","items":["عیب‌یابی استخراج دیگر هیچ‌وقت شکست را «OK» گزارش نمی‌کند: فیلد ok سلامت مراحل را عینه منعکس می‌کند و productCount، durationMs، url و usedEngine همیشه در گزارش هستند؛ خروجی «کپی گزارش کامل» و لاگ WebConsole به‌جای «result: OK · products: 0 · durationMs: 0» وضعیت واقعی را نشان می‌دهد","پروفایلِ قفل‌شده روی موتور مرورگریِ نصب‌نشده (مثل playwright)، عیب‌یابی را در همان صفحهٔ اول متوقف نمی‌کند: مثل استخراج واقعی (۱۰.۱۹۸) زنجیرهٔ موتورهای HTTP ساده امتحان می‌شود؛ مرحلهٔ «دریافت شبکه» موتورِ واقعیِ به‌کاررفته و دلیل بازگشت را صریح می‌نویسد و دستور نصب موتور غایب در «راهکار پیشنهادی» می‌آید — ایمالز که مسیر تأییدشده‌اش HTTP با کوکی سشن است، بدون نصب مرورگر هم واقعاً آزموده می‌شود","پیام «Playwright نصب نیست» دستورهای نصبِ همین محیط را می‌دهد: روی پایتون‌های EXTERNALLY-MANAGED (مثل اوبونتو ۲۶.۰۴) پرچم ‎--break-system-packages‎، برای حساب سرویس غیر root (مثل www-data) ترکیب ‎--user‎ مثل پچر وب‌کنسول، داخل venv بدون ‎--user‎، و ‎--with-deps‎ فقط وقتی root هستیم؛ دستورهای pip پنل نصب داشبورد هم با همین پرچم ساخته می‌شوند","استخراج واقعی وقتی کتابخانهٔ مرورگر نصب نیست (نه فقط فایل اجرایی) هم پیام «بازگشت خودکار به موتورهای HTTP» را در لاگ ثبت می‌کند و رویدادهای زندهٔ عیب‌یابی زمان سپری‌شدهٔ هر مرحله (elapsedMs) را دارند","تست جدید tools/test_diag_fallback_hint.py: سازندهٔ دستور نصب در چهار ترکیب محیط، رفتار واقعی عیب‌یابی با کلاینت فلَسک (بازگشت از playwright به موتور HTTP، گزارش شکست صادق با attempts و پیشنهادها) و پرچم PEP 668 پنل نصب"]},
@@ -5913,6 +5914,23 @@ def live_task_update(task_id: str, progress: int, step: str, status: str="runnin
         live_task_disk_write(task)
 
 
+def live_task_event(task_id: str, event: str, item: dict[str,Any], message: str="") -> None:
+    """10.249: append a structured per-product event to a running task.
+
+    The dashboard's clickable counters read these live — the list of sent /
+    failed products is visible while the dispatch is still running, not only
+    in the comparison lists after it finishes.
+    """
+    with LIVE_TASK_LOCK:
+        task=LIVE_TASKS.get(task_id) or live_task_read(task_id)
+        if not task:return
+        LIVE_TASKS[task_id]=task
+        log=task.setdefault("log",[])
+        log.append({"event":clean_text(event),"item":item if isinstance(item,dict) else {},"message":clean_text(message)[:400],"at":int(time.time())})
+        if len(log)>800: del log[:len(log)-800]
+        live_task_disk_write(task)
+
+
 def live_task_read(task_id: str) -> dict[str,Any]:
     with LIVE_TASK_LOCK:task=dict(LIVE_TASKS.get(task_id,{ }))
     if not task and re.fullmatch(r"task-[0-9a-f]{16}",task_id):
@@ -9018,11 +9036,28 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
                     sent+=1;counts[destination]["sent"]+=1;message=f"✓ {label} · {index}/{len(products)} · {title}"
                     if isinstance(result,dict) and result.get("action"):message+=f" · {result['action']}"
                     if isinstance(result,dict) and int(result.get("shop_ok") or 0)>1:message+=f" · {int(result.get('shop_ok') or 0)} غرفه"
+                    # 10.249: structured event so the counters are clickable LIVE.
+                    try:
+                        _ev="sync-updated" if (isinstance(result,dict) and result.get("action")=="updated") else "sync-created"
+                        live_task_event(task_id,_ev,{"title":title,"price":clean_text(product.get("price")),"link":clean_text(product.get("link")),"sourceKey":clean_text(product.get("source_key") or product.get("sourceKey")),"target":label,"action":(result.get("action") if isinstance(result,dict) else "")},message)
+                    except Exception: pass
                 except Exception as exc:
                     failed+=1;counts[destination]["failed"]+=1;message=f"✕ {label} · {index}/{len(products)} · {title} · {clean_text(exc)[:350]}"
+                    try:
+                        live_task_event(task_id,"failed",{"title":title,"price":clean_text(product.get("price")),"link":clean_text(product.get("link")),"sourceKey":clean_text(product.get("source_key") or product.get("sourceKey")),"target":label,"error":clean_text(exc)[:300]},message)
+                    except Exception: pass
                 done+=1;elapsed=max(.001,time.time()-started);rate=done/elapsed;remaining=int((total-done)/rate) if rate else 0
                 live_task_update(task_id,max(2,int(done/total*100)),f"{label}: محصول {index} از {len(products)}","running",message,profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=int(elapsed),eta_seconds=remaining,current_product=title)
         status="completed";step="ارسال کامل پروفایل پایان یافت";detail=f"{sent} عملیات موفق و {failed} خطا در {int(time.time()-started)} ثانیه"
+        # 10.249: optional automatic reconcile after the profile's sync —
+        # the per-profile «مغایرت‌گیری خودکار پس از همگام‌سازی» toggle.
+        try:
+            _prof=load_data().get("profiles",{}).get(profile_name) or {}
+            if _prof.get("reconcile"):
+                _labels={"woocommerce":"ووکامرس","basalam":"باسلام"}
+                _queued=[start_destination_reconcile_task(profile_name,x) for x in destinations]
+                if _queued:detail+=" · مغایرت‌گیری خودکار برای "+" و ".join(_labels.get(x,x) for x in destinations)+" در صف قرار گرفت"
+        except Exception: pass
         live_task_update(task_id,100,step,status,detail,profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=int(time.time()-started),eta_seconds=0)
     except Exception as exc:
         live_task_update(task_id,max(1,int(done/total*100)),"ارسال کامل پروفایل ناموفق بود","failed",str(exc),profile=profile_name,done=done,total=total,sent=sent,failed=failed,error=clean_text(exc)[:1500],destinations=counts)
@@ -9047,8 +9082,14 @@ def api_destination_reconcile(destination: str, profile_name: str):
     if destination not in {"woocommerce","basalam"}:return jsonify(ok=False,error="مقصد نامعتبر است"),400
     profile=load_data().get("profiles",{}).get(profile_name)
     if not isinstance(profile,dict):return jsonify(ok=False,error="پروفایل پیدا نشد"),404
+    return jsonify(ok=True,task=start_destination_reconcile_task(profile_name,destination))
+
+
+def start_destination_reconcile_task(profile_name: str, destination: str) -> dict[str,Any]:
+    """Queue one reconcile task (shared by the API route and the automatic
+    post-dispatch reconcile of 10.249)."""
     task=live_task_create("destination_reconcile",f"مغایرت‌گیری {profile_name} · "+("ووکامرس" if destination=="woocommerce" else "باسلام"),private=True);task.update(profile=profile_name,destination=destination);live_task_disk_write(task)
-    threading.Thread(target=destination_reconcile_worker,args=(task["id"],profile_name,destination),name="destination-reconcile",daemon=True).start();return jsonify(ok=True,task=task)
+    threading.Thread(target=destination_reconcile_worker,args=(task["id"],profile_name,destination),name="destination-reconcile",daemon=True).start();return task
 
 
 def start_destination_repair(profile_name: str, destination: str, scope: str) -> dict[str,Any]:
