@@ -4,7 +4,7 @@
 # Modes: 1) Start Server (Default) | 2) Quick Update | 3) Full Installation
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 1.8.8 | Repository: fazilatma/new
+# Version: 1.8.9 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail
@@ -135,23 +135,28 @@ elif [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/w
     fi
 fi
 
-# Helper: Guaranteed Persistent PHP Server Launcher (tmux + setsid + disown + watchdog)
+# Helper: Guaranteed Persistent PHP Server Launcher (Fixes Termux OPcache lock errors)
 start_php_server() {
     local port="$1"
     local doc="$2"
     mkdir -p "$doc" 2>/dev/null || true
+    mkdir -p "$TMP_DIR" 2>/dev/null || true
+    export TMPDIR="$TMP_DIR"
+    
+    # Termux Android fix: disable OPcache CLI lock to prevent 'Cannot create lock - Permission denied (13)'
+    local php_opts="-d opcache.enable=0 -d opcache.enable_cli=0 -d sys_temp_dir=${TMP_DIR} -d upload_tmp_dir=${TMP_DIR}"
     
     fuser -k "${port}/tcp" 2>/dev/null || true
-    pkill -f "php -S 0.0.0.0:${port}" 2>/dev/null || true
+    pkill -f "php .*0.0.0.0:${port}" 2>/dev/null || true
     sleep 0.5
     
     if command -v tmux >/dev/null 2>&1; then
         tmux kill-session -t "wcp-${port}" 2>/dev/null || true
-        tmux new-session -d -s "wcp-${port}" "cd '${doc}' && exec php -S 0.0.0.0:${port} -t '${doc}'" 2>/dev/null || true
+        tmux new-session -d -s "wcp-${port}" "cd '${doc}' && export TMPDIR='${TMP_DIR}' && exec php ${php_opts} -S 0.0.0.0:${port} -t '${doc}'" 2>/dev/null || true
     fi
     
-    if ! pgrep -f "php -S 0.0.0.0:${port}" >/dev/null 2>&1; then
-        (cd "$doc" && setsid nohup php -S 0.0.0.0:${port} -t "$doc" > "${TMP_DIR}/wcp-${port}.log" 2>&1 &) 2>/dev/null || true
+    if ! pgrep -f "php .*0.0.0.0:${port}" >/dev/null 2>&1; then
+        (cd "$doc" && export TMPDIR="$TMP_DIR" && setsid nohup php ${php_opts} -S 0.0.0.0:${port} -t "$doc" > "${TMP_DIR}/wcp-${port}.log" 2>&1 &) 2>/dev/null || true
         disown -a 2>/dev/null || true
     fi
     
@@ -176,7 +181,7 @@ echo -e "  ${CLR_GREEN}${CLR_BOLD}[1] ⚡ Start WebConsole Server (Default)${CLR
 echo -e "      • Starts persistent background server on Port 8888 & outputs live URLs (~1s)"
 echo -e ""
 echo -e "  ${CLR_CYAN}${CLR_BOLD}[2] 🔄 Quick Update WebConsole & wcp CLI${CLR_RESET}"
-echo -e "      • Downloads latest WebConsole Pro v1.8.8 and wcp CLI from GitHub (~3s)"
+echo -e "      • Downloads latest WebConsole Pro v1.8.9 and wcp CLI from GitHub (~3s)"
 echo -e ""
 echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full System Installation${CLR_RESET}"
 echo -e "      • Installs Web Server, Node 20 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
@@ -299,6 +304,17 @@ case "$MODE" in
             pkg install -y bash curl wget git php apache2 nodejs-lts python clang make jq tar tmux htop 2>/dev/null || \
             pkg install -y bash curl wget git php nodejs python jq tar tmux || true
             WEB_USER="$(id -un)"; WEB_GROUP="$(id -gn 2>/dev/null || id -un)"
+            
+            # Fix Termux php.ini OPcache lock permission issue permanently
+            for pini in "${PREFIX:-/data/data/com.termux/files/usr}/lib/php.ini" "${PREFIX:-/data/data/com.termux/files/usr}/etc/php.ini"; do
+                if [ -f "$pini" ]; then
+                    sed -i -E 's/^[; ]*opcache.enable[[:space:]]*=.*/opcache.enable=0/' "$pini" 2>/dev/null || true
+                    sed -i -E 's/^[; ]*opcache.enable_cli[[:space:]]*=.*/opcache.enable_cli=0/' "$pini" 2>/dev/null || true
+                    if ! grep -q "opcache.enable" "$pini" 2>/dev/null; then
+                        echo -e "\nopcache.enable=0\nopcache.enable_cli=0\n" >> "$pini" 2>/dev/null || true
+                    fi
+                fi
+            done
         elif [ "$OS_FAMILY" = "debian" ]; then
             rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources 2>/dev/null || true
             rm -f /etc/apt/keyrings/nodesource*.gpg /usr/share/keyrings/nodesource*.gpg 2>/dev/null || true
@@ -370,7 +386,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.8.8 Ready & Operational!                         "
+echo "          🎉 WebConsole Pro v1.8.9 Ready & Operational!                         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
