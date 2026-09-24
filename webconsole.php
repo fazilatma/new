@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.7');
+define('WCP_VERSION', '1.6.9');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1196,16 +1196,28 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
 
     // Exclude persistent directories, databases, and configuration from being wiped out on updates
     $rsyncExcludes = $shouldPreserve ? [
-        '.git', 'node_modules', '.env', '.env.*', '.env.local', '.env.wcp',
+        '.git', '.git*', '.git-cache', 'node_modules', '.env', '.env.*', '.env.local', '.env.wcp',
         'data/', 'storage/', 'uploads/', 'sessions/', 'logs/', 'db/',
         '*.sqlite', '*.sqlite3', '*.db', '*.local.*', 'config.local.*', '*.wcp_bak'
     ] : [
-        '.git', 'node_modules', '.env.wcp'
+        '.git', '.git*', '.git-cache', 'node_modules', '.env.wcp'
     ];
     $excludeArgs = implode(' ', array_map(fn($x) => '--exclude=' . escapeshellarg($x), $rsyncExcludes));
 
+    // Ensure destination directory exists and has permissive write rights
+    if (!is_dir($dest)) @mkdir($dest, 0777, true);
+    @sh('chmod -R 777 ' . esc($dest) . ' 2>/dev/null || sudo -n chmod -R 777 ' . esc($dest) . ' 2>/dev/null || true');
+
     if (which('rsync')) {
-        cli_checked('rsync -a --delete ' . $excludeArgs . ' ' . esc(rtrim($src, '/') . '/') . ' ' . esc(rtrim($dest, '/') . '/'));
+        // Use -rlD --no-perms --no-owner --no-group --omit-dir-times to prevent Operation not permitted (1) on containers/Codespaces
+        $rsyncCmd = 'rsync -rlD --no-perms --no-owner --no-group --omit-dir-times --delete ' . $excludeArgs . ' ' . esc(rtrim($src, '/') . '/') . ' ' . esc(rtrim($dest, '/') . '/');
+        $out = cli_run($rsyncCmd, $rc);
+        // Exit codes 0 (OK), 23 (partial transfer/attributes), 24 (vanished source files) are non-fatal
+        if ($rc !== 0 && $rc !== 23 && $rc !== 24) {
+            cli_log("rsync warning ($rc), falling back to robust tar copy...");
+            $tarExcludes = implode(' ', array_map(fn($x) => '--exclude=' . escapeshellarg(rtrim($x, '/')), $rsyncExcludes));
+            cli_checked('bash -o pipefail -c ' . esc('tar -C ' . esc($src) . ' ' . $tarExcludes . ' -cf - . | tar -C ' . esc($dest) . ' -xf -'));
+        }
     } else {
         $tarExcludes = implode(' ', array_map(fn($x) => '--exclude=' . escapeshellarg(rtrim($x, '/')), $rsyncExcludes));
         cli_checked('bash -o pipefail -c ' . esc('tar -C ' . esc($src) . ' ' . $tarExcludes . ' -cf - . | tar -C ' . esc($dest) . ' -xf -'));
