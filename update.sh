@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Auto-Installer (VPS, Codespaces & Android Termux)
-# Version: 1.7.5 | Repository: fazilatma/new
+# Version: 1.7.6 | Repository: fazilatma/new
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
 # ==============================================================================
@@ -42,6 +42,14 @@ if [ "$IS_TERMUX" = "false" ] && [ "$(id -u)" -ne 0 ]; then
         exit 1
     fi
 fi
+
+# Portable Temporary Directory Definition (Handles Termux $PREFIX/tmp vs Linux /tmp)
+TMP_DIR="${TMPDIR:-/tmp}"
+if [ "$IS_TERMUX" = "true" ]; then
+    TMP_DIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+    mkdir -p "$TMP_DIR" 2>/dev/null || TMP_DIR="${HOME}/.tmp"
+fi
+mkdir -p "$TMP_DIR" 2>/dev/null || true
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -393,21 +401,21 @@ fi
 
 log_info "Fetching latest WebConsole Pro from GitHub (fazilatma/new)..."
 WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
-curl -fsSL "$WCP_URL" -o /tmp/webconsole_latest.php 2>/dev/null || \
-wget -qO /tmp/webconsole_latest.php "$WCP_URL"
+curl -fsSL "$WCP_URL" -o ${TMP_DIR}/webconsole_latest.php 2>/dev/null || \
+wget -qO ${TMP_DIR}/webconsole_latest.php "$WCP_URL"
 
 # Deploy to DocumentRoot
-cp -f /tmp/webconsole_latest.php "${DOC_ROOT}/webconsole.php"
-cp -f /tmp/webconsole_latest.php "${DOC_ROOT}/index.php"
+cp -f ${TMP_DIR}/webconsole_latest.php "${DOC_ROOT}/webconsole.php"
+cp -f ${TMP_DIR}/webconsole_latest.php "${DOC_ROOT}/index.php"
 
 if [ "$IS_TERMUX" = "false" ]; then
     mkdir -p /var/www/html
-    cp -f /tmp/webconsole_latest.php "/var/www/html/webconsole.php" 2>/dev/null || true
-    cp -f /tmp/webconsole_latest.php "/var/www/html/index.php" 2>/dev/null || true
+    cp -f ${TMP_DIR}/webconsole_latest.php "/var/www/html/webconsole.php" 2>/dev/null || true
+    cp -f ${TMP_DIR}/webconsole_latest.php "/var/www/html/index.php" 2>/dev/null || true
     chown -R ${WEB_USER}:${WEB_GROUP} "${DOC_ROOT}" /var/www/html /var/www/projects 2>/dev/null || true
     chmod -R 775 "${DOC_ROOT}" /var/www/html /var/www/projects 2>/dev/null || true
 fi
-rm -f /tmp/webconsole_latest.php
+rm -f ${TMP_DIR}/webconsole_latest.php
 
 # Install wcp CLI tool globally
 log_info "Installing WebConsole Pro CLI tool (wcp)..."
@@ -426,8 +434,8 @@ fi
 pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
 pkill -f 'php -S 0.0.0.0:8000' 2>/dev/null || true
 
-nohup php -S 0.0.0.0:8888 -t "$DOC_ROOT" >/tmp/webconsole-php-8888.log 2>&1 &
-nohup php -S 0.0.0.0:8000 -t "$DOC_ROOT" >/tmp/webconsole-php-8000.log 2>&1 &
+nohup php -S 0.0.0.0:8888 -t "$DOC_ROOT" >${TMP_DIR}/webconsole-php-8888.log 2>&1 &
+nohup php -S 0.0.0.0:8000 -t "$DOC_ROOT" >${TMP_DIR}/webconsole-php-8000.log 2>&1 &
 sleep 1
 
 # Configure VS Code ports inside workspace directories
@@ -478,7 +486,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.7.5 Universal Edition Installed Successfully!   "
+echo "          🎉 WebConsole Pro v1.7.6 Universal Edition Installed Successfully!   "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
