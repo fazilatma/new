@@ -43,7 +43,7 @@ mkdir -p "$CACHE_DIR" "$RUNNER_DIR" 2>/dev/null || true
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.7.0)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.7.5)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
@@ -116,7 +116,11 @@ cmd_url() {
     local cs_domain="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
     local ip=$(curl -s4m 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
 
-    if [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
+    if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; then
+        echo -e "${CLR_BOLD}📱 Android Termux Access Endpoints:${CLR_RESET}"
+        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://localhost:8888/${CLR_RESET} (or ${CLR_CYAN}http://127.0.0.1:8888/${CLR_RESET})"
+        echo -e "  🐘 ${CLR_CYAN}http://localhost:8000/${CLR_RESET}"
+    elif [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
         echo -e "${CLR_BOLD}🌐 GitHub Codespaces Access Endpoints:${CLR_RESET}"
         echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-8888.${cs_domain}/${CLR_RESET} (Primary WebConsole)"
         echo -e "  🐘 ${CLR_CYAN}https://${cs_name}-8000.${cs_domain}/${CLR_RESET} (Alternate WebConsole)"
