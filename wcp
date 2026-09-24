@@ -624,6 +624,12 @@ cmd_rebuild() {
 
 # Main command dispatcher
 case "${1:-}" in
+    on|start-server)
+        cmd_serve "${2:-8888}"
+        ;;
+    off|stop-server)
+        cmd_shutdown
+        ;;
     shutdown|kill-all|off)
         cmd_shutdown
         ;;
