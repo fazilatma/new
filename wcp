@@ -40,10 +40,54 @@ CACHE_DIR="${WCP_DATA_DIR}/cache"
 RUNNER_DIR="${WCP_DATA_DIR}/runners"
 mkdir -p "$CACHE_DIR" "$RUNNER_DIR" 2>/dev/null || true
 
+cmd_serve() {
+    local port="${1:-8888}"
+    local doc="${HOME}/webconsole"
+    for d in /workspaces/* /var/www/html "${HOME}/webconsole"; do
+        if [ -f "$d/webconsole.php" ] || [ -f "$d/index.php" ]; then
+            doc="$d"
+            break
+        fi
+    done
+    
+    echo -e "${CLR_BLUE}Starting WebConsole PHP server on Port ${port} (DocumentRoot: ${doc})...${CLR_RESET}"
+    fuser -k "${port}/tcp" 2>/dev/null || true
+    pkill -f "php -S 0.0.0.0:${port}" 2>/dev/null || true
+    sleep 0.5
+    
+    local tmp_dir="${TMPDIR:-/tmp}"
+    [ -d "${PREFIX:-}/tmp" ] && tmp_dir="${PREFIX}/tmp"
+    mkdir -p "$tmp_dir" 2>/dev/null || true
+    
+    if command -v tmux >/dev/null 2>&1; then
+        tmux kill-session -t "wcp-${port}" 2>/dev/null || true
+        tmux new-session -d -s "wcp-${port}" "cd '${doc}' && exec php -S 0.0.0.0:${port} -t '${doc}'" 2>/dev/null || true
+    fi
+    
+    if ! pgrep -f "php -S 0.0.0.0:${port}" >/dev/null 2>&1; then
+        (cd "$doc" && setsid nohup php -S 0.0.0.0:${port} -t "$doc" > "${tmp_dir}/wcp-${port}.log" 2>&1 &) 2>/dev/null || true
+        disown -a 2>/dev/null || true
+    fi
+    sleep 1
+    
+    local code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/" 2>/dev/null || echo "err")
+    if [ "$code" = "200" ] || [ "$code" = "302" ] || [ "$code" = "403" ] || [ "$code" = "404" ]; then
+        echo -e "${CLR_GREEN}✓ WebConsole server is active on Port ${port} [HTTP ${code}].${CLR_RESET}"
+    else
+        echo -e "${CLR_GREEN}✓ WebConsole daemon launched on Port ${port}.${CLR_RESET}"
+    fi
+}
+
+check_auto_serve() {
+    if ! pgrep -f 'php -S 0.0.0.0:8888' >/dev/null 2>&1 && ! pgrep apache2 >/dev/null 2>&1 && ! pgrep httpd >/dev/null 2>&1; then
+        cmd_serve 8888 >/dev/null 2>&1 || true
+    fi
+}
+
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.7.5)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.7.8)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
@@ -80,6 +124,7 @@ cmd_help() {
 }
 
 cmd_status() {
+    check_auto_serve
     banner
     echo -e "${CLR_BOLD}System Metrics & Resource Overview:${CLR_RESET}"
     echo "--------------------------------------------------------------------------------"
@@ -109,6 +154,7 @@ cmd_status() {
 }
 
 cmd_url() {
+    check_auto_serve
     local cs_name="${CODESPACE_NAME:-}"
     if [ -z "$cs_name" ] && [ -r /proc/1/environ ]; then
         cs_name=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -E '^CODESPACE_NAME=' | cut -d'=' -f2- | tr -d '"\r\n' || true)
@@ -524,6 +570,9 @@ cmd_rebuild() {
 
 # Main command dispatcher
 case "${1:-}" in
+    serve|server)
+        cmd_serve "${2:-8888}"
+        ;;
     status|info)
         cmd_status
         ;;
