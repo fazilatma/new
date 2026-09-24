@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Linux & GitHub Codespaces 1-Click Auto-Installer
-# Repository: fazilatma/new | Version: 1.6.6
-# Supports: GitHub Codespaces (SSH / Browser), Debian, Ubuntu, Linux Mint,
-#           CentOS, RHEL, Rocky Linux, AlmaLinux, Fedora, Alpine, Arch Linux
+# Web Server: Apache2 & Universal Multi-Port PHP (Ports 8888, 8000, 8080, 80)
+# Workspace Integration: Auto-deploys to /workspaces for instant VS Code visibility
+# Repository: fazilatma/new | Version: 1.6.7
 # ==============================================================================
 
 set -euo pipefail
@@ -34,7 +34,7 @@ log_err() {
     echo -e "${CLR_RED}✗ $1${CLR_RESET}"
 }
 
-# Ensure root privileges (or auto-escalate with sudo)
+# Ensure root privileges
 if [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
         exec sudo -E bash "$0" "$@"
@@ -48,36 +48,37 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo -e "${CLR_CYAN}${CLR_BOLD}"
 echo "================================================================================"
-echo "   🌐 WebConsole Pro - Universal Linux & GitHub Codespaces Auto-Installer       "
+echo "   🌐 WebConsole Pro - Apache2 & Codespaces Universal Auto-Installer            "
 echo "================================================================================"
 echo -e "${CLR_RESET}"
 
-# Check systemd availability
 HAS_SYSTEMD=false
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     HAS_SYSTEMD=true
 fi
 
+# Stop Nginx if running to prevent port conflicts with Apache
+service nginx stop 2>/dev/null || systemctl stop nginx 2>/dev/null || true
+
 # ------------------------------------------------------------------------------
-# 1. Environment & Codespaces Detection (Multi-Source Deep Extraction)
+# 1. Environment & Codespaces Detection & Workspace Directory Finding
 # ------------------------------------------------------------------------------
-log_step "1/9" "Detecting Environment, Linux Distro & GitHub Codespaces..."
+log_step "1/9" "Detecting Environment, Linux Distro & Workspace Directory..."
 
 IS_CODESPACES=false
 CODESPACE_NAME="${CODESPACE_NAME:-}"
 CODESPACE_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
+WS_ROOT=""
 
 extract_cs_var() {
     local var_name="$1"
     local val=""
 
-    # A. Check PID 1 environ (Container Root Init)
     if [ -r /proc/1/environ ]; then
         val=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -E "^${var_name}=" | head -n 1 | cut -d'=' -f2- | tr -d '"\r\n' || true)
         if [ -n "$val" ]; then echo "$val"; return; fi
     fi
 
-    # B. Check all parent / sibling processes in /proc/*/environ
     for env_file in /proc/[0-9]*/environ; do
         if [ -r "$env_file" ]; then
             val=$(tr '\0' '\n' < "$env_file" 2>/dev/null | grep -E "^${var_name}=" | head -n 1 | cut -d'=' -f2- | tr -d '"\r\n' || true)
@@ -85,7 +86,6 @@ extract_cs_var() {
         fi
     done
 
-    # C. Check Codespaces shared JSON metadata
     for json_file in /workspaces/.codespaces/shared/environment-variables.json \
                      /workspaces/.codespaces/.persistedshare/environment-variables.json \
                      /tmp/codespaces-environment.json \
@@ -96,7 +96,6 @@ extract_cs_var() {
         fi
     done
 
-    # D. Check system environments and shell configs
     for f in /etc/environment \
              /etc/profile.d/*codespaces*.sh \
              /home/vscode/.bashrc \
@@ -109,7 +108,6 @@ extract_cs_var() {
         fi
     done
 
-    # E. Check GitHub CLI if authenticated
     if [ "$var_name" = "CODESPACE_NAME" ] && command -v gh >/dev/null 2>&1; then
         val=$(gh codespace list --json name -q '.[0].name' 2>/dev/null || true)
         if [ -n "$val" ]; then echo "$val"; return; fi
@@ -139,6 +137,19 @@ if [ -n "$GITHUB_TOKEN" ]; then
     export GH_TOKEN="$GITHUB_TOKEN"
 fi
 
+# Detect workspace root folder in Codespaces for direct file visibility
+if [ -d "/workspaces" ]; then
+    for d in /workspaces/*; do
+        if [ -d "$d" ] && [ "$(basename "$d")" != ".codespaces" ]; then
+            WS_ROOT="$d"
+            break
+        fi
+    done
+    if [ -z "$WS_ROOT" ]; then
+        WS_ROOT="/workspaces"
+    fi
+fi
+
 if [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/workspaces" ] || [ -d "/.codespaces" ]; then
     IS_CODESPACES=true
     if [ -z "$CODESPACE_NAME" ]; then
@@ -149,7 +160,10 @@ if [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/wor
             CODESPACE_NAME="codespace"
         fi
     fi
-    log_ok "GitHub Codespaces Detected! -> Name: ${CLR_BOLD}${CODESPACE_NAME}${CLR_RESET} (Domain: ${CODESPACE_DOMAIN})"
+    log_ok "GitHub Codespaces Detected: ${CLR_BOLD}${CODESPACE_NAME}${CLR_RESET} (Domain: ${CODESPACE_DOMAIN})"
+    if [ -n "$WS_ROOT" ]; then
+        log_ok "Visible Workspace Directory: ${CLR_CYAN}${WS_ROOT}${CLR_RESET}"
+    fi
 else
     log_info "Standard VPS / Dedicated Server environment detected."
 fi
@@ -208,7 +222,7 @@ log_ok "Operating System: ${DISTRO} (Family: ${OS_FAMILY}, Version: ${VERSION_ID
 log_step "2/9" "Checking Virtual Memory (Swap) Configuration..."
 
 if [ "$IS_CODESPACES" = "true" ]; then
-    log_info "Running inside container/Codespaces. Host manages memory allocation."
+    log_info "Running inside container/Codespaces. Host kernel manages swap allocation."
 else
     TOTAL_SWAP_KB=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
     if [ "${TOTAL_SWAP_KB:-0}" -lt 1048576 ]; then
@@ -243,7 +257,7 @@ WEB_USER="www-data"
 WEB_GROUP="www-data"
 
 if [ "$OS_FAMILY" = "debian" ]; then
-    # Clean up conflicting / duplicated repository lists (e.g. NodeSource gpg key collisions on Ubuntu 24.04)
+    # Clean up conflicting / broken third-party APT lists
     rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources 2>/dev/null || true
     rm -f /etc/apt/keyrings/nodesource*.gpg /usr/share/keyrings/nodesource*.gpg 2>/dev/null || true
     apt-get update -y || true
@@ -263,15 +277,14 @@ elif [ "$OS_FAMILY" = "rhel" ]; then
         yum update -y
         yum install -y curl wget git unzip zip tar tmux htop jq gcc gcc-c++ make ca-certificates sudo
     fi
-    WEB_USER="nginx"
-    WEB_GROUP="nginx"
-    id -u nginx >/dev/null 2>&1 || useradd -r -s /sbin/nologin nginx 2>/dev/null || true
+    WEB_USER="apache"
+    WEB_GROUP="apache"
+    id -u apache >/dev/null 2>&1 || useradd -r -s /sbin/nologin apache 2>/dev/null || true
 elif [ "$OS_FAMILY" = "alpine" ]; then
     apk update
     apk add --no-cache bash curl wget git unzip zip tar tmux htop jq build-base ca-certificates sudo shadow
-    WEB_USER="nginx"
-    WEB_GROUP="nginx"
-    id -u nginx >/dev/null 2>&1 || adduser -D -S -G nginx -H -s /sbin/nologin nginx 2>/dev/null || true
+    WEB_USER="apache"
+    WEB_GROUP="apache"
 elif [ "$OS_FAMILY" = "arch" ]; then
     pacman -Syu --noconfirm --needed base-devel curl wget git unzip zip tar tmux htop jq sudo ca-certificates
     WEB_USER="http"
@@ -374,16 +387,13 @@ python3 -m pip install --upgrade pip 2>/dev/null || true
 
 PY_PACKAGES="requests flask beautifulsoup4 lxml httpx curl_cffi cloudscraper aiohttp playwright html5lib selectolax basalam-sdk psutil python-dotenv fastapi uvicorn fake-useragent tqdm pandas"
 
-log_info "Installing scraping packages globally across all Python environments..."
-# 1. System-wide installation
+log_info "Installing Python scraping packages..."
 python3 -m pip install --break-system-packages --ignore-installed $PY_PACKAGES 2>/dev/null || \
 python3 -m pip install $PY_PACKAGES 2>/dev/null || true
 
-# 2. www-data user installation
 mkdir -p /var/www/.local /var/www/projects 2>/dev/null || true
 chown -R ${WEB_USER}:${WEB_GROUP} /var/www 2>/dev/null || true
 
-# 3. vscode user installation if present
 if id -u vscode >/dev/null 2>&1; then
     su - vscode -c "python3 -m pip install --break-system-packages --user $PY_PACKAGES" 2>/dev/null || true
 fi
@@ -392,137 +402,114 @@ PY_VER=$(python3 --version 2>/dev/null || echo "Python 3")
 log_ok "${PY_VER} and scraping stack installed successfully."
 
 # ------------------------------------------------------------------------------
-# 7. Nginx, PHP & PHP-FPM Configuration (Multi-Port 8888, 8000, 8080, 80)
+# 7. Apache2 & PHP Multi-Port Configuration (Ports 8888, 8000, 8080, 80)
 # ------------------------------------------------------------------------------
-log_step "7/9" "Configuring Nginx & PHP-FPM Web Servers..."
+log_step "7/9" "Installing and Configuring Apache2 & PHP Web Server..."
+
+# Set primary document root: In Codespaces, use visible workspace folder!
+DOC_ROOT="/var/www/html"
+if [ "$IS_CODESPACES" = "true" ] && [ -n "$WS_ROOT" ] && [ -d "$WS_ROOT" ]; then
+    DOC_ROOT="$WS_ROOT"
+fi
+mkdir -p "$DOC_ROOT" /var/www/html /var/www/projects
 
 if [ "$OS_FAMILY" = "debian" ]; then
-    apt-get install -y nginx php-fpm php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-sqlite3
+    apt-get install -y apache2 libapache2-mod-php php php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-sqlite3
+    
+    # Configure Apache Ports
+    cat << 'APACHE_PORTS' > /etc/apache2/ports.conf
+Listen 8888
+Listen 8000
+Listen 8080
+Listen 80
+APACHE_PORTS
+
+    # Configure Apache VirtualHost
+    cat << APACHE_VHOST > /etc/apache2/sites-available/000-default.conf
+<VirtualHost *:8888 *:8000 *:8080 *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot ${DOC_ROOT}
+
+    <Directory ${DOC_ROOT}>
+        Options Indexes FollowSymLinks MultiViews
+        AllowOverride All
+        Require all granted
+        DirectoryIndex index.php index.html webconsole.php
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+</VirtualHost>
+APACHE_VHOST
+
+    a2enmod rewrite headers 2>/dev/null || true
+    a2ensite 000-default.conf 2>/dev/null || true
+
+    service apache2 restart 2>/dev/null || systemctl restart apache2 2>/dev/null || /usr/sbin/apache2ctl restart 2>/dev/null || true
 elif [ "$OS_FAMILY" = "rhel" ]; then
     if command -v dnf >/dev/null 2>&1; then
-        dnf install -y nginx php-fpm php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-pdo
+        dnf install -y httpd php php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-pdo
     else
-        yum install -y nginx php-fpm php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-pdo
+        yum install -y httpd php php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-pdo
     fi
-elif [ "$OS_FAMILY" = "alpine" ]; then
-    apk add --no-cache nginx php82-fpm php82-cli php82-curl php82-mbstring php82-xml php82-zip php82-json php82-bcmath php82-intl php82-sqlite3
-elif [ "$OS_FAMILY" = "arch" ]; then
-    pacman -S --noconfirm --needed nginx php php-fpm php-gd php-sqlite
+    service httpd restart 2>/dev/null || systemctl restart httpd 2>/dev/null || true
 fi
 
-PHP_SOCK=""
-for sock in /run/php/php*-fpm.sock /var/run/php/php*-fpm.sock /var/run/php-fpm/www.sock /run/php-fpm/www.sock /var/run/php82-fpm.sock /var/run/php-fpm.sock; do
-    if [ -e "$sock" ] || [ -d "$(dirname "$sock")" ]; then
-        PHP_SOCK="unix:$sock"
-        break
-    fi
-done
-
-if [ -z "$PHP_SOCK" ]; then
-    PHP_SOCK="127.0.0.1:9000"
-fi
-
-log_info "FastCGI Socket: ${PHP_SOCK}"
-
-mkdir -p /var/www/html /var/www/projects
-
-if [ "$OS_FAMILY" = "debian" ]; then
-    cat << NGINX_CONF > /etc/nginx/sites-available/default
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    listen 8080 default_server;
-    listen [::]:8080 default_server;
-    listen 8000 default_server;
-    listen [::]:8000 default_server;
-    listen 8888 default_server;
-    listen [::]:8888 default_server;
-    server_name _;
-    root /var/www/html;
-    index index.php index.html index.htm;
-    client_max_body_size 1024M;
-    client_body_buffer_size 128M;
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    location ~ \.php\$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass ${PHP_SOCK};
-        fastcgi_read_timeout 600;
-        fastcgi_send_timeout 600;
-        fastcgi_connect_timeout 60;
-    }
-
-    location ~ /\.ht {
-        deny all;
-    }
-}
-NGINX_CONF
-    ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default 2>/dev/null || true
-fi
-
-# Start services gracefully
-if [ "$HAS_SYSTEMD" = "true" ]; then
-    systemctl restart nginx 2>/dev/null || true
-    for fpm in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
-        systemctl restart $fpm 2>/dev/null || true
-    done
-else
-    service nginx restart 2>/dev/null || nginx 2>/dev/null || true
-    for fpm in php-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm; do
-        service $fpm restart 2>/dev/null || true
-    done
-fi
-
-log_ok "Nginx & PHP-FPM configured and listening on Ports 8888, 8000, 8080, and 80."
+log_ok "Apache2 configured and listening on Ports 8888, 8000, 8080, and 80 (DocumentRoot: ${DOC_ROOT})."
 
 # ------------------------------------------------------------------------------
-# 8. Deploy WebConsole Pro v1.6.6 & Sudoers Permissions
+# 8. Deploy WebConsole Pro v1.6.7 to DocumentRoot & Workspace Explorer
 # ------------------------------------------------------------------------------
-log_step "8/9" "Deploying WebConsole Pro v1.6.6 & Sudoers Permissions..."
+log_step "8/9" "Deploying WebConsole Pro v1.6.7 to Workspace Explorer & WebRoot..."
 
 mkdir -p /etc/sudoers.d
 cat << SUDOERS_CONF > /etc/sudoers.d/99-webconsole-nopasswd
 www-data ALL=(ALL) NOPASSWD: ALL
-nginx ALL=(ALL) NOPASSWD: ALL
 apache ALL=(ALL) NOPASSWD: ALL
+nginx ALL=(ALL) NOPASSWD: ALL
 http ALL=(ALL) NOPASSWD: ALL
 vscode ALL=(ALL) NOPASSWD: ALL
 codespace ALL=(ALL) NOPASSWD: ALL
 SUDOERS_CONF
 chmod 0440 /etc/sudoers.d/99-webconsole-nopasswd
 
-log_info "Fetching latest WebConsole Pro v1.6.6 from GitHub (fazilatma/new)..."
+log_info "Fetching latest WebConsole Pro v1.6.7 from GitHub (fazilatma/new)..."
 WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
-curl -fsSL "$WCP_URL" -o /var/www/html/webconsole.php || \
-wget -qO /var/www/html/webconsole.php "$WCP_URL"
+curl -fsSL "$WCP_URL" -o /tmp/webconsole_latest.php || \
+wget -qO /tmp/webconsole_latest.php "$WCP_URL"
 
-cp -f /var/www/html/webconsole.php /var/www/html/index.php
+# Deploy to Primary DocumentRoot (Workspace folder in Codespaces)
+cp -f /tmp/webconsole_latest.php "${DOC_ROOT}/webconsole.php"
+cp -f /tmp/webconsole_latest.php "${DOC_ROOT}/index.php"
 
-chown -R ${WEB_USER}:${WEB_GROUP} /var/www/html /var/www/projects 2>/dev/null || true
-chmod -R 775 /var/www/html /var/www/projects 2>/dev/null || true
-touch /var/www/html/webconsole.php /var/www/html/index.php 2>/dev/null || true
+# Also ensure /var/www/html has a copy
+mkdir -p /var/www/html
+cp -f /tmp/webconsole_latest.php "/var/www/html/webconsole.php"
+cp -f /tmp/webconsole_latest.php "/var/www/html/index.php"
+rm -f /tmp/webconsole_latest.php
 
-# Start background supervised PHP servers on high ports
+# Fix permissions
+chown -R ${WEB_USER}:${WEB_GROUP} "${DOC_ROOT}" /var/www/html /var/www/projects 2>/dev/null || true
+chmod -R 775 "${DOC_ROOT}" /var/www/html /var/www/projects 2>/dev/null || true
+
+# Start background fallback PHP server on port 8888
 pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
 pkill -f 'php -S 0.0.0.0:8000' 2>/dev/null || true
 
-nohup php -S 0.0.0.0:8888 -t /var/www/html >/tmp/webconsole-php-8888.log 2>&1 &
-nohup php -S 0.0.0.0:8000 -t /var/www/html >/tmp/webconsole-php-8000.log 2>&1 &
+nohup php -S 0.0.0.0:8888 -t "$DOC_ROOT" >/tmp/webconsole-php-8888.log 2>&1 &
+nohup php -S 0.0.0.0:8000 -t "$DOC_ROOT" >/tmp/webconsole-php-8000.log 2>&1 &
 sleep 1
 
-# Configure .devcontainer and .vscode ports inside all workspace directories
-for ws_dir in /workspaces/*; do
+# Configure VS Code ports inside workspace directories
+for ws_dir in /workspaces/* "$DOC_ROOT"; do
     if [ -d "$ws_dir" ]; then
-        mkdir -p "$ws_dir/.vscode" "$ws_dir/.devcontainer" 2>/dev/null || true
+        mkdir -p "$ws_dir/.vscode" 2>/dev/null || true
         cat << 'VSCODE_PORTS_JSON' > "$ws_dir/.vscode/ports.json" 2>/dev/null || true
 {
     "portsAttributes": {
         "8888": { "label": "WebConsole Pro (Primary)", "onAutoForward": "openBrowser", "visibility": "public" },
         "8000": { "label": "WebConsole Pro (Alternate)", "visibility": "public" },
-        "8080": { "label": "WebConsole Pro (Nginx)", "visibility": "public" },
+        "8080": { "label": "WebConsole Pro (Apache)", "visibility": "public" },
         "3000": { "label": "Node.js Application", "visibility": "public" },
         "5000": { "label": "Node.js / Python API", "visibility": "public" },
         "8081": { "label": "Python Scraper Service", "visibility": "public" }
@@ -533,7 +520,7 @@ VSCODE_PORTS_JSON
 done
 
 if command -v php >/dev/null 2>&1; then
-    php -l /var/www/html/webconsole.php >/dev/null 2>&1 && log_ok "PHP syntax validation passed."
+    php -l "${DOC_ROOT}/webconsole.php" >/dev/null 2>&1 && log_ok "PHP syntax validation passed."
 fi
 
 # ------------------------------------------------------------------------------
@@ -562,11 +549,12 @@ SERVER_IP=$(curl -s4m 4 ifconfig.me || curl -s4m 4 api.ipify.org || curl -s4m 4 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.6.6 Installation Completed Successfully!         "
+echo "          🎉 WebConsole Pro v1.6.7 (Apache2 Edition) Installed Successfully!    "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
 if [ "$IS_CODESPACES" = "true" ]; then
+    echo -e "  📂 ${CLR_BOLD}Workspace Files:${CLR_RESET}   ${CLR_GREEN}${DOC_ROOT}/${CLR_RESET} (Visible directly in VS Code Sidebar)"
     echo -e "  🌐 ${CLR_BOLD}GitHub Codespaces Public Access Links:${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
     echo -e "  🐘 ${CLR_BOLD}WebConsole (Primary Port 8888):${CLR_RESET}  ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-8888.${CODESPACE_DOMAIN}/${CLR_RESET}"
@@ -576,16 +564,15 @@ if [ "$IS_CODESPACES" = "true" ]; then
     echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 5000):${CLR_RESET}        ${CLR_MAGENTA}https://${CODESPACE_NAME}-5000.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  🐍 ${CLR_BOLD}Python Scraper (Port 8081):${CLR_RESET}      ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  💡 ${CLR_YELLOW}Notice:${CLR_RESET} In Codespaces, Port 8888 and 8000 are recommended."
     echo -e "  🔗 ${CLR_BOLD}VS Code Ports Tab:${CLR_RESET} In VS Code, open the Ports tab and click 🌐 on Port 8888."
 else
     echo -e "  🌐 ${CLR_BOLD}Primary URL:${CLR_RESET}   ${CLR_GREEN}${CLR_BOLD}http://${SERVER_IP:-YOUR_SERVER_IP}/${CLR_RESET}"
-    echo -e "  🌐 ${CLR_BOLD}Backup Port:${CLR_RESET}  ${CLR_CYAN}http://${SERVER_IP:-YOUR_SERVER_IP}:8080/${CLR_RESET}"
+    echo -e "  🌐 ${CLR_BOLD}Backup Port:${CLR_RESET}  ${CLR_CYAN}http://${SERVER_IP:-YOUR_SERVER_IP}:8888/${CLR_RESET}"
 fi
 
 echo ""
 echo -e "  🔑 ${CLR_BOLD}First Login:${CLR_RESET}  Set your master administrator password on first visit."
-echo -e "  🚀 ${CLR_BOLD}Installed:${CLR_RESET}   Node.js 20 LTS, Python 3 Scraping Stack, Dynamic Swap, Nginx & PHP"
+echo -e "  🚀 ${CLR_BOLD}Installed:${CLR_RESET}   Apache2 Web Server, Node 20 LTS, Python 3 Stack, Dynamic Swap"
 echo -e "  🔄 ${CLR_BOLD}Self-Update:${CLR_RESET} Available directly in Settings tab in WebConsole Pro."
 echo ""
 echo -e "${CLR_CYAN}================================================================================${CLR_RESET}"
