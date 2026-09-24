@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.9.0');
+define('WCP_VERSION', '1.9.1');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
