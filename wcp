@@ -63,7 +63,7 @@ cmd_set_port() {
     
     echo -e "${CLR_BLUE}Switching WebConsole port to ${new_port}...${CLR_RESET}"
     local old_port=$(get_wcp_port)
-    pkill -f 'php -S 0.0.0.0' 2>/dev/null || true
+    pkill -f 'php .*0.0.0.0' 2>/dev/null || true
     fuser -k "${old_port}/tcp" 2>/dev/null || true
     fuser -k "${new_port}/tcp" 2>/dev/null || true
     sleep 0.5
@@ -88,7 +88,7 @@ cmd_shutdown() {
     banner
     echo -e "${CLR_YELLOW}🛑 Stopping WebConsole server and all background services...${CLR_RESET}"
     cmd_stop_all >/dev/null 2>&1 || true
-    pkill -f 'php -S 0.0.0.0' 2>/dev/null || true
+    pkill -f 'php .*0.0.0.0' 2>/dev/null || true
     fuser -k "8888/tcp" 2>/dev/null || true
     fuser -k "8000/tcp" 2>/dev/null || true
     fuser -k "8080/tcp" 2>/dev/null || true
@@ -144,7 +144,7 @@ check_auto_serve() {
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.8.5)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.8.9)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
@@ -200,7 +200,7 @@ cmd_status() {
         ap_stat="${CLR_GREEN}Active (Running)${CLR_RESET}"
     fi
     local php_stat="Inactive"
-    if pgrep -f 'php -S 0.0.0.0' >/dev/null 2>&1; then
+    if pgrep -f 'php .*0.0.0.0' >/dev/null 2>&1; then
         php_stat="${CLR_GREEN}Active on Ports 8888 & 8000${CLR_RESET}"
     fi
     echo -e "  • ${CLR_BOLD}Apache2 Web Server:${CLR_RESET}   ${ap_stat}"
