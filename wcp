@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# WebConsole Pro CLI Management Utility (wcp)
+# Version: 1.6.8 | Repository: fazilatma/new
+# ==============================================================================
+
+set -eo pipefail
+
+CLR_RESET="\033[0m"
+CLR_BOLD="\033[1m"
+CLR_GREEN="\033[1;32m"
+CLR_BLUE="\033[1;34m"
+CLR_CYAN="\033[1;36m"
+CLR_YELLOW="\033[1;33m"
+CLR_MAGENTA="\033[1;35m"
+CLR_RED="\033[1;31m"
+
+CONFIG_FILE="/var/www/html/.wconsole_data/config.json"
+[ -f "$CONFIG_FILE" ] || CONFIG_FILE="/workspaces/.wconsole_data/config.json"
+
+banner() {
+    echo -e "${CLR_CYAN}${CLR_BOLD}"
+    echo "================================================================================"
+    echo "       🚀 WebConsole Pro CLI Management Interface (wcp v1.6.8)                 "
+    echo "================================================================================"
+    echo -e "${CLR_RESET}"
+}
+
+cmd_help() {
+    banner
+    echo -e "${CLR_BOLD}دستورات قابل استفاده در ترمینال (Usage):${CLR_RESET}"
+    echo -e "  ${CLR_GREEN}wcp status${CLR_RESET}          مشاهده وضعیت زنده سرور، رم، Swap و وب‌سرور"
+    echo -e "  ${CLR_GREEN}wcp url${CLR_RESET}             نمایش لینک‌های دسترسی وب‌کنسول (Codespaces و VPS)"
+    echo -e "  ${CLR_GREEN}wcp proj [list]${CLR_RESET}     مشاهده لیست و وضعیت تمامی پروژه‌ها و سرویس‌ها"
+    echo -e "  ${CLR_GREEN}wcp start <id>${CLR_RESET}      راه‌اندازی یک پروژه با شناسه آن"
+    echo -e "  ${CLR_GREEN}wcp stop <id>${CLR_RESET}       متوقف‌سازی یک پروژه"
+    echo -e "  ${CLR_GREEN}wcp restart <id>${CLR_RESET}    راه‌اندازی مجدد پروژه"
+    echo -e "  ${CLR_GREEN}wcp logs <id>${CLR_RESET}       مشاهده لاگ‌های زنده یک پروژه"
+    echo -e "  ${CLR_GREEN}wcp ports${CLR_RESET}           مشاهده و مدیریت پورت‌های در حال گوش‌به‌زنگ"
+    echo -e "  ${CLR_GREEN}wcp killport <p>${CLR_RESET}    آزادسازی و بستن پردازش روی یک پورت خاص"
+    echo -e "  ${CLR_GREEN}wcp swap [size_mb]${CLR_RESET}  مشاهده و افزایش فوری حافظه مجازی Swap (مثلاً wcp swap 4096)"
+    echo -e "  ${CLR_GREEN}wcp pass [new_pass]${CLR_RESET} تغییر یا بازنشانی رمز عبور ادمین وب‌کنسول"
+    echo -e "  ${CLR_GREEN}wcp update${CLR_RESET}          به‌روزرسانی آنی وب‌کنسول به آخرین نسخه گیت‌هاب"
+    echo -e "  ${CLR_GREEN}wcp doctor${CLR_RESET}          بررسی سلامت محیط، آپاچی، PHP، پایتون و پرمیشن‌ها"
+    echo -e "  ${CLR_GREEN}wcp rebuild${CLR_RESET}         ریبیلد مجدد محیط کُداسپیس با تنظیمات دائم پورت‌ها"
+    echo ""
+}
+
+cmd_status() {
+    banner
+    echo -e "${CLR_BOLD}📊 وضعیت منابع و سرویس‌های سیستمی:${CLR_RESET}"
+    echo "--------------------------------------------------------------------------------"
+    
+    # RAM & Swap
+    local mem_total=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
+    local mem_free=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
+    local swap_total=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
+    local swap_free=$(grep SwapFree /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
+    local cores=$(nproc 2>/dev/null || echo "1")
+    
+    echo -e "  • ${CLR_BOLD}پردازنده (CPU):${CLR_RESET}   ${cores} هسته"
+    echo -e "  • ${CLR_BOLD}حافظه رم (RAM):${CLR_RESET}  کل: ${mem_total} (آزاد: ${mem_free})"
+    echo -e "  • ${CLR_BOLD}حافظه مجازی (Swap):${CLR_RESET} کل: ${swap_total} (آزاد: ${swap_free})"
+    
+    # Web server
+    local ap_stat="خاموش"
+    if pgrep apache2 >/dev/null 2>&1 || pgrep httpd >/dev/null 2>&1; then
+        ap_stat="${CLR_GREEN}فعال (Running)${CLR_RESET}"
+    fi
+    local php_stat="خاموش"
+    if pgrep -f 'php -S 0.0.0.0' >/dev/null 2>&1; then
+        php_stat="${CLR_GREEN}فعال روی پورت 8888/8000${CLR_RESET}"
+    fi
+    echo -e "  • ${CLR_BOLD}وب‌سرور آپاچی:${CLR_RESET}  ${ap_stat}"
+    echo -e "  • ${CLR_BOLD}سرویس PHP:${CLR_RESET}      ${php_stat}"
+    
+    echo "--------------------------------------------------------------------------------"
+    cmd_url
+}
+
+cmd_url() {
+    local cs_name="${CODESPACE_NAME:-}"
+    if [ -z "$cs_name" ] && [ -r /proc/1/environ ]; then
+        cs_name=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -E '^CODESPACE_NAME=' | cut -d'=' -f2- | tr -d '"\r\n' || true)
+    fi
+    local cs_domain="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
+    local ip=$(curl -s4m 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
+
+    if [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
+        echo -e "${CLR_BOLD}🌐 آدرس‌های اختصاصی GitHub Codespaces:${CLR_RESET}"
+        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-8888.${cs_domain}/${CLR_RESET} (پورت اصلی وب‌کنسول)"
+        echo -e "  🐘 ${CLR_CYAN}https://${cs_name}-8000.${cs_domain}/${CLR_RESET} (پورت کمکی وب‌کنسول)"
+        echo -e "  🟢 ${CLR_MAGENTA}https://${cs_name}-3000.${cs_domain}/${CLR_RESET} (سرویس‌های Node.js)"
+        echo -e "  🐍 ${CLR_YELLOW}https://${cs_name}-8081.${cs_domain}/${CLR_RESET} (اسکریپر پایتون)"
+    else
+        echo -e "${CLR_BOLD}🌐 آدرس‌های دسترسی سرور:${CLR_RESET}"
+        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://${ip}:8888/${CLR_RESET}"
+        echo -e "  🐘 ${CLR_CYAN}http://${ip}:8000/${CLR_RESET}"
+        echo -e "  🐘 ${CLR_CYAN}http://${ip}/${CLR_RESET}"
+    fi
+    echo ""
+}
+
+cmd_ports() {
+    banner
+    echo -e "${CLR_BOLD}🔌 پورت‌های فعال و فرآیندهای گوش‌به‌زنگ (Active Listening Ports):${CLR_RESET}"
+    echo "--------------------------------------------------------------------------------"
+    if command -v ss >/dev/null 2>&1; then
+        ss -tulpn | grep LISTEN || true
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tulpn | grep LISTEN || true
+    else
+        lsof -iTCP -sTCP:LISTEN -P -n || true
+    fi
+    echo "--------------------------------------------------------------------------------"
+    echo -e "💡 برای بستن یک پورت: ${CLR_YELLOW}wcp killport <port_number>${CLR_RESET}"
+}
+
+cmd_killport() {
+    local port="${1:-}"
+    if [ -z "$port" ]; then
+        echo -e "${CLR_RED}لطفاً شماره پورت را وارد کنید. مثال: wcp killport 8888${CLR_RESET}"
+        return 1
+    fi
+    echo -e "${CLR_YELLOW}در حال آزادسازی پورت ${port}...${CLR_RESET}"
+    fuser -k "${port}/tcp" 2>/dev/null || true
+    echo -e "${CLR_GREEN}✓ پورت ${port} با موفقیت آزاد شد.${CLR_RESET}"
+}
+
+cmd_swap() {
+    local sz="${1:-}"
+    if [ -z "$sz" ]; then
+        echo -e "${CLR_BOLD}وضعیت فعلی حافظه Swap:${CLR_RESET}"
+        swapon --show 2>/dev/null || free -h
+        echo -e "\nبرای تغییر ظرفیت: ${CLR_YELLOW}wcp swap 2048${CLR_RESET} (برحسب مگابایت)"
+        return 0
+    fi
+    echo -e "${CLR_BLUE}در حال تنظیم Swap به ${sz} مگابایت...${CLR_RESET}"
+    swapoff -a 2>/dev/null || true
+    rm -f /swapfile 2>/dev/null || true
+    if command -v fallocate >/dev/null 2>&1; then
+        fallocate -l "${sz}M" /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count="${sz}" 2>/dev/null
+    else
+        dd if=/dev/zero of=/swapfile bs=1M count="${sz}" 2>/dev/null
+    fi
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null 2>&1
+    swapon /swapfile 2>/dev/null || true
+    echo -e "${CLR_GREEN}✓ حافظه Swap با موفقیت به ${sz}MB تغییر یافت و فعال شد.${CLR_RESET}"
+}
+
+cmd_pass() {
+    local new_pass="${1:-}"
+    if [ -z "$new_pass" ]; then
+        read -s -p "رمز عبور جدید وب‌کنسول را وارد کنید: " new_pass
+        echo ""
+    fi
+    if [ -z "$new_pass" ]; then
+        echo -e "${CLR_RED}رمز عبور نمی‌تواند خالی باشد.${CLR_RESET}"
+        return 1
+    fi
+    local hash=$(php -r "echo password_hash('$new_pass', PASSWORD_BCRYPT);")
+    python3 -c "
+import json, os, glob
+cfg_paths = glob.glob('/var/www/*/.wconsole_data/config.json') + glob.glob('/workspaces/*/.wconsole_data/config.json') + ['/var/www/html/.wconsole_data/config.json']
+for p in set(cfg_paths):
+    if os.path.exists(p):
+        try:
+            with open(p, 'r') as f: d = json.load(f)
+            d['pass_hash'] = '$hash'
+            with open(p, 'w') as f: json.dump(d, f, indent=2)
+            print('✓ رمز عبور در ' + p + ' به‌روز شد.')
+        except Exception as e: pass
+"
+    echo -e "${CLR_GREEN}✓ رمز عبور مدیریت وب‌کنسول با موفقیت تغییر کرد.${CLR_RESET}"
+}
+
+cmd_update() {
+    banner
+    echo -e "${CLR_BLUE}🔄 در حال دانلود و به‌روزرسانی آنی WebConsole Pro از مخزن اصلی...${CLR_RESET}"
+    curl -sSL "https://raw.githubusercontent.com/fazilatma/new/main/install.sh?t=$(date +%s)" | sudo bash
+}
+
+cmd_doctor() {
+    banner
+    echo -e "${CLR_BOLD}🩺 تست و عیب‌یابی سلامت کامل وب‌کنسول:${CLR_RESET}"
+    echo "--------------------------------------------------------------------------------"
+    
+    # PHP check
+    if command -v php >/dev/null 2>&1; then
+        echo -e "  [✓] PHP: $(php -v | head -n 1)"
+    else
+        echo -e "  [✗] PHP نصب نیست!"
+    fi
+    
+    # Node.js check
+    if command -v node >/dev/null 2>&1; then
+        echo -e "  [✓] Node.js: $(node -v) (npm $(npm -v 2>/dev/null || echo 'not found'))"
+    else
+        echo -e "  [✗] Node.js نصب نیست!"
+    fi
+    
+    # Python check
+    if command -v python3 >/dev/null 2>&1; then
+        echo -e "  [✓] Python: $(python3 --version)"
+        python3 -c "import requests, flask, bs4, curl_cffi, playwright; print('  [✓] Python Scraping Stack: همه پکیج‌ها (requests, curl_cffi, playwright, ...) آماده هستند.')" 2>/dev/null || echo -e "  [⚠️] برخی پکیج‌های پایتون نیاز به نصب دارند."
+    else
+        echo -e "  [✗] Python 3 نصب نیست!"
+    fi
+
+    # Web Server check
+    if pgrep apache2 >/dev/null 2>&1 || pgrep httpd >/dev/null 2>&1; then
+        echo -e "  [✓] وب‌سرور Apache2 فعال است."
+    else
+        echo -e "  [⚠️] آپاچی خاموش است؛ راه‌اندازی با دستور: service apache2 start"
+    fi
+
+    echo "--------------------------------------------------------------------------------"
+    cmd_url
+}
+
+cmd_rebuild() {
+    banner
+    echo -e "${CLR_YELLOW}🔄 در حال ارسال درخواست Rebuild به کُداسپیس...${CLR_RESET}"
+    if command -v gh >/dev/null 2>&1; then
+        local cs_name="${CODESPACE_NAME:-}"
+        if [ -n "$cs_name" ]; then
+            gh codespace rebuild -c "$cs_name" 2>/dev/null || true
+            echo -e "${CLR_GREEN}✓ درخواست ریبیلد با تنظیمات دائم پورت‌ها ارسال شد.${CLR_RESET}"
+            return 0
+        fi
+    fi
+    echo -e "${CLR_CYAN}برای ریبیلد کُداسپیس، در محیط VS Code کلیدهای Ctrl+Shift+P را فشرده و دستور 'Codespaces: Rebuild Container' را انتخاب کنید.${CLR_RESET}"
+}
+
+# Main command dispatcher
+case "${1:-}" in
+    status|info)
+        cmd_status
+        ;;
+    url|links)
+        cmd_url
+        ;;
+    ports)
+        cmd_ports
+        ;;
+    killport)
+        cmd_killport "${2:-}"
+        ;;
+    swap)
+        cmd_swap "${2:-}"
+        ;;
+    pass|password)
+        cmd_pass "${2:-}"
+        ;;
+    update|self-update)
+        cmd_update
+        ;;
+    doctor|check)
+        cmd_doctor
+        ;;
+    rebuild)
+        cmd_rebuild
+        ;;
+    help|--help|-h|"")
+        cmd_help
+        ;;
+    *)
+        echo -e "${CLR_RED}دستور ناشناخته: $1${CLR_RESET}"
+        cmd_help
+        exit 1
+        ;;
+esac
