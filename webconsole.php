@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.6.9');
+define('WCP_VERSION', '1.8.5');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1660,6 +1660,181 @@ function check_file_syntax(string $path, string $content): array {
 }
 
 
+
+function handle_universal_proxy(string $targetUrl): void {
+    while (ob_get_level() > 0) @ob_end_clean();
+    $targetUrl = trim($targetUrl);
+    
+    if (!preg_match('#^https?://#i', $targetUrl)) {
+        http_response_code(400);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "Error: Invalid target URL. Must begin with http:// or https://";
+        exit;
+    }
+    
+    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
+    header('Access-Control-Allow-Headers: *');
+    header('Access-Control-Expose-Headers: *');
+    header('Access-Control-Allow-Credentials: true');
+    header('Access-Control-Max-Age: 86400');
+    
+    if ($method === 'OPTIONS') {
+        http_response_code(204);
+        exit;
+    }
+    
+    $incomingHeaders = [];
+    if (function_exists('getallheaders')) {
+        $incomingHeaders = getallheaders() ?: [];
+    } else {
+        foreach ($_SERVER as $k => $v) {
+            if (strpos($k, 'HTTP_') === 0) {
+                $headerName = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($k, 5)))));
+                $incomingHeaders[$headerName] = $v;
+            } elseif (in_array($k, ['CONTENT_TYPE', 'CONTENT_LENGTH'], true) && !empty($v)) {
+                $headerName = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', $k))));
+                $incomingHeaders[$headerName] = $v;
+            }
+        }
+    }
+    
+    $headersToSend = [];
+    $hasUserAgent = false;
+    $hasAccept = false;
+    
+    $excludedHeaders = ['host', 'connection', 'transfer-encoding', 'content-length', 'accept-encoding'];
+    foreach ($incomingHeaders as $hKey => $hVal) {
+        $lowKey = strtolower($hKey);
+        if (in_array($lowKey, $excludedHeaders, true)) continue;
+        if ($lowKey === 'user-agent') $hasUserAgent = true;
+        if ($lowKey === 'accept') $hasAccept = true;
+        $headersToSend[] = "{$hKey}: {$hVal}";
+    }
+    
+    if (!$hasUserAgent) {
+        $headersToSend[] = 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+    }
+    if (!$hasAccept) {
+        $headersToSend[] = 'Accept: */*';
+    }
+    
+    $rawBody = '';
+    if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+        $rawBody = file_get_contents('php://input');
+    }
+    
+    if (function_exists('curl_init')) {
+        $ch = curl_init($targetUrl);
+        $curlOpts = [
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_HTTPHEADER => $headersToSend,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 600,
+            CURLOPT_CONNECTTIMEOUT => 30,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_AUTOREFERER => true,
+            CURLOPT_BINARYTRANSFER => true,
+            CURLOPT_BUFFERSIZE => 131072
+        ];
+        
+        if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true) && strlen($rawBody) > 0) {
+            $curlOpts[CURLOPT_POSTFIELDS] = $rawBody;
+        }
+        
+        if ($method === 'HEAD') {
+            $curlOpts[CURLOPT_NOBODY] = true;
+        }
+        
+        $curlOpts[CURLOPT_HEADERFUNCTION] = function ($ch, $headerLine) {
+            $len = strlen($headerLine);
+            $trimmed = trim($headerLine);
+            if ($trimmed === '') return $len;
+            
+            if (preg_match('#^HTTP/\S+\s+(\d+)\b#i', $trimmed, $m)) {
+                $statusCode = (int)$m[1];
+                if ($statusCode !== 100) {
+                    http_response_code($statusCode);
+                }
+                return $len;
+            }
+            
+            $colonPos = strpos($trimmed, ':');
+            if ($colonPos !== false) {
+                $headerName = trim(substr($trimmed, 0, $colonPos));
+                $headerValue = trim(substr($trimmed, $colonPos + 1));
+                $lowName = strtolower($headerName);
+                $skipHeaders = ['transfer-encoding', 'connection', 'keep-alive', 'access-control-allow-origin', 'access-control-allow-methods', 'access-control-allow-headers', 'access-control-allow-credentials'];
+                if (!in_array($lowName, $skipHeaders, true)) {
+                    header("{$headerName}: {$headerValue}", false);
+                }
+            }
+            return $len;
+        };
+        
+        $curlOpts[CURLOPT_WRITEFUNCTION] = function ($ch, $chunk) {
+            echo $chunk;
+            if (ob_get_level() > 0) @ob_flush();
+            flush();
+            return strlen($chunk);
+        };
+        
+        curl_setopt_array($ch, $curlOpts);
+        curl_exec($ch);
+        $errNo = curl_errno($ch);
+        $errMsg = curl_error($ch);
+        curl_close($ch);
+        
+        if ($errNo !== 0 && !headers_sent()) {
+            http_response_code(502);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo "Proxy Error ({$errNo}): {$errMsg}";
+        }
+    } else {
+        $ctxOpts = [
+            'http' => [
+                'method' => $method,
+                'header' => implode("\r\n", $headersToSend) . "\r\n",
+                'content' => $rawBody,
+                'timeout' => 600,
+                'ignore_errors' => true,
+                'follow_location' => 1
+            ],
+            'ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false
+            ]
+        ];
+        $ctx = stream_context_create($ctxOpts);
+        $fp = @fopen($targetUrl, 'rb', false, $ctx);
+        if ($fp === false) {
+            http_response_code(502);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo "Proxy Error: Could not connect to remote host.";
+            exit;
+        }
+        $meta = stream_get_meta_data($fp);
+        $rawHeaders = $meta['wrapper_data'] ?? [];
+        foreach ($rawHeaders as $hdr) {
+            if (preg_match('#^HTTP/\S+\s+(\d+)#i', $hdr, $m)) {
+                http_response_code((int)$m[1]);
+            } else {
+                header($hdr, false);
+            }
+        }
+        while (!feof($fp)) {
+            echo fread($fp, 131072);
+            if (ob_get_level() > 0) @ob_flush();
+            flush();
+        }
+        fclose($fp);
+    }
+    exit;
+}
 
 function handle_api() {
     $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
@@ -5308,7 +5483,18 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
     <button class="btn sm pri" id="wcp_self_up_btn">⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)</button>
   </div>
   <div id="wcp_up_status" style="margin-top:10px;display:none"></div>
-</div><div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>🛡️ پروکسی کلودفلر و رفع تحریم پکیج‌ها (Proxy & Anti-Sanction)</h3><p class="hint">تنظیم حالت عبور ترافیک، کلون مخازن گیت، دانلود پکیج‌ها (Pip / Npm / Composer / Git) و وب‌هوک‌ها از طریق Cloudflare Worker جهت دورزدن تحریم‌ها و فیلترینگ.</p><label class="lb">حالت اتصال پروکسی (Proxy Mode)</label><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="direct" ${s.proxy_mode==='direct'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🌐 مستقیم (Direct)</div><div class="hint" style="font-size:12px;margin:0">اتصال بدون پروکسی (برای سرورهای خارج از کشور یا اینترنت بدون فیلتر و تحریم)</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="auto" ${s.proxy_mode==='auto'||!s.proxy_mode?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">⚡ خودکار و هوشمند (Auto / Smart Fallback) — پیشنهادی</div><div class="hint" style="font-size:12px;margin:0">تلاش اتصال مستقیم؛ در صورت خطا، مسدودی، تحریم یا HTTP 403 به طور خودکار از ورکر کلودفلر عبور می‌کند</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="cf_proxy" ${s.proxy_mode==='cf_proxy'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🛡️ پروکسی کلودفلر (Cloudflare Worker Proxy)</div><div class="hint" style="font-size:12px;margin:0">هدایت اجباری تمامی درخواست‌های مخازن، دیپلوی، دانلودها و ارتباطات خارجی از طریق ورکر کلودفلر</div></div></label></div><label class="lb">آدرس ورکر پروکسی کلودفلر (Worker Proxy URL)</label><input class="inp ltr" id="st_proxy_cf_url" placeholder="https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page" value="${esc(s.proxy_cf_url||'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page')}"><p class="hint">می‌توانید ورکر پیش‌فرض را استفاده کنید یا آدرس Cloudflare Worker اختصاصی خودتان را وارد فرمایید.</p><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="st_proxy_save_btn">💾 ذخیره تنظیمات پروکسی</button><button class="btn" id="st_proxy_test_btn">🔍 تست اتصال و سلامت پروکسی</button></div><div id="proxy-test-box" style="margin-top:10px;display:none"></div></div><div class="card">
+</div><div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>🛡️ پروکسی کلودفلر و رفع تحریم پکیج‌ها (Proxy & Anti-Sanction)</h3><p class="hint">تنظیم حالت عبور ترافیک، کلون مخازن گیت، دانلود پکیج‌ها (Pip / Npm / Composer / Git) و وب‌هوک‌ها از طریق Cloudflare Worker جهت دورزدن تحریم‌ها و فیلترینگ.</p><div style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-weight:700">🌐 اندپوینت پروکسی سرور فعال وب‌کنسول (Universal Proxy Endpoint):</span>
+    <span class="tag ok">پروکسی فعال و آماده</span>
+  </div>
+  <p class="hint" style="margin:2px 0;font-size:11.5px">دقیقاً با همان فرمت کلودفلر ورکرز؛ عبور تمامی متدهای HTTP، انواع ترافیک، ویدیو/صوت، استریم مالتی‌مدیا و دورزدن تحریم‌ها:</p>
+  <div class="row" style="gap:6px;margin-top:6px">
+    <input class="inp ltr" id="wcp-proxy-live-url" value="${window.location.origin}/?url=https://example.com/page" readonly style="font-weight:bold;color:var(--acc)">
+    <button class="btn sm pri" onclick="copyText($('#wcp-proxy-live-url').value, 'آدرس اندپوینت پروکسی کپی شد')">📋 کپی اندپوینت</button>
+  </div>
+</div>
+<label class="lb">حالت اتصال پروکسی (Proxy Mode)</label><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="direct" ${s.proxy_mode==='direct'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🌐 مستقیم (Direct)</div><div class="hint" style="font-size:12px;margin:0">اتصال بدون پروکسی (برای سرورهای خارج از کشور یا اینترنت بدون فیلتر و تحریم)</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="auto" ${s.proxy_mode==='auto'||!s.proxy_mode?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">⚡ خودکار و هوشمند (Auto / Smart Fallback) — پیشنهادی</div><div class="hint" style="font-size:12px;margin:0">تلاش اتصال مستقیم؛ در صورت خطا، مسدودی، تحریم یا HTTP 403 به طور خودکار از ورکر کلودفلر عبور می‌کند</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="cf_proxy" ${s.proxy_mode==='cf_proxy'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🛡️ پروکسی کلودفلر (Cloudflare Worker Proxy)</div><div class="hint" style="font-size:12px;margin:0">هدایت اجباری تمامی درخواست‌های مخازن، دیپلوی، دانلودها و ارتباطات خارجی از طریق ورکر کلودفلر</div></div></label></div><label class="lb">آدرس ورکر پروکسی کلودفلر (Worker Proxy URL)</label><input class="inp ltr" id="st_proxy_cf_url" placeholder="https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page" value="${esc(s.proxy_cf_url||'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page')}"><p class="hint">می‌توانید ورکر پیش‌فرض را استفاده کنید یا آدرس Cloudflare Worker اختصاصی خودتان را وارد فرمایید.</p><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="st_proxy_save_btn">💾 ذخیره تنظیمات پروکسی</button><button class="btn" id="st_proxy_test_btn">🔍 تست اتصال و سلامت پروکسی</button></div><div id="proxy-test-box" style="margin-top:10px;display:none"></div></div><div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <div>
       <h3 style="margin:0">📦 درون‌ریزی و برون‌بری تنظیمات (Import / Export)</h3>
@@ -5404,6 +5590,12 @@ setInterval(async()=>{
 <?php return ob_get_clean();}
 /* CLI library mode is reserved for local validation; it is not an HTTP option. */
 try {
+    // 🌐 Universal Forward Proxy Gateway (?url=https://example.com/page)
+    $proxyTarget = $_GET['url'] ?? $_GET['proxy'] ?? ($_REQUEST['url'] ?? '');
+    if (!empty($proxyTarget) && is_string($proxyTarget) && preg_match('#^https?://#i', $proxyTarget)) {
+        handle_universal_proxy($proxyTarget);
+        exit;
+    }
     $in = body();
     if (!empty($in['api'])) {
         try { handle_api(); }
