@@ -1,0 +1,37 @@
+{
+  "name": "WebConsole Pro & Scraper Dev Container",
+  "forwardPorts": [8000, 8888, 9000, 8080, 3000, 4000],
+  "portsAttributes": {
+    "8888": {
+      "label": "WebConsole Pro (Primary)",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    },
+    "8000": {
+      "label": "WebConsole Pro (Alternate)",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "8080": {
+      "label": "WebConsole Apache",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "9000": {
+      "label": "PHP FastCGI",
+      "onAutoForward": "silent",
+      "visibility": "private"
+    },
+    "3000": {
+      "label": "Node.js Application",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "4000": {
+      "label": "Port 4000",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    }
+  },
+  "postCreateCommand": "bash install.sh"
+}
