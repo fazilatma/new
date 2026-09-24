@@ -4,7 +4,7 @@
 # Modes: 1) Start Server (Default) | 2) Quick Update | 3) Full Installation
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 1.8.9 | Repository: fazilatma/new
+# Version: 1.9.2 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail
@@ -181,10 +181,10 @@ echo -e "  ${CLR_GREEN}${CLR_BOLD}[1] ⚡ Start WebConsole Server (Default)${CLR
 echo -e "      • Starts persistent background server on Port 8888 & outputs live URLs (~1s)"
 echo -e ""
 echo -e "  ${CLR_CYAN}${CLR_BOLD}[2] 🔄 Quick Update WebConsole & wcp CLI${CLR_RESET}"
-echo -e "      • Downloads latest WebConsole Pro v1.8.9 and wcp CLI from GitHub (~3s)"
+echo -e "      • Downloads latest WebConsole Pro v1.9.2 and wcp CLI from GitHub (~3s)"
 echo -e ""
 echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full System Installation${CLR_RESET}"
-echo -e "      • Installs Web Server, Node 20 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
+echo -e "      • Installs Web Server, Node 22 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
 echo -e "${CLR_CYAN}================================================================================${CLR_RESET}"
 
 MODE="1"
@@ -329,10 +329,10 @@ case "$MODE" in
         # Node.js
         if [ "$OS_FAMILY" = "debian" ]; then
             NODE_CUR_MAJOR=$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -n 1 || echo "0")
-            if [ "${NODE_CUR_MAJOR:-0}" -lt 20 ]; then
+            if [ "${NODE_CUR_MAJOR:-0}" -lt 22 ]; then
                 mkdir -p /etc/apt/keyrings
                 curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes 2>/dev/null || true
-                echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+                echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
                 apt-get update -y || true; apt-get install -y nodejs || true
             fi
         fi
@@ -386,7 +386,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.8.9 Ready & Operational!                         "
+echo "          🎉 WebConsole Pro v1.9.2 Ready & Operational!                         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
