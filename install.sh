@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Auto-Installer (VPS, Codespaces & Android Termux)
-# Version: 1.7.6 | Repository: fazilatma/new
+# Version: 1.7.8 | Repository: fazilatma/new
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
 # ==============================================================================
@@ -430,13 +430,50 @@ if [ -f "$CLI_TARGET" ]; then
     log_ok "wcp CLI installed. You can type 'wcp' anytime in terminal."
 fi
 
-# Start background fallback PHP servers on ports 8888 and 8000
-pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
-pkill -f 'php -S 0.0.0.0:8000' 2>/dev/null || true
+# ------------------------------------------------------------------------------
+# Guaranteed Persistent PHP Server Launcher (tmux + setsid + disown + watchdog)
+# ------------------------------------------------------------------------------
+start_php_server() {
+    local port="$1"
+    local doc="$2"
+    
+    # Kill any stale listener
+    fuser -k "${port}/tcp" 2>/dev/null || true
+    pkill -f "php -S 0.0.0.0:${port}" 2>/dev/null || true
+    sleep 0.5
+    
+    # Method 1: Detached tmux session (Immune to shell termination / subshell exits)
+    if command -v tmux >/dev/null 2>&1; then
+        tmux kill-session -t "wcp-${port}" 2>/dev/null || true
+        tmux new-session -d -s "wcp-${port}" "cd '${doc}' && exec php -S 0.0.0.0:${port} -t '${doc}'" 2>/dev/null || true
+    fi
+    
+    # Method 2: Detached setsid subshell with disown
+    if ! pgrep -f "php -S 0.0.0.0:${port}" >/dev/null 2>&1; then
+        (cd "$doc" && setsid nohup php -S 0.0.0.0:${port} -t "$doc" > "${TMP_DIR}/wcp-${port}.log" 2>&1 &) 2>/dev/null || true
+        disown -a 2>/dev/null || true
+    fi
+    
+    sleep 1
+    # Verify live HTTP response
+    local code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/" 2>/dev/null || echo "err")
+    if [ "$code" = "200" ] || [ "$code" = "302" ] || [ "$code" = "403" ] || [ "$code" = "404" ]; then
+        log_ok "PHP WebConsole server is active and responding on Port ${port} [HTTP ${code}]."
+    else
+        log_info "PHP WebConsole daemon started on Port ${port}."
+    fi
+}
 
-nohup php -S 0.0.0.0:8888 -t "$DOC_ROOT" >${TMP_DIR}/webconsole-php-8888.log 2>&1 &
-nohup php -S 0.0.0.0:8000 -t "$DOC_ROOT" >${TMP_DIR}/webconsole-php-8000.log 2>&1 &
-sleep 1
+log_info "Launching persistent WebConsole PHP servers on Ports 8888 and 8000..."
+start_php_server "8888" "$DOC_ROOT"
+start_php_server "8000" "$DOC_ROOT"
+
+# Start Apache if available
+if command -v apachectl >/dev/null 2>&1; then
+    apachectl start 2>/dev/null || apachectl restart 2>/dev/null || service apache2 start 2>/dev/null || true
+elif command -v httpd >/dev/null 2>&1; then
+    httpd -k start 2>/dev/null || httpd -k restart 2>/dev/null || service httpd start 2>/dev/null || true
+fi
 
 # Configure VS Code ports inside workspace directories
 if [ "$IS_CODESPACES" = "true" ]; then
@@ -486,7 +523,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.7.6 Universal Edition Installed Successfully!   "
+echo "          🎉 WebConsole Pro v1.7.8 Universal Edition Installed Successfully!   "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
