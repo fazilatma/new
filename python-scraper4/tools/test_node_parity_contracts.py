@@ -447,7 +447,7 @@ class NodeParityContracts(unittest.TestCase):
         redirect = FakeResponse(None, status=302)
         redirect.headers = {"Location": "http://127.0.0.1/admin"}
         with patch.object(core.socket, "getaddrinfo", return_value=public_answer), \
-                patch.object(core.requests, "request", return_value=redirect) as request_mock:
+                patch.object(core._OUTBOUND_SESSION, "request", return_value=redirect) as request_mock:
             with self.assertRaisesRegex(ValueError, "خصوصی"):
                 core.outbound_request("GET", "https://safe.example/start")
         request_mock.assert_called_once()
@@ -626,10 +626,9 @@ class NodeParityContracts(unittest.TestCase):
         self.save(data)
         requested_pages = []
 
-        def catalog(method, path, **kwargs):
-            self.assertEqual(method, "GET")
+        # 10.251: listings go through the fast REST-first seam.
+        def catalog(path, params=None, **kwargs):
             self.assertEqual(path, "/v1/vendors/7701/products")
-            params = kwargs["params"]
             page, per_page = int(params["page"]), int(params["per_page"])
             self.assertIn("2976", params["statuses"])
             self.assertIn("4184", params["statuses"])
@@ -644,7 +643,7 @@ class NodeParityContracts(unittest.TestCase):
                     (205 + per_page - 1) // per_page}
 
         # Default mode forwards only the requested remote page, like Node.
-        with patch.object(core, "basalam_request", side_effect=catalog), \
+        with patch.object(core, "basalam_read_get", side_effect=catalog), \
                 patch.object(core, "destination_remote_rows",
                              side_effect=AssertionError("full catalogue must not run")):
             paged = self.assert_ok(self.client.get(
@@ -659,7 +658,7 @@ class NodeParityContracts(unittest.TestCase):
         # Explicit all-at-once mode builds one complete snapshot concurrently;
         # page navigation then reuses it without touching Basalam again.
         requested_pages.clear()
-        with patch.object(core, "basalam_request", side_effect=catalog), \
+        with patch.object(core, "basalam_read_get", side_effect=catalog), \
                 patch.object(core, "destination_remote_rows",
                              side_effect=AssertionError("legacy full catalogue must not run")):
             complete = self.assert_ok(self.client.get(

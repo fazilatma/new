@@ -3469,8 +3469,9 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         if query:
             params["title"] = query
         with core.basalam_use_cfg(shop["cfg"]):
-            payload = core.basalam_request(
-                "GET", f"/v1/vendors/{shop['vendor_id']}/products", params=params)
+            # 10.251: fast REST read (keep-alive) instead of SDK-first.
+            payload = core.basalam_read_get(
+                f"/v1/vendors/{shop['vendor_id']}/products", params)
         plain = _plain_catalog_payload(payload)
         raw_rows = core.basalam_api_rows(plain)
         rows: list[dict[str, Any]] = []
@@ -3598,26 +3599,20 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
         for shop in selected:
             if not shop.get("token") or not shop.get("vendor_id"):
                 continue
+            # 10.251: one warm parallel listing per shop (keep-alive REST with
+            # a small page window, retries and partial-survive) instead of a
+            # page-by-page SDK-first loop — this is the row source for dedup,
+            # reconcile-by-account and the destination manager.
             with core.basalam_use_cfg(shop["cfg"]):
-                for page in range(1, getattr(core, "REMOTE_CATALOG_PAGES", 20) + 1):
-                    # 10.232: same hardened fetch as the backend listing -
-                    # retries with backoff + polite page gap so reconcile /
-                    # dedup survive Basalam rate limits while other tasks run.
-                    payload = core._basalam_catalog_page(
-                        f"/v1/vendors/{shop['vendor_id']}/products", page)
-                    if payload is None:
-                        break
-                    batch = core.basalam_api_rows(payload)
-                    for raw in batch:
-                        if isinstance(raw, dict):
-                            item = dict(raw)
-                            item["__s4_shop_id"] = shop["id"]
-                            item["__s4_shop_name"] = shop["name"]
-                            rows.append(item)
-                    if len(batch) < 100:
-                        break
-                    if page < getattr(core, "REMOTE_CATALOG_PAGES", 20):
-                        time.sleep(getattr(core, "BASELAM_PAGE_GAP", 0.35))
+                shop_rows, _info = core.basalam_vendor_products(
+                    int(shop["vendor_id"]),
+                    max_pages=getattr(core, "REMOTE_CATALOG_PAGES", 20))
+            for raw in shop_rows:
+                if isinstance(raw, dict):
+                    item = dict(raw)
+                    item["__s4_shop_id"] = shop["id"]
+                    item["__s4_shop_name"] = shop["name"]
+                    rows.append(item)
         return rows, [{k: s[k] for k in ("id", "name", "primary")} for s in shops]
 
     def _nested(row: dict[str, Any], *names: str) -> Any:

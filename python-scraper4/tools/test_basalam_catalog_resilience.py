@@ -35,7 +35,9 @@ def _page_payload(page: int, count: int = 100):
     return {"data": [{"id": (page - 1) * 100 + i, "name": f"product {page}-{i}"} for i in range(count)]}
 
 
-def fake_basalam_request(method, path, *, params=None, **kw):
+# 10.251: listings go through the fast REST-first seam instead of
+# basalam_request, so the fake replaces that seam (same signature).
+def fake_basalam_read_get(path, params=None, **kw):
     page = int((params or {}).get("page", 1))
     calls.append(page)
     # page 2 fails twice then succeeds; page 3 always fails; page 1 fine
@@ -56,7 +58,7 @@ def check(label, cond, detail=""):
     print(f"  OK {label}")
 
 
-core.basalam_request = fake_basalam_request
+core.basalam_read_get = fake_basalam_read_get
 core.load_data = lambda: {"basalam": {"vendor_id": 123}}
 
 rows = core.destination_remote_rows("basalam")
@@ -76,12 +78,12 @@ except Exception as exc:
 calls.clear()
 
 
-def always_fails(method, path, *, params=None, **kw):
+def always_fails(path, params=None, **kw):
     calls.append(1)
     raise RuntimeError("HTTP 401: unauthorized")
 
 
-core.basalam_request = always_fails
+core.basalam_read_get = always_fails
 try:
     core.destination_remote_rows("basalam")
     raise AssertionError("FAIL: first-page failure must raise")

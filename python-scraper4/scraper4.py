@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.250"
+APP_VERSION = "10.251"
 CHANGELOG = [
+    {"version":"10.251","date":"2026-09-24","title":"سرعت و پایداری دریافت محصولات از باسلام چند برابر شد (مسیر سریع keep-alive و صفحه‌بندی موازی)","items":["ریشهٔ کندی نسبت به نسخهٔ نود جی‌اس پیدا شد: هر درخواست خروجی اتصال TCP/TLS تازه می‌ساخت، هر صفحهٔ فهرست باسلام یک کلاینت SDK تازه با مهلت ۴۵ ثانیه می‌ساخت و در صورت خطا همان صفحه یک بار هم از مسیر REST خوانده می‌شد؛ حالا همهٔ درخواست‌های خروجی (باسلام، ووکامرس و بقیه) از یک استخر اتصال زندهٔ مشترک استفاده می‌کنند و کلاینت SDK ساخته‌شده در حافظه نگه داشته و دوباره استفاده می‌شود","خواندن فهرست محصولات غرفه حالا مستقیم از REST سریع با صفحه‌بندی موازی (پنجرهٔ ۳ صفحهٔ همزمان، قابل تنظیم با SCRAPER4_BASALAM_PAGE_WINDOW) انجام می‌شود؛ تعداد صفحات از خود پاسخ باسلام خوانده می‌شود و صفحات باقی‌مانده هم‌زمان دریافت می‌شوند — مغایرت‌گیری، تکراری‌یابی، دفتر حساب و مدیر مقصد همه از همین مسیر سریع استفاده می‌کنند و مسیر چند-غرفه‌ای هم به‌جای حلقهٔ صفحه‌به‌صفحه، به‌ازای هر غرفه یک دریافت موازی دارد","مقاومت ۱۰.۲۳۲ حفظ شد: صفحهٔ ۱ همچنان با خطای واضح بلند است (توکن/شناسهٔ غرفهٔ خراب بی‌صدا نادیده گرفته نمی‌شود)، هر صفحه تا ۳ تلاش با وقفهٔ نمایی کوتاه‌تر دارد، شکست یک صفحه فقط همان صفحه را حذف می‌کند و نتیجهٔ ناقص با برچسب complete برمی‌گردد؛ هر شکست صفحه پنجرهٔ موازی را هم نصف می‌کند تا فشار روی باسلام کم شود","در حالت «خودکار» خواندن‌ها دیگر اصلاً SDK را نمی‌سازند؛ یعنی بدون SDK نصب‌شده هم تکراری‌یابی و مغایرت‌گیری کار می‌کند و تلاش نصب pip در میانهٔ عملیات رخ نمی‌دهد؛ حالت «فقط SDK» همچنان از مسیر SDK-first استفاده می‌کند","تست جدید tools/test_basalam_fast_lane.py با سرور HTTP محلی واقعی: اثبات اتصال زنده (استفادهٔ مکرر از یک پورت)، اثبات دریافت موازی صفحات و رعایت سقف پنجره، تلاش مجدد روی 429، خطای واضح صفحهٔ ۱، حالت بدون metadata، نتیجهٔ ناقص، مسیر کامل destination_remote_rows و کش کلاینت SDK"]},
     {"version":"10.250","date":"2026-09-24","title":"ارسال موازی محصولات به مقاصد با تشخیص خودکار تعداد همزمانی و امکان تنظیم دستی","items":["عملیات ارسال کامل پروفایل حالا موازی است: چند محصول هم‌زمان به ووکامرس/باسلام می‌رود و به‌جای انتظار تک‌تک، زمان ارسال چند برابر کوتاه‌تر می‌شود؛ پنجرهٔ لغزان ارسال یعنی توقف دکمه بلافاصله کار را قطع می‌کند و صف طولانی پشت صحنه باقی نمی‌ماند","تعداد محصول موازی به سه روش تعیین می‌شود: خودکار (پیش‌فرض؛ ووکامرس ۴ همزمان، باسلام ۲ همزمان چون محدودیت نرخ سخت‌تری دارد)، دستی از تنظیمات پروفایل (۱ ترتیبی تا ۱۶)، یا متغیر محیطی SCRAPER4_DISPATCH_CONCURRENCY برای سیاست ثابت سرور","اگر مقصد محدودیت نرخ بدهد (429/Too Many Requests)، همزمانی در همان لحظه نصف می‌شود و پیام «کاهش همزمانی» در جزئیات کار ثبت می‌شود؛ شمارنده‌ها، رویدادهای زندهٔ هر محصول، ثبت شناسه‌های مقصد و مغایرت‌گیری خودکار پس از ارسال همگی دقیقاً مثل قبل کار می‌کنند","ایمنی داده‌ها حفظ شد: شمارش، ثبت رویداد زنده و نوشتن شناسه مقصد فقط در نخ هماهنگ‌کننده انجام می‌شود (فایل داده هرگز هم‌زمان نوشته نمی‌شود) و خود ارسال‌ها هم مثل قبل به‌ازای هر محصول به همهٔ غرفه‌های فعال باسلام فن‌اوت می‌شوند","تست جدید tools/test_dispatch_parallel.py: تشخیص همزمانی در سه حالت، اثبات واقعی اجرای موازی با سنجش هم‌زمانی ماکزیمم، صحت شمارنده‌ها و رویدادها در حالت موازی، کاهش خودکار همزمانی با خطای 429، مسیر ترتیبی با انتخاب ۱، توقف در میانهٔ ارسال موازی و رفت‌وبرگشت تنظیم پروفایل از API"]},
     {"version":"10.249","date":"2026-09-23","title":"تست جامع دسترسی به منبع، شمارنده‌های زندهٔ کلیک‌شو و مغایرت‌گیری خودکار پس از همگام‌سازی","items":["دکمهٔ «آزمایش دسترسی» حالا گزارش واقعی و جامع اتصال می‌دهد: اندازه‌گیری جداگانهٔ DNS (همهٔ IPها و زمان)، اتصال TCP (IP و پورت و زمان)، دست‌دادن TLS (نسخه، رمزنگار، صادرکننده و انقضای گواهی با روز باقی‌مانده)، زمان اولین بایت و دانلود، هدرهای کلیدی پاسخ، عنوان صفحه، نشانه‌های ضدبات و JSON-LD/NEXT_DATA، موتورهای نصب‌شده و مسیر دروازه (رله/مستقیم/پروکسی)","در حالت رله، سنجش DNS/TCP/TLS روی خود Worker انجام می‌شود (هدف واقعی از سرور شما دیده نمی‌شود) و مسیر جایگزین هم آزموده می‌شود: با رله فعال، یک اتصال مستقیم هم امتحان می‌شود و با اتصال مستقیم، اگر Worker تنظیم باشد رله هم — نتیجهٔ هر دو مسیر کنار هم نمایش داده می‌شود","پنجرهٔ نتیجهٔ تست دسترسی بازنویسی شد: به‌جای چند خط JSON، بخش‌بندی خوانا (مسیر اتصال، زمان‌بندی، گواهی TLS، پاسخ سرور، مسیر جایگزین) به‌همراه JSON خام در انتها","شمارنده‌های کار ارسال (انجام‌شده/جدید/آپدیت/خطا/ارسال موفق) حالا در حین اجرا کلیک‌شو هستند: هر محصول که ارسال می‌شود رویداد ساختاریافته‌اش (عنوان، قیمت، مقصد، خطا) روی همان کار ثبت می‌شود و با کلیک روی هر شمارنده، فهرست زندهٔ همان دسته باز می‌شود و تا پایان کار خودکار تازه می‌شود — دیگر لازم نیست تا پایان مرحلهٔ ارسال منتظر بمانید","تیک جدید «مغایرت‌گیری خودکار پس از همگام‌سازی» در رفتار پروفایل: بعد از پایان ارسال کامل همان پروفایل، کار مغایرت‌گیری برای هر مقصدی که ارسال شده به‌صورت خودکار در صف قرار می‌گیرد و در جزئیات کار هم اعلام می‌شود","تست جدید tools/test_source_test_live_counters.py: گزارش تست دسترسی با سرور محلی واقعی (DNS/TCP/هدر/عنوان/حالت رله و مسیر جایگزین)، رویدادهای زندهٔ ارسال و شمارنده‌ها از طریق کلاینت Flask، مغایرت‌گیری خودکار پس از ارسال و رفت‌وبرگشت فیلد تیک؛ jobEventRows حالا رویدادهای sync-created/sync-updated را در شمارنده‌های جدید/آپدیت هم می‌شناسد"]},
     {"version":"10.248","date":"2026-09-23","title":"پوش محصولات هر پروفایل به برنچ گیت‌هاب و دریافت از آن برنچ برای ارسال به غرفه‌ها و ووکامرس","items":["تنظیمات پروفایل جدید «برنچ گیت‌هاب» + کارت «گیت‌هاب محصولات» در صفحه تنظیمات: دکمهٔ پوش محصولات استخراج‌شدهٔ همان پروفایل به‌صورت یک فایل JSON روی برنچ انتخابی، دکمهٔ بررسی برنچ (تعداد محصول، زمان پوش، نسخه، حجم بدون تغییر دادن چیزی) و دکمهٔ دریافت از برنچ با انتخاب مقصد (ووکامرس/باسلام/هر دو/فقط ذخیره)","فایل محصولات هر پروفایل در مسیر ثابت scraper4-products/نام-امن-پروفایل.json با ساختار خوانا (kind، نسخه، زمان، تعداد و آرایهٔ محصولات) ذخیره می‌شود؛ نام فارسی پروفایل به‌سلامت اسلاگ می‌شود و هش کوچکی برای بی‌برخورد بودن پروفایل‌ها اضافه می‌شود","پوش با همان زنجیرهٔ اتمی بکاپ (blob ← tree ← commit ← به‌روزرسانی ref، هرگز حالت نیمه‌نوشته) انجام می‌شود و پیشرفت آن زنده در داشبورد جریان می‌یابد؛ توکن و ریپو همان‌های بخش بکاپ/برنچ است و پرچم ندارد","دریافت فایل‌های بزرگ‌تر از ۱ مگابایت با هدر raw محتوای گیت‌هاب انجام می‌شود (API معمولی از ۱ مگابایت به بالا content نمی‌دهد)؛ بعد از دریافت، محصولات جای محصولات فعلی پروفایل می‌نشیند و با همان worker ارسال پروفایل به مقاصد انتخابی می‌رود — یعنی یک نصب استخراج می‌کند و نصب دیگر فقط دریافت و ارسال می‌کند","وضعیت آخرین پوش/دریافت روی پروفایل ذخیره و در کارت نمایش داده می‌شود؛ فهرست برنچ‌ها با کلیک روی منوی انتخاب از همان اسکن برنچ‌های داشبورد خوانده می‌شود","تست جدید tools/test_github_products_sync.py: زنجیرهٔ کامیت اتمی با API ساختگی، خواندن raw، اعتبارسنجی فایل، dry-run، جایگزینی محصولات، ارسال با مقاصد دلخواه، خطاهای توکن/برنچ/فایل، ایمنی مسیر و رفتار واقعی هر دو endpoint با کلاینت Flask"]},
@@ -784,6 +785,16 @@ class FetchResult:
     mode: str = "http"
 
 
+# 10.251: one keep-alive pool for every outbound call. Node reuses its agent
+# sockets; requests.request() opened a fresh TCP+TLS connection per call, so
+# every Basalam/WooCommerce page fetch paid a full handshake. The session is
+# thread-safe (urllib3 pools lock internally) and cookies stay domain-scoped.
+_OUTBOUND_POOL = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=0)
+_OUTBOUND_SESSION = requests.Session()
+_OUTBOUND_SESSION.mount("https://", _OUTBOUND_POOL)
+_OUTBOUND_SESSION.mount("http://", _OUTBOUND_POOL)
+
+
 def outbound_mode(cfg: Optional[dict[str,Any]]=None) -> str:
     cfg=cfg or load_data().get("network",{});mode=clean_text(cfg.get("proxy_mode","auto")).lower();proxy=clean_text(cfg.get("proxy"))
     return ("relay" if proxy and ("workers.dev" in proxy.lower() or "?url=" in proxy or "{url}" in proxy) else "http" if proxy else "direct") if mode=="auto" else mode
@@ -836,7 +847,7 @@ def outbound_request(method: str, url: str, **kwargs: Any) -> requests.Response:
         call_options = dict(options)
         call_options["allow_redirects"] = False
         try:
-            return requests.request(verb, request_url, headers=sent_headers, **call_options)
+            return _OUTBOUND_SESSION.request(verb, request_url, headers=sent_headers, **call_options)
         except requests.exceptions.SSLError:
             # Managed hosts sometimes install an HTTPS inspection/root CA only
             # in the OS store. Retry with an actual CA file, never verify=False.
@@ -850,7 +861,7 @@ def outbound_request(method: str, url: str, **kwargs: Any) -> requests.Response:
             if not ca_file:
                 raise
             call_options["verify"] = ca_file
-            return requests.request(verb, request_url, headers=sent_headers, **call_options)
+            return _OUTBOUND_SESSION.request(verb, request_url, headers=sent_headers, **call_options)
 
     current = target
     current_method = method.upper()
@@ -8108,6 +8119,19 @@ def basalam_request(method: str, path: str, *, params: Optional[dict[str,Any]]=N
     return result
 
 
+def basalam_read_get(path: str, params: dict[str,Any]) -> Any:
+    """Fast read-only GET for Basalam listings (10.251).
+
+    Auto/API mode goes straight to REST over the shared keep-alive outbound
+    session — no per-page SDK client construction, no fresh TLS handshake, no
+    double-fetch when the SDK leg fails, and no pip-install attempt when the
+    SDK is missing. Explicit 'sdk' mode keeps the SDK-first basalam_request.
+    """
+    if normalize_basalam_client_mode(basalam_active_cfg().get("client_mode","auto"))=="sdk":
+        return basalam_request("GET", path, params=params)
+    return basalam_api_request("GET", path, params=params)
+
+
 def basalam_api_rows(payload: Any) -> list[dict[str,Any]]:
     if isinstance(payload,list):return [x for x in payload if isinstance(x,dict)]
     if isinstance(payload,dict):
@@ -8159,17 +8183,33 @@ def install_basalam_relay_transport() -> None:
     request_sync._scraper4_relay=True;BaseClient.request_sync=request_sync
 
 
+_BASALAM_CLIENT_CACHE: dict[str, Any] = {}
+
+
 def basalam_client():
+    """Build (or reuse) the official SDK client.
+
+    10.251: the client is cached per (token, refresh, route, version). Before,
+    every single SDK call rebuilt the config + auth objects and rescanned
+    package metadata — on a 20-page listing that happened 20 times.
+    """
     cfg=basalam_active_cfg();token=normalize_basalam_token(cfg.get("token",""));refresh=str(cfg.get("refresh_token","")).strip()
+    network=load_data().get("network",{});mode=outbound_mode(network);relay=clean_text(network.get("proxy"))
+    cache_key="|".join((token[:16],str(bool(refresh)),mode,relay[:64],clean_text(network.get("worker_key"))[:32],"Scraper4/"+APP_VERSION))
+    cached=_BASALAM_CLIENT_CACHE.get(cache_key)
+    if cached is not None:return cached
     ensure_basalam_sdk()
     try:
         from basalam_sdk import BasalamClient, PersonalToken
         from basalam_sdk.config import BasalamConfig
     except ImportError as exc:raise ValueError("SDK نصب شد اما فرآیند وب هنوز آن را نمی‌بیند؛ یک بار دیگر تست اتصال را بزنید") from exc
-    sdk_cfg=BasalamConfig(timeout=45,user_agent="Scraper4/"+APP_VERSION);network=load_data().get("network",{});mode=outbound_mode(network);relay=clean_text(network.get("proxy"))
+    sdk_cfg=BasalamConfig(timeout=45,user_agent="Scraper4/"+APP_VERSION)
     if mode=="relay" and relay:
         install_basalam_relay_transport();sdk_cfg.scraper4_relay_url=relay;sdk_cfg.scraper4_worker_key=clean_text(network.get("worker_key"))
-    return BasalamClient(auth=PersonalToken(token=token,refresh_token=refresh,config=sdk_cfg),config=sdk_cfg)
+    client=BasalamClient(auth=PersonalToken(token=token,refresh_token=refresh,config=sdk_cfg),config=sdk_cfg)
+    if len(_BASALAM_CLIENT_CACHE)>=8:_BASALAM_CLIENT_CACHE.clear()
+    _BASALAM_CLIENT_CACHE[cache_key]=client
+    return client
 
 
 def basalam_photo_files(product: dict[str,Any]) -> list[io.BytesIO]:
@@ -8936,12 +8976,7 @@ def destination_remote_rows(destination: str) -> list[dict[str,Any]]:
     if destination!="basalam":raise ValueError("مقصد نامعتبر است")
     vendor=int(load_data().get("basalam",{}).get("vendor_id",0))
     if not vendor:raise ValueError("شناسه غرفه باسلام تنظیم نشده است")
-    for page in range(1,REMOTE_CATALOG_PAGES+1):
-        payload=_basalam_catalog_page(f"/v1/vendors/{vendor}/products",page,required=(page==1))
-        if payload is None:break
-        batch=basalam_api_rows(payload);rows.extend(batch)
-        if len(batch)<100:break
-        if page<REMOTE_CATALOG_PAGES:time.sleep(BASELAM_PAGE_GAP)
+    rows,info=basalam_vendor_products(vendor)
     return rows
 
 
@@ -8963,15 +8998,129 @@ def _basalam_catalog_page(path: str, page: int, per_page: int = 100,
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            return basalam_request("GET", path, params={"per_page": per_page, "page": page})
+            return basalam_read_get(path, {"per_page": per_page, "page": page})
         except Exception as exc:  # noqa: BLE001 - listing must survive bursts
             last_exc = exc
             if attempt < 2:
-                time.sleep(1.0 * (2 ** attempt))
+                time.sleep(0.6 * (2.5 ** attempt))
     report_error("basalam:catalog_page", last_exc, extra={"page": page})
     if required and last_exc is not None:
         raise FetchError(f"دریافت صفحهٔ ۱ کاتالوگ باسلام ناموفق بود: {last_exc}")
     return None
+
+
+BASELAM_PAGE_WINDOW = _env_int("SCRAPER4_BASALAM_PAGE_WINDOW", 3, 1, 6)
+
+
+def _basalam_catalog_meta(payload: Any, rows: list[dict[str,Any]], page: int, per_page: int) -> dict[str,Any]:
+    """Total / total-pages from a Basalam listing payload (core twin of the dashboard reader)."""
+    plain = payload
+    if hasattr(plain, "model_dump"):
+        try: plain = plain.model_dump(mode="json")
+        except TypeError: plain = plain.model_dump()
+    elif hasattr(plain, "dict"):
+        try: plain = plain.dict()
+        except TypeError: pass
+    if not isinstance(plain, dict): return {"total": None, "totalPages": None, "known": False}
+    containers=[plain]
+    for name in ("meta","pagination","paging"):
+        value=plain.get(name)
+        if isinstance(value,dict): containers.append(value)
+    data=plain.get("data")
+    if isinstance(data,dict):
+        containers.append(data)
+        for name in ("meta","pagination","paging"):
+            value=data.get(name)
+            if isinstance(value,dict): containers.append(value)
+    def number(*names):
+        for container in containers:
+            for name in names:
+                value=container.get(name)
+                if value in (None,"") or isinstance(value,bool): continue
+                try: return max(0,int(float(value)))
+                except (TypeError,ValueError): continue
+        return None
+    total=number("total_count","total","count","records_total")
+    pages=number("total_page","total_pages","last_page","page_count")
+    known=total is not None or pages is not None
+    if total is None:
+        total=(page-1)*per_page+len(rows)
+        if len(rows)>=per_page: total+=1
+    if pages is None: pages=max(1,(total+per_page-1)//per_page)
+    return {"total":total,"totalPages":max(1,pages),"known":known}
+
+
+def basalam_vendor_products(vendor_id: int, *, per_page: int = 100,
+                            max_pages: Optional[int]=None, window: Optional[int]=None) -> tuple[list[dict[str,Any]], dict[str,Any]]:
+    """Fast full catalogue for one Basalam vendor (10.251).
+
+    Page 1 is required — a broken token or vendor id must stay loud. When the
+    payload reports its page count the remaining pages are fetched through a
+    small parallel window over the keep-alive REST transport: a 10-page
+    listing that used to cost ~10 fresh TLS handshakes plus fixed gaps now
+    costs one warm connection and a few concurrent round-trips. Any page
+    failure halves the window (politeness on 429/5xx bursts); a page that
+    keeps failing is skipped and the partial catalogue is still returned with
+    complete=False, exactly like the 10.232 semantics.
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    vendor_id=int(vendor_id or 0)
+    if vendor_id<=0: raise ValueError("شناسه غرفه باسلام نامعتبر است")
+    limit=max(1,int(max_pages or REMOTE_CATALOG_PAGES));path=f"/v1/vendors/{vendor_id}/products"
+    first_payload=_basalam_catalog_page(path,1,per_page,required=True)
+    first_rows=basalam_api_rows(first_payload);meta=_basalam_catalog_meta(first_payload,first_rows,1,per_page)
+    pages:dict[int,list[dict[str,Any]]]={1:first_rows}
+    failures:dict[int,str]={}
+    inflight=1;window_reduced_to=0
+    complete=meta["known"] and int(meta["totalPages"])<=limit
+    if not meta["known"]:
+        # Older endpoints without metadata: probe sequentially like 10.232.
+        page=1;batch=first_rows
+        while len(batch)>=per_page and page<limit:
+            page+=1
+            payload=_basalam_catalog_page(path,page,per_page)
+            if payload is None: break
+            batch=basalam_api_rows(payload);pages[page]=batch
+            if len(batch)<per_page: break
+            if page<limit: time.sleep(BASELAM_PAGE_GAP)
+        complete=len(batch)<per_page
+    elif int(meta["totalPages"])>1:
+        last=min(limit,int(meta["totalPages"]))
+        inflight=max(1,min(int(window or BASELAM_PAGE_WINDOW),6))
+
+        def _slow_down()->None:
+            nonlocal inflight,window_reduced_to
+            if inflight>1:
+                inflight=max(1,inflight//2);window_reduced_to=inflight
+            time.sleep(0.5)
+
+        pool=ThreadPoolExecutor(max_workers=inflight,thread_name_prefix=f"bsl-cat-{vendor_id}")
+        pending:dict[Any,int]={}
+        order=iter(range(2,last+1));exhausted=False
+        try:
+            while pending or not exhausted:
+                while not exhausted and len(pending)<inflight:
+                    try: pg=next(order)
+                    except StopIteration: exhausted=True; break
+                    pending[pool.submit(_basalam_catalog_page,path,pg,per_page)]=pg
+                done_futs,_rest=wait(list(pending),timeout=0.5,return_when=FIRST_COMPLETED)
+                for fut in done_futs:
+                    pg=pending.pop(fut)
+                    try: payload=fut.result()
+                    except Exception as exc:
+                        failures[pg]=clean_text(exc)[:250];_slow_down();continue
+                    if payload is None:
+                        failures[pg]="صفحه پس از تلاش‌های مکرر دریافت نشد";_slow_down();continue
+                    pages[pg]=basalam_api_rows(payload)
+        finally:
+            pool.shutdown(wait=False,cancel_futures=True)
+        complete=complete and not failures
+    rows:list[dict[str,Any]]=[]
+    for pg in sorted(pages): rows.extend(x for x in pages[pg] if isinstance(x,dict))
+    info={"complete":bool(complete),"pagesFetched":len(pages),"totalPages":int(meta["totalPages"]),
+          "total":int(meta["total"] or len(rows)),"failedPages":sorted(failures)}
+    if window_reduced_to: info["windowReducedTo"]=window_reduced_to
+    return rows,info
 
 
 def remote_product_view(row: dict[str,Any], destination: str) -> dict[str,Any]:
