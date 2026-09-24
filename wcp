@@ -144,7 +144,7 @@ check_auto_serve() {
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.8.0)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.8.5)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
@@ -225,12 +225,14 @@ cmd_url() {
         echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://localhost:${w_port}/${CLR_RESET} (or ${CLR_CYAN}http://127.0.0.1:${w_port}/${CLR_RESET})"
     elif [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
         echo -e "${CLR_BOLD}🌐 GitHub Codespaces Access Endpoints:${CLR_RESET}"
-        echo -e "  🐘 WebConsole:   ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-${w_port}.${cs_domain}/${CLR_RESET}"
+        echo -e "  🐘 WebConsole:    ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-${w_port}.${cs_domain}/${CLR_RESET}"
+        echo -e "  🛡️ Proxy Gateway: ${CLR_CYAN}${CLR_BOLD}https://${cs_name}-${w_port}.${cs_domain}/?url=https://example.com/page${CLR_RESET}"
         echo -e "  🟢 Node.js Apps:  ${CLR_MAGENTA}https://${cs_name}-3000.${cs_domain}/${CLR_RESET}"
         echo -e "  🐍 Python Apps:   ${CLR_YELLOW}https://${cs_name}-9000.${cs_domain}/${CLR_RESET} (or -8000 / -8081)"
     else
         echo -e "${CLR_BOLD}🌐 Server Access Endpoints:${CLR_RESET}"
-        echo -e "  🐘 WebConsole:   ${CLR_GREEN}${CLR_BOLD}http://${ip}:${w_port}/${CLR_RESET}"
+        echo -e "  🐘 WebConsole:    ${CLR_GREEN}${CLR_BOLD}http://${ip}:${w_port}/${CLR_RESET}"
+        echo -e "  🛡️ Proxy Gateway: ${CLR_CYAN}${CLR_BOLD}http://${ip}:${w_port}/?url=https://example.com/page${CLR_RESET}"
     fi
     echo ""
 }
