@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Auto-Installer (VPS, Codespaces & Android Termux)
-# Version: 1.7.8 | Repository: fazilatma/new
+# Version: 1.8.0 | Repository: fazilatma/new
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
 # ==============================================================================
@@ -349,13 +349,11 @@ elif [ "$OS_FAMILY" = "debian" ]; then
     
     cat << 'APACHE_PORTS' > /etc/apache2/ports.conf 2>/dev/null || true
 Listen 8888
-Listen 8000
-Listen 8080
 Listen 80
 APACHE_PORTS
 
     cat << APACHE_VHOST > /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
-<VirtualHost *:8888 *:8000 *:8080 *:80>
+<VirtualHost *:8888 *:80>
     ServerAdmin webmaster@localhost
     DocumentRoot ${DOC_ROOT}
 
@@ -523,7 +521,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.7.8 Universal Edition Installed Successfully!   "
+echo "          🎉 WebConsole Pro v1.8.0 Universal Edition Installed Successfully!   "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
@@ -534,10 +532,9 @@ elif [ "$IS_CODESPACES" = "true" ]; then
     echo -e "  📂 ${CLR_BOLD}Workspace Files:${CLR_RESET}      ${CLR_GREEN}${DOC_ROOT}/${CLR_RESET} (Visible directly in VS Code Sidebar)"
     echo -e "  🌐 ${CLR_BOLD}GitHub Codespaces Public Access Links:${CLR_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (Primary Port 8888):${CLR_RESET}  ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-8888.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐘 ${CLR_BOLD}WebConsole (Alternate Port 8000):${CLR_RESET}${CLR_CYAN}https://${CODESPACE_NAME}-8000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 3000):${CLR_RESET}        ${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
-    echo -e "  🐍 ${CLR_BOLD}Python Scraper (Port 8081):${CLR_RESET}      ${CLR_YELLOW}https://${CODESPACE_NAME}-8081.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐘 ${CLR_BOLD}WebConsole (Port 8888):${CLR_RESET}        ${CLR_GREEN}${CLR_BOLD}https://${CODESPACE_NAME}-8888.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🟢 ${CLR_BOLD}Node.js Apps (Port 3000):${CLR_RESET}      ${CLR_MAGENTA}https://${CODESPACE_NAME}-3000.${CODESPACE_DOMAIN}/${CLR_RESET}"
+    echo -e "  🐍 ${CLR_BOLD}Python Projects (Port 9000):${CLR_RESET}   ${CLR_YELLOW}https://${CODESPACE_NAME}-9000.${CODESPACE_DOMAIN}/${CLR_RESET} (or 8000, 8081)"
 else
     echo -e "  🌐 ${CLR_BOLD}Primary URL:${CLR_RESET}          ${CLR_GREEN}${CLR_BOLD}http://${SERVER_IP:-YOUR_SERVER_IP}:8888/${CLR_RESET}"
     echo -e "  🌐 ${CLR_BOLD}Alternate Port:${CLR_RESET}       ${CLR_CYAN}http://${SERVER_IP:-YOUR_SERVER_IP}:8000/${CLR_RESET}"
