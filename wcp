@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# WebConsole Pro CLI Management Utility (wcp)
-# Version: 1.6.8 | Repository: fazilatma/new
+# WebConsole Pro Universal CLI Tool (wcp)
+# Supports: All Linux Distributions (Debian, Ubuntu, CentOS, RHEL, Rocky,
+#           AlmaLinux, Fedora, Alpine, Arch) and GitHub Codespaces
+# Version: 1.7.0 | Repository: fazilatma/new
 # ==============================================================================
 
 set -eo pipefail
 
+# ANSI Colors
 CLR_RESET="\033[0m"
 CLR_BOLD="\033[1m"
 CLR_GREEN="\033[1;32m"
@@ -14,68 +17,95 @@ CLR_CYAN="\033[1;36m"
 CLR_YELLOW="\033[1;33m"
 CLR_MAGENTA="\033[1;35m"
 CLR_RED="\033[1;31m"
+CLR_GRAY="\033[0;90m"
 
-CONFIG_FILE="/var/www/html/.wconsole_data/config.json"
-[ -f "$CONFIG_FILE" ] || CONFIG_FILE="/workspaces/.wconsole_data/config.json"
+# Find WebConsole Data Directory
+find_wcp_data_dir() {
+    for d in /var/www/html/.wconsole_data \
+             /workspaces/*/.wconsole_data \
+             /workspaces/.wconsole_data \
+             /var/www/.wconsole_data \
+             ${HOME}/.wconsole_data; do
+        if [ -d "$d" ]; then
+            echo "$d"
+            return
+        fi
+    done
+    echo "/var/www/html/.wconsole_data"
+}
+
+WCP_DATA_DIR=$(find_wcp_data_dir)
+PROJECTS_JSON="${WCP_DATA_DIR}/projects.json"
+CACHE_DIR="${WCP_DATA_DIR}/cache"
+RUNNER_DIR="${WCP_DATA_DIR}/runners"
+mkdir -p "$CACHE_DIR" "$RUNNER_DIR" 2>/dev/null || true
 
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro CLI Management Interface (wcp v1.6.8)                 "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v1.7.0)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
 
+cmd_table() {
+    echo -e "${CLR_BOLD}Command Reference & Usage Table:${CLR_RESET}"
+    echo -e "${CLR_GRAY}┌──────────────────────┬───────────────────────────────────────────────────────┐${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_CYAN}${CLR_BOLD}Command${CLR_RESET}              ${CLR_GRAY}│${CLR_RESET} ${CLR_BOLD}Description${CLR_RESET}                                           ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}├──────────────────────┼───────────────────────────────────────────────────────┤${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp status${CLR_RESET}           ${CLR_GRAY}│${CLR_RESET} Live server metrics: CPU, RAM, Swap, Apache & Services ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp url${CLR_RESET}              ${CLR_GRAY}│${CLR_RESET} Print public HTTPS Codespaces and VPS access links     ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp run-all${CLR_RESET}          ${CLR_GRAY}│${CLR_RESET} Launch/start all active and auto-start projects        ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp stop-all${CLR_RESET}         ${CLR_GRAY}│${CLR_RESET} Stop all currently running background project services ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp restart-all${CLR_RESET}      ${CLR_GRAY}│${CLR_RESET} Gracefully restart all configured project services     ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp proj [list]${CLR_RESET}      ${CLR_GRAY}│${CLR_RESET} Display table of all projects, ports, types & status   ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp start <id>${CLR_RESET}       ${CLR_GRAY}│${CLR_RESET} Start a specific project service by ID or Name         ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp stop <id>${CLR_RESET}        ${CLR_GRAY}│${CLR_RESET} Stop a specific running project service                ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp restart <id>${CLR_RESET}     ${CLR_GRAY}│${CLR_RESET} Restart a specific project service                     ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp logs <id>${CLR_RESET}        ${CLR_GRAY}│${CLR_RESET} Stream and tail live console logs of a project         ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp ports${CLR_RESET}            ${CLR_GRAY}│${CLR_RESET} List all active listening TCP ports, sockets & PIDs    ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp killport <port>${CLR_RESET}  ${CLR_GRAY}│${CLR_RESET} Forcefully free and kill process listening on a port   ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp swap [size_mb]${CLR_RESET}   ${CLR_GRAY}│${CLR_RESET} View or dynamically resize virtual Swap memory (MB)    ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp pass [password]${CLR_RESET}  ${CLR_GRAY}│${CLR_RESET} Set or reset WebConsole master administrator password  ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp update${CLR_RESET}           ${CLR_GRAY}│${CLR_RESET} 1-click self-update to latest WebConsole release       ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp doctor${CLR_RESET}           ${CLR_GRAY}│${CLR_RESET} Run system health diagnostics for Apache, PHP, Python  ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp rebuild${CLR_RESET}          ${CLR_GRAY}│${CLR_RESET} Trigger persistent port container rebuild in Codespaces${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}└──────────────────────┴───────────────────────────────────────────────────────┘${CLR_RESET}"
+    echo ""
+}
+
 cmd_help() {
     banner
-    echo -e "${CLR_BOLD}دستورات قابل استفاده در ترمینال (Usage):${CLR_RESET}"
-    echo -e "  ${CLR_GREEN}wcp status${CLR_RESET}          مشاهده وضعیت زنده سرور، رم، Swap و وب‌سرور"
-    echo -e "  ${CLR_GREEN}wcp url${CLR_RESET}             نمایش لینک‌های دسترسی وب‌کنسول (Codespaces و VPS)"
-    echo -e "  ${CLR_GREEN}wcp proj [list]${CLR_RESET}     مشاهده لیست و وضعیت تمامی پروژه‌ها و سرویس‌ها"
-    echo -e "  ${CLR_GREEN}wcp start <id>${CLR_RESET}      راه‌اندازی یک پروژه با شناسه آن"
-    echo -e "  ${CLR_GREEN}wcp stop <id>${CLR_RESET}       متوقف‌سازی یک پروژه"
-    echo -e "  ${CLR_GREEN}wcp restart <id>${CLR_RESET}    راه‌اندازی مجدد پروژه"
-    echo -e "  ${CLR_GREEN}wcp logs <id>${CLR_RESET}       مشاهده لاگ‌های زنده یک پروژه"
-    echo -e "  ${CLR_GREEN}wcp ports${CLR_RESET}           مشاهده و مدیریت پورت‌های در حال گوش‌به‌زنگ"
-    echo -e "  ${CLR_GREEN}wcp killport <p>${CLR_RESET}    آزادسازی و بستن پردازش روی یک پورت خاص"
-    echo -e "  ${CLR_GREEN}wcp swap [size_mb]${CLR_RESET}  مشاهده و افزایش فوری حافظه مجازی Swap (مثلاً wcp swap 4096)"
-    echo -e "  ${CLR_GREEN}wcp pass [new_pass]${CLR_RESET} تغییر یا بازنشانی رمز عبور ادمین وب‌کنسول"
-    echo -e "  ${CLR_GREEN}wcp update${CLR_RESET}          به‌روزرسانی آنی وب‌کنسول به آخرین نسخه گیت‌هاب"
-    echo -e "  ${CLR_GREEN}wcp doctor${CLR_RESET}          بررسی سلامت محیط، آپاچی، PHP، پایتون و پرمیشن‌ها"
-    echo -e "  ${CLR_GREEN}wcp rebuild${CLR_RESET}         ریبیلد مجدد محیط کُداسپیس با تنظیمات دائم پورت‌ها"
-    echo ""
+    cmd_table
 }
 
 cmd_status() {
     banner
-    echo -e "${CLR_BOLD}📊 وضعیت منابع و سرویس‌های سیستمی:${CLR_RESET}"
+    echo -e "${CLR_BOLD}System Metrics & Resource Overview:${CLR_RESET}"
     echo "--------------------------------------------------------------------------------"
-    
-    # RAM & Swap
-    local mem_total=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
-    local mem_free=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
-    local swap_total=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
-    local swap_free=$(grep SwapFree /proc/meminfo 2>/dev/null | awk '{printf "%.1f GB", $2/1024/1024}')
+    local mem_total=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{printf "%.2f GB", $2/1024/1024}')
+    local mem_free=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{printf "%.2f GB", $2/1024/1024}')
+    local swap_total=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{printf "%.2f GB", $2/1024/1024}')
+    local swap_free=$(grep SwapFree /proc/meminfo 2>/dev/null | awk '{printf "%.2f GB", $2/1024/1024}')
     local cores=$(nproc 2>/dev/null || echo "1")
     
-    echo -e "  • ${CLR_BOLD}پردازنده (CPU):${CLR_RESET}   ${cores} هسته"
-    echo -e "  • ${CLR_BOLD}حافظه رم (RAM):${CLR_RESET}  کل: ${mem_total} (آزاد: ${mem_free})"
-    echo -e "  • ${CLR_BOLD}حافظه مجازی (Swap):${CLR_RESET} کل: ${swap_total} (آزاد: ${swap_free})"
+    echo -e "  • ${CLR_BOLD}Processor (CPU):${CLR_RESET}      ${cores} Core(s)"
+    echo -e "  • ${CLR_BOLD}Physical RAM:${CLR_RESET}         ${mem_total} Total (Available: ${mem_free})"
+    echo -e "  • ${CLR_BOLD}Virtual Swap:${CLR_RESET}         ${swap_total} Total (Available: ${swap_free})"
     
-    # Web server
-    local ap_stat="خاموش"
+    local ap_stat="Inactive"
     if pgrep apache2 >/dev/null 2>&1 || pgrep httpd >/dev/null 2>&1; then
-        ap_stat="${CLR_GREEN}فعال (Running)${CLR_RESET}"
+        ap_stat="${CLR_GREEN}Active (Running)${CLR_RESET}"
     fi
-    local php_stat="خاموش"
+    local php_stat="Inactive"
     if pgrep -f 'php -S 0.0.0.0' >/dev/null 2>&1; then
-        php_stat="${CLR_GREEN}فعال روی پورت 8888/8000${CLR_RESET}"
+        php_stat="${CLR_GREEN}Active on Ports 8888 & 8000${CLR_RESET}"
     fi
-    echo -e "  • ${CLR_BOLD}وب‌سرور آپاچی:${CLR_RESET}  ${ap_stat}"
-    echo -e "  • ${CLR_BOLD}سرویس PHP:${CLR_RESET}      ${php_stat}"
-    
+    echo -e "  • ${CLR_BOLD}Apache2 Web Server:${CLR_RESET}   ${ap_stat}"
+    echo -e "  • ${CLR_BOLD}PHP Application Server:${CLR_RESET} ${php_stat}"
     echo "--------------------------------------------------------------------------------"
     cmd_url
+    cmd_proj_list
 }
 
 cmd_url() {
@@ -87,13 +117,13 @@ cmd_url() {
     local ip=$(curl -s4m 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
 
     if [ -n "$cs_name" ] && [ "$cs_name" != "codespace" ]; then
-        echo -e "${CLR_BOLD}🌐 آدرس‌های اختصاصی GitHub Codespaces:${CLR_RESET}"
-        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-8888.${cs_domain}/${CLR_RESET} (پورت اصلی وب‌کنسول)"
-        echo -e "  🐘 ${CLR_CYAN}https://${cs_name}-8000.${cs_domain}/${CLR_RESET} (پورت کمکی وب‌کنسول)"
-        echo -e "  🟢 ${CLR_MAGENTA}https://${cs_name}-3000.${cs_domain}/${CLR_RESET} (سرویس‌های Node.js)"
-        echo -e "  🐍 ${CLR_YELLOW}https://${cs_name}-8081.${cs_domain}/${CLR_RESET} (اسکریپر پایتون)"
+        echo -e "${CLR_BOLD}🌐 GitHub Codespaces Access Endpoints:${CLR_RESET}"
+        echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}https://${cs_name}-8888.${cs_domain}/${CLR_RESET} (Primary WebConsole)"
+        echo -e "  🐘 ${CLR_CYAN}https://${cs_name}-8000.${cs_domain}/${CLR_RESET} (Alternate WebConsole)"
+        echo -e "  🟢 ${CLR_MAGENTA}https://${cs_name}-3000.${cs_domain}/${CLR_RESET} (Node.js Application)"
+        echo -e "  🐍 ${CLR_YELLOW}https://${cs_name}-8081.${cs_domain}/${CLR_RESET} (Python Scraper Service)"
     else
-        echo -e "${CLR_BOLD}🌐 آدرس‌های دسترسی سرور:${CLR_RESET}"
+        echo -e "${CLR_BOLD}🌐 Server Access Endpoints:${CLR_RESET}"
         echo -e "  🐘 ${CLR_GREEN}${CLR_BOLD}http://${ip}:8888/${CLR_RESET}"
         echo -e "  🐘 ${CLR_CYAN}http://${ip}:8000/${CLR_RESET}"
         echo -e "  🐘 ${CLR_CYAN}http://${ip}/${CLR_RESET}"
@@ -101,9 +131,268 @@ cmd_url() {
     echo ""
 }
 
+cmd_proj_list() {
+    echo -e "${CLR_BOLD}📦 Configured Projects & Services Status:${CLR_RESET}"
+    python3 -c "
+import json, os, subprocess
+
+pfile = '$PROJECTS_JSON'
+cache_dir = '$CACHE_DIR'
+if not os.path.exists(pfile):
+    print('  No projects configured yet. Open WebConsole to deploy your first project.')
+    exit(0)
+
+try:
+    with open(pfile, 'r', encoding='utf-8') as f:
+        projects = json.load(f)
+except Exception as e:
+    print('  Error reading projects:', e)
+    exit(0)
+
+if not projects:
+    print('  No projects found.')
+    exit(0)
+
+print('\033[0;90m┌───────────────────────────┬──────────────┬────────┬────────┬─────────────────────────┐\033[0m')
+print('\033[0;90m│\033[0m \033[1;36mProject Name\033[0m              \033[0;90m│\033[0m \033[1mType\033[0m         \033[0;90m│\033[0m \033[1mPort\033[0m   \033[0;90m│\033[0m \033[1mPID\033[0m    \033[0;90m│\033[0m \033[1mStatus\033[0m                  \033[0;90m│\033[0m')
+print('\033[0;90m├───────────────────────────┼──────────────┼────────┼────────┼─────────────────────────┤\033[0m')
+
+for p in projects:
+    pid_file = os.path.join(cache_dir, f'svc-{p[\"id\"]}.pid')
+    running = False
+    proc_pid = '—'
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, 'r') as pf:
+                val = pf.read().strip()
+                if val.isdigit() and os.path.exists(f'/proc/{val}'):
+                    running = True
+                    proc_pid = val
+        except: pass
+    
+    # Check port if running
+    port = str(p.get('port') or '—')
+    ptype = str(p.get('type') or 'generic')
+    pname = str(p.get('name') or p['id'])[:25]
+    
+    status_str = '\033[1;32m🟢 Running\033[0m' if running else '\033[1;31m🔴 Stopped\033[0m'
+    print(f'\033[0;90m│\033[0m {pname:<25} \033[0;90m│\033[0m {ptype:<12} \033[0;90m│\033[0m {port:<6} \033[0;90m│\033[0m {proc_pid:<6} \033[0;90m│\033[0m {status_str:<32} \033[0;90m│\033[0m')
+
+print('\033[0;90m└───────────────────────────┴──────────────┴────────┴────────┴─────────────────────────┘\033[0m')
+"
+    echo ""
+}
+
+cmd_start_proj() {
+    local target="${1:-}"
+    if [ -z "$target" ]; then
+        echo -e "${CLR_RED}Usage: wcp start <project_id_or_name>${CLR_RESET}"
+        return 1
+    fi
+    echo -e "${CLR_BLUE}Starting project ${target}...${CLR_RESET}"
+    python3 -c "
+import json, os, subprocess
+
+pfile = '$PROJECTS_JSON'
+cache_dir = '$CACHE_DIR'
+target = '$target'.strip()
+
+if not os.path.exists(pfile):
+    print('Projects file not found.')
+    exit(1)
+
+with open(pfile, 'r') as f:
+    projects = json.load(f)
+
+matched = [p for p in projects if p.get('id') == target or p.get('name') == target or target in p.get('id', '')]
+if not matched:
+    print(f'Project \"{target}\" not found.')
+    exit(1)
+
+proj = matched[0]
+pid_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.pid')
+runner_file = os.path.join(cache_dir, f'svc-run-{proj[\"id\"]}.sh')
+
+if not os.path.exists(runner_file):
+    print(f'Runner script not found for project {proj[\"name\"]}. Please deploy it once via WebConsole.')
+    exit(1)
+
+# Kill previous instance
+if os.path.exists(pid_file):
+    try:
+        with open(pid_file) as pf:
+            old_pid = pf.read().strip()
+            if old_pid.isdigit():
+                subprocess.run(['kill', '-9', old_pid], stderr=subprocess.DEVNULL)
+    except: pass
+
+log_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.log')
+os.chmod(runner_file, 0o775)
+cmd = f'nohup bash {runner_file} > {log_file} 2>&1 &'
+proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setpgrp)
+with open(pid_file, 'w') as pf:
+    pf.write(str(proc.pid))
+
+print(f'\033[1;32m✓ Project \"{proj.get(\"name\")}\" started successfully (PID: {proc.pid})!\033[0m')
+print(f'  Logs: wcp logs {proj[\"id\"]}')
+"
+}
+
+cmd_stop_proj() {
+    local target="${1:-}"
+    if [ -z "$target" ]; then
+        echo -e "${CLR_RED}Usage: wcp stop <project_id_or_name>${CLR_RESET}"
+        return 1
+    fi
+    python3 -c "
+import json, os, subprocess
+
+pfile = '$PROJECTS_JSON'
+cache_dir = '$CACHE_DIR'
+target = '$target'.strip()
+
+if not os.path.exists(pfile): exit(1)
+with open(pfile) as f: projects = json.load(f)
+
+matched = [p for p in projects if p.get('id') == target or p.get('name') == target or target in p.get('id', '')]
+if not matched:
+    print(f'Project \"{target}\" not found.')
+    exit(1)
+
+proj = matched[0]
+pid_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.pid')
+
+if os.path.exists(pid_file):
+    with open(pid_file) as pf:
+        val = pf.read().strip()
+        if val.isdigit():
+            subprocess.run(['kill', '-9', val], stderr=subprocess.DEVNULL)
+            subprocess.run(['pkill', '-P', val], stderr=subprocess.DEVNULL)
+    try: os.remove(pid_file)
+    except: pass
+
+if proj.get('port'):
+    subprocess.run(f'fuser -k {proj[\"port\"]}/tcp', shell=True, stderr=subprocess.DEVNULL)
+
+print(f'\033[1;33m✓ Project \"{proj.get(\"name\")}\" stopped.\033[0m')
+"
+}
+
+cmd_run_all() {
+    banner
+    echo -e "${CLR_BOLD}🚀 Launching All Configured Active Projects...${CLR_RESET}"
+    echo "--------------------------------------------------------------------------------"
+    python3 -c "
+import json, os, subprocess
+
+pfile = '$PROJECTS_JSON'
+cache_dir = '$CACHE_DIR'
+
+if not os.path.exists(pfile):
+    print('No projects found.')
+    exit(0)
+
+with open(pfile, 'r') as f:
+    projects = json.load(f)
+
+if not projects:
+    print('No projects found.')
+    exit(0)
+
+started = 0
+for proj in projects:
+    pid_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.pid')
+    runner_file = os.path.join(cache_dir, f'svc-run-{proj[\"id\"]}.sh')
+    
+    if not os.path.exists(runner_file):
+        continue
+    
+    # Check if already running
+    running = False
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as pf:
+                val = pf.read().strip()
+                if val.isdigit() and os.path.exists(f'/proc/{val}'):
+                    running = True
+        except: pass
+    
+    if running:
+        print(f'  • \033[1;32m[Active]\033[0m  {proj[\"name\"]} is already running.')
+        continue
+    
+    log_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.log')
+    os.chmod(runner_file, 0o775)
+    cmd = f'nohup bash {runner_file} > {log_file} 2>&1 &'
+    proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setpgrp)
+    with open(pid_file, 'w') as pf:
+        pf.write(str(proc.pid))
+    
+    print(f'  • \033[1;32m[Started]\033[0m {proj[\"name\"]} (PID: {proc.pid}, Port: {proj.get(\"port\", \"—\")})')
+    started += 1
+
+print('--------------------------------------------------------------------------------')
+print(f'\033[1;32m✓ All active project services launched ({started} started).\033[0m\n')
+"
+    cmd_proj_list
+}
+
+cmd_stop_all() {
+    banner
+    echo -e "${CLR_BOLD}🛑 Stopping All Running Project Services...${CLR_RESET}"
+    python3 -c "
+import json, os, subprocess
+
+pfile = '$PROJECTS_JSON'
+cache_dir = '$CACHE_DIR'
+if not os.path.exists(pfile): exit(0)
+with open(pfile) as f: projects = json.load(f)
+
+for proj in projects:
+    pid_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.pid')
+    if os.path.exists(pid_file):
+        with open(pid_file) as pf:
+            val = pf.read().strip()
+            if val.isdigit():
+                subprocess.run(['kill', '-9', val], stderr=subprocess.DEVNULL)
+                subprocess.run(['pkill', '-P', val], stderr=subprocess.DEVNULL)
+        try: os.remove(pid_file)
+        except: pass
+    if proj.get('port'):
+        subprocess.run(f'fuser -k {proj[\"port\"]}/tcp', shell=True, stderr=subprocess.DEVNULL)
+    print(f'  • \033[1;33m[Stopped]\033[0m {proj.get(\"name\")}')
+
+print('\033[1;32m✓ All project services stopped.\033[0m\n')
+"
+}
+
+cmd_restart_all() {
+    cmd_stop_all
+    sleep 1
+    cmd_run_all
+}
+
+cmd_logs() {
+    local target="${1:-}"
+    if [ -z "$target" ]; then
+        echo -e "${CLR_RED}Usage: wcp logs <project_id_or_name>${CLR_RESET}"
+        return 1
+    fi
+    local log_file=""
+    for f in "${CACHE_DIR}/svc-${target}.log" "${CACHE_DIR}/svc-"*"${target}"*".log"; do
+        if [ -f "$f" ]; then log_file="$f"; break; fi
+    done
+    if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
+        echo -e "${CLR_RED}No log file found for project ${target}.${CLR_RESET}"
+        return 1
+    fi
+    echo -e "${CLR_CYAN}Tailing live logs from ${log_file} (Press Ctrl+C to exit):${CLR_RESET}\n"
+    tail -n 60 -f "$log_file"
+}
+
 cmd_ports() {
     banner
-    echo -e "${CLR_BOLD}🔌 پورت‌های فعال و فرآیندهای گوش‌به‌زنگ (Active Listening Ports):${CLR_RESET}"
+    echo -e "${CLR_BOLD}Active Listening TCP Ports & Sockets:${CLR_RESET}"
     echo "--------------------------------------------------------------------------------"
     if command -v ss >/dev/null 2>&1; then
         ss -tulpn | grep LISTEN || true
@@ -113,29 +402,29 @@ cmd_ports() {
         lsof -iTCP -sTCP:LISTEN -P -n || true
     fi
     echo "--------------------------------------------------------------------------------"
-    echo -e "💡 برای بستن یک پورت: ${CLR_YELLOW}wcp killport <port_number>${CLR_RESET}"
+    echo -e "💡 To terminate process on a port: ${CLR_YELLOW}wcp killport <port_number>${CLR_RESET}"
 }
 
 cmd_killport() {
     local port="${1:-}"
     if [ -z "$port" ]; then
-        echo -e "${CLR_RED}لطفاً شماره پورت را وارد کنید. مثال: wcp killport 8888${CLR_RESET}"
+        echo -e "${CLR_RED}Usage: wcp killport <port>${CLR_RESET}"
         return 1
     fi
-    echo -e "${CLR_YELLOW}در حال آزادسازی پورت ${port}...${CLR_RESET}"
+    echo -e "${CLR_YELLOW}Terminating process listening on port ${port}...${CLR_RESET}"
     fuser -k "${port}/tcp" 2>/dev/null || true
-    echo -e "${CLR_GREEN}✓ پورت ${port} با موفقیت آزاد شد.${CLR_RESET}"
+    echo -e "${CLR_GREEN}✓ Port ${port} freed successfully.${CLR_RESET}"
 }
 
 cmd_swap() {
     local sz="${1:-}"
     if [ -z "$sz" ]; then
-        echo -e "${CLR_BOLD}وضعیت فعلی حافظه Swap:${CLR_RESET}"
+        echo -e "${CLR_BOLD}Virtual Swap Memory Status:${CLR_RESET}"
         swapon --show 2>/dev/null || free -h
-        echo -e "\nبرای تغییر ظرفیت: ${CLR_YELLOW}wcp swap 2048${CLR_RESET} (برحسب مگابایت)"
+        echo -e "\nTo resize: ${CLR_YELLOW}wcp swap 4096${CLR_RESET} (in Megabytes)"
         return 0
     fi
-    echo -e "${CLR_BLUE}در حال تنظیم Swap به ${sz} مگابایت...${CLR_RESET}"
+    echo -e "${CLR_BLUE}Resizing Swap memory to ${sz}MB...${CLR_RESET}"
     swapoff -a 2>/dev/null || true
     rm -f /swapfile 2>/dev/null || true
     if command -v fallocate >/dev/null 2>&1; then
@@ -146,17 +435,17 @@ cmd_swap() {
     chmod 600 /swapfile
     mkswap /swapfile >/dev/null 2>&1
     swapon /swapfile 2>/dev/null || true
-    echo -e "${CLR_GREEN}✓ حافظه Swap با موفقیت به ${sz}MB تغییر یافت و فعال شد.${CLR_RESET}"
+    echo -e "${CLR_GREEN}✓ Swap memory resized to ${sz}MB and activated.${CLR_RESET}"
 }
 
 cmd_pass() {
     local new_pass="${1:-}"
     if [ -z "$new_pass" ]; then
-        read -s -p "رمز عبور جدید وب‌کنسول را وارد کنید: " new_pass
+        read -s -p "Enter new WebConsole master administrator password: " new_pass
         echo ""
     fi
     if [ -z "$new_pass" ]; then
-        echo -e "${CLR_RED}رمز عبور نمی‌تواند خالی باشد.${CLR_RESET}"
+        echo -e "${CLR_RED}Password cannot be empty.${CLR_RESET}"
         return 1
     fi
     local hash=$(php -r "echo password_hash('$new_pass', PASSWORD_BCRYPT);")
@@ -169,50 +458,46 @@ for p in set(cfg_paths):
             with open(p, 'r') as f: d = json.load(f)
             d['pass_hash'] = '$hash'
             with open(p, 'w') as f: json.dump(d, f, indent=2)
-            print('✓ رمز عبور در ' + p + ' به‌روز شد.')
+            print('✓ Password updated in ' + p)
         except Exception as e: pass
 "
-    echo -e "${CLR_GREEN}✓ رمز عبور مدیریت وب‌کنسول با موفقیت تغییر کرد.${CLR_RESET}"
+    echo -e "${CLR_GREEN}✓ Master password updated successfully.${CLR_RESET}"
 }
 
 cmd_update() {
     banner
-    echo -e "${CLR_BLUE}🔄 در حال دانلود و به‌روزرسانی آنی WebConsole Pro از مخزن اصلی...${CLR_RESET}"
+    echo -e "${CLR_BLUE}🔄 Downloading and applying latest WebConsole Pro release...${CLR_RESET}"
     curl -sSL "https://raw.githubusercontent.com/fazilatma/new/main/install.sh?t=$(date +%s)" | sudo bash
 }
 
 cmd_doctor() {
     banner
-    echo -e "${CLR_BOLD}🩺 تست و عیب‌یابی سلامت کامل وب‌کنسول:${CLR_RESET}"
+    echo -e "${CLR_BOLD}🩺 Comprehensive System Diagnostic & Health Check:${CLR_RESET}"
     echo "--------------------------------------------------------------------------------"
     
-    # PHP check
     if command -v php >/dev/null 2>&1; then
-        echo -e "  [✓] PHP: $(php -v | head -n 1)"
+        echo -e "  [✓] PHP CLI: $(php -v | head -n 1)"
     else
-        echo -e "  [✗] PHP نصب نیست!"
+        echo -e "  [✗] PHP is missing!"
     fi
     
-    # Node.js check
     if command -v node >/dev/null 2>&1; then
         echo -e "  [✓] Node.js: $(node -v) (npm $(npm -v 2>/dev/null || echo 'not found'))"
     else
-        echo -e "  [✗] Node.js نصب نیست!"
+        echo -e "  [✗] Node.js is missing!"
     fi
     
-    # Python check
     if command -v python3 >/dev/null 2>&1; then
-        echo -e "  [✓] Python: $(python3 --version)"
-        python3 -c "import requests, flask, bs4, curl_cffi, playwright; print('  [✓] Python Scraping Stack: همه پکیج‌ها (requests, curl_cffi, playwright, ...) آماده هستند.')" 2>/dev/null || echo -e "  [⚠️] برخی پکیج‌های پایتون نیاز به نصب دارند."
+        echo -e "  [✓] Python Runtime: $(python3 --version)"
+        python3 -c "import requests, flask, bs4, curl_cffi, playwright; print('  [✓] Scraping Stack: requests, curl_cffi, playwright, flask all verified.')" 2>/dev/null || echo -e "  [⚠️] Some Python scraping packages need installation."
     else
-        echo -e "  [✗] Python 3 نصب نیست!"
+        echo -e "  [✗] Python 3 is missing!"
     fi
 
-    # Web Server check
     if pgrep apache2 >/dev/null 2>&1 || pgrep httpd >/dev/null 2>&1; then
-        echo -e "  [✓] وب‌سرور Apache2 فعال است."
+        echo -e "  [✓] Apache2 Web Server: Running"
     else
-        echo -e "  [⚠️] آپاچی خاموش است؛ راه‌اندازی با دستور: service apache2 start"
+        echo -e "  [⚠️] Apache2 is stopped. Start with: service apache2 start"
     fi
 
     echo "--------------------------------------------------------------------------------"
@@ -221,16 +506,16 @@ cmd_doctor() {
 
 cmd_rebuild() {
     banner
-    echo -e "${CLR_YELLOW}🔄 در حال ارسال درخواست Rebuild به کُداسپیس...${CLR_RESET}"
+    echo -e "${CLR_YELLOW}🔄 Requesting Codespaces container rebuild with persistent ports...${CLR_RESET}"
     if command -v gh >/dev/null 2>&1; then
         local cs_name="${CODESPACE_NAME:-}"
         if [ -n "$cs_name" ]; then
             gh codespace rebuild -c "$cs_name" 2>/dev/null || true
-            echo -e "${CLR_GREEN}✓ درخواست ریبیلد با تنظیمات دائم پورت‌ها ارسال شد.${CLR_RESET}"
+            echo -e "${CLR_GREEN}✓ Rebuild command dispatched.${CLR_RESET}"
             return 0
         fi
     fi
-    echo -e "${CLR_CYAN}برای ریبیلد کُداسپیس، در محیط VS Code کلیدهای Ctrl+Shift+P را فشرده و دستور 'Codespaces: Rebuild Container' را انتخاب کنید.${CLR_RESET}"
+    echo -e "${CLR_CYAN}In VS Code, press Ctrl+Shift+P and select 'Codespaces: Rebuild Container'.${CLR_RESET}"
 }
 
 # Main command dispatcher
@@ -240,6 +525,38 @@ case "${1:-}" in
         ;;
     url|links)
         cmd_url
+        ;;
+    proj|projects)
+        case "${2:-}" in
+            start) cmd_start_proj "${3:-}" ;;
+            stop) cmd_stop_proj "${3:-}" ;;
+            restart) cmd_stop_proj "${3:-}"; sleep 1; cmd_start_proj "${3:-}" ;;
+            logs) cmd_logs "${3:-}" ;;
+            *) cmd_proj_list ;;
+        esac
+        ;;
+    start)
+        cmd_start_proj "${2:-}"
+        ;;
+    stop)
+        cmd_stop_proj "${2:-}"
+        ;;
+    restart)
+        cmd_stop_proj "${2:-}"
+        sleep 1
+        cmd_start_proj "${2:-}"
+        ;;
+    run-all|start-all|up)
+        cmd_run_all
+        ;;
+    stop-all|down)
+        cmd_stop_all
+        ;;
+    restart-all)
+        cmd_restart_all
+        ;;
+    logs|log)
+        cmd_logs "${2:-}"
         ;;
     ports)
         cmd_ports
@@ -266,7 +583,7 @@ case "${1:-}" in
         cmd_help
         ;;
     *)
-        echo -e "${CLR_RED}دستور ناشناخته: $1${CLR_RESET}"
+        echo -e "${CLR_RED}Unknown command: $1${CLR_RESET}"
         cmd_help
         exit 1
         ;;
