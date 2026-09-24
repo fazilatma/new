@@ -1,3 +1,4 @@
+import { createBrowserRepair } from '../scripts/browser-repair.mjs';
 import { processResources } from './process-resources.js';
 import { benchmarkPagination } from '../worker-src/benchmark-pagination.js';
 import { extractionDetails } from '../worker-src/job-details.js';
@@ -40,7 +41,7 @@ import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
 import { controlCategoryRun, getPublicCategoryRun, recoverCategoryRun, resetCategoryRun, startCategoryRun } from './category-run.js';
 import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
-import { benchmarkScroll, benchmarkProbeUrl, browserEngineAvailable, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector } from './scraper.js';
+import { browserExecutable, benchmarkScroll, benchmarkProbeUrl, browserEngineAvailable, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
 import { basalamSdkBridgePath, basalamSdkStatus, describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
 import { createPhpSettingsBundle, decodePhpSettingsBundle, stateKeyForFile } from './settings-transfer.js';
@@ -48,7 +49,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.212.0+'; } catch { return process.env.npm_package_version || '1.212.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.213.0+'; } catch { return process.env.npm_package_version || '1.213.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -301,6 +302,18 @@ app.use('/api/*', async (c, next) => {
 });
 
 app.use('/api/*',activityMiddleware({setState,deleteState}));
+const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExecutable(driver)});
+app.on(['GET','POST'],'/api/runtime/browser-repair',async c=>{
+  // Installation is privileged relative to normal scraping: never permit anonymous use.
+  if(!config.adminToken)return c.json({ok:false,error:'Browser repair requires ADMIN_TOKEN authentication. Configure it for this runtime first.'},403);
+  if(c.req.method==='GET')return c.json({ok:true,...browserRepair.status()});
+  if(c.req.header('x-browser-repair')!=='1')return c.json({ok:false,error:'Explicit browser repair request required'},403);
+  try{
+    const body=await c.req.text();if(body.length>256)return c.json({ok:false,error:'Request too large'},413);
+    return c.json({ok:true,...browserRepair.start(JSON.parse(body||'{}'))},202);
+  }catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400);}
+});
+
 app.get('/api/web-push/config',c=>c.json({ok:true,...pushConfiguration()}));
 app.post('/api/web-push/subscribe',async c=>c.json(await subscribePush(await c.req.json())));
 app.post('/api/web-push/unsubscribe',async c=>{const b=await c.req.json() as any;return c.json(await unsubscribePush(String(b.id||'')))});

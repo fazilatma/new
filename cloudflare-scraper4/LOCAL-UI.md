@@ -655,3 +655,49 @@ The deployer now retries unexpected scraper exits and watches prolonged failures
 to respond. Intentional Stop cancels recovery. See [KEEPALIVE.md](KEEPALIVE.md)
 for limits, controls, and persistent VPS/systemd or Termux/runit setup. A normal
 browser tab does not need to stay open, but the deployer must remain running.
+
+## In-scraper browser repair (1.213.0+)
+
+In the scraper hamburger menu, open **Code version → Browser installation and repair**.
+The Node runtime endpoint requires the configured `ADMIN_TOKEN` and the dashboard's
+normal bearer authentication, even on installations where other APIs allow anonymous
+local use. Configure this in your deployment environment and sign in before repair.
+The Cloudflare Worker cannot install local browser binaries.
+
+The button covers Playwright, Puppeteer and Crawlee. Missing libraries are restored
+at their root package-lock versions using npm with `--ignore-scripts --no-save
+--package-lock=false --engine-strict`. Existing libraries are not deliberately
+upgraded; npm may reconcile transitive dependencies during a missing-package repair.
+Do not run project updates or another package installer concurrently with repair.
+Node remains unchanged; incompatible packages (for example Puppeteer requiring
+Node 22.12+ on a Node 20 runtime) are reported, not silently downgraded.
+
+It checks the actual browser executable selection used by extraction, then uses
+the project's installed CLIs to download Playwright Chromium and Puppeteer Chrome
+into their respective runtime caches. Existing HOME, XDG and explicit browser-cache
+settings are inherited; no project ID or root-cache path is hardcoded. Crawlee uses
+these browsers rather than a separate browser download. Four separate launch/page
+tests cover Playwright, Puppeteer and the Crawlee launchers for each. A working
+browser is not downloaded again. One failed component does not suppress tests of
+the remaining engines; overall success requires all four tests to pass.
+
+Official npm/browser sources are tried first. Optional npmmirror fallback for npm,
+Playwright, and Chrome-for-Testing requires explicit third-party executable trust
+consent. Existing HTTP/HTTPS proxy settings are inherited; the UI neither asks for
+proxy credentials nor accepts arbitrary URLs/commands. Reachability and mirror
+revision availability are not guaranteed. TLS verification is not disabled. No
+Firefox, WebKit or Selenium downloads are added: current extraction engines use
+Chromium/Chrome. Installing libraries cannot fix a target site's HTTP 403.
+
+Root-running installations require a separate acknowledgement. There is no sudo,
+permission/ownership rewrite, apt installation, version downgrade, service restart,
+or automatic extraction/delivery. Termux uses system Chromium; absent/broken system
+browsers or explicit executable overrides require administrator repair. Offline
+transfer still needs a compatible donor machine and administrator action.
+
+Progress is bounded and polled. Duplicate starts share one in-process job. A refresh
+can reconnect with the status button; a server restart loses job status. Downloads
+have a three-minute limit per browser source, package installation five minutes per
+registry, and launch tests a 45-second limit. Only a
+successful browser launch/page test reports success. After success rerun extraction
+diagnostics to investigate site access or selector problems separately.
