@@ -84,6 +84,19 @@ cmd_set_port() {
     cmd_url "$new_port"
 }
 
+cmd_shutdown() {
+    banner
+    echo -e "${CLR_YELLOW}🛑 Stopping WebConsole server and all background services...${CLR_RESET}"
+    cmd_stop_all >/dev/null 2>&1 || true
+    pkill -f 'php -S 0.0.0.0' 2>/dev/null || true
+    fuser -k "8888/tcp" 2>/dev/null || true
+    fuser -k "8000/tcp" 2>/dev/null || true
+    fuser -k "8080/tcp" 2>/dev/null || true
+    tmux kill-session -t wcp-8888 2>/dev/null || true
+    tmux kill-session -t wcp-server 2>/dev/null || true
+    echo -e "${CLR_GREEN}✓ WebConsole server and all project services have been stopped successfully.${CLR_RESET}"
+}
+
 cmd_serve() {
     local port="${1:-$(get_wcp_port)}"
     local doc="${HOME}/webconsole"
@@ -611,6 +624,9 @@ cmd_rebuild() {
 
 # Main command dispatcher
 case "${1:-}" in
+    shutdown|kill-all|off)
+        cmd_shutdown
+        ;;
     port|setport|change-port)
         cmd_set_port "${2:-}"
         ;;
