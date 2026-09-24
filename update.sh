@@ -492,6 +492,37 @@ rm -f /tmp/webconsole_latest.php
 chown -R ${WEB_USER}:${WEB_GROUP} "${DOC_ROOT}" /var/www/html /var/www/projects 2>/dev/null || true
 chmod -R 775 "${DOC_ROOT}" /var/www/html /var/www/projects 2>/dev/null || true
 
+# Install wcp CLI tool globally
+log_info "Installing WebConsole Pro CLI tool (wcp)..."
+WCP_CLI_URL="https://raw.githubusercontent.com/fazilatma/new/main/wcp?t=$(date +%s)"
+curl -fsSL "$WCP_CLI_URL" -o /usr/local/bin/wcp 2>/dev/null || wget -qO /usr/local/bin/wcp "$WCP_CLI_URL" 2>/dev/null || true
+if [ -f /usr/local/bin/wcp ]; then
+    chmod +x /usr/local/bin/wcp 2>/dev/null || true
+    cp -f /usr/local/bin/wcp /usr/bin/wcp 2>/dev/null || true
+    log_ok "wcp CLI installed. You can type 'wcp' anytime in terminal."
+fi
+
+# Write .devcontainer/devcontainer.json for persistent Codespaces port forwarding
+for ws_dir in /workspaces/* "$DOC_ROOT"; do
+    if [ -d "$ws_dir" ]; then
+        mkdir -p "$ws_dir/.devcontainer" 2>/dev/null || true
+        cat << 'DEVCONTAINER_JSON' > "$ws_dir/.devcontainer/devcontainer.json" 2>/dev/null || true
+{
+  "name": "Dev Container",
+  "forwardPorts": [8000, 8888, 9000, 8080, 3000, 4000],
+  "portsAttributes": {
+    "8000": { "label": "Port 8000", "onAutoForward": "notify" },
+    "8888": { "label": "Port 8888", "onAutoForward": "notify" },
+    "9000": { "label": "Port 9000", "onAutoForward": "notify" },
+    "8080": { "label": "Port 8080", "onAutoForward": "notify" },
+    "3000": { "label": "Port 3000", "onAutoForward": "notify" },
+    "4000": { "label": "Port 4000", "onAutoForward": "notify" }
+  }
+}
+DEVCONTAINER_JSON
+    fi
+done
+
 # Start background fallback PHP server on port 8888
 pkill -f 'php -S 0.0.0.0:8888' 2>/dev/null || true
 pkill -f 'php -S 0.0.0.0:8000' 2>/dev/null || true
