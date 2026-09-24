@@ -289,9 +289,10 @@ def main() -> int:
     check("running-empty state explains live refresh",
           "خودکار به‌روز می‌شود" in js)
     s4src = open(os.path.join(ROOT, "scraper4.py"), encoding="utf-8").read()
+    # 10.250 refactored the worker: events are recorded in _record().
     check("dispatch worker records live events",
           'live_task_event(task_id,_ev,' in s4src
-          and 'live_task_event(task_id,"failed"' in s4src)
+          and '_ev="failed"' in s4src)
     check("auto reconcile after dispatch",
           "start_destination_reconcile_task(profile_name,x)" in
           open(os.path.join(ROOT, "scraper4.py"), encoding="utf-8").read())

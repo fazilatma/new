@@ -175,6 +175,12 @@ def _body() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _dispatch_concurrency(value: Any) -> Any:
+    """Node 'dispatchConcurrency' ('auto' | '1'..'16') → stored value."""
+    text = _s(value).strip()
+    return int(text) if text.isdigit() and 1 <= int(text) <= 16 else ""
+
+
 def register(core: Any) -> None:  # noqa: C901 - one registrar, many small routes
     """Attach the Node-compatible dashboard + API to the Flask app in ``core``."""
 
@@ -240,6 +246,10 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "aiDescriptions": cfg.get("ai_descriptions", True) is not False,
             "detailExtract": cfg.get("detail_extract", True) is not False,
             "reconcile": cfg.get("reconcile") is True,
+            "dispatchConcurrency": (str(int(cfg.get("dispatch_concurrency")))
+                                    if str(cfg.get("dispatch_concurrency") or "").strip().isdigit()
+                                    and 1 <= int(cfg.get("dispatch_concurrency") or 0) <= 16
+                                    else "auto"),
             "githubBranch": _s(cfg.get("github_branch")),
             "productsPush": cfg.get("products_push") if isinstance(cfg.get("products_push"), dict) else None,
             "productsPull": cfg.get("products_pull") if isinstance(cfg.get("products_pull"), dict) else None,
@@ -326,6 +336,7 @@ def register(core: Any) -> None:  # noqa: C901 - one registrar, many small route
             "ai_descriptions": node.get("aiDescriptions", True) is not False,
             "detail_extract": node.get("detailExtract", True) is not False,
             "reconcile": node.get("reconcile") is True,
+            "dispatch_concurrency": _dispatch_concurrency(node.get("dispatchConcurrency")),
             "github_branch": _s(node.get("githubBranch")),
             "interval_minutes": _int(node.get("intervalMinutes")),
             "created_at": cfg.get("created_at") or _iso(),

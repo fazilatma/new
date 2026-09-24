@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.249"
+APP_VERSION = "10.250"
 CHANGELOG = [
+    {"version":"10.250","date":"2026-09-24","title":"ارسال موازی محصولات به مقاصد با تشخیص خودکار تعداد همزمانی و امکان تنظیم دستی","items":["عملیات ارسال کامل پروفایل حالا موازی است: چند محصول هم‌زمان به ووکامرس/باسلام می‌رود و به‌جای انتظار تک‌تک، زمان ارسال چند برابر کوتاه‌تر می‌شود؛ پنجرهٔ لغزان ارسال یعنی توقف دکمه بلافاصله کار را قطع می‌کند و صف طولانی پشت صحنه باقی نمی‌ماند","تعداد محصول موازی به سه روش تعیین می‌شود: خودکار (پیش‌فرض؛ ووکامرس ۴ همزمان، باسلام ۲ همزمان چون محدودیت نرخ سخت‌تری دارد)، دستی از تنظیمات پروفایل (۱ ترتیبی تا ۱۶)، یا متغیر محیطی SCRAPER4_DISPATCH_CONCURRENCY برای سیاست ثابت سرور","اگر مقصد محدودیت نرخ بدهد (429/Too Many Requests)، همزمانی در همان لحظه نصف می‌شود و پیام «کاهش همزمانی» در جزئیات کار ثبت می‌شود؛ شمارنده‌ها، رویدادهای زندهٔ هر محصول، ثبت شناسه‌های مقصد و مغایرت‌گیری خودکار پس از ارسال همگی دقیقاً مثل قبل کار می‌کنند","ایمنی داده‌ها حفظ شد: شمارش، ثبت رویداد زنده و نوشتن شناسه مقصد فقط در نخ هماهنگ‌کننده انجام می‌شود (فایل داده هرگز هم‌زمان نوشته نمی‌شود) و خود ارسال‌ها هم مثل قبل به‌ازای هر محصول به همهٔ غرفه‌های فعال باسلام فن‌اوت می‌شوند","تست جدید tools/test_dispatch_parallel.py: تشخیص همزمانی در سه حالت، اثبات واقعی اجرای موازی با سنجش هم‌زمانی ماکزیمم، صحت شمارنده‌ها و رویدادها در حالت موازی، کاهش خودکار همزمانی با خطای 429، مسیر ترتیبی با انتخاب ۱، توقف در میانهٔ ارسال موازی و رفت‌وبرگشت تنظیم پروفایل از API"]},
     {"version":"10.249","date":"2026-09-23","title":"تست جامع دسترسی به منبع، شمارنده‌های زندهٔ کلیک‌شو و مغایرت‌گیری خودکار پس از همگام‌سازی","items":["دکمهٔ «آزمایش دسترسی» حالا گزارش واقعی و جامع اتصال می‌دهد: اندازه‌گیری جداگانهٔ DNS (همهٔ IPها و زمان)، اتصال TCP (IP و پورت و زمان)، دست‌دادن TLS (نسخه، رمزنگار، صادرکننده و انقضای گواهی با روز باقی‌مانده)، زمان اولین بایت و دانلود، هدرهای کلیدی پاسخ، عنوان صفحه، نشانه‌های ضدبات و JSON-LD/NEXT_DATA، موتورهای نصب‌شده و مسیر دروازه (رله/مستقیم/پروکسی)","در حالت رله، سنجش DNS/TCP/TLS روی خود Worker انجام می‌شود (هدف واقعی از سرور شما دیده نمی‌شود) و مسیر جایگزین هم آزموده می‌شود: با رله فعال، یک اتصال مستقیم هم امتحان می‌شود و با اتصال مستقیم، اگر Worker تنظیم باشد رله هم — نتیجهٔ هر دو مسیر کنار هم نمایش داده می‌شود","پنجرهٔ نتیجهٔ تست دسترسی بازنویسی شد: به‌جای چند خط JSON، بخش‌بندی خوانا (مسیر اتصال، زمان‌بندی، گواهی TLS، پاسخ سرور، مسیر جایگزین) به‌همراه JSON خام در انتها","شمارنده‌های کار ارسال (انجام‌شده/جدید/آپدیت/خطا/ارسال موفق) حالا در حین اجرا کلیک‌شو هستند: هر محصول که ارسال می‌شود رویداد ساختاریافته‌اش (عنوان، قیمت، مقصد، خطا) روی همان کار ثبت می‌شود و با کلیک روی هر شمارنده، فهرست زندهٔ همان دسته باز می‌شود و تا پایان کار خودکار تازه می‌شود — دیگر لازم نیست تا پایان مرحلهٔ ارسال منتظر بمانید","تیک جدید «مغایرت‌گیری خودکار پس از همگام‌سازی» در رفتار پروفایل: بعد از پایان ارسال کامل همان پروفایل، کار مغایرت‌گیری برای هر مقصدی که ارسال شده به‌صورت خودکار در صف قرار می‌گیرد و در جزئیات کار هم اعلام می‌شود","تست جدید tools/test_source_test_live_counters.py: گزارش تست دسترسی با سرور محلی واقعی (DNS/TCP/هدر/عنوان/حالت رله و مسیر جایگزین)، رویدادهای زندهٔ ارسال و شمارنده‌ها از طریق کلاینت Flask، مغایرت‌گیری خودکار پس از ارسال و رفت‌وبرگشت فیلد تیک؛ jobEventRows حالا رویدادهای sync-created/sync-updated را در شمارنده‌های جدید/آپدیت هم می‌شناسد"]},
     {"version":"10.248","date":"2026-09-23","title":"پوش محصولات هر پروفایل به برنچ گیت‌هاب و دریافت از آن برنچ برای ارسال به غرفه‌ها و ووکامرس","items":["تنظیمات پروفایل جدید «برنچ گیت‌هاب» + کارت «گیت‌هاب محصولات» در صفحه تنظیمات: دکمهٔ پوش محصولات استخراج‌شدهٔ همان پروفایل به‌صورت یک فایل JSON روی برنچ انتخابی، دکمهٔ بررسی برنچ (تعداد محصول، زمان پوش، نسخه، حجم بدون تغییر دادن چیزی) و دکمهٔ دریافت از برنچ با انتخاب مقصد (ووکامرس/باسلام/هر دو/فقط ذخیره)","فایل محصولات هر پروفایل در مسیر ثابت scraper4-products/نام-امن-پروفایل.json با ساختار خوانا (kind، نسخه، زمان، تعداد و آرایهٔ محصولات) ذخیره می‌شود؛ نام فارسی پروفایل به‌سلامت اسلاگ می‌شود و هش کوچکی برای بی‌برخورد بودن پروفایل‌ها اضافه می‌شود","پوش با همان زنجیرهٔ اتمی بکاپ (blob ← tree ← commit ← به‌روزرسانی ref، هرگز حالت نیمه‌نوشته) انجام می‌شود و پیشرفت آن زنده در داشبورد جریان می‌یابد؛ توکن و ریپو همان‌های بخش بکاپ/برنچ است و پرچم ندارد","دریافت فایل‌های بزرگ‌تر از ۱ مگابایت با هدر raw محتوای گیت‌هاب انجام می‌شود (API معمولی از ۱ مگابایت به بالا content نمی‌دهد)؛ بعد از دریافت، محصولات جای محصولات فعلی پروفایل می‌نشیند و با همان worker ارسال پروفایل به مقاصد انتخابی می‌رود — یعنی یک نصب استخراج می‌کند و نصب دیگر فقط دریافت و ارسال می‌کند","وضعیت آخرین پوش/دریافت روی پروفایل ذخیره و در کارت نمایش داده می‌شود؛ فهرست برنچ‌ها با کلیک روی منوی انتخاب از همان اسکن برنچ‌های داشبورد خوانده می‌شود","تست جدید tools/test_github_products_sync.py: زنجیرهٔ کامیت اتمی با API ساختگی، خواندن raw، اعتبارسنجی فایل، dry-run، جایگزینی محصولات، ارسال با مقاصد دلخواه، خطاهای توکن/برنچ/فایل، ایمنی مسیر و رفتار واقعی هر دو endpoint با کلاینت Flask"]},
     {"version":"10.247","date":"2026-09-23","title":"دکمهٔ نصب مرورگر در داشبورد — Playwright و کرومیوم بدون ترمینال نصب می‌شوند","items":["دکمهٔ جدید «🧩 نصب مرورگر» کنار تست سرعت و عیب‌یابی صفحهٔ اصلی: همان دستورهایی که تا حالا باید دستی در ترمینال اجرا می‌شدند با یک کلیک روی خود سرور اجرا می‌شوند — pip با پرچم‌های درست همین محیط (PEP 668 و ‎--user‎ برای حساب‌هایی مثل www-data) و سپس دانلود کرومیوم؛ پس از نصب فهرست موتورهای داشبورد خودکار تازه‌سازی می‌شود","پیشرفت زندهٔ نصب: هر خط خروجی pip و دانلود در پنجرهٔ داشبورد جریان می‌یابد (همان جریان NDJSON عیب‌یابی)؛ نصب همزمان دوباره ممکن نیست (قفل تک‌نصب) و نصب بی‌اثر (idempotent) است — اگر همه‌چیز از قبل باشد سریع «از قبل نصب است» برمی‌گردد","مسیر دانلود هوشمند: اول CDN رسمی playwright؛ اگر پاسخ نداد (مثل IPهای ایران) منطق اسکریپت آینه داخل خود اسکریپر بازنویسی شد — خواندن نسخه‌های لازم از dry-run، دانلود Chrome-for-Testing از آینه‌های npmmirror/huaweicloud/nju و چیدمان دقیق کش playwright با نشانک INSTALLATION_COMPLETE؛ کش در مسیر مشترک WebConsole می‌نشیند تا rsync پاکش نکند و ‎--with-deps‎ فقط با root اجرا می‌شود","پس از نصب همان پروسهٔ در حال اجرا پکیج را می‌بیند (به‌روزرسانی مسیرهای import و user-site) و نیازی به ری‌استارت سرویس نیست؛ در پایان مسیر فایل اجرایی و نتیجهٔ تست راه‌اندازی headless گزارش می‌شود","تست جدید tools/test_browser_install_button.py: زنجیرهٔ pip در محیط‌های مختلف، بازنویسی آینه (دانلود با requests و پشتیبان curl، اعتبارسنجی zip، چیدمان، نشانک)، مسیرهای موفق/شکست/مشغول، رفتار واقعی endpoint با کلاینت Flask و سیم‌کازی داشبورد؛ مسیر نصب یک‌بار زنده در محیط PEP 668 غیر root اجرا شد: زنجیرهٔ pip با ‎--user‎ واقعاً نصب کرد، جریان NDJSON و گزارش صادق مراحل تأیید شد و پشتیبان curl برای دانلود آینه‌ها اضافه گردید"]},
@@ -9014,40 +9015,130 @@ def destination_reconcile_worker(task_id: str, profile_name: str, destination: s
     except Exception as exc:live_task_update(task_id,100,"مغایرت‌گیری ناموفق بود","failed",str(exc),profile=profile_name,destination=destination,error=clean_text(exc)[:1500])
 
 
+DISPATCH_AUTO_CONCURRENCY = {"woocommerce": 4, "basalam": 2}
+_DISPATCH_RATE_LIMIT_RE = re.compile(r"(HTTP 429|Too Many Requests|rate.?limit|محدودیت نرخ)", re.I)
+
+
+def resolve_dispatch_concurrency(profile: dict[str, Any], destination: str) -> tuple[int, str]:
+    """Max parallel product sends for one destination (10.250).
+
+    Priority: the profile's manual setting (ارسال موازی در تنظیمات پروفایل،
+    1..16) → the SCRAPER4_DISPATCH_CONCURRENCY server override → automatic
+    per-destination defaults. WooCommerce REST handles 4 parallel calls
+    comfortably; Basalam rate-limits harder (the catalog reader already backs
+    off politely), so it starts at 2. Callers clamp to the product count, and
+    the worker halves the limit at runtime whenever the destination answers
+    429/rate-limit.
+    """
+    profile = profile if isinstance(profile, dict) else {}
+    raw = profile.get("dispatch_concurrency")
+    try:
+        manual = int(raw)
+    except (TypeError, ValueError):
+        manual = 0
+    if 1 <= manual <= 16:
+        return manual, "manual"
+    env = clean_text(os.environ.get("SCRAPER4_DISPATCH_CONCURRENCY"))
+    if env.isdigit() and 1 <= int(env) <= 16:
+        return int(env), "env"
+    return DISPATCH_AUTO_CONCURRENCY.get(destination, 2), "auto"
+
+
 def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict[str,Any]], destinations: list[str], woo_status: str, woo_update: bool, profile_rules: dict[str,Any], force_update: bool=False) -> None:
-    """Send every saved product for one profile, checkpointing after each destination item."""
+    """Send every saved product for one profile, checkpointing after each destination item.
+
+    10.250: products are sent in PARALLEL per destination — the manual
+    per-profile concurrency (تنظیمات پروفایل، ۱ تا ۱۶), the
+    SCRAPER4_DISPATCH_CONCURRENCY server override, or automatic
+    per-destination defaults that halve themselves when the destination
+    answers 429. Counters, live events and identity recording stay in the
+    coordinating thread, so the data file is never written concurrently.
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     started=time.time();total=max(1,len(products)*len(destinations));done=sent=failed=0;counts={x:{"sent":0,"failed":0} for x in destinations}
     try:
+        _profile_cfg=load_data().get("profiles",{}).get(profile_name) or {}
         live_task_update(task_id,1,"آماده‌سازی ارسال کامل پروفایل","running",f"پروفایل {profile_name} · {len(products)} محصول · مقصد: {'، '.join(destinations)}",profile=profile_name,total=total,done=0,sent=0,failed=0,destinations=counts,stage="sync")
+
+        def _cancelled_update()->None:
+            elapsed=max(1,int(time.time()-started));live_task_update(task_id,int(done/total*100),"ارسال توسط کاربر متوقف شد","cancelled",f"پس از {done} عملیات و {elapsed} ثانیه متوقف شد",done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=elapsed)
+
+        def _record(destination:str,label:str,index:int,product:dict[str,Any],ok:bool,message:str,result:Any,title:str,error:str)->None:
+            """Count + event + identity + progress — coordinating thread only."""
+            nonlocal done,sent,failed
+            if ok:
+                sent+=1;counts[destination]["sent"]+=1
+                if isinstance(result,dict):
+                    try:record_destination_identity(profile_name,destination,product,result)
+                    except Exception: pass
+                _ev="sync-updated" if (isinstance(result,dict) and result.get("action")=="updated") else "sync-created"
+            else:
+                failed+=1;counts[destination]["failed"]+=1;_ev="failed"
+            try:
+                live_task_event(task_id,_ev,{"title":title,"price":clean_text(product.get("price")),"link":clean_text(product.get("link")),"sourceKey":clean_text(product.get("source_key") or product.get("sourceKey")),"target":label,"action":(result.get("action") if isinstance(result,dict) else ""),"error":error},message)
+            except Exception: pass
+            done+=1;elapsed=max(.001,time.time()-started);rate=done/elapsed;remaining=int((total-done)/rate) if rate else 0
+            live_task_update(task_id,max(2,int(done/total*100)),f"{label}: محصول {index} از {len(products)}","running",message,profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=int(elapsed),eta_seconds=remaining,current_product=title)
+
         for destination in destinations:
             label="ووکامرس" if destination=="woocommerce" else "باسلام"
-            live_task_update(task_id,max(1,int(done/total*100)),f"شروع ارسال به {label}","running",f"{len(products)} محصول این پروفایل برای {label} بررسی می‌شود",stage="sync-woo" if destination=="woocommerce" else "sync-basalam")
-            for index,product in enumerate(products,1):
-                if live_task_cancelled(task_id):
-                    elapsed=max(1,int(time.time()-started));live_task_update(task_id,int(done/total*100),"ارسال توسط کاربر متوقف شد","cancelled",f"پس از {done} عملیات و {elapsed} ثانیه متوقف شد",done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=elapsed);return
+            concurrency,how=resolve_dispatch_concurrency(_profile_cfg,destination)
+            concurrency=max(1,min(concurrency,16,len(products)))
+            _how_fa="دستی" if how=="manual" else ("سرور (SCRAPER4_DISPATCH_CONCURRENCY)" if how=="env" else "خودکار")
+            live_task_update(task_id,max(1,int(done/total*100)),f"شروع ارسال به {label}","running",f"{len(products)} محصول این پروفایل برای {label} بررسی می‌شود · ارسال "+("ترتیبی" if concurrency==1 else f"موازی حداکثر {concurrency} محصول همزمان")+f" ({_how_fa})",stage="sync-woo" if destination=="woocommerce" else "sync-basalam",concurrency=concurrency)
+
+            def _send_one(index:int,product:dict[str,Any],_destination:str=destination,_label:str=label)->tuple[bool,str,Any,str,str]:
                 title=clean_text(product.get("title") or product.get("name") or f"محصول {index}")
                 try:
-                    destination_product=product_for_destination(product,profile_rules,destination);known_id=destination_identity_id(profile_name,destination,product)
+                    destination_product=product_for_destination(product,profile_rules,_destination);known_id=destination_identity_id(profile_name,_destination,product)
                     if known_id:destination_product["_destination_id"]=known_id
                     if force_update:destination_product["_force_destination_update"]=True;destination_product["_preserve_destination_status"]=True
-                    if destination=="woocommerce":result=woo_send_one(destination_product,woo_status,woo_update or force_update)
+                    if _destination=="woocommerce":result=woo_send_one(destination_product,woo_status,woo_update or force_update)
                     else:result=basalam_fanout_send(destination_product)
-                    if isinstance(result,dict):record_destination_identity(profile_name,destination,product,result)
-                    sent+=1;counts[destination]["sent"]+=1;message=f"✓ {label} · {index}/{len(products)} · {title}"
+                    message=f"✓ {_label} · {index}/{len(products)} · {title}"
                     if isinstance(result,dict) and result.get("action"):message+=f" · {result['action']}"
                     if isinstance(result,dict) and int(result.get("shop_ok") or 0)>1:message+=f" · {int(result.get('shop_ok') or 0)} غرفه"
-                    # 10.249: structured event so the counters are clickable LIVE.
-                    try:
-                        _ev="sync-updated" if (isinstance(result,dict) and result.get("action")=="updated") else "sync-created"
-                        live_task_event(task_id,_ev,{"title":title,"price":clean_text(product.get("price")),"link":clean_text(product.get("link")),"sourceKey":clean_text(product.get("source_key") or product.get("sourceKey")),"target":label,"action":(result.get("action") if isinstance(result,dict) else "")},message)
-                    except Exception: pass
+                    return True,message,result,title,""
                 except Exception as exc:
-                    failed+=1;counts[destination]["failed"]+=1;message=f"✕ {label} · {index}/{len(products)} · {title} · {clean_text(exc)[:350]}"
-                    try:
-                        live_task_event(task_id,"failed",{"title":title,"price":clean_text(product.get("price")),"link":clean_text(product.get("link")),"sourceKey":clean_text(product.get("source_key") or product.get("sourceKey")),"target":label,"error":clean_text(exc)[:300]},message)
-                    except Exception: pass
-                done+=1;elapsed=max(.001,time.time()-started);rate=done/elapsed;remaining=int((total-done)/rate) if rate else 0
-                live_task_update(task_id,max(2,int(done/total*100)),f"{label}: محصول {index} از {len(products)}","running",message,profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=int(elapsed),eta_seconds=remaining,current_product=title)
+                    return False,f"✕ {_label} · {index}/{len(products)} · {title} · {clean_text(exc)[:350]}",None,title,clean_text(exc)[:300]
+
+            if concurrency<=1:
+                for index,product in enumerate(products,1):
+                    if live_task_cancelled(task_id):
+                        _cancelled_update();return
+                    ok,message,result,title,error=_send_one(index,product)
+                    _record(destination,label,index,product,ok,message,result,title,error)
+            else:
+                # Sliding window (not submit-all): the in-flight cap can be
+                # lowered mid-run when the destination answers 429, and a stop
+                # request never leaves a long queued backlog behind.
+                limit=concurrency;reduced=False
+                pool=ThreadPoolExecutor(max_workers=concurrency,thread_name_prefix=f"dispatch-{destination}")
+                pending:dict[Any,tuple[int,dict[str,Any]]]={}
+                order=iter(list(enumerate(products,1)))
+                exhausted=False
+                try:
+                    while pending or not exhausted:
+                        if live_task_cancelled(task_id):
+                            for fut in pending:fut.cancel()
+                            _cancelled_update();return
+                        while not exhausted and len(pending)<limit:
+                            try:index,product=next(order)
+                            except StopIteration:exhausted=True;break
+                            pending[pool.submit(_send_one,index,product)]=(index,product)
+                        done_futs,_rest=wait(list(pending),timeout=0.4,return_when=FIRST_COMPLETED)
+                        for fut in done_futs:
+                            index,product=pending.pop(fut)
+                            ok,message,result,title,error=fut.result()
+                            _record(destination,label,index,product,ok,message,result,title,error)
+                            if not ok and limit>1 and _DISPATCH_RATE_LIMIT_RE.search(message or ""):
+                                _new=max(1,limit//2)
+                                if _new<limit:
+                                    limit=_new;reduced=True
+                                    live_task_update(task_id,max(2,int(done/total*100)),f"{label}: کاهش همزمانی به {limit}","running",f"مقصد محدودیت نرخ (429) داد — ارسال موازی از {concurrency} به {limit} کاهش یافت",profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,concurrency=limit)
+                finally:
+                    pool.shutdown(wait=False,cancel_futures=True)
+                live_task_update(task_id,max(2,int(done/total*100)),f"پایان ارسال موازی به {label}","running",f"{counts[destination]['sent']} موفق و {counts[destination]['failed']} خطا"+(f" · همزمانی به‌علت محدودیت نرخ به {limit} کاهش یافت" if reduced else ""),profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,concurrency=limit)
         status="completed";step="ارسال کامل پروفایل پایان یافت";detail=f"{sent} عملیات موفق و {failed} خطا در {int(time.time()-started)} ثانیه"
         # 10.249: optional automatic reconcile after the profile's sync —
         # the per-profile «مغایرت‌گیری خودکار پس از همگام‌سازی» toggle.
