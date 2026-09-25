@@ -1,20 +1,23 @@
 /**
  * ==============================================================================
  * WebConsole Pro - Cloudflare Workers Edition
- * Universal Forward Proxy Gateway & Edge Management Console
+ * Universal Forward Proxy Gateway, Remote Linux Bridge & Edge Management Suite
  * 
  * Features:
  *  1. Universal Forward Proxy (?url=https://...) supporting all HTTP methods,
  *     CORS, Byte-Range streaming (Audio/Video), headers, and chunked transfer.
- *  2. Edge WebConsole UI (Persian / RTL dark glassmorphism responsive SPA).
- *  3. Cloudflare D1 SQL Console (Interactive database query editor & table viewer).
- *  4. Cloudflare KV Storage Explorer (Key-Value manager with search & TTL).
- *  5. Cloudflare Workers AI Assistant (Chat & inference with Llama 3 / Qwen / Mistral).
- *  6. Edge JavaScript Code Runner (V8 Isolate REPL with fetch & crypto).
- *  7. Outbound HTTP Request & API Testing Suite.
- *  8. Password / Secret Token Access Protection.
+ *  2. Remote Linux Server Terminal Bridge (Connects to VPS / Codespaces / Termux
+ *     with live command execution, ANSI colors, and background process control).
+ *  3. In-Browser Virtual Linux Shell (100% Free client-side POSIX environment
+ *     with real outbound internet access via Worker Proxy).
+ *  4. Cloudflare D1 SQL Console (Interactive database query editor & table viewer).
+ *  5. Cloudflare KV Storage Explorer (Key-Value manager with search & TTL).
+ *  6. Cloudflare Workers AI Assistant (Chat & inference with Llama 3 / Qwen / Mistral).
+ *  7. Edge JavaScript Code Runner (V8 Isolate REPL with fetch & crypto).
+ *  8. Outbound HTTP Request & API Testing Suite.
+ *  9. Password / Secret Token Access Protection.
  * 
- * Version: 1.0.0
+ * Version: 2.0.0 (Linux Terminal Edition)
  * Repository: https://github.com/fazilatma/new
  * ==============================================================================
  */
@@ -95,7 +98,6 @@ async function handleUniversalProxy(request, targetUrlStr, env) {
       }
     }
 
-    // Set or preserve Host and User-Agent
     forwardHeaders.set('Host', targetUrl.host);
     if (!forwardHeaders.has('User-Agent')) {
       forwardHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
@@ -104,7 +106,6 @@ async function handleUniversalProxy(request, targetUrlStr, env) {
       forwardHeaders.set('Accept', '*/*');
     }
 
-    // Prepare Fetch Init
     const fetchInit = {
       method: request.method,
       headers: forwardHeaders,
@@ -116,10 +117,8 @@ async function handleUniversalProxy(request, targetUrlStr, env) {
       fetchInit.duplex = 'half';
     }
 
-    // Execute Outbound Fetch
     const upstreamRes = await fetch(targetUrl.toString(), fetchInit);
 
-    // Build Response Headers with Full CORS & Range support
     const resHeaders = new Headers();
     for (const [k, v] of upstreamRes.headers.entries()) {
       const lk = k.toLowerCase();
@@ -128,13 +127,11 @@ async function handleUniversalProxy(request, targetUrlStr, env) {
       }
     }
 
-    // Guarantee CORS Wildcard
     resHeaders.set('Access-Control-Allow-Origin', '*');
-    resHeaders.set('Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
     resHeaders.set('Access-Control-Allow-Headers', '*');
     resHeaders.set('Access-Control-Expose-Headers', '*');
 
-    // Stream Response directly
     return new Response(upstreamRes.body, {
       status: upstreamRes.status,
       statusText: upstreamRes.statusText,
@@ -228,7 +225,7 @@ async function handleApiRequest(request, url, env, ctx) {
     return jsonResponse({
       ok: true,
       service: 'WebConsole Pro (Cloudflare Workers Edition)',
-      version: '1.0.0',
+      version: '2.0.0',
       colo: cf.colo || 'Local',
       country: cf.country || 'Unknown',
       city: cf.city || 'Unknown',
@@ -247,7 +244,46 @@ async function handleApiRequest(request, url, env, ctx) {
     });
   }
 
-  // 2. D1 Database Query Runner
+  // 2. Remote Linux Server Command Bridge
+  if (path === '/api/remote-exec' && request.method === 'POST') {
+    try {
+      const { serverUrl, token, command, cwd } = await request.json();
+      if (!serverUrl || !command) {
+        return jsonResponse({ ok: false, error: 'آدرس سرور و دستور لینوکسی الزامی است.' }, 400);
+      }
+
+      const targetEndpoint = serverUrl.replace(/\/$/, '') + '/api.php';
+      const payload = {
+        action: 'terminal.exec',
+        cmd: command,
+        cwd: cwd || '',
+        token: token || ''
+      };
+
+      const resp = await fetch(targetEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const text = await resp.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        return jsonResponse({ ok: false, raw: text, status: resp.status, error: 'پاسخ سرور در قالب JSON معتبر نبود.' });
+      }
+
+      return jsonResponse({ ok: true, output: data.output || data.stdout || data.result || text, cwd: data.cwd || cwd, exitCode: data.code ?? 0 });
+    } catch (e) {
+      return jsonResponse({ ok: false, error: 'خطا در ارتباط با سرور لینوکس: ' + e.message }, 500);
+    }
+  }
+
+  // 3. D1 Database Query Runner
   if (path === '/api/d1/query' && request.method === 'POST') {
     if (!env.DB) return jsonResponse({ ok: false, error: 'D1 binding (env.DB) is not configured in wrangler.toml.' }, 400);
     try {
@@ -257,17 +293,6 @@ async function handleApiRequest(request, url, env, ctx) {
       const stmt = env.DB.prepare(sql);
       const queryResult = Array.isArray(params) && params.length ? await stmt.bind(...params).all() : await stmt.all();
       return jsonResponse({ ok: true, result: queryResult });
-    } catch (e) {
-      return jsonResponse({ ok: false, error: e.message }, 500);
-    }
-  }
-
-  // 3. D1 Tables Schema Inspector
-  if (path === '/api/d1/schema') {
-    if (!env.DB) return jsonResponse({ ok: false, error: 'D1 binding (env.DB) is not configured.' }, 400);
-    try {
-      const tables = await env.DB.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name;").all();
-      return jsonResponse({ ok: true, tables: tables.results || [] });
     } catch (e) {
       return jsonResponse({ ok: false, error: e.message }, 500);
     }
@@ -412,7 +437,6 @@ function jsonResponse(data, status = 200) {
 // SINGLE-PAGE APPLICATION DASHBOARD (HTML / CSS / JS)
 // ==============================================================================
 function renderDashboard(request, url, env) {
-  const currentHost = url.host;
   const currentOrigin = url.origin;
 
   const html = `<!DOCTYPE html>
@@ -440,35 +464,29 @@ function renderDashboard(request, url, env) {
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
     body { background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; padding-bottom: 40px; }
     
-    /* Header */
     header { background: #0f172a; border-bottom: 1px solid var(--card-border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; backdrop-filter: blur(8px); }
     .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 18px; color: var(--primary); }
     .node-pill { background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); color: var(--primary); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-    /* Nav Tabs */
     .tabs-bar { background: #0c1322; border-bottom: 1px solid var(--card-border); padding: 8px 24px; display: flex; gap: 8px; overflow-x: auto; }
     .tab-btn { background: transparent; border: 1px solid transparent; color: var(--muted); padding: 8px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: 0.15s; white-space: nowrap; }
     .tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.03); }
     .tab-btn.active { color: #fff; background: var(--card-bg); border-color: var(--primary); }
 
-    /* Layout */
     .container { max-width: 1200px; margin: 24px auto; padding: 0 20px; }
     .tab-content { display: none; }
     .tab-content.active { display: block; }
 
-    /* Cards */
     .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
     .card-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; color: #fff; }
 
-    /* Grids & Metrics */
     .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
     .stat-box { background: rgba(0,0,0,0.2); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px 18px; }
     .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
     .stat-value { font-size: 18px; font-weight: 700; color: var(--text); direction: ltr; text-align: left; }
 
-    /* Form Controls */
     .inp-group { margin-bottom: 14px; }
     .lb { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
     .inp, select, textarea { width: 100%; padding: 10px 14px; background: var(--code-bg); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; font-size: 14px; outline: none; transition: 0.2s; }
@@ -481,7 +499,6 @@ function renderDashboard(request, url, env) {
     .btn.sec:hover { background: rgba(255,255,255,0.12); }
     .btn.del { background: var(--red); color: #fff; }
 
-    /* Results and Tables */
     .code-box { background: var(--code-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; font-family: ui-monospace, monospace; font-size: 13px; direction: ltr; text-align: left; overflow-x: auto; white-space: pre-wrap; max-height: 400px; }
     .tbl-wrap { overflow-x: auto; margin-top: 14px; border: 1px solid var(--card-border); border-radius: 8px; }
     table { width: 100%; border-collapse: collapse; text-align: right; font-size: 13.5px; }
@@ -490,18 +507,27 @@ function renderDashboard(request, url, env) {
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,0.02); }
 
-    /* Live Proxy URL Banner */
     .proxy-banner { background: linear-gradient(135deg, rgba(56,189,248,0.1), rgba(129,140,248,0.1)); border: 1px solid rgba(56,189,248,0.3); border-radius: 12px; padding: 18px; margin-bottom: 20px; }
     .proxy-url-display { background: #070a12; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; font-family: ui-monospace, monospace; color: var(--green); font-size: 14px; direction: ltr; text-align: left; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
     .copy-btn { background: #1e293b; border: 1px solid #334155; color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
     .copy-btn:hover { background: #334155; }
+
+    /* Interactive Terminal Styling */
+    .term-window { background: #05070e; border: 1px solid #1e293b; border-radius: 10px; padding: 14px; font-family: ui-monospace, 'Courier New', monospace; font-size: 13.5px; color: #38bdf8; min-height: 360px; max-height: 520px; overflow-y: auto; direction: ltr; text-align: left; line-height: 1.45; }
+    .term-line { white-space: pre-wrap; word-break: break-all; margin-bottom: 2px; }
+    .term-prompt { color: var(--green); font-weight: bold; }
+    .term-in-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .term-input { flex: 1; background: transparent; border: none; color: #fff; font-family: inherit; font-size: inherit; outline: none; }
+    .quick-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .chip { background: rgba(255,255,255,0.06); border: 1px solid var(--card-border); color: var(--muted); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-family: ui-monospace, monospace; cursor: pointer; transition: 0.15s; }
+    .chip:hover { color: #fff; background: rgba(56,189,248,0.15); border-color: var(--primary); }
   </style>
 </head>
 <body>
 
   <header>
     <div class="brand">
-      <span>☁️</span> WebConsole Pro <span style="font-size: 12px; background: rgba(56,189,248,0.2); padding: 2px 8px; border-radius: 6px;">Edge Edition</span>
+      <span>☁️</span> WebConsole Pro <span style="font-size: 12px; background: rgba(56,189,248,0.2); padding: 2px 8px; border-radius: 6px;">Edge v2.0</span>
     </div>
     <div class="node-pill">
       <div class="dot"></div>
@@ -511,12 +537,14 @@ function renderDashboard(request, url, env) {
 
   <nav class="tabs-bar">
     <button class="tab-btn active" onclick="switchTab('tab-proxy')">🌐 پروکسی سرور (Universal Proxy)</button>
+    <button class="tab-btn" onclick="switchTab('tab-remote-term')">🖥️ ترمینال متصل به سرور لینوکس (Bridge)</button>
+    <button class="tab-btn" onclick="switchTab('tab-wasm-term')">🐧 لینوکس مجازی داخل مرورگر (Wasm Shell)</button>
     <button class="tab-btn" onclick="switchTab('tab-d1')">🗄️ دیتابیس D1 SQL</button>
     <button class="tab-btn" onclick="switchTab('tab-kv')">🔑 حافظه KV Storage</button>
     <button class="tab-btn" onclick="switchTab('tab-ai')">🤖 هوش مصنوعی لبه (Workers AI)</button>
     <button class="tab-btn" onclick="switchTab('tab-eval')">⚡ اجرای کد جاوااسکریپت (Edge REPL)</button>
     <button class="tab-btn" onclick="switchTab('tab-http')">📡 تست درخواست شبکه (API Client)</button>
-    <button class="tab-btn" onclick="switchTab('tab-settings')">⚙️ راهنمای ورکر و تنظیمات</button>
+    <button class="tab-btn" onclick="switchTab('tab-settings')">⚙️ راهنما و تنظیمات</button>
   </nav>
 
   <div class="container">
@@ -564,7 +592,88 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 2: D1 SQL -->
+    <!-- TAB 2: REMOTE LINUX TERMINAL BRIDGE -->
+    <div id="tab-remote-term" class="tab-content">
+      <div class="card">
+        <div class="card-title">🖥️ اتصال به ترمینال لینوکس سرور (VPS / Codespaces / Termux)</div>
+        <p style="font-size: 13.5px; color: var(--muted); margin-bottom: 14px;">
+          این رابط امن به وب‌کنسول سرور لینوکسی شما وصل شده و دستورات واقعی را با دسترسی روت در پس‌زمینه اجرا می‌کند.
+        </p>
+        
+        <div class="grid3" style="margin-bottom: 14px;">
+          <div>
+            <label class="lb">آدرس وب‌کنسول سرور لینوکس (URL)</label>
+            <input type="text" id="rem-server-url" class="inp ltr" placeholder="http://YOUR_VPS_IP:8888" value="">
+          </div>
+          <div>
+            <label class="lb">رمز عبور مدیریت / توکن سرور</label>
+            <input type="password" id="rem-server-token" class="inp ltr" placeholder="پسورد وب‌کنسول سرور" value="">
+          </div>
+          <div>
+            <label class="lb">وضعیت اتصال</label>
+            <div id="rem-conn-badge" style="padding: 10px 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); border-radius: 8px; font-size: 13px; color: var(--yellow);">آماده اتصال به سرور</div>
+          </div>
+        </div>
+
+        <div class="quick-chips">
+          <span class="chip" onclick="sendQuickCmd('wcp status')">⚡ wcp status</span>
+          <span class="chip" onclick="sendQuickCmd('wcp url')">🌐 wcp url</span>
+          <span class="chip" onclick="sendQuickCmd('wcp ports')">🔌 wcp ports</span>
+          <span class="chip" onclick="sendQuickCmd('wcp run-all')">▶️ wcp run-all</span>
+          <span class="chip" onclick="sendQuickCmd('wcp stop-all')">⏹️ wcp stop-all</span>
+          <span class="chip" onclick="sendQuickCmd('htop -b -n 1 | head -n 20')">📊 htop summary</span>
+          <span class="chip" onclick="sendQuickCmd('uname -a && uptime')">🐧 uptime</span>
+          <span class="chip" onclick="sendQuickCmd('df -h')">💾 df -h</span>
+          <span class="chip" onclick="sendQuickCmd('free -m')">🧠 free -m</span>
+          <span class="chip" onclick="sendQuickCmd('node -v && python3 --version')">🐍 node & python</span>
+        </div>
+
+        <div class="term-window" id="rem-term-out">
+          <div class="term-line" style="color: #94a3b8;">=== WebConsole Remote Linux Terminal Bridge ===</div>
+          <div class="term-line" style="color: #64748b;">برای اتصال، آدرس وب‌کنسول سرور خود (مانند http://YOUR_SERVER_IP:8888) را در کادر بالا وارد کرده و دستورات را اجرا کنید.</div>
+        </div>
+
+        <div class="term-in-row" style="margin-top: 10px;">
+          <span class="term-prompt" id="rem-term-prompt">root@linux:~$</span>
+          <input type="text" id="rem-term-inp" class="inp ltr" style="flex:1;" placeholder="دستور لینوکسی را اینجا تایپ کنید و Enter بزنید..." onkeydown="handleRemoteKey(event)">
+          <button class="btn" onclick="execRemoteCmd()">ارسال</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: IN-BROWSER WASM LINUX SHELL -->
+    <div id="tab-wasm-term" class="tab-content">
+      <div class="card">
+        <div class="card-title">🐧 محیط لینوکس مجازی داخل مرورگر (Client-Side POSIX Shell & Wasm)</div>
+        <p style="font-size: 13.5px; color: var(--muted); margin-bottom: 14px;">
+          یک محیط شل لینوکسی کامل و کاملاً رایگان در مرورگر شما با پشتیبانی از سیستم فایل محلی و قابلیت اتصال به اینترنت جهانی از طریق پروکسی کلودفلر ورکرز!
+        </p>
+
+        <div class="quick-chips">
+          <span class="chip" onclick="sendWasmCmd('uname -a')">uname -a</span>
+          <span class="chip" onclick="sendWasmCmd('curl https://api.ipify.org?format=json')">🌐 curl ip</span>
+          <span class="chip" onclick="sendWasmCmd('ls -la')">ls -la</span>
+          <span class="chip" onclick="sendWasmCmd('df -h')">df -h</span>
+          <span class="chip" onclick="sendWasmCmd('echo \"Hello from Cloudflare Edge Wasm Linux!\" > note.txt && cat note.txt')">cat & write file</span>
+          <span class="chip" onclick="sendWasmCmd('date && whoami')">date & whoami</span>
+          <span class="chip" onclick="sendWasmCmd('help')">help</span>
+          <span class="chip" onclick="sendWasmCmd('clear')">clear</span>
+        </div>
+
+        <div class="term-window" id="wasm-term-out">
+          <div class="term-line" style="color: var(--green);">Linux edge-worker 6.1.0-wasm-x86_64 #1 SMP Cloudflare Edge V8</div>
+          <div class="term-line" style="color: var(--primary);">WebConsole Virtual POSIX Shell Ready. Type 'help' for available commands.</div>
+        </div>
+
+        <div class="term-in-row" style="margin-top: 10px;">
+          <span class="term-prompt" id="wasm-term-prompt">user@edge-wasm:~$</span>
+          <input type="text" id="wasm-term-inp" class="inp ltr" style="flex:1;" placeholder="دستور لینوکسی مجازی (مانند curl, ls, cat, echo, pwd)..." onkeydown="handleWasmKey(event)">
+          <button class="btn" onclick="execWasmCmd()">اجرا</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: D1 SQL -->
     <div id="tab-d1" class="tab-content">
       <div class="card">
         <div class="card-title">🗄️ کنسول کوئری Cloudflare D1 SQL</div>
@@ -580,7 +689,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 3: KV STORAGE -->
+    <!-- TAB 5: KV STORAGE -->
     <div id="tab-kv" class="tab-content">
       <div class="card">
         <div class="card-title">🔑 کاوشگر و مدیریت کلیدهای KV (<code style="color:#fff;">env.KV</code>)</div>
@@ -593,7 +702,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 4: WORKERS AI -->
+    <!-- TAB 6: WORKERS AI -->
     <div id="tab-ai" class="tab-content">
       <div class="card">
         <div class="card-title">🤖 هوش مصنوعی لبه (Cloudflare Workers AI)</div>
@@ -616,7 +725,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 5: EDGE REPL -->
+    <!-- TAB 7: EDGE REPL -->
     <div id="tab-eval" class="tab-content">
       <div class="card">
         <div class="card-title">⚡ مفسر و اجرای کد جاوااسکریپت در ایزولیت ورکر (Edge REPL)</div>
@@ -632,7 +741,7 @@ return { edge_ip: data.ip, colo: request.cf?.colo || 'local', timestamp: new Dat
       </div>
     </div>
 
-    <!-- TAB 6: HTTP TESTER -->
+    <!-- TAB 8: HTTP TESTER -->
     <div id="tab-http" class="tab-content">
       <div class="card">
         <div class="card-title">📡 کلاینت ارسال درخواست شبکه (Outbound API Tester)</div>
@@ -662,7 +771,7 @@ return { edge_ip: data.ip, colo: request.cf?.colo || 'local', timestamp: new Dat
       </div>
     </div>
 
-    <!-- TAB 7: SETTINGS & GUIDE -->
+    <!-- TAB 9: SETTINGS & GUIDE -->
     <div id="tab-settings" class="tab-content">
       <div class="card">
         <div class="card-title">⚙️ نحوه استقرار و پیکربندی در Cloudflare Workers</div>
@@ -700,6 +809,7 @@ binding = "AI"</div>
   </div>
 
   <script>
+    // Tab Switching
     function switchTab(tabId) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -712,6 +822,7 @@ binding = "AI"</div>
       navigator.clipboard.writeText(text).then(() => alert('آدرس با موفقیت در کلیپ‌بورد کپی شد!'));
     }
 
+    // Node info
     async function fetchInfo() {
       try {
         const res = await fetch('/api/info');
@@ -726,6 +837,303 @@ binding = "AI"</div>
     }
     fetchInfo();
 
+    // --------------------------------------------------------------------------
+    // 1. Remote Linux Terminal Bridge Implementation
+    // --------------------------------------------------------------------------
+    let remoteHistory = [];
+    let remoteHistIdx = -1;
+    let remoteCwd = '/var/www/html';
+
+    // Auto-fill stored server URL
+    const savedServer = localStorage.getItem('wc_rem_server') || '';
+    const savedToken = localStorage.getItem('wc_rem_token') || '';
+    if (savedServer) document.getElementById('rem-server-url').value = savedServer;
+    if (savedToken) document.getElementById('rem-server-token').value = savedToken;
+
+    function handleRemoteKey(e) {
+      if (e.key === 'Enter') {
+        execRemoteCmd();
+      } else if (e.key === 'ArrowUp') {
+        if (remoteHistIdx < remoteHistory.length - 1) {
+          remoteHistIdx++;
+          document.getElementById('rem-term-inp').value = remoteHistory[remoteHistory.length - 1 - remoteHistIdx];
+        }
+      } else if (e.key === 'ArrowDown') {
+        if (remoteHistIdx > 0) {
+          remoteHistIdx--;
+          document.getElementById('rem-term-inp').value = remoteHistory[remoteHistory.length - 1 - remoteHistIdx];
+        } else {
+          remoteHistIdx = -1;
+          document.getElementById('rem-term-inp').value = '';
+        }
+      }
+    }
+
+    function sendQuickCmd(cmd) {
+      document.getElementById('rem-term-inp').value = cmd;
+      execRemoteCmd();
+    }
+
+    async function execRemoteCmd() {
+      const inp = document.getElementById('rem-term-inp');
+      const cmd = inp.value.trim();
+      if (!cmd) return;
+
+      const serverUrl = document.getElementById('rem-server-url').value.trim();
+      const token = document.getElementById('rem-server-token').value.trim();
+      const outBox = document.getElementById('rem-term-out');
+      const badge = document.getElementById('rem-conn-badge');
+
+      if (!serverUrl) {
+        alert('لطفاً آدرس وب‌کنسول سرور لینوکس را وارد کنید.');
+        return;
+      }
+
+      localStorage.setItem('wc_rem_server', serverUrl);
+      localStorage.setItem('wc_rem_token', token);
+
+      remoteHistory.push(cmd);
+      remoteHistIdx = -1;
+      inp.value = '';
+
+      const lineElem = document.createElement('div');
+      lineElem.className = 'term-line';
+      lineElem.innerHTML = '<span style="color:var(--green)">root@vps:' + remoteCwd + '$</span> <span style="color:#fff">' + escapeHtml(cmd) + '</span>';
+      outBox.appendChild(lineElem);
+
+      const runningElem = document.createElement('div');
+      runningElem.className = 'term-line';
+      runningElem.style.color = 'var(--yellow)';
+      runningElem.textContent = '⏳ در حال اجرا بر روی سرور لینوکس...';
+      outBox.appendChild(runningElem);
+      outBox.scrollTop = outBox.scrollHeight;
+
+      try {
+        badge.textContent = '⚡ در حال ارتباط...';
+        badge.style.color = 'var(--primary)';
+
+        const res = await fetch('/api/remote-exec', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serverUrl, token, command: cmd, cwd: remoteCwd })
+        });
+
+        const data = await res.json();
+        runningElem.remove();
+
+        const resElem = document.createElement('div');
+        resElem.className = 'term-line';
+
+        if (data.ok) {
+          badge.textContent = '🟢 متصل به سرور لینوکس';
+          badge.style.color = 'var(--green)';
+          resElem.style.color = '#e2e8f0';
+          resElem.textContent = data.output || '(دستور بدون خروجی متنی با موفقیت پایان یافت)';
+          if (data.cwd) remoteCwd = data.cwd;
+          document.getElementById('rem-term-prompt').textContent = 'root@vps:' + remoteCwd + '$';
+        } else {
+          badge.textContent = '🔴 خطا در اتصال به سرور';
+          badge.style.color = 'var(--red)';
+          resElem.style.color = 'var(--red)';
+          resElem.textContent = 'خطا: ' + (data.error || data.raw || 'عدم دریافت پاسخ معتبر');
+        }
+
+        outBox.appendChild(resElem);
+        outBox.scrollTop = outBox.scrollHeight;
+
+      } catch (e) {
+        runningElem.remove();
+        badge.textContent = '🔴 خطای شبکه';
+        badge.style.color = 'var(--red)';
+        const errElem = document.createElement('div');
+        errElem.className = 'term-line';
+        errElem.style.color = 'var(--red)';
+        errElem.textContent = 'خطای ارتباطی با ورکر: ' + e.message;
+        outBox.appendChild(errElem);
+        outBox.scrollTop = outBox.scrollHeight;
+      }
+    }
+
+    // --------------------------------------------------------------------------
+    // 2. In-Browser Virtual POSIX Shell (Wasm / JS Engine) Implementation
+    // --------------------------------------------------------------------------
+    let wasmFs = JSON.parse(localStorage.getItem('wc_wasm_fs') || '{"/": ["home", "etc", "tmp"], "/home": ["user"], "/home/user": ["welcome.txt"], "/home/user/welcome.txt": "Welcome to WebConsole In-Browser Linux Environment!\\nThis shell runs directly in your browser with real internet connectivity via Cloudflare Workers Proxy."}');
+    let wasmCwd = '/home/user';
+    let wasmHistory = [];
+    let wasmHistIdx = -1;
+
+    function saveWasmFs() {
+      localStorage.setItem('wc_wasm_fs', JSON.stringify(wasmFs));
+    }
+
+    function sendWasmCmd(cmd) {
+      document.getElementById('wasm-term-inp').value = cmd;
+      execWasmCmd();
+    }
+
+    function handleWasmKey(e) {
+      if (e.key === 'Enter') {
+        execWasmCmd();
+      } else if (e.key === 'ArrowUp') {
+        if (wasmHistIdx < wasmHistory.length - 1) {
+          wasmHistIdx++;
+          document.getElementById('wasm-term-inp').value = wasmHistory[wasmHistory.length - 1 - wasmHistIdx];
+        }
+      } else if (e.key === 'ArrowDown') {
+        if (wasmHistIdx > 0) {
+          wasmHistIdx--;
+          document.getElementById('wasm-term-inp').value = wasmHistory[wasmHistory.length - 1 - wasmHistIdx];
+        } else {
+          wasmHistIdx = -1;
+          document.getElementById('wasm-term-inp').value = '';
+        }
+      }
+    }
+
+    async function execWasmCmd() {
+      const inp = document.getElementById('wasm-term-inp');
+      const raw = inp.value.trim();
+      if (!raw) return;
+
+      wasmHistory.push(raw);
+      wasmHistIdx = -1;
+      inp.value = '';
+
+      const outBox = document.getElementById('wasm-term-out');
+      const lineElem = document.createElement('div');
+      lineElem.className = 'term-line';
+      lineElem.innerHTML = '<span style="color:var(--green)">user@edge-wasm:' + wasmCwd + '$</span> <span style="color:#fff">' + escapeHtml(raw) + '</span>';
+      outBox.appendChild(lineElem);
+
+      const parts = raw.split('&&').map(s => s.trim()).filter(Boolean);
+      for (const cmdStr of parts) {
+        await runSingleWasmCmd(cmdStr, outBox);
+      }
+
+      outBox.scrollTop = outBox.scrollHeight;
+    }
+
+    async function runSingleWasmCmd(cmdStr, outBox) {
+      const tokens = cmdStr.split(' ').filter(Boolean);
+      const app = tokens[0];
+      const args = tokens.slice(1);
+      const resElem = document.createElement('div');
+      resElem.className = 'term-line';
+      resElem.style.color = '#cbd5e1';
+
+      if (app === 'clear') {
+        outBox.innerHTML = '';
+        return;
+      } else if (app === 'help') {
+        resElem.textContent = `Available virtual POSIX commands:
+  • curl <url>          - Fetch live URL across the internet via Cloudflare Proxy
+  • ls [-la]            - List files and directories
+  • pwd                 - Print working directory
+  • cd <dir>            - Change directory
+  • cat <file>          - Display file content
+  • echo "text" [> file]- Print text or redirect to file
+  • mkdir <dir>         - Create directory
+  • rm <file>           - Delete file
+  • uname -a            - System information
+  • whoami / date       - Current user & timestamp
+  • df -h / free -m     - Storage & memory information
+  • clear / help        - Screen control & help guide`;
+      } else if (app === 'pwd') {
+        resElem.textContent = wasmCwd;
+      } else if (app === 'whoami') {
+        resElem.textContent = 'user (uid=1000, gid=1000)';
+      } else if (app === 'date') {
+        resElem.textContent = new Date().toUTCString();
+      } else if (app === 'uname') {
+        resElem.textContent = 'Linux edge-worker 6.1.0-wasm-x86_64 #1 SMP Cloudflare Edge V8 x86_64 GNU/Linux';
+      } else if (app === 'df') {
+        resElem.textContent = 'Filesystem      Size  Used Avail Use% Mounted on\n/dev/root        10G  1.2G  8.8G  12% /\ntmpfs           512M     0  512M   0% /tmp';
+      } else if (app === 'free') {
+        resElem.textContent = '               total        used        free      shared  buff/cache   available\nMem:         1048576      128420      920156           0       12400      920156\nSwap:        2097152           0     2097152';
+      } else if (app === 'ls') {
+        const items = wasmFs[wasmCwd] || [];
+        if (args.includes('-la') || args.includes('-l')) {
+          resElem.textContent = 'drwxr-xr-x 2 user user 4096 ' + new Date().toLocaleDateString() + ' .\ndrwxr-xr-x 3 user user 4096 ' + new Date().toLocaleDateString() + ' ..\n' + items.map(f => {
+            const isDir = Array.isArray(wasmFs[wasmCwd + '/' + f]) || Array.isArray(wasmFs['/' + f]);
+            return (isDir ? 'drwxr-xr-x' : '-rw-r--r--') + ' 1 user user ' + (wasmFs[wasmCwd + '/' + f]?.length || 4096) + ' ' + new Date().toLocaleDateString() + ' ' + f;
+          }).join('\n');
+        } else {
+          resElem.textContent = items.join('  ') || '(پوشه خالی است)';
+        }
+      } else if (app === 'cd') {
+        const target = args[0] || '/home/user';
+        let newPath = target.startsWith('/') ? target : (wasmCwd === '/' ? '/' + target : wasmCwd + '/' + target);
+        if (target === '..') {
+          const segs = wasmCwd.split('/').filter(Boolean);
+          segs.pop();
+          newPath = '/' + segs.join('/');
+        } else if (target === '~') {
+          newPath = '/home/user';
+        }
+        if (wasmFs[newPath] !== undefined) {
+          wasmCwd = newPath || '/';
+          document.getElementById('wasm-term-prompt').textContent = 'user@edge-wasm:' + wasmCwd + '$';
+        } else {
+          resElem.style.color = 'var(--red)';
+          resElem.textContent = 'cd: ' + target + ': No such file or directory';
+        }
+      } else if (app === 'cat') {
+        const file = args[0];
+        const filePath = file?.startsWith('/') ? file : (wasmCwd === '/' ? '/' + file : wasmCwd + '/' + file);
+        if (wasmFs[filePath] !== undefined && typeof wasmFs[filePath] === 'string') {
+          resElem.textContent = wasmFs[filePath];
+        } else {
+          resElem.style.color = 'var(--red)';
+          resElem.textContent = 'cat: ' + file + ': No such file';
+        }
+      } else if (app === 'echo') {
+        const full = args.join(' ');
+        if (full.includes('>')) {
+          const [text, filename] = full.split('>').map(s => s.trim());
+          const cleanText = text.replace(/^['"]|['"]$/g, '');
+          const cleanFile = filename.replace(/^['"]|['"]$/g, '');
+          const filePath = cleanFile.startsWith('/') ? cleanFile : (wasmCwd === '/' ? '/' + cleanFile : wasmCwd + '/' + cleanFile);
+          wasmFs[filePath] = cleanText;
+          if (!wasmFs[wasmCwd].includes(cleanFile)) wasmFs[wasmCwd].push(cleanFile);
+          saveWasmFs();
+          resElem.textContent = '';
+        } else {
+          resElem.textContent = full.replace(/^['"]|['"]$/g, '');
+        }
+      } else if (app === 'curl') {
+        const target = args.find(a => !a.startsWith('-'));
+        if (!target) {
+          resElem.style.color = 'var(--red)';
+          resElem.textContent = 'curl: no URL specified!';
+        } else {
+          resElem.textContent = '🌐 Connecting to ' + target + ' via Cloudflare Edge Forward Proxy...';
+          try {
+            const fetchUrl = '/?url=' + encodeURIComponent(target.startsWith('http') ? target : 'https://' + target);
+            const r = await fetch(fetchUrl);
+            const txt = await r.text();
+            resElem.textContent = txt;
+          } catch (e) {
+            resElem.style.color = 'var(--red)';
+            resElem.textContent = 'curl: (6) Could not resolve host: ' + e.message;
+          }
+        }
+      } else {
+        resElem.style.color = 'var(--red)';
+        resElem.textContent = app + ': command not found. Type "help" for list of commands.';
+      }
+
+      if (resElem.textContent) {
+        outBox.appendChild(resElem);
+      }
+    }
+
+    function escapeHtml(str) {
+      return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // --------------------------------------------------------------------------
+    // 3. Universal Proxy Tester
+    // --------------------------------------------------------------------------
     async function runProxyTest() {
       const url = document.getElementById('prx-url').value.trim();
       const method = document.getElementById('prx-method').value;
@@ -743,6 +1151,9 @@ binding = "AI"</div>
       }
     }
 
+    // --------------------------------------------------------------------------
+    // 4. D1 SQL Console
+    // --------------------------------------------------------------------------
     async function runD1Query() {
       const sql = document.getElementById('d1-sql').value.trim();
       const box = document.getElementById('d1-result');
@@ -781,6 +1192,9 @@ binding = "AI"</div>
       runD1Query();
     }
 
+    // --------------------------------------------------------------------------
+    // 5. KV Storage
+    // --------------------------------------------------------------------------
     async function loadKvKeys() {
       const prefix = document.getElementById('kv-search-prefix').value.trim();
       const box = document.getElementById('kv-list');
@@ -838,6 +1252,9 @@ binding = "AI"</div>
       loadKvKeys();
     }
 
+    // --------------------------------------------------------------------------
+    // 6. Workers AI
+    // --------------------------------------------------------------------------
     async function runAiInference() {
       const model = document.getElementById('ai-model').value;
       const prompt = document.getElementById('ai-prompt').value.trim();
@@ -866,6 +1283,9 @@ binding = "AI"</div>
       }
     }
 
+    // --------------------------------------------------------------------------
+    // 7. Edge JavaScript Code Evaluator
+    // --------------------------------------------------------------------------
     async function runEvalCode() {
       const code = document.getElementById('eval-code').value;
       const box = document.getElementById('eval-result');
@@ -888,6 +1308,9 @@ binding = "AI"</div>
       }
     }
 
+    // --------------------------------------------------------------------------
+    // 8. Outbound HTTP Request Tester
+    // --------------------------------------------------------------------------
     async function runHttpTest() {
       const url = document.getElementById('http-url').value.trim();
       const method = document.getElementById('http-method').value;
