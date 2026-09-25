@@ -4,7 +4,7 @@
 # Modes: 1) Start Server (Default) | 2) Quick Update | 3) Full Installation
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 1.9.2 | Repository: fazilatma/new
+# Version: 2.8.2 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail
@@ -37,7 +37,11 @@ fi
 # Auto-escalate with sudo only on standard Linux (Skip on Termux userland)
 if [ "$IS_TERMUX" = "false" ] && [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
-        exec sudo -E bash "$0" "$@"
+        if [ -f "$0" ]; then
+            exec sudo -E bash "$0" "$@"
+        else
+            exec sudo -E bash -c "$(curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh)" -- "$@"
+        fi
     else
         log_err "This installation script must be executed as root or with sudo."
         exit 1
@@ -181,24 +185,38 @@ echo -e "  ${CLR_GREEN}${CLR_BOLD}[1] ⚡ Start WebConsole Server (Default)${CLR
 echo -e "      • Starts persistent background server on Port 8888 & outputs live URLs (~1s)"
 echo -e ""
 echo -e "  ${CLR_CYAN}${CLR_BOLD}[2] 🔄 Quick Update WebConsole & wcp CLI${CLR_RESET}"
-echo -e "      • Downloads latest WebConsole Pro v1.9.2 and wcp CLI from GitHub (~3s)"
+echo -e "      • Downloads latest WebConsole Pro v2.8.2 and wcp CLI from GitHub (~3s)"
 echo -e ""
 echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full System Installation${CLR_RESET}"
 echo -e "      • Installs Web Server, Node 22 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
 echo -e "${CLR_CYAN}================================================================================${CLR_RESET}"
 
-MODE="1"
-if [ -e /dev/tty ]; then
-    echo -ne "${CLR_BOLD}👉 Select an option [1, 2, or 3] (Auto-selects 1 in 8s): ${CLR_RESET}"
-    read -r -t 8 input_choice < /dev/tty || input_choice="1"
+MODE_INPUT=""
+if [ -n "${1:-}" ]; then
+    MODE_INPUT="$1"
+elif [ -n "${MODE:-}" ]; then
+    MODE_INPUT="$MODE"
+elif [ -r /dev/tty ]; then
+    echo -ne "${CLR_BOLD}👉 Select an option [1, 2, or 3] (Instant 1-key press / Auto-selects 1 in 15s): ${CLR_RESET}"
+    # Use single-key read with 15s timeout
+    read -r -n 1 -t 15 user_key < /dev/tty 2>/dev/null || user_key="1"
     echo ""
-    MODE="${input_choice:-1}"
+    MODE_INPUT="$user_key"
 elif [ -t 0 ]; then
-    echo -ne "${CLR_BOLD}👉 Select an option [1, 2, or 3] (Auto-selects 1 in 8s): ${CLR_RESET}"
-    read -r -t 8 input_choice || input_choice="1"
+    echo -ne "${CLR_BOLD}👉 Select an option [1, 2, or 3] (Instant 1-key press / Auto-selects 1 in 15s): ${CLR_RESET}"
+    read -r -n 1 -t 15 user_key 2>/dev/null || user_key="1"
     echo ""
-    MODE="${input_choice:-1}"
+    MODE_INPUT="$user_key"
+else
+    MODE_INPUT="1"
 fi
+
+# Clean and extract single digit [1, 2, or 3]
+MODE=$(echo "$MODE_INPUT" | tr -dc '0-9' | head -c 1)
+[ -z "$MODE" ] && MODE="1"
+
+echo -e "${CLR_GREEN}✓ Selected Option [${MODE}]${CLR_RESET}\n"
+
 
 case "$MODE" in
     1|"")
@@ -386,7 +404,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v1.9.2 Ready & Operational!                         "
+echo "          🎉 WebConsole Pro v2.8.2 Ready & Operational!                         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
