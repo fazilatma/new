@@ -10,7 +10,7 @@
 #
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 2.8.5 | Repository: fazilatma/new
+# Version: 2.8.8 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail
@@ -279,7 +279,7 @@ echo -e "  ${CLR_GREEN}${CLR_BOLD}[1] ⚡ Start WebConsole Server (Default)${CLR
 echo -e "      • Starts persistent background server on Port 8888 & outputs live URLs (~1s)"
 echo -e ""
 echo -e "  ${CLR_CYAN}${CLR_BOLD}[2] 🔄 Quick Update WebConsole & wcp CLI${CLR_RESET}"
-echo -e "      • Downloads latest WebConsole Pro v2.8.5 and wcp CLI from GitHub (~3s)"
+echo -e "      • Downloads latest WebConsole Pro v2.8.8 and wcp CLI from GitHub (~3s)"
 echo -e ""
 echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full All-in-One Installation${CLR_RESET}"
 echo -e "      • Installs Web Server, Node 22 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
@@ -405,11 +405,35 @@ esac
 # ------------------------------------------------------------------------------
 # 3. Final Summary & Links
 # ------------------------------------------------------------------------------
-SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+detect_clean_ip() {
+    local candidate=""
+    # 1. Try reliable public IP endpoints with clean timeout
+    for service in "https://api.ipify.org" "https://icanhazip.com" "https://checkip.amazonaws.com" "https://ifconfig.me/ip" "https://ipinfo.io/ip"; do
+        candidate=$(curl -fsSL -m 2 "$service" 2>/dev/null | tr -d '\r\n[:space:]' || true)
+        if [[ "$candidate" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    # 2. Try network interface IP
+    candidate=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' | grep -v '^127\.' | head -n 1 || true)
+    if [[ "$candidate" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$candidate"
+        return 0
+    fi
+    # 3. Try default route interface IP
+    candidate=$(ip route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' || true)
+    if [[ "$candidate" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$candidate"
+        return 0
+    fi
+    echo "127.0.0.1"
+}
+SERVER_IP=$(detect_clean_ip)
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v2.8.5 Ready & Operational!                         "
+echo "          🎉 WebConsole Pro v2.8.8 Ready & Operational!                         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
