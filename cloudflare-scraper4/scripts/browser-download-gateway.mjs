@@ -33,6 +33,7 @@ export function installGateway(gateway){
   for(const [key,value] of Object.entries(opts.headers||{}))if(['accept','accept-encoding','user-agent','range','if-range','if-none-match','if-modified-since'].includes(key.toLowerCase()))headers[key]=value;
   // Never forward registry auth, cookies, client TLS keys or a caller's proxy agent.
   const request=original.https(destination,{method,headers,timeout:opts.timeout},response=>{
+   if(response.statusCode>=400){const ray=String(response.headers['cf-ray']||'not supplied').replace(/[^a-zA-Z0-9 -]/g,'').slice(0,100);console.error('Cloudflare gateway download HTTP '+response.statusCode+'; target host='+target.hostname+'; cf-ray='+ray+'. This response alone does not identify gateway versus upstream failure.');}
    if(response.headers.location)response.headers.location=new URL(response.headers.location,target).href;
    callback?.(response);
   });

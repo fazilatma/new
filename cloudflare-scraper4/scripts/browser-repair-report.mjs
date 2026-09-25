@@ -1,5 +1,5 @@
 import os from 'node:os';
-import {access,readFile,readdir,stat,statfs} from 'node:fs/promises';
+import {access,readFile,readdir,stat,statfs,lstat,realpath} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {createRequire} from 'node:module';
 import {join,dirname} from 'node:path';
@@ -20,7 +20,7 @@ export function reportRedactor(env={},network={}){
 function endpoint(raw){try{const url=new URL(/^https?:\/\//i.test(raw)?raw:'https://'+raw);return {configured:true,origin:url.origin,credentialsPresent:!!(url.username||url.password),queryPresent:!!url.search,pathPresent:url.pathname!=='/'}}catch{return {configured:!!raw,valid:false}}}
 async function pathInfo(path){
  if(!path)return {configured:false};const result={path};
- try{const s=await stat(path);Object.assign(result,{exists:true,directory:s.isDirectory(),mode:(s.mode&0o777).toString(8),uid:s.uid,gid:s.gid});for(const [key,flag] of [['readable',constants.R_OK],['writable',constants.W_OK],['executableOrSearchable',constants.X_OK]])result[key]=await access(path,flag).then(()=>true,()=>false)}catch(e){Object.assign(result,{exists:e.code==='ENOENT'?false:null,error:e.code||'unavailable'})}return result;
+ try{const s=await stat(path);Object.assign(result,{exists:true,symlink:(await lstat(path)).isSymbolicLink(),resolvedPath:await realpath(path),directory:s.isDirectory(),mode:(s.mode&0o777).toString(8),uid:s.uid,gid:s.gid});for(const [key,flag] of [['readable',constants.R_OK],['writable',constants.W_OK],['executableOrSearchable',constants.X_OK]])result[key]=await access(path,flag).then(()=>true,()=>false)}catch(e){Object.assign(result,{exists:e.code==='ENOENT'?false:null,error:e.code||'unavailable'})}return result;
 }
 async function diskInfo(path){try{const s=await statfs(path);return {path,availableBytes:s.bavail*s.bsize,totalBytes:s.blocks*s.bsize}}catch(e){return {path,error:e.code||'unavailable'}}}
 async function packageInfo(cwd,name,lock){

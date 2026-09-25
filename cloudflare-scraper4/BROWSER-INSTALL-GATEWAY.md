@@ -45,7 +45,10 @@ rejected for copying; choose an explicit shared cache first.
 - Creates destination directories and prepares readable/executable modes.
 - Retains source files and existing destination content; repeatable without
   overwriting browser binaries. Playwright `.links` metadata is not copied.
-- Rejects symlinks and overlapping source/destination trees.
+- Resolves cache root aliases and copies contained source links as regular files.
+  Rejects escaping links, directory cycles, nested destination symlinks and
+  overlapping source/destination trees. Root aliases must name browser cache
+  directories, unless source and target already resolve to the same directory.
 - Runs under the **actual scraper user**: no sudo, automatic ownership change,
   OS package installation, service restart or deletion of source caches.
 - If `/root` is unreadable to that user, a privileged administrator must first
@@ -88,3 +91,42 @@ uses `Cache-Control: no-store`.
 The log is capped at **24,000 characters**, with a truncation flag, and exists
 only in the current process. Restarting clears it. Reporting never runs an
 installer, browser, network probe, OS-library command or cache-copy operation.
+
+
+## Missing Ubuntu libraries and cache aliases — 1.218.1+
+
+A browser can be installed and still fail to launch. For example:
+
+```
+error while loading shared libraries: libatk-1.0.so.0
+```
+
+This is an **OS dependency** failure, not proof of a missing browser archive.
+The repair job now records `errorCategory: missing-os-libraries`, names the
+observed missing libraries, and skips a redundant download for that driver.
+On the reported Ubuntu 24.04 VPS, run the matching installed Playwright CLI
+from the project directory as an administrator:
+
+```sh
+cd /var/lib/webconsole-projects/scraper4-cloudflare-11dad8732b
+node node_modules/playwright/cli.js install-deps chromium
+```
+
+This command changes system packages using Ubuntu's package manager. It is not
+run automatically by the dashboard, and the browser-download Worker adapter
+does **not** route apt traffic. If Ubuntu repositories are inaccessible, that
+must be resolved separately. Retest browser launch afterwards; no target-site
+success is implied.
+
+Cache reuse compares real paths first: two aliases of the same runtime cache
+need no copy or chmod. Safe source links contained inside the cache can be
+copied without retaining symlinks. Unsafe links remain errors. Each cache has
+its own status; copy failures no longer suppress all browser launch results.
+A job with a failed copy still reports overall failure even if browsers launch.
+Support reports show resolved paths as well as direct symlink status.
+
+A missing Puppeteer Chrome revision remains a separate issue. HTTP 500 from
+both the official archive and mirror through a gateway does not prove which
+hop caused the failure. Failed downloads now log status, target hostname and
+`cf-ray` when provided. No direct fallback, version downgrade, automatic
+browser substitution or OS installation was introduced.
