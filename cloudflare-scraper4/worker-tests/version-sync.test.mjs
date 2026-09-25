@@ -1789,7 +1789,10 @@ test('browser navigation survives aborted navigations and never-idle pages', asy
   const rendered = scraper.slice(scraper.indexOf('async function scrapeRenderedHtml('), scraper.indexOf('async function scrapeListWithPlaywright('));
   assert.match(rendered, /waitUntil: 'domcontentloaded'/, 'goto must resolve on parsed DOM, not network idle');
   assert.ok(!rendered.includes("waitUntil: 'networkidle'") && !rendered.includes("waitUntil: 'networkidle2'"), 'goto must not wait for idle (redirects abort it)');
-  assert.equal((rendered.match(/if \(!isAbortedNavigation\(navigationError\)\) throw navigationError;/g) || []).length, 2, 'both drivers must survive ERR_ABORTED and read what landed');
-  assert.match(rendered, /waitForLoadState\('networkidle', \{ timeout: 15_000 \}\)\.catch\(\(\) => undefined\)/, 'playwright must still get a best-effort idle window');
+  assert.equal((rendered.match(/if \(!isAbortedNavigation\(navigationError\)\) throw navigationError;/g) || []).length, 1, 'Puppeteer keeps its ERR_ABORTED recovery');
+  const profile = await readProjectFile('render-src/playwright-python.ts');
+  assert.ok(profile.includes('/ERR_ABORTED/i.test(message)'), 'adapted Playwright must retain redirect recovery');
+  assert.ok(profile.includes("['load','domcontentloaded','commit']"), 'Playwright uses bounded Python wait sequence');
+  assert.ok(profile.includes('page.waitForTimeout(plan.initialWait)'), 'Playwright now uses reference settling and scroll waits rather than network idle');
   assert.match(rendered, /waitForNetworkIdle\(\{ timeout: 15_000 \}\)\.catch\(\(\) => undefined\)/, 'puppeteer must still get a best-effort idle window');
 });

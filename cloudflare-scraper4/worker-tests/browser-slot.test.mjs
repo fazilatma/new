@@ -39,7 +39,7 @@ test('browser slot: a throwing task still releases the slot', async () => {
 });
 
 test('browser slot: all four browser engines funnel through the mutex', () => {
-  for (const engine of ['scrapeListWithPlaywright(url, activeSelectors)', 'scrapeListWithPuppeteer(url, activeSelectors)', 'scrapeListWithCrawleePlaywright(url, activeSelectors)', 'scrapeListWithNetworkApi(url)']) {
+  for (const engine of ['scrapeListWithPlaywright(url, activeSelectors, stopped)', 'scrapeListWithPuppeteer(url, activeSelectors)', 'scrapeListWithCrawleePlaywright(url, activeSelectors)', 'scrapeListWithNetworkApi(url)']) {
     assert.ok(scraper.includes(`withBrowserSlot(() => ${engine})`), `${engine} must run inside the browser slot`);
   }
   assert.equal(scraper.split('withBrowserSlot(() =>').length - 1, 4, 'exactly the four browser engines may hold the slot');

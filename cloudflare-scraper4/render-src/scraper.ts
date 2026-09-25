@@ -1,3 +1,4 @@
+import {renderPythonPlaywright} from './playwright-python.js';
 import { collectScrollProducts } from '../worker-src/scroll-collector.js';
 import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
@@ -537,7 +538,7 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if (engine !== 'auto' && name === engine) throw new Error('مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.');
       return [] as Product[];
     }
-    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors));
+    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors, stopped));
     if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors));
     if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors));
     if (name === 'network_api') return withBrowserSlot(() => scrapeListWithNetworkApi(url));
@@ -967,47 +968,16 @@ async function collectRenderedScroll(page:any,selectors:Selectors,stopped?:()=>P
  },benchmark?{maxBatches:3,timeoutMs:30000,quietMs:4000,maxRounds:60}:{})}finally{tracker.close()}
 }
 
-async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
+async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>): Promise<Product[]> {
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true, executablePath, args: browserLaunchArgs() });
-    try {
-      const page = await browser.newPage({ locale: 'fa-IR' });
-      // goto waits only for parsed DOM: shops routinely redirect/reload
-      // mid-load (cookie checks, bot screens, framework routers), which
-      // aborts a networkidle goto with net::ERR_ABORTED even though the
-      // follow-up page loads fine. On abort, settle and read whatever
-      // actually landed instead of failing the whole run.
-      let navStatus = 0;
-      try {
-        const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-        navStatus = navResponse?.status() ?? 0;
-      } catch (navigationError: unknown) {
-        if (!isAbortedNavigation(navigationError)) throw navigationError;
-        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-      }
-      if (isBlankPageUrl(page.url())) {
-        try {
-          const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-          navStatus = retryResponse?.status() ?? navStatus;
-        } catch (retryError: unknown) {
-          if (!isAbortedNavigation(retryError)) throw retryError;
-          await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-        }
-      }
-      if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
-      // Best-effort idle window for JavaScript rendering; pages with
-      // ever-open connections (ads, analytics) may never idle.
-      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-      const finalUrl = page.url();
-      const html = await page.content();
-      dumpRenderedHtml(html, page.url(), 'playwright');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
-      const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-      lastBrowserLayer = rescued.layer;
-      console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-      return rescued.products;
-    } finally { await browser.close(); }
+    const {html,finalUrl,httpStatus}=await renderPythonPlaywright(url,executablePath,stopped);
+    dumpRenderedHtml(html,finalUrl,'playwright');
+    lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl,httpStatus});
+    const rescued=rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+    lastBrowserLayer=rescued.layer;
+    console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+    return rescued.products;
   }
   const puppeteer = await import('puppeteer');
   const browser = await puppeteer.default.launch({ headless: true, executablePath, args: browserLaunchArgs() });
@@ -1043,7 +1013,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     return rescued.products;
   } finally { await browser.close(); }
 }
-async function scrapeListWithPlaywright(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright'); }
+async function scrapeListWithPlaywright(url: string, selectors: Selectors, stopped?:()=>Promise<boolean>): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright', stopped); }
 async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer'); }
 async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors): Promise<Product[]> {
   const { PlaywrightCrawler } = await import('crawlee');
