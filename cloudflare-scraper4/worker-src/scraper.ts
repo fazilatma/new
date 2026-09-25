@@ -1,3 +1,4 @@
+import {requireStaticSelectorEngine} from './selector-engine.js';
 import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from './product-parser.js';
 import { applyResultAdjustments } from './result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progress.js';
@@ -970,11 +971,12 @@ export function benchmarkProbeUrl(profile:Profile):string{
 export async function mapLimit<T>(items:T[],limit:number,fn:(item:T,index:number)=>Promise<void>):Promise<void>{
   let next=0;await Promise.all(Array.from({length:Math.min(Math.max(1,limit),items.length)},async()=>{while(true){const index=next++;if(index>=items.length)return;await fn(items[index],index)}}));
 }
-export async function testSelector(url:string,selector:string,type='text'):Promise<{count:number;values:string[]}>{
+export async function testSelector(url:string,selector:string,type='text',engine?:string):Promise<{count:number;values:string[]}>{
+  requireStaticSelectorEngine(engine);
   const page=await safeText(url,4_000_000),values=await extractSelectorValues(page.text,page.url,selector,type==='link'?'link':type==='image'?'image':'text');return {count:values.length,values:values.slice(0,20)};
 }
-export async function testVariations(url:string,selector:string){const page=await safeText(url,4_000_000);return {url:page.url,...await extractVariations(page.text,page.url,selector)}}
-export async function testGallery(url:string,selector:string,max=30,skipFirst=false){const page=await safeText(url,4_000_000),detail=await parseDetailPage(page.text,page.url,{gallery:selector,galleryMax:max,gallerySkipFirst:skipFirst});return{url:page.url,count:detail.images.length,values:detail.images}}
+export async function testVariations(url:string,selector:string,engine?:string){requireStaticSelectorEngine(engine);const page=await safeText(url,4_000_000);return {url:page.url,...await extractVariations(page.text,page.url,selector)}}
+export async function testGallery(url:string,selector:string,max=30,skipFirst=false,engine?:string){requireStaticSelectorEngine(engine);const page=await safeText(url,4_000_000),detail=await parseDetailPage(page.text,page.url,{gallery:selector,galleryMax:max,gallerySkipFirst:skipFirst});return{url:page.url,count:detail.images.length,values:detail.images}}
 const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors:string[]}>= {
   container:{selectors:['li.product','article.product','.products .product','.product-card','.product-item','[data-product-id]',
     // Generic / non-WooCommerce grids (1.128.0 on Render/Node, 1.129.0 on the
@@ -1000,7 +1002,8 @@ const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors
   gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img','.product-images img','[class*="gallery"] img']},
   variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
 };
-export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all'){
+export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string){
+  requireStaticSelectorEngine(engine);
   const page=await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
   // List fields go through the same discovery the engines use (1.128.0 on
   // Render/Node, 1.129.0 on the Worker), so the dashboard button proposes

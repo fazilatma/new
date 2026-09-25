@@ -1,3 +1,4 @@
+import {isBrowserSelectorEngine} from '../worker-src/selector-engine.js';
 import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from '../worker-src/product-parser.js';
 import {renderPythonPlaywright} from './playwright-python.js';
 import { collectScrollProducts } from '../worker-src/scroll-collector.js';
@@ -8,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { safeText, sourceRoute } from './network.js';
+import { assertPublicUrl, safeText, sourceRoute } from './network.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile, type Selectors } from './types.js';
 
 // Playwright resolves its browser-registry directory at IMPORT time and only
@@ -1659,8 +1660,24 @@ const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors
   gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img','.product-images img','[class*="gallery"] img']},
   variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
 };
-export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all'){
-  const page=await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+/** Selector tools read the selected browser's DOM, never a product-parser result.
+ * Capture through the existing drivers so navigation/context match extraction.
+ * network_api uses Playwright for DOM selectors; API JSON has no CSS nodes.
+ */
+export async function selectorToolDocument(url:string,engine?:string):Promise<{text:string;url:string}>{
+  if(!isBrowserSelectorEngine(engine))return safeText(url,4_000_000);
+  await assertPublicUrl(url);
+  return withBrowserSlot(async()=>{
+    let document:{text:string;url:string}|undefined;
+    const reader=async(text:string,finalUrl:string):Promise<Product[]>=>{await assertPublicUrl(finalUrl);document={text,url:finalUrl};return []};
+    if(engine==='crawlee_playwright')await scrapeListWithCrawleePlaywright(url,DEFAULT_SELECTORS,reader);
+    else await scrapeRenderedHtml(url,DEFAULT_SELECTORS,engine==='puppeteer'?'puppeteer':'playwright',undefined,reader);
+    if(!document)throw Error('مرورگر HTML قابل آزمایشی برنگرداند؛ HTML اولیه جایگزین نشده است.');
+    return document;
+  });
+}
+export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string){
+  const page=await selectorToolDocument(url,engine),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
   // List fields go through the same discovery the engines use (1.128.0), so the
   // dashboard button proposes structural selectors for unknown shops too.
   if(mode==='list'||mode==='all'){
@@ -2008,9 +2025,14 @@ function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[
   const priceWinner = [...priceVotes.entries()].sort((a, b) => b[1].count - a[1].count || a[1].length - b[1].length)[0];
   return { title: titleWinner[0], price: priceWinner ? priceWinner[0] : '', cardIsLink: cardIsLink * 2 >= sampleNodes.length };
 }
-export async function testSelector(url: string, selector: string, type = 'text'): Promise<{ count: number; values: string[] }> {
-  const { text, url: final } = await safeText(url, 4_000_000); const $ = cheerio.load(text); const values: string[] = [];
+export async function testSelector(url: string, selector: string, type = 'text',engine?:string,gallery?:{max?:number;skipFirst?:boolean}): Promise<{ count: number; values: string[] }> {
+  const { text, url: final } = await selectorToolDocument(url,engine); const $ = cheerio.load(text); const values: string[] = [];
   let nodes: cheerio.Cheerio<any>; try { nodes = $(xpathToCss(selector) ?? selector); } catch (error) { throw invalidSelectorError(selector, error); }
+  if(type==='gallery'&&isBrowserSelectorEngine(engine)){
+    const images:string[]=[];
+    nodes.each((_i,el)=>{const node=$(el);const candidates=node.is('img,source,a[href]')?node.add(node.find('img,source')):node.find('img,source');candidates.each((_j,img)=>{const image=$(img),value=absolute(image.attr('data-src')||image.attr('src')||image.attr('href')||'',final);if(value&&!images.includes(value))images.push(value)});});
+    const values=images.slice(gallery?.skipFirst?1:0).slice(0,Math.max(1,Math.min(30,Number(gallery?.max)||30)));return {count:values.length,values};
+  }
   nodes.slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
   return { count: nodes.length, values };
 }
