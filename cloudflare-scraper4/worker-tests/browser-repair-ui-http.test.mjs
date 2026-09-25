@@ -44,3 +44,9 @@ test('real Node HTTP repair route honors optional auth and rejects arbitrary com
   }finally{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');const kill=setTimeout(()=>child.kill('SIGKILL'),3000);await ended;clearTimeout(kill);}rmSync(dir,{recursive:true,force:true});}
  }
 });
+test('separate cache button sends reuse-only intent and retains the same root/header protections',async()=>{
+ const source=readFileSync(new URL('../worker-src/dashboard.ts',import.meta.url),'utf8'),code=source.slice(source.indexOf('let browserRepairTimer=null;'),source.indexOf('async function menuAction('));
+ const {document}=parseHTML('<input type="checkbox" id="browserRepairMirror"><input type="checkbox" id="browserRepairRoot"><pre id="browserRepairLog"></pre>');document.getElementById('browserRepairRoot').checked=true;
+ let request;const action=new Function('$','api','setTimeout','clearTimeout',code+';return browserRepairAction;')(id=>document.getElementById(id),async(path,options)=>{request={path,options};return{phase:'ready',success:true}},()=>{},()=>{});
+ await action(true,true);assert.equal(request.options.headers['x-browser-repair'],'1');assert.deepEqual(JSON.parse(request.options.body),{allowMirror:false,allowRoot:true,reuseExisting:true});assert.match(source,/mButton\([^\n]+browser-cache-reuse/);assert.match(source,/action==='browser-cache-reuse'\)return browserRepairAction\(true,true\)/);
+});

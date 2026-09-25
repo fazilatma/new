@@ -1,3 +1,5 @@
+import {gatewayDownloadEnvironment} from '../scripts/browser-download-gateway.mjs';
+import {resolveSourceNetwork} from '../worker-src/source-network.js';
 import {normalizeProductParser,selectedProductParser} from '../worker-src/product-parser.js';
 import { createBrowserRepair } from '../scripts/browser-repair.mjs';
 import { processResources } from './process-resources.js';
@@ -50,7 +52,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.216.0+'; } catch { return process.env.npm_package_version || '1.216.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.217.0+'; } catch { return process.env.npm_package_version || '1.217.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -304,7 +306,14 @@ app.use('/api/*', async (c, next) => {
 });
 
 app.use('/api/*',activityMiddleware({setState,deleteState}));
-const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExecutable(driver)});
+const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExecutable(driver),resolveDownloadEnv:async()=>{
+ const network=resolveSourceNetwork((await getState<any>('settings',{}))?.source,(await loadConnections()).ai.network);
+ if(network.mode!=='worker')return process.env;
+ const {assertPublicUrl}=await import('./network.js');
+ const raw=String(network.workerUrl||'').trim().replace(/%7Burl%7D/ig,'{url}');if(!raw)throw Error('Cloudflare gateway URL is empty');const gateway=/^https?:\/\//i.test(raw)?raw:'https://'+raw;
+ await assertPublicUrl(gateway.replace('{url}',encodeURIComponent('https://registry.npmjs.org/playwright')));
+ return gatewayDownloadEnvironment(process.env,gateway);
+}});
 app.on(['GET','POST'],'/api/runtime/browser-repair',async c=>{
   // Follow the owner's optional global API-auth policy; no separate token prerequisite.
   if(c.req.method==='GET')return c.json({ok:true,...browserRepair.status()});

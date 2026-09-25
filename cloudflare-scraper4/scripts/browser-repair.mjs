@@ -1,9 +1,10 @@
+import {reuseBrowserCaches} from './browser-cache-reuse.mjs';
 import {spawn} from 'node:child_process';
 import {existsSync,readFileSync,realpathSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {resolve,dirname,join} from 'node:path';
 export const MIRROR='https://registry.npmmirror.com/-/binary/playwright';
-export const redact=text=>String(text).replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g,'$1[redacted]@').replace(/\x1b\[[0-9;]*m/g,'');
+export const redact=text=>String(text).replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g,'$1[redacted]@').replace(/([?&](?:token|key|secret|password|auth|access_token|api_key)=)[^&\s]+/gi,'$1[redacted]').replace(/\x1b\[[0-9;]*m/g,'');
 export function downloadEnvironment(env,mirror=false){
  const out={...env,PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT:'60000'};
  for(const k of ['PLAYWRIGHT_DOWNLOAD_HOST','PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST','PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST','PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST'])delete out[k];
@@ -53,11 +54,12 @@ export function smokeScript(engine,executable){
  const launch=engine==='playwright'?`const {chromium}=await import('playwright');b=await chromium.launch(${opts});`:engine==='puppeteer'?`const {default:p}=await import('puppeteer');b=await p.launch(${opts});`:`const c=await import('crawlee');b=await c.${engine==='crawlee-playwright'?'launchPlaywright':'launchPuppeteer'}({launchOptions:${opts}});`;
  return `let b;try{${launch}const page=await b.newPage();await page.setContent('<title>Browser launch OK</title>');if(await page.title()!=='Browser launch OK')throw Error('Page test failed');console.log('Browser launch OK',await b.version());}finally{if(b)await b.close();}`;
 }
-export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=process.getuid?.(),run=runBrowserCommand,exists=existsSync,resolveExecutable=driver=>env.BROWSER_EXECUTABLE_PATH||(driver==='playwright'?env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:env.PUPPETEER_EXECUTABLE_PATH)||env.CHROME_BIN,resolveCli=name=>localCli(cwd,name),plan=()=>libraryPlan(cwd),resolveNpm=()=>npmCli(env)}={}){
+export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=process.getuid?.(),run=runBrowserCommand,exists=existsSync,resolveExecutable=driver=>env.BROWSER_EXECUTABLE_PATH||(driver==='playwright'?env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:env.PUPPETEER_EXECUTABLE_PATH)||env.CHROME_BIN,resolveCli=name=>localCli(cwd,name),plan=()=>libraryPlan(cwd),resolveNpm=()=>npmCli(env),resolveDownloadEnv=async()=>env,reuseCaches=reuseBrowserCaches}={}){
  const fresh=()=>({running:false,success:null,phase:'idle',log:'',results:{},startedAt:null,finishedAt:null});
- let state=fresh();
+ let state=fresh(),downloadEnv;
+ const installEnv=async()=>{if(!downloadEnv){downloadEnv=await resolveDownloadEnv();log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
  const snapshot=()=>({...state,results:JSON.parse(JSON.stringify(state.results))});
- const log=text=>{state.log=(state.log+redact(text)+'\n').slice(-24000);};
+ const log=text=>{const safe=downloadEnv?.SCRAPER_BROWSER_GATEWAY?String(text).split(downloadEnv.SCRAPER_BROWSER_GATEWAY).join('[configured gateway]'):text;state.log=(state.log+redact(safe)+'\n').slice(-24000);};
  async function verify(engine,executable){
   state.phase=engine+'-verifying';log('Testing '+engine+' with the current runtime browser configuration.');
   return run(['--input-type=module','-e',smokeScript(engine,executable)],{cwd,env,log,timeout:45000});
@@ -71,7 +73,7 @@ export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=proce
     state.phase=driver+(mirror?'-mirror-download':'-official-download');
     log(driver+': '+(mirror?'trying third-party npmmirror with your consent; this revision may be unavailable.':'trying official download; existing HTTP/HTTPS proxy settings are inherited.'));
     const args=driver==='playwright'?[cli,'install','chromium']:[cli,'browsers','install','chrome','--base-url',mirror?CHROME_MIRROR:'https://storage.googleapis.com/chrome-for-testing-public'];
-    if(await run(args,{cwd,env:downloadEnvironment(env,driver==='playwright'&&mirror),log})){
+    if(await run(args,{cwd,env:downloadEnvironment(await installEnv(),driver==='playwright'&&mirror),log})){
      if(await verify(driver,executable))return true;
      throw Error('Download completed but launch failed. Inspect OS libraries, Node compatibility, permissions and RAM. No system packages were changed.');
     }
@@ -81,23 +83,25 @@ export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=proce
  }
  async function work(options){
   try{
+   if(options.reuseExisting){state.phase='cache-copy';state.cacheReuse=await reuseCaches({env,log});}
    state.phase='libraries';
    log('Uses this process user, project and cache. No sudo, OS packages, ownership changes or Node replacement. Browser flags match extraction.');
    if(uid===0)log('WARNING: executing as root with your acknowledgement; a non-root runtime is recommended.');
    const libraries=plan(),missing=libraries.filter(p=>!p.installed);
    for(const lib of libraries)log(lib.name+' pinned '+lib.version+': '+(lib.installed?'present':'missing'));
+   if(missing.length&&options.reuseExisting)throw Error('Required libraries are missing; run install/repair first. Cache reuse never downloads or installs packages.');
    if(missing.length){
     let installed=false;
     for(const mirror of options.allowMirror?[false,true]:[false]){
      log('Installing missing locked libraries via '+(mirror?'third-party npmmirror':'official npm registry')+'; lifecycle scripts are disabled.');
-     installed=await run([resolveNpm(),'install','--ignore-scripts','--no-save','--package-lock=false','--no-audit','--no-fund','--engine-strict','--registry='+ (mirror?'https://registry.npmmirror.com':'https://registry.npmjs.org'),...missing.map(p=>p.name+'@'+p.version)],{cwd,env:{...env,PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:'1',PUPPETEER_SKIP_DOWNLOAD:'true'},log,timeout:300000});
+     installed=await run([resolveNpm(),'install','--ignore-scripts','--no-save','--package-lock=false','--no-audit','--no-fund','--engine-strict','--registry='+ (mirror?'https://registry.npmmirror.com':'https://registry.npmjs.org'),...missing.map(p=>p.name+'@'+p.version)],{cwd,env:{...await installEnv(),PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:'1',PUPPETEER_SKIP_DOWNLOAD:'true'},log,timeout:300000});
      if(installed)break;
     }
     if(!installed)log('Library installation failed; still testing any available engines. Check Node engine requirements and network access.');
    }
    const termux=(env.PREFIX||'').includes('com.termux')||exists('/data/data/com.termux/files/usr/bin/pkg');
    const paths=Object.fromEntries(['playwright','puppeteer'].map(driver=>[driver,resolveExecutable(driver)||(termux?'/data/data/com.termux/files/usr/bin/chromium':'')]));
-   for(const driver of ['playwright','puppeteer'])state.results[driver]={success:await repairDriver(driver,paths[driver],options)};
+   for(const driver of ['playwright','puppeteer'])state.results[driver]={success:options.reuseExisting?await verify(driver,paths[driver]):await repairDriver(driver,paths[driver],options)};
    for(const driver of ['playwright','puppeteer']){
     const engine='crawlee-'+driver;
     if(!state.results[driver].success){state.results[engine]={success:false,skipped:true};log(engine+': skipped because its underlying browser failed.');continue;}
@@ -109,10 +113,10 @@ export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=proce
   finally{state.running=false;state.phase=state.success?'ready':'failed';state.finishedAt=new Date().toISOString();}
  }
  function start(options={}){
-  if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['allowMirror','allowRoot'].includes(k))||Object.values(options).some(v=>typeof v!=='boolean'))throw Error('Only boolean allowMirror/allowRoot options are accepted.');
+  if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['allowMirror','allowRoot','reuseExisting'].includes(k))||Object.values(options).some(v=>typeof v!=='boolean'))throw Error('Only boolean allowMirror/allowRoot/reuseExisting options are accepted.');
   if(state.running)return snapshot();
   if(uid===0&&options.allowRoot!==true)throw Error('This scraper runs as root. Explicit root-runtime acknowledgement is required. Running a web scraper as root is not recommended.');
-  state={...fresh(),running:true,phase:'starting',startedAt:new Date().toISOString()};
+  downloadEnv=undefined;state={...fresh(),running:true,phase:'starting',startedAt:new Date().toISOString()};
   void work(options);return snapshot();
  }
  return {start,status:()=>({...snapshot(),root:uid===0})};

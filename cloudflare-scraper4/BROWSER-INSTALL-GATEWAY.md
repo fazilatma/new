@@ -1,0 +1,63 @@
+# Browser installation gateway and same-VPS cache reuse — 1.217.0+
+
+Open **Code version → Install/repair Playwright, Puppeteer and Crawlee**.
+The existing install button and a separate cache-copy button share the job log,
+root acknowledgement and the server's owner-configured authentication policy.
+
+## Install through the active Cloudflare gateway
+
+When the source connection settings select **Worker**, installation reads the
+saved gateway (legacy AI network settings remain the fallback). It applies to
+public npm packages and browser archives, not just extraction requests. The
+source-domain filter is intentionally not applied to installer destinations.
+No changes to `HTTPS_PROXY` on the host are necessary: a reverse Worker URL is
+not a CONNECT proxy.
+
+Child installation processes get a scoped Node preload adapter. HTTP(S)
+requests to approved package/artifact hosts and builtin fetch requests go
+through the gateway's existing query, `{url}` or path contract. Registry auth,
+cookies and custom client TLS credentials are not forwarded. Ordinary TLS
+certificate validation stays enabled. npm checks tarball integrity as usual.
+The parent scraper and browser launch checks do not load this adapter.
+
+Proxy failure **does not fall back to direct access**. Optional npmmirror
+attempts still require the existing consent and use the same gateway. The
+Worker must support streaming large binary responses and the selected gateway
+contract; a configured Worker URL alone does not prove that browser archives
+can pass its bandwidth, time or response-size limits. A changed upstream CDN
+outside the approved host list fails explicitly rather than bypassing it.
+Without an active Worker route, the prior installation environment is retained.
+
+## Copy browsers already installed on this VPS
+
+The new button **copies**, rather than moves, the two browser caches:
+
+| Cache | Default source | Runtime destination |
+| --- | --- | --- |
+| Playwright | `/root/.cache/ms-playwright` | `PLAYWRIGHT_BROWSERS_PATH`, or the current user's XDG/default cache |
+| Puppeteer | `/root/.cache/puppeteer` | `PUPPETEER_CACHE_DIR`, or the current user's default cache |
+
+Set `BROWSER_CACHE_SOURCE_HOME=/home/previous-user` in the scraper service's
+environment to copy from a different user's home. Restart after changing the
+service environment. `PLAYWRIGHT_BROWSERS_PATH=0` (package-local mode) is
+rejected for copying; choose an explicit shared cache first.
+
+- Creates destination directories and prepares readable/executable modes.
+- Retains source files and existing destination content; repeatable without
+  overwriting browser binaries. Playwright `.links` metadata is not copied.
+- Rejects symlinks and overlapping source/destination trees.
+- Runs under the **actual scraper user**: no sudo, automatic ownership change,
+  OS package installation, service restart or deletion of source caches.
+- If `/root` is unreadable to that user, a privileged administrator must first
+  provide a readable staging home. The button reports the error; it cannot
+  grant itself permission. Partial copies after an error are not called success.
+- Does not copy `node_modules`, download missing packages, or downgrade versions.
+  Use install/repair first if the project libraries are missing.
+- Tests Playwright, Puppeteer and both Crawlee launchers afterwards. Old cache
+  revisions, incompatible architectures, missing OS libraries or explicit
+  executable overrides can still fail; merely copying folders is not success.
+
+Tests include a local TLS gateway with real Node HTTP/fetch and npm metadata
+plus integrity-checked package installation, filesystem reuse/idempotency,
+permission modes, symlink rejection, no-download reuse and UI intent. No live
+Cloudflare large-archive download or VPS deployment is claimed.
