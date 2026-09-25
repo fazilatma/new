@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Auto-Installer & Launcher
-# Modes: 1) Start Server (Default) | 2) Quick Update | 3) Full Installation
+# Modes:
+#   [1] Start Server (Default)
+#   [2] Quick Update
+#   [3] Full All-in-One Installation
+#   [4] Dedicated Node.js 22 LTS Stack
+#   [5] Dedicated Python 3 & Web Scraping Stack
+#
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 2.8.2 | Repository: fazilatma/new
+# Version: 2.8.5 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail
@@ -50,7 +56,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Portable Temporary Directory Definition (Handles Termux $PREFIX/tmp vs Linux /tmp)
+# Portable Temporary Directory Definition
 TMP_DIR="${TMPDIR:-/tmp}"
 if [ "$IS_TERMUX" = "true" ]; then
     TMP_DIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
@@ -139,6 +145,37 @@ elif [ -n "$CODESPACE_NAME" ] || [ "${CODESPACES:-false}" = "true" ] || [ -d "/w
     fi
 fi
 
+# Detect Distro
+OS_FAMILY="unknown"
+DISTRO="unknown"
+VERSION_ID="unknown"
+ARCH="$(uname -m)"
+
+if [ "$IS_TERMUX" = "true" ]; then
+    OS_FAMILY="termux"; DISTRO="termux"; VERSION_ID="android"
+elif [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO="${ID:-unknown}"; VERSION_ID="${VERSION_ID:-unknown}"; ID_LIKE="${ID_LIKE:-}"
+elif [ -f /etc/redhat-release ]; then DISTRO="rhel"
+elif [ -f /etc/debian_version ]; then DISTRO="debian"
+elif [ -f /etc/alpine-release ]; then DISTRO="alpine"
+elif [ -f /etc/arch-release ]; then DISTRO="arch"
+fi
+
+case "$DISTRO" in
+    termux) OS_FAMILY="termux" ;;
+    ubuntu|debian|linuxmint|pop|kali|raspbian|elementary) OS_FAMILY="debian" ;;
+    centos|rhel|rocky|almalinux|fedora|ol|amzn) OS_FAMILY="rhel" ;;
+    alpine) OS_FAMILY="alpine" ;;
+    arch|manjaro|endeavouros) OS_FAMILY="arch" ;;
+    *)
+        if [[ "${ID_LIKE:-}" =~ (debian|ubuntu) ]]; then OS_FAMILY="debian";
+        elif [[ "${ID_LIKE:-}" =~ (rhel|fedora|centos) ]]; then OS_FAMILY="rhel";
+        elif [[ "${ID_LIKE:-}" =~ (arch) ]]; then OS_FAMILY="arch";
+        else OS_FAMILY="debian"; fi
+        ;;
+esac
+
 # Helper: Guaranteed Persistent PHP Server Launcher (Fixes Termux OPcache lock errors)
 start_php_server() {
     local port="$1"
@@ -147,7 +184,6 @@ start_php_server() {
     mkdir -p "$TMP_DIR" 2>/dev/null || true
     export TMPDIR="$TMP_DIR"
     
-    # Termux Android fix: disable OPcache CLI lock to prevent 'Cannot create lock - Permission denied (13)'
     local php_opts="-d opcache.enable=0 -d opcache.enable_cli=0 -d sys_temp_dir=${TMP_DIR} -d upload_tmp_dir=${TMP_DIR}"
     
     fuser -k "${port}/tcp" 2>/dev/null || true
@@ -173,8 +209,66 @@ start_php_server() {
     fi
 }
 
+deploy_webconsole_and_cli() {
+    mkdir -p "$DOC_ROOT" 2>/dev/null || true
+    WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
+    curl -fsSL "$WCP_URL" -o "${DOC_ROOT}/webconsole.php" 2>/dev/null || true
+    cp -f "${DOC_ROOT}/webconsole.php" "${DOC_ROOT}/index.php" 2>/dev/null || true
+    [ "$IS_TERMUX" = "false" ] && mkdir -p /var/www/html && cp -f "${DOC_ROOT}/webconsole.php" /var/www/html/webconsole.php 2>/dev/null || true
+    
+    CLI_TARGET="/usr/local/bin/wcp"
+    [ "$IS_TERMUX" = "true" ] && CLI_TARGET="${PREFIX:-/data/data/com.termux/files/usr}/bin/wcp"
+    WCP_CLI_URL="https://raw.githubusercontent.com/fazilatma/new/main/wcp?t=$(date +%s)"
+    curl -fsSL "$WCP_CLI_URL" -o "$CLI_TARGET" 2>/dev/null || true
+    chmod +x "$CLI_TARGET" 2>/dev/null || true
+    [ "$IS_TERMUX" = "false" ] && cp -f "$CLI_TARGET" /usr/bin/wcp 2>/dev/null || true
+}
+
+install_node22_stack() {
+    log_step "NODE" "Installing Node.js 22 LTS & Modern JS Package Ecosystem..."
+    if [ "$OS_FAMILY" = "termux" ]; then
+        pkg update -y || true
+        pkg install -y nodejs-lts clang make jq tar tmux 2>/dev/null || pkg install -y nodejs jq tar tmux || true
+    elif [ "$OS_FAMILY" = "debian" ]; then
+        rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources 2>/dev/null || true
+        rm -f /etc/apt/keyrings/nodesource*.gpg /usr/share/keyrings/nodesource*.gpg 2>/dev/null || true
+        apt-get update -y || true; apt-get purge -y libnode-dev libnode72 2>/dev/null || true
+        apt-get install -y --no-install-recommends curl wget git unzip zip tar tmux htop jq build-essential ca-certificates gnupg sudo 2>/dev/null || true
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes 2>/dev/null || true
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+        apt-get update -y || true; apt-get install -y nodejs || true
+    elif [ "$OS_FAMILY" = "rhel" ]; then
+        curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - 2>/dev/null || true
+        dnf install -y nodejs gcc gcc-c++ make jq tmux 2>/dev/null || yum install -y nodejs gcc gcc-c++ make jq tmux || true
+    fi
+
+    if command -v npm >/dev/null 2>&1; then
+        npm install -g pm2 yarn pnpm nodemon tsx typescript esbuild wrangler --silent 2>/dev/null || true
+    fi
+    log_ok "Node.js $(node -v 2>/dev/null || echo '22') and npm $(npm -v 2>/dev/null || echo '') installed."
+}
+
+install_python_stack() {
+    log_step "PYTHON" "Installing Python 3 & High-Performance Scraping Stack..."
+    if [ "$OS_FAMILY" = "termux" ]; then
+        pkg update -y || true
+        pkg install -y python clang make libxml2 libxslt libffi 2>/dev/null || true
+    elif [ "$OS_FAMILY" = "debian" ]; then
+        apt-get update -y || true
+        apt-get install -y --no-install-recommends python3 python3-pip python3-dev python3-venv build-essential libxml2-dev libxslt1-dev libffi-dev libssl-dev 2>/dev/null || true
+    elif [ "$OS_FAMILY" = "rhel" ]; then
+        dnf install -y python3 python3-pip python3-devel gcc gcc-c++ libxml2-devel libxslt-devel 2>/dev/null || true
+    fi
+
+    python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || python3 -m pip install --upgrade pip 2>/dev/null || true
+    PY_PACKAGES="requests flask beautifulsoup4 lxml httpx curl_cffi cloudscraper aiohttp playwright html5lib selectolax basalam-sdk psutil python-dotenv fastapi uvicorn fake-useragent tqdm pandas"
+    python3 -m pip install --break-system-packages --ignore-installed $PY_PACKAGES 2>/dev/null || python3 -m pip install $PY_PACKAGES 2>/dev/null || true
+    log_ok "Python $(python3 --version 2>/dev/null || echo '3') scraping stack installed."
+}
+
 # ------------------------------------------------------------------------------
-# 2. Interactive Mode Selection Menu (3 Options)
+# 2. Interactive Mode Selection Menu (5 Options)
 # ------------------------------------------------------------------------------
 echo -e "${CLR_CYAN}${CLR_BOLD}"
 echo "================================================================================"
@@ -185,10 +279,16 @@ echo -e "  ${CLR_GREEN}${CLR_BOLD}[1] ⚡ Start WebConsole Server (Default)${CLR
 echo -e "      • Starts persistent background server on Port 8888 & outputs live URLs (~1s)"
 echo -e ""
 echo -e "  ${CLR_CYAN}${CLR_BOLD}[2] 🔄 Quick Update WebConsole & wcp CLI${CLR_RESET}"
-echo -e "      • Downloads latest WebConsole Pro v2.8.2 and wcp CLI from GitHub (~3s)"
+echo -e "      • Downloads latest WebConsole Pro v2.8.5 and wcp CLI from GitHub (~3s)"
 echo -e ""
-echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full System Installation${CLR_RESET}"
+echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full All-in-One Installation${CLR_RESET}"
 echo -e "      • Installs Web Server, Node 22 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
+echo -e ""
+echo -e "  ${CLR_MAGENTA}${CLR_BOLD}[4] 🟢 Dedicated Node.js 22 LTS Stack${CLR_RESET}"
+echo -e "      • Installs Node.js 22.x LTS (node:sqlite ready), PM2, Yarn, PNPM, Wrangler (~30s)"
+echo -e ""
+echo -e "  ${CLR_BLUE}${CLR_BOLD}[5] 🐍 Dedicated Python 3 & Scraping Stack${CLR_RESET}"
+echo -e "      • Installs Python 3, curl_cffi, playwright, cloudscraper, basalam-sdk (~45s)"
 echo -e "${CLR_CYAN}================================================================================${CLR_RESET}"
 
 MODE_INPUT=""
@@ -197,13 +297,12 @@ if [ -n "${1:-}" ]; then
 elif [ -n "${MODE:-}" ]; then
     MODE_INPUT="$MODE"
 elif [ -r /dev/tty ]; then
-    echo -ne "${CLR_BOLD}👉 Select an option [1, 2, or 3] (Instant 1-key press / Auto-selects 1 in 15s): ${CLR_RESET}"
-    # Use single-key read with 15s timeout
+    echo -ne "${CLR_BOLD}👉 Select an option [1-5] (Instant 1-key press / Auto-selects 1 in 15s): ${CLR_RESET}"
     read -r -n 1 -t 15 user_key < /dev/tty 2>/dev/null || user_key="1"
     echo ""
     MODE_INPUT="$user_key"
 elif [ -t 0 ]; then
-    echo -ne "${CLR_BOLD}👉 Select an option [1, 2, or 3] (Instant 1-key press / Auto-selects 1 in 15s): ${CLR_RESET}"
+    echo -ne "${CLR_BOLD}👉 Select an option [1-5] (Instant 1-key press / Auto-selects 1 in 15s): ${CLR_RESET}"
     read -r -n 1 -t 15 user_key 2>/dev/null || user_key="1"
     echo ""
     MODE_INPUT="$user_key"
@@ -211,39 +310,27 @@ else
     MODE_INPUT="1"
 fi
 
-# Clean and extract single digit [1, 2, or 3]
 MODE=$(echo "$MODE_INPUT" | tr -dc '0-9' | head -c 1)
 [ -z "$MODE" ] && MODE="1"
 
 echo -e "${CLR_GREEN}✓ Selected Option [${MODE}]${CLR_RESET}\n"
 
-
 case "$MODE" in
-    1|"")
+    1)
         log_info "Mode [1] selected: Starting WebConsole Server..."
         mkdir -p "$DOC_ROOT" 2>/dev/null || true
         
-        # Deploy latest webconsole if missing
         if [ ! -f "${DOC_ROOT}/webconsole.php" ] && [ ! -f "${DOC_ROOT}/index.php" ]; then
             log_info "Fetching WebConsole Pro..."
-            WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
-            curl -fsSL "$WCP_URL" -o "${DOC_ROOT}/webconsole.php" 2>/dev/null || true
-            cp -f "${DOC_ROOT}/webconsole.php" "${DOC_ROOT}/index.php" 2>/dev/null || true
+            deploy_webconsole_and_cli
         fi
         
-        # Install wcp if missing
         if ! command -v wcp >/dev/null 2>&1; then
-            CLI_TARGET="/usr/local/bin/wcp"
-            [ "$IS_TERMUX" = "true" ] && CLI_TARGET="${PREFIX:-/data/data/com.termux/files/usr}/bin/wcp"
-            WCP_CLI_URL="https://raw.githubusercontent.com/fazilatma/new/main/wcp?t=$(date +%s)"
-            curl -fsSL "$WCP_CLI_URL" -o "$CLI_TARGET" 2>/dev/null || true
-            chmod +x "$CLI_TARGET" 2>/dev/null || true
-            [ "$IS_TERMUX" = "false" ] && cp -f "$CLI_TARGET" /usr/bin/wcp 2>/dev/null || true
+            deploy_webconsole_and_cli
         fi
         
         start_php_server "8888" "$DOC_ROOT"
         
-        # Codespaces visibility
         if [ "$IS_CODESPACES" = "true" ] && [ -n "$CODESPACE_NAME" ] && [ "$CODESPACE_NAME" != "codespace" ]; then
             gh codespace ports visibility "8888:public" -c "$CODESPACE_NAME" 2>/dev/null || true
         fi
@@ -251,115 +338,27 @@ case "$MODE" in
 
     2)
         log_info "Mode [2] selected: Performing Quick Update of WebConsole & wcp CLI..."
-        mkdir -p "$DOC_ROOT" 2>/dev/null || true
-        WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
-        curl -fsSL "$WCP_URL" -o "${DOC_ROOT}/webconsole.php" 2>/dev/null || true
-        cp -f "${DOC_ROOT}/webconsole.php" "${DOC_ROOT}/index.php" 2>/dev/null || true
-        [ "$IS_TERMUX" = "false" ] && mkdir -p /var/www/html && cp -f "${DOC_ROOT}/webconsole.php" /var/www/html/webconsole.php 2>/dev/null || true
-        
-        CLI_TARGET="/usr/local/bin/wcp"
-        [ "$IS_TERMUX" = "true" ] && CLI_TARGET="${PREFIX:-/data/data/com.termux/files/usr}/bin/wcp"
-        WCP_CLI_URL="https://raw.githubusercontent.com/fazilatma/new/main/wcp?t=$(date +%s)"
-        curl -fsSL "$WCP_CLI_URL" -o "$CLI_TARGET" 2>/dev/null || true
-        chmod +x "$CLI_TARGET" 2>/dev/null || true
-        [ "$IS_TERMUX" = "false" ] && cp -f "$CLI_TARGET" /usr/bin/wcp 2>/dev/null || true
-        
+        deploy_webconsole_and_cli
         start_php_server "8888" "$DOC_ROOT"
         log_ok "WebConsole Pro and wcp CLI updated to latest version."
         ;;
 
     3)
-        log_info "Mode [3] selected: Running Full System Installation..."
+        log_info "Mode [3] selected: Running Full All-in-One Installation..."
         
-        OS_FAMILY="unknown"
-        DISTRO="unknown"
-        VERSION_ID="unknown"
-        ARCH="$(uname -m)"
-
-        if [ "$IS_TERMUX" = "true" ]; then
-            OS_FAMILY="termux"; DISTRO="termux"; VERSION_ID="android"
-        elif [ -f /etc/os-release ]; then
-            . /etc/os-release
-            DISTRO="${ID:-unknown}"; VERSION_ID="${VERSION_ID:-unknown}"; ID_LIKE="${ID_LIKE:-}"
-        elif [ -f /etc/redhat-release ]; then DISTRO="rhel"
-        elif [ -f /etc/debian_version ]; then DISTRO="debian"
-        elif [ -f /etc/alpine-release ]; then DISTRO="alpine"
-        elif [ -f /etc/arch-release ]; then DISTRO="arch"
-        fi
-
-        case "$DISTRO" in
-            termux) OS_FAMILY="termux" ;;
-            ubuntu|debian|linuxmint|pop|kali|raspbian|elementary) OS_FAMILY="debian" ;;
-            centos|rhel|rocky|almalinux|fedora|ol|amzn) OS_FAMILY="rhel" ;;
-            alpine) OS_FAMILY="alpine" ;;
-            arch|manjaro|endeavouros) OS_FAMILY="arch" ;;
-            *)
-                if [[ "${ID_LIKE:-}" =~ (debian|ubuntu) ]]; then OS_FAMILY="debian";
-                elif [[ "${ID_LIKE:-}" =~ (rhel|fedora|centos) ]]; then OS_FAMILY="rhel";
-                elif [[ "${ID_LIKE:-}" =~ (arch) ]]; then OS_FAMILY="arch";
-                else OS_FAMILY="debian"; fi
-                ;;
-        esac
-
-        log_ok "OS Family: ${OS_FAMILY} (${DISTRO} ${VERSION_ID})"
-
-        # Swap allocation
-        if [ "$IS_TERMUX" = "false" ] && [ "$IS_CODESPACES" = "false" ]; then
-            TOTAL_SWAP_KB=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
-            if [ "${TOTAL_SWAP_KB:-0}" -lt 1048576 ]; then
-                log_info "Swap is less than 1GB. Allocating 2GB /swapfile..."
-                swapoff /swapfile 2>/dev/null || true; rm -f /swapfile 2>/dev/null || true
-                fallocate -l 2048M /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 2>/dev/null
-                chmod 600 /swapfile 2>/dev/null || true; mkswap /swapfile >/dev/null 2>&1 || true; swapon /swapfile 2>/dev/null || true
-                if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then echo '/swapfile none swap sw 0 0' >> /etc/fstab 2>/dev/null || true; fi
-                log_ok "2GB Swap allocated."
-            fi
-        fi
-
-        WEB_USER="www-data"; WEB_GROUP="www-data"
+        # Base PHP & Web server
         if [ "$OS_FAMILY" = "termux" ]; then
             pkg update -y || true
-            pkg install -y bash curl wget git php apache2 nodejs-lts python clang make jq tar tmux htop 2>/dev/null || \
-            pkg install -y bash curl wget git php nodejs python jq tar tmux || true
-            WEB_USER="$(id -un)"; WEB_GROUP="$(id -gn 2>/dev/null || id -un)"
-            
-            # Fix Termux php.ini OPcache lock permission issue permanently
-            for pini in "${PREFIX:-/data/data/com.termux/files/usr}/lib/php.ini" "${PREFIX:-/data/data/com.termux/files/usr}/etc/php.ini"; do
-                if [ -f "$pini" ]; then
-                    sed -i -E 's/^[; ]*opcache.enable[[:space:]]*=.*/opcache.enable=0/' "$pini" 2>/dev/null || true
-                    sed -i -E 's/^[; ]*opcache.enable_cli[[:space:]]*=.*/opcache.enable_cli=0/' "$pini" 2>/dev/null || true
-                    if ! grep -q "opcache.enable" "$pini" 2>/dev/null; then
-                        echo -e "\nopcache.enable=0\nopcache.enable_cli=0\n" >> "$pini" 2>/dev/null || true
-                    fi
-                fi
-            done
+            pkg install -y bash curl wget git php apache2 nodejs-lts python clang make jq tar tmux htop 2>/dev/null || true
         elif [ "$OS_FAMILY" = "debian" ]; then
-            rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources 2>/dev/null || true
-            rm -f /etc/apt/keyrings/nodesource*.gpg /usr/share/keyrings/nodesource*.gpg 2>/dev/null || true
-            apt-get update -y || true; apt-get purge -y libnode-dev libnode72 2>/dev/null || true
+            apt-get update -y || true
             apt-get install -y --no-install-recommends curl wget git unzip zip tar tmux htop jq ufw build-essential ca-certificates gnupg lsb-release software-properties-common sudo apache2 libapache2-mod-php php php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-sqlite3 2>/dev/null || true
-            WEB_USER="www-data"; WEB_GROUP="www-data"
         elif [ "$OS_FAMILY" = "rhel" ]; then
-            if command -v dnf >/dev/null 2>&1; then dnf install -y epel-release 2>/dev/null || true; dnf update -y; dnf install -y curl wget git unzip zip tar tmux htop jq gcc gcc-c++ make ca-certificates sudo httpd php php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-pdo 2>/dev/null || true; fi
-            WEB_USER="apache"; WEB_GROUP="apache"
+            dnf install -y epel-release 2>/dev/null || true; dnf update -y; dnf install -y curl wget git unzip zip tar tmux htop jq gcc gcc-c++ make ca-certificates sudo httpd php php-cli php-curl php-json php-mbstring php-xml php-zip php-bcmath php-intl php-pdo 2>/dev/null || true
         fi
 
-        # Node.js
-        if [ "$OS_FAMILY" = "debian" ]; then
-            NODE_CUR_MAJOR=$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -n 1 || echo "0")
-            if [ "${NODE_CUR_MAJOR:-0}" -lt 22 ]; then
-                mkdir -p /etc/apt/keyrings
-                curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes 2>/dev/null || true
-                echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
-                apt-get update -y || true; apt-get install -y nodejs || true
-            fi
-        fi
-        if command -v npm >/dev/null 2>&1; then npm install -g pm2 yarn pnpm nodemon --silent 2>/dev/null || true; fi
-
-        # Python & Scraping Packages
-        python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || python3 -m pip install --upgrade pip 2>/dev/null || true
-        PY_PACKAGES="requests flask beautifulsoup4 lxml httpx curl_cffi cloudscraper aiohttp playwright html5lib selectolax basalam-sdk psutil python-dotenv fastapi uvicorn fake-useragent tqdm pandas"
-        python3 -m pip install --break-system-packages --ignore-installed $PY_PACKAGES 2>/dev/null || python3 -m pip install $PY_PACKAGES 2>/dev/null || true
+        install_node22_stack
+        install_python_stack
 
         # Sudoers
         if [ "$IS_TERMUX" = "false" ]; then
@@ -375,25 +374,31 @@ SUDOERS_CONF
             chmod 0440 /etc/sudoers.d/99-webconsole-nopasswd 2>/dev/null || true
         fi
 
-        # Deploy files
-        WCP_URL="https://raw.githubusercontent.com/fazilatma/new/main/webconsole.php?t=$(date +%s)"
-        curl -fsSL "$WCP_URL" -o "${DOC_ROOT}/webconsole.php" 2>/dev/null || true
-        cp -f "${DOC_ROOT}/webconsole.php" "${DOC_ROOT}/index.php" 2>/dev/null || true
-        [ "$IS_TERMUX" = "false" ] && mkdir -p /var/www/html && cp -f "${DOC_ROOT}/webconsole.php" /var/www/html/webconsole.php 2>/dev/null || true
-        
-        CLI_TARGET="/usr/local/bin/wcp"
-        [ "$IS_TERMUX" = "true" ] && CLI_TARGET="${PREFIX:-/data/data/com.termux/files/usr}/bin/wcp"
-        WCP_CLI_URL="https://raw.githubusercontent.com/fazilatma/new/main/wcp?t=$(date +%s)"
-        curl -fsSL "$WCP_CLI_URL" -o "$CLI_TARGET" 2>/dev/null || true
-        chmod +x "$CLI_TARGET" 2>/dev/null || true
-        [ "$IS_TERMUX" = "false" ] && cp -f "$CLI_TARGET" /usr/bin/wcp 2>/dev/null || true
-        
+        deploy_webconsole_and_cli
         start_php_server "8888" "$DOC_ROOT"
         log_ok "Full installation completed successfully."
         ;;
+
+    4)
+        log_info "Mode [4] selected: Installing Dedicated Node.js 22 LTS Stack..."
+        install_node22_stack
+        deploy_webconsole_and_cli
+        start_php_server "8888" "$DOC_ROOT"
+        log_ok "Dedicated Node.js 22 LTS stack installed and server ready."
+        ;;
+
+    5)
+        log_info "Mode [5] selected: Installing Dedicated Python 3 & Web Scraping Stack..."
+        install_python_stack
+        deploy_webconsole_and_cli
+        start_php_server "8888" "$DOC_ROOT"
+        log_ok "Dedicated Python 3 & Web Scraping stack installed and server ready."
+        ;;
+
     *)
-        log_err "Invalid selection. Exiting."
-        exit 1
+        log_err "Invalid selection [${MODE}]. Defaulting to Start Server."
+        deploy_webconsole_and_cli
+        start_php_server "8888" "$DOC_ROOT"
         ;;
 esac
 
@@ -404,7 +409,7 @@ SERVER_IP=$(curl -s4m 2 ifconfig.me || curl -s4m 2 api.ipify.org || hostname -I 
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v2.8.2 Ready & Operational!                         "
+echo "          🎉 WebConsole Pro v2.8.5 Ready & Operational!                         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 
