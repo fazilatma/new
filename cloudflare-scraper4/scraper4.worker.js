@@ -34,21 +34,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __template = (cooked, raw2) => __freeze(__defProp(cooked, "raw", { value: __freeze(raw2 || cooked.slice()) }));
 
-// worker-src/benchmark-profile.ts
-function mergeBenchmarkProfile(current2, original, result, discovered) {
-  const merged = { ...current2, extractionEngineBenchmarks: result.extractionEngineBenchmarks };
-  if (current2.extractionEngine === original.extractionEngine && current2.url === original.url && current2.pagination === original.pagination && current2.paginationValue === original.paginationValue && JSON.stringify(current2.selectors) === JSON.stringify(original.selectors)) {
-    for (const key2 of ["extractionEngine", "extractionEngineMaster", "extractionEngineMs", "extractionEngineHost"]) merged[key2] = result[key2];
-  }
-  merged.selectors = { ...current2.selectors };
-  for (const [key2, value] of Object.entries(discovered)) if (current2.selectors?.[key2] === original.selectors?.[key2]) merged.selectors[key2] = value;
-  return merged;
-}
-var init_benchmark_profile = __esm({
-  "worker-src/benchmark-profile.ts"() {
-  }
-});
-
 // worker-src/result-adjustments.ts
 function applyResultAdjustments(product, profile, suffixFormats) {
   const row = product;
@@ -92,6 +77,21 @@ function sameResultData(a, b) {
 }
 var init_result_adjustments = __esm({
   "worker-src/result-adjustments.ts"() {
+  }
+});
+
+// worker-src/benchmark-profile.ts
+function mergeBenchmarkProfile(current2, original, result, discovered) {
+  const merged = { ...current2, extractionEngineBenchmarks: result.extractionEngineBenchmarks };
+  if (current2.extractionEngine === original.extractionEngine && current2.url === original.url && current2.pagination === original.pagination && current2.paginationValue === original.paginationValue && JSON.stringify(current2.selectors) === JSON.stringify(original.selectors)) {
+    for (const key2 of ["extractionEngine", "extractionEngineMaster", "extractionEngineMs", "extractionEngineHost"]) merged[key2] = result[key2];
+  }
+  merged.selectors = { ...current2.selectors };
+  for (const [key2, value] of Object.entries(discovered)) if (current2.selectors?.[key2] === original.selectors?.[key2]) merged.selectors[key2] = value;
+  return merged;
+}
+var init_benchmark_profile = __esm({
+  "worker-src/benchmark-profile.ts"() {
   }
 });
 
@@ -5968,63 +5968,6 @@ var init_workers_ai_catalog = __esm({
   }
 });
 
-// worker-src/benchmark-evidence.ts
-function benchmarkEvidence(engine, products, error = "", parser, previous = {}) {
-  const sample = products[0] ? Object.fromEntries(["title", "price", "priceText", "url", "image", "sku"].map((k) => [k, k === "price" ? Number.isFinite(Number(products[0][k])) ? Number(products[0][k]) : 0 : String(products[0][k] || "").slice(0, 2048)])) : null;
-  const complete = { title: products.filter((p) => p.title).length, price: products.filter((p) => p.price > 0).length, link: products.filter((p) => p.url).length, image: products.filter((p) => p.image).length };
-  let failure2 = null;
-  const libs = [...new Set([...error.matchAll(/error while loading shared libraries:\s*([^\s:]+)|((?:lib)[\w.+-]+\.so(?:\.\d+)*)\s*=>\s*not found/g)].map((m) => m[1] || m[2]))];
-  if (libs.length || /Host system is missing dependencies/.test(error)) failure2 = { category: "missing-os-libraries", missingLibraries: libs, hint: "\u0645\u0631\u0648\u0631\u06AF\u0631 \u0645\u0648\u062C\u0648\u062F \u0627\u0633\u062A \u0648\u0644\u06CC \u0648\u0627\u0628\u0633\u062A\u06AF\u06CC Ubuntu \u0646\u0635\u0628 \u0646\u06CC\u0633\u062A\u061B \u062F\u0627\u0646\u0644\u0648\u062F \u062F\u0648\u0628\u0627\u0631\u0647 \u06CC\u0627 \u062A\u063A\u06CC\u06CC\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631 \u06A9\u0645\u06A9\u06CC \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F. \u062F\u0633\u062A\u0648\u0631 \u0632\u06CC\u0631 \u0631\u0627 \u062F\u0631 \u067E\u0648\u0634\u0647\u0654 \u067E\u0631\u0648\u0698\u0647 \u0628\u0627 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062F\u06CC\u0631 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F\u061B apt \u0627\u0632 gateway \u062F\u0627\u0646\u0644\u0648\u062F \u0645\u0631\u0648\u0631\u06AF\u0631 \u0639\u0628\u0648\u0631 \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.", command: "node node_modules/playwright/cli.js install-deps chromium" };
-  else if (/Could not find (?:Chrome|Chromium)|Executable doesn't exist/i.test(error)) failure2 = { category: "missing-browser", hint: "\u0646\u0633\u062E\u0647\u0654 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0645\u0648\u0631\u062F \u0646\u06CC\u0627\u0632 \u062F\u0631 \u06A9\u0634 \u06A9\u0627\u0631\u0628\u0631 \u0633\u0631\u0648\u06CC\u0633 \u0646\u06CC\u0633\u062A. \u0627\u0632 \u0628\u062E\u0634 \u0646\u0635\u0628 \u0648 \u062A\u0639\u0645\u06CC\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F\u061B \u0648\u062C\u0648\u062F \u067E\u0648\u0634\u0647\u0654 \u06A9\u0634 \u0628\u0647\u200C\u062A\u0646\u0647\u0627\u06CC\u06CC \u06A9\u0627\u0641\u06CC \u0646\u06CC\u0633\u062A. \u0634\u06A9\u0633\u062A \u062F\u0627\u0646\u0644\u0648\u062F gateway \u0631\u0627 \u062F\u0631 \u06AF\u0632\u0627\u0631\u0634 \u0646\u0635\u0628 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F." };
-  else if (/Failed to launch browser|browserType.launch/i.test(error)) failure2 = { category: "browser-launch", hint: "\u0631\u0627\u0647\u200C\u0627\u0646\u062F\u0627\u0632\u06CC \u0645\u0631\u0648\u0631\u06AF\u0631 \u0634\u06A9\u0633\u062A \u062E\u0648\u0631\u062F\u061B \u0639\u0644\u062A \u062F\u0627\u062E\u0644\u06CC \u0648 \u06AF\u0632\u0627\u0631\u0634 \u0646\u0635\u0628 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F. \u0645\u0648\u0641\u0642\u06CC\u062A \u0645\u0648\u062A\u0648\u0631 HTTP\u060C \u0633\u0644\u0627\u0645\u062A \u0645\u0631\u0648\u0631\u06AF\u0631 \u0631\u0627 \u062B\u0627\u0628\u062A \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F." };
-  const browser = ["playwright", "puppeteer", "crawlee_playwright", "network_api"].includes(engine);
-  return { ...previous || {}, engine, extracted: products.length, complete, sample, signals: { ...previous?.signals || {}, loader: browser ? engine : "http", ...parser ? { productParser: parser } : {} }, ...parser ? { productParser: parser, candidates: null, hint: "\u067E\u0627\u0631\u0633\u0631 HTML \u062B\u0627\u0628\u062A: " + parser + "\u061B \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC \u063A\u06CC\u0631\u0645\u0631\u0648\u0631\u06AF\u0631\u06CC \u0647\u0645\u06AF\u06CC HTTP \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u0646\u062F\u061B \u0627\u06CC\u0646 \u0645\u0642\u0627\u06CC\u0633\u0647 \u0622\u0632\u0645\u0648\u0646 \u0645\u0633\u062A\u0642\u0644 parser\u0647\u0627\u06CC \u0646\u0627\u0645\u200C\u0628\u0631\u062F\u0647 \u0646\u06CC\u0633\u062A." } : {}, ...error ? { dropReasons: [error] } : {}, ...failure2 ? { failure: failure2, hint: failure2.hint } : {} };
-}
-function incompatibleBenchmark(engine, parser) {
-  if (engine !== "network_api" || !parser) return null;
-  const hint = "Network API \u067E\u0627\u0633\u062E JSON \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F\u060C \u0646\u0647 HTML\u061B \u0628\u0631\u0627\u06CC \u0622\u0632\u0645\u0648\u0646 \u0645\u0633\u062A\u0642\u0644 \u0622\u0646\u060C \u06A9\u0644\u06CC\u062F \u067E\u0627\u0631\u0633\u0631 \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 \u0631\u0627 \u062E\u0627\u0645\u0648\u0634 \u06A9\u0646\u06CC\u062F. \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0634\u0645\u0627 \u062E\u0648\u062F\u06A9\u0627\u0631 \u062A\u063A\u06CC\u06CC\u0631 \u0646\u06A9\u0631\u062F.";
-  return { engine, productParser: parser, ok: false, available: true, status: "incompatible", skipped: true, elapsedMs: 0, pagesScanned: 0, products: 0, productsPerMinute: 0, sample: null, diagnosis: { engine, extracted: 0, sample: null, complete: { title: 0, price: 0, link: 0, image: 0 }, signals: { compatible: false }, hint, failure: { category: "incompatible-parser", hint }, dropReasons: [] } };
-}
-
-// worker-src/product-parser.ts
-var PRODUCT_PARSERS = ["auto", "lxml", "selectolax", "jsonld", "next_data", "script_json", "metadata", "heuristic"];
-function normalizeProductParser(raw2) {
-  return { productParserEnabled: raw2.productParserEnabled === true, productParser: PRODUCT_PARSERS.includes(raw2.productParser) ? raw2.productParser : "auto" };
-}
-function selectedProductParser(profile) {
-  if (profile.productParserEnabled !== true) return void 0;
-  if (!PRODUCT_PARSERS.includes(profile.productParser || "auto")) throw Error("Unknown product parser");
-  return profile.productParser || "auto";
-}
-async function parseDownloadedProducts(parser, readers) {
-  if (parser !== "auto") {
-    if (!PRODUCT_PARSERS.includes(parser)) throw Error("Unknown product parser");
-    return readers[parser]();
-  }
-  for (const name of ["jsonld", "next_data", "script_json", "lxml", "selectolax", "metadata", "heuristic"]) {
-    const rows2 = await readers[name]();
-    if (rows2.length) return rows2;
-  }
-  return [];
-}
-function embeddedProductData(html, mode) {
-  const out = [];
-  const read2 = (text) => {
-    if (text.length > 2e5) return;
-    try {
-      out.push(JSON.parse(text));
-    } catch {
-    }
-  };
-  for (const match2 of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
-    const attrs = match2[1], body = match2[2].trim();
-    if (mode === "script_json" || /\bid\s*=\s*["']__(?:NEXT|NUXT)_DATA__["']/i.test(attrs)) read2(body);
-    const assignments = mode === "next_data" ? /(?:window\.)?__NUXT__\s*=\s*([\s\S]+)/g : /(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)\s*=\s*([\s\S]+)/g;
-    for (const found of body.matchAll(assignments)) read2(found[1].replace(/;\s*$/, ""));
-  }
-  return out;
-}
-
 // worker-src/benchmark-pagination.ts
 function benchmarkError(error) {
   const seen = /* @__PURE__ */ new Set(), messages = [];
@@ -6097,169 +6040,215 @@ async function benchmarkPagination(profile, io) {
   return { products, records, pagesScanned, error, mode, status: mode === "none" && !error ? "disabled" : error ? "incomplete" : "verified", transitionsVerified, verified: !error && (mode === "none" || transitionsVerified === 2) };
 }
 
-// worker-src/job-details.ts
-function extractionDetails(job, now4 = Date.now()) {
-  const log = Array.isArray(job.log) ? job.log : [], cache = log.filter((r) => r.event === "source-cache"), last = [...log].reverse().find((r) => r.item?.sourceKey), pages = new Set(log.map((r) => String(r.message || "").match(/صفحه\s+([۰-۹٠-٩\d]+)/)?.[1]).filter(Boolean));
-  const started = Date.parse(job.startedAt || ""), end = ["queued", "running"].includes(job.status) ? now4 : Date.parse(job.finishedAt || job.updatedAt || "");
-  return {
-    processed: Number(job.processed) || 0,
-    total: Number(job.total) || 0,
-    added: Number(job.added) || 0,
-    updated: Number(job.updated) || 0,
-    failed: Number(job.failed) || 0,
-    pages: pages.size,
-    listCount: cache.length ? cache.reduce((n, r) => n + (Number(r.item?.listCount) || 0), 0) : null,
-    reusedCount: cache.length ? cache.reduce((n, r) => n + (Number(r.item?.reusedCount) || 0), 0) : null,
-    elapsedMs: Number.isFinite(started) && Number.isFinite(end) ? Math.max(0, end - started) : null,
-    lastProduct: String(last?.item?.title || "").slice(0, 200),
-    lastEventAt: last?.at || null,
-    sent: log.filter((r) => ["sync-created", "sync-updated"].includes(r.event)).length,
-    sendSkipped: log.filter((r) => r.event === "sync-skipped").length,
-    zeroPrice: log.filter((r) => r.event === "zero-price").length,
-    waiting: job.status === "queued" ? job.startedAt ? "\u0646\u0642\u0637\u0647\u0654 \u0628\u0627\u0632\u06CC\u0627\u0628\u06CC \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F\u0647\u061B \u0645\u0646\u062A\u0638\u0631 \u0627\u062C\u0631\u0627\u06A9\u0646\u0646\u062F\u0647 \u0628\u0631\u0627\u06CC \u0627\u062F\u0627\u0645\u0647\u0654 \u0647\u0645\u06CC\u0646 \u0645\u0631\u062D\u0644\u0647." : "\u0645\u0646\u062A\u0638\u0631 \u062F\u0631\u06CC\u0627\u0641\u062A \u062A\u0648\u0633\u0637 \u0627\u062C\u0631\u0627\u06A9\u0646\u0646\u062F\u0647 \u0648 \u0638\u0631\u0641\u06CC\u062A \u0622\u0632\u0627\u062F \u0635\u0641\u061B \u0647\u0646\u0648\u0632 \u0634\u0631\u0648\u0639 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A." : "",
-    note: "\u0634\u0645\u0627\u0631\u0646\u062F\u0647\u200C\u0647\u0627\u06CC \u06A9\u0634\u060C \u0635\u0641\u062D\u0627\u062A \u0648 \u0627\u0631\u0633\u0627\u0644 \u0627\u0632 \u0631\u0648\u06CC\u062F\u0627\u062F\u0647\u0627\u06CC \u0645\u0648\u062C\u0648\u062F \u062F\u0631 \u06AF\u0632\u0627\u0631\u0634 \u0648\u0638\u06CC\u0641\u0647 \u0647\u0633\u062A\u0646\u062F."
-  };
+// worker-src/diagnostic-details.ts
+async function diagnosticDetails(product, profile, engine, extract) {
+  const started = Date.now();
+  if (!product?.url) return { ok: false, skipped: true, engine, error: "\u0645\u062D\u0635\u0648\u0644 \u062F\u0627\u0631\u0627\u06CC \u0644\u06CC\u0646\u06A9 \u0628\u0631\u0627\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062C\u0632\u0626\u06CC\u0627\u062A \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.", product: product || null, elapsedMs: 0 };
+  try {
+    const result = await extract(structuredClone(product), structuredClone(profile), engine);
+    const bounded = boundedDiagnosticProduct(result.product);
+    return { ok: true, engine, loader: ["playwright", "puppeteer", "crawlee_playwright"].includes(engine) ? engine : engine === "network_api" ? "playwright DOM (API JSON has no detail selectors)" : "http", ...result, ...bounded, ...bounded.truncated ? { warning: "\u0646\u0645\u0648\u0646\u0647\u0654 \u0628\u0633\u06CC\u0627\u0631 \u0628\u0632\u0631\u06AF \u0628\u0631\u0627\u06CC \u06AF\u0632\u0627\u0631\u0634 \u0645\u062D\u062F\u0648\u062F \u0634\u062F\u061B \u062A\u0648\u0636\u06CC\u062D\u0627\u062A \u062D\u062F\u0627\u06A9\u062B\u0631 \u06F1\u06F0\u06F0\u0647\u0632\u0627\u0631 \u0646\u0648\u06CC\u0633\u0647 \u0648 \u0622\u0631\u0627\u06CC\u0647\u200C\u0647\u0627 \u062D\u062F\u0627\u06A9\u062B\u0631 \u06F6\u06F0 \u0645\u0648\u0631\u062F \u062F\u0627\u0631\u0646\u062F." } : {}, elapsedMs: Date.now() - started };
+  } catch (error) {
+    return { ok: false, engine, error: benchmarkError(error), product: structuredClone(product), elapsedMs: Date.now() - started };
+  }
 }
-
-// worker-src/ledger-inventory.ts
-function customerVisible(target, remote) {
-  const raw2 = remote?.raw || {}, status = String(remote?.status ?? "");
-  return target === "basalam" ? status === "2976" : target === "woo" && status === "publish" && raw2.catalog_visibility !== "hidden";
-}
-
-// worker-src/destination-ledger.ts
-var LEDGER_TTL = 6 * 60 * 60 * 1e3;
-function stable(value) {
-  return JSON.stringify(value === void 0 ? null : Array.isArray(value) ? value.map((v) => JSON.parse(stable(v))) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().filter((k) => value[k] !== void 0).map((k) => [k, JSON.parse(stable(value[k]))])) : value);
-}
-async function digest(value) {
-  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stable(value))))].map((v) => v.toString(16).padStart(2, "0")).join("");
-}
-async function ledgerScope(target, endpoint, accountKey) {
-  const u = new URL(endpoint);
-  return target + ":" + await digest([u.origin, u.pathname.replace(/\/+$/, ""), accountKey]);
-}
-function observed(remote) {
-  const raw2 = remote.raw || {};
-  return { name: remote.name, sku: remote.sku || "", price: Number(remote.price) || 0, status: String(remote.status || ""), stock: raw2.stock_quantity ?? raw2.stock, description: raw2.description, short: raw2.short_description, weight: raw2.weight, categories: raw2.categories ?? raw2.category_id, images: raw2.images ?? raw2.photos, attributes: raw2.attributes, variations: raw2.variations };
-}
-function desiredProduct(product, profile, config) {
-  return { product: Object.fromEntries(["title", "price", "priceText", "sku", "shortDesc", "longDesc", "image", "images", "stock", "weight", "basalamCategoryId", "variationGroups", "variationPrices", "destinationStatus"].map((k) => [k, product[k]])), profile: { id: profile.id, wooCategoryId: profile.wooCategoryId, basalamCategoryId: profile.basalamCategoryId, basalamFallbackCategoryIds: profile.basalamFallbackCategoryIds }, config: Object.fromEntries(["replaceImages", "target", "pricePercent", "categoryId", "preparationDays", "weight", "packageWeight", "stock", "autoCategory", "fallbackCategoryIds", "contentSync"].map((k) => [k, config[k]])) };
-}
-function equivalentDesired(remote, desired) {
-  const p = desired?.product, c = desired?.config, profile = desired?.profile;
-  if (!p || !c || !remote?.raw) return false;
-  const raw2 = remote.raw, basalam = c.target === "basalam", price = Math.round(Number(p.price) * (1 + (Number(c.pricePercent) || 0) / 100)) * (basalam && !/ریال|rial|irr/i.test(p.priceText || "") ? 10 : 1);
-  if (remote.name !== p.title || Number(remote.price) !== price || !(price > 0) || (p.variationGroups || []).length) return false;
-  if (basalam && String(remote.status) !== "2976" || !basalam && p.destinationStatus && remote.status !== p.destinationStatus) return false;
-  const stock = p.stock ?? (basalam ? c.stock : void 0);
-  if (stock !== void 0 && Number(raw2.stock_quantity ?? raw2.stock) !== Number(stock)) return false;
-  if (c.contentSync !== false) {
-    if (String(raw2.description ?? "") !== String(basalam ? p.longDesc || p.shortDesc || "" : p.longDesc || "")) return false;
-    if (!basalam && String(raw2.short_description || "") !== String(p.shortDesc || "")) return false;
-    const images = (p.images || []).map(String);
-    if (images.length || c.replaceImages) {
-      if (basalam) return false;
-      const actual = (raw2.images || []).map((x) => String(x.src || ""));
-      if (stable(images) !== stable(actual)) return false;
+function boundedDiagnosticProduct(product) {
+  let budget = 18e4, truncated = false;
+  function trim(value, depth = 0) {
+    if (typeof value === "string") {
+      const size = Math.max(0, Math.min(budget, 1e5));
+      const text = value.slice(0, size);
+      budget -= text.length;
+      if (text.length < value.length) truncated = true;
+      return text;
     }
-  }
-  const category = basalam ? p.basalamCategoryId || profile.basalamCategoryId || c.categoryId : profile.wooCategoryId || c.categoryId;
-  if (category) {
-    const actual = basalam ? raw2.category_id ?? raw2.category?.id : raw2.categories?.[0]?.id;
-    if (String(actual) !== String(category)) return false;
-  }
-  if (p.weight && Number(raw2.weight) !== Number(p.weight)) return false;
-  if ((p.longDesc || p.shortDesc) && raw2.description === void 0) return false;
-  return true;
-}
-function cleanRemote(remote) {
-  const raw2 = remote.raw || {}, keys = ["id", "name", "title", "sku", "price", "primary_price", "regular_price", "sale_price", "status", "stock", "stock_quantity", "manage_stock", "catalog_visibility", "description", "short_description", "weight", "dimensions", "categories", "category_id", "category", "images", "photos", "photo", "attributes", "variations"];
-  return { ...remote, raw: Object.fromEntries(keys.filter((k) => raw2[k] !== void 0).map((k) => [k, raw2[k]])) };
-}
-function createDestinationLedger(io) {
-  const inflight = /* @__PURE__ */ new Map();
-  const key2 = (scope) => "ledger_meta:" + scope;
-  async function metadata(scope) {
-    return io.getState(key2(scope), null);
-  }
-  async function entries(scope) {
-    const meta = await metadata(scope), base = meta ? await io.ledgerRows(scope, meta.generation) : [], live = await io.ledgerRows(scope, "live");
-    if (meta && base.length !== meta.count) throw Error("\u0646\u0633\u062E\u0647\u0654 \u062F\u0641\u062A\u0631 \u062D\u0633\u0627\u0628 \u0646\u0627\u0642\u0635 \u0627\u0633\u062A\u061B \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC \u0644\u0627\u0632\u0645 \u0627\u0633\u062A.");
-    const map2 = new Map(base.map((x) => [String(x.remote.id), x]));
-    for (const x of live) if (!meta || x.at >= meta.startedAt) {
-      if (x.deleted) map2.delete(String(x.remote.id));
-      else map2.set(String(x.remote.id), x);
-    }
-    return [...map2.values()];
-  }
-  async function refresh(scope, fetchAll, force = false) {
-    const meta = await metadata(scope);
-    if (!force && meta?.inventoryPolicy === "customer-visible-v1" && Date.now() - Date.parse(meta.startedAt) < LEDGER_TTL) return { cached: true, ...meta };
-    if (inflight.has(scope)) return inflight.get(scope);
-    const task = (async () => {
-      const startedAt = (/* @__PURE__ */ new Date()).toISOString(), generation = crypto.randomUUID();
-      const all = await fetchAll(), unique = /* @__PURE__ */ new Map();
-      for (const remote of all) {
-        if (!remote?.id) throw Error("\u0634\u0646\u0627\u0633\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 \u0645\u0642\u0635\u062F \u062F\u0631 \u0627\u0633\u06A9\u0646 \u062F\u0641\u062A\u0631 \u062D\u0633\u0627\u0628 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A.");
-        const id = String(remote.id);
-        if (unique.has(id)) throw Error("\u0635\u0641\u062D\u0647\u0654 \u062A\u06A9\u0631\u0627\u0631\u06CC \u0645\u0642\u0635\u062F\u061B \u06A9\u0627\u0645\u0644 \u0628\u0648\u062F\u0646 \u062F\u0641\u062A\u0631 \u062D\u0633\u0627\u0628 \u062A\u0623\u06CC\u06CC\u062F \u0646\u0634\u062F.");
-        unique.set(id, cleanRemote(remote));
-      }
-      const rows2 = [...unique.values()].map((remote) => ({ remote, at: startedAt }));
-      for (let i = 0; i < rows2.length; i += 20) await io.ledgerPut(scope, generation, rows2.slice(i, i + 20));
-      const next = { generation, previous: meta?.generation, startedAt, completedAt: (/* @__PURE__ */ new Date()).toISOString(), count: rows2.length, complete: true, inventoryPolicy: "customer-visible-v1", durationMs: Math.max(0, Date.now() - Date.parse(startedAt)) };
-      await io.setState(key2(scope), next);
-      await io.ledgerPrune(scope, [generation, meta?.generation || "", "live"]).catch(() => {
-      });
-      return { cached: false, ...next };
-    })();
-    inflight.set(scope, task);
-    try {
-      return await task;
-    } finally {
-      inflight.delete(scope);
-    }
-  }
-  async function find(scope, id, sku = "") {
-    const meta = await metadata(scope);
-    if (id) {
-      const live = await io.ledgerGet(scope, "live", String(id));
-      const base = meta ? await io.ledgerGet(scope, meta.generation, String(id)) : null;
-      if (live && (!meta || live.at >= meta.startedAt)) return live;
-      if (base) {
-        if (live?.desiredHash && !live.invalid && !live.deleted && live.observedHash === await digest(observed(base.remote))) return { ...base, desiredHash: live.desiredHash, profileId: live.profileId, sourceKey: live.sourceKey };
-        return { ...base, profileId: live?.profileId, sourceKey: live?.sourceKey };
-      }
+    if (value === null || typeof value !== "object") return value;
+    if (depth > 5) {
+      truncated = true;
       return null;
     }
-    if (!sku || !meta || Date.now() - Date.parse(meta.startedAt) >= LEDGER_TTL) return null;
-    const matches2 = (await entries(scope)).filter((x) => x.remote.sku === sku && !x.invalid && !x.deleted);
-    return matches2.length === 1 ? matches2[0] : null;
-  }
-  async function matches(entry, desired) {
-    return !!entry && !entry.invalid && !entry.deleted && Date.now() - Date.parse(entry.at) < LEDGER_TTL && (entry.desiredHash === await digest(desired) || !entry.desiredHash && equivalentDesired(entry.remote, desired));
-  }
-  async function invalidate(scope, id) {
-    if (id) {
-      const before = await find(scope, id);
-      await io.ledgerPut(scope, "live", [{ remote: before?.remote || { id: String(id) }, profileId: before?.profileId, sourceKey: before?.sourceKey, at: (/* @__PURE__ */ new Date()).toISOString(), invalid: true }]);
+    if (Array.isArray(value)) {
+      if (value.length > 60) truncated = true;
+      return value.slice(0, 60).map((v) => trim(v, depth + 1));
     }
+    const entries = Object.entries(value);
+    if (entries.length > 60) truncated = true;
+    return Object.fromEntries(entries.slice(0, 60).map(([k, v]) => [k, trim(v, depth + 1)]));
   }
-  async function confirm(scope, remote, desired, profileId, sourceKey2, observedAt) {
-    if (!remote?.id) return;
-    remote = cleanRemote(remote);
-    await io.ledgerPut(scope, "live", [{ remote, at: observedAt || (/* @__PURE__ */ new Date()).toISOString(), desiredHash: await digest(desired), observedHash: await digest(observed(remote)), profileId, sourceKey: sourceKey2 }]);
-  }
-  async function patch(scope, id, changes, deleted = false) {
-    const previous = await find(scope, id);
-    await io.ledgerPut(scope, "live", [{ profileId: previous?.profileId, sourceKey: previous?.sourceKey, remote: { ...previous?.remote, ...changes, id: String(id), raw: { ...previous?.remote?.raw, ...changes } }, at: (/* @__PURE__ */ new Date()).toISOString(), deleted, invalid: !previous?.remote?.name && !deleted }]);
-  }
-  return { metadata, entries, refresh, find, matches, invalidate, confirm, patch };
+  return { product: trim(product), truncated };
 }
 
-// worker-src/ledger.ts
+// worker-src/selector-engine.ts
+function isBrowserSelectorEngine(engine) {
+  return ["playwright", "puppeteer", "crawlee_playwright", "network_api"].includes(engine || "");
+}
+function requireStaticSelectorEngine(engine) {
+  if (isBrowserSelectorEngine(engine)) throw Error("\u0622\u0632\u0645\u0627\u06CC\u0634 \u0648 \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0633\u0644\u06A9\u062A\u0648\u0631 \u0628\u0627 \u0645\u0648\u062A\u0648\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u06CC \u0628\u0647 \u0627\u062C\u0631\u0627\u06CC Node \u0631\u0648\u06CC VPS \u06CC\u0627 Termux \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F\u061B Cloudflare Worker \u0646\u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u0645\u0631\u0648\u0631\u06AF\u0631 \u0627\u062C\u0631\u0627 \u06A9\u0646\u062F.");
+}
+
+// worker-src/product-parser.ts
+var PRODUCT_PARSERS = ["auto", "lxml", "selectolax", "jsonld", "next_data", "script_json", "metadata", "heuristic"];
+function normalizeProductParser(raw2) {
+  return { productParserEnabled: raw2.productParserEnabled === true, productParser: PRODUCT_PARSERS.includes(raw2.productParser) ? raw2.productParser : "auto" };
+}
+function selectedProductParser(profile) {
+  if (profile.productParserEnabled !== true) return void 0;
+  if (!PRODUCT_PARSERS.includes(profile.productParser || "auto")) throw Error("Unknown product parser");
+  return profile.productParser || "auto";
+}
+async function parseDownloadedProducts(parser, readers) {
+  if (parser !== "auto") {
+    if (!PRODUCT_PARSERS.includes(parser)) throw Error("Unknown product parser");
+    return readers[parser]();
+  }
+  for (const name of ["jsonld", "next_data", "script_json", "lxml", "selectolax", "metadata", "heuristic"]) {
+    const rows2 = await readers[name]();
+    if (rows2.length) return rows2;
+  }
+  return [];
+}
+function embeddedProductData(html, mode) {
+  const out = [];
+  const read2 = (text) => {
+    if (text.length > 2e5) return;
+    try {
+      out.push(JSON.parse(text));
+    } catch {
+    }
+  };
+  for (const match2 of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const attrs = match2[1], body = match2[2].trim();
+    if (mode === "script_json" || /\bid\s*=\s*["']__(?:NEXT|NUXT)_DATA__["']/i.test(attrs)) read2(body);
+    const assignments = mode === "next_data" ? /(?:window\.)?__NUXT__\s*=\s*([\s\S]+)/g : /(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)\s*=\s*([\s\S]+)/g;
+    for (const found of body.matchAll(assignments)) read2(found[1].replace(/;\s*$/, ""));
+  }
+  return out;
+}
+
+// worker-src/scraper.ts
+init_result_adjustments();
+
+// worker-src/diagnostic-progress.ts
+function diagnosticProgress(observer) {
+  const started = Date.now();
+  const emit = (event) => {
+    try {
+      observer?.({ ...event, elapsedMs: Date.now() - started });
+    } catch {
+    }
+  };
+  return {
+    begin(name, summary, details = {}) {
+      emit({ name, status: "running", summary, ...details });
+    },
+    finish(stage) {
+      emit({ ...stage, status: stage.skipped ? "skipped" : stage.ok ? "success" : "error" });
+    }
+  };
+}
+function diagnosticStream(run2) {
+  const encoder = new TextEncoder(), started = Date.now();
+  let closed = false, sequence = 0, heartbeat;
+  const body = new ReadableStream({
+    start(controller) {
+      const send2 = (event) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify({ ...event, sequence: ++sequence, at: (/* @__PURE__ */ new Date()).toISOString(), elapsedMs: Date.now() - started }) + "\n"));
+        } catch {
+          closed = true;
+          clearInterval(heartbeat);
+        }
+      };
+      send2({ type: "started", summary: "\u0627\u0631\u062A\u0628\u0627\u0637 \u0632\u0646\u062F\u0647 \u0628\u0627 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628 \u0628\u0631\u0642\u0631\u0627\u0631 \u0634\u062F." });
+      heartbeat = setInterval(() => send2({ type: "heartbeat" }), 5e3);
+      void (async () => {
+        try {
+          const report = await run2((event) => send2({ ...event, type: "progress" }));
+          send2({ type: "result", report });
+        } catch (error) {
+          send2({ type: "error", error: error instanceof Error ? error.message : String(error) });
+        } finally {
+          clearInterval(heartbeat);
+          if (!closed) {
+            closed = true;
+            controller.close();
+          }
+        }
+      })();
+    },
+    cancel() {
+      closed = true;
+      clearInterval(heartbeat);
+    }
+  });
+  return new Response(body, { headers: {
+    "content-type": "application/x-ndjson; charset=utf-8",
+    "cache-control": "no-store, no-transform",
+    "x-accel-buffering": "no"
+  } });
+}
+
+// worker-src/scraper.ts
 init_db();
+
+// worker-src/source-network.ts
+function resolveSourceNetwork(source2, legacy = {}, target = "") {
+  const explicit = source2 && typeof source2 === "object" && typeof source2.mode === "string";
+  const result = explicit ? { mode: String(source2.mode), proxyUrl: String(source2.proxy || "").trim(), workerUrl: String(source2.worker || "").trim() } : { mode: String(legacy.mode || "direct"), proxyUrl: String(legacy.proxyUrl || "").trim(), workerUrl: String(legacy.workerUrl || "").trim() };
+  const hosts = explicit ? String(source2.hosts || "").split(/[\s,،]+/).filter(Boolean).map((h) => h.toLowerCase()) : [];
+  if (hosts.length && target) {
+    const host = new URL(target).hostname.toLowerCase();
+    if (!hosts.some((h) => host === h || host.endsWith("." + h))) return { mode: "direct", proxyUrl: "", workerUrl: "" };
+  }
+  if (result.mode === "proxy" && result.proxyUrl) {
+    try {
+      const url = new URL(/^https?:\/\//i.test(result.proxyUrl) ? result.proxyUrl : "https://" + result.proxyUrl);
+      if (url.hostname.endsWith(".workers.dev")) {
+        result.mode = "worker";
+        result.workerUrl = result.proxyUrl;
+        result.proxyUrl = "";
+      }
+    } catch {
+    }
+  }
+  return result;
+}
+function sourceWorkerUrl(raw2, target) {
+  const value = String(raw2 || "").trim().replace(/%7Burl%7D/ig, "{url}");
+  if (!value || value.startsWith("/")) throw new Error("\u0628\u0631\u0627\u06CC \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645\u060C Worker URL \u0645\u0639\u062A\u0628\u0631 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.");
+  let base = /^https?:\/\//i.test(value) ? value : "https://" + value;
+  if (new URL(base.replace("{url}", "target")).hostname.endsWith(".workers.dev")) base = base.replace(/^http:/i, "https:");
+  if (base.includes("{url}")) return base.replace("{url}", encodeURIComponent(target));
+  const parsed = new URL(base);
+  if (parsed.searchParams.has("url")) {
+    parsed.searchParams.set("url", target);
+    return parsed.href;
+  }
+  return base.replace(/\/$/, "") + "/" + target;
+}
+var gatewayAttempts = /* @__PURE__ */ new WeakMap();
+function sourceGatewayAttempts(response) {
+  return gatewayAttempts.get(response) || [response.status];
+}
+async function fetchSourceGateway(target, gateway, init, send2) {
+  let response = await send2(init);
+  const statuses = [response.status];
+  const query = new URL(gateway).searchParams.get("url");
+  if (response.status === 403 && /^(GET|HEAD)$/i.test(init.method || "GET") && query === target) {
+    await response.body?.cancel();
+    const headers = new Headers(init.headers);
+    const ua = headers.get("user-agent") || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    if (!headers.has("x-proxy-ua")) headers.set("x-proxy-ua", ua);
+    if (!headers.has("x-proxy-referer")) headers.set("x-proxy-referer", headers.get("referer") || new URL(target).origin + "/");
+    for (const name of ["user-agent", "referer", "accept-language", "cache-control", "x-target-url", "x-scraper-target", "x-scraper-target-url"]) headers.delete(name);
+    headers.set("accept", "text/html,application/xhtml+xml");
+    response = await send2({ ...init, headers });
+    statuses.push(response.status);
+  }
+  gatewayAttempts.set(response, statuses);
+  return response;
+}
 
 // worker-src/connections.ts
 init_db();
@@ -6533,7 +6522,2382 @@ async function connectionDiagnostics() {
   return { source: raw2 ? "encrypted-d1" : "environment-fallback", encrypted: Boolean(raw2), version: raw2?.version ?? null, iterations: raw2?.iterations ?? null, status: connectionStatus(value) };
 }
 
+// worker-src/network.ts
+init_db();
+init_env();
+function privateIp(value) {
+  const ip = value.replace(/^\[|\]$/g, "").toLowerCase();
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+    const p = ip.split(".").map(Number);
+    if (p.some((x) => x < 0 || x > 255)) return true;
+    const [a, b] = p;
+    return a === 0 || a === 10 || a === 127 || a >= 224 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127;
+  }
+  if (ip.includes(":")) return ip === "::" || ip === "::1" || ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe8") || ip.startsWith("fe9") || ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("::ffff:127.") || ip.startsWith("::ffff:10.") || ip.startsWith("::ffff:192.168.");
+  return false;
+}
+function assertPublicUrl(raw2) {
+  const url = new URL(raw2);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Only HTTP/HTTPS URLs are allowed");
+  if (url.username || url.password) throw new Error("Credentials in URLs are not allowed");
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".home") || privateIp(host)) throw new Error("Private hosts are not allowed");
+  return url;
+}
+async function limitedBody(response, maxBytes) {
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > maxBytes) {
+    await response.body?.cancel();
+    throw new Error(`Response exceeds ${maxBytes} bytes`);
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader(), chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          throw new Error(`Response exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+function redirectedInit(init, from, to, status) {
+  let next = { ...init };
+  if (from.origin !== to.origin) {
+    const headers = new Headers(next.headers);
+    for (const name of ["authorization", "proxy-authorization", "cookie"]) headers.delete(name);
+    next = { ...next, headers };
+  }
+  if (status === 303 || (status === 301 || status === 302) && String(next.method || "GET").toUpperCase() === "POST") next = { ...next, method: "GET", body: void 0 };
+  return next;
+}
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+function retryAfterMs(response) {
+  const raw2 = (response.headers.get("retry-after") || "").trim();
+  if (/^\d+$/.test(raw2)) return Math.min(1e4, Number(raw2) * 1e3);
+  const when = raw2 ? Date.parse(raw2) : NaN;
+  if (Number.isFinite(when)) return Math.min(1e4, Math.max(0, when - Date.now()));
+  return 2e3;
+}
+async function safeFetch(raw2, init = {}, maxBytes, timeoutMs) {
+  let url = assertPublicUrl(raw2), requestInit = { ...init }, throttleRetries = 0;
+  const env = getEnv(), limit = Math.min(25e6, Math.max(1e3, maxBytes || Number(env.MAX_RESPONSE_BYTES) || 8e6));
+  for (let redirects = 0; redirects < 5; redirects++) {
+    const wait = Number(timeoutMs) > 0 ? Math.max(50, Number(timeoutMs)) : Math.max(1e3, Number(env.REQUEST_TIMEOUT_MS) || 25e3), controller = new AbortController(), timeout = setTimeout(() => controller.abort("timeout"), wait);
+    try {
+      const apiMode = init.apiMode === true;
+      const requestHeaders = apiMode ? new Headers() : new Headers({ "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", accept: "text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5", "accept-language": "fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6", "cache-control": "no-cache" });
+      new Headers(requestInit.headers).forEach((value, name) => requestHeaders.set(name, value));
+      const { apiMode: _apiMode, ...fetchInit } = requestInit;
+      meterSubrequest();
+      const response = await fetch(url.href, { ...fetchInit, redirect: "manual", signal: init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal, headers: requestHeaders });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        if (init.redirect === "error") {
+          await response.body?.cancel();
+          throw Error("Unexpected redirect for API request");
+        }
+        const location = response.headers.get("location");
+        await response.body?.cancel();
+        if (!location) throw new Error("Redirect without location");
+        const nextUrl = assertPublicUrl(new URL(location, url).href);
+        requestInit = redirectedInit(requestInit, url, nextUrl, response.status);
+        url = nextUrl;
+        continue;
+      }
+      if (response.status === 429 && throttleRetries < 1) {
+        throttleRetries++;
+        try {
+          await response.body?.cancel();
+        } catch {
+        }
+        await sleepMs(retryAfterMs(response));
+        continue;
+      }
+      const body = await limitedBody(response, limit), headers = new Headers(response.headers);
+      headers.set("x-scraper-final-url", url.href);
+      return new Response(Uint8Array.from(body).buffer, { status: response.status, statusText: response.statusText, headers });
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`\u0645\u0647\u0644\u062A \u062F\u0631\u06CC\u0627\u0641\u062A ${url.href} \u062A\u0645\u0627\u0645 \u0634\u062F.`);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw new Error("Too many redirects");
+}
+function asciiPrefix(bytes, limit = 8192) {
+  let value = "";
+  for (let i = 0; i < Math.min(limit, bytes.length); i++) value += String.fromCharCode(bytes[i]);
+  return value;
+}
+function responseEncoding(bytes, contentType) {
+  if (bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) return "utf-8";
+  if (bytes[0] === 255 && bytes[1] === 254) return "utf-16le";
+  if (bytes[0] === 254 && bytes[1] === 255) return "utf-16be";
+  const header = contentType.match(/charset\s*=\s*["']?([^\s;"']+)/i)?.[1];
+  if (header) return header.toLowerCase();
+  const prefix = asciiPrefix(bytes), meta = prefix.match(/<meta\b[^>]*charset\s*=\s*["']?([^\s;"'/>]+)/i)?.[1] || prefix.match(/<meta\b[^>]*content\s*=\s*["'][^"']*charset\s*=\s*([^\s;"']+)/i)?.[1];
+  return (meta || "utf-8").toLowerCase();
+}
+function decodeResponseBody(bytes, contentType = "") {
+  const label = responseEncoding(bytes, contentType);
+  try {
+    return new TextDecoder(label, { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  }
+}
+function ensureTextResponse(text, contentType, url) {
+  if (contentType && !/(?:text\/|json|xml|xhtml|javascript|octet-stream)/i.test(contentType)) throw new Error(`\u0646\u0648\u0639 \u067E\u0627\u0633\u062E \u0645\u0628\u062F\u0623 \u0628\u0631\u0627\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0645\u0646\u0627\u0633\u0628 \u0646\u06CC\u0633\u062A (${contentType}).`);
+  const sample = text.slice(0, 2e5);
+  if (/(?:cf-chl-|challenge-platform|cdn-cgi\/challenge-platform|g-recaptcha|hcaptcha)/i.test(sample) || /<title[^>]*>\s*(?:Just a moment|Attention Required|Access denied)/i.test(sample)) throw new Error(`\u0635\u0641\u062D\u0647\u0654 \u0636\u062F\u0631\u0628\u0627\u062A/\u0686\u0627\u0644\u0634 \u0628\u0647\u200C\u062C\u0627\u06CC \u0645\u062D\u062A\u0648\u0627\u06CC \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 ${url} \u062F\u0631\u06CC\u0627\u0641\u062A \u0634\u062F. \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.`);
+}
+async function responseText(response, url) {
+  if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
+  const contentType = response.headers.get("content-type") || "", bytes = new Uint8Array(await response.arrayBuffer()), text = decodeResponseBody(bytes, contentType), finalUrl = response.headers.get("x-scraper-final-url") || url;
+  ensureTextResponse(text, contentType, finalUrl);
+  return { text, url: finalUrl, contentType };
+}
+async function safeText(raw2, maxBytes = 8e6) {
+  return responseText(await safeFetch(raw2, {}, maxBytes), raw2);
+}
+function normalizeProxyUrl(raw2) {
+  const value = String(raw2 || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith("/")) throw new Error(`\u0622\u062F\u0631\u0633 \u067E\u0631\u0627\u06A9\u0633\u06CC \xAB${value}\xBB \u0646\u0633\u0628\u06CC \u0627\u0633\u062A\u061B \u0628\u0627\u06CC\u062F \u0628\u0627 https:// \u0634\u0631\u0648\u0639 \u0634\u0648\u062F.`);
+  return "https://" + value.replace(/^\/+/, "");
+}
+async function safeTextViaWorker(raw2, workerUrl, maxBytes = 8e6) {
+  const target = assertPublicUrl(raw2).href, base = normalizeProxyUrl(workerUrl);
+  if (!base) throw new Error("\u0628\u0631\u0627\u06CC \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645\u060C Worker URL \u0631\u0627 \u062F\u0631 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.");
+  const gateway = sourceWorkerUrl(base, target);
+  const response = await fetchSourceGateway(target, gateway, { headers: { "x-target-url": target, accept: "text/html,application/xhtml+xml" } }, (options) => safeFetch(gateway, { ...options, apiMode: new Headers(options.headers).has("x-proxy-ua") }, maxBytes));
+  if (!response.ok) throw new Error(`HTTP ${response.status} from ${target} (route: worker, attempts: ${sourceGatewayAttempts(response).join(" \u2192 ")}); \u067E\u0627\u0633\u062E \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u0627\u0632 \u067E\u0631\u0627\u06A9\u0633\u06CC \u06CC\u0627 \u0645\u0628\u062F\u0623 \u0628\u0627\u0634\u062F.`);
+  const result = await responseText(response, target);
+  return { ...result, url: target };
+}
+var WOO_EDGE_ERRORS = /* @__PURE__ */ new Set([520, 521, 522, 523, 524, 525, 526]);
+function wooGatewayUrl(target, workerUrl) {
+  const base = normalizeProxyUrl(workerUrl);
+  if (!base) throw new Error("\u0622\u062F\u0631\u0633 Worker \u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648\u0627\u0631\u062F \u0646\u0634\u062F\u0647 \u0627\u0633\u062A.");
+  return sourceWorkerUrl(base, target);
+}
+async function tagNetwork(response, mode, fallbackStatus = 0) {
+  const headers = new Headers(response.headers);
+  headers.set("x-scraper-network-mode", mode);
+  if (fallbackStatus) headers.set("x-scraper-direct-status", String(fallbackStatus));
+  return new Response(await response.arrayBuffer(), { status: response.status, statusText: response.statusText, headers });
+}
+async function workerFetch(target, workerUrl, init, maxBytes, fallbackStatus = 0) {
+  const headers = new Headers(init.headers);
+  headers.set("x-target-url", target);
+  headers.set("x-scraper-target-url", target);
+  return tagNetwork(await safeFetch(wooGatewayUrl(target, workerUrl), { ...init, headers }, maxBytes), "worker", fallbackStatus);
+}
+async function safeBasalamFetch(raw2, init = {}, maxBytes) {
+  const target = assertPublicUrl(raw2).href, connections = await loadConnections();
+  const indirect = Boolean(connections.basalam?.netIndirect);
+  const workerUrl = connections.woo.network?.workerUrl || "";
+  if (indirect && workerUrl) return workerFetch(target, workerUrl, { ...init, apiMode: true }, maxBytes);
+  if (indirect && !workerUrl)
+    throw new Error("\xAB\u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645\xBB \u0628\u0631\u0627\u06CC \u0628\u0627\u0633\u0644\u0627\u0645 \u0631\u0648\u0634\u0646 \u0627\u0633\u062A \u0627\u0645\u0627 \u0622\u062F\u0631\u0633 Worker \u0648\u0627\u0633\u0637 \u0648\u0627\u0631\u062F \u0646\u0634\u062F\u0647\u061B \u0622\u0646 \u0631\u0627 \u062F\u0631 \xAB\u{1F6D2} \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u2190 \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644\xBB \u062A\u0646\u0638\u06CC\u0645 \u06A9\u0646\u06CC\u062F.");
+  return safeFetch(target, { ...init, apiMode: true }, maxBytes);
+}
+async function safeWooFetch(raw2, init = {}, maxBytes) {
+  const target = assertPublicUrl(raw2).href, connections = await loadConnections(), config = connections.woo.network || { mode: "auto", workerUrl: "" }, workerUrl = config.workerUrl || "";
+  if (config.mode === "worker") return workerFetch(target, workerUrl, init, maxBytes);
+  try {
+    const direct = await safeFetch(target, { ...init, apiMode: true }, maxBytes);
+    if (config.mode === "auto" && workerUrl && WOO_EDGE_ERRORS.has(direct.status)) {
+      const status = direct.status;
+      await direct.body?.cancel();
+      return workerFetch(target, workerUrl, init, maxBytes, status);
+    }
+    return tagNetwork(direct, "direct");
+  } catch (error) {
+    if (config.mode === "auto" && workerUrl) return workerFetch(target, workerUrl, init, maxBytes);
+    throw error;
+  }
+}
+
+// worker-src/scraper.ts
+init_utils();
+
+// worker-src/types.ts
+var DEFAULT_SELECTORS = {
+  container: "li.product",
+  title: "h2, h3, .woocommerce-loop-product__title",
+  price: ".price, .amount",
+  link: "a[href]",
+  image: "img"
+};
+
+// worker-src/scraper.ts
+var DEFAULT_CONTAINER = '.product, li.product, article.product, .product-item, .product-card, [data-product-id], [itemtype*="Product"]';
+var FALLBACKS = {
+  title: '.woocommerce-loop-product__title, .product-title, .product-name, [itemprop="name"], h1, h2, h3',
+  price: '.price ins, .sale-price, [itemprop="price"], .price, .amount, [data-price]',
+  link: 'a.woocommerce-LoopProduct-link, a.product-link, a[href*="/product/"], a[href*="/products/"], a[href]',
+  image: 'img.wp-post-image, img.product-image, [itemprop="image"], picture img, img, source',
+  sku: '[data-sku], [itemprop="sku"], .sku'
+};
+var DETAIL_KEYS = ["shortDesc", "price", "sku", "category", "tags", "weight", "stock", "brand"];
+var IMAGE_ATTRS = ["data-zoom-image", "data-large_image", "data-large-image", "data-full", "data-src", "data-lazy-src", "data-original", "src", "content", "href"];
+var LINK_ATTRS = ["data-href", "href", "data-url", "data-link", "data-product-url", "data-product-link", "content"];
+function onclickUrl(element) {
+  return element.getAttribute("onclick")?.match(/(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i)?.[1] || "";
+}
+var TITLE_ATTRS = ["data-title", "title", "aria-label", "content"];
+var PRICE_ATTRS = ["data-price", "data-regular-price", "data-sale-price", "content", "value"];
+var SKU_ATTRS = ["data-sku", "data-product-sku", "content", "value"];
+var VOID_TAGS = /* @__PURE__ */ new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+function hasEndTag(element) {
+  return !VOID_TAGS.has(String(element.tagName || "").toLowerCase());
+}
+async function sourceKey(value) {
+  return (await sha256(value)).slice(0, 32);
+}
+async function sourceText(url, indirect = false, maxBytes = 8e6) {
+  const network = resolveSourceNetwork((await getState("settings", {}))?.source, (await loadConnections()).ai.network, url);
+  const useWorker = Boolean(network.workerUrl) && (indirect || network.mode === "worker");
+  if (useWorker) {
+    try {
+      return { ...await safeTextViaWorker(url, network.workerUrl, maxBytes), route: "worker" };
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)} (route: worker)\u061B \u0642\u0631\u0627\u0631\u062F\u0627\u062F \u0622\u062F\u0631\u0633 \u067E\u0631\u0627\u06A9\u0633\u06CC \u0648 \u0645\u062C\u0648\u0632 \u062F\u0627\u0645\u0646\u0647\u0654 \u0645\u0628\u062F\u0623 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.`);
+    }
+  }
+  if (network.mode === "worker" && !network.workerUrl) throw new Error("Worker URL \u062F\u0631 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0627\u062A\u0635\u0627\u0644 \u0645\u0628\u062F\u0623 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.");
+  if (network.mode === "proxy") throw new Error("\u067E\u0631\u0648\u06A9\u0633\u06CC CONNECT \u062F\u0631 Cloudflare \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u0646\u0645\u06CC\u200C\u0634\u0648\u062F\u061B \u0631\u0648\u0634 Worker / \u067E\u0631\u0648\u06A9\u0633\u06CC \u0645\u0639\u06A9\u0648\u0633 \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F.");
+  if (indirect && network.mode !== "worker") throw new Error("\u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0645\u0628\u062F\u0623 \u062F\u0631 Cloudflare \u0641\u0642\u0637 \u0628\u0627 \u0631\u0648\u0634 Worker URL \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u0645\u06CC\u200C\u0634\u0648\u062F. (\u062F\u0631 \u0645\u062D\u06CC\u0637 Cloudflare \u067E\u0631\u0648\u06A9\u0633\u06CC HTTP \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0646\u06CC\u0633\u062A\u061B \u0622\u062F\u0631\u0633 Worker \u0648\u0627\u0633\u0637 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.)");
+  return { ...await safeText(url, maxBytes), route: "direct" };
+}
+function toAbsoluteUrl(value, base) {
+  try {
+    return new URL(value, base).href;
+  } catch {
+    return "";
+  }
+}
+var TRACKING_PARAMS = /^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
+var PAGING_PARAMS = /^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
+function selectorParts(selector) {
+  const out = [], value = String(selector || "");
+  let part = "", round = 0, square = 0, quote = "";
+  for (const char of value) {
+    if (quote) {
+      part += char;
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      part += char;
+    } else if (char === "(") {
+      round++;
+      part += char;
+    } else if (char === ")") {
+      round = Math.max(0, round - 1);
+      part += char;
+    } else if (char === "[") {
+      square++;
+      part += char;
+    } else if (char === "]") {
+      square = Math.max(0, square - 1);
+      part += char;
+    } else if (char === "," && !round && !square) {
+      if (part.trim()) out.push(part.trim());
+      part = "";
+    } else part += char;
+  }
+  if (part.trim()) out.push(part.trim());
+  return out;
+}
+function multilineSelectorParts(selector) {
+  return String(selector || "").split(/[\r\n|]+/).flatMap((part) => selectorParts(part)).filter(Boolean);
+}
+function isXPathSelector(selector) {
+  const value = String(selector || "").trim();
+  if (!value) return false;
+  if (/^(\(\/\/|\/\/|\/html\b|\/\*|\.\/\/|\.\/)/.test(value)) return true;
+  return value.startsWith("/") && (value.includes("@") || value.includes("["));
+}
+function splitOutsideXPath(input, seps) {
+  const parts = [];
+  let depth = 0, quote = "", current2 = "";
+  for (const ch of input) {
+    if (quote) {
+      current2 += ch;
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current2 += ch;
+      continue;
+    }
+    if (ch === "[") depth++;
+    else if (ch === "]") depth = Math.max(0, depth - 1);
+    if (depth === 0 && seps.includes(ch)) {
+      parts.push(current2);
+      current2 = "";
+      continue;
+    }
+    current2 += ch;
+  }
+  parts.push(current2);
+  return parts;
+}
+function splitXPathAnd(predicate) {
+  const parts = [];
+  let depth = 0, quote = "", current2 = "";
+  for (let i = 0; i < predicate.length; i++) {
+    const ch = predicate[i];
+    if (quote) {
+      current2 += ch;
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current2 += ch;
+      continue;
+    }
+    if (ch === "[" || ch === "(") depth++;
+    else if (ch === "]" || ch === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && predicate.startsWith(" and ", i)) {
+      parts.push(current2);
+      current2 = "";
+      i += 4;
+      continue;
+    }
+    current2 += ch;
+  }
+  parts.push(current2);
+  return parts;
+}
+function xpathSinglePredicateToCss(part, tag) {
+  const nth = tag === "*" ? "nth-child" : "nth-of-type", last = tag === "*" ? "last-child" : "last-of-type";
+  let match2 = part.match(/^(\d+)$/) || part.match(/^position\(\)\s*=\s*(\d+)$/);
+  if (match2) return `:${nth}(${match2[1]})`;
+  if (/^last\(\)$/.test(part)) return `:${last}`;
+  match2 = part.match(/^@([\w.-]+)\s*=\s*("([^"]*)"|'([^']*)')$/);
+  if (match2) return `[${match2[1]}="${String(match2[3] ?? match2[4] ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+  match2 = part.match(/^(contains|starts-with|ends-with)\(\s*@([\w.-]+)\s*,\s*("([^"]*)"|'([^']*)')\s*\)$/);
+  if (match2) {
+    const operator = match2[1] === "contains" ? "*=" : match2[1] === "starts-with" ? "^=" : "$=";
+    return `[${match2[2]}${operator}"${String(match2[4] ?? match2[5] ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+  }
+  return null;
+}
+function xpathPredicateToCss(predicate, tag) {
+  let css = "";
+  for (const raw2 of splitXPathAnd(predicate.trim())) {
+    const converted = xpathSinglePredicateToCss(raw2.trim(), tag);
+    if (converted === null) return null;
+    css += converted;
+  }
+  return css;
+}
+function xpathParseStep(raw2) {
+  const bracket = raw2.indexOf("["), tag = (bracket < 0 ? raw2 : raw2.slice(0, bracket)).trim();
+  if (!/^(\*|[A-Za-z_][\w.-]*)$/.test(tag)) return null;
+  const predicates = [];
+  if (bracket >= 0) {
+    const rest = raw2.slice(bracket);
+    let cursor = 0;
+    while (cursor < rest.length) {
+      if (rest[cursor] !== "[") return null;
+      let depth = 0, quote = "", end = cursor;
+      for (; end < rest.length; end++) {
+        const ch = rest[end];
+        if (quote) {
+          if (ch === quote) quote = "";
+        } else if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === "[") depth++;
+        else if (ch === "]") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      if (depth !== 0) return null;
+      predicates.push(rest.slice(cursor + 1, end).trim());
+      cursor = end + 1;
+      while (rest[cursor] === " " || rest[cursor] === "	") cursor++;
+    }
+  }
+  return { tag, predicates };
+}
+function xpathSingleToCss(input) {
+  if (input.startsWith("(")) return null;
+  let cursor = 0, pendingAxis = "descendant", scoped = false;
+  if (input.startsWith(".//")) cursor = 3;
+  else if (input.startsWith("./")) {
+    cursor = 2;
+    pendingAxis = "child";
+    scoped = true;
+  } else if (input.startsWith("//")) cursor = 2;
+  else if (input.startsWith("/")) {
+    cursor = 1;
+    pendingAxis = "child";
+  } else return null;
+  const steps = [];
+  while (cursor < input.length) {
+    let end = cursor, depth = 0, quote = "";
+    for (; end < input.length; end++) {
+      const ch = input[end];
+      if (quote) {
+        if (ch === quote) quote = "";
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === "[") depth++;
+      else if (ch === "]") {
+        depth--;
+        if (depth < 0) return null;
+      } else if (ch === "/" && depth === 0) break;
+    }
+    const step = xpathParseStep(input.slice(cursor, end).trim());
+    if (!step) return null;
+    steps.push({ ...step, axis: pendingAxis });
+    if (end >= input.length) break;
+    if (input[end + 1] === "/") {
+      pendingAxis = "descendant";
+      cursor = end + 2;
+    } else {
+      pendingAxis = "child";
+      cursor = end + 1;
+    }
+  }
+  if (!steps.length) return null;
+  let css = scoped ? ":scope" : "";
+  for (let index = 0; index < steps.length; index++) {
+    const step = steps[index];
+    let chunk = step.tag === "*" ? "" : cssEscapeIdent(step.tag);
+    for (const predicate of step.predicates) {
+      const converted = xpathPredicateToCss(predicate, step.tag);
+      if (converted === null) return null;
+      chunk += converted;
+    }
+    if (!chunk) chunk = "*";
+    if (index > 0) css += step.axis === "descendant" ? " " : " > ";
+    else if (scoped) css += " > ";
+    css += chunk;
+  }
+  return css || null;
+}
+function xpathToCss(selector) {
+  const input = String(selector || "").trim();
+  if (!isXPathSelector(input)) return null;
+  const arms = splitOutsideXPath(input, "|");
+  if (arms.length > 1) {
+    const converted = [];
+    for (const arm of arms) {
+      const css = xpathSingleToCss(arm.trim());
+      if (css === null) return null;
+      converted.push(css);
+    }
+    return converted.join(", ");
+  }
+  return xpathSingleToCss(input);
+}
+function safeOn(rewriter, selector, handler) {
+  const css = xpathToCss(selector) ?? selector;
+  try {
+    rewriter.on(css, handler);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function cleanText(value) {
+  return normalizeDigits(decodeEntities(String(value || ""))).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g, " ").replace(/\s+/g, " ").trim();
+}
+function decodeEntities(value) {
+  if (!value.includes("&")) return value;
+  return value.replace(/&(?:nbsp|#160|#xa0);/gi, " ").replace(/&(?:quot|#34|#x22);/gi, '"').replace(/&(?:apos|#39|#x27);/gi, "'").replace(/&(?:lt|#60|#x3c);/gi, "<").replace(/&(?:gt|#62|#x3e);/gi, ">").replace(/&#(\d{1,7});/g, (_, code) => safeCodePoint(Number(code))).replace(/&#x([0-9a-f]{1,6});/gi, (_, code) => safeCodePoint(parseInt(code, 16))).replace(/&(?:amp|#38|#x26);/gi, "&");
+}
+function safeCodePoint(code) {
+  if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "";
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return "";
+  }
+}
+function normalizeDigits(value) {
+  return String(value || "").replace(/[۰-۹]/g, (d) => String("\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9".indexOf(d))).replace(/[٠-٩]/g, (d) => String("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669".indexOf(d)));
+}
+function firstAttribute(element, names) {
+  for (const name of names) {
+    const value = element.getAttribute(name);
+    if (value && value.trim()) return value.trim();
+  }
+  return "";
+}
+function srcsetValue(value) {
+  const items = String(value || "").split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
+    const match2 = part.match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)(w|x))?$/i);
+    return { url: match2?.[1] || part.split(/\s+/)[0], score: Number(match2?.[2] || 1) * (match2?.[3]?.toLowerCase() === "x" ? 1e4 : 1) };
+  }).filter((item) => item.url);
+  return items.sort((a, b) => b.score - a.score)[0]?.url || "";
+}
+function elementValue(field, element, text = "") {
+  if (field === "link") return firstAttribute(element, LINK_ATTRS) || onclickUrl(element);
+  if (field === "image") return firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("data-srcset") || element.getAttribute("srcset") || "");
+  if (field === "title") return cleanText(text) || firstAttribute(element, TITLE_ATTRS);
+  if (field === "price") return cleanText(text) || firstAttribute(element, PRICE_ATTRS);
+  if (field === "sku") return cleanText(text) || firstAttribute(element, SKU_ATTRS);
+  return cleanText(text);
+}
+function canonicalUrl(value, baseUrl, stripAllQuery = false) {
+  const raw2 = String(value || "").trim();
+  if (!raw2 || /^(?:#|javascript:|mailto:|tel:|data:|blob:)/i.test(raw2)) return "";
+  const absolute = toAbsoluteUrl(raw2.replace(/&amp;/gi, "&"), baseUrl);
+  if (!absolute || !/^(https?):/i.test(absolute)) return "";
+  try {
+    const url = new URL(absolute);
+    url.hash = "";
+    if (stripAllQuery) {
+      for (const key2 of [...url.searchParams.keys()]) {
+        if (TRACKING_PARAMS.test(key2) || PAGING_PARAMS.test(key2)) url.searchParams.delete(key2);
+      }
+      url.searchParams.sort();
+    } else for (const key2 of [...url.searchParams.keys()]) if (TRACKING_PARAMS.test(key2)) url.searchParams.delete(key2);
+    url.pathname = url.pathname.replace(/\/{2,}/g, "/");
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return absolute;
+  }
+}
+function imageUrl(value, baseUrl) {
+  const raw2 = String(value || "").trim();
+  if (!raw2 || /^(data:|blob:|javascript:|#)/i.test(raw2) || /(?:placeholder|spacer|transparent|loading)(?:[-_.]|$)/i.test(raw2)) return "";
+  const absolute = toAbsoluteUrl(raw2.replace(/&amp;/gi, "&"), baseUrl);
+  return /^(https?):/i.test(absolute) ? absolute : "";
+}
+function galleryKey(url) {
+  return url.replace(/-\d{2,4}x\d{2,4}(?=\.[a-z]{3,5}(?:[?#]|$))/i, "").replace(/[?#].*$/, "");
+}
+function addGalleryImage(images, raw2, baseUrl, max2 = 30) {
+  const url = imageUrl(raw2, baseUrl);
+  if (url && images.length < Math.max(1, Math.min(30, max2)) && !images.some((existing) => galleryKey(existing) === galleryKey(url))) images.push(url);
+}
+function linkScore(value) {
+  if (!value || /^(javascript:|mailto:|tel:|#)/i.test(value)) return -1e3;
+  let score = 0;
+  if (/\/products?\//i.test(value)) score += 40;
+  if (/[?&](?:add-to-cart|remove_item)=|\/cart\/?|wishlist|compare/i.test(value)) score -= 200;
+  return score;
+}
+function setCardValue(card, field, value, rank, baseUrl) {
+  let clean2 = String(value || "").trim();
+  if (field === "link") {
+    clean2 = canonicalUrl(clean2, baseUrl);
+    rank += linkScore(clean2);
+  } else if (field === "image") clean2 = imageUrl(clean2, baseUrl);
+  else clean2 = cleanText(clean2);
+  if (!clean2) return;
+  const previous = card.values[field];
+  if (!previous || rank > previous.rank) card.values[field] = { value: clean2, rank };
+}
+var CardHandler = class {
+  constructor(output, baseUrl) {
+    this.output = output;
+    this.baseUrl = baseUrl;
+  }
+  stack = [];
+  element(element) {
+    const card = { values: {} };
+    this.stack.push(card);
+    setCardValue(card, "link", firstAttribute(element, LINK_ATTRS), 15, this.baseUrl);
+    setCardValue(card, "image", firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("srcset") || ""), 15, this.baseUrl);
+    setCardValue(card, "title", firstAttribute(element, TITLE_ATTRS), 15, this.baseUrl);
+    setCardValue(card, "price", firstAttribute(element, PRICE_ATTRS), 15, this.baseUrl);
+    setCardValue(card, "sku", firstAttribute(element, SKU_ATTRS), 15, this.baseUrl);
+    if (!hasEndTag(element)) {
+      this.stack.pop();
+      this.output.push(card);
+      return;
+    }
+    element.onEndTag(() => {
+      const ended = this.stack.pop();
+      if (ended) this.output.push(ended);
+    });
+  }
+  current() {
+    return this.stack[this.stack.length - 1];
+  }
+};
+var CardFieldHandler = class {
+  constructor(cards, field, rank, baseUrl) {
+    this.cards = cards;
+    this.field = field;
+    this.rank = rank;
+    this.baseUrl = baseUrl;
+  }
+  captures = [];
+  element(element) {
+    const card = this.cards.current();
+    if (!card || this.captures.some((capture2) => capture2.card === card)) return;
+    const immediate = elementValue(this.field, element);
+    if (immediate) setCardValue(card, this.field, immediate, this.rank + 2, this.baseUrl);
+    if (this.field === "link" || this.field === "image" || !hasEndTag(element)) return;
+    const capture = { card, text: "", element };
+    this.captures.push(capture);
+    element.onEndTag(() => {
+      setCardValue(card, this.field, elementValue(this.field, element, capture.text), this.rank, this.baseUrl);
+      const index = this.captures.indexOf(capture);
+      if (index >= 0) this.captures.splice(index, 1);
+    });
+  }
+  text(chunk) {
+    for (const capture of this.captures) capture.text += chunk.text;
+  }
+};
+function numberFromText(value) {
+  const normalized = normalizeDigits(value).replace(/[٬،]/g, ",").replace(/\u00a0/g, " ");
+  const matches = normalized.match(/\d[\d\s,._]{0,30}\d|\d/g) || [];
+  const numbers = matches.map((raw2) => {
+    let token = raw2.trim().replace(/\s/g, "");
+    if (/^\d+[.,]\d{1,2}$/.test(token) && !/[٬،]/.test(raw2)) return Number(token.replace(",", "."));
+    if (/^\d{1,3}(?:,\d{3})+\.\d{1,2}$/.test(token)) return Number(token.replace(/,/g, ""));
+    if (/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(token)) return Number(token.replace(/\./g, "").replace(",", "."));
+    token = token.replace(/[^\d]/g, "");
+    return Number(token || 0);
+  }).filter((n) => Number.isFinite(n) && n >= 0);
+  return numbers.length ? Math.max(...numbers) : 0;
+}
+async function parseJsonLdProducts(html, baseUrl) {
+  const products = [];
+  for (const match2 of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const data = JSON.parse(match2[1].replace(/^\s*<!--|-->\s*$/g, ""));
+      const walk = (node, insideVariant = false) => {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) {
+          node.forEach((item2) => walk(item2, insideVariant));
+          return;
+        }
+        const item = node, types = Array.isArray(item["@type"]) ? item["@type"] : [item["@type"]];
+        if (!insideVariant && types.some((type) => String(type || "").toLowerCase() === "product")) {
+          const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers || {};
+          const image = Array.isArray(item.image) ? item.image[0] : typeof item.image === "object" ? item.image?.url : item.image, imageValue3 = imageUrl(String(image || ""), baseUrl);
+          const title = cleanText(item.name || "");
+          const url = canonicalUrl(item.url || item["@id"] || "", baseUrl), availability = String(offers.availability || "");
+          const priceText = cleanText(String(offers.price || offers.lowPrice || ""));
+          if (title && imageValue3 && priceText && numberFromText(priceText) > 0) products.push({ sourceKey: "", title, price: numberFromText(priceText), priceText, url, image: imageValue3, images: imageValue3 ? [imageValue3] : [], sku: cleanText(String(item.sku || item.mpn || "")), brand: cleanText(String(typeof item.brand === "object" ? item.brand?.name : item.brand || "")), shortDesc: cleanText(String(item.description || "")), longDesc: "", stock: /outofstock|soldout|discontinued/i.test(availability) ? 0 : void 0, weight: void 0, category: cleanText(String(item.category || "")), tags: cleanText(Array.isArray(item.keywords) ? item.keywords.join(", ") : String(item.keywords || "")), variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
+        }
+        for (const [key2, value] of Object.entries(item)) walk(value, insideVariant || key2 === "hasVariant" || key2 === "isVariantOf");
+      };
+      walk(data);
+    } catch {
+    }
+  }
+  return products;
+}
+async function parseCards(html, baseUrl, selectors) {
+  const cards = [];
+  const cardHandler = new CardHandler(cards, baseUrl);
+  const rewriter = new HTMLRewriter();
+  const containers = selectorParts(selectors.container || DEFAULT_CONTAINER).map((selector) => selector.includes(":nth-of-type(") ? selector.replace(/:nth-of-type\(\d+\)/g, "").trim() || selector : selector);
+  let validContainer = false;
+  for (const selector of containers) validContainer = safeOn(rewriter, selector, cardHandler) || validContainer;
+  if (!validContainer) throw new Error("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0645\u062D\u0635\u0648\u0644 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A.");
+  for (const field of ["title", "price", "link", "image", "sku"]) {
+    const configured = selectorParts(selectors[field]);
+    for (const selector of configured) {
+      safeOn(rewriter, selector, new CardFieldHandler(cardHandler, field, 100, baseUrl));
+      if (field === "image") for (const suffix of ["img", "source", "a"]) safeOn(rewriter, `${selector} ${suffix}`, new CardFieldHandler(cardHandler, field, 99, baseUrl));
+      if (field === "link") for (const suffix of ["a[href]", "[data-href]", "[data-url]", "[data-link]", "[data-product-url]", "[data-product-link]", "[onclick]"]) safeOn(rewriter, `${selector} ${suffix}`, new CardFieldHandler(cardHandler, field, 99, baseUrl));
+    }
+    for (const selector of selectorParts(FALLBACKS[field])) safeOn(rewriter, selector, new CardFieldHandler(cardHandler, field, 10, baseUrl));
+  }
+  try {
+    await rewriter.transform(new Response(html, { headers: { "content-type": "text/html; charset=UTF-8" } })).text();
+  } catch (error) {
+    throw new Error(`\u067E\u0631\u062F\u0627\u0632\u0634 HTML \u0641\u0647\u0631\u0633\u062A \u0634\u06A9\u0633\u062A \u062E\u0648\u0631\u062F: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const output = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const card of cards) {
+    let title = card.values.title?.value || "", url = card.values.link?.value || "", image = card.values.image?.value || "";
+    const priceText = card.values.price?.value || "", sku = card.values.sku?.value || "";
+    if (!title && url) {
+      try {
+        title = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "").replace(/[-_]+/g, " ");
+      } catch {
+      }
+    }
+    if (!title && !url) continue;
+    const identity = url ? canonicalUrl(url, baseUrl, true) : `${title}|${priceText}`;
+    const key2 = await sourceKey(identity);
+    if (seen.has(key2)) continue;
+    seen.add(key2);
+    output.push({ sourceKey: key2, title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku, shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  }
+  const structured = await parseJsonLdProducts(html, baseUrl), byKey = /* @__PURE__ */ new Map(), byUrl = /* @__PURE__ */ new Map(), bySku = /* @__PURE__ */ new Map(), byTitle = /* @__PURE__ */ new Map();
+  const addUnique = (map2, key2, product) => {
+    if (key2) map2.set(key2, map2.has(key2) ? null : product);
+  };
+  for (const product of structured) {
+    const identity = product.url ? canonicalUrl(product.url, baseUrl, true) : `${product.title}|${product.priceText}`;
+    product.sourceKey = await sourceKey(identity);
+    byKey.set(product.sourceKey, product);
+    addUnique(byUrl, canonicalUrl(product.url, baseUrl, true), product);
+    addUnique(bySku, cleanText(product.sku || "").toLowerCase(), product);
+    addUnique(byTitle, cleanText(product.title).toLowerCase(), product);
+  }
+  for (let index = 0; index < output.length; index++) {
+    const product = output[index], urlKey = canonicalUrl(product.url, baseUrl, true), skuKey = cleanText(product.sku || "").toLowerCase(), titleKey = cleanText(product.title).toLowerCase();
+    const fallback = byKey.get(product.sourceKey) || byUrl.get(urlKey) || bySku.get(skuKey) || byTitle.get(titleKey) || null;
+    if (!fallback) continue;
+    const merged = { ...fallback, ...product, title: product.title || fallback.title, price: product.price > 0 ? product.price : fallback.price, priceText: product.priceText || fallback.priceText, url: product.url || fallback.url, image: product.image || fallback.image, images: product.images.length ? product.images : fallback.images, shortDesc: product.shortDesc || fallback.shortDesc, longDesc: product.longDesc || fallback.longDesc, sku: product.sku || fallback.sku, brand: product.brand || fallback.brand, stock: product.stock ?? fallback.stock, weight: product.weight ?? fallback.weight, category: product.category || fallback.category, tags: product.tags || fallback.tags, variations: product.variations?.length ? product.variations : fallback.variations, variationGroups: product.variationGroups?.length ? product.variationGroups : fallback.variationGroups, variationPrices: Object.keys(product.variationPrices || {}).length ? product.variationPrices : fallback.variationPrices };
+    const mergedIdentity = merged.url ? canonicalUrl(merged.url, baseUrl, true) : `${merged.title}|${merged.priceText}`;
+    merged.sourceKey = await sourceKey(mergedIdentity);
+    output[index] = merged;
+    byKey.delete(fallback.sourceKey);
+  }
+  const final = [], finalSeen = /* @__PURE__ */ new Set();
+  for (const product of [...output, ...byKey.values()]) if (!finalSeen.has(product.sourceKey)) {
+    finalSeen.add(product.sourceKey);
+    final.push(product);
+  }
+  return final;
+}
+var DETAIL_ATTRS = { shortDesc: ["data-description", "data-summary", "content", "title", "aria-label"], sku: SKU_ATTRS, category: ["data-category", "data-category-name", "content", "title"], tags: ["data-tags", "data-keywords", "content"], weight: ["data-weight", "data-product-weight", "content", "value"], stock: ["data-stock", "data-quantity", "data-stock-quantity", "content", "value"], brand: ["data-brand", "data-brand-name", "content", "title"] };
+var ScalarHandler = class {
+  constructor(key2, values) {
+    this.key = key2;
+    this.values = values;
+  }
+  captures = [];
+  element(element) {
+    if (this.values.get(this.key) || this.captures.length) return;
+    const immediate = firstAttribute(element, DETAIL_ATTRS[this.key] || ["data-value", "content", "value"]);
+    if (immediate) this.values.set(this.key, cleanText(immediate));
+    if (!hasEndTag(element)) return;
+    const capture = { text: "", element };
+    this.captures.push(capture);
+    element.onEndTag(() => {
+      if (!this.values.get(this.key)) {
+        const value = cleanText(capture.text);
+        if (value) this.values.set(this.key, value);
+      }
+      const index = this.captures.indexOf(capture);
+      if (index >= 0) this.captures.splice(index, 1);
+    });
+  }
+  text(chunk) {
+    for (const capture of this.captures) capture.text += chunk.text;
+  }
+};
+var DetailImageHandler = class {
+  constructor(result, baseUrl) {
+    this.result = result;
+    this.baseUrl = baseUrl;
+  }
+  element(element) {
+    if (this.result.mainImage) return;
+    const value = firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("data-srcset") || element.getAttribute("srcset") || "");
+    this.result.mainImage = imageUrl(value, this.baseUrl);
+  }
+};
+var GalleryHandler = class {
+  constructor(images, baseUrl, max2 = 30) {
+    this.images = images;
+    this.baseUrl = baseUrl;
+    this.max = max2;
+  }
+  element(element) {
+    const candidates = [...IMAGE_ATTRS.map((attr) => element.getAttribute(attr) || ""), element.getAttribute("href") || "", element.getAttribute("content") || "", srcsetValue(element.getAttribute("data-srcset") || ""), srcsetValue(element.getAttribute("srcset") || "")];
+    for (const candidate of candidates) addGalleryImage(this.images, candidate, this.baseUrl, this.max);
+  }
+};
+var LongDescriptionHandler = class {
+  constructor(marker) {
+    this.marker = marker;
+  }
+  element(element) {
+    element.before(`<!--${this.marker}:START-->`, { html: true });
+    element.after(`<!--${this.marker}:END-->`, { html: true });
+  }
+};
+var SanitizeHandler = class {
+  element(element) {
+    for (const [name] of Array.from(element.attributes)) if (/^on/i.test(name) || name.toLowerCase() === "srcdoc") element.removeAttribute(name);
+    for (const name of ["href", "src", "data-src"]) {
+      const value = element.getAttribute(name);
+      if (value && /^\s*(?:javascript|data\s*:\s*text\/html)/i.test(value)) element.removeAttribute(name);
+    }
+  }
+};
+var RemoveHandler = class {
+  element(element) {
+    element.remove();
+  }
+};
+function variationName(element) {
+  return cleanText(firstAttribute(element, ["data-attribute_name", "data-attribute-name", "data-name", "name", "data-label", "aria-label"]));
+}
+var VariationContext = class {
+  stack = [];
+  current() {
+    return this.stack[this.stack.length - 1] || "";
+  }
+};
+var VariationScopeHandler = class {
+  constructor(context) {
+    this.context = context;
+  }
+  element(element) {
+    if (!hasEndTag(element)) return;
+    const name = variationName(element);
+    this.context.stack.push(name);
+    element.onEndTag(() => this.context.stack.pop());
+  }
+};
+function mergeVariation(result, element, text, baseUrl, inheritedName = "") {
+  const attrs = Object.fromEntries(Array.from(element.attributes));
+  let json3 = {};
+  for (const key2 of ["data-product_variation", "data-variation", "data-product-variation"]) {
+    try {
+      if (attrs[key2]) json3 = JSON.parse(attrs[key2]);
+    } catch {
+    }
+  }
+  const name = variationName(element) || cleanText(String(json3.attribute_name || json3.name || "")) || inheritedName;
+  const explicitValue = firstAttribute(element, ["data-value", "value", "data-variation", "data-slug"]) || String(json3.variation || json3.value || "");
+  const tag = String(element.tagName || "").toLowerCase();
+  if (!name && !explicitValue && !["option", "button", "input"].includes(tag)) return;
+  const value = cleanText(explicitValue || text);
+  if (!value || /^(انتخاب|choose|select|لطفا)/i.test(value)) return;
+  const label = cleanText(text);
+  for (const item of [value, label]) if (item && item.length <= 180 && !result.variations.includes(item)) result.variations.push(item);
+  if (name) {
+    let group = result.variationGroups.find((group2) => group2.name === name);
+    if (!group) {
+      group = { name, values: [] };
+      result.variationGroups.push(group);
+    }
+    if (!group.values.includes(value)) group.values.push(value);
+  }
+  const price = numberFromText(String(json3.display_price || json3.price || firstAttribute(element, ["data-display_price", "data-display-price", "data-price", "data-regular-price", "data-sale-price"]) || text));
+  if (price > 0) {
+    result.variationPrices[value] = price;
+    if (label) result.variationPrices[label] = price;
+  }
+  const variationImage = String(json3.image?.full_src || json3.image?.src || json3.image || firstAttribute(element, IMAGE_ATTRS) || "");
+  addGalleryImage(result.images, variationImage, baseUrl);
+}
+var VariationHandler = class {
+  constructor(result, baseUrl, context) {
+    this.result = result;
+    this.baseUrl = baseUrl;
+    this.context = context;
+  }
+  captures = [];
+  element(element) {
+    if (!hasEndTag(element)) {
+      mergeVariation(this.result, element, "", this.baseUrl, this.context.current());
+      return;
+    }
+    const capture = { element, text: "" };
+    this.captures.push(capture);
+    element.onEndTag(() => {
+      mergeVariation(this.result, element, capture.text, this.baseUrl, this.context.current());
+      const index = this.captures.indexOf(capture);
+      if (index >= 0) this.captures.splice(index, 1);
+    });
+  }
+  text(chunk) {
+    for (const capture of this.captures) capture.text += chunk.text;
+  }
+};
+function parseSpecFragment(html) {
+  if (!html) return [];
+  const rows2 = [];
+  const cell = (value) => cleanText(value.replace(/<[^>]*>/g, " "));
+  for (const match2 of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)) {
+    const cells = [...match2[1].matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)\s*>/gi)].map((m) => cell(m[1]));
+    if (cells.length >= 2 && cells[0] && cells[1]) rows2.push({ name: cells[0], value: cells.slice(1).filter(Boolean).join(" ") });
+  }
+  if (!rows2.length) {
+    const terms = [...html.matchAll(/<dt\b[^>]*>([\s\S]*?)<\/dt\s*>/gi)].map((m) => cell(m[1]));
+    const values = [...html.matchAll(/<dd\b[^>]*>([\s\S]*?)<\/dd\s*>/gi)].map((m) => cell(m[1]));
+    terms.forEach((name, index) => {
+      const value = values[index] || "";
+      if (name && value) rows2.push({ name, value });
+    });
+  }
+  if (!rows2.length) for (const match2 of html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)) {
+    const parts = cell(match2[1]).split(/\s*[:：]\s*/);
+    if (parts.length >= 2 && parts[0] && parts[1]) rows2.push({ name: parts[0], value: parts.slice(1).join(": ") });
+  }
+  return rows2.filter((row) => row.name && row.value).slice(0, 60);
+}
+function extractMarkedFragment(html, marker) {
+  const start = `<!--${marker}:START-->`, end = `<!--${marker}:END-->`, from = html.indexOf(start);
+  if (from < 0) return "";
+  const to = html.indexOf(end, from + start.length);
+  return to < 0 ? "" : html.slice(from + start.length, to).trim();
+}
+function stripUnsafeHtml(html) {
+  return html.replace(/<(script|style|iframe|object|embed|form)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<(script|style|iframe|object|embed|form)\b[^>]*\/?\s*>/gi, "").replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "").replace(/\s+(href|src|srcdoc)\s*=\s*(["'])\s*(?:javascript|data\s*:\s*text\/html)[\s\S]*?\2/gi, "");
+}
+async function parseDetailPage(html, baseUrl, selectors) {
+  const result = { shortDesc: "", longDesc: "", price: "", sku: "", brand: "", stock: "", weight: "", category: "", tags: "", mainImage: "", images: [], variations: [], variationGroups: [], variationPrices: {} };
+  const values = /* @__PURE__ */ new Map(), rewriter = new HTMLRewriter();
+  for (const key2 of DETAIL_KEYS) for (const selector of selectorParts(selectors[key2])) safeOn(rewriter, selector, new ScalarHandler(key2, values));
+  const marker = `SCRAPER4_${Math.random().toString(36).slice(2)}`;
+  for (const selector of selectorParts(selectors.longDesc)) {
+    safeOn(rewriter, selector, new LongDescriptionHandler(marker));
+  }
+  const specsMarker = `SCRAPER4S_${Math.random().toString(36).slice(2)}`;
+  for (const selector of multilineSelectorParts(selectors.specs)) {
+    safeOn(rewriter, selector, new LongDescriptionHandler(specsMarker));
+    for (const suffix of ["script", "style", "iframe", "object", "embed", "form"]) safeOn(rewriter, `${selector} ${suffix}`, new RemoveHandler());
+    safeOn(rewriter, `${selector} *`, new SanitizeHandler());
+  }
+  const detailImage = new DetailImageHandler(result, baseUrl);
+  for (const selector of selectorParts(selectors.detailImage)) {
+    safeOn(rewriter, selector, detailImage);
+    for (const suffix of ["img", "source", "a[href]", "[data-src]", "[data-large_image]", "[data-zoom-image]"]) safeOn(rewriter, `${selector} ${suffix}`, detailImage);
+  }
+  const galleryMax = Math.max(1, Math.min(30, Math.trunc(Number(selectors.galleryMax) || 30)));
+  const galleryImages = [], gallery = new GalleryHandler(galleryImages, baseUrl, galleryMax);
+  for (const selector of multilineSelectorParts(selectors.gallery)) {
+    safeOn(rewriter, selector, gallery);
+    for (const suffix of ["img", "source", "a", "meta", "[data-src]", "[data-zoom-image]"]) safeOn(rewriter, `${selector} ${suffix}`, gallery);
+  }
+  const includeGallery = multilineSelectorParts(selectors.gallery).length > 0;
+  const variationContext = new VariationContext();
+  for (const selector of multilineSelectorParts(selectors.variations)) {
+    safeOn(rewriter, `${selector} select`, new VariationScopeHandler(variationContext));
+    safeOn(rewriter, selector, new VariationHandler(result, baseUrl, variationContext));
+    for (const suffix of ["option", "button", "input", "[data-value]", "[data-variation]", "[data-product_variation]"]) safeOn(rewriter, `${selector} ${suffix}`, new VariationHandler(result, baseUrl, variationContext));
+    if (includeGallery) for (const suffix of ["img", "source", "a[href]", "[data-src]", "[data-large_image]", "[data-zoom-image]"]) safeOn(rewriter, `${selector} ${suffix}`, gallery);
+  }
+  let transformed = "";
+  try {
+    transformed = await rewriter.transform(new Response(html, { headers: { "content-type": "text/html; charset=UTF-8" } })).text();
+  } catch (error) {
+    throw new Error(`\u067E\u0631\u062F\u0627\u0632\u0634 HTML \u062C\u0632\u0626\u06CC\u0627\u062A \u0634\u06A9\u0633\u062A \u062E\u0648\u0631\u062F: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const key2 of DETAIL_KEYS) result[key2] = values.get(key2) || "";
+  result.longDesc = stripUnsafeHtml(extractMarkedFragment(transformed, marker));
+  const specRows = parseSpecFragment(extractMarkedFragment(transformed, specsMarker));
+  if (specRows.length) result.specs = specRows;
+  if (includeGallery) for (const image of result.images) addGalleryImage(galleryImages, image, baseUrl, galleryMax);
+  result.images = galleryImages;
+  applyJsonLdDetail(html, baseUrl, result, galleryMax, includeGallery);
+  if (selectors.gallerySkipFirst && result.images.length) result.images = result.images.slice(1);
+  result.variations = [...new Set(result.variations.map(cleanText).filter(Boolean))];
+  result.variationGroups = result.variationGroups.filter((group) => group.name && group.values.length).map((group) => ({ ...group, values: [...new Set(group.values.map(cleanText).filter(Boolean))] }));
+  return result;
+}
+function applyJsonLdDetail(html, baseUrl, result, galleryMax = 30, includeGallery = true) {
+  const imageValue3 = (raw2) => String(typeof raw2 === "object" ? raw2?.url || raw2?.contentUrl || raw2?.["@id"] || "" : raw2 || "");
+  const addVariant = (variant) => {
+    if (!variant || typeof variant !== "object") return;
+    const groups = [];
+    for (const key2 of ["color", "size", "material", "pattern"]) {
+      const value = cleanText(String(variant[key2] || ""));
+      if (value) groups.push([key2, value]);
+    }
+    const properties = Array.isArray(variant.additionalProperty) ? variant.additionalProperty : [variant.additionalProperty];
+    for (const property of properties) if (property && typeof property === "object") {
+      const name = cleanText(String(property.name || property.propertyID || "\u0648\u06CC\u0698\u06AF\u06CC")), value = cleanText(String(property.value || property.valueReference?.name || ""));
+      if (value) groups.push([name, value]);
+    }
+    if (!groups.length && variant.isVariantOf) {
+      const value = cleanText(String(variant.name || ""));
+      if (value) groups.push(["\u062A\u0646\u0648\u0639", value]);
+    }
+    const offer = Array.isArray(variant.offers) ? variant.offers[0] : variant.offers || {}, price = numberFromText(String(offer.price || offer.lowPrice || offer.highPrice || ""));
+    for (const [name, value] of groups) {
+      if (!result.variations.includes(value)) result.variations.push(value);
+      let group = result.variationGroups.find((item) => item.name === name);
+      if (!group) {
+        group = { name, values: [] };
+        result.variationGroups.push(group);
+      }
+      if (!group.values.includes(value)) group.values.push(value);
+      if (price > 0) result.variationPrices[value] = price;
+    }
+    if (includeGallery) {
+      const images = Array.isArray(variant.image) ? variant.image : [variant.image];
+      for (const raw2 of images) addGalleryImage(result.images, imageValue3(raw2), baseUrl, galleryMax);
+    }
+  };
+  for (const match2 of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) try {
+    const root = JSON.parse(match2[1].replace(/^\s*<!--|-->\s*$/g, "")), queue = [root];
+    while (queue.length) {
+      const node = queue.shift();
+      if (!node || typeof node !== "object") continue;
+      if (Array.isArray(node)) {
+        queue.push(...node);
+        continue;
+      }
+      queue.push(...Object.values(node).filter((value) => value && typeof value === "object"));
+      const types = (Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]]).map((type) => String(type || "").toLowerCase());
+      if (!types.includes("product") && !types.includes("productgroup")) continue;
+      if (types.includes("product")) {
+        if (!result.sku) result.sku = cleanText(String(node.sku || node.mpn || ""));
+        if (!result.brand) result.brand = cleanText(String(typeof node.brand === "object" ? node.brand?.name : node.brand || ""));
+        if (!result.category) result.category = cleanText(String(node.category || ""));
+        if (!result.tags) result.tags = cleanText(Array.isArray(node.keywords) ? node.keywords.join(", ") : String(node.keywords || ""));
+        if (!result.shortDesc) result.shortDesc = cleanText(String(node.description || ""));
+        if (!result.weight) result.weight = cleanText(String(typeof node.weight === "object" ? node.weight.value || node.weight.valueReference?.value || "" : node.weight || ""));
+        const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers || {}, availability = String(offer.availability || "");
+        if (!result.stock && /outofstock|soldout|discontinued/i.test(availability)) result.stock = "0";
+        const images = Array.isArray(node.image) ? node.image : [node.image];
+        if (!result.mainImage) for (const raw2 of images) {
+          const candidate = imageUrl(imageValue3(raw2), baseUrl);
+          if (candidate) {
+            result.mainImage = candidate;
+            break;
+          }
+        }
+        if (includeGallery) for (const raw2 of images) addGalleryImage(result.images, imageValue3(raw2), baseUrl, galleryMax);
+        if (node.isVariantOf) addVariant(node);
+      }
+      const variants = Array.isArray(node.hasVariant) ? node.hasVariant : [node.hasVariant];
+      for (const variant of variants) addVariant(variant);
+    }
+  } catch {
+  }
+}
+function hasDetailSelectors(selectors) {
+  return [...DETAIL_KEYS, "longDesc", "detailImage", "gallery", "variations"].some((key2) => String(selectors[key2] || "").trim().length > 0);
+}
+async function scrapeDetails(product, selectors, indirect = false, maxBytes = 4e6, document) {
+  if (!product.url || !hasDetailSelectors(selectors)) return product;
+  const { text } = document || await sourceText(product.url, indirect, maxBytes);
+  const detail = await parseDetailPage(text, document?.url || product.url, selectors);
+  const mainImage = detail.mainImage || product.image || "", images = [...new Set([mainImage, ...detail.images].filter(Boolean))];
+  const detailPrice = detail.price ? numberFromText(detail.price) : 0;
+  return { ...product, price: detailPrice > 0 ? detailPrice : product.price, priceText: detailPrice > 0 ? detail.price || product.priceText : product.priceText, shortDesc: detail.shortDesc || product.shortDesc, longDesc: detail.longDesc || product.longDesc, sku: detail.sku || product.sku, brand: detail.brand || product.brand, stock: detail.stock ? numberFromText(detail.stock) : product.stock, weight: detail.weight ? numberFromText(detail.weight) : product.weight, category: detail.category || product.category, tags: detail.tags || product.tags, images, image: mainImage || images[0] || product.image, variations: detail.variations.length ? detail.variations : product.variations || [], variationGroups: detail.variationGroups.length ? detail.variationGroups : product.variationGroups || [], variationPrices: Object.keys(detail.variationPrices).length ? detail.variationPrices : product.variationPrices || {} };
+}
+async function extractVariations(html, baseUrl, selector) {
+  const parsed = await parseDetailPage(html, baseUrl, { variations: selector });
+  return { variations: parsed.variations, variationGroups: parsed.variationGroups, variationPrices: parsed.variationPrices, images: parsed.images };
+}
+async function extractSelectorValues(html, baseUrl, selector, type) {
+  if (type === "variations") {
+    const result = await extractVariations(html, baseUrl, selector);
+    return result.variations || [];
+  }
+  const values = [];
+  class ValueHandler {
+    captures = [];
+    element(element) {
+      if (type === "link") {
+        const value = canonicalUrl(firstAttribute(element, LINK_ATTRS) || onclickUrl(element), baseUrl);
+        if (value) values.push(value);
+        return;
+      }
+      if (type === "image") {
+        const value = imageUrl(firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("srcset") || ""), baseUrl);
+        if (value) values.push(value);
+        return;
+      }
+      if (!hasEndTag(element)) {
+        const value = firstAttribute(element, [...TITLE_ATTRS, ...PRICE_ATTRS, ...SKU_ATTRS]);
+        if (value) values.push(cleanText(value));
+        return;
+      }
+      const capture = { element, text: "" };
+      this.captures.push(capture);
+      element.onEndTag(() => {
+        const value = cleanText(capture.text) || firstAttribute(element, [...TITLE_ATTRS, ...PRICE_ATTRS, ...SKU_ATTRS]);
+        if (value) values.push(value);
+        const i = this.captures.indexOf(capture);
+        if (i >= 0) this.captures.splice(i, 1);
+      });
+    }
+    text(chunk) {
+      for (const capture of this.captures) capture.text += chunk.text;
+    }
+  }
+  const rewriter = new HTMLRewriter(), handler = new ValueHandler();
+  let valid = false;
+  for (const part of selectorParts(selector)) valid = safeOn(rewriter, part, handler) || valid;
+  if (!valid) throw new Error("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A.");
+  await rewriter.transform(new Response(html)).text();
+  return [...new Set(values)].slice(0, 100);
+}
+var NextLinkHandler = class {
+  constructor(baseUrl) {
+    this.baseUrl = baseUrl;
+  }
+  url = "";
+  element(element) {
+    if (!this.url) this.url = canonicalUrl(firstAttribute(element, LINK_ATTRS), this.baseUrl);
+  }
+};
+var NODE_ONLY_ENGINES = /* @__PURE__ */ new Set(["playwright", "puppeteer", "crawlee_playwright", "structural", "network_api"]);
+var WORKER_DISCOVERY_ENGINES = ["jsonld", "next_data", "script_json", "heuristic", "metadata"];
+var WORKER_MANUAL_ENGINES = /* @__PURE__ */ new Set(["htmlrewriter", "cheerio"]);
+var WORKER_AUTO_ENGINES = [...WORKER_DISCOVERY_ENGINES, "htmlrewriter"];
+function engineOrder(requested, master, autoFirst = true) {
+  const out = [], add = (engine) => {
+    if (engine && !out.includes(engine)) out.push(engine);
+  };
+  if (!autoFirst && requested !== "auto") {
+    add(requested);
+    return out;
+  }
+  if (requested !== "auto") {
+    add(requested);
+    if (master && !NODE_ONLY_ENGINES.has(master) && !WORKER_MANUAL_ENGINES.has(master)) add(master);
+    for (const engine of WORKER_AUTO_ENGINES) add(engine);
+    return out;
+  }
+  if (master && !NODE_ONLY_ENGINES.has(master) && !WORKER_MANUAL_ENGINES.has(master)) add(master);
+  for (const engine of WORKER_DISCOVERY_ENGINES) add(engine);
+  for (const engine of WORKER_AUTO_ENGINES) add(engine);
+  return out;
+}
+async function scrapeListPage(url, selectors, nextSelector = "", indirect = false, engine = "auto", master, autoFirst = true, autoDiscover = true, scrollToEnd = false, productParser) {
+  if (scrollToEnd) throw Error("\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627 \u0628\u0647 \u0645\u0631\u0648\u0631\u06AF\u0631 Node \u0631\u0648\u06CC VPS/Termux/Render \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F\u061B Worker \u0641\u0642\u0637 HTML \u0627\u0648\u0644\u06CC\u0647 \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F.");
+  const page = await sourceText(url, indirect), next = new NextLinkHandler(page.url);
+  if (nextSelector) {
+    const rewriter = new HTMLRewriter();
+    for (const selector of selectorParts(nextSelector)) safeOn(rewriter, selector, next);
+    await rewriter.transform(new Response(page.text)).text();
+  }
+  if (productParser) {
+    if (NODE_ONLY_ENGINES.has(engine)) throw Error("Selected page loader requires Node");
+    const started2 = Date.now();
+    return { products: await parseProductDocument(page.text, page.url, selectors, productParser), nextUrl: next.url, url: page.url, usedEngine: engine, elapsedMs: Date.now() - started2, selectorsUsed: selectors };
+  }
+  let ensured = { selectors, method: "" };
+  if (autoDiscover) {
+    try {
+      ensured = await ensureListSelectors(page.text, page.url, selectors);
+    } catch {
+    }
+  }
+  const started = Date.now(), result = await parseByEngine(page.text, page.url, ensured.selectors, engine, master, autoFirst);
+  return { products: result.products, nextUrl: next.url, url: page.url, usedEngine: result.usedEngine, elapsedMs: Date.now() - started, selectorsUsed: ensured.selectors, discoveredSelectors: ensured.discovered, discoveryMethod: ensured.method, engineError: result.engineError };
+}
+async function parseProductDocument(html, base, selectors, parser) {
+  const embedded = async (mode) => {
+    const out = [];
+    for (const value of embeddedProductData(html, mode)) walkObjects(value, base, out);
+    return finalizeFound(out, base);
+  };
+  const cards = async () => {
+    let active3 = selectors;
+    if (listSelectorsStatus(selectors) !== "custom") {
+      const found = await discoverListSelectorsFromHtml(html, base);
+      if (found.selectors.container) active3 = { ...selectors, ...found.selectors };
+    }
+    return parseCards(html, base, active3);
+  };
+  return finalizeFound(await parseDownloadedProducts(parser, { lxml: cards, selectolax: cards, jsonld: () => parseJsonLdProducts(html, base), next_data: () => embedded("next_data"), script_json: async () => [...await parseJsonLdProducts(html, base), ...await embedded("script_json"), ...await extractScriptJsonProducts(html, base)], metadata: () => extractMetadataProduct(html, base), heuristic: () => extractHeuristicProducts(html, base) }), base);
+}
+async function parseByEngine(html, baseUrl, selectors, engine, master, autoFirst = true) {
+  if (engine !== "auto" && NODE_ONLY_ENGINES.has(engine)) throw new Error(`\u0645\u0648\u062A\u0648\u0631 ${engine} \u0628\u0647 \u0627\u062C\u0631\u0627\u06AF\u0631 Node \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F (Termux\u060C \u0648\u06CC\u0646\u062F\u0648\u0632\u060C VPS \u06CC\u0627 Render). ${engine === "structural" ? "Cloudflare Worker \u0645\u0648\u062A\u0648\u0631 DOM (cheerio) \u0646\u062F\u0627\u0631\u062F\u061B \u0627\u0632 heuristic \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F." : "Cloudflare Worker \u0646\u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u0645\u0631\u0648\u0631\u06AF\u0631 \u0627\u062C\u0631\u0627 \u06A9\u0646\u062F\u061B \u0627\u0632 htmlrewriter \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F."}`);
+  const tryOne = async (name) => {
+    if (name === "htmlrewriter" || name === "cheerio") return parseCards(html, baseUrl, selectors);
+    if (name === "jsonld") return parseJsonLdProducts(html, baseUrl);
+    if (name === "next_data") return extractNextDataProducts(html, baseUrl);
+    if (name === "metadata") return extractMetadataProduct(html, baseUrl);
+    if (name === "script_json") return extractScriptJsonProducts(html, baseUrl);
+    if (name === "heuristic") return extractHeuristicProducts(html, baseUrl);
+    return [];
+  };
+  let firstError = null, explicitError = null;
+  for (const name of engineOrder(engine, master, autoFirst)) {
+    try {
+      const products = dedupeProducts(await tryOne(name));
+      if (products.length) return { products, usedEngine: name };
+    } catch (error) {
+      if (!firstError) firstError = error;
+      if (engine !== "auto" && name === engine && !explicitError) explicitError = error;
+    }
+  }
+  if (!autoFirst && firstError) throw firstError;
+  const engineError = explicitError instanceof Error ? explicitError.message : explicitError ? String(explicitError) : void 0;
+  return { products: [], usedEngine: engine, engineError };
+}
+function dedupeProducts(products) {
+  const seen = /* @__PURE__ */ new Set(), out = [];
+  for (const p of products) {
+    const key2 = p.sourceKey || p.url || p.title;
+    if (!key2 || seen.has(key2)) continue;
+    seen.add(key2);
+    out.push(p);
+  }
+  return out;
+}
+function productFromObject(obj, baseUrl) {
+  if (!obj || typeof obj !== "object") return null;
+  const title = cleanText(String(obj.name || obj.title || obj.productName || obj.label || ""));
+  const offer = Array.isArray(obj.offers) ? obj.offers[0] : obj.offers || obj.offer || {};
+  const priceText = cleanText(String(obj.price || obj.finalPrice || obj.salePrice || obj.sellingPrice || obj.priceText || offer.price || offer.lowPrice || offer.highPrice || ""));
+  const rawUrl = String(obj.url || obj.href || obj.link || obj.webUrl || obj.canonicalUrl || (typeof obj.slug === "string" ? obj.slug.startsWith("/") ? obj.slug : `/product/${obj.slug}` : "") || "");
+  const url = canonicalUrl(rawUrl, baseUrl);
+  const image = imageUrl(firstImageValue(obj.image || obj.images || obj.thumbnail || obj.cover || obj.imageUrl || obj.picture), baseUrl);
+  if (!title || !image || !priceText || numberFromText(priceText) <= 0) return null;
+  return { sourceKey: "", title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku: cleanText(String(obj.sku || obj.id || "")), shortDesc: cleanText(String(obj.description || "")), longDesc: "", brand: cleanText(String(typeof obj.brand === "object" ? obj.brand?.name : obj.brand || "")), stock: void 0, weight: void 0, category: cleanText(String(obj.category || "")), tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() };
+}
+function firstImageValue(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return firstImageValue(value[0]);
+  if (typeof value === "object") return String(value.url || value.src || value.href || value.original || value.medium || value.large || "");
+  return "";
+}
+async function finalizeFound(products, baseUrl) {
+  const out = [];
+  for (const p of products) {
+    const identity = p.url ? canonicalUrl(p.url, baseUrl, true) : `${p.title}|${p.priceText}`;
+    p.sourceKey = await sourceKey(identity);
+    out.push(p);
+  }
+  return dedupeProducts(out);
+}
+function walkObjects(value, baseUrl, out, depth = 0) {
+  if (!value || depth > 12 || out.length > 1e3) return;
+  if (Array.isArray(value)) {
+    for (const item of value) walkObjects(item, baseUrl, out, depth + 1);
+    return;
+  }
+  if (typeof value !== "object") return;
+  const p = productFromObject(value, baseUrl);
+  if (p) out.push(p);
+  for (const [key2, v] of Object.entries(value)) if (/product|item|result|data|pageProps|props|list|card|entity|catalog|shop|store/i.test(key2)) walkObjects(v, baseUrl, out, depth + 1);
+}
+async function extractNextDataProducts(html, baseUrl) {
+  const m = html.match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return [];
+  try {
+    const out = [];
+    walkObjects(JSON.parse(decodeHtml(m[1])), baseUrl, out);
+    return finalizeFound(out, baseUrl);
+  } catch {
+    return [];
+  }
+}
+function decodeHtml(value) {
+  return value.replace(/&nbsp;|&#160;|&#xa0;/gi, " ").replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+function stripHtml(value) {
+  return cleanText(decodeHtml(value.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")));
+}
+function metaContent(html, key2) {
+  const escaped = key2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${escaped}["'])[^>]*content=["']([^"']+)["'][^>]*>`, "i");
+  return decodeHtml(html.match(re)?.[1] || "");
+}
+function enclosingOpen(html, pos, tag, endTag) {
+  let extra = 0, cursor = pos;
+  while (cursor > 0) {
+    const closeAt = html.lastIndexOf(endTag, cursor - 1), openAt = html.lastIndexOf("<" + tag, cursor - 1);
+    if (openAt < 0) return -1;
+    if (closeAt > openAt) {
+      extra++;
+      cursor = closeAt;
+      continue;
+    }
+    if (extra === 0) return openAt;
+    extra--;
+    cursor = openAt;
+  }
+  return -1;
+}
+function matchingClose(html, openPos, tag, endTag) {
+  const openEnd = html.indexOf(">", openPos);
+  if (openEnd < 0) return -1;
+  let depth = 1, cursor = openEnd + 1;
+  while (depth > 0) {
+    if (cursor - openPos > 6e3) return -1;
+    const nextOpen = html.indexOf("<" + tag, cursor), nextClose = html.indexOf(endTag, cursor);
+    if (nextClose < 0) return -1;
+    if (nextOpen >= 0 && nextOpen < nextClose) {
+      depth++;
+      cursor = nextOpen + 1;
+    } else {
+      depth--;
+      if (depth === 0) return nextClose;
+      cursor = nextClose + endTag.length;
+    }
+  }
+  return -1;
+}
+function enclosingChunks(html, index) {
+  const out = [];
+  let cursor = index;
+  for (let level = 0; level < 6 && cursor > 0; level++) {
+    let best = "", bestOpen = -1;
+    for (const [tag, endTag] of [["article", "</article>"], ["li", "</li>"], ["tr", "</tr>"], ["div", "</div>"]]) {
+      const open = enclosingOpen(html, cursor, tag, endTag);
+      if (open < 0 || index - open > 1800) continue;
+      const end = matchingClose(html, open, tag, endTag);
+      if (end < 0 || end - open > 5e3) continue;
+      const chunk = html.slice(open, end + endTag.length);
+      if (!best || chunk.length < best.length) {
+        best = chunk;
+        bestOpen = open;
+      }
+    }
+    if (!best || bestOpen < 0) break;
+    out.push(best);
+    cursor = bestOpen;
+  }
+  return out;
+}
+function productContextChunk(html, index, anchor) {
+  void anchor;
+  const candidates = enclosingChunks(html, index);
+  if (!candidates.length) return "";
+  return candidates.find((chunk) => /<img\b/i.test(chunk) && chunkHasPriceText(stripPriceFormatChars(stripHtml(chunk)))) || candidates[0];
+}
+async function extractMetadataProduct(html, baseUrl) {
+  const title = metaContent(html, "og:title") || metaContent(html, "twitter:title") || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
+  if (!title) return [];
+  const ogType = (metaContent(html, "og:type") || "").toLowerCase(), priceText = metaContent(html, "product:price:amount") || metaContent(html, "og:price:amount") || "", url = canonicalUrl(metaContent(html, "og:url") || baseUrl, baseUrl), image = imageUrl(metaContent(html, "og:image") || metaContent(html, "twitter:image"), baseUrl), price = numberFromText(priceText);
+  if (!/(?:product|product.item)/i.test(ogType) || !priceText || price <= 0 || !image) return [];
+  return finalizeFound([{ sourceKey: "", title, price, priceText, url, image, images: image ? [image] : [], sku: "", shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() }], baseUrl);
+}
+async function extractScriptJsonProducts(html, baseUrl) {
+  const out = [];
+  for (const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = decodeHtml(m[1].trim());
+    if (!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body)) continue;
+    for (const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)) {
+      try {
+        walkObjects(JSON.parse(j[1]), baseUrl, out);
+      } catch {
+      }
+    }
+  }
+  return finalizeFound(out, baseUrl);
+}
+function chunkTitle(chunk) {
+  let best = "";
+  for (const m of chunk.matchAll(/<(span|div|p|h5|h6|strong|b|em|li|td)\b[^>]*>([^<>]{6,160})<\/\1>/gi)) {
+    const text = cleanText(decodeHtml(m[2] || ""));
+    if (text.length >= 6 && text.length > best.length && !looksLikePrice(text)) best = text;
+  }
+  return best;
+}
+function heuristicImage(chunk, baseUrl) {
+  const tag = chunk.match(/<img\b[^>]*>/i)?.[0] || "";
+  const dataSrc = tag.match(/\sdata-(?:src|lazy-src|lazyload|original|image)\s*=\s*["']([^"']+)["']/i)?.[1] || "";
+  const srcAttr = (tag.match(/\ssrc(?:set)?\s*=\s*["']([^"']+)["']/i)?.[1] || "").split(",")[0].trim().split(/\s+/)[0];
+  return imageUrl(decodeHtml(dataSrc || srcAttr), baseUrl);
+}
+var NON_PRODUCT_URL_RE = /[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
+async function extractHeuristicProducts(html, baseUrl) {
+  const out = [];
+  const seenUrls = /* @__PURE__ */ new Set();
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) {
+    const url = canonicalUrl(decodeHtml(m[1]), baseUrl);
+    if (!url || seenUrls.has(url) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url) || NON_PRODUCT_URL_RE.test(url)) continue;
+    const chunk = productContextChunk(html, m.index || 0, m[0]);
+    if (!chunk) continue;
+    const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || "") || cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || "")) || stripHtml(m[2]) || chunkTitle(chunk);
+    const image = heuristicImage(chunk, baseUrl);
+    const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, " "))));
+    if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue;
+    seenUrls.add(url);
+    out.push({ sourceKey: "", title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku: "", shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  }
+  return finalizeFound(out, baseUrl);
+}
+var countMatches = (html, re) => {
+  const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  let n = 0;
+  global.lastIndex = 0;
+  while (global.exec(html)) {
+    n++;
+    if (n > 5e3) break;
+  }
+  return n;
+};
+function invalidSelectorMessage(error) {
+  const msg3 = error instanceof Error ? error.message : String(error || "");
+  if (!msg3) return "";
+  if (msg3.startsWith("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631")) return msg3;
+  if (/attribute selector|didn't terminate|not a valid selector|unknown pseudo/i.test(msg3)) return `\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631: ${msg3}`;
+  return "";
+}
+function fetchErrorHint(error) {
+  const message2 = error instanceof Error ? error.message : String(error || "");
+  if (!message2 || /سلکتور نامعتبر/.test(message2)) return "";
+  if (/HTTP 429/.test(message2)) return "\u0633\u0627\u06CC\u062A \u062F\u0631\u062E\u0648\u0627\u0633\u062A\u200C\u0647\u0627 \u0631\u0627 \u0645\u062D\u062F\u0648\u062F \u06A9\u0631\u062F\u0647 (\u062E\u0637\u0627\u06CC 429)\u061B \u06CC\u06A9 \u062F\u0642\u06CC\u0642\u0647 \u0635\u0628\u0631 \u06A9\u0646\u06CC\u062F \u0648 \u0628\u0639\u062F \u0628\u0627 \u0635\u0641\u062D\u0647\u200C\u0647\u0627\u06CC \u06A9\u0645\u062A\u0631 \u062F\u0648\u0628\u0627\u0631\u0647 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.";
+  if (/HTTP 403/.test(message2)) return "\u0633\u0627\u06CC\u062A \u062F\u0633\u062A\u0631\u0633\u06CC \u0631\u0627 \u0628\u0633\u062A (\u062E\u0637\u0627\u06CC 403)\u061B \u0645\u0639\u0645\u0648\u0644\u0627\u064B IP \u062F\u06CC\u062A\u0627\u0633\u0646\u062A\u0631 \u06CC\u0627 VPN \u0627\u0633\u062A. \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 (Worker \u0648\u0627\u0633\u0637) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+  if (/مهلت|timeout|timed out|abort|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|Failed to fetch|network|Network|ERR_|HTTP (502|503|504)/.test(message2)) return "\u062F\u0631\u06CC\u0627\u0641\u062A \u0635\u0641\u062D\u0647 \u0627\u0632 \u0633\u0627\u06CC\u062A \u0646\u0627\u0645\u0648\u0641\u0642 \u0628\u0648\u062F\u061B \u0622\u062F\u0631\u0633\u060C \u0627\u062A\u0635\u0627\u0644 \u0627\u06CC\u0646\u062A\u0631\u0646\u062A \u0648 \u0648\u0636\u0639\u06CC\u062A \u0633\u0627\u06CC\u062A \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F \u0648 \u062F\u0648\u0628\u0627\u0631\u0647 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.";
+  return "";
+}
+async function diagnoseBenchmarkEngine(engine, html, baseUrl, selectors, products, error = "") {
+  const list = Array.isArray(products) ? products : [];
+  const complete = { title: 0, price: 0, link: 0, image: 0 };
+  for (const p of list) {
+    if (p.title) complete.title++;
+    if (Number(p.price) > 0) complete.price++;
+    if (p.url) complete.link++;
+    if (p.image) complete.image++;
+  }
+  const first = list.find((p) => p.title || p.url) || list[0];
+  const sample = first ? { title: String(first.title || ""), priceText: String(first.priceText || ""), url: String(first.url || ""), image: String(first.image || "") } : null;
+  const dropReasons = [];
+  const signals = {};
+  const text = String(html || "");
+  let candidates = 0, hint = "";
+  const partialNote = () => {
+    const missing = [];
+    if (complete.title < list.length) missing.push("\u0639\u0646\u0648\u0627\u0646");
+    if (complete.price < list.length) missing.push("\u0642\u06CC\u0645\u062A");
+    if (complete.link < list.length) missing.push("\u0644\u06CC\u0646\u06A9");
+    if (complete.image < list.length) missing.push("\u062A\u0635\u0648\u06CC\u0631");
+    return missing.length ? ` \u0648\u0644\u06CC ${list.length - Math.min(complete.title, complete.price, complete.link, complete.image)} \u0645\u062D\u0635\u0648\u0644 ${missing.join("/")} \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0631\u0646\u062F` : "";
+  };
+  if (!text) {
+    candidates = list.length;
+    signals.pageFetched = false;
+    if (error) dropReasons.push(error);
+    else if (!list.length) dropReasons.push("\u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 \u0628\u0631\u0627\u06CC \u0628\u0631\u0631\u0633\u06CC \u0633\u06CC\u06AF\u0646\u0627\u0644\u200C\u0647\u0627 \u062F\u0631\u06CC\u0627\u0641\u062A \u0646\u0634\u062F \u0648 \u0645\u062D\u0635\u0648\u0644\u06CC \u0647\u0645 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u0634\u062F.");
+    hint = list.length ? `\u0645\u0648\u062A\u0648\u0631 ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u06A9\u0631\u062F (\u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 \u0628\u0631\u0627\u06CC \u0628\u0631\u0631\u0633\u06CC \u0639\u0645\u06CC\u0642 \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0646\u0628\u0648\u062F).` : "\u062F\u0633\u062A\u0631\u0633\u06CC \u0634\u0628\u06A9\u0647 \u0628\u0647 \u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 \u0646\u0627\u0645\u0648\u0641\u0642 \u0628\u0648\u062F\u061B \u0622\u062F\u0631\u0633 \u0648 \u0627\u062A\u0635\u0627\u0644 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.";
+    if (!list.length) {
+      const bad = invalidSelectorMessage(error), fetch2 = fetchErrorHint(error);
+      if (bad) hint = "\u06CC\u06A9\u06CC \u0627\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u062E\u0631\u0627\u0628 \u0627\u0633\u062A\u061B \u0622\u0646 \u0631\u0627 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0627\u0644\u0645 \u0633\u0627\u062E\u062A\u0647 \u0634\u0648\u0646\u062F.";
+      else if (fetch2) hint = fetch2;
+    }
+    return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
+  }
+  signals.pageFetched = true;
+  if (engine === "cheerio" || engine === "htmlrewriter") {
+    let verified = null;
+    try {
+      verified = await verifyListSelectors(text, baseUrl, selectors);
+    } catch {
+      verified = null;
+    }
+    const containers = verified?.containerCount || 0, titles = verified?.title.count || 0, prices = verified?.price.count || 0, links = verified?.link.count || 0, images = verified?.image.count || 0;
+    candidates = containers;
+    signals.containers = containers;
+    signals.titles = titles;
+    signals.prices = prices;
+    signals.links = links;
+    signals.images = images;
+    const containerSel = String(selectors?.container || "").trim();
+    const badSelector = invalidSelectorMessage(error) || verified?.error || "";
+    if (badSelector) {
+      dropReasons.push(badSelector);
+      hint = "\u06CC\u06A9\u06CC \u0627\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u062E\u0631\u0627\u0628 \u0627\u0633\u062A\u061B \u0622\u0646 \u0631\u0627 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0627\u0644\u0645 \u0633\u0627\u062E\u062A\u0647 \u0634\u0648\u0646\u062F.";
+    } else if (!containerSel) {
+      dropReasons.push("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0628\u062F\u0648\u0646 \u0638\u0631\u0641 \u0646\u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u06A9\u0627\u0631\u062A\u06CC \u067E\u06CC\u062F\u0627 \u06A9\u0646\u062F.");
+      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.";
+    } else if (!containers) {
+      dropReasons.push(`\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \xAB${containerSel}\xBB \u0647\u06CC\u0686 \u06A9\u0627\u0631\u062A\u06CC \u062F\u0631 \u0635\u0641\u062D\u0647 \u067E\u06CC\u062F\u0627 \u0646\u06A9\u0631\u062F.`);
+      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0627\u0634\u062A\u0628\u0627\u0647 \u0627\u0633\u062A \u06CC\u0627 \u0635\u0641\u062D\u0647 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u06CC \u0627\u0633\u062A\u061B \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.";
+    } else if (!titles) {
+      dropReasons.push(`${containers} \u06A9\u0627\u0631\u062A \u067E\u06CC\u062F\u0627 \u0634\u062F \u0648\u0644\u06CC \u062F\u0627\u062E\u0644 \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u0639\u0646\u0648\u0627\u0646\u06CC \u0646\u06CC\u0633\u062A\u061B \u06CC\u0639\u0646\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631 \u0639\u0646\u0648\u0627\u0646 \u0628\u06CC\u0631\u0648\u0646 \u0627\u0632 \u0638\u0631\u0641 \u0631\u0627 \u0645\u06CC\u200C\u0628\u06CC\u0646\u062F \u06CC\u0627 \u0638\u0631\u0641 \u06A9\u0644 \u0641\u0647\u0631\u0633\u062A \u0631\u0627 \u06AF\u0631\u0641\u062A\u0647 \u0627\u0633\u062A.`);
+      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0639\u0646\u0648\u0627\u0646 \u0628\u0627\u06CC\u062F \u0646\u0633\u0628\u062A \u0628\u0647 \u0638\u0631\u0641 \u062F\u0627\u062E\u0644\u06CC \u0628\u0627\u0634\u062F\u060C \u06CC\u0627 \u0638\u0631\u0641 \u0628\u0627\u06CC\u062F \u0647\u0631 \u06A9\u0627\u0631\u062A \u0628\u0627\u0634\u062F \u0646\u0647 \u06A9\u0644 \u0641\u0647\u0631\u0633\u062A.";
+    } else if (!list.length) {
+      if (error) dropReasons.push(error);
+      if (!prices) dropReasons.push(`${containers} \u06A9\u0627\u0631\u062A \u0648 ${titles} \u0639\u0646\u0648\u0627\u0646 \u0647\u0633\u062A \u0648\u0644\u06CC \u0642\u06CC\u0645\u062A \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.`);
+      if (!links) dropReasons.push("\u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
+      if (!images) dropReasons.push("\u062A\u0635\u0648\u06CC\u0631 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
+      if (!dropReasons.length) dropReasons.push(`${containers} \u06A9\u0627\u0631\u062A \u062F\u06CC\u062F\u0647 \u0634\u062F \u0648\u0644\u06CC \u0647\u06CC\u0686 \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u0634\u062F.`);
+      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0639\u0646\u0648\u0627\u0646/\u0642\u06CC\u0645\u062A/\u0644\u06CC\u0646\u06A9/\u062A\u0635\u0648\u06CC\u0631 \u0631\u0627 \u0646\u0633\u0628\u062A \u0628\u0647 \u0638\u0631\u0641 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F.";
+    } else {
+      if (containers > list.length) dropReasons.push(`\u0627\u0632 ${containers} \u06A9\u0627\u0631\u062A\u060C ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0646\u06AF\u0647 \u062F\u0627\u0634\u062A\u0647 \u0634\u062F\u061B \u0628\u0642\u06CC\u0647 \u0639\u0646\u0648\u0627\u0646/\u0642\u06CC\u0645\u062A/\u062A\u0635\u0648\u06CC\u0631 \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0634\u062A\u0646\u062F.`);
+      hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
+    }
+  } else if (engine === "jsonld") {
+    const blocks = [...text.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1] || "");
+    const productBlocks = blocks.filter((b) => /"@type"\s*:\s*"(Product|ItemList|ProductGroup|Offer|AggregateOffer|SearchResultsPage)"/i.test(b)).length;
+    candidates = countMatches(text, /"@type"\s*:\s*"Product"/i) + countMatches(text, /"@type"\s*:\s*"ListItem"/i);
+    signals.ldBlocks = blocks.length;
+    signals.productBlocks = productBlocks;
+    if (!blocks.length) {
+      dropReasons.push("\u0635\u0641\u062D\u0647 \u0647\u06CC\u0686 \u0628\u0644\u0648\u06A9 JSON-LD \u0646\u062F\u0627\u0631\u062F.");
+      hint = "\u0627\u06CC\u0646 \u0633\u0627\u06CC\u062A \u062F\u0627\u062F\u0647\u0654 \u0633\u0627\u062E\u062A\u200C\u06CC\u0627\u0641\u062A\u0647 \u0646\u062F\u0627\u0631\u062F\u061B htmlrewriter \u06CC\u0627 heuristic \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else if (!list.length) {
+      dropReasons.push(`${blocks.length} \u0628\u0644\u0648\u06A9 JSON-LD \u0647\u0633\u062A \u0648\u0644\u06CC \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u0645\u062D\u0635\u0648\u0644 \u06CC\u0627 \u0641\u0647\u0631\u0633\u062A \u0645\u062D\u0635\u0648\u0644 \u0646\u06CC\u0633\u062A.`);
+      hint = "\u0628\u0644\u0648\u06A9\u200C\u0647\u0627\u06CC JSON-LD \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u0645\u062D\u0635\u0648\u0644 \u0646\u062F\u0627\u0631\u0646\u062F\u061B htmlrewriter \u06CC\u0627 heuristic \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 JSON-LD \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
+  } else if (engine === "next_data") {
+    const m = text.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i), payload = m?.[1] || "";
+    candidates = countMatches(payload, /"(price|priceText|finalPrice|salePrice)"\s*:/i);
+    signals.hasNextData = Boolean(m);
+    signals.nextBytes = payload.length;
+    signals.priceKeys = candidates;
+    if (!m) {
+      dropReasons.push("\u0635\u0641\u062D\u0647 \u062F\u0627\u062F\u0647\u0654 __NEXT_DATA__ \u0646\u062F\u0627\u0631\u062F (\u0633\u0627\u06CC\u062A Next.js \u0646\u06CC\u0633\u062A).");
+      hint = "\u0627\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631 \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u0633\u0627\u06CC\u062A\u200C\u0647\u0627\u06CC Next.js \u0627\u0633\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else if (!list.length) {
+      dropReasons.push("\u062F\u0627\u062F\u0647\u0654 __NEXT_DATA__ \u0647\u0633\u062A \u0648\u0644\u06CC \u0645\u0648\u062A\u0648\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0632 \u0622\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u06A9\u0631\u062F\u061B \u0633\u0627\u062E\u062A\u0627\u0631 \u06A9\u0627\u062A\u0627\u0644\u0648\u06AF \u0628\u0627 \u0627\u0644\u06AF\u0648\u0647\u0627\u06CC \u0634\u0646\u0627\u062E\u062A\u0647\u200C\u0634\u062F\u0647 \u0641\u0631\u0642 \u062F\u0627\u0631\u062F.");
+      hint = "\u06A9\u0627\u062A\u0627\u0644\u0648\u06AF \u062F\u0627\u062E\u0644 __NEXT_DATA__ \u0633\u0627\u062E\u062A\u0627\u0631 \u063A\u06CC\u0631\u0627\u0633\u062A\u0627\u0646\u062F\u0627\u0631\u062F \u062F\u0627\u0631\u062F\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 __NEXT_DATA__ \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
+  } else if (engine === "script_json") {
+    const inline = [...text.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1] || "");
+    const withProduct = inline.filter((s) => /"(price|priceText|finalPrice|salePrice)"\s*:/i.test(s) && /"(title|name|productName)"\s*:/i.test(s)).length;
+    candidates = countMatches(text, /"(price|priceText|finalPrice|salePrice)"\s*:/i);
+    signals.inlineScripts = inline.length;
+    signals.productScripts = withProduct;
+    signals.priceKeys = candidates;
+    if (!withProduct) {
+      dropReasons.push("\u0647\u06CC\u0686 \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u062F\u0631\u0648\u0646\u200C\u062E\u0637\u06CC\u200C\u0627\u06CC \u0622\u0628\u062C\u06A9\u062A \u0645\u062D\u0635\u0648\u0644 (\u0646\u0627\u0645+\u0642\u06CC\u0645\u062A) \u0646\u062F\u0627\u0631\u062F.");
+      hint = "\u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u06A9\u0627\u062A\u0627\u0644\u0648\u06AF JSON \u062F\u0631 \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0646\u062F\u0627\u0631\u062F\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else if (!list.length) {
+      dropReasons.push(`${withProduct} \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u062F\u0627\u062F\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u200C\u062F\u0627\u0631 \u0647\u0633\u062A \u0648\u0644\u06CC \u0645\u0648\u062A\u0648\u0631 \u0646\u062A\u0648\u0627\u0646\u0633\u062A \u0622\u0646\u200C\u0647\u0627 \u0631\u0627 \u0628\u062E\u0648\u0627\u0646\u062F (\u0633\u0627\u062E\u062A\u0627\u0631 \u063A\u06CC\u0631\u0627\u0633\u062A\u0627\u0646\u062F\u0627\u0631\u062F).`);
+      hint = "\u0633\u0627\u062E\u062A\u0627\u0631 JSON \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u200C\u0647\u0627 \u063A\u06CC\u0631\u0627\u0633\u062A\u0627\u0646\u062F\u0627\u0631\u062F \u0627\u0633\u062A\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 JSON \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
+  } else if (engine === "metadata") {
+    const og = countMatches(text, /<meta\b[^>]*property=["']og:/i);
+    candidates = /<meta\b[^>]*property=["']og:title["']/i.test(text) ? 1 : 0;
+    signals.ogTags = og;
+    if (!og) {
+      dropReasons.push("\u0635\u0641\u062D\u0647 \u0645\u062A\u0627\u062A\u06AF OpenGraph \u0646\u062F\u0627\u0631\u062F.");
+      hint = "\u0627\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631 \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u0635\u0641\u062D\u0627\u062A \u062F\u0627\u0631\u0627\u06CC \u0645\u062A\u0627\u062A\u06AF og \u0627\u0633\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else if (!list.length) {
+      dropReasons.push("\u0645\u062A\u0627\u062A\u06AF og \u0647\u0633\u062A \u0648\u0644\u06CC \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644\u06CC \u0627\u0632 \u0622\u0646 \u0633\u0627\u062E\u062A\u0647 \u0646\u0634\u062F (\u0627\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631 \u062A\u06A9\u200C\u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0633\u062A \u0648 \u0628\u0631\u0627\u06CC \u0635\u0641\u062D\u0647\u0654 \u0641\u0647\u0631\u0633\u062A \u0645\u0646\u0627\u0633\u0628 \u0646\u06CC\u0633\u062A).");
+      hint = "\u0645\u0648\u062A\u0648\u0631 metadata \u0628\u0631\u0627\u06CC \u0635\u0641\u062D\u0647\u0654 \u062C\u0632\u0626\u06CC\u0627\u062A \u062A\u06A9\u200C\u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u060C \u0646\u0647 \u0641\u0647\u0631\u0633\u062A\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 \u0645\u062A\u0627\u062A\u06AF\u200C\u0647\u0627 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
+  } else if (engine === "heuristic") {
+    let anchors = 0;
+    for (const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
+      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || "") && !NON_PRODUCT_URL_RE.test(m[1] || "")) anchors++;
+      if (anchors > 5e3) break;
+    }
+    const priceHints = countMatches(stripPriceFormatChars(stripHtml(text)), PRICE_HINT_RE), barePrices = countMatches(stripHtml(text), THOUSANDS_RE), images = countMatches(text, /<img\b/i);
+    candidates = anchors;
+    signals.productAnchors = anchors;
+    signals.priceHints = priceHints;
+    signals.barePrices = barePrices;
+    signals.images = images;
+    if (!anchors) {
+      dropReasons.push("\u0647\u06CC\u0686 \u0644\u06CC\u0646\u06A9\u06CC \u0628\u0627 \u0627\u0644\u06AF\u0648\u06CC \u0622\u062F\u0631\u0633 \u0645\u062D\u0635\u0648\u0644 (/product/ \u060C/shop/ \u060Csnp- \u0648\u2026) \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
+      hint = "\u0622\u062F\u0631\u0633 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0627\u06CC\u0646 \u0633\u0627\u06CC\u062A \u0627\u0644\u06AF\u0648\u06CC \u0634\u0646\u0627\u062E\u062A\u0647\u200C\u0634\u062F\u0647 \u0646\u062F\u0627\u0631\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC (htmlrewriter) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else if (!list.length) {
+      if (error) dropReasons.push(error);
+      dropReasons.push(`${anchors} \u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u0647\u0633\u062A \u0648\u0644\u06CC \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u06CC \u0628\u0627 \u062A\u0635\u0648\u06CC\u0631+\u0642\u06CC\u0645\u062A \u06A9\u0627\u0645\u0644 \u0646\u0628\u0648\u062F\u0646\u062F (\u062D\u0630\u0641 \u0634\u062F\u0646\u062F).`);
+      if (!priceHints && !barePrices) dropReasons.push("\u062F\u0631 \u06A9\u0644 \u0635\u0641\u062D\u0647 \u0647\u06CC\u0686 \u0645\u062A\u0646 \u0642\u06CC\u0645\u062A\u200C\u062F\u0627\u0631\u06CC (\u062A\u0648\u0645\u0627\u0646/\u0631\u06CC\u0627\u0644/\u2026) \u062F\u06CC\u062F\u0647 \u0646\u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0645\u06CC\u200C\u0622\u06CC\u0646\u062F.");
+      else if (!priceHints) dropReasons.push(`${barePrices} \u0639\u062F\u062F \u0647\u0632\u0627\u0631\u06AF\u0627\u0646\u200C\u0628\u0646\u062F\u06CC\u200C\u0634\u062F\u0647 \u0628\u062F\u0648\u0646 \u0648\u0627\u062D\u062F \u067E\u0648\u0644\u06CC \u062F\u06CC\u062F\u0647 \u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0648\u0627\u062D\u062F \u067E\u0648\u0644 \u0628\u0627 \u0627\u0633\u062A\u0627\u06CC\u0644/\u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0627\u0636\u0627\u0641\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F \u06CC\u0627 \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u062F\u0627\u06CC\u0646\u0627\u0645\u06CC\u06A9\u200C\u0627\u0646\u062F.`);
+      hint = !priceHints ? "\u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0645\u06CC\u200C\u0634\u0648\u0646\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u06CC (\u0646\u0645\u0627\u06CC\u0634\u06CC) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F." : "\u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u062A\u0635\u0648\u06CC\u0631 \u06CC\u0627 \u0642\u06CC\u0645\u062A \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0631\u0646\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC (htmlrewriter) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
+    } else {
+      if (anchors > list.length) dropReasons.push(`\u0627\u0632 ${anchors} \u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644\u060C ${list.length} \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644 \u0646\u06AF\u0647 \u062F\u0627\u0634\u062A\u0647 \u0634\u062F\u061B \u0628\u0642\u06CC\u0647 \u062A\u0635\u0648\u06CC\u0631/\u0642\u06CC\u0645\u062A/\u0639\u0646\u0648\u0627\u0646 \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0634\u062A\u0646\u062F.`);
+      hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0628\u062F\u0648\u0646 \u0646\u06CC\u0627\u0632 \u0628\u0647 \u0633\u0644\u06A9\u062A\u0648\u0631 \u067E\u06CC\u062F\u0627 \u0634\u062F${partialNote()}.`;
+    }
+  } else {
+    candidates = list.length;
+    signals.note = "engine-specific signals are not measured for this engine";
+    if (error) dropReasons.push(error);
+    else if (!list.length) dropReasons.push("\u0645\u0648\u062A\u0648\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u06A9\u0631\u062F.");
+    const badSelectorError = invalidSelectorMessage(error);
+    hint = list.length ? `\u0645\u0648\u062A\u0648\u0631 ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u06A9\u0631\u062F${partialNote()}.` : badSelectorError ? "\u06CC\u06A9\u06CC \u0627\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u062E\u0631\u0627\u0628 \u0627\u0633\u062A\u061B \u0622\u0646 \u0631\u0627 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0627\u0644\u0645 \u0633\u0627\u062E\u062A\u0647 \u0634\u0648\u0646\u062F." : error || "\u0645\u0648\u062A\u0648\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u06A9\u0631\u062F\u061B \u062E\u0637\u0627 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.";
+  }
+  if (error && !dropReasons.includes(error) && !dropReasons.some((reason) => reason.includes(error)) && !list.length) dropReasons.unshift(error);
+  const fetchHint = !list.length ? fetchErrorHint(error) : "";
+  if (fetchHint && !dropReasons.some((reason) => String(reason).includes("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631"))) hint = fetchHint;
+  return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
+}
+async function diagnoseExtraction(profile, urlOverride = "", onProgress, withDetails = false) {
+  const started = Date.now(), url = String(urlOverride || profile.url || "").trim(), stages = [], recommendations = [];
+  const progress = diagnosticProgress(onProgress);
+  const add = (name, ok, summary, details = {}) => {
+    const stage = { name, ok, summary, ...details };
+    stages.push(stage);
+    progress.finish(stage);
+  };
+  if (!url) {
+    add("configuration", false, "\u0622\u062F\u0631\u0633 \u0645\u0628\u062F\u0623 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.");
+    return { ok: false, profileId: profile.id, url, stages, selectorsToSave: {}, recommendations: ["\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 \u0641\u0647\u0631\u0633\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0631\u0627 \u062F\u0631 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F."] };
+  }
+  let page;
+  try {
+    progress.begin("network", "\u062F\u0631 \u062D\u0627\u0644 \u0627\u062A\u0635\u0627\u0644 \u0628\u0647 \u0645\u0628\u062F\u0623 \u0648 \u062F\u0631\u06CC\u0627\u0641\u062A HTML\u2026", { url, indirect: Boolean(profile.networkIndirect) });
+    page = await sourceText(url, Boolean(profile.networkIndirect));
+    const bytes = new TextEncoder().encode(page.text).byteLength, title = cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, " ") || "");
+    add("network", true, `\u0635\u0641\u062D\u0647 \u0628\u0627 ${bytes.toLocaleString("fa-IR")} \u0628\u0627\u06CC\u062A \u062F\u0631\u06CC\u0627\u0641\u062A \u0634\u062F.`, { requestedUrl: url, finalUrl: page.url, contentType: page.contentType, bytes, title, route: page.route, indirect: Boolean(profile.networkIndirect) });
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    add("network", false, text, { requestedUrl: url, indirect: Boolean(profile.networkIndirect) });
+    recommendations.push(/ضدربات|چالش/.test(text) ? "\u0633\u0627\u06CC\u062A \u0635\u0641\u062D\u0647\u0654 \u0636\u062F\u0631\u0628\u0627\u062A \u0628\u0631\u06AF\u0631\u062F\u0627\u0646\u062F\u0647 \u0627\u0633\u062A\u061B \u062F\u0633\u062A\u0631\u0633\u06CC Worker \u0631\u0627 \u062F\u0631 \u0645\u0628\u062F\u0623 \u0645\u062C\u0627\u0632 \u06A9\u0646\u06CC\u062F \u06CC\u0627 Worker \u0648\u0627\u0633\u0637 \u0645\u0639\u062A\u0628\u0631 \u062A\u0646\u0638\u06CC\u0645 \u06A9\u0646\u06CC\u062F." : "\u0622\u062F\u0631\u0633\u060C \u062F\u0633\u062A\u0631\u0633\u06CC \u0639\u0645\u0648\u0645\u06CC \u0633\u0627\u06CC\u062A \u0648 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644 \u0645\u0628\u062F\u0623 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.");
+    return { ok: false, profileId: profile.id, url, startedAt: new Date(Date.now() - (Date.now() - started)).toISOString(), durationMs: Date.now() - started, stages, selectorsToSave: {}, recommendations };
+  }
+  let products = [];
+  const selectorsToSave = {}, overriddenTestUrl = String(urlOverride || "").trim().length > 0 && url !== String(profile.url || "").trim();
+  try {
+    progress.begin("list-extraction", "\u062F\u0631 \u062D\u0627\u0644 \u0627\u062C\u0631\u0627\u06CC \u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0647\u0631\u0633\u062A\u2026", { engine: profile.extractionEngine || "auto" });
+    let listSelectors = profile.selectors;
+    progress.begin("selector-verification", "\u062F\u0631 \u062D\u0627\u0644 \u06A9\u0634\u0641 \u0648 \u0631\u0627\u0633\u062A\u06CC\u200C\u0622\u0632\u0645\u0627\u06CC\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A\u2026");
+    let selectorCheckOk = true;
+    try {
+      const ensured = selectedProductParser(profile) ? { selectors: profile.selectors, discovered: void 0 } : await ensureListSelectors(page.text, page.url, profile.selectors);
+      listSelectors = ensured.selectors;
+      if (!overriddenTestUrl && ensured.discovered) {
+        for (const [key2, value] of Object.entries(ensured.discovered)) if (String(value || "").trim()) selectorsToSave[key2] = String(value);
+      }
+    } catch {
+      selectorCheckOk = false;
+    }
+    progress.finish({ name: "selector-verification", ok: selectorCheckOk, summary: selectorCheckOk ? "\u0628\u0631\u0631\u0633\u06CC \u0627\u0648\u0644\u06CC\u0647 \u067E\u0627\u06CC\u0627\u0646 \u06CC\u0627\u0641\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u0628\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0645\u0648\u062C\u0648\u062F \u06CC\u0627 \u06A9\u0634\u0641\u200C\u0634\u062F\u0647 \u0627\u062C\u0631\u0627 \u0645\u06CC\u200C\u0634\u0648\u062F." : "\u0628\u0631\u0631\u0633\u06CC \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u06A9\u0627\u0645\u0644 \u0646\u0634\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0628\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0645\u0648\u062C\u0648\u062F \u0627\u062F\u0627\u0645\u0647 \u0645\u06CC\u200C\u062F\u0647\u062F." });
+    if (profile.pagination === "scroll") throw Error("\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627 \u0628\u0647 \u0627\u062C\u0631\u0627\u06AF\u0631 Node \u0648 \u0645\u0631\u0648\u0631\u06AF\u0631 Chromium \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F\u061B HTML \u0627\u0648\u0644\u06CC\u0647 \u0641\u0647\u0631\u0633\u062A \u06A9\u0627\u0645\u0644 \u0646\u06CC\u0633\u062A.");
+    const parser = selectedProductParser(profile);
+    if (parser && NODE_ONLY_ENGINES.has(profile.extractionEngine)) throw Error("Selected page loader requires Node");
+    const engineResult = parser ? { products: await parseProductDocument(page.text, page.url, profile.selectors, parser), usedEngine: profile.extractionEngine, engineError: void 0 } : await parseByEngine(page.text, page.url, listSelectors, profile.extractionEngine || "auto", profile.extractionEngineMaster);
+    products = engineResult.products;
+    const complete = { title: products.filter((x) => x.title).length, price: products.filter((x) => x.price > 0).length, link: products.filter((x) => x.url).length, image: products.filter((x) => x.image).length, sku: products.filter((x) => x.sku).length };
+    add("list-extraction", products.length > 0, products.length ? `${products.length.toLocaleString("fa-IR")} \u0645\u062D\u0635\u0648\u0644 \u0628\u0627 pipeline \u0648\u0627\u0642\u0639\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F.` : "\u0647\u06CC\u0686 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0632 \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC \u062E\u0648\u062F\u06A9\u0627\u0631 \u06CC\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062F\u0633\u062A\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u0634\u062F.", { count: products.length, usedEngine: engineResult.usedEngine, ...parser ? { productParser: parser } : {}, ...engineResult.engineError ? { engineError: engineResult.engineError } : {}, complete, selectors: profile.selectors, samples: products.slice(0, 5).map((x) => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+  } catch (error) {
+    add("list-extraction", false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
+  }
+  if (!products.length) {
+    try {
+      progress.begin("selector-discovery", "\u062F\u0631 \u062D\u0627\u0644 \u062C\u0633\u062A\u200C\u0648\u062C\u0648\u06CC \u0633\u0627\u062E\u062A\u0627\u0631 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC \u0645\u062D\u0635\u0648\u0644\u2026");
+      const discovery = await discoverListSelectorsFromHtml(page.text, page.url);
+      const proposed = Object.entries(discovery.selectors).filter(([, value]) => String(value || "").trim());
+      if (discovery.method !== "none" && proposed.length >= 2 && discovery.selectors.container && discovery.selectors.title) {
+        add("selector-discovery", true, `\u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C ${discovery.containerCount.toLocaleString("fa-IR")} \u06A9\u0627\u0631\u062A \u0645\u062D\u0635\u0648\u0644 \u0631\u0627 \u0628\u062F\u0648\u0646 \u0646\u06CC\u0627\u0632 \u0628\u0647 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062F\u0633\u062A\u06CC \u067E\u06CC\u062F\u0627 \u06A9\u0631\u062F (\u0631\u0648\u0634: ${discovery.method === "structural" ? "\u062A\u062D\u0644\u06CC\u0644 \u0633\u0627\u062E\u062A\u0627\u0631\u06CC \u0635\u0641\u062D\u0647" : discovery.method === "mixed" ? "\u062A\u0631\u06A9\u06CC\u0628\u06CC" : "\u0627\u0644\u06AF\u0648\u0647\u0627\u06CC \u0622\u0645\u0627\u062F\u0647"})\u061B \u0627\u06CC\u0646 \u06CC\u0627\u0641\u062A\u0647 \u0645\u0631\u0628\u0648\u0637 \u0628\u0647 HTML \u0627\u0648\u0644\u06CC\u0647 \u0627\u0633\u062A \u0648 \u0645\u0648\u0641\u0642\u06CC\u062A \u0645\u0631\u0648\u0631\u06AF\u0631 \u06CC\u0627 \u0627\u0633\u06A9\u0631\u0648\u0644 \u0631\u0627 \u062B\u0627\u0628\u062A \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.`, { method: discovery.method, selectors: discovery.selectors, evidence: discovery.evidence, containerCount: discovery.containerCount });
+        if (!Object.keys(selectorsToSave).length && !(await verifyListSelectors(page.text, page.url, profile.selectors)).ok) recommendations.push("\u062F\u06A9\u0645\u0647\u0654 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0647\u0645\u06CC\u0646 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u067E\u06CC\u062F\u0627\u0634\u062F\u0647 \u0630\u062E\u06CC\u0631\u0647 \u0634\u0648\u0646\u062F\u060C \u0633\u067E\u0633 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0631\u0627 \u062F\u0648\u0628\u0627\u0631\u0647 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F.");
+      } else {
+        add("selector-discovery", false, "\u06A9\u0634\u0641 \u062E\u0648\u062F\u06A9\u0627\u0631 \u0647\u0645 \u0627\u0644\u06AF\u0648\u06CC \u06A9\u0627\u0631\u062A \u0645\u062D\u0635\u0648\u0644\u06CC \u062F\u0631 \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u067E\u06CC\u062F\u0627 \u0646\u06A9\u0631\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0635\u0641\u062D\u0647 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u06CC \u0627\u0633\u062A (\u067E\u0633 \u0627\u0632 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u06A9\u0627\u0645\u0644 \u0631\u0646\u062F\u0631 \u0645\u06CC\u200C\u0634\u0648\u062F)\u060C \u0646\u06CC\u0627\u0632\u0645\u0646\u062F \u0648\u0631\u0648\u062F \u0627\u0633\u062A\u060C \u06CC\u0627 \u0645\u062D\u0635\u0648\u0644\u06CC \u062F\u0631 \u0622\u0646 \u0646\u06CC\u0633\u062A.", { method: discovery.method });
+      }
+    } catch (error) {
+      progress.finish({ name: "selector-discovery", ok: false, summary: String(error) });
+    }
+  }
+  progress.begin("selector-evidence", "\u062F\u0631 \u062D\u0627\u0644 \u0628\u0631\u0631\u0633\u06CC \u062A\u06A9\u200C\u062A\u06A9 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u0631\u0648\u06CC HTML \u0648\u0627\u0642\u0639\u06CC\u2026");
+  const evidence = {};
+  for (const field of ["container", "title", "price", "link", "image"]) {
+    progress.begin("selector-evidence", "\u062F\u0631 \u062D\u0627\u0644 \u0628\u0631\u0631\u0633\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631 " + field, { field });
+    const selector = String(profile.selectors[field] || "").trim();
+    if (!selector) {
+      evidence[field] = { ok: false, count: 0, error: "\u0633\u0644\u06A9\u062A\u0648\u0631 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A" };
+      continue;
+    }
+    try {
+      const type = field === "link" ? "link" : field === "image" ? "image" : "text", values = await extractSelectorValues(page.text, page.url, selector, type);
+      evidence[field] = { ok: values.length > 0, count: values.length, sample: values.slice(0, 3) };
+    } catch (error) {
+      evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const scoped = await verifyListSelectors(page.text, page.url, { ...profile.selectors, ...selectorsToSave });
+  const containerCount = scoped.containerCount;
+  const evidenceOk = containerCount > 0 && Number(scoped.title.count || 0) > 0;
+  const scopedEvidence = { container: { ok: containerCount > 0, count: containerCount }, ...Object.fromEntries(["title", "price", "link", "image"].map((key2) => [key2, { ...scoped[key2], ok: scoped[key2].count > 0 }])) };
+  add(
+    "selector-evidence",
+    evidenceOk,
+    evidenceOk ? "\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC \u0648\u0627\u0642\u0639\u06CC HTML \u0627\u0648\u0644\u06CC\u0647 \u0645\u0639\u062A\u0628\u0631\u0646\u062F\u061B \u0646\u062A\u06CC\u062C\u0647\u0654 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0648 \u0627\u0633\u06A9\u0631\u0648\u0644 \u062C\u062F\u0627\u06AF\u0627\u0646\u0647 \u0628\u0631\u0631\u0633\u06CC \u0645\u06CC\u200C\u0634\u0648\u062F." : "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u06CC\u0627 \u0639\u0646\u0648\u0627\u0646 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC HTML \u0627\u0648\u0644\u06CC\u0647 \u0646\u062A\u06CC\u062C\u0647 \u0646\u062F\u0627\u062F.",
+    { evidence: scopedEvidence, containerCount, cardsSampled: scoped.cardsSampled, documentEvidence: evidence, scope: "\u0639\u0646\u0648\u0627\u0646\u060C \u0642\u06CC\u0645\u062A\u060C \u0644\u06CC\u0646\u06A9 \u0648 \u062A\u0635\u0648\u06CC\u0631 \u0641\u0642\u0637 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u0628\u0631\u0631\u0633\u06CC \u0634\u062F\u0646\u062F\u061B \u0634\u0627\u0647\u062F \u06A9\u0644 \u0635\u0641\u062D\u0647 \u0646\u0645\u0648\u0646\u0647\u0654 \u0645\u062D\u062F\u0648\u062F \u0627\u0633\u062A." }
+  );
+  let detail = null;
+  progress.begin("detail-extraction", "\u062F\u0631 \u062D\u0627\u0644 \u0628\u0631\u0631\u0633\u06CC \u0646\u0645\u0648\u0646\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 \u0648 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062C\u0632\u0626\u06CC\u0627\u062A\u2026");
+  const candidate = products.find((product) => product.url);
+  if (withDetails) {
+    detail = await diagnosticDetails(candidate, profile, profile.extractionEngine || "auto", extractDiagnosticSample);
+    add("detail-extraction", detail.ok, detail.ok ? "\u062C\u0632\u0626\u06CC\u0627\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0646\u0645\u0648\u0646\u0647 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F." : detail.error, { sample: detail.product, detail });
+  } else if (candidate && hasDetailSelectors(profile.selectors)) try {
+    const extracted = await scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect));
+    detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || "").length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images.length, variations: extracted.variations?.slice(0, 20) };
+    add("detail-extraction", true, "\u0635\u0641\u062D\u0647\u0654 \u062C\u0632\u0626\u06CC\u0627\u062A \u0646\u0645\u0648\u0646\u0647 \u0628\u0627 pipeline \u0648\u0627\u0642\u0639\u06CC \u067E\u0631\u062F\u0627\u0632\u0634 \u0634\u062F.", { sample: detail });
+  } catch (error) {
+    add("detail-extraction", false, error instanceof Error ? error.message : String(error), { url: candidate.url });
+  }
+  else add("detail-extraction", true, candidate ? "\u0628\u0631\u0627\u06CC \u0627\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062C\u0632\u0626\u06CC\u0627\u062A \u062A\u0646\u0638\u06CC\u0645 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A." : "\u0645\u062D\u0635\u0648\u0644 \u062F\u0627\u0631\u0627\u06CC \u0644\u06CC\u0646\u06A9 \u0628\u0631\u0627\u06CC \u062A\u0633\u062A \u062C\u0632\u0626\u06CC\u0627\u062A \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.", { skipped: true });
+  const detailSample = candidate && candidate.url ? candidate.url : "";
+  if (!withDetails && !overriddenTestUrl && detailSample) {
+    const missingDetail = ["shortDesc", "price", "longDesc", "sku", "category", "tags", "weight", "stock", "brand", "detailImage", "gallery", "variations"].filter((key2) => !String(profile.selectors[key2] || "").trim());
+    if (missingDetail.length) try {
+      progress.begin("detail-discovery", "\u062F\u0631 \u062D\u0627\u0644 \u062F\u0631\u06CC\u0627\u0641\u062A \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 \u0628\u0631\u0627\u06CC \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A\u2026");
+      const suggested = await suggestSelectors(detailSample, "detail");
+      for (const [key2, value] of Object.entries(suggested.selectors || {})) if (String(value || "").trim() && missingDetail.includes(key2)) selectorsToSave[key2] = String(value);
+      progress.finish({ name: "detail-discovery", ok: true, summary: "\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A \u0628\u0631\u0631\u0633\u06CC \u0634\u062F." });
+    } catch (error) {
+      progress.finish({ name: "detail-discovery", ok: false, summary: String(error) });
+    }
+  }
+  if (Object.keys(selectorsToSave).length) recommendations.push("\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u067E\u06CC\u062F\u0627\u0634\u062F\u0647 \u0628\u0647\u200C\u0635\u0648\u0631\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u062F\u0631 \u062A\u0628 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F\u0646\u062F\u061B \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0631\u0627 \u062F\u0648\u0628\u0627\u0631\u0647 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F.");
+  const deepPage = Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i) || [])[2] || 0);
+  if (!products.length && deepPage > 1) recommendations.push(`\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 ${deepPage.toLocaleString("fa-IR")} \u0627\u0633\u062A\u061B \u0627\u0648\u0644 \u0647\u0645\u06CC\u0646 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628 \u0631\u0627 \u0631\u0648\u06CC \u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 (\u0628\u062F\u0648\u0646 \u067E\u0627\u0631\u0627\u0645\u062A\u0631 \u0635\u0641\u062D\u0647) \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F \u2014 \u0635\u0641\u062D\u0647\u200C\u0647\u0627\u06CC \u0639\u0645\u06CC\u0642 \u0627\u063A\u0644\u0628 \u062E\u0627\u0644\u06CC\u200C\u0627\u0646\u062F \u06CC\u0627 \u0633\u0627\u062E\u062A\u0627\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u062F\u0627\u0631\u0646\u062F.`);
+  if (!products.length && !evidenceOk) recommendations.push("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0645\u062D\u0635\u0648\u0644 \u0631\u0627 \u0628\u0627 HTML \u0648\u0627\u0642\u0639\u06CC \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F\u061B \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0631\u0627 \u0627\u062C\u0631\u0627 \u0648 \u0633\u067E\u0633 \u062F\u0648\u0628\u0627\u0631\u0647 \u0647\u0645\u06CC\u0646 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628 \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.");
+  else if (products.length) {
+    if (!products.some((x) => x.price > 0)) recommendations.push("\u0645\u062D\u0635\u0648\u0644 \u067E\u06CC\u062F\u0627 \u0634\u062F\u0647 \u0648\u0644\u06CC \u0642\u06CC\u0645\u062A \u0635\u0641\u0631 \u0627\u0633\u062A\u061B \u0633\u0644\u06A9\u062A\u0648\u0631 \u0642\u06CC\u0645\u062A \u0648 \u0648\u0627\u062D\u062F/\u0645\u062A\u0646 \u0642\u06CC\u0645\u062A \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.");
+    if (!products.some((x) => x.url)) recommendations.push("\u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A\u061B \u0633\u0644\u06A9\u062A\u0648\u0631 \u0644\u06CC\u0646\u06A9 \u0628\u0627\u06CC\u062F \u0628\u0647 \u0639\u0646\u0635\u0631 a \u06CC\u0627 \u0648\u06CC\u0698\u06AF\u06CC href/data-url \u0628\u0631\u0633\u062F.");
+    if (!products.some((x) => x.image)) recommendations.push("\u062A\u0635\u0648\u06CC\u0631 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A\u061B data-src\u060C srcset \u06CC\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062A\u0635\u0648\u06CC\u0631 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.");
+  }
+  if (!products.length && evidenceOk) recommendations.push("\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0641\u0639\u0644\u06CC \u062F\u0631 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC HTML \u0627\u0648\u0644\u06CC\u0647 \u0645\u0639\u062A\u0628\u0631\u0646\u062F\u061B \u062E\u0637\u0627\u06CC \u0645\u0631\u062D\u0644\u0647\u0654 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\u060C \u0645\u0631\u0648\u0631\u06AF\u0631 \u0648 \u0627\u0631\u062A\u0628\u0627\u0637 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F. \u0635\u0641\u0631 \u0645\u062D\u0635\u0648\u0644 \u067E\u0633 \u0627\u0632 \u062E\u0637\u0627\u06CC \u0645\u0631\u0648\u0631\u06AF\u0631 \u062F\u0644\u06CC\u0644 \u062E\u0631\u0627\u0628\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u06CC\u0633\u062A \u0648 \u06A9\u0627\u0645\u0644\u200C\u0634\u062F\u0646 \u0627\u0633\u06A9\u0631\u0648\u0644 \u0631\u0627 \u062A\u0623\u06CC\u06CC\u062F \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.");
+  const failed = stages.filter((stage) => !stage.ok);
+  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, startedAt: new Date(Date.now() - (Date.now() - started)).toISOString(), durationMs: Date.now() - started, productCount: products.length, stages, recommendations, detail, sample: detail?.product || products[0] || null, selectorsToSave };
+}
+function pageUrl(profile, page) {
+  const url = new URL(profile.url);
+  if (page <= 1 || profile.pagination === "scroll" || profile.pagination === "none" || profile.pagination === "next_selector") return url.href;
+  const pageNumber = (base) => Math.max(1, base) + (page - 1);
+  if (profile.pagination === "full_pattern") return profile.paginationValue.split("{page}").join(String(pageNumber(1)));
+  if (profile.pagination === "path_page" || profile.pagination === "path_pattern") {
+    const next = profile.pagination === "path_page" ? pageNumber(Number(url.pathname.match(/\/page\/(\d+)\/?$/i)?.[1] || 1)) : page;
+    const pattern = profile.pagination === "path_page" ? "/page/{page}/" : profile.paginationValue || "/page/{page}/";
+    const basePath = url.pathname.replace(/\/page\/\d+\/?$/i, "").replace(/\/$/, "");
+    return url.origin + basePath + pattern.split("{page}").join(String(next));
+  }
+  const param = profile.pagination === "query_custom" ? profile.paginationValue || "paged" : "page", current2 = Number(url.searchParams.get(param) || 1);
+  url.hash = "";
+  url.searchParams.set(param, String(pageNumber(current2)));
+  return url.href;
+}
+function benchmarkProbeUrl(profile) {
+  try {
+    const pagination = String(profile?.pagination || "query");
+    if (pagination === "scroll" || pagination === "none" || pagination === "next_selector" || pagination === "full_pattern") return profile.url;
+    const url = new URL(profile.url);
+    url.hash = "";
+    if (pagination === "path_page" || pagination === "path_pattern") {
+      url.pathname = url.pathname.replace(/\/page\/\d+\/?$/i, "") || "/";
+      return url.href;
+    }
+    const custom = pagination === "query_custom" ? String(profile?.paginationValue || "paged") : "page";
+    for (const param of /* @__PURE__ */ new Set([custom, "page", "paged"])) url.searchParams.delete(param);
+    return url.href;
+  } catch {
+    return profile.url;
+  }
+}
+async function mapLimit(items, limit, fn) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      await fn(items[index], index);
+    }
+  }));
+}
+async function testSelector(url, selector, type = "text", engine) {
+  requireStaticSelectorEngine(engine);
+  const page = await safeText(url, 4e6), values = await extractSelectorValues(page.text, page.url, selector, type === "link" ? "link" : type === "image" ? "image" : "text");
+  return { count: values.length, values: values.slice(0, 20) };
+}
+async function testVariations(url, selector, engine) {
+  requireStaticSelectorEngine(engine);
+  const page = await safeText(url, 4e6);
+  return { url: page.url, ...await extractVariations(page.text, page.url, selector) };
+}
+async function testGallery(url, selector, max2 = 30, skipFirst = false, engine) {
+  requireStaticSelectorEngine(engine);
+  const page = await safeText(url, 4e6), detail = await parseDetailPage(page.text, page.url, { gallery: selector, galleryMax: max2, gallerySkipFirst: skipFirst });
+  return { url: page.url, count: detail.images.length, values: detail.images };
+}
+var SUGGESTION_CANDIDATES = {
+  container: { selectors: [
+    "li.product",
+    "article.product",
+    ".products .product",
+    ".product-card",
+    ".product-item",
+    "[data-product-id]",
+    // Generic / non-WooCommerce grids (1.128.0 on Render/Node, 1.129.0 on the
+    // Worker). Platform-specific guesses stay first; these only win when
+    // nothing above matched. Structural inference below is the real fallback
+    // when none of these exist either.
+    "article",
+    '[class*="product-card"]',
+    '[class*="product-item"]',
+    '[class*="product-box"]',
+    "[data-product]",
+    ".grid-item",
+    ".product",
+    ".product-box",
+    ".item-card"
+  ] },
+  title: { selectors: [
+    ".woocommerce-loop-product__title",
+    ".product-title",
+    ".card-title",
+    "h2",
+    "h3",
+    '[itemprop="name"]',
+    ".product-name",
+    '[class*="product-title"]',
+    '[class*="product-name"]',
+    ".name",
+    "h4"
+  ] },
+  price: { selectors: [
+    ".price ins",
+    ".sale-price",
+    ".price",
+    '[itemprop="price"]',
+    ".amount",
+    '[class*="price"]',
+    ".money",
+    "[data-price]",
+    ".product-price"
+  ] },
+  link: { type: "link", selectors: ["a.woocommerce-LoopProduct-link", "a.product-link", 'a[href*="/product/"]', "a[href]", "h2 a", "h3 a", "article a[href]"] },
+  image: { type: "image", selectors: ["img.wp-post-image", "img.product-image", "picture img", "img", ".product-media img", "article img"] },
+  shortDesc: { selectors: [".woocommerce-product-details__short-description", ".short-description", '[itemprop="description"]', ".product-info", ".short-desc", '[class*="short-description"]'] },
+  longDesc: { selectors: ["#tab-description", ".woocommerce-Tabs-panel--description", ".product-description", ".description", ".product-tabs", '[class*="description"]'] },
+  sku: { selectors: [".sku", '[itemprop="sku"]', "[data-sku]", '[class*="sku"]'] },
+  brand: { selectors: [".brand", '[itemprop="brand"]', ".product-brand", '[class*="brand"]'] },
+  stock: { selectors: [".stock", '[itemprop="availability"]', ".inventory"] },
+  weight: { selectors: [".product_weight", ".weight", "[data-weight]"] },
+  category: { selectors: [".posted_in", ".product_meta .category", ".breadcrumb"] },
+  tags: { selectors: [".tagged_as", ".product_meta .tags", '[rel="tag"]'] },
+  detailImage: { type: "image", selectors: [".woocommerce-product-gallery__image img", ".product-main-image img", "img.wp-post-image", '[itemprop="image"]'] },
+  gallery: { type: "image", selectors: [".woocommerce-product-gallery img", ".product-gallery img", "[data-gallery] img", ".gallery img", ".product-images img", '[class*="gallery"] img'] },
+  variations: { selectors: [".variations", ".variations_form", "[data-product_variations]", ".product-options"] }
+};
+async function suggestSelectors(url, mode = "all", engine, document) {
+  requireStaticSelectorEngine(engine);
+  const page = document || await safeText(url, 4e6), selectors = {}, evidence = {};
+  if (mode === "list" || mode === "all") {
+    const found = await discoverListSelectorsFromHtml(page.text, page.url);
+    for (const [key2, value] of Object.entries(found.selectors)) if (value) selectors[key2] = value;
+    for (const [key2, value] of Object.entries(found.evidence)) evidence[key2] = value;
+    evidence.discoveryMethod = found.method;
+    evidence.containerCount = found.containerCount;
+  }
+  if (mode === "detail" || mode === "all") {
+    const wanted = ["shortDesc", "price", "longDesc", "sku", "category", "tags", "weight", "stock", "brand", "detailImage", "gallery", "variations"];
+    for (const field of wanted) {
+      const config = SUGGESTION_CANDIDATES[field];
+      if (!config) continue;
+      for (const candidate of config.selectors) try {
+        const values = await extractSelectorValues(page.text, page.url, candidate, config.type || "text");
+        const count = values.length, minimum = 1;
+        if (count >= minimum) {
+          selectors[field] = candidate;
+          evidence[field] = { count, sample: values[0] || "" };
+          break;
+        }
+      } catch {
+      }
+    }
+  }
+  return { url: page.url, mode, selectors, evidence };
+}
+var LIST_SELECTOR_KEYS = ["container", "title", "price", "link", "image"];
+function listSelectorsStatus(selectors) {
+  const values = LIST_SELECTOR_KEYS.map((key2) => String(selectors?.[key2] || "").trim());
+  if (values.every((value) => !value)) return "empty";
+  if (values.some((value) => !value)) return "partial";
+  const isDefault = LIST_SELECTOR_KEYS.every((key2) => String(selectors?.[key2]).trim() === String(DEFAULT_SELECTORS[key2]));
+  return isDefault ? "default" : "custom";
+}
+var emptyVerification = (containerCount = 0) => ({
+  containerCount,
+  cardsSampled: 0,
+  title: { count: 0, sample: "" },
+  price: { count: 0, sample: "" },
+  link: { count: 0, sample: "" },
+  image: { count: 0, sample: "" },
+  ok: false
+});
+async function countSelectorMatches(html, selector) {
+  let count = 0;
+  const rewriter = new HTMLRewriter(), handler = { element() {
+    count++;
+  } };
+  let valid = false;
+  for (const part of selectorParts(selector)) valid = safeOn(rewriter, part, handler) || valid;
+  if (!valid) return 0;
+  try {
+    await rewriter.transform(new Response(html)).text();
+  } catch {
+    return 0;
+  }
+  return count;
+}
+function descendantSelector(container, field) {
+  const combos = [];
+  for (const outer of selectorParts(container).slice(0, 4)) for (const inner of selectorParts(field).slice(0, 4)) combos.push(`${outer} ${inner}`);
+  return combos.join(", ");
+}
+async function verifyListSelectors(html, baseUrl, selectors) {
+  const container = String(selectors?.container || "").trim();
+  if (!container || !html) return emptyVerification();
+  const containerCount = await countSelectorMatches(html, container);
+  if (containerCount < 1) return emptyVerification(containerCount);
+  const [titleHits, priceHits, linkHits, imageHits] = await Promise.all([
+    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.title || ""), "text").catch(() => []),
+    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.price || ""), "text").catch(() => []),
+    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.link || ""), "link").catch(() => []),
+    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.image || ""), "image").catch(() => [])
+  ]);
+  const moneyHits = priceHits.filter((value) => numberFromText(value) > 0);
+  const evidence = (hits) => ({ count: hits.length, sample: (hits[0] || "").slice(0, 200) });
+  const needed = Math.max(1, Math.ceil(Math.min(containerCount, 12) / 2));
+  return { containerCount, cardsSampled: Math.min(containerCount, 12), title: evidence(titleHits), price: evidence(moneyHits), link: evidence(linkHits), image: evidence(imageHits), ok: containerCount >= 2 && titleHits.length >= needed };
+}
+var PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
+var THOUSANDS_RE = /[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
+var THOUSANDS_GLOBAL_RE = new RegExp(THOUSANDS_RE.source, "g");
+function chunkHasPriceText(plainText) {
+  return PRICE_HINT_RE.test(plainText) || THOUSANDS_RE.test(plainText);
+}
+function heuristicPriceText(plainText) {
+  const hint = plainText.match(PRICE_HINT_RE)?.[0];
+  if (hint) return cleanText(hint);
+  let best = "";
+  for (const m of plainText.matchAll(THOUSANDS_GLOBAL_RE)) {
+    if (m[0].replace(/[^\d۰-۹٠-٩]/g, "").length > best.replace(/[^\d۰-۹٠-٩]/g, "").length) best = m[0];
+  }
+  return cleanText(best);
+}
+var PRICE_FORMAT_CHARS_RE = /[ـ‌‍﻿]/g;
+function stripPriceFormatChars(value) {
+  return value.replace(PRICE_FORMAT_CHARS_RE, "");
+}
+function looksLikePrice(text) {
+  const value = stripPriceFormatChars(cleanText(text));
+  if (!value || value.length > 80) return false;
+  if (PRICE_HINT_RE.test(value)) return numberFromText(value) > 0;
+  return THOUSANDS_RE.test(value) && numberFromText(value) > 0;
+}
+function cssEscapeIdent(value) {
+  return value.replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char).replace(/^(\d)/, "\\3$1 ");
+}
+var VOLATILE_CLASS_RE = /^(active|selected|current|open|opened|hover|focus|disabled|loading|ng-|v-|is-|has-|js-)/i;
+var HASH_CLASS_RE = /^[a-f0-9]{6,}$/i;
+function stableClasses(classAttr) {
+  const all = String(classAttr || "").split(/\s+/).filter(Boolean);
+  const stable2 = all.filter((name) => name.length <= 40 && !VOLATILE_CLASS_RE.test(name) && !HASH_CLASS_RE.test(name));
+  const rank = (name) => (/[^a-zA-Z0-9_-]/.test(name) ? 100 : 0) + name.length;
+  return [...new Set(stable2)].sort((a, b) => rank(a) - rank(b));
+}
+function selectorForTagClasses(tag, classAttr) {
+  const base = /^[a-z][a-z0-9]*$/i.test(tag) ? tag.toLowerCase() : "div";
+  const classes = stableClasses(classAttr);
+  if (classes.length >= 2) return `${base}.${cssEscapeIdent(classes[0])}.${cssEscapeIdent(classes[1])}`;
+  if (classes.length === 1) return `${base}.${cssEscapeIdent(classes[0])}`;
+  return base;
+}
+async function discoverListSelectorsFromHtml(html, baseUrl) {
+  const selectors = {};
+  const evidence = {};
+  for (const field of LIST_SELECTOR_KEYS) {
+    const config = SUGGESTION_CANDIDATES[field];
+    for (const candidate of config.selectors) {
+      try {
+        const values = await extractSelectorValues(html, baseUrl, candidate, config.type || "text");
+        const minimum = field === "container" ? 2 : 1;
+        if (values.length >= minimum) {
+          selectors[field] = candidate;
+          evidence[field] = { count: values.length, sample: (values[0] || "").slice(0, 200), via: "curated" };
+          break;
+        }
+      } catch {
+      }
+    }
+  }
+  const curatedSelectors = { ...selectors };
+  const curatedEvidence = { ...evidence };
+  let structuralSelectors = null;
+  let structuralEvidence = {};
+  if (!selectors.container || !selectors.title) {
+    try {
+      const structural = await inferStructuralListSelectors(html, baseUrl);
+      if (structural) {
+        structuralSelectors = { ...structural.selectors };
+        structuralEvidence = { ...structural.evidence };
+        for (const [key2, value] of Object.entries(structural.selectors)) {
+          if (value && !selectors[key2]) {
+            selectors[key2] = value;
+            evidence[key2] = { ...structural.evidence[key2] || {}, via: "structural" };
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  const mergedMethod = !structuralSelectors ? "curated" : curatedSelectors.container && curatedSelectors.title ? "mixed" : "structural";
+  const candidates = [
+    { sel: selectors, ev: evidence, method: mergedMethod },
+    ...structuralSelectors ? [{ sel: structuralSelectors, ev: structuralEvidence, method: "structural" }] : [],
+    { sel: curatedSelectors, ev: curatedEvidence, method: "curated" }
+  ];
+  let containerCount = 0;
+  for (const candidate of candidates) {
+    if (!candidate.sel.container || !candidate.sel.title) continue;
+    const verified = await verifyListSelectors(html, baseUrl, { ...DEFAULT_SELECTORS, ...candidate.sel });
+    containerCount = verified.containerCount;
+    if (verified.ok) return { selectors: candidate.sel, evidence: candidate.ev, method: candidate.method, containerCount };
+  }
+  return { selectors: {}, evidence: {}, method: "none", containerCount };
+}
+function contextChunks(html, index, anchorOpen) {
+  void anchorOpen;
+  const chunks = [];
+  const close = html.indexOf("</a>", index);
+  if (close > index && close - index < 6e3) chunks.push(html.slice(index, close + 4));
+  let cursor = index;
+  for (let depth = 0; depth < 4; depth++) {
+    let best = "", bestOpen = -1;
+    for (const [tag, endTag] of [["article", "</article>"], ["li", "</li>"], ["tr", "</tr>"], ["div", "</div>"]]) {
+      const open = enclosingOpen(html, cursor, tag, endTag);
+      if (open < 0 || cursor - open > 1800) continue;
+      const end = matchingClose(html, open, tag, endTag);
+      if (end < 0 || end - open > 5e3) continue;
+      const chunk = html.slice(open, end + endTag.length);
+      if (!best || chunk.length < best.length) {
+        best = chunk;
+        bestOpen = open;
+      }
+    }
+    if (!best || bestOpen < 0) break;
+    chunks.push(best);
+    cursor = bestOpen;
+  }
+  return chunks;
+}
+async function inferStructuralListSelectors(html, baseUrl) {
+  const groups = /* @__PURE__ */ new Map();
+  const anchors = [];
+  try {
+    const anchorRe = /<a\b[^>]*href=["']([^"']*)["'][^>]*>/gi;
+    let match2;
+    while ((match2 = anchorRe.exec(html)) && anchors.length < 800) anchors.push(match2);
+  } catch {
+    return null;
+  }
+  if (anchors.length < 2) return null;
+  for (const anchor of anchors) {
+    const href = String(anchor[1] || "").trim();
+    if (!href || href === "#" || /^javascript:/i.test(href)) continue;
+    for (const chunk of contextChunks(html, anchor.index, anchor[0])) {
+      const open = chunk.match(/^<(\w+)\b([^>]*)>/);
+      if (!open) continue;
+      const tag = open[1].toLowerCase();
+      if (!tag || tag === "html" || tag === "body") continue;
+      const text = stripHtml(chunk);
+      if (!text || text.length < 12 || text.length > 1500) continue;
+      if (!/<img\b/i.test(chunk)) continue;
+      if ((chunk.match(/<a\b[^>]*href\s*=/gi) || []).length > 4) continue;
+      const classAttr = open[2].match(/\bclass=["']([^"']*)["']/)?.[1] || "";
+      const signature = selectorForTagClasses(tag, classAttr);
+      if (!signature.includes(".") && tag !== "li" && tag !== "article") continue;
+      let group = groups.get(signature);
+      if (!group) {
+        group = { chunks: [], seen: /* @__PURE__ */ new Set(), priceHits: 0 };
+        groups.set(signature, group);
+      }
+      if (group.seen.has(chunk)) continue;
+      group.seen.add(chunk);
+      group.chunks.push(chunk);
+      if (PRICE_HINT_RE.test(stripPriceFormatChars(text)) || THOUSANDS_RE.test(text)) group.priceHits++;
+    }
+  }
+  const clusters = [...groups.entries()].map(([selector, group]) => ({ selector, chunks: group.chunks, priceHits: group.priceHits })).filter((cluster) => cluster.chunks.length >= 2).sort((a, b) => b.chunks.length * (1 + b.priceHits) - a.chunks.length * (1 + a.priceHits));
+  for (const cluster of clusters.slice(0, 5)) {
+    const derived = deriveStructuralFieldSelectors(cluster.chunks.slice(0, 8));
+    if (!derived || !derived.title) continue;
+    const linkSelector = derived.cardIsLink ? cluster.selector : "a[href]";
+    const merged = { ...DEFAULT_SELECTORS, container: cluster.selector, title: derived.title, price: derived.price || "", link: linkSelector, image: "img" };
+    const verified = await verifyListSelectors(html, baseUrl, merged);
+    if (!verified.ok) continue;
+    return {
+      selectors: { container: cluster.selector, title: derived.title, ...derived.price ? { price: derived.price } : {}, link: linkSelector, image: "img" },
+      evidence: {
+        container: { count: verified.containerCount, sample: cluster.selector },
+        title: verified.title,
+        price: verified.price,
+        link: verified.link,
+        image: verified.image
+      }
+    };
+  }
+  return null;
+}
+var BLOCK_TAG_RE = /<(div|ul|ol|li|table|section|article|header|footer|main|form|p|h[1-6])\b/i;
+function deriveStructuralFieldSelectors(sampleChunks) {
+  const titleVotes = /* @__PURE__ */ new Map();
+  const priceVotes = /* @__PURE__ */ new Map();
+  let cardIsLink = 0;
+  const classOf = (attrs) => attrs.match(/\bclass=["']([^"']*)["']/)?.[1] || "";
+  for (const chunk of sampleChunks) {
+    if (/^<a\b/i.test(chunk)) cardIsLink++;
+    let titleSig = "";
+    const headingH = chunk.match(/<h([1-4])\b([^>]*)>([\s\S]{0,600}?)<\/h[1-4]>/i);
+    const headingProp = !headingH ? chunk.match(/<([a-z][a-z0-9]*)\b([^>]*itemprop=["']name["'][^>]*)>([\s\S]{0,600}?)<\/\1>/i) : null;
+    const heading = headingH || headingProp;
+    if (heading) {
+      const text = stripHtml(heading[3] || "");
+      if (text.length >= 8 && text.length <= 200 && !looksLikePrice(text)) {
+        const tag = headingH ? `h${headingH[1]}` : headingProp?.[1] || "div";
+        titleSig = selectorForTagClasses(tag, classOf(heading[2] || ""));
+      }
+    } else {
+      let bestLen = 0, bestIndex = -1;
+      const considerTitle = (tag, attrs, rawInner, index) => {
+        const text = stripHtml(rawInner);
+        if (text.length >= 15 && text.length <= 160 && (text.length > bestLen || text.length === bestLen && index > bestIndex) && !looksLikePrice(text)) {
+          bestLen = text.length;
+          bestIndex = index;
+          titleSig = selectorForTagClasses(tag, classOf(attrs));
+        }
+      };
+      for (const m of chunk.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([^<>]{15,160})<\/\1>/gi)) considerTitle(m[1], m[2] || "", m[3] || "", m.index ?? 0);
+      const body = chunk.replace(/^<[a-z][a-z0-9]*\b[^>]*>/i, "");
+      for (const m of body.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([\s\S]{15,220}?)<\/\1>/gi)) {
+        const inner = m[3] || "";
+        if (!/[<>]/.test(inner)) continue;
+        if (BLOCK_TAG_RE.test(inner)) continue;
+        considerTitle(m[1], m[2] || "", inner, m.index ?? 0);
+      }
+    }
+    if (titleSig) {
+      const vote = titleVotes.get(titleSig) || { count: 0, bonus: /^h[1-4][.]/.test(titleSig) ? 2 : 0 };
+      vote.count++;
+      titleVotes.set(titleSig, vote);
+    }
+    const priceCandidates = [];
+    const considerPrice = (tag, attrs, rawInner, index) => {
+      const text = stripHtml(rawInner);
+      if (!text || text.length > 80 || !looksLikePrice(text)) return;
+      priceCandidates.push({ sig: selectorForTagClasses(tag, classOf(attrs)), length: text.length, index });
+    };
+    for (const m of chunk.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>([^<>]{1,80})<\/\1>/gi)) considerPrice(m[1], m[2] || "", m[3] || "", m.index ?? 0);
+    const priceBody = chunk.replace(/^<[a-z][a-z0-9]*\b[^>]*>/i, "");
+    for (const m of priceBody.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>([\s\S]{1,160}?)<\/\1>/gi)) {
+      const inner = m[3] || "";
+      if (!/[<>]/.test(inner)) continue;
+      if (BLOCK_TAG_RE.test(inner)) continue;
+      considerPrice(m[1], m[2] || "", inner, m.index ?? 0);
+    }
+    priceCandidates.sort((a, b) => a.length - b.length || b.index - a.index);
+    if (priceCandidates.length) {
+      const winner = priceCandidates[0].sig;
+      const vote = priceVotes.get(winner) || { count: 0, length: priceCandidates[0].length };
+      vote.count++;
+      priceVotes.set(winner, vote);
+    }
+  }
+  const titleWinner = [...titleVotes.entries()].sort((a, b) => b[1].count * 10 + b[1].bonus - (a[1].count * 10 + a[1].bonus))[0];
+  if (!titleWinner) return null;
+  const priceWinner = [...priceVotes.entries()].sort((a, b) => b[1].count - a[1].count || a[1].length - b[1].length)[0];
+  return { title: titleWinner[0], price: priceWinner ? priceWinner[0] : "", cardIsLink: cardIsLink * 2 >= sampleChunks.length };
+}
+async function ensureListSelectors(html, baseUrl, selectors) {
+  if (listSelectorsStatus(selectors) === "custom") return { selectors, method: "" };
+  if ((await verifyListSelectors(html, baseUrl, selectors)).ok) return { selectors, method: "" };
+  const found = await discoverListSelectorsFromHtml(html, baseUrl);
+  const merged = { ...selectors, ...found.selectors };
+  if (found.method !== "none" && found.selectors.container && found.selectors.title && (await verifyListSelectors(html, baseUrl, merged)).ok)
+    return { selectors: merged, discovered: found.selectors, method: found.method };
+  return { selectors, method: "" };
+}
+async function extractDiagnosticSample(product, profile, engine) {
+  requireStaticSelectorEngine(engine);
+  const page = await sourceText(product.url, Boolean(profile.networkIndirect), 4e6);
+  const suggested = await suggestSelectors(page.url, "detail", engine, page);
+  const selectors = { ...profile.selectors, ...suggested.selectors };
+  const extracted = await scrapeDetails(product, selectors, Boolean(profile.networkIndirect), 4e6, page);
+  const fields = ["shortDesc", "longDesc", "sku", "brand", "stock", "weight", "category", "tags", "images", "specs", "variations"].filter((key2) => {
+    const v = extracted[key2];
+    return Array.isArray(v) ? v.length > 0 : v !== void 0 && v !== null && String(v) !== "";
+  });
+  return { product: extracted, fields, selectors: suggested.selectors, finalUrl: page.url, warning: fields.length ? "" : "\u0635\u0641\u062D\u0647 \u062E\u0648\u0627\u0646\u062F\u0647 \u0634\u062F\u060C \u0648\u0644\u06CC \u0641\u06CC\u0644\u062F \u062C\u0632\u0626\u06CC\u0627\u062A \u0642\u0627\u0628\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F." };
+}
+
+// worker-src/benchmark-evidence.ts
+function benchmarkEvidence(engine, products, error = "", parser, previous = {}) {
+  const sample = products[0] ? Object.fromEntries(["title", "price", "priceText", "url", "image", "sku"].map((k) => [k, k === "price" ? Number.isFinite(Number(products[0][k])) ? Number(products[0][k]) : 0 : String(products[0][k] || "").slice(0, 2048)])) : null;
+  const complete = { title: products.filter((p) => p.title).length, price: products.filter((p) => p.price > 0).length, link: products.filter((p) => p.url).length, image: products.filter((p) => p.image).length };
+  let failure2 = null;
+  const libs = [...new Set([...error.matchAll(/error while loading shared libraries:\s*([^\s:]+)|((?:lib)[\w.+-]+\.so(?:\.\d+)*)\s*=>\s*not found/g)].map((m) => m[1] || m[2]))];
+  if (libs.length || /Host system is missing dependencies/.test(error)) failure2 = { category: "missing-os-libraries", missingLibraries: libs, hint: "\u0645\u0631\u0648\u0631\u06AF\u0631 \u0645\u0648\u062C\u0648\u062F \u0627\u0633\u062A \u0648\u0644\u06CC \u0648\u0627\u0628\u0633\u062A\u06AF\u06CC Ubuntu \u0646\u0635\u0628 \u0646\u06CC\u0633\u062A\u061B \u062F\u0627\u0646\u0644\u0648\u062F \u062F\u0648\u0628\u0627\u0631\u0647 \u06CC\u0627 \u062A\u063A\u06CC\u06CC\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631 \u06A9\u0645\u06A9\u06CC \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F. \u062F\u0633\u062A\u0648\u0631 \u0632\u06CC\u0631 \u0631\u0627 \u062F\u0631 \u067E\u0648\u0634\u0647\u0654 \u067E\u0631\u0648\u0698\u0647 \u0628\u0627 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062F\u06CC\u0631 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F\u061B apt \u0627\u0632 gateway \u062F\u0627\u0646\u0644\u0648\u062F \u0645\u0631\u0648\u0631\u06AF\u0631 \u0639\u0628\u0648\u0631 \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.", command: "node node_modules/playwright/cli.js install-deps chromium" };
+  else if (/Could not find (?:Chrome|Chromium)|Executable doesn't exist/i.test(error)) failure2 = { category: "missing-browser", hint: "\u0646\u0633\u062E\u0647\u0654 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0645\u0648\u0631\u062F \u0646\u06CC\u0627\u0632 \u062F\u0631 \u06A9\u0634 \u06A9\u0627\u0631\u0628\u0631 \u0633\u0631\u0648\u06CC\u0633 \u0646\u06CC\u0633\u062A. \u0627\u0632 \u0628\u062E\u0634 \u0646\u0635\u0628 \u0648 \u062A\u0639\u0645\u06CC\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F\u061B \u0648\u062C\u0648\u062F \u067E\u0648\u0634\u0647\u0654 \u06A9\u0634 \u0628\u0647\u200C\u062A\u0646\u0647\u0627\u06CC\u06CC \u06A9\u0627\u0641\u06CC \u0646\u06CC\u0633\u062A. \u0634\u06A9\u0633\u062A \u062F\u0627\u0646\u0644\u0648\u062F gateway \u0631\u0627 \u062F\u0631 \u06AF\u0632\u0627\u0631\u0634 \u0646\u0635\u0628 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F." };
+  else if (/Failed to launch browser|browserType.launch/i.test(error)) failure2 = { category: "browser-launch", hint: "\u0631\u0627\u0647\u200C\u0627\u0646\u062F\u0627\u0632\u06CC \u0645\u0631\u0648\u0631\u06AF\u0631 \u0634\u06A9\u0633\u062A \u062E\u0648\u0631\u062F\u061B \u0639\u0644\u062A \u062F\u0627\u062E\u0644\u06CC \u0648 \u06AF\u0632\u0627\u0631\u0634 \u0646\u0635\u0628 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F. \u0645\u0648\u0641\u0642\u06CC\u062A \u0645\u0648\u062A\u0648\u0631 HTTP\u060C \u0633\u0644\u0627\u0645\u062A \u0645\u0631\u0648\u0631\u06AF\u0631 \u0631\u0627 \u062B\u0627\u0628\u062A \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F." };
+  const browser = ["playwright", "puppeteer", "crawlee_playwright", "network_api"].includes(engine);
+  return { ...previous || {}, engine, extracted: products.length, complete, sample, signals: { ...previous?.signals || {}, loader: browser ? engine : "http", ...parser ? { productParser: parser } : {} }, ...parser ? { productParser: parser, candidates: null, hint: "\u067E\u0627\u0631\u0633\u0631 HTML \u062B\u0627\u0628\u062A: " + parser + "\u061B \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC \u063A\u06CC\u0631\u0645\u0631\u0648\u0631\u06AF\u0631\u06CC \u0647\u0645\u06AF\u06CC HTTP \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u0646\u062F\u061B \u0627\u06CC\u0646 \u0645\u0642\u0627\u06CC\u0633\u0647 \u0622\u0632\u0645\u0648\u0646 \u0645\u0633\u062A\u0642\u0644 parser\u0647\u0627\u06CC \u0646\u0627\u0645\u200C\u0628\u0631\u062F\u0647 \u0646\u06CC\u0633\u062A." } : {}, ...error ? { dropReasons: [error] } : {}, ...failure2 ? { failure: failure2, hint: failure2.hint } : {} };
+}
+function incompatibleBenchmark(engine, parser) {
+  if (engine !== "network_api" || !parser) return null;
+  const hint = "Network API \u067E\u0627\u0633\u062E JSON \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F\u060C \u0646\u0647 HTML\u061B \u0628\u0631\u0627\u06CC \u0622\u0632\u0645\u0648\u0646 \u0645\u0633\u062A\u0642\u0644 \u0622\u0646\u060C \u06A9\u0644\u06CC\u062F \u067E\u0627\u0631\u0633\u0631 \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 \u0631\u0627 \u062E\u0627\u0645\u0648\u0634 \u06A9\u0646\u06CC\u062F. \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0634\u0645\u0627 \u062E\u0648\u062F\u06A9\u0627\u0631 \u062A\u063A\u06CC\u06CC\u0631 \u0646\u06A9\u0631\u062F.";
+  return { engine, productParser: parser, ok: false, available: true, status: "incompatible", skipped: true, elapsedMs: 0, pagesScanned: 0, products: 0, productsPerMinute: 0, sample: null, diagnosis: { engine, extracted: 0, sample: null, complete: { title: 0, price: 0, link: 0, image: 0 }, signals: { compatible: false }, hint, failure: { category: "incompatible-parser", hint }, dropReasons: [] } };
+}
+
+// worker-src/job-details.ts
+function extractionDetails(job, now4 = Date.now()) {
+  const log = Array.isArray(job.log) ? job.log : [], cache = log.filter((r) => r.event === "source-cache"), last = [...log].reverse().find((r) => r.item?.sourceKey), pages = new Set(log.map((r) => String(r.message || "").match(/صفحه\s+([۰-۹٠-٩\d]+)/)?.[1]).filter(Boolean));
+  const started = Date.parse(job.startedAt || ""), end = ["queued", "running"].includes(job.status) ? now4 : Date.parse(job.finishedAt || job.updatedAt || "");
+  return {
+    processed: Number(job.processed) || 0,
+    total: Number(job.total) || 0,
+    added: Number(job.added) || 0,
+    updated: Number(job.updated) || 0,
+    failed: Number(job.failed) || 0,
+    pages: pages.size,
+    listCount: cache.length ? cache.reduce((n, r) => n + (Number(r.item?.listCount) || 0), 0) : null,
+    reusedCount: cache.length ? cache.reduce((n, r) => n + (Number(r.item?.reusedCount) || 0), 0) : null,
+    elapsedMs: Number.isFinite(started) && Number.isFinite(end) ? Math.max(0, end - started) : null,
+    lastProduct: String(last?.item?.title || "").slice(0, 200),
+    lastEventAt: last?.at || null,
+    sent: log.filter((r) => ["sync-created", "sync-updated"].includes(r.event)).length,
+    sendSkipped: log.filter((r) => r.event === "sync-skipped").length,
+    zeroPrice: log.filter((r) => r.event === "zero-price").length,
+    waiting: job.status === "queued" ? job.startedAt ? "\u0646\u0642\u0637\u0647\u0654 \u0628\u0627\u0632\u06CC\u0627\u0628\u06CC \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F\u0647\u061B \u0645\u0646\u062A\u0638\u0631 \u0627\u062C\u0631\u0627\u06A9\u0646\u0646\u062F\u0647 \u0628\u0631\u0627\u06CC \u0627\u062F\u0627\u0645\u0647\u0654 \u0647\u0645\u06CC\u0646 \u0645\u0631\u062D\u0644\u0647." : "\u0645\u0646\u062A\u0638\u0631 \u062F\u0631\u06CC\u0627\u0641\u062A \u062A\u0648\u0633\u0637 \u0627\u062C\u0631\u0627\u06A9\u0646\u0646\u062F\u0647 \u0648 \u0638\u0631\u0641\u06CC\u062A \u0622\u0632\u0627\u062F \u0635\u0641\u061B \u0647\u0646\u0648\u0632 \u0634\u0631\u0648\u0639 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A." : "",
+    note: "\u0634\u0645\u0627\u0631\u0646\u062F\u0647\u200C\u0647\u0627\u06CC \u06A9\u0634\u060C \u0635\u0641\u062D\u0627\u062A \u0648 \u0627\u0631\u0633\u0627\u0644 \u0627\u0632 \u0631\u0648\u06CC\u062F\u0627\u062F\u0647\u0627\u06CC \u0645\u0648\u062C\u0648\u062F \u062F\u0631 \u06AF\u0632\u0627\u0631\u0634 \u0648\u0638\u06CC\u0641\u0647 \u0647\u0633\u062A\u0646\u062F."
+  };
+}
+
+// worker-src/ledger-inventory.ts
+function customerVisible(target, remote) {
+  const raw2 = remote?.raw || {}, status = String(remote?.status ?? "");
+  return target === "basalam" ? status === "2976" : target === "woo" && status === "publish" && raw2.catalog_visibility !== "hidden";
+}
+
+// worker-src/destination-ledger.ts
+var LEDGER_TTL = 6 * 60 * 60 * 1e3;
+function stable(value) {
+  return JSON.stringify(value === void 0 ? null : Array.isArray(value) ? value.map((v) => JSON.parse(stable(v))) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().filter((k) => value[k] !== void 0).map((k) => [k, JSON.parse(stable(value[k]))])) : value);
+}
+async function digest(value) {
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stable(value))))].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+async function ledgerScope(target, endpoint, accountKey) {
+  const u = new URL(endpoint);
+  return target + ":" + await digest([u.origin, u.pathname.replace(/\/+$/, ""), accountKey]);
+}
+function observed(remote) {
+  const raw2 = remote.raw || {};
+  return { name: remote.name, sku: remote.sku || "", price: Number(remote.price) || 0, status: String(remote.status || ""), stock: raw2.stock_quantity ?? raw2.stock, description: raw2.description, short: raw2.short_description, weight: raw2.weight, categories: raw2.categories ?? raw2.category_id, images: raw2.images ?? raw2.photos, attributes: raw2.attributes, variations: raw2.variations };
+}
+function desiredProduct(product, profile, config) {
+  return { product: Object.fromEntries(["title", "price", "priceText", "sku", "shortDesc", "longDesc", "image", "images", "stock", "weight", "basalamCategoryId", "variationGroups", "variationPrices", "destinationStatus"].map((k) => [k, product[k]])), profile: { id: profile.id, wooCategoryId: profile.wooCategoryId, basalamCategoryId: profile.basalamCategoryId, basalamFallbackCategoryIds: profile.basalamFallbackCategoryIds }, config: Object.fromEntries(["replaceImages", "target", "pricePercent", "categoryId", "preparationDays", "weight", "packageWeight", "stock", "autoCategory", "fallbackCategoryIds", "contentSync"].map((k) => [k, config[k]])) };
+}
+function equivalentDesired(remote, desired) {
+  const p = desired?.product, c = desired?.config, profile = desired?.profile;
+  if (!p || !c || !remote?.raw) return false;
+  const raw2 = remote.raw, basalam = c.target === "basalam", price = Math.round(Number(p.price) * (1 + (Number(c.pricePercent) || 0) / 100)) * (basalam && !/ریال|rial|irr/i.test(p.priceText || "") ? 10 : 1);
+  if (remote.name !== p.title || Number(remote.price) !== price || !(price > 0) || (p.variationGroups || []).length) return false;
+  if (basalam && String(remote.status) !== "2976" || !basalam && p.destinationStatus && remote.status !== p.destinationStatus) return false;
+  const stock = p.stock ?? (basalam ? c.stock : void 0);
+  if (stock !== void 0 && Number(raw2.stock_quantity ?? raw2.stock) !== Number(stock)) return false;
+  if (c.contentSync !== false) {
+    if (String(raw2.description ?? "") !== String(basalam ? p.longDesc || p.shortDesc || "" : p.longDesc || "")) return false;
+    if (!basalam && String(raw2.short_description || "") !== String(p.shortDesc || "")) return false;
+    const images = (p.images || []).map(String);
+    if (images.length || c.replaceImages) {
+      if (basalam) return false;
+      const actual = (raw2.images || []).map((x) => String(x.src || ""));
+      if (stable(images) !== stable(actual)) return false;
+    }
+  }
+  const category = basalam ? p.basalamCategoryId || profile.basalamCategoryId || c.categoryId : profile.wooCategoryId || c.categoryId;
+  if (category) {
+    const actual = basalam ? raw2.category_id ?? raw2.category?.id : raw2.categories?.[0]?.id;
+    if (String(actual) !== String(category)) return false;
+  }
+  if (p.weight && Number(raw2.weight) !== Number(p.weight)) return false;
+  if ((p.longDesc || p.shortDesc) && raw2.description === void 0) return false;
+  return true;
+}
+function cleanRemote(remote) {
+  const raw2 = remote.raw || {}, keys = ["id", "name", "title", "sku", "price", "primary_price", "regular_price", "sale_price", "status", "stock", "stock_quantity", "manage_stock", "catalog_visibility", "description", "short_description", "weight", "dimensions", "categories", "category_id", "category", "images", "photos", "photo", "attributes", "variations"];
+  return { ...remote, raw: Object.fromEntries(keys.filter((k) => raw2[k] !== void 0).map((k) => [k, raw2[k]])) };
+}
+function createDestinationLedger(io) {
+  const inflight = /* @__PURE__ */ new Map();
+  const key2 = (scope) => "ledger_meta:" + scope;
+  async function metadata(scope) {
+    return io.getState(key2(scope), null);
+  }
+  async function entries(scope) {
+    const meta = await metadata(scope), base = meta ? await io.ledgerRows(scope, meta.generation) : [], live = await io.ledgerRows(scope, "live");
+    if (meta && base.length !== meta.count) throw Error("\u0646\u0633\u062E\u0647\u0654 \u062F\u0641\u062A\u0631 \u062D\u0633\u0627\u0628 \u0646\u0627\u0642\u0635 \u0627\u0633\u062A\u061B \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC \u0644\u0627\u0632\u0645 \u0627\u0633\u062A.");
+    const map2 = new Map(base.map((x) => [String(x.remote.id), x]));
+    for (const x of live) if (!meta || x.at >= meta.startedAt) {
+      if (x.deleted) map2.delete(String(x.remote.id));
+      else map2.set(String(x.remote.id), x);
+    }
+    return [...map2.values()];
+  }
+  async function refresh(scope, fetchAll, force = false) {
+    const meta = await metadata(scope);
+    if (!force && meta?.inventoryPolicy === "customer-visible-v1" && Date.now() - Date.parse(meta.startedAt) < LEDGER_TTL) return { cached: true, ...meta };
+    if (inflight.has(scope)) return inflight.get(scope);
+    const task = (async () => {
+      const startedAt = (/* @__PURE__ */ new Date()).toISOString(), generation = crypto.randomUUID();
+      const all = await fetchAll(), unique = /* @__PURE__ */ new Map();
+      for (const remote of all) {
+        if (!remote?.id) throw Error("\u0634\u0646\u0627\u0633\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 \u0645\u0642\u0635\u062F \u062F\u0631 \u0627\u0633\u06A9\u0646 \u062F\u0641\u062A\u0631 \u062D\u0633\u0627\u0628 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A.");
+        const id = String(remote.id);
+        if (unique.has(id)) throw Error("\u0635\u0641\u062D\u0647\u0654 \u062A\u06A9\u0631\u0627\u0631\u06CC \u0645\u0642\u0635\u062F\u061B \u06A9\u0627\u0645\u0644 \u0628\u0648\u062F\u0646 \u062F\u0641\u062A\u0631 \u062D\u0633\u0627\u0628 \u062A\u0623\u06CC\u06CC\u062F \u0646\u0634\u062F.");
+        unique.set(id, cleanRemote(remote));
+      }
+      const rows2 = [...unique.values()].map((remote) => ({ remote, at: startedAt }));
+      for (let i = 0; i < rows2.length; i += 20) await io.ledgerPut(scope, generation, rows2.slice(i, i + 20));
+      const next = { generation, previous: meta?.generation, startedAt, completedAt: (/* @__PURE__ */ new Date()).toISOString(), count: rows2.length, complete: true, inventoryPolicy: "customer-visible-v1", durationMs: Math.max(0, Date.now() - Date.parse(startedAt)) };
+      await io.setState(key2(scope), next);
+      await io.ledgerPrune(scope, [generation, meta?.generation || "", "live"]).catch(() => {
+      });
+      return { cached: false, ...next };
+    })();
+    inflight.set(scope, task);
+    try {
+      return await task;
+    } finally {
+      inflight.delete(scope);
+    }
+  }
+  async function find(scope, id, sku = "") {
+    const meta = await metadata(scope);
+    if (id) {
+      const live = await io.ledgerGet(scope, "live", String(id));
+      const base = meta ? await io.ledgerGet(scope, meta.generation, String(id)) : null;
+      if (live && (!meta || live.at >= meta.startedAt)) return live;
+      if (base) {
+        if (live?.desiredHash && !live.invalid && !live.deleted && live.observedHash === await digest(observed(base.remote))) return { ...base, desiredHash: live.desiredHash, profileId: live.profileId, sourceKey: live.sourceKey };
+        return { ...base, profileId: live?.profileId, sourceKey: live?.sourceKey };
+      }
+      return null;
+    }
+    if (!sku || !meta || Date.now() - Date.parse(meta.startedAt) >= LEDGER_TTL) return null;
+    const matches2 = (await entries(scope)).filter((x) => x.remote.sku === sku && !x.invalid && !x.deleted);
+    return matches2.length === 1 ? matches2[0] : null;
+  }
+  async function matches(entry, desired) {
+    return !!entry && !entry.invalid && !entry.deleted && Date.now() - Date.parse(entry.at) < LEDGER_TTL && (entry.desiredHash === await digest(desired) || !entry.desiredHash && equivalentDesired(entry.remote, desired));
+  }
+  async function invalidate(scope, id) {
+    if (id) {
+      const before = await find(scope, id);
+      await io.ledgerPut(scope, "live", [{ remote: before?.remote || { id: String(id) }, profileId: before?.profileId, sourceKey: before?.sourceKey, at: (/* @__PURE__ */ new Date()).toISOString(), invalid: true }]);
+    }
+  }
+  async function confirm(scope, remote, desired, profileId, sourceKey2, observedAt) {
+    if (!remote?.id) return;
+    remote = cleanRemote(remote);
+    await io.ledgerPut(scope, "live", [{ remote, at: observedAt || (/* @__PURE__ */ new Date()).toISOString(), desiredHash: await digest(desired), observedHash: await digest(observed(remote)), profileId, sourceKey: sourceKey2 }]);
+  }
+  async function patch(scope, id, changes, deleted = false) {
+    const previous = await find(scope, id);
+    await io.ledgerPut(scope, "live", [{ profileId: previous?.profileId, sourceKey: previous?.sourceKey, remote: { ...previous?.remote, ...changes, id: String(id), raw: { ...previous?.remote?.raw, ...changes } }, at: (/* @__PURE__ */ new Date()).toISOString(), deleted, invalid: !previous?.remote?.name && !deleted }]);
+  }
+  return { metadata, entries, refresh, find, matches, invalidate, confirm, patch };
+}
+
 // worker-src/ledger.ts
+init_db();
 var destinationLedger = createDestinationLedger({ getState, setState, ledgerRows, ledgerGet, ledgerPut, ledgerPrune });
 async function destinationScope(target, accountKey = "default") {
   const c = await loadConnections();
@@ -6552,7 +8916,7 @@ var DEFAULT_SUFFIX_FORMATS = ["(\u06A9\u062F:x)", "#x"];
 var DEDUP_KEEPS = ["newest", "oldest", "cheapest", "expensive"];
 var FA_DIGITS = "\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9";
 var AR_DIGITS = "\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669";
-function normalizeDigits(value) {
+function normalizeDigits2(value) {
   return String(value || "").replace(/[۰-۹٠-٩]/g, (ch) => {
     const fa = FA_DIGITS.indexOf(ch);
     if (fa >= 0) return String(fa);
@@ -6579,13 +8943,13 @@ function suffixPatterns(formats) {
 }
 var GENERIC_CODE_SUFFIX = /(?:[\s\u200c\u200d]|[-–—_·.])*[\[(][\s\u200c\u200d]*(?:کد|كد|code|sku)[\s\u200c\u200d]*[:：#-]?[\s\u200c\u200d]*[\p{L}\p{N}][\p{L}\p{N}\s\u200c\u200d._/-]{0,40}?[\s\u200c\u200d]*[\])][\s\u200c\u200d]*$/iu;
 function hasCodeSuffix(name, patterns) {
-  const value = normalizeDigits(String(name || ""));
+  const value = normalizeDigits2(String(name || ""));
   if (!value.trim()) return false;
   if (GENERIC_CODE_SUFFIX.test(value)) return true;
   return patterns.some((pattern) => pattern.test(value));
 }
 function stripCodeSuffix(name, patterns) {
-  let out = normalizeDigits(String(name || ""));
+  let out = normalizeDigits2(String(name || ""));
   for (let guard = 0; guard < 5; guard++) {
     const before = out;
     out = stripDedupSuffix(out, patterns).replace(GENERIC_CODE_SUFFIX, "");
@@ -6594,7 +8958,7 @@ function stripCodeSuffix(name, patterns) {
   return out.trim();
 }
 function stripDedupSuffix(name, patterns) {
-  let out = normalizeDigits(String(name || ""));
+  let out = normalizeDigits2(String(name || ""));
   for (let guard = 0; guard < 5; guard++) {
     let changed = false;
     for (const pattern of patterns) {
@@ -6938,281 +9302,6 @@ function planDuplicateDeletions(remotes, account, suffixFormats = "", keep = "ex
     }
   }
   return actions;
-}
-
-// worker-src/source-network.ts
-function resolveSourceNetwork(source2, legacy = {}, target = "") {
-  const explicit = source2 && typeof source2 === "object" && typeof source2.mode === "string";
-  const result = explicit ? { mode: String(source2.mode), proxyUrl: String(source2.proxy || "").trim(), workerUrl: String(source2.worker || "").trim() } : { mode: String(legacy.mode || "direct"), proxyUrl: String(legacy.proxyUrl || "").trim(), workerUrl: String(legacy.workerUrl || "").trim() };
-  const hosts = explicit ? String(source2.hosts || "").split(/[\s,،]+/).filter(Boolean).map((h) => h.toLowerCase()) : [];
-  if (hosts.length && target) {
-    const host = new URL(target).hostname.toLowerCase();
-    if (!hosts.some((h) => host === h || host.endsWith("." + h))) return { mode: "direct", proxyUrl: "", workerUrl: "" };
-  }
-  if (result.mode === "proxy" && result.proxyUrl) {
-    try {
-      const url = new URL(/^https?:\/\//i.test(result.proxyUrl) ? result.proxyUrl : "https://" + result.proxyUrl);
-      if (url.hostname.endsWith(".workers.dev")) {
-        result.mode = "worker";
-        result.workerUrl = result.proxyUrl;
-        result.proxyUrl = "";
-      }
-    } catch {
-    }
-  }
-  return result;
-}
-function sourceWorkerUrl(raw2, target) {
-  const value = String(raw2 || "").trim().replace(/%7Burl%7D/ig, "{url}");
-  if (!value || value.startsWith("/")) throw new Error("\u0628\u0631\u0627\u06CC \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645\u060C Worker URL \u0645\u0639\u062A\u0628\u0631 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.");
-  let base = /^https?:\/\//i.test(value) ? value : "https://" + value;
-  if (new URL(base.replace("{url}", "target")).hostname.endsWith(".workers.dev")) base = base.replace(/^http:/i, "https:");
-  if (base.includes("{url}")) return base.replace("{url}", encodeURIComponent(target));
-  const parsed = new URL(base);
-  if (parsed.searchParams.has("url")) {
-    parsed.searchParams.set("url", target);
-    return parsed.href;
-  }
-  return base.replace(/\/$/, "") + "/" + target;
-}
-var gatewayAttempts = /* @__PURE__ */ new WeakMap();
-function sourceGatewayAttempts(response) {
-  return gatewayAttempts.get(response) || [response.status];
-}
-async function fetchSourceGateway(target, gateway, init, send2) {
-  let response = await send2(init);
-  const statuses = [response.status];
-  const query = new URL(gateway).searchParams.get("url");
-  if (response.status === 403 && /^(GET|HEAD)$/i.test(init.method || "GET") && query === target) {
-    await response.body?.cancel();
-    const headers = new Headers(init.headers);
-    const ua = headers.get("user-agent") || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-    if (!headers.has("x-proxy-ua")) headers.set("x-proxy-ua", ua);
-    if (!headers.has("x-proxy-referer")) headers.set("x-proxy-referer", headers.get("referer") || new URL(target).origin + "/");
-    for (const name of ["user-agent", "referer", "accept-language", "cache-control", "x-target-url", "x-scraper-target", "x-scraper-target-url"]) headers.delete(name);
-    headers.set("accept", "text/html,application/xhtml+xml");
-    response = await send2({ ...init, headers });
-    statuses.push(response.status);
-  }
-  gatewayAttempts.set(response, statuses);
-  return response;
-}
-
-// worker-src/network.ts
-init_db();
-init_env();
-function privateIp(value) {
-  const ip = value.replace(/^\[|\]$/g, "").toLowerCase();
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
-    const p = ip.split(".").map(Number);
-    if (p.some((x) => x < 0 || x > 255)) return true;
-    const [a, b] = p;
-    return a === 0 || a === 10 || a === 127 || a >= 224 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127;
-  }
-  if (ip.includes(":")) return ip === "::" || ip === "::1" || ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe8") || ip.startsWith("fe9") || ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("::ffff:127.") || ip.startsWith("::ffff:10.") || ip.startsWith("::ffff:192.168.");
-  return false;
-}
-function assertPublicUrl(raw2) {
-  const url = new URL(raw2);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Only HTTP/HTTPS URLs are allowed");
-  if (url.username || url.password) throw new Error("Credentials in URLs are not allowed");
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".home") || privateIp(host)) throw new Error("Private hosts are not allowed");
-  return url;
-}
-async function limitedBody(response, maxBytes) {
-  const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > maxBytes) {
-    await response.body?.cancel();
-    throw new Error(`Response exceeds ${maxBytes} bytes`);
-  }
-  if (!response.body) return new Uint8Array();
-  const reader = response.body.getReader(), chunks = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > maxBytes) {
-          await reader.cancel();
-          throw new Error(`Response exceeds ${maxBytes} bytes`);
-        }
-        chunks.push(value);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-function redirectedInit(init, from, to, status) {
-  let next = { ...init };
-  if (from.origin !== to.origin) {
-    const headers = new Headers(next.headers);
-    for (const name of ["authorization", "proxy-authorization", "cookie"]) headers.delete(name);
-    next = { ...next, headers };
-  }
-  if (status === 303 || (status === 301 || status === 302) && String(next.method || "GET").toUpperCase() === "POST") next = { ...next, method: "GET", body: void 0 };
-  return next;
-}
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-}
-function retryAfterMs(response) {
-  const raw2 = (response.headers.get("retry-after") || "").trim();
-  if (/^\d+$/.test(raw2)) return Math.min(1e4, Number(raw2) * 1e3);
-  const when = raw2 ? Date.parse(raw2) : NaN;
-  if (Number.isFinite(when)) return Math.min(1e4, Math.max(0, when - Date.now()));
-  return 2e3;
-}
-async function safeFetch(raw2, init = {}, maxBytes, timeoutMs) {
-  let url = assertPublicUrl(raw2), requestInit = { ...init }, throttleRetries = 0;
-  const env = getEnv(), limit = Math.min(25e6, Math.max(1e3, maxBytes || Number(env.MAX_RESPONSE_BYTES) || 8e6));
-  for (let redirects = 0; redirects < 5; redirects++) {
-    const wait = Number(timeoutMs) > 0 ? Math.max(50, Number(timeoutMs)) : Math.max(1e3, Number(env.REQUEST_TIMEOUT_MS) || 25e3), controller = new AbortController(), timeout = setTimeout(() => controller.abort("timeout"), wait);
-    try {
-      const apiMode = init.apiMode === true;
-      const requestHeaders = apiMode ? new Headers() : new Headers({ "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", accept: "text/html,application/xhtml+xml,application/json;q=0.9,application/xml;q=0.8,*/*;q=0.5", "accept-language": "fa-IR,fa;q=0.9,en-US;q=0.7,en;q=0.6", "cache-control": "no-cache" });
-      new Headers(requestInit.headers).forEach((value, name) => requestHeaders.set(name, value));
-      const { apiMode: _apiMode, ...fetchInit } = requestInit;
-      meterSubrequest();
-      const response = await fetch(url.href, { ...fetchInit, redirect: "manual", signal: init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal, headers: requestHeaders });
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        if (init.redirect === "error") {
-          await response.body?.cancel();
-          throw Error("Unexpected redirect for API request");
-        }
-        const location = response.headers.get("location");
-        await response.body?.cancel();
-        if (!location) throw new Error("Redirect without location");
-        const nextUrl = assertPublicUrl(new URL(location, url).href);
-        requestInit = redirectedInit(requestInit, url, nextUrl, response.status);
-        url = nextUrl;
-        continue;
-      }
-      if (response.status === 429 && throttleRetries < 1) {
-        throttleRetries++;
-        try {
-          await response.body?.cancel();
-        } catch {
-        }
-        await sleepMs(retryAfterMs(response));
-        continue;
-      }
-      const body = await limitedBody(response, limit), headers = new Headers(response.headers);
-      headers.set("x-scraper-final-url", url.href);
-      return new Response(Uint8Array.from(body).buffer, { status: response.status, statusText: response.statusText, headers });
-    } catch (error) {
-      if (controller.signal.aborted) throw new Error(`\u0645\u0647\u0644\u062A \u062F\u0631\u06CC\u0627\u0641\u062A ${url.href} \u062A\u0645\u0627\u0645 \u0634\u062F.`);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-  throw new Error("Too many redirects");
-}
-function asciiPrefix(bytes, limit = 8192) {
-  let value = "";
-  for (let i = 0; i < Math.min(limit, bytes.length); i++) value += String.fromCharCode(bytes[i]);
-  return value;
-}
-function responseEncoding(bytes, contentType) {
-  if (bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) return "utf-8";
-  if (bytes[0] === 255 && bytes[1] === 254) return "utf-16le";
-  if (bytes[0] === 254 && bytes[1] === 255) return "utf-16be";
-  const header = contentType.match(/charset\s*=\s*["']?([^\s;"']+)/i)?.[1];
-  if (header) return header.toLowerCase();
-  const prefix = asciiPrefix(bytes), meta = prefix.match(/<meta\b[^>]*charset\s*=\s*["']?([^\s;"'/>]+)/i)?.[1] || prefix.match(/<meta\b[^>]*content\s*=\s*["'][^"']*charset\s*=\s*([^\s;"']+)/i)?.[1];
-  return (meta || "utf-8").toLowerCase();
-}
-function decodeResponseBody(bytes, contentType = "") {
-  const label = responseEncoding(bytes, contentType);
-  try {
-    return new TextDecoder(label, { fatal: false }).decode(bytes);
-  } catch {
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  }
-}
-function ensureTextResponse(text, contentType, url) {
-  if (contentType && !/(?:text\/|json|xml|xhtml|javascript|octet-stream)/i.test(contentType)) throw new Error(`\u0646\u0648\u0639 \u067E\u0627\u0633\u062E \u0645\u0628\u062F\u0623 \u0628\u0631\u0627\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0645\u0646\u0627\u0633\u0628 \u0646\u06CC\u0633\u062A (${contentType}).`);
-  const sample = text.slice(0, 2e5);
-  if (/(?:cf-chl-|challenge-platform|cdn-cgi\/challenge-platform|g-recaptcha|hcaptcha)/i.test(sample) || /<title[^>]*>\s*(?:Just a moment|Attention Required|Access denied)/i.test(sample)) throw new Error(`\u0635\u0641\u062D\u0647\u0654 \u0636\u062F\u0631\u0628\u0627\u062A/\u0686\u0627\u0644\u0634 \u0628\u0647\u200C\u062C\u0627\u06CC \u0645\u062D\u062A\u0648\u0627\u06CC \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 ${url} \u062F\u0631\u06CC\u0627\u0641\u062A \u0634\u062F. \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.`);
-}
-async function responseText(response, url) {
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
-  const contentType = response.headers.get("content-type") || "", bytes = new Uint8Array(await response.arrayBuffer()), text = decodeResponseBody(bytes, contentType), finalUrl = response.headers.get("x-scraper-final-url") || url;
-  ensureTextResponse(text, contentType, finalUrl);
-  return { text, url: finalUrl, contentType };
-}
-async function safeText(raw2, maxBytes = 8e6) {
-  return responseText(await safeFetch(raw2, {}, maxBytes), raw2);
-}
-function normalizeProxyUrl(raw2) {
-  const value = String(raw2 || "").trim();
-  if (!value) return "";
-  if (/^https?:\/\//i.test(value)) return value;
-  if (value.startsWith("/")) throw new Error(`\u0622\u062F\u0631\u0633 \u067E\u0631\u0627\u06A9\u0633\u06CC \xAB${value}\xBB \u0646\u0633\u0628\u06CC \u0627\u0633\u062A\u061B \u0628\u0627\u06CC\u062F \u0628\u0627 https:// \u0634\u0631\u0648\u0639 \u0634\u0648\u062F.`);
-  return "https://" + value.replace(/^\/+/, "");
-}
-async function safeTextViaWorker(raw2, workerUrl, maxBytes = 8e6) {
-  const target = assertPublicUrl(raw2).href, base = normalizeProxyUrl(workerUrl);
-  if (!base) throw new Error("\u0628\u0631\u0627\u06CC \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645\u060C Worker URL \u0631\u0627 \u062F\u0631 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.");
-  const gateway = sourceWorkerUrl(base, target);
-  const response = await fetchSourceGateway(target, gateway, { headers: { "x-target-url": target, accept: "text/html,application/xhtml+xml" } }, (options) => safeFetch(gateway, { ...options, apiMode: new Headers(options.headers).has("x-proxy-ua") }, maxBytes));
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${target} (route: worker, attempts: ${sourceGatewayAttempts(response).join(" \u2192 ")}); \u067E\u0627\u0633\u062E \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u0627\u0632 \u067E\u0631\u0627\u06A9\u0633\u06CC \u06CC\u0627 \u0645\u0628\u062F\u0623 \u0628\u0627\u0634\u062F.`);
-  const result = await responseText(response, target);
-  return { ...result, url: target };
-}
-var WOO_EDGE_ERRORS = /* @__PURE__ */ new Set([520, 521, 522, 523, 524, 525, 526]);
-function wooGatewayUrl(target, workerUrl) {
-  const base = normalizeProxyUrl(workerUrl);
-  if (!base) throw new Error("\u0622\u062F\u0631\u0633 Worker \u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648\u0627\u0631\u062F \u0646\u0634\u062F\u0647 \u0627\u0633\u062A.");
-  return sourceWorkerUrl(base, target);
-}
-async function tagNetwork(response, mode, fallbackStatus = 0) {
-  const headers = new Headers(response.headers);
-  headers.set("x-scraper-network-mode", mode);
-  if (fallbackStatus) headers.set("x-scraper-direct-status", String(fallbackStatus));
-  return new Response(await response.arrayBuffer(), { status: response.status, statusText: response.statusText, headers });
-}
-async function workerFetch(target, workerUrl, init, maxBytes, fallbackStatus = 0) {
-  const headers = new Headers(init.headers);
-  headers.set("x-target-url", target);
-  headers.set("x-scraper-target-url", target);
-  return tagNetwork(await safeFetch(wooGatewayUrl(target, workerUrl), { ...init, headers }, maxBytes), "worker", fallbackStatus);
-}
-async function safeBasalamFetch(raw2, init = {}, maxBytes) {
-  const target = assertPublicUrl(raw2).href, connections = await loadConnections();
-  const indirect = Boolean(connections.basalam?.netIndirect);
-  const workerUrl = connections.woo.network?.workerUrl || "";
-  if (indirect && workerUrl) return workerFetch(target, workerUrl, { ...init, apiMode: true }, maxBytes);
-  if (indirect && !workerUrl)
-    throw new Error("\xAB\u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645\xBB \u0628\u0631\u0627\u06CC \u0628\u0627\u0633\u0644\u0627\u0645 \u0631\u0648\u0634\u0646 \u0627\u0633\u062A \u0627\u0645\u0627 \u0622\u062F\u0631\u0633 Worker \u0648\u0627\u0633\u0637 \u0648\u0627\u0631\u062F \u0646\u0634\u062F\u0647\u061B \u0622\u0646 \u0631\u0627 \u062F\u0631 \xAB\u{1F6D2} \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u2190 \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644\xBB \u062A\u0646\u0638\u06CC\u0645 \u06A9\u0646\u06CC\u062F.");
-  return safeFetch(target, { ...init, apiMode: true }, maxBytes);
-}
-async function safeWooFetch(raw2, init = {}, maxBytes) {
-  const target = assertPublicUrl(raw2).href, connections = await loadConnections(), config = connections.woo.network || { mode: "auto", workerUrl: "" }, workerUrl = config.workerUrl || "";
-  if (config.mode === "worker") return workerFetch(target, workerUrl, init, maxBytes);
-  try {
-    const direct = await safeFetch(target, { ...init, apiMode: true }, maxBytes);
-    if (config.mode === "auto" && workerUrl && WOO_EDGE_ERRORS.has(direct.status)) {
-      const status = direct.status;
-      await direct.body?.cancel();
-      return workerFetch(target, workerUrl, init, maxBytes, status);
-    }
-    return tagNetwork(direct, "direct");
-  } catch (error) {
-    if (config.mode === "auto" && workerUrl) return workerFetch(target, workerUrl, init, maxBytes);
-    throw error;
-  }
 }
 
 // worker-src/maintenance.ts
@@ -8460,67 +10549,6 @@ var PUSH_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><
 var PUSH_ICON_PNG = { "192": "iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAACEklEQVR42u3awQ2DMBBE0e0gR+45pv9O6IMaaAGBI+zZJ/0KRu/kdX22n3S7MoEAEkACSABJAAkgASSAJIAEkAASQBJAAkgACSAJIAEkgASQAJIAEkACSABJAAkgASSAJIAEkAASQBJAAkgACSABJAEkgASQAJIAEkACSABJAAkgASSAovvux/XMBdAdNyQBNIwORn0BDaTTnFHRwxBAU9DpyajoYQig6fT0MVT0MATQpHo6GCp6GAIIIIBy9WQbKnoYAggggNL1pBoCCCCAFtETaQgggAACCKAmevIMAQQQQAABBBBAAAEEEEAAAQRQsp4wQwABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAA9Qa0EI5WyAACCCCAAAIIIIAAAggggAACCCCAAAIIIIAAAggggAACCCCAAAIIIP+BBJAAkgASQAJIAAkgCaD/P1oaB6CnT94mAmjAtcRcAAEE0KvHWqMB9PTUbzqAAAIIIIAAAggggAACCCCAAAIIIIAAYogegNzCAAIIIP+BAGKIHoAEkAASQBJAAkgACSABJAEkgASQAJIAEkACSABJAAkgASSAJIAEkAASQAJIAkgACSABJAEkgASQAJIAEkACSABJAAkgTdMJUOnwwGyZvFIAAAAASUVORK5CYII=", "512": "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAIMklEQVR42u3VwQmAMBQFQTvw6D1H++8kfaQGW5AcRNiBqeCTvD3O6wYg6HACAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAFwBQABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAABcAUAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAHaMufY4HQIAibmXBAQAjL4YIABg9MUAAQDTLwMIANh9JUAAwPTLAAIApl8GEAAw/TKAAEB++mUAAYD09MsAAgDp6ZcBBADq668BCACmf+EZIABYfw0AAcD6awAIAKZfBkAAsP4aAAKA9dcAEACsvwaAAGD9NQAEAOuvASAAWH8NAAHA+msACADWXwMQACfA+msAAgDWXwMQALD+GoAAgAAIAAIA1l8DEACw/hqAAID11wAEAAFAABAArD8agABg/dEABAABQAAQAKw/GoAAIAAIAAKA9UcDEAAEAAFAALD+aAACgAAgAAgA1h8NQAAQADxLBADrrwEgAAiAAIAAYP01AAQAARAAEAAEQAAQALD+GoAAgAAIAAIA1l8DEACwqgKAACAACAACgAAgAAgA1h8NQAAQAAQAAUAAEAAEAAFAABAArD8agAAgAAgAAoAAIAAIAAKAACAACAACgAAgAAgAAoD1RwMQAAQAAUAAEAAEAAFAABAABAABEAAQAARAAEAAEAABQABcAQEQAAQABEAAEAAQAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAEwBtGABAAAQABQAAEAAQAARAABAAEQAAQABAAAUAAQAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABEAAQAARAAEAAEAABQABcAQEQAAQABEAAEAAQAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAEAAQAARAAEAAEQABAABAAAUAAQAAEAAEAARAABABsqAAgAAgAAoAAIAAIAAKAACAACAACgAAgAAgAAoAAIAAIAAKAACAACAACgAAgAAgAAoAAIAAIAAKAACAACAACgAAgAAgAAoAAIAAIAAJgoEFgEAABAAFAAAQABAABEAAQAARAAEAAEAABAAEQAAQABEAAEAAQAAFAAEAABAABAAEQAAQABEAAEAAEwB8UAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAQAAUAAEAAEAAFAABAABAABQAAQAAEAAUAABAAEAAEQABAABEAAQAAQAAEAAUAABAAEQAAQABAAAUAAQAAEAAEAARAABAAEQAAQABAAAUAAEAAEAAFAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAABAAAAQBAAAAQAAAEAAABAEAA4PfGXO85FwIArd1XAgQATL8MIADQnn4ZQACgvv4agABAd/01AAGA6PTLAAIA9fXXAAQABAAEAGLrrwEIAHTXXwMQAOiuvwYgACAAIAAQW38NQABAAEAAILb+GoAAgACAAEBs/TUAAQABAAEAAQABgML6awACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACgAAIAAgAAiAAIABogPUHAUAABAAEAAEQABAANMD6gwAgAAIAAoAACAACABpg/REAEAABQABAA6w/AgAaYP0RABAAAUAAINwAx0cAoNgAZ0cAoNgAB0cAoNgAp0YAIJcB50UAoNgAh0UAIJcBx0QAIJcBB0QAIJcBR0MAIBQDx0EAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAAAEAEAAnABAAAAQAAAEAAABAEAAABAAAAQAAAEAQAAAEAAABAAAAQBAAAD4yAMnLHjhy+PNjgAAAABJRU5ErkJggg==" };
 function pushIconPng(size) {
   return Uint8Array.from(atob(PUSH_ICON_PNG[size] || PUSH_ICON_PNG["192"]), (ch) => ch.charCodeAt(0)).buffer;
-}
-
-// worker-src/diagnostic-progress.ts
-function diagnosticProgress(observer) {
-  const started = Date.now();
-  const emit = (event) => {
-    try {
-      observer?.({ ...event, elapsedMs: Date.now() - started });
-    } catch {
-    }
-  };
-  return {
-    begin(name, summary, details = {}) {
-      emit({ name, status: "running", summary, ...details });
-    },
-    finish(stage) {
-      emit({ ...stage, status: stage.skipped ? "skipped" : stage.ok ? "success" : "error" });
-    }
-  };
-}
-function diagnosticStream(run2) {
-  const encoder = new TextEncoder(), started = Date.now();
-  let closed = false, sequence = 0, heartbeat;
-  const body = new ReadableStream({
-    start(controller) {
-      const send2 = (event) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(JSON.stringify({ ...event, sequence: ++sequence, at: (/* @__PURE__ */ new Date()).toISOString(), elapsedMs: Date.now() - started }) + "\n"));
-        } catch {
-          closed = true;
-          clearInterval(heartbeat);
-        }
-      };
-      send2({ type: "started", summary: "\u0627\u0631\u062A\u0628\u0627\u0637 \u0632\u0646\u062F\u0647 \u0628\u0627 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628 \u0628\u0631\u0642\u0631\u0627\u0631 \u0634\u062F." });
-      heartbeat = setInterval(() => send2({ type: "heartbeat" }), 5e3);
-      void (async () => {
-        try {
-          const report = await run2((event) => send2({ ...event, type: "progress" }));
-          send2({ type: "result", report });
-        } catch (error) {
-          send2({ type: "error", error: error instanceof Error ? error.message : String(error) });
-        } finally {
-          clearInterval(heartbeat);
-          if (!closed) {
-            closed = true;
-            controller.close();
-          }
-        }
-      })();
-    },
-    cancel() {
-      closed = true;
-      clearInterval(heartbeat);
-    }
-  });
-  return new Response(body, { headers: {
-    "content-type": "application/x-ndjson; charset=utf-8",
-    "cache-control": "no-store, no-transform",
-    "x-accel-buffering": "no"
-  } });
 }
 
 // node_modules/hono/dist/compose.js
@@ -13616,7 +15644,7 @@ function canonicalAiModel(model) {
   return String(model || "").trim().replace(/^~+/, "");
 }
 function aiRequestHeaders(provider, endpoint, method = "POST") {
-  const headers = { authorization: `Bearer ${provider.apiKey}`, accept: "application/json", "user-agent": "Scraper4/1.219.0+" };
+  const headers = { authorization: `Bearer ${provider.apiKey}`, accept: "application/json", "user-agent": "Scraper4/1.220.0+" };
   if (method === "POST") headers["content-type"] = "application/json";
   if (isOpenRouter(provider, endpoint)) {
     headers["http-referer"] = "https://scraper4.workers.dev";
@@ -14925,7 +16953,7 @@ html[data-site-theme]{background:var(--theme-page)}html[data-site-theme] body{co
 /* Unified backup/version panel: real tabs + numbered step cards (mobile-first). */.utabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}.utab{display:flex!important;align-items:center;justify-content:center;gap:8px;min-height:56px;margin-bottom:0!important;white-space:normal!important;text-align:center}.utab-num{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:#ffffff2e;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900}.utab-text{display:flex;flex-direction:column;gap:1px;font-size:11px;line-height:1.5}.utab-text small{font-size:9px;font-weight:400;opacity:.8}.utup{display:none}.utup.active{display:block}.ustep{background:#0f172a;border:1px solid #334155;border-radius:14px;margin:0 0 10px;overflow:hidden}.ustep-head{display:flex;align-items:center;gap:9px;padding:9px 12px;background:#162032;border-bottom:1px solid #334155}.ustep-num{flex:0 0 auto;min-width:26px;height:26px;padding:0 6px;border-radius:999px;background:linear-gradient(135deg,#168fc9,#18c2cf);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900}.ustatus .ustep-num{background:linear-gradient(135deg,#6559d9,#9d60ef)}.ustep-title{font-size:12px;font-weight:700;color:#e8eef8;line-height:1.6}.ustep-title small{display:block;font-size:9px;color:#94a3b8;font-weight:400}.ustep-body{padding:10px 12px}.ustep-body>.menu-actions:first-child{margin-top:0}.uhelp{margin:8px 0;border:1px dashed #475569;border-radius:10px;background:#0b1224}.uhelp>summary{cursor:pointer;padding:9px 11px;font-size:10px;color:#7dd3fc;list-style:none;min-height:40px;display:flex;align-items:center}.uhelp>summary::-webkit-details-marker{display:none}.uhelp>summary::before{content:'\u25B8 ';color:#60a5fa}.uhelp[open]>summary::before{content:'\u25BE '}.uhelp .help-box{margin:0 8px 8px}@media(max-width:700px){.utabs{grid-template-columns:1fr}.utab{min-height:52px}.utup .menu-actions{display:grid;grid-template-columns:1fr;gap:8px}.utup .menu-actions .btn{width:100%;min-height:46px;font-size:12px}.ustep-body{padding:8px}.version-panel{padding:8px}.uhelp>summary{min-height:44px;font-size:11px}}
 
 .diagnostic-live{display:grid;gap:1rem}.diag-live-hero{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;padding:1rem;border:1px solid #22d3ee55;border-radius:1rem;background:linear-gradient(120deg,#164e63,#172554)}.diag-live-hero [data-diag-clock]{margin-inline-start:auto;font-variant-numeric:tabular-nums}.diag-live-dot{width:.65rem;height:.65rem;border-radius:50%;background:#22d3ee;box-shadow:0 0 .8rem #22d3ee}.diag-live-meter{height:.3rem;overflow:hidden;background:#334155;border-radius:1rem}.diag-live-meter span{display:block;width:35%;height:100%;background:#22d3ee;animation:diag-progress 1.8s ease-in-out infinite alternate}.diag-live-counts{font-size:.8rem;color:#cbd5e1}.diag-live-stages{display:grid;gap:.6rem}.diag-live-stage{padding:.9rem;border:1px solid #334155;border-inline-start-width:.3rem;border-radius:.8rem;background:#0f172a}.diag-stage-head{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.diag-stage-head>span:last-child{margin-inline-start:auto;font-size:.7rem}.diag-live-stage p{font-size:.8rem;line-height:1.8;overflow-wrap:anywhere}.diag-live-stage small,.diag-live-stage details{font-size:.75rem}.diag-live-stage.running{border-color:#22d3ee;background:#083344}.diag-live-stage.running .diag-stage-icon{display:inline-block;animation:diag-spin 1.2s linear infinite}.diag-live-stage.success{border-inline-start-color:#34d399}.diag-live-stage.error{border-inline-start-color:#fb7185}.diag-live-stage.waiting,.diag-live-stage.skipped{opacity:.65}.diag-activity ol{max-height:16rem;overflow:auto;font-size:.75rem;line-height:2;overflow-wrap:anywhere}.diagnostic-live.finished .diag-live-dot{background:#94a3b8;box-shadow:none}.diagnostic-live.failed [data-diag-status]{color:#fda4af}@keyframes diag-progress{to{transform:translateX(185%)}}@keyframes diag-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.diag-live-meter span,.diag-live-stage.running .diag-stage-icon{animation:none}}
-</style></head><body><button id="hamburgerBtn" class="hamburger" title="\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0639\u0645\u0648\u0645\u06CC">\u2630</button><div id="drawerOverlay" class="drawer-overlay"></div><aside id="drawer" class="drawer"><div class="drawer-head"><b>\u2630 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0639\u0645\u0648\u0645\u06CC</b><div class="drawer-tools"><button id="drawerFull" class="fullwidth-btn" title="\u062A\u0645\u0627\u0645 \u0639\u0631\u0636 \u06A9\u0631\u062F\u0646 \u0645\u0646\u0648 \u0648 \u0645\u062D\u062A\u0648\u06CC\u0627\u062A \u0622\u0646" aria-label="\u062A\u0645\u0627\u0645 \u0639\u0631\u0636 \u06A9\u0631\u062F\u0646 \u0645\u0646\u0648">\u26F6</button><button id="drawerClose" class="btn btn-gray" style="font-size:14px;padding:4px 10px">\u2715</button></div></div><div id="menuSections" class="drawer-body"></div></aside><header class="topbar"><div class="brand">\u{1F6D2} \u0627\u0633\u06A9\u0631\u067E\u0631 <b>\u0648\u0648\u06A9\u0627\u0645\u0631\u0633 / \u0628\u0627\u0633\u0644\u0627\u0645</b><span class="live-badge" id="liveBadge"><i></i>\u0632\u0646\u062F\u0647</span></div><span id="autoSaveState" class="chip" role="status" aria-live="polite">\u0630\u062E\u06CC\u0631\u0647\u0654 \u062E\u0648\u062F\u06A9\u0627\u0631 \u0641\u0639\u0627\u0644 \u0627\u0633\u062A</span><button type="button" class="top-version" id="topVersion" title="\u06AF\u0632\u0627\u0631\u0634 \u062A\u063A\u06CC\u06CC\u0631\u0627\u062A \u0627\u06CC\u0646 \u0646\u0633\u062E\u0647"><small>\u0646\u0633\u062E\u0647</small><b id="topVersionNum">\u06F1.\u06F2\u06F1\u06F9.\u06F0+</b></button><div class="top-state"><div class="top-quick" aria-label="\u0645\u06CC\u0627\u0646\u0628\u0631\u0647\u0627\u06CC \u0633\u0631\u06CC\u0639"><button type="button" id="topHomeBtn" class="btn btn-gray btn-sm" title="\u0634\u0631\u0648\u0639">\u{1F3E0} \u0634\u0631\u0648\u0639</button><button type="button" id="topRunBtn" class="btn btn-green btn-sm" title="\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u06A9\u200C\u0627\u0646\u062F \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0641\u0639\u0644\u06CC">\u25B6 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</button><button type="button" id="topJobsBtn" class="btn btn-blue btn-sm" title="\u0635\u0641 \u0648 \u06A9\u0627\u0631\u0647\u0627">\u{1F4CB} \u0635\u0641</button><button type="button" id="topMenuBtn" class="btn btn-gray btn-sm" title="\u0645\u0646\u0648">\u2630 \u0645\u0646\u0648</button></div><button type="button" id="activityBtn" class="btn btn-purple btn-sm" title="\u0641\u0639\u0627\u0644\u06CC\u062A\u200C\u0647\u0627\u06CC \u067E\u0634\u062A\u0635\u062D\u0646\u0647 (\u0645\u062F\u06CC\u0631 \u0648\u0638\u0627\u06CC\u0641)">\u26A1 \u0641\u0639\u0627\u0644\u06CC\u062A</button><span id="topText">\u062F\u0631 \u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u062A\u0635\u0627\u0644</span><i id="topDot" class="dot"></i></div></header><main class="container"><div id="releaseBanner" class="release-banner" role="status">\u2705 \u0686\u06CC\u062F\u0645\u0627\u0646 \u062C\u062F\u06CC\u062F \u0622\u0645\u0627\u062F\u0647 \u0627\u0633\u062A \u2014 \u0627\u0632 \xAB\u0634\u0631\u0648\u0639\xBB \u062A\u0627 \xAB\u0627\u0631\u0633\u0627\u0644\xBB\u060C \u06A9\u0627\u0631\u0647\u0627\u06CC \u0627\u0635\u0644\u06CC \u0628\u0647\u200C\u062A\u0631\u062A\u06CC\u0628 \u062C\u0631\u06CC\u0627\u0646 \u0648\u0627\u0642\u0639\u06CC \u0645\u0631\u062A\u0628 \u0634\u062F\u0647\u200C\u0627\u0646\u062F.</div><div id="notice" class="notice" role="status"></div><script type="text/plain" id="s4injectorSrc">/* Scraper4 selector injector \u2014 paste into the DevTools console on any shop page.
+</style></head><body><button id="hamburgerBtn" class="hamburger" title="\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0639\u0645\u0648\u0645\u06CC">\u2630</button><div id="drawerOverlay" class="drawer-overlay"></div><aside id="drawer" class="drawer"><div class="drawer-head"><b>\u2630 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0639\u0645\u0648\u0645\u06CC</b><div class="drawer-tools"><button id="drawerFull" class="fullwidth-btn" title="\u062A\u0645\u0627\u0645 \u0639\u0631\u0636 \u06A9\u0631\u062F\u0646 \u0645\u0646\u0648 \u0648 \u0645\u062D\u062A\u0648\u06CC\u0627\u062A \u0622\u0646" aria-label="\u062A\u0645\u0627\u0645 \u0639\u0631\u0636 \u06A9\u0631\u062F\u0646 \u0645\u0646\u0648">\u26F6</button><button id="drawerClose" class="btn btn-gray" style="font-size:14px;padding:4px 10px">\u2715</button></div></div><div id="menuSections" class="drawer-body"></div></aside><header class="topbar"><div class="brand">\u{1F6D2} \u0627\u0633\u06A9\u0631\u067E\u0631 <b>\u0648\u0648\u06A9\u0627\u0645\u0631\u0633 / \u0628\u0627\u0633\u0644\u0627\u0645</b><span class="live-badge" id="liveBadge"><i></i>\u0632\u0646\u062F\u0647</span></div><span id="autoSaveState" class="chip" role="status" aria-live="polite">\u0630\u062E\u06CC\u0631\u0647\u0654 \u062E\u0648\u062F\u06A9\u0627\u0631 \u0641\u0639\u0627\u0644 \u0627\u0633\u062A</span><button type="button" class="top-version" id="topVersion" title="\u06AF\u0632\u0627\u0631\u0634 \u062A\u063A\u06CC\u06CC\u0631\u0627\u062A \u0627\u06CC\u0646 \u0646\u0633\u062E\u0647"><small>\u0646\u0633\u062E\u0647</small><b id="topVersionNum">\u06F1.\u06F2\u06F2\u06F0.\u06F0+</b></button><div class="top-state"><div class="top-quick" aria-label="\u0645\u06CC\u0627\u0646\u0628\u0631\u0647\u0627\u06CC \u0633\u0631\u06CC\u0639"><button type="button" id="topHomeBtn" class="btn btn-gray btn-sm" title="\u0634\u0631\u0648\u0639">\u{1F3E0} \u0634\u0631\u0648\u0639</button><button type="button" id="topRunBtn" class="btn btn-green btn-sm" title="\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u06A9\u200C\u0627\u0646\u062F \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0641\u0639\u0644\u06CC">\u25B6 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</button><button type="button" id="topJobsBtn" class="btn btn-blue btn-sm" title="\u0635\u0641 \u0648 \u06A9\u0627\u0631\u0647\u0627">\u{1F4CB} \u0635\u0641</button><button type="button" id="topMenuBtn" class="btn btn-gray btn-sm" title="\u0645\u0646\u0648">\u2630 \u0645\u0646\u0648</button></div><button type="button" id="activityBtn" class="btn btn-purple btn-sm" title="\u0641\u0639\u0627\u0644\u06CC\u062A\u200C\u0647\u0627\u06CC \u067E\u0634\u062A\u0635\u062D\u0646\u0647 (\u0645\u062F\u06CC\u0631 \u0648\u0638\u0627\u06CC\u0641)">\u26A1 \u0641\u0639\u0627\u0644\u06CC\u062A</button><span id="topText">\u062F\u0631 \u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u062A\u0635\u0627\u0644</span><i id="topDot" class="dot"></i></div></header><main class="container"><div id="releaseBanner" class="release-banner" role="status">\u2705 \u0686\u06CC\u062F\u0645\u0627\u0646 \u062C\u062F\u06CC\u062F \u0622\u0645\u0627\u062F\u0647 \u0627\u0633\u062A \u2014 \u0627\u0632 \xAB\u0634\u0631\u0648\u0639\xBB \u062A\u0627 \xAB\u0627\u0631\u0633\u0627\u0644\xBB\u060C \u06A9\u0627\u0631\u0647\u0627\u06CC \u0627\u0635\u0644\u06CC \u0628\u0647\u200C\u062A\u0631\u062A\u06CC\u0628 \u062C\u0631\u06CC\u0627\u0646 \u0648\u0627\u0642\u0639\u06CC \u0645\u0631\u062A\u0628 \u0634\u062F\u0647\u200C\u0627\u0646\u062F.</div><div id="notice" class="notice" role="status"></div><script type="text/plain" id="s4injectorSrc">/* Scraper4 selector injector \u2014 paste into the DevTools console on any shop page.
  *
  * Finds the product grid on the LIVE rendered page (works on JS-rendered shops
  * like Snappshop where fetch-based engines see a shell or a bot wall), derives
@@ -15421,7 +17449,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.
   catch (error) { console.warn('[S4] \u062E\u0637\u0627\u06CC \u062A\u0632\u0631\u06CC\u0642\u200C\u06A9\u0646\u0646\u062F\u0647: ' + (error && error.message)); }
 }
 <\/script>
-<section id="pane-home" class="tab-pane active"><div class="card home-profile-card"><div class="home-section-heading"><span class="home-heading-icon">\u{1F465}</span><div><h1>\u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647</h1><p>\u06CC\u06A9 \u0633\u0627\u06CC\u062A \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F \u06CC\u0627 \u0646\u0627\u0645 \u062A\u0627\u0632\u0647\u200C\u0627\u06CC \u0628\u0646\u0648\u06CC\u0633\u06CC\u062F \u0648 \u0630\u062E\u06CC\u0631\u0647 \u06A9\u0646\u06CC\u062F.</p></div></div><div class="home-profile-row"><div class="field"><label>\u0627\u0646\u062A\u062E\u0627\u0628 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><select id="homeProfile"><option value="">\u2014 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F \u2014</option></select></div><div class="field"><label>\u0646\u0627\u0645 \u0627\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><input id="homeProfileName" placeholder="\u0645\u062B\u0644\u0627\u064B \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0645\u0628\u062F\u0623"></div><button id="homeSaveProfile" class="home-icon-button save" type="button" title="\u0630\u062E\u06CC\u0631\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644" aria-label="\u0630\u062E\u06CC\u0631\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644">\u{1F4BE}</button><button id="homeDeleteProfile" class="home-icon-button delete" type="button" title="\u062D\u0630\u0641 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644" aria-label="\u062D\u0630\u0641 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644">\u{1F5D1}</button></div><div class="home-sync-panel"><div class="home-option-row primary"><label class="home-option-label" for="homeSyncEnabled"><span class="home-option-icon">\u{1F504}</span><span><b>\u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u0647\u0645\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</b><small>\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0648 \u0627\u0631\u0633\u0627\u0644 \u062E\u0648\u062F\u06A9\u0627\u0631 \u062F\u0631 \u0641\u0627\u0635\u0644\u0647\u0654 \u0627\u0646\u062A\u062E\u0627\u0628\u06CC</small></span></label><label class="switch"><input id="homeSyncEnabled" type="checkbox"><span></span></label></div><div class="home-sync-controls"><div class="field"><label>\u062F\u0648\u0631\u0647\u0654 \u0627\u062C\u0631\u0627</label><select id="homeSyncInterval"><option value="15">\u0647\u0631 \u06F1\u06F5 \u062F\u0642\u06CC\u0642\u0647</option><option value="30">\u0647\u0631 \u06F3\u06F0 \u062F\u0642\u06CC\u0642\u0647</option><option value="60" selected>\u0647\u0631 \u06F1 \u0633\u0627\u0639\u062A</option><option value="120">\u0647\u0631 \u06F2 \u0633\u0627\u0639\u062A</option><option value="360">\u0647\u0631 \u06F6 \u0633\u0627\u0639\u062A</option><option value="720">\u0647\u0631 \u06F1\u06F2 \u0633\u0627\u0639\u062A</option><option value="1440">\u0647\u0631 \u06F2\u06F4 \u0633\u0627\u0639\u062A</option></select></div><div class="field"><label>\u0645\u0642\u0635\u062F \u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC</label><select id="homeSyncTarget"><option value="none">\u0641\u0642\u0637 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\u061B \u0628\u062F\u0648\u0646 \u0627\u0631\u0633\u0627\u0644</option><option value="woo">\u0641\u0642\u0637 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</option><option value="basalam">\u0641\u0642\u0637 \u0628\u0627\u0633\u0644\u0627\u0645</option><option value="both">\u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0628\u0627\u0633\u0644\u0627\u0645</option></select></div><div class="field"><label>\u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</label><select id="homeExtractionEngine"><option value="auto">Auto advanced</option><option value="cheerio">Cheerio CSS selectors</option><option value="htmlrewriter">Cloudflare HTMLRewriter</option><option value="jsonld">JSON-LD Product</option><option value="next_data">Next.js __NEXT_DATA__</option><option value="metadata">OpenGraph / metadata</option><option value="script_json">Inline script JSON</option><option value="heuristic">Heuristic product cards</option><option value="structural">Structural product cards \u2014 Node only</option><option value="playwright">Playwright browser rendering \u2014 Node only</option><option value="puppeteer">Puppeteer browser rendering \u2014 Node only</option><option value="crawlee_playwright">Crawlee PlaywrightCrawler \u2014 Node only</option><option value="network_api">Network API sniffing \u2014 Node only</option></select><div class="field" style="margin-top:10px"><label><input type="checkbox" id="homeProductParserEnabled"> \u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u067E\u0627\u0631\u0633\u0631 \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 HTML</label><select id="homeProductParser" disabled><option value="auto">Auto (HTML strategies)</option><option value="lxml">lxml \u2014 JS-compatible DOM</option><option value="selectolax">selectolax \u2014 JS-compatible CSS</option><option value="jsonld">JSON-LD</option><option value="next_data">Next.js / Nuxt data</option><option value="script_json">Script JSON</option><option value="metadata">Metadata</option><option value="heuristic">Heuristic</option></select><div class="field-hint">\u067E\u06CC\u0634\u200C\u0641\u0631\u0636 \u062E\u0627\u0645\u0648\u0634: \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0639\u0644\u06CC \u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631. \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 \u0641\u0642\u0637 HTML \u062F\u0631\u06CC\u0627\u0641\u062A\u200C\u0634\u062F\u0647 \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F\u061B lxml \u0648 selectolax \u0645\u0639\u0627\u062F\u0644 JavaScript \u0647\u0633\u062A\u0646\u062F\u060C \u0646\u0647 \u06A9\u062A\u0627\u0628\u062E\u0627\u0646\u0647\u0654 Python. \u0627\u0646\u062A\u062E\u0627\u0628 \u0645\u0634\u062E\u0635 \u0628\u0647 \u067E\u0627\u0631\u0633\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u062A\u063A\u06CC\u06CC\u0631 \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F. \u0628\u0627 Network API \u0633\u0627\u0632\u06AF\u0627\u0631 \u0646\u06CC\u0633\u062A.</div></div><div class="menu-actions" style="margin-top:7px"><button id="homeBenchmarkEngines" class="btn btn-blue btn-sm" type="button">\u{1F3C1} \u062A\u0633\u062A \u0633\u0631\u0639\u062A \u06F3 \u0635\u0641\u062D\u0647</button><button id="homeTopDiagnose" class="btn btn-gray btn-sm" type="button">\u{1FA7A} \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628\u06CC \u0647\u0645\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631</button></div><div class="field-hint">\u0631\u0648\u06CC Termux/\u0633\u0631\u0648\u0631 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u06CC\u062F Playwright\u060C Puppeteer \u06CC\u0627 Crawlee \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F.</div></div></div><label class="home-option-row" for="homeNoExtract"><span class="home-option-label"><span class="home-option-icon">\u{1F4E6}</span><span><b>\u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</b><small>\u0641\u0642\u0637 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0627\u0632 \u0642\u0628\u0644 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0631\u0627 \u0628\u0647 \u0645\u0642\u0635\u062F \u0628\u0641\u0631\u0633\u062A</small></span></span><input id="homeNoExtract" type="checkbox"></label><div class="home-destination-checks"><label><input id="homeSyncWoo" type="checkbox"><span>\u{1F6D2} \u0627\u0641\u0632\u0648\u062F\u0646 / \u0622\u067E\u062F\u06CC\u062A \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</span></label><label><input id="homeSyncBasalam" type="checkbox"><span>\u{1F3EA} \u0627\u0641\u0632\u0648\u062F\u0646 / \u0622\u067E\u062F\u06CC\u062A \u0628\u0627\u0633\u0644\u0627\u0645</span></label></div><div class="home-help-box">\u{1F4A1} \u062D\u0627\u0644\u062A \xAB\u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\xBB \u0628\u0631\u0627\u06CC \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u06CC \u0645\u0646\u0627\u0633\u0628 \u0627\u0633\u062A \u06A9\u0647 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0622\u0646 \u0631\u0627 \u0628\u0627 \u0641\u0627\u06CC\u0644 CSV \u06CC\u0627 Excel \u0648\u0627\u0631\u062F \u06A9\u0631\u062F\u0647\u200C\u0627\u06CC\u062F. \u0645\u0642\u0635\u062F\u0647\u0627 \u0645\u0634\u062E\u0635 \u0645\u06CC\u200C\u06A9\u0646\u0646\u062F \u0627\u062C\u0631\u0627\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u0628\u0647 \u06A9\u062C\u0627 \u0627\u0631\u0633\u0627\u0644 \u0634\u0648\u062F.</div><div id="homeSyncStatus" class="home-sync-status">\u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u062E\u0627\u0645\u0648\u0634 \u0627\u0633\u062A.</div></div><div class="home-option-row network"><label class="home-option-label" for="homeNetworkIndirect"><span class="home-option-icon">\u{1F310}</span><span><b>\u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0628\u0647 \u0633\u0627\u06CC\u062A \u0645\u0628\u062F\u0623</b><small>\u0628\u0631\u0627\u06CC \u0633\u0627\u06CC\u062A\u200C\u0647\u0627\u06CC\u06CC \u06A9\u0647 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u0633\u062A\u0642\u06CC\u0645 Cloudflare \u0628\u0647 \u0622\u0646\u200C\u0647\u0627 \u0645\u062D\u062F\u0648\u062F \u0627\u0633\u062A</small></span></label><label class="switch"><input id="homeNetworkIndirect" type="checkbox"><span></span></label></div></div><div class="card home-source-card"><div class="home-section-heading compact"><span class="home-heading-icon">\u{1F517}</span><div><h2>\u0622\u062F\u0631\u0633 \u0648 \u0645\u062D\u062F\u0648\u062F\u0647\u0654 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</h2><p>\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0631\u0627 \u0628\u062F\u0647\u06CC\u062F\u061B \u062A\u0639\u062F\u0627\u062F \u0635\u0641\u062D\u0627\u062A \u0628\u0647\u200C\u0635\u0648\u0631\u062A \u067E\u06CC\u0634\u200C\u0641\u0631\u0636 \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9 \u0627\u0633\u062A.</p></div></div><div class="home-source-grid"><div class="field url-field"><label>\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u0627\u062A</label><input id="homeUrl" dir="ltr" placeholder="https://example.com/shop?page=1"></div><div class="field pages-field"><label>\u062A\u0639\u062F\u0627\u062F \u0635\u0641\u062D\u0627\u062A</label><input id="homePages" type="number" value="0" min="0" max="100" placeholder="0 = \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9"><div class="field-hint">\u06F0 \u06CC\u0639\u0646\u06CC \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9: \u062A\u0627 \u0635\u0641\u062D\u0647\u0654 \u062E\u0627\u0644\u06CC/\u067E\u0627\u06CC\u0627\u0646 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC \u0627\u062F\u0627\u0645\u0647 \u0645\u06CC\u200C\u062F\u0647\u062F\u060C \u0628\u0627 \u0633\u0642\u0641 \u0627\u06CC\u0645\u0646\u06CC \u06F1\u06F0\u06F0 \u0635\u0641\u062D\u0647.</div></div><div class="field"><label>\u0646\u0648\u0639 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</label><select id="homePagination"><option value="query_page">\u067E\u0627\u0631\u0627\u0645\u062A\u0631 page \u062F\u0631 \u0622\u062F\u0631\u0633</option><option value="query_custom">\u067E\u0627\u0631\u0627\u0645\u062A\u0631 \u0633\u0641\u0627\u0631\u0634\u06CC</option><option value="path_page">\u0645\u0633\u06CC\u0631 /page/2/</option><option value="path_pattern">\u0627\u0644\u06AF\u0648\u06CC \u0645\u0633\u06CC\u0631 \u0628\u0627 {page}</option><option value="full_pattern">\u0627\u0644\u06AF\u0648\u06CC \u06A9\u0627\u0645\u0644 URL</option><option value="next_selector">\u062F\u06A9\u0645\u0647\u0654 \u0635\u0641\u062D\u0647\u0654 \u0628\u0639\u062F</option><option value="none">\u0628\u062F\u0648\u0646 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</option><option value="scroll">\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A (\u0645\u0631\u0648\u0631\u06AF\u0631 Node)</option></select></div><div class="field"><label>\u0645\u0642\u062F\u0627\u0631 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</label><input id="homePaginationValue" dir="ltr" value="page" placeholder="page \u06CC\u0627 \u0627\u0644\u06AF\u0648\u06CC {page}"></div></div></div><div class="card home-run-card"><div class="home-section-heading compact"><span class="home-heading-icon">\u{1F680}</span><div><h2>\u0634\u0631\u0648\u0639 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0645\u062D\u0635\u0648\u0644\u0627\u062A</h2><p>\xAB\u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u06CC\xBB \u06CC\u06A9\u200C\u0628\u0627\u0631 \u06A9\u0644 \u0686\u0631\u062E\u0647 \u0631\u0627 \u0627\u062C\u0631\u0627 \u0645\u06CC\u200C\u06A9\u0646\u062F: \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0647\u0631\u0633\u062A\u060C \u0633\u067E\u0633 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062C\u0632\u0626\u06CC\u0627\u062A\u060C \u0648 \u062F\u0631 \u0635\u0648\u0631\u062A \u0641\u0639\u0627\u0644 \u0628\u0648\u062F\u0646 \u0645\u0642\u0635\u062F\u0647\u0627 \u0627\u0631\u0633\u0627\u0644 \u0628\u0647 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0647\u0645\u0647\u0654 \u063A\u0631\u0641\u0647\u200C\u0647\u0627\u06CC \u0641\u0639\u0627\u0644 \u0628\u0627\u0633\u0644\u0627\u0645.</p></div></div><div class="mode-tabs" role="tablist" aria-label="\u0631\u0648\u0634 \u0627\u0633\u062A\u062E\u0631\u0627\u062C"><button id="homeAutoMode" class="mode-tab active" type="button">\u{1F916} \u062E\u0648\u062F\u06A9\u0627\u0631</button><button id="homeManualMode" class="mode-tab" type="button">\u{1F446} \u062F\u0633\u062A\u06CC</button></div><div class="flow-actions"><button id="homeScrape" class="btn btn-green btn-xl">\u{1F504} \u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u06CC</button><div class="home-trial-actions"><button id="homeDiagnose" class="btn btn-gray">\u{1F9EA} \u0634\u0631\u0648\u0639 \u0628\u062F\u0648\u0646 \u0633\u0644\u06A9\u062A\u0648\u0631 (\u0622\u0632\u0645\u0627\u06CC\u0634\u06CC)</button><button id="homeReset" class="btn btn-gray btn-square" title="\u0628\u0631\u06AF\u0631\u062F\u0627\u0646\u062F\u0646 \u0641\u0631\u0645 \u0628\u0647 \u0622\u062E\u0631\u06CC\u0646 \u0646\u0633\u062E\u0647\u0654 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647" aria-label="\u0628\u0627\u0632\u0646\u0634\u0627\u0646\u06CC">\u21BB</button></div><button id="homeBackend" class="btn btn-purple btn-xl">\u26A1 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u06A9\u200C\u0627\u0646\u062F \u2014 \u0641\u0642\u0637 \u0641\u0647\u0631\u0633\u062A</button></div><div class="queue-preview"><div class="queue-preview-head"><div><b>\u{1F4CB} \u0635\u0641 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u06A9\u200C\u0627\u0646\u062F</b><small>\u0628\u06A9\u200C\u0627\u0646\u062F: \u0641\u0642\u0637 \u0641\u0647\u0631\u0633\u062A\u061B \u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u06CC: \u0641\u0631\u0622\u06CC\u0646\u062F \u06A9\u0627\u0645\u0644 \u0628\u0627 \u0645\u0642\u0635\u062F \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647\u061B \u06AF\u0632\u06CC\u0646\u0647\u0654 \u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0627\u06CC\u0646 \u062F\u0648 \u062F\u06A9\u0645\u0647 \u0631\u0627 \u062A\u063A\u06CC\u06CC\u0631 \u0646\u0645\u06CC\u200C\u062F\u0647\u062F</small></div><div class="queue-preview-tools"><button id="homeClearJobs" class="btn btn-red btn-sm">\u{1F5D1} \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC</button><button id="homeRefreshJobs" class="btn btn-gray btn-sm">\u21BB \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC</button><button id="homeOpenJobs" class="btn btn-gray btn-sm">\u0646\u0645\u0627\u06CC\u0634 \u0647\u0645\u0647</button></div></div><div id="homeJobs" class="mini-jobs"><div class="empty compact">\u0635\u0641 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.</div></div></div></div><details class="support-panel profile-library"><summary><span>\u{1F4CA} \u0646\u0645\u0627\u06CC \u06A9\u0644\u06CC \u0648 \u0641\u0647\u0631\u0633\u062A \u0647\u0645\u0647\u0654 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627<small class="support-note">\u0622\u0645\u0627\u0631\u060C \u0627\u06CC\u062C\u0627\u062F \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062A\u0627\u0632\u0647 \u0648 \u0639\u0645\u0644\u06CC\u0627\u062A \u067E\u06CC\u0634\u0631\u0641\u062A\u0647</small></span></summary><div class="support-panel-body"><div class="card overview-card"><div class="card-head"><h2>\u{1F4CA} \u0646\u0645\u0627\u06CC \u06A9\u0644\u06CC</h2><button id="refreshAll" class="btn btn-gray btn-sm">\u21BB \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC</button></div><div class="stats"><div class="stat"><b id="statProfiles">\u06F0</b><span>\u067E\u0631\u0648\u0641\u0627\u06CC\u0644</span></div><div class="stat"><b id="statProducts">\u06F0</b><span>\u0645\u062D\u0635\u0648\u0644 \u0646\u0645\u0627\u06CC\u0634\u06CC</span></div><div class="stat"><b id="statRunning">\u06F0</b><span>\u062F\u0631 \u0635\u0641 / \u0627\u062C\u0631\u0627</span></div><div class="stat"><b id="statFailed">\u06F0</b><span>\u062E\u0637\u0627</span></div></div></div><div class="card"><div class="card-head"><h2>\u{1F4DA} \u0647\u0645\u0647\u0654 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647</h2><button id="newProfileBtn" class="btn btn-blue btn-sm">\uFF0B \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F</button></div><div id="profileList" class="profile-list"><div class="empty">\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u2026</div></div></div></div></details></section>
+<section id="pane-home" class="tab-pane active"><div class="card home-profile-card"><div class="home-section-heading"><span class="home-heading-icon">\u{1F465}</span><div><h1>\u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647</h1><p>\u06CC\u06A9 \u0633\u0627\u06CC\u062A \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F \u06CC\u0627 \u0646\u0627\u0645 \u062A\u0627\u0632\u0647\u200C\u0627\u06CC \u0628\u0646\u0648\u06CC\u0633\u06CC\u062F \u0648 \u0630\u062E\u06CC\u0631\u0647 \u06A9\u0646\u06CC\u062F.</p></div></div><div class="home-profile-row"><div class="field"><label>\u0627\u0646\u062A\u062E\u0627\u0628 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><select id="homeProfile"><option value="">\u2014 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F \u2014</option></select></div><div class="field"><label>\u0646\u0627\u0645 \u0627\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><input id="homeProfileName" placeholder="\u0645\u062B\u0644\u0627\u064B \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0645\u0628\u062F\u0623"></div><button id="homeSaveProfile" class="home-icon-button save" type="button" title="\u0630\u062E\u06CC\u0631\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644" aria-label="\u0630\u062E\u06CC\u0631\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644">\u{1F4BE}</button><button id="homeDeleteProfile" class="home-icon-button delete" type="button" title="\u062D\u0630\u0641 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644" aria-label="\u062D\u0630\u0641 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644">\u{1F5D1}</button></div><div class="home-sync-panel"><div class="home-option-row primary"><label class="home-option-label" for="homeSyncEnabled"><span class="home-option-icon">\u{1F504}</span><span><b>\u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u0647\u0645\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</b><small>\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0648 \u0627\u0631\u0633\u0627\u0644 \u062E\u0648\u062F\u06A9\u0627\u0631 \u062F\u0631 \u0641\u0627\u0635\u0644\u0647\u0654 \u0627\u0646\u062A\u062E\u0627\u0628\u06CC</small></span></label><label class="switch"><input id="homeSyncEnabled" type="checkbox"><span></span></label></div><div class="home-sync-controls"><div class="field"><label>\u062F\u0648\u0631\u0647\u0654 \u0627\u062C\u0631\u0627</label><select id="homeSyncInterval"><option value="15">\u0647\u0631 \u06F1\u06F5 \u062F\u0642\u06CC\u0642\u0647</option><option value="30">\u0647\u0631 \u06F3\u06F0 \u062F\u0642\u06CC\u0642\u0647</option><option value="60" selected>\u0647\u0631 \u06F1 \u0633\u0627\u0639\u062A</option><option value="120">\u0647\u0631 \u06F2 \u0633\u0627\u0639\u062A</option><option value="360">\u0647\u0631 \u06F6 \u0633\u0627\u0639\u062A</option><option value="720">\u0647\u0631 \u06F1\u06F2 \u0633\u0627\u0639\u062A</option><option value="1440">\u0647\u0631 \u06F2\u06F4 \u0633\u0627\u0639\u062A</option></select></div><div class="field"><label>\u0645\u0642\u0635\u062F \u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC</label><select id="homeSyncTarget"><option value="none">\u0641\u0642\u0637 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\u061B \u0628\u062F\u0648\u0646 \u0627\u0631\u0633\u0627\u0644</option><option value="woo">\u0641\u0642\u0637 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</option><option value="basalam">\u0641\u0642\u0637 \u0628\u0627\u0633\u0644\u0627\u0645</option><option value="both">\u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0628\u0627\u0633\u0644\u0627\u0645</option></select></div><div class="field"><label>\u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</label><select id="homeExtractionEngine"><option value="auto">Auto advanced</option><option value="cheerio">Cheerio CSS selectors</option><option value="htmlrewriter">Cloudflare HTMLRewriter</option><option value="jsonld">JSON-LD Product</option><option value="next_data">Next.js __NEXT_DATA__</option><option value="metadata">OpenGraph / metadata</option><option value="script_json">Inline script JSON</option><option value="heuristic">Heuristic product cards</option><option value="structural">Structural product cards \u2014 Node only</option><option value="playwright">Playwright browser rendering \u2014 Node only</option><option value="puppeteer">Puppeteer browser rendering \u2014 Node only</option><option value="crawlee_playwright">Crawlee PlaywrightCrawler \u2014 Node only</option><option value="network_api">Network API sniffing \u2014 Node only</option></select><div class="field" style="margin-top:10px"><label><input type="checkbox" id="homeProductParserEnabled"> \u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u067E\u0627\u0631\u0633\u0631 \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 HTML</label><select id="homeProductParser" disabled><option value="auto">Auto (HTML strategies)</option><option value="lxml">lxml \u2014 JS-compatible DOM</option><option value="selectolax">selectolax \u2014 JS-compatible CSS</option><option value="jsonld">JSON-LD</option><option value="next_data">Next.js / Nuxt data</option><option value="script_json">Script JSON</option><option value="metadata">Metadata</option><option value="heuristic">Heuristic</option></select><div class="field-hint">\u067E\u06CC\u0634\u200C\u0641\u0631\u0636 \u062E\u0627\u0645\u0648\u0634: \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0639\u0644\u06CC \u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631. \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 \u0641\u0642\u0637 HTML \u062F\u0631\u06CC\u0627\u0641\u062A\u200C\u0634\u062F\u0647 \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F\u061B lxml \u0648 selectolax \u0645\u0639\u0627\u062F\u0644 JavaScript \u0647\u0633\u062A\u0646\u062F\u060C \u0646\u0647 \u06A9\u062A\u0627\u0628\u062E\u0627\u0646\u0647\u0654 Python. \u0627\u0646\u062A\u062E\u0627\u0628 \u0645\u0634\u062E\u0635 \u0628\u0647 \u067E\u0627\u0631\u0633\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u062A\u063A\u06CC\u06CC\u0631 \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F. \u0628\u0627 Network API \u0633\u0627\u0632\u06AF\u0627\u0631 \u0646\u06CC\u0633\u062A.</div></div><div class="checks"><label><input type="checkbox" id="benchmarkAutoDetails"> \u062C\u0632\u0626\u06CC\u0627\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u06CC\u06A9 \u0645\u062D\u0635\u0648\u0644 \u0646\u0645\u0648\u0646\u0647 \u0628\u0631\u0627\u06CC \u0647\u0631 \u0645\u0648\u062A\u0648\u0631 \u062F\u0631 \u062A\u0633\u062A \u06F3 \u0635\u0641\u062D\u0647</label><label><input type="checkbox" id="diagnosticAutoDetails"> \u062C\u0632\u0626\u06CC\u0627\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0646\u0645\u0648\u0646\u0647 \u062F\u0631 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C</label></div><div class="field-hint">\u0627\u062E\u062A\u06CC\u0627\u0631\u06CC \u0648 \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u0627\u06CC\u0646 \u0622\u0632\u0645\u0648\u0646\u061B \u0632\u0645\u0627\u0646 \u062C\u0632\u0626\u06CC\u0627\u062A \u062C\u062F\u0627 \u0627\u0632 \u0633\u0631\u0639\u062A \u0641\u0647\u0631\u0633\u062A \u0627\u0633\u062A. \u06A9\u0627\u0631\u062A \u0646\u0645\u0648\u0646\u0647 \u0631\u0627 \u0628\u0631\u0627\u06CC \u0646\u0645\u0627\u06CC\u0634 \u0635\u0641\u062D\u0647\u0654 \u06A9\u0627\u0645\u0644 \u0645\u062D\u0635\u0648\u0644 \u0628\u0627\u0632 \u06A9\u0646\u06CC\u062F. \u062C\u0632\u0626\u06CC\u0627\u062A \u0628\u0627 \u06A9\u0634\u0641 \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631 \u0631\u0648\u06CC DOM \u0647\u0645\u0627\u0646 \u062F\u0631\u06CC\u0627\u0641\u062A\u200C\u06A9\u0646\u0646\u062F\u0647 \u062E\u0648\u0627\u0646\u062F\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F\u061B \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC HTML \u062F\u0631\u06CC\u0627\u0641\u062A\u200C\u06A9\u0646\u0646\u062F\u0647\u0654 HTTP \u0645\u0634\u062A\u0631\u06A9 \u062F\u0627\u0631\u0646\u062F.</div><div class="menu-actions" style="margin-top:7px"><button id="homeBenchmarkEngines" class="btn btn-blue btn-sm" type="button">\u{1F3C1} \u062A\u0633\u062A \u0633\u0631\u0639\u062A \u06F3 \u0635\u0641\u062D\u0647</button><button id="homeTopDiagnose" class="btn btn-gray btn-sm" type="button">\u{1FA7A} \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628\u06CC \u0647\u0645\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631</button></div><div class="field-hint">\u0631\u0648\u06CC Termux/\u0633\u0631\u0648\u0631 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u06CC\u062F Playwright\u060C Puppeteer \u06CC\u0627 Crawlee \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F.</div></div></div><label class="home-option-row" for="homeNoExtract"><span class="home-option-label"><span class="home-option-icon">\u{1F4E6}</span><span><b>\u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</b><small>\u0641\u0642\u0637 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0627\u0632 \u0642\u0628\u0644 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0631\u0627 \u0628\u0647 \u0645\u0642\u0635\u062F \u0628\u0641\u0631\u0633\u062A</small></span></span><input id="homeNoExtract" type="checkbox"></label><div class="home-destination-checks"><label><input id="homeSyncWoo" type="checkbox"><span>\u{1F6D2} \u0627\u0641\u0632\u0648\u062F\u0646 / \u0622\u067E\u062F\u06CC\u062A \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</span></label><label><input id="homeSyncBasalam" type="checkbox"><span>\u{1F3EA} \u0627\u0641\u0632\u0648\u062F\u0646 / \u0622\u067E\u062F\u06CC\u062A \u0628\u0627\u0633\u0644\u0627\u0645</span></label></div><div class="home-help-box">\u{1F4A1} \u062D\u0627\u0644\u062A \xAB\u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\xBB \u0628\u0631\u0627\u06CC \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u06CC \u0645\u0646\u0627\u0633\u0628 \u0627\u0633\u062A \u06A9\u0647 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0622\u0646 \u0631\u0627 \u0628\u0627 \u0641\u0627\u06CC\u0644 CSV \u06CC\u0627 Excel \u0648\u0627\u0631\u062F \u06A9\u0631\u062F\u0647\u200C\u0627\u06CC\u062F. \u0645\u0642\u0635\u062F\u0647\u0627 \u0645\u0634\u062E\u0635 \u0645\u06CC\u200C\u06A9\u0646\u0646\u062F \u0627\u062C\u0631\u0627\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u0628\u0647 \u06A9\u062C\u0627 \u0627\u0631\u0633\u0627\u0644 \u0634\u0648\u062F.</div><div id="homeSyncStatus" class="home-sync-status">\u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u062E\u0627\u0645\u0648\u0634 \u0627\u0633\u062A.</div></div><div class="home-option-row network"><label class="home-option-label" for="homeNetworkIndirect"><span class="home-option-icon">\u{1F310}</span><span><b>\u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0628\u0647 \u0633\u0627\u06CC\u062A \u0645\u0628\u062F\u0623</b><small>\u0628\u0631\u0627\u06CC \u0633\u0627\u06CC\u062A\u200C\u0647\u0627\u06CC\u06CC \u06A9\u0647 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u0633\u062A\u0642\u06CC\u0645 Cloudflare \u0628\u0647 \u0622\u0646\u200C\u0647\u0627 \u0645\u062D\u062F\u0648\u062F \u0627\u0633\u062A</small></span></label><label class="switch"><input id="homeNetworkIndirect" type="checkbox"><span></span></label></div></div><div class="card home-source-card"><div class="home-section-heading compact"><span class="home-heading-icon">\u{1F517}</span><div><h2>\u0622\u062F\u0631\u0633 \u0648 \u0645\u062D\u062F\u0648\u062F\u0647\u0654 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</h2><p>\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0631\u0627 \u0628\u062F\u0647\u06CC\u062F\u061B \u062A\u0639\u062F\u0627\u062F \u0635\u0641\u062D\u0627\u062A \u0628\u0647\u200C\u0635\u0648\u0631\u062A \u067E\u06CC\u0634\u200C\u0641\u0631\u0636 \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9 \u0627\u0633\u062A.</p></div></div><div class="home-source-grid"><div class="field url-field"><label>\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u0627\u062A</label><input id="homeUrl" dir="ltr" placeholder="https://example.com/shop?page=1"></div><div class="field pages-field"><label>\u062A\u0639\u062F\u0627\u062F \u0635\u0641\u062D\u0627\u062A</label><input id="homePages" type="number" value="0" min="0" max="100" placeholder="0 = \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9"><div class="field-hint">\u06F0 \u06CC\u0639\u0646\u06CC \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9: \u062A\u0627 \u0635\u0641\u062D\u0647\u0654 \u062E\u0627\u0644\u06CC/\u067E\u0627\u06CC\u0627\u0646 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC \u0627\u062F\u0627\u0645\u0647 \u0645\u06CC\u200C\u062F\u0647\u062F\u060C \u0628\u0627 \u0633\u0642\u0641 \u0627\u06CC\u0645\u0646\u06CC \u06F1\u06F0\u06F0 \u0635\u0641\u062D\u0647.</div></div><div class="field"><label>\u0646\u0648\u0639 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</label><select id="homePagination"><option value="query_page">\u067E\u0627\u0631\u0627\u0645\u062A\u0631 page \u062F\u0631 \u0622\u062F\u0631\u0633</option><option value="query_custom">\u067E\u0627\u0631\u0627\u0645\u062A\u0631 \u0633\u0641\u0627\u0631\u0634\u06CC</option><option value="path_page">\u0645\u0633\u06CC\u0631 /page/2/</option><option value="path_pattern">\u0627\u0644\u06AF\u0648\u06CC \u0645\u0633\u06CC\u0631 \u0628\u0627 {page}</option><option value="full_pattern">\u0627\u0644\u06AF\u0648\u06CC \u06A9\u0627\u0645\u0644 URL</option><option value="next_selector">\u062F\u06A9\u0645\u0647\u0654 \u0635\u0641\u062D\u0647\u0654 \u0628\u0639\u062F</option><option value="none">\u0628\u062F\u0648\u0646 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</option><option value="scroll">\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A (\u0645\u0631\u0648\u0631\u06AF\u0631 Node)</option></select></div><div class="field"><label>\u0645\u0642\u062F\u0627\u0631 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</label><input id="homePaginationValue" dir="ltr" value="page" placeholder="page \u06CC\u0627 \u0627\u0644\u06AF\u0648\u06CC {page}"></div></div></div><div class="card home-run-card"><div class="home-section-heading compact"><span class="home-heading-icon">\u{1F680}</span><div><h2>\u0634\u0631\u0648\u0639 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0645\u062D\u0635\u0648\u0644\u0627\u062A</h2><p>\xAB\u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u06CC\xBB \u06CC\u06A9\u200C\u0628\u0627\u0631 \u06A9\u0644 \u0686\u0631\u062E\u0647 \u0631\u0627 \u0627\u062C\u0631\u0627 \u0645\u06CC\u200C\u06A9\u0646\u062F: \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0647\u0631\u0633\u062A\u060C \u0633\u067E\u0633 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062C\u0632\u0626\u06CC\u0627\u062A\u060C \u0648 \u062F\u0631 \u0635\u0648\u0631\u062A \u0641\u0639\u0627\u0644 \u0628\u0648\u062F\u0646 \u0645\u0642\u0635\u062F\u0647\u0627 \u0627\u0631\u0633\u0627\u0644 \u0628\u0647 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0647\u0645\u0647\u0654 \u063A\u0631\u0641\u0647\u200C\u0647\u0627\u06CC \u0641\u0639\u0627\u0644 \u0628\u0627\u0633\u0644\u0627\u0645.</p></div></div><div class="mode-tabs" role="tablist" aria-label="\u0631\u0648\u0634 \u0627\u0633\u062A\u062E\u0631\u0627\u062C"><button id="homeAutoMode" class="mode-tab active" type="button">\u{1F916} \u062E\u0648\u062F\u06A9\u0627\u0631</button><button id="homeManualMode" class="mode-tab" type="button">\u{1F446} \u062F\u0633\u062A\u06CC</button></div><div class="flow-actions"><button id="homeScrape" class="btn btn-green btn-xl">\u{1F504} \u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u06CC</button><div class="home-trial-actions"><button id="homeDiagnose" class="btn btn-gray">\u{1F9EA} \u0634\u0631\u0648\u0639 \u0628\u062F\u0648\u0646 \u0633\u0644\u06A9\u062A\u0648\u0631 (\u0622\u0632\u0645\u0627\u06CC\u0634\u06CC)</button><button id="homeReset" class="btn btn-gray btn-square" title="\u0628\u0631\u06AF\u0631\u062F\u0627\u0646\u062F\u0646 \u0641\u0631\u0645 \u0628\u0647 \u0622\u062E\u0631\u06CC\u0646 \u0646\u0633\u062E\u0647\u0654 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647" aria-label="\u0628\u0627\u0632\u0646\u0634\u0627\u0646\u06CC">\u21BB</button></div><button id="homeBackend" class="btn btn-purple btn-xl">\u26A1 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u06A9\u200C\u0627\u0646\u062F \u2014 \u0641\u0642\u0637 \u0641\u0647\u0631\u0633\u062A</button></div><div class="queue-preview"><div class="queue-preview-head"><div><b>\u{1F4CB} \u0635\u0641 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u06A9\u200C\u0627\u0646\u062F</b><small>\u0628\u06A9\u200C\u0627\u0646\u062F: \u0641\u0642\u0637 \u0641\u0647\u0631\u0633\u062A\u061B \u0647\u0645\u06AF\u0627\u0645\u200C\u0633\u0627\u0632\u06CC \u062F\u0633\u062A\u06CC: \u0641\u0631\u0622\u06CC\u0646\u062F \u06A9\u0627\u0645\u0644 \u0628\u0627 \u0645\u0642\u0635\u062F \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647\u061B \u06AF\u0632\u06CC\u0646\u0647\u0654 \u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0627\u06CC\u0646 \u062F\u0648 \u062F\u06A9\u0645\u0647 \u0631\u0627 \u062A\u063A\u06CC\u06CC\u0631 \u0646\u0645\u06CC\u200C\u062F\u0647\u062F</small></div><div class="queue-preview-tools"><button id="homeClearJobs" class="btn btn-red btn-sm">\u{1F5D1} \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC</button><button id="homeRefreshJobs" class="btn btn-gray btn-sm">\u21BB \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC</button><button id="homeOpenJobs" class="btn btn-gray btn-sm">\u0646\u0645\u0627\u06CC\u0634 \u0647\u0645\u0647</button></div></div><div id="homeJobs" class="mini-jobs"><div class="empty compact">\u0635\u0641 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.</div></div></div></div><details class="support-panel profile-library"><summary><span>\u{1F4CA} \u0646\u0645\u0627\u06CC \u06A9\u0644\u06CC \u0648 \u0641\u0647\u0631\u0633\u062A \u0647\u0645\u0647\u0654 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627<small class="support-note">\u0622\u0645\u0627\u0631\u060C \u0627\u06CC\u062C\u0627\u062F \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062A\u0627\u0632\u0647 \u0648 \u0639\u0645\u0644\u06CC\u0627\u062A \u067E\u06CC\u0634\u0631\u0641\u062A\u0647</small></span></summary><div class="support-panel-body"><div class="card overview-card"><div class="card-head"><h2>\u{1F4CA} \u0646\u0645\u0627\u06CC \u06A9\u0644\u06CC</h2><button id="refreshAll" class="btn btn-gray btn-sm">\u21BB \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC</button></div><div class="stats"><div class="stat"><b id="statProfiles">\u06F0</b><span>\u067E\u0631\u0648\u0641\u0627\u06CC\u0644</span></div><div class="stat"><b id="statProducts">\u06F0</b><span>\u0645\u062D\u0635\u0648\u0644 \u0646\u0645\u0627\u06CC\u0634\u06CC</span></div><div class="stat"><b id="statRunning">\u06F0</b><span>\u062F\u0631 \u0635\u0641 / \u0627\u062C\u0631\u0627</span></div><div class="stat"><b id="statFailed">\u06F0</b><span>\u062E\u0637\u0627</span></div></div></div><div class="card"><div class="card-head"><h2>\u{1F4DA} \u0647\u0645\u0647\u0654 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647</h2><button id="newProfileBtn" class="btn btn-blue btn-sm">\uFF0B \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F</button></div><div id="profileList" class="profile-list"><div class="empty">\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u2026</div></div></div></div></details></section>
 <section id="pane-selector" class="tab-pane"><div class="pane-intro"><div class="pane-intro-text"><h1>\u{1F3AF} \u062A\u0639\u0631\u06CC\u0641 \u0631\u0648\u0634 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</h1><p>\u0627\u0632 \u0622\u062F\u0631\u0633 \u0633\u0627\u06CC\u062A \u0634\u0631\u0648\u0639 \u06A9\u0646\u06CC\u062F\u060C \u0641\u06CC\u0644\u062F\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A \u0631\u0627 \u0645\u0634\u062E\u0635 \u06A9\u0646\u06CC\u062F \u0648 \u0633\u067E\u0633 \u062C\u0632\u0626\u06CC\u0627\u062A \u0647\u0631 \u0645\u062D\u0635\u0648\u0644 \u0631\u0627 \u06A9\u0627\u0645\u0644 \u06A9\u0646\u06CC\u062F.</p></div><div class="pane-intro-icon">\u{1F9ED}</div></div><div class="sub-tabs" aria-label="\u0645\u0631\u0627\u062D\u0644 \u062A\u0639\u0631\u06CC\u0641 \u0627\u0633\u062A\u062E\u0631\u0627\u062C"><button class="sub-tab active" data-sub="basic">\u06F1. \u0645\u0646\u0628\u0639 \u0648 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</button><button class="sub-tab" data-sub="selectors">\u06F2. \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627</button><button class="sub-tab" data-sub="details">\u06F3. \u062C\u0632\u0626\u06CC\u0627\u062A \u0645\u062D\u0635\u0648\u0644</button></div><div class="sub-pane" data-panel="basic"><div class="card workflow-card"><div class="card-head"><h2 class="workflow-title"><span class="step-badge">\u06F1</span> \u0645\u0646\u0628\u0639 \u0648 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</h2><span id="editBadge" class="chip">\u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F</span></div><input type="hidden" id="profileId"><div class="row"><div class="field"><label>\u0646\u0627\u0645 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><input id="name" placeholder="\u0645\u062B\u0644\u0627\u064B \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0645\u0628\u062F\u0623"></div><div class="field"><label>\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647 \u0645\u062D\u0635\u0648\u0644\u0627\u062A</label><input id="url" dir="ltr" placeholder="https://example.com/shop?page=1"></div></div><div class="row"><div class="field small"><label>\u062A\u0639\u062F\u0627\u062F \u0635\u0641\u062D\u0627\u062A</label><input id="pages" type="number" value="0" min="0" max="100" placeholder="0 = \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9"><div class="field-hint">\u06F0 = \u0627\u062A\u0648\u0645\u0627\u062A\u06CC\u06A9 \u062A\u0627 \u067E\u0627\u06CC\u0627\u0646/\u0635\u0641\u062D\u0647\u0654 \u062E\u0627\u0644\u06CC\u060C \u0633\u0642\u0641 \u06F1\u06F0\u06F0.</div></div><div class="field"><label>\u0646\u0648\u0639 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</label><select id="pagination"><option value="query_page">\u067E\u0627\u0631\u0627\u0645\u062A\u0631 Query (page)</option><option value="query_custom">\u067E\u0627\u0631\u0627\u0645\u062A\u0631 Query \u0633\u0641\u0627\u0631\u0634\u06CC</option><option value="path_page">\u0645\u0633\u06CC\u0631 /page/2/</option><option value="path_pattern">\u0627\u0644\u06AF\u0648\u06CC \u0645\u0633\u06CC\u0631 \u0628\u0627 {page}</option><option value="full_pattern">\u0627\u0644\u06AF\u0648\u06CC \u06A9\u0627\u0645\u0644 URL \u0628\u0627 {page}</option><option value="next_selector">\u0633\u0644\u06A9\u062A\u0648\u0631 \u062F\u06A9\u0645\u0647/\u0644\u06CC\u0646\u06A9 \u0628\u0639\u062F\u06CC</option><option value="none">\u0628\u062F\u0648\u0646 \u0635\u0641\u062D\u0647\u200C\u0628\u0646\u062F\u06CC</option><option value="scroll">\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A (\u0645\u0631\u0648\u0631\u06AF\u0631 Node)</option></select></div><div class="field"><label>\u0646\u0627\u0645 \u067E\u0627\u0631\u0627\u0645\u062A\u0631 \u0635\u0641\u062D\u0647</label><input id="paginationValue" value="page" dir="ltr"></div><div class="field"><label>\u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</label><select id="extractionEngine"><option value="auto">Auto advanced</option><option value="cheerio">Cheerio CSS selectors</option><option value="htmlrewriter">Cloudflare HTMLRewriter</option><option value="jsonld">JSON-LD Product</option><option value="next_data">Next.js __NEXT_DATA__</option><option value="metadata">OpenGraph / metadata</option><option value="script_json">Inline script JSON</option><option value="heuristic">Heuristic product cards</option><option value="structural">Structural product cards \u2014 Node only</option><option value="playwright">Playwright browser rendering \u2014 Node only</option><option value="puppeteer">Puppeteer browser rendering \u2014 Node only</option><option value="crawlee_playwright">Crawlee PlaywrightCrawler \u2014 Node only</option><option value="network_api">Network API sniffing \u2014 Node only</option></select><div class="field" style="margin-top:10px"><label><input type="checkbox" id="productParserEnabled"> \u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u067E\u0627\u0631\u0633\u0631 \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 HTML</label><select id="productParser" disabled><option value="auto">Auto (HTML strategies)</option><option value="lxml">lxml \u2014 JS-compatible DOM</option><option value="selectolax">selectolax \u2014 JS-compatible CSS</option><option value="jsonld">JSON-LD</option><option value="next_data">Next.js / Nuxt data</option><option value="script_json">Script JSON</option><option value="metadata">Metadata</option><option value="heuristic">Heuristic</option></select><div class="field-hint">\u067E\u06CC\u0634\u200C\u0641\u0631\u0636 \u062E\u0627\u0645\u0648\u0634: \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0639\u0644\u06CC \u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631. \u0645\u0631\u062D\u0644\u0647\u0654 \u062F\u0648\u0645 \u0641\u0642\u0637 HTML \u062F\u0631\u06CC\u0627\u0641\u062A\u200C\u0634\u062F\u0647 \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F\u061B lxml \u0648 selectolax \u0645\u0639\u0627\u062F\u0644 JavaScript \u0647\u0633\u062A\u0646\u062F\u060C \u0646\u0647 \u06A9\u062A\u0627\u0628\u062E\u0627\u0646\u0647\u0654 Python. \u0627\u0646\u062A\u062E\u0627\u0628 \u0645\u0634\u062E\u0635 \u0628\u0647 \u067E\u0627\u0631\u0633\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u062A\u063A\u06CC\u06CC\u0631 \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F. \u0628\u0627 Network API \u0633\u0627\u0632\u06AF\u0627\u0631 \u0646\u06CC\u0633\u062A.</div></div><div class="field-hint">\u0628\u0631\u0627\u06CC \u0633\u0627\u06CC\u062A\u200C\u0647\u0627\u06CC \u0645\u062F\u0631\u0646 \u0645\u062B\u0644 Next.js \u062D\u0627\u0644\u062A Auto \u06CC\u0627 Next.js \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F. \u062F\u0631 Termux/\u0633\u0631\u0648\u0631 \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC browser \u0647\u0645 \u0641\u0639\u0627\u0644 \u0647\u0633\u062A\u0646\u062F.</div></div><div class="field"><label>\u0627\u062C\u0631\u0627\u06CC \u062F\u0648\u0631\u0647\u200C\u0627\u06CC (\u062F\u0642\u06CC\u0642\u0647)</label><input id="interval" type="number" value="0" min="0"></div></div></div></div><div class="sub-pane" data-panel="selectors" hidden><div class="card workflow-card"><div class="card-head"><h2 class="workflow-title"><span class="step-badge">\u06F2</span> \u0641\u06CC\u0644\u062F\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A</h2><div class="row" style="margin:0"><button id="openVisual" class="btn btn-blue btn-sm">\u{1F441} \u0627\u0646\u062A\u062E\u0627\u0628 \u0628\u0635\u0631\u06CC</button><button id="suggestSelectors" class="btn btn-orange btn-sm">\u2728 \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631</button><button id="testSelectors" class="btn btn-purple btn-sm">\u{1F9EA} \u0622\u0632\u0645\u0627\u06CC\u0634 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627</button></div></div><div id="selectorGrid" class="selector-grid"></div><div class="field-hint">\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 CSS \u0647\u0633\u062A\u0646\u062F. \u0622\u0632\u0645\u0627\u06CC\u0634\u060C \u0627\u0648\u0644\u06CC\u0646 \u0645\u0642\u0627\u062F\u06CC\u0631 \u067E\u06CC\u062F\u0627\u200C\u0634\u062F\u0647 \u0631\u0627 \u0646\u0634\u0627\u0646 \u0645\u06CC\u200C\u062F\u0647\u062F.</div></div><div class="card"><h2>\u{1F489} \u062A\u0632\u0631\u06CC\u0642\u06AF\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631</h2><div class="menu-text">\u0633\u0627\u062E\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u062F\u0631 \u0635\u0641\u062D\u0647 \u0632\u0646\u062F\u0647 \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u2014 \u0628\u0631\u0627\u06CC \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u06CC \u0645\u062B\u0644 \u0627\u0633\u0646\u067E\u200C\u0634\u0627\u067E \u06A9\u0647 \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0645\u062A \u0633\u0631\u0648\u0631 \u0631\u0648\u06CC \u0622\u0646 \u0641\u0642\u0637 \u067E\u0648\u0633\u062A\u0647 \u062E\u0627\u0644\u06CC \u062F\u0627\u0631\u062F.</div><div class="menu-text">\u0635\u0641\u062D\u0647 \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC \u0641\u0631\u0648\u0634\u06AF\u0627\u0647 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646\u06CC\u062F \u0648 \u06CC\u06A9 \u0628\u0627\u0631 \u062A\u0627 \u067E\u0627\u06CC\u06CC\u0646 \u0627\u0633\u06A9\u0631\u0648\u0644 \u06A9\u0646\u06CC\u062F. \u0628\u0639\u062F \u062F\u06A9\u0645\u0647 \u06A9\u067E\u06CC \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F\u060C \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0631\u0627 \u062F\u0631 \u06A9\u0646\u0633\u0648\u0644 DevTools (\u06A9\u0644\u06CC\u062F F12) \u0628\u0686\u0633\u0628\u0627\u0646\u06CC\u062F \u0648 Enter \u0628\u0632\u0646\u06CC\u062F. \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u0642\u0627\u0628 \u0633\u0628\u0632 \u0645\u06CC\u200C\u06AF\u06CC\u0631\u0646\u062F \u0648 \u067E\u0646\u062C \u0633\u0644\u06A9\u062A\u0648\u0631 \u0628\u0627 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 JSON \u0686\u0627\u067E \u0645\u06CC\u200C\u0634\u0648\u062F.</div><div class="menu-actions"><button type="button" class="btn btn-green btn-sm" id="injectorCopyBtn" data-copy-injector>\u{1F4CB} \u06A9\u067E\u06CC \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u062A\u0632\u0631\u06CC\u0642\u06AF\u0631</button><span id="injectorCopyStatus" class="copy-flash"></span></div><textarea id="injectorPreview" readonly dir="ltr" style="width:100%;min-height:180px;white-space:pre;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px"></textarea><div class="menu-text">\u062E\u0631\u0648\u062C\u06CC \u0622\u06AF\u0627\u0647\u0627\u0646\u0647 \u0633\u0627\u062F\u0647 \u0646\u06AF\u0647\u200C\u062F\u0627\u0634\u062A\u0647 \u0634\u062F\u0647 \u062A\u0627 \u0631\u0648\u06CC Cloudflare Worker \u0647\u0645 \u0627\u062C\u0631\u0627 \u0634\u0648\u062F. \u0647\u0634\u062F\u0627\u0631\u0647\u0627\u06CC \u06A9\u0646\u0633\u0648\u0644 \u0631\u0627 \u062C\u062F\u06CC \u0628\u06AF\u06CC\u0631\u06CC\u062F.</div></div></div><div class="sub-pane" data-panel="details" hidden><div class="card workflow-card detail-selector-card"><div class="card-head"><h2 class="workflow-title"><span class="step-badge">\u06F3</span> \u0627\u0646\u062A\u062E\u0627\u0628 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644</h2><div class="row" style="margin:0"><button id="openDetailVisual" class="btn btn-blue btn-sm">\u{1F441} \u0627\u0646\u062A\u062E\u0627\u0628 \u0628\u0635\u0631\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A</button><button id="suggestDetails" class="btn btn-orange btn-sm">\u2728 \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062C\u0632\u0626\u06CC\u0627\u062A</button><button id="testDetails" class="btn btn-purple btn-sm">\u{1F9EA} \u0622\u0632\u0645\u0627\u06CC\u0634 \u062C\u0632\u0626\u06CC\u0627\u062A</button><button id="clearDetails" class="btn btn-gray btn-sm">\u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC</button></div></div><div class="detail-step-guide"><b>\u0631\u0648\u0634 \u0633\u0627\u062F\u0647:</b> \u06CC\u06A9 \u0635\u0641\u062D\u0647\u0654 \u0648\u0627\u0642\u0639\u06CC \u0645\u062D\u0635\u0648\u0644 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F\u060C \xAB\u0627\u0646\u062A\u062E\u0627\u0628 \u0628\u0635\u0631\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F\u060C \u0641\u06CC\u0644\u062F\u0647\u0627 \u0631\u0627 \u06CC\u06A9\u06CC\u200C\u06CC\u06A9\u06CC \u062B\u0628\u062A \u06A9\u0646\u06CC\u062F \u0648 \u062F\u0631 \u067E\u0627\u06CC\u0627\u0646 \xAB\u0627\u0639\u0645\u0627\u0644 \u0647\u0645\u0647\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F. \u0634\u0645\u0627\u0631\u0646\u062F\u0647 \u0648 \u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634 \u0647\u0631 \u0641\u06CC\u0644\u062F \u067E\u0627\u06CC\u06CC\u0646 \u0622\u0646 \u062F\u06CC\u062F\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F.</div><div class="row"><div class="field"><label>\u0627\u0646\u062A\u062E\u0627\u0628 \u0645\u062D\u0635\u0648\u0644 \u0646\u0645\u0648\u0646\u0647 (\u0628\u062F\u0648\u0646 \u062A\u0627\u06CC\u067E)</label><select id="detailSampleSelect"><option value="">\u2014 \u0627\u0632 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F \u2014</option></select><div class="field-hint">\u0628\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u0647\u0631 \u0645\u062D\u0635\u0648\u0644\u060C \u0622\u062F\u0631\u0633 \u0622\u0646 \u0628\u0647\u200C\u0635\u0648\u0631\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u062F\u0631 \u0641\u06CC\u0644\u062F \u067E\u0627\u06CC\u06CC\u0646 \u0642\u0631\u0627\u0631 \u0645\u06CC\u200C\u06AF\u06CC\u0631\u062F. \u0627\u06AF\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0646\u06CC\u0633\u062A\u060C \u0622\u062F\u0631\u0633 \u0631\u0627 \u062F\u0633\u062A\u06CC \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.</div></div><div class="field small" style="align-self:end"><button id="detailSamplesReload" class="btn btn-gray btn-sm">\u21BB \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC \u0644\u06CC\u0633\u062A</button></div></div><div class="field"><label>\u0622\u062F\u0631\u0633 \u0646\u0645\u0648\u0646\u0647\u0654 \u06CC\u06A9 \u0645\u062D\u0635\u0648\u0644 (\u06CC\u0627 \u0627\u0632 \u0628\u0627\u0644\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F)</label><input id="detailSampleUrl" dir="ltr" placeholder="https://example.com/product/sample"><div class="field-hint">\u0627\u06CC\u0646 \u0622\u062F\u0631\u0633 \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u0627\u0646\u062A\u062E\u0627\u0628 \u0648 \u0622\u0632\u0645\u0627\u06CC\u0634 \u062A\u0648\u0636\u06CC\u062D\u0627\u062A\u060C \u0642\u06CC\u0645\u062A\u060C SKU\u060C \u062F\u0633\u062A\u0647\u060C \u0628\u0631\u0686\u0633\u0628\u060C \u0648\u0632\u0646\u060C \u0645\u0648\u062C\u0648\u062F\u06CC\u060C \u0628\u0631\u0646\u062F\u060C \u0639\u06A9\u0633 \u0627\u0635\u0644\u06CC\u060C \u062A\u0646\u0648\u0639\u200C\u0647\u0627 \u0648 \u06AF\u0627\u0644\u0631\u06CC \u0627\u0633\u062A \u0648 \u0647\u0645\u0631\u0627\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0630\u062E\u06CC\u0631\u0647 \u0646\u0645\u06CC\u200C\u0634\u0648\u062F.</div></div><div id="detailGrid" class="selector-grid"></div><div id="detailSelectionSummary" class="field-hint">\u0647\u0646\u0648\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062C\u0632\u0626\u06CC\u0627\u062A\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647 \u0627\u0633\u062A.</div></div><div class="card" style="border-color:#ec4899"><h2 style="color:#f9a8d4">\u{1F5BC} \u0686\u0646\u062F \u0639\u06A9\u0633 \u0627\u0632 \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 (\u06AF\u0627\u0644\u0631\u06CC)</h2><div class="field-hint">\u0639\u06A9\u0633 \u0627\u0648\u0644 \u0634\u0627\u062E\u0635 \u0645\u062D\u0635\u0648\u0644 \u0645\u06CC\u200C\u0634\u0648\u062F \u0648 \u0628\u0642\u06CC\u0647 \u062F\u0631 \u06AF\u0627\u0644\u0631\u06CC \u0645\u0642\u0635\u062F \u0642\u0631\u0627\u0631 \u0645\u06CC\u200C\u06AF\u06CC\u0631\u0646\u062F.</div><div class="row"><div class="field"><label>\u0631\u0648\u0634</label><select id="galMode"><option value="off">\u062E\u0627\u0645\u0648\u0634 \u2014 \u0641\u0642\u0637 \u06CC\u06A9 \u0639\u06A9\u0633</option><option value="auto">\u{1F4E6} \u062E\u0648\u062F\u06A9\u0627\u0631 \u0627\u0632 \u0628\u0627\u06A9\u0633 \u0639\u06A9\u0633\u200C\u0647\u0627</option><option value="manual">\u270D\uFE0F \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062F\u0633\u062A\u06CC</option><option value="number">\u{1F522} \u0627\u0644\u06AF\u0648\u06CC \u0634\u0645\u0627\u0631\u0647\u200C\u062F\u0627\u0631</option><option value="variations">\u{1F3A8} \u062A\u0635\u0627\u0648\u06CC\u0631 \u062A\u0646\u0648\u0639\u200C\u0647\u0627</option></select></div></div><div id="galAutoBox" hidden><div class="field"><label>\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u06AF\u0627\u0644\u0631\u06CC</label><input id="galBox" dir="ltr" placeholder=".woocommerce-product-gallery"></div></div><div id="galManualBox" hidden><div class="field"><label>\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062F\u0633\u062A\u06CC (\u0647\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062F\u0631 \u06CC\u06A9 \u062E\u0637 \u06CC\u0627 \u062C\u062F\u0627\u0634\u062F\u0647 \u0628\u0627 |)</label><textarea id="galSelectors" rows="4" dir="ltr" placeholder=".gallery-1 img&#10;.gallery-2 img"></textarea></div></div><div id="galNumberBox" hidden><div class="field"><label>\u0627\u0644\u06AF\u0648\u06CC \u062F\u0627\u0631\u0627\u06CC {n}</label><input id="galPattern" dir="ltr" placeholder=".slide-{n} img"></div><div class="row"><div class="field"><label>\u0627\u0632</label><input id="galFrom" type="number" value="1" min="0" max="99"></div><div class="field"><label>\u062A\u0627</label><input id="galTo" type="number" value="10" min="1" max="99"></div></div></div><div id="galCommon" hidden><div class="row"><div class="field"><label>\u062D\u062F\u0627\u06A9\u062B\u0631 \u0639\u06A9\u0633</label><input id="galMax" type="number" value="10" min="1" max="30"></div><label class="checks"><input id="galSkipFirst" type="checkbox"> \u0639\u06A9\u0633 \u0627\u0648\u0644 \u0631\u0627 \u0631\u062F \u06A9\u0646</label></div><button id="testGallery" class="btn btn-purple btn-sm">\u{1F9EA} \u0622\u0632\u0645\u0627\u06CC\u0634 \u0631\u0648\u06CC \u06CC\u06A9 \u0645\u062D\u0635\u0648\u0644</button></div></div></div><div class="card selector-actions"><div class="row" style="margin:0"><button id="saveBtn" class="btn btn-green">\u{1F4BE} \u0630\u062E\u06CC\u0631\u0647 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</button><button id="clearForm" class="btn btn-gray">\u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646 \u0641\u0631\u0645</button><button id="scrapeForm" class="btn btn-blue">\u25B6 \u0630\u062E\u06CC\u0631\u0647 \u0648 \u0627\u0633\u062A\u062E\u0631\u0627\u062C</button></div></div></section>
 <section id="pane-products" class="tab-pane"><div class="pane-intro"><div class="pane-intro-text"><h1>\u{1F4E6} \u0628\u0631\u0631\u0633\u06CC \u0646\u062A\u0627\u06CC\u062C \u0627\u0633\u062A\u062E\u0631\u0627\u062C</h1><p>\u0645\u062D\u0635\u0648\u0644\u0627\u062A \u06CC\u06A9 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0631\u0627 \u067E\u06CC\u062F\u0627 \u06A9\u0646\u06CC\u062F\u060C \u06A9\u06CC\u0641\u06CC\u062A \u062F\u0627\u062F\u0647\u200C\u0647\u0627 \u0631\u0627 \u0628\u0628\u06CC\u0646\u06CC\u062F \u0648 \u0628\u0639\u062F \u0628\u0631\u0627\u06CC \u0627\u0631\u0633\u0627\u0644 \u06CC\u0627 \u062E\u0631\u0648\u062C\u06CC \u06AF\u0631\u0641\u062A\u0646 \u062A\u0635\u0645\u06CC\u0645 \u0628\u06AF\u06CC\u0631\u06CC\u062F.</p></div><div class="pane-intro-icon">\u{1F50E}</div></div><div class="card result-filter-card"><div class="card-head"><h2>\u06F1. \u0627\u0646\u062A\u062E\u0627\u0628 \u0648 \u062C\u0633\u062A\u200C\u0648\u062C\u0648</h2><span class="concept-tag">\u0628\u0627\u0632\u0628\u06CC\u0646\u06CC \u067E\u06CC\u0634 \u0627\u0632 \u0627\u0631\u0633\u0627\u0644</span></div><div class="row" style="margin:0"><div class="field"><label>\u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><select id="productProfile"></select></div><div class="field"><label>\u062C\u0633\u062A\u200C\u0648\u062C\u0648\u06CC \u0645\u062D\u0635\u0648\u0644</label><input id="productSearch" placeholder="\u0639\u0646\u0648\u0627\u0646 \u0645\u062D\u0635\u0648\u0644..."></div><div class="field small" style="align-self:end"><button id="loadProducts" class="btn btn-blue">\u{1F4E6} \u0646\u0645\u0627\u06CC\u0634 \u0646\u062A\u0627\u06CC\u062C</button><button id="applyResultSettings" class="btn btn-purple">\u{1F4B0} \u0627\u0639\u0645\u0627\u0644 \u0642\u06CC\u0645\u062A \u0648 \u067E\u0633\u0648\u0646\u062F\u0650 \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647</button><small>\u0628\u062F\u0648\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0645\u062C\u062F\u062F\u061B \u0645\u0628\u0646\u0627\u06CC \u0642\u062F\u06CC\u0645\u06CC\u200C\u0647\u0627 \u0645\u0628\u0644\u063A \u0641\u0639\u0644\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u0627\u0633\u062A. \u062D\u062F\u0627\u0642\u0644 \u0642\u06CC\u0645\u062A \u0641\u0642\u0637 \u0627\u0631\u0633\u0627\u0644 \u0631\u0627 \u0645\u062D\u062F\u0648\u062F \u0645\u06CC\u200C\u06A9\u0646\u062F.</small></div></div></div><div class="card result-list-card"><div class="card-head"><h2>\u06F2. \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647\u0654 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</h2><span id="productCount" class="chip">\u06F0 \u0645\u062D\u0635\u0648\u0644</span></div><div id="products" class="products"><div class="empty">\u06CC\u06A9 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F \u062A\u0627 \u0646\u062A\u0627\u06CC\u062C \u0646\u0645\u0627\u06CC\u0634 \u062F\u0627\u062F\u0647 \u0634\u0648\u0646\u062F.</div></div></div><details class="support-panel result-tools"><summary><span>\u{1F4E4} \u0627\u0628\u0632\u0627\u0631\u0647\u0627\u06CC \u062E\u0631\u0648\u062C\u06CC \u0648 \u0627\u0646\u062A\u0642\u0627\u0644<small class="support-note">CSV \u0628\u0631\u0627\u06CC \u062E\u0631\u0648\u062C\u06CC\u060C \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u200C\u06AF\u06CC\u0631\u06CC \u06CC\u0627 \u0633\u0627\u0632\u06AF\u0627\u0631\u06CC \u0628\u0627 \u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0642\u062F\u06CC\u0645\u06CC</small></span></summary><div class="support-panel-body"><div class="row"><div class="field"><label>\u067E\u0631\u0648\u0641\u0627\u06CC\u0644</label><select id="transferProfile"></select></div><div class="field" style="align-self:end"><div class="menu-actions"><button id="csvExportMain" class="btn btn-green">\u2B07 \u062E\u0631\u0648\u062C\u06CC CSV</button><label class="btn btn-orange">\u2B06 \u0648\u0631\u0648\u062F CSV \u0642\u062F\u06CC\u0645\u06CC<input id="csvImportFile" type="file" accept=".csv,text/csv" hidden></label><button id="goImportTab" class="btn btn-blue">\u{1F4E5} \u0648\u0631\u0648\u062F CSV / Excel \u062C\u062F\u06CC\u062F</button></div></div></div><div id="csvStatus" class="menu-text">\u0628\u0631\u0627\u06CC \u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u062A\u0627\u0632\u0647 \u0648 Excel \u0627\u0632 \u0628\u062E\u0634 \xAB\u062F\u0631\u0648\u0646\u200C\u0631\u06CC\u0632\u06CC\xBB \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F.</div></div></details></section>
 <section id="pane-destination" class="tab-pane"><div class="pane-intro"><div class="pane-intro-text"><h1>\u{1F4E4} \u0627\u0631\u0633\u0627\u0644 \u0648 \u0645\u062F\u06CC\u0631\u06CC\u062A \u0645\u0642\u0635\u062F\u0647\u0627</h1><p>\u0627\u0631\u0633\u0627\u0644 \u0631\u0648\u0632\u0645\u0631\u0647 \u0631\u0627 \u0627\u0632 \u06A9\u0627\u0631\u062A \u0633\u0631\u06CC\u0639 \u0627\u0646\u062C\u0627\u0645 \u062F\u0647\u06CC\u062F\u061B \u0627\u0628\u0632\u0627\u0631\u0647\u0627\u06CC \u062C\u0627\u0645\u0639 \u0645\u0642\u0635\u062F \u062F\u0631 \u0627\u062F\u0627\u0645\u0647 \u0642\u0631\u0627\u0631 \u062F\u0627\u0631\u0646\u062F.</p></div><div class="pane-intro-icon">\u{1F69A}</div></div><div class="card quick-send-card"><div class="section-title">\u{1F4E4} \u0627\u0631\u0633\u0627\u0644 \u0633\u0631\u06CC\u0639 \u0645\u062D\u0635\u0648\u0644\u0627\u062A</div><div class="quick-send-inner"><div class="field"><label>\u0645\u062D\u0635\u0648\u0644\u0627\u062A \u06A9\u062F\u0627\u0645 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0627\u0631\u0633\u0627\u0644 \u0634\u0648\u0646\u062F\u061F</label><select id="sendProfile"><option value="">\u2014 \u0627\u0646\u062A\u062E\u0627\u0628 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u2014</option></select></div><label class="toggle-row"><input id="sendAllProducts" type="checkbox" checked><span>\u0627\u0631\u0633\u0627\u0644 \u0647\u0645\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0622\u0645\u0627\u062F\u0647\u0654 \u0627\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644</span></label><div class="quick-send-actions"><button id="quickWoo" class="btn btn-green btn-xl">\u{1F6D2} \u0627\u0631\u0633\u0627\u0644 \u0628\u0647 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</button><button id="quickBasalam" class="btn btn-orange btn-xl">\u{1F3EA} \u0627\u0631\u0633\u0627\u0644 \u0628\u0647 \u0628\u0627\u0633\u0644\u0627\u0645</button></div></div><div class="queue-preview send-queue"><div class="queue-preview-head"><b>\u23F3 \u0635\u0641 \u0627\u0631\u0633\u0627\u0644</b><button id="quickRefreshJobs" class="btn btn-gray btn-sm">\u21BB \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC</button></div><div id="destinationJobs" class="mini-jobs"><div class="empty compact">\u0647\u0646\u0648\u0632 \u0627\u0631\u0633\u0627\u0644\u06CC \u062F\u0631 \u0635\u0641 \u0646\u06CC\u0633\u062A.</div></div></div></div><div class="destination-launch-grid"><article class="destination-launch woo-launch"><div class="launch-icon">\u{1F6D2}</div><h2>\u0645\u062F\u06CC\u0631\u06CC\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</h2><p>\u0641\u0647\u0631\u0633\u062A \u0648\u0627\u0642\u0639\u06CC\u060C \u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0631\u062A\u06CC \u0648 \u0631\u062F\u06CC\u0641\u06CC\u060C \u0627\u0646\u062A\u062E\u0627\u0628 \u062A\u06A9\u06CC \u06CC\u0627 \u0647\u0645\u0647\u0654 \u0635\u0641\u062D\u0647 \u0648 \u0648\u06CC\u0631\u0627\u06CC\u0634 \u06AF\u0631\u0648\u0647\u06CC.</p><button class="btn btn-purple btn-xl" data-open-destination="woo">\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0645\u0648\u062F\u0627\u0644 \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</button></article><article class="destination-launch basalam-launch"><div class="launch-icon">\u{1F3EA}</div><h2>\u0645\u062F\u06CC\u0631\u06CC\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0628\u0627\u0633\u0644\u0627\u0645</h2><p>\u0647\u0645\u0647\u0654 \u063A\u0631\u0641\u0647\u200C\u0647\u0627\u060C \u0648\u0636\u0639\u06CC\u062A\u200C\u0647\u0627\u060C \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC \u0647\u0648\u0634\u0645\u0646\u062F \u0648 \u0639\u0645\u0644\u06CC\u0627\u062A \u062A\u06A9\u06CC \u0648 \u06AF\u0631\u0648\u0647\u06CC \u062F\u0631 \u0645\u0648\u062F\u0627\u0644 \u0627\u062E\u062A\u0635\u0627\u0635\u06CC.</p><button class="btn btn-orange btn-xl" data-open-destination="basalam">\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0645\u0648\u062F\u0627\u0644 \u0628\u0627\u0633\u0644\u0627\u0645</button><button class="btn btn-yellow" data-open-destination="basalam-unapproved">\u{1F7E0} \u062A\u0635\u062D\u06CC\u062D \u062C\u0645\u0639\u06CC \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u062A\u0623\u06CC\u06CC\u062F\u0646\u0634\u062F\u0647</button></article></div><div id="destinationManagerModal" class="destination-manager-modal" hidden><div class="destination-manager-shell" role="dialog" aria-modal="true"><div class="destination-manager-head"><div><b id="destinationManagerTitle">\u0645\u062F\u06CC\u0631\u06CC\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0645\u0642\u0635\u062F</b><small>\u0641\u0647\u0631\u0633\u062A \u0648 \u0639\u0645\u0644\u06CC\u0627\u062A \u0648\u0627\u0642\u0639\u06CC \u0645\u0642\u0635\u062F</small></div><button id="destinationManagerClose" class="btn btn-red">\u2715 \u0628\u0633\u062A\u0646</button></div><div class="destination-manager-body"><div class="dest-hero"><h1>\u{1F9ED} \u0645\u062F\u06CC\u0631\u06CC\u062A \u062C\u0627\u0645\u0639 \u0645\u0642\u0635\u062F</h1><p>\u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0648\u0627\u0642\u0639\u06CC \u0648\u0648\u06A9\u0627\u0645\u0631\u0633 \u0648 \u0647\u0645\u0647\u0654 \u063A\u0631\u0641\u0647\u200C\u0647\u0627\u06CC \u0628\u0627\u0633\u0644\u0627\u0645 \u0631\u0627 \u062C\u0633\u062A\u200C\u0648\u062C\u0648\u060C \u0628\u0627\u0632\u0628\u06CC\u0646\u06CC \u0648 \u0648\u06CC\u0631\u0627\u06CC\u0634 \u06A9\u0646\u06CC\u062F. \u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634 \u06AF\u0631\u0648\u0647\u06CC \u0647\u0645\u06CC\u0634\u0647 \u0642\u0628\u0644 \u0627\u0632 \u0627\u0639\u0645\u0627\u0644 \u0648\u0627\u0642\u0639\u06CC \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0627\u0633\u062A.</p><div class="dest-targets"><button class="dest-target active" data-dest-target="woo">\u{1F6D2} \u0648\u0648\u06A9\u0627\u0645\u0631\u0633</button><button class="dest-target" data-dest-target="basalam">\u{1F3EA} \u0628\u0627\u0633\u0644\u0627\u0645</button></div></div><div id="destUnapprovedTools" class="unapproved-tools" hidden><div><b>\u{1F7E0} \u0628\u062E\u0634 \u0627\u062E\u062A\u0635\u0627\u0635\u06CC \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u062A\u0623\u06CC\u06CC\u062F\u0646\u0634\u062F\u0647</b><p>\u0647\u0645\u0647\u0654 \u0635\u0641\u062D\u0627\u062A \u0648 \u0647\u0645\u0647\u0654 \u063A\u0631\u0641\u0647\u200C\u0647\u0627 \u062F\u0631 \u06CC\u06A9 \u0627\u062C\u0631\u0627\u06CC \u067E\u0627\u06CC\u062F\u0627\u0631 \u0633\u0631\u0648\u0631\u0633\u0627\u06CC\u062F \u067E\u0631\u062F\u0627\u0632\u0634 \u0645\u06CC\u200C\u0634\u0648\u0646\u062F\u061B \u0628\u0633\u062A\u0646 \u06CC\u0627 \u062A\u0627\u0632\u0647\u200C\u0633\u0627\u0632\u06CC \u0635\u0641\u062D\u0647 \u0627\u062C\u0631\u0627\u06CC \u06A9\u0627\u0631 \u0631\u0627 \u0645\u062A\u0648\u0642\u0641 \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.</p></div><button id="destUnapprovedSelect" class="btn btn-orange">\u25B6 \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC \u0647\u0645\u0647\u0654 \u062A\u0623\u06CC\u06CC\u062F\u0646\u0634\u062F\u0647\u200C\u0647\u0627</button></div><div class="card"><div class="dest-toolbar"><div><label>\u062C\u0633\u062A\u200C\u0648\u062C\u0648\u06CC \u0639\u0646\u0648\u0627\u0646 \u06CC\u0627 \u0634\u0646\u0627\u0633\u0647 \u0645\u062D\u0635\u0648\u0644</label><input id="destSearch" placeholder="\u0645\u062B\u0644\u0627\u064B \u0639\u0637\u0631 \u06CC\u0627 \u06F1\u06F2\u06F3\u06F4"></div><div><label>\u063A\u0631\u0641\u0647</label><select id="destShop"><option value="all">\u0647\u0645\u0647\u0654 \u063A\u0631\u0641\u0647\u200C\u0647\u0627</option></select></div><div><label>\u062A\u0639\u062F\u0627\u062F \u062F\u0631 \u0635\u0641\u062D\u0647</label><select id="destPerPage"><option value="10">\u06F1\u06F0</option><option value="20" selected>\u06F2\u06F0</option></select></div><button id="destLoad" class="btn btn-blue">\u{1F50E} \u062F\u0631\u06CC\u0627\u0641\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A</button><button id="destReset" class="btn btn-gray">\u21BB \u067E\u0627\u06A9\u200C\u0633\u0627\u0632\u06CC</button></div><div id="destStatusPills" class="status-pills"></div><div class="dest-summary"><b id="destSummary">\u0645\u0642\u0635\u062F \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u0648 \u0641\u0647\u0631\u0633\u062A \u0631\u0627 \u062F\u0631\u06CC\u0627\u0641\u062A \u06A9\u0646\u06CC\u062F.</b><div class="dest-display-controls"><label class="select-all-products"><input id="destSelectAll" type="checkbox"> \u0627\u0646\u062A\u062E\u0627\u0628 \u0647\u0645\u0647\u0654 \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647</label><button class="view-toggle active" data-dest-view="cards" title="\u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0631\u062A\u06CC">\u25A6 \u06A9\u0627\u0631\u062A\u06CC</button><button class="view-toggle" data-dest-view="rows" title="\u0646\u0645\u0627\u06CC\u0634 \u0631\u062F\u06CC\u0641\u06CC">\u2637 \u0631\u062F\u06CC\u0641\u06CC</button><span id="destSelection" class="chip">\u06F0 \u0627\u0646\u062A\u062E\u0627\u0628</span></div></div></div><details class="bulk-panel"><summary>\u26A1 \u0648\u06CC\u0631\u0627\u06CC\u0634 \u06AF\u0631\u0648\u0647\u06CC \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647 <span id="destBulkCount">(\u06F0 \u0645\u062D\u0635\u0648\u0644)</span></summary><div class="bulk-body"><div class="help-box">\u062D\u062F\u0627\u06A9\u062B\u0631 \u06F2\u06F0 \u0645\u062D\u0635\u0648\u0644 \u062F\u0631 \u0647\u0631 \u0646\u0648\u0628\u062A \u062A\u0627 \u0633\u0642\u0641 \u062F\u0631\u062E\u0648\u0627\u0633\u062A\u200C\u0647\u0627\u06CC \u067E\u0644\u0646 \u0631\u0627\u06CC\u06AF\u0627\u0646 Cloudflare \u0631\u0639\u0627\u06CC\u062A \u0634\u0648\u062F. \u0627\u0628\u062A\u062F\u0627 \xAB\u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.</div><div class="bulk-grid"><div><label>\u0639\u0645\u0644\u06CC\u0627\u062A \u0642\u06CC\u0645\u062A</label><select id="destPriceOp"><option value="">\u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631</option><option value="set">\u0642\u0631\u0627\u0631 \u062F\u0627\u062F\u0646 \u0642\u06CC\u0645\u062A</option><option value="inc">\u0627\u0641\u0632\u0627\u06CC\u0634</option><option value="dec">\u06A9\u0627\u0647\u0634</option></select></div><div><label>\u0645\u0642\u062F\u0627\u0631 \u0642\u06CC\u0645\u062A (\u0639\u062F\u062F \u06CC\u0627 \u062F\u0631\u0635\u062F)</label><input id="destPriceValue" placeholder="\u0645\u062B\u0644\u0627\u064B 10% \u06CC\u0627 50000"></div><div><label>\u0645\u0648\u062C\u0648\u062F\u06CC \u062C\u062F\u06CC\u062F</label><input id="destBulkStock" type="number" min="0" placeholder="\u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631"></div><div><label>\u0648\u0636\u0639\u06CC\u062A \u062C\u062F\u06CC\u062F</label><select id="destBulkStatus"><option value="">\u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631</option></select></div><div><label>\u067E\u06CC\u0634\u0648\u0646\u062F \u0639\u0646\u0648\u0627\u0646</label><input id="destTitlePrefix" placeholder="\u0645\u062B\u0644\u0627\u064B \u0648\u06CC\u0698\u0647 \u2014 "></div><div><label>\u067E\u0633\u0648\u0646\u062F \u0639\u0646\u0648\u0627\u0646</label><input id="destTitleSuffix" placeholder="\u0645\u062B\u0644\u0627\u064B (\u062C\u062F\u06CC\u062F)"></div></div><div class="row" style="margin-top:8px"><div class="field"><label>\u062A\u0648\u0636\u06CC\u062D \u06A9\u0648\u062A\u0627\u0647 \u062C\u062F\u06CC\u062F</label><textarea id="destBulkShort" rows="2" placeholder="\u062E\u0627\u0644\u06CC = \u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631"></textarea></div><div class="field"><label>\u062A\u0648\u0636\u06CC\u062D\u0627\u062A \u06A9\u0627\u0645\u0644 \u062C\u062F\u06CC\u062F</label><textarea id="destBulkDesc" rows="2" placeholder="\u062E\u0627\u0644\u06CC = \u0628\u062F\u0648\u0646 \u062A\u063A\u06CC\u06CC\u0631"></textarea></div></div><div class="bulk-actions"><button id="destBulkCategory" class="btn btn-yellow" hidden>\u{1F3F7} \u0645\u062F\u06CC\u0631\u06CC\u062A \u062F\u0633\u062A\u0647\u200C\u0628\u0646\u062F\u06CC \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647\u200C\u0647\u0627</button><button id="destBulkPreview" class="btn btn-purple">\u{1F441} \u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634 \u062A\u063A\u06CC\u06CC\u0631\u0627\u062A</button><button id="destBulkApply" class="btn btn-green">\u2713 \u0627\u0639\u0645\u0627\u0644 \u062A\u063A\u06CC\u06CC\u0631\u0627\u062A</button><button id="destBulkDeletePreview" class="btn btn-orange">\u{1F441} \u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634 \u062D\u0630\u0641 / \u0628\u0627\u06CC\u06AF\u0627\u0646\u06CC</button><button id="destBulkDelete" class="btn btn-red">\u{1F5D1} \u0627\u0639\u0645\u0627\u0644 \u062D\u0630\u0641 / \u0628\u0627\u06CC\u06AF\u0627\u0646\u06CC</button><button id="destClearSelection" class="btn btn-gray">\u067E\u0627\u06A9\u200C\u06A9\u0631\u062F\u0646 \u0627\u0646\u062A\u062E\u0627\u0628</button></div></div></details><div id="destProducts" class="dest-grid"><div class="empty">\u0628\u0631\u0627\u06CC \u0634\u0631\u0648\u0639 \xAB\u062F\u0631\u06CC\u0627\u0641\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.</div></div><div class="dest-pagination"><button id="destPrev" class="btn btn-gray">\u0635\u0641\u062D\u0647 \u0642\u0628\u0644</button><span id="destPageInfo">\u0635\u0641\u062D\u0647 \u06F1</span><button id="destNext" class="btn btn-gray">\u0635\u0641\u062D\u0647 \u0628\u0639\u062F</button></div></div></div></div></section>
@@ -15477,19 +17505,21 @@ const INSTALLED_LIBRARY_GROUPS_BY_ENV=[
   {type:'Managed project deps',label:'کتابخانه‌هایی که deployer برای scraper نصب/آپدیت می‌کند',items:['package.json dependencies','Playwright browser install','Puppeteer browser install','Termux chromium pkg','Basalam SDK install (npm run basalam:install)']}
  ]}
 ];
+const BROWSER_MANUAL_COMMANDS=[{"title": "Ubuntu / VPS — کتابخانه‌های سیستم (خطای libatk و مشابه)", "note": "در پوشهٔ پروژهٔ دارای package.json اجرا کنید. فقط این مرحله دسترسی مدیر می‌خواهد. apt از gateway مرورگر عبور نمی‌کند؛ دانلود دوبارهٔ Chrome جایگزین این مرحله نیست.", "command": "# Run from the deployed project directory\nif [ \"$(id -u)\" -eq 0 ]; then\n  node node_modules/playwright/cli.js install-deps chromium\nelse\n  sudo \"$(command -v node)\" node_modules/playwright/cli.js install-deps chromium\nfi"}, {"title": "بازیابی کتابخانه‌های Node با نسخهٔ قفل‌شده", "note": "فقط اگر خود کتابخانه‌ها غایب‌اند. ابتدا سرویس را با پنل دیپلوی متوقف کنید؛ npm ci پوشهٔ node_modules را بازسازی می‌کند. با کاربر سرویس اجرا کنید. این دستور شبکهٔ npm ترمینال را به کار می‌برد، نه gateway ذخیره‌شده در اسکرپر؛ اگر gateway لازم است از دکمهٔ نصب استفاده کنید.", "command": "npm ci --ignore-scripts --include=optional --no-audit --no-fund\nnpm ls playwright puppeteer crawlee"}, {"title": "Playwright — نصب Chromium مورد نیاز همین نسخه", "note": "فقط وقتی مرورگر غایب است، نه libatk. با همان کاربر سرویس و همان HOME و PLAYWRIGHT_BROWSERS_PATH گزارش پشتیبانی اجرا کنید. این دستور اتصال ترمینال است؛ تنظیم gateway داخل برنامه خودکار اعمال نمی‌شود. برای مسیر gateway از دکمهٔ نصب استفاده کنید.", "command": "node node_modules/playwright/cli.js install chromium"}, {"title": "Puppeteer — نصب Chrome مورد نیاز همین نسخه", "note": "با همان کاربر سرویس و همان HOME و PUPPETEER_CACHE_DIR گزارش پشتیبانی اجرا کنید؛ نصب در کش root برای سرویس دیگر کافی نیست. مسیر زیر متعلق به نسخهٔ قفل‌شدهٔ فعلی پروژه است. HTTP 500 نیازمند اصلاح gateway/ارتباط است، نه نصب مجدد npm یا کاهش نسخه.", "command": "node node_modules/puppeteer/lib/puppeteer/node/cli.js browsers install chrome"}, {"title": "Termux / Android — Chromium بومی", "note": "بدون sudo. بستهٔ Chromium لینوکس Playwright روی Android اجرا نمی‌شود. بعد از نصب، مسیر زیر را در محیط سرویس تنظیم و سرویس را از پنل دوباره اجرا کنید. Crawlee از همان مرورگر استفاده می‌کند؛ مرورگر جداگانه‌ای ندارد.", "command": "pkg update\npkg install chromium\nexport BROWSER_EXECUTABLE_PATH=\"$PREFIX/bin/chromium\"\n\"$BROWSER_EXECUTABLE_PATH\" --version"}, {"title": "بررسی مسیرهای کش و نسخه‌های نصب‌شده", "note": "این بررسی فقط مسیر و نسخه را نشان می‌دهد، نه موفقیت launch. پس از اصلاح، دکمهٔ نصب و تست همهٔ موتورهای مرورگر را بزنید و گزارش کامل را بررسی کنید. Cloudflare Worker قابلیت نصب/اجرای مرورگر محلی ندارد.", "command": "id\npwd\nnode --version\nprintf \"HOME=%s\\nPLAYWRIGHT_BROWSERS_PATH=%s\\nPUPPETEER_CACHE_DIR=%s\\n\" \"$HOME\" \"$PLAYWRIGHT_BROWSERS_PATH\" \"$PUPPETEER_CACHE_DIR\"\nnpm ls playwright puppeteer crawlee"}];
+function browserManualHtml(){return '<details><summary>📋 دستورهای دستی نصب و رفع خطا (قابل کپی)</summary><p>این دستورها خودکار اجرا نمی‌شوند. ابتدا مسیر پروژه، کاربر سرویس و متغیرهای کش را با گزارش پشتیبانی تطبیق دهید. دانلود دستی Chrome مانند Playwright از تنظیم gateway ذخیره‌شده استفاده نمی‌کند؛ اگر فقط gateway مجاز است، از دکمهٔ نصب استفاده کنید.</p>'+BROWSER_MANUAL_COMMANDS.map(x=>'<section class="install-command-card" data-browser-command><h4>'+esc(x.title)+'</h4><p>'+esc(x.note)+'</p><textarea readonly dir="ltr" style="width:100%;min-height:8em">'+esc(x.command)+'</textarea><button type="button" class="btn btn-blue btn-sm" data-copy-browser-command>📋 کپی دستور</button></section>').join('')+'</details>'}
 const INSTALLED_LIBRARY_HTML='<div class="install-command-hero"><b>📚 استعلام زندهٔ کتابخانه‌های نصب‌شده/قابل اجرا</b><br>این بخش از API خود محیط سؤال می‌کند و سپس نتیجهٔ واقعی همان محیط را نمایش می‌دهد.</div><div id="runtimeInstalledLibraries" class="install-command-grid"><article class="install-command-card"><h4>در حال استعلام…</h4><pre>لطفاً چند لحظه صبر کنید.</pre></article></div><div class="install-command-hero"><b>📚 کاتالوگ مرجع براساس محیط</b><br>هر محیط فقط کتابخانه‌ها و runtimeهایی را نشان می‌دهد که همان‌جا واقعاً نصب/قابل اجرا هستند؛ بنابراین Playwright/Puppeteer زیر Cloudflare Worker نمایش داده نمی‌شوند.</div>'+INSTALLED_LIBRARY_GROUPS_BY_ENV.map(env=>'<div class="install-command-hero"><b>'+esc(env.env)+'</b><br>'+esc(env.note)+'</div><div class="install-command-grid">'+env.groups.map(g=>'<article class="install-command-card"><h4>'+esc(g.label)+' <span class="chip">'+esc(g.type)+'</span></h4><pre>'+esc(g.items.join('\n'))+'</pre></article>').join('')+'</div>').join('');
-const INSTALL_COMMAND_GROUPS=[{"key": "deployer", "title": "Local deployer page", "badge": "Localhost UI", "body": "cd \"$HOME/new/cloudflare-scraper4\"\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL on this device\n# Inside the deployer page: Build & start local scraper\nnpm run version:check\n# Expected: 1.219.0+"},{"key": "update", "title": "Update existing clone / Worker", "badge": "Code update", "body": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run basalam:install || true\nnpm run version:check\ngrep version package.json | head -1\n# Expected: 1.219.0+\n# Cloudflare Dashboard: Workers & Pages → Deployments → Redeploy latest commit"}, {"key": "desktop", "title": "VS Code / Desktop", "badge": "Node + Deployer", "body": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.219.0+\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL\n# Browser engines for JavaScript-only shops. Without this step the\n# playwright/puppeteer engines cannot launch and are skipped.\nnpm run browsers:install\n# Official Basalam SDK (SDK-first product sends; REST fallback stays if pip is offline).\nnpm run basalam:install"}, {"key": "windows-powershell", "title": "Windows PowerShell", "badge": "Choose install folder", "body": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n  winget install --id Python.Python.3.12 -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.219.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path."}, {"key": "windows-cmd", "title": "Windows Command Prompt", "badge": "Choose install folder", "body": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nwhere python || winget install --id Python.Python.3.12 -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.219.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path."}, {"key": "termux", "title": "Termux / Android", "badge": "Phone local runtime", "body": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium esbuild\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run basalam:install || true\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.219.0+\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# First \"Open scraper\" click runs render:build; on Termux/ARM that takes tens of seconds.\n# The deployer now waits for it. Raise the budget on a very slow device:\n#   export LOCAL_SCRAPER_PROXY_WAIT_MS=300000\n# If a build ever fails with \"cannot find esbuild\": Termux reports itself as\n# Android, where the native npm binary is often unavailable. v1.83.0 recovers\n# automatically using the system esbuild (pkg install esbuild) or the\n# WebAssembly build. To check it by hand:\n#   node scripts/esbuild-check.mjs\n# v1.90.0 fixes three Termux-only problems:\n#  1) After the deployer auto-updates to a new version it now restarts the\n#     scraper too (its start command runs render:build), so both the deployer\n#     and the scraper are rebuilt and you only refresh the scraper page.\n#  2) AI model tests used to sit on the queued-on-server message forever: the Node\n#     runtime had no background run, so progress was never reported. It now\n#     reports per-model progress and supports stop/resume, like the Worker.\n#  3) A profile that extracted fine on Cloudflare returned nothing here,\n#     because auto mode skipped the htmlrewriter engine and fell through to\n#     browsers that Android cannot run. Engine order now matches the Worker.\n# v1.91.0 fixes the diagnostic buttons returning 404 here. They were only ever\n#   implemented on the Cloudflare Worker, so on Termux every one of them said\n#   not found even though the visual selector preview loaded the same site.\n#   Extraction diagnostic, full debug, selector suggestion, import history,\n#   job/run priority, agent tools and the Workers AI catalog now all work here.\n#   The extraction diagnostic runs the real scrape pipeline and names the\n#   engine that won, so its report matches what a real run does.\n# If the deployer says \"Auto-update skipped: 1 uncommitted change(s)\" and the\n# version never moves, the stale lockfile is the cause. Force one update:\n#   cd \"$HOME/new\" && git checkout -- cloudflare-scraper4/package-lock.json\n#   git pull --ff-only origin arena/01a09468-new\n# v1.93.0 fixes the database error on this device. Termux used to be forced\n#   onto PostgreSQL, so every refresh of the scraper page flashed\n#   connect ECONNREFUSED 127.0.0.1:5432 and the status light stayed red,\n#   because a stock phone has no PostgreSQL server installed. Termux now\n#   uses the built-in Node SQLite database (data/scraper4.sqlite) by\n#   default - no server, no daemon, nothing to start.\n#   An existing broken .env.local self-heals: a local PostgreSQL that\n#   refuses the connection now falls back to SQLite automatically\n#   instead of leaving the status light red forever.\n#   PostgreSQL stays fully supported - see the next card if you want it.\n# v1.101.0 installs the official Basalam SDK. Basalam only publishes it for\n# Python (there is no npm package), so sending now tries the real SDK first\n# through a python3 bridge and falls back to the REST API automatically.\npip install --upgrade basalam-sdk || pip install basalam-sdk || true\npython3 -c \"import basalam_sdk, sys; print('basalam-sdk OK')\" || echo \"basalam-sdk not installed - sending will use the REST API only\"\nnpm run deployer:ui\n"}, {"key": "termux-db", "title": "Termux PostgreSQL (optional)", "badge": "Only if you want Postgres", "body": "cd \"$HOME/new/cloudflare-scraper4\"\npkg install -y postgresql\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start || true\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\\nRUN_WORKER_IN_WEB=true\\n\" > .env.local\ncat .env.local\n# Do not use postgres:postgres on Termux unless you created that role manually.\nnpm run version:check\n# Expected: 1.219.0+\n# This card is OPTIONAL. Termux works out of the box on the built-in Node\n# SQLite database; follow it only if you specifically want PostgreSQL.\n# Switch back to SQLite at any time by putting this line in .env.local:\n#   DATABASE_URL=sqlite:data/scraper4.sqlite\n# PostgreSQL must be started again after every Termux restart, otherwise you\n# get connect ECONNREFUSED 127.0.0.1:5432. Since v1.93.0 the app then falls\n# back to SQLite instead of staying unusable. Start it with:\n#   pg_ctl -D $PREFIX/var/lib/postgresql start\n# Windows users: skip this card. On Windows the deployer uses the built-in Node SQLite database\n# (DATABASE_URL=sqlite:data/scraper4.sqlite) and needs no PostgreSQL service."}, {"key": "docker-db", "title": "Desktop/Codespaces PostgreSQL", "badge": "Docker DB", "body": "cd new/cloudflare-scraper4\ndocker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\\nRUN_WORKER_IN_WEB=true\\n' > .env.local\nnpm run version:check\n# Expected: 1.219.0+\n# No Docker available? Leave DATABASE_URL empty or set sqlite:data/scraper4.sqlite\n# and the deployer falls back to the built-in Node SQLite database."}, {"key": "render", "title": "Render.com", "badge": "Panel setup", "body": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) After the deploy finishes open https://YOUR-SERVICE.onrender.com/health\n   Expected version: 1.219.0+\n6) The build also installs the Python basalam-sdk (SDK-first Basalam sends);\n   verify it in the libraries card under version."}, {"key": "cloudflare", "title": "Cloudflare Worker", "badge": "Dashboard setup", "body": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nAfter redeploy open https://YOUR-WORKER.workers.dev/api/version\n  Expected version: 1.219.0+\n  WORKER_VERSION in wrangler.toml is kept in sync by: npm run version:sync"}, {"key": "vps", "title": "Ubuntu/Debian VPS", "badge": "Production Node", "body": "sudo apt update\nsudo apt install -y git curl nginx build-essential postgresql postgresql-contrib python3 python3-pip\ncurl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -\nsudo apt install -y nodejs\ngit clone --branch arena/01a09468-new https://github.com/fazilatma/new.git /opt/scraper4-new\ncd /opt/scraper4-new/cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.219.0+\nnpm run deployer:ui\n# Browser engines for JavaScript-only shops (skip on a tiny VPS: ~400MB).\nsudo apt-get install -y chromium || sudo apt-get install -y chromium-browser || true\nnpm run browsers:install\n# Official Basalam SDK (SDK-first product sends; REST fallback stays if pip is offline).\nnpm run basalam:install"}, {"key": "api", "title": "API examples", "badge": "Automation", "body": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1,\"details\":true,\"persist\":true}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"extract\":false,\"target\":\"both\",\"limit\":100}'\ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.219.0+\n# Manual sync = extract + details + push to WooCommerce and every active Basalam stall:\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/scrape -H 'content-type: application/json' -d '{\"target\":\"both\"}'\n# AI description generator (on by default, uses the master model, fills only empty fields):\ncurl -s http://127.0.0.1:3000/api/ai/description-settings\ncurl -X POST http://127.0.0.1:3000/api/ai/description-settings -H 'content-type: application/json' -d '{\"enabled\":true}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/ai-descriptions -H 'content-type: application/json' -d '{\"limit\":25}'\n# The same three routes exist on the Cloudflare Worker: swap the host for your workers.dev URL."}, {"key": "cpanel", "title": "cPanel Shared Hosting", "badge": "Node.js Selector + Passenger", "body": "# cPanel shared hosting (Setup Node.js App + Phusion Passenger)\n# Full walkthrough: CPANEL-SHARED-HOSTING.md\n\n# 1) BUILD LOCALLY - shared hosting rarely has RAM to build.\ngit clone https://github.com/fazilatma/new.git\ncd new/cloudflare-scraper4\nnpm install\nnpm run render:build\nnpm run version:check          # Expected: 1.219.0+\n\n# 2) UPLOAD to a folder OUTSIDE public_html, e.g. /home/USER/scraper4 :\n#    render-dist/  package.json  scripts/basalam-sdk-bridge.py  scripts/cpanel-app.js\n#    Never upload node_modules (native files are OS-specific) or data/ storage/.\n\n# 3) Rename scripts/cpanel-app.js to app.js in the application root.\n\n# 4) cPanel -> Setup Node.js App -> Create Application\n#    Node.js version   : 22 or newer   (needed for the built-in node:sqlite)\n#    Application root  : scraper4      (NOT inside public_html)\n#    Application URL   : your domain or subdomain\n#    Startup file      : app.js\n#    Application mode  : Production\n\n# 5) Environment variables (same screen). Do NOT set PORT - Passenger assigns it.\n#    ADMIN_TOKEN=<long random string>\n#    VAULT_SECRET=<long random string>\n#    SCRAPER4_SQLITE_PATH=/home/USER/scraper4/data/scraper4.sqlite\n#    LOCAL_SCRAPER_AUTO_UPDATE=0\n#    BASALAM_PYTHON=/home/USER/virtualenv/scraper4py/3.11/bin/python\n\n# 6) Install dependencies. Use the activation line cPanel shows at the top:\nsource /home/USER/nodevenv/scraper4/22/bin/activate\ncd /home/USER/scraper4\nNODE_OPTIONS='--max-old-space-size=512' npm install --omit=dev\n\n# 7) OPTIONAL - official Basalam SDK (cPanel -> Setup Python App, 3.9+):\nsource /home/USER/virtualenv/scraper4py/3.11/bin/activate\npip install basalam-sdk\necho '{\"action\":\"probe\"}' | python /home/USER/scraper4/scripts/basalam-sdk-bridge.py\n\n# 8) Press Restart in cPanel, then verify:\n#    https://your-domain/health   -> {\"ok\":true,...,\"databaseReady\":true}\n\n# NOTES\n# - playwright/puppeteer/crawlee are NOT installable here (each downloads a\n#   ~300MB browser). They are lazy-loaded, so the cheerio/htmlrewriter engines\n#   still work. JavaScript-only shops need Render/VPS/Termux instead.\n# - No PM2/forever/systemd: Passenger is the process manager. Restart from cPanel\n#   (or touch tmp/restart.txt) after every code change.\n# - Node 20 cannot use node:sqlite -> set DATABASE_URL to PostgreSQL instead.\n\n# 9) Confirm the deployed build really is this version:\n#    curl -s https://your-domain/health | grep version   # Expected: 1.219.0+"}];
+const INSTALL_COMMAND_GROUPS=[{"key": "deployer", "title": "Local deployer page", "badge": "Localhost UI", "body": "cd \"$HOME/new/cloudflare-scraper4\"\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL on this device\n# Inside the deployer page: Build & start local scraper\nnpm run version:check\n# Expected: 1.220.0+"},{"key": "update", "title": "Update existing clone / Worker", "badge": "Code update", "body": "cd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngh auth setup-git || true\ngit fetch origin arena/01a09468-new\ngit reset --hard origin/arena/01a09468-new\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\n# On Termux add --ignore-scripts to the npm install (Android cannot run install scripts)\nnode scripts/esbuild-check.mjs\nnpm run browsers:install || true\nnpm run basalam:install || true\nnpm run version:check\ngrep version package.json | head -1\n# Expected: 1.220.0+\n# Cloudflare Dashboard: Workers & Pages → Deployments → Redeploy latest commit"}, {"key": "desktop", "title": "VS Code / Desktop", "badge": "Node + Deployer", "body": "git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git\ncd new\nnpm install\ncd cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.220.0+\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL\n# Browser engines for JavaScript-only shops. Without this step the\n# playwright/puppeteer engines cannot launch and are skipped.\nnpm run browsers:install\n# Official Basalam SDK (SDK-first product sends; REST fallback stays if pip is offline).\nnpm run basalam:install"}, {"key": "windows-powershell", "title": "Windows PowerShell", "badge": "Choose install folder", "body": "# Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\n$InstallRoot = Read-Host \"Install folder for Scraper4 (not forced to C:)\"\nif ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw \"Install folder is required\" }\nNew-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null\nSet-Location $InstallRoot\n# Install prerequisites if winget is available. You can also install Node.js LTS, Git, and GitHub CLI manually.\nif (Get-Command winget -ErrorAction SilentlyContinue) {\n  winget install --id Git.Git -e --source winget\n  winget install --id GitHub.cli -e --source winget\n  winget install --id OpenJS.NodeJS.LTS -e --source winget\n  winget install --id Python.Python.3.12 -e --source winget\n}\n# Restart PowerShell after first installing Node/Git if commands are not found.\nif (-not (Test-Path \"$InstallRoot\\new\\.git\")) {\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"$InstallRoot\\new\"\n} else {\n  Set-Location \"$InstallRoot\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n}\nSet-Location \"$InstallRoot\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.220.0+\n@\"\nDATABASE_URL=sqlite:data/scraper4.sqlite\nRUN_WORKER_IN_WEB=true\nLOCAL_SCRAPER_AUTO_UPDATE=true\nPORT=3000\n\"@ | Set-Content -Encoding UTF8 .env.local\n# Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\n# Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\n# Open the printed http://localhost:8790/?token=... URL. The app files stay under $InstallRoot\\new, not the default C: path."}, {"key": "windows-cmd", "title": "Windows Command Prompt", "badge": "Choose install folder", "body": "REM Choose the install directory yourself. Example: D:\\Scraper4 or E:\\Apps\\Scraper4\nset /p INSTALL_ROOT=Install folder for Scraper4 (not forced to C:): \nif \"%INSTALL_ROOT%\"==\"\" echo Install folder is required && exit /b 1\nmkdir \"%INSTALL_ROOT%\" 2>nul\ncd /d \"%INSTALL_ROOT%\"\nREM Install Node.js LTS, Git, and GitHub CLI manually, or use winget before running this block.\nwhere git || winget install --id Git.Git -e --source winget\nwhere node || winget install --id OpenJS.NodeJS.LTS -e --source winget\nwhere gh || winget install --id GitHub.cli -e --source winget\nwhere python || winget install --id Python.Python.3.12 -e --source winget\nif not exist \"%INSTALL_ROOT%\\new\\.git\" (\n  git clone --branch arena/01a09468-new https://github.com/fazilatma/new.git \"%INSTALL_ROOT%\\new\"\n) else (\n  cd /d \"%INSTALL_ROOT%\\new\"\n  git fetch origin arena/01a09468-new\n  git reset --hard origin/arena/01a09468-new\n)\ncd /d \"%INSTALL_ROOT%\\new\\cloudflare-scraper4\"\nnpm install --no-audit --prefer-online\nnpm run browsers:install\nnpm run basalam:install\nnode scripts\\esbuild-check.mjs\nnpm run version:check\nREM Expected: 1.220.0+\n(\n  echo DATABASE_URL=sqlite:data/scraper4.sqlite\n  echo RUN_WORKER_IN_WEB=true\n  echo LOCAL_SCRAPER_AUTO_UPDATE=true\n  echo PORT=3000\n) > .env.local\nREM Windows uses Node built-in SQLite - no PostgreSQL install/service needed.\nREM Remove DATABASE_URL only if you prefer a remote/managed PostgreSQL URL.\nnpm run deployer:ui\nREM Open the printed http://localhost:8790/?token=... URL. The app files stay under %INSTALL_ROOT%\\new, not the default C: path."}, {"key": "termux", "title": "Termux / Android", "badge": "Phone local runtime", "body": "cd \"$HOME\"\npkg update -y\npkg upgrade -y\npkg install -y git gh openssh nodejs-lts python make clang chromium esbuild\nrm -rf \"$HOME/new\"\ngit config --global --unset-all credential.helper || true\ngh auth login --web -h github.com -p https\ngh auth setup-git\ngh repo clone fazilatma/new \"$HOME/new\" -- --branch arena/01a09468-new --depth 1\ncd \"$HOME/new\"\ngit config --local --unset-all credential.helper || true\ngit config --local --replace-all credential.helper '!gh auth git-credential'\ngit config --local --get-all credential.helper\n# Correct output: !gh auth git-credential\n# Do NOT set: gh auth setup-git auth git-credential\ncd \"$HOME/new/cloudflare-scraper4\"\nnpm config set fetch-retries 5\nnpm config set fetch-retry-mintimeout 20000\nnpm config set fetch-retry-maxtimeout 90000\n# --ignore-scripts: wrangler's workerd setup has no Android build and fails the whole install. Nothing the scraper runs needs install scripts here.\nnpm install --ignore-scripts --no-audit --prefer-online\nnpm run browsers:install || true\nnpm run basalam:install || true\nCHROME_BIN=\"$(command -v chromium-browser || command -v chromium || true)\"\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.220.0+\nif [ -n \"$CHROME_BIN\" ]; then printf \"BROWSER_EXECUTABLE_PATH=$CHROME_BIN\nPLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROME_BIN\nPUPPETEER_EXECUTABLE_PATH=$CHROME_BIN\nLOCAL_SCRAPER_AUTO_UPDATE=true\n\" >> .env.local; fi\n# First \"Open scraper\" click runs render:build; on Termux/ARM that takes tens of seconds.\n# The deployer now waits for it. Raise the budget on a very slow device:\n#   export LOCAL_SCRAPER_PROXY_WAIT_MS=300000\n# If a build ever fails with \"cannot find esbuild\": Termux reports itself as\n# Android, where the native npm binary is often unavailable. v1.83.0 recovers\n# automatically using the system esbuild (pkg install esbuild) or the\n# WebAssembly build. To check it by hand:\n#   node scripts/esbuild-check.mjs\n# v1.90.0 fixes three Termux-only problems:\n#  1) After the deployer auto-updates to a new version it now restarts the\n#     scraper too (its start command runs render:build), so both the deployer\n#     and the scraper are rebuilt and you only refresh the scraper page.\n#  2) AI model tests used to sit on the queued-on-server message forever: the Node\n#     runtime had no background run, so progress was never reported. It now\n#     reports per-model progress and supports stop/resume, like the Worker.\n#  3) A profile that extracted fine on Cloudflare returned nothing here,\n#     because auto mode skipped the htmlrewriter engine and fell through to\n#     browsers that Android cannot run. Engine order now matches the Worker.\n# v1.91.0 fixes the diagnostic buttons returning 404 here. They were only ever\n#   implemented on the Cloudflare Worker, so on Termux every one of them said\n#   not found even though the visual selector preview loaded the same site.\n#   Extraction diagnostic, full debug, selector suggestion, import history,\n#   job/run priority, agent tools and the Workers AI catalog now all work here.\n#   The extraction diagnostic runs the real scrape pipeline and names the\n#   engine that won, so its report matches what a real run does.\n# If the deployer says \"Auto-update skipped: 1 uncommitted change(s)\" and the\n# version never moves, the stale lockfile is the cause. Force one update:\n#   cd \"$HOME/new\" && git checkout -- cloudflare-scraper4/package-lock.json\n#   git pull --ff-only origin arena/01a09468-new\n# v1.93.0 fixes the database error on this device. Termux used to be forced\n#   onto PostgreSQL, so every refresh of the scraper page flashed\n#   connect ECONNREFUSED 127.0.0.1:5432 and the status light stayed red,\n#   because a stock phone has no PostgreSQL server installed. Termux now\n#   uses the built-in Node SQLite database (data/scraper4.sqlite) by\n#   default - no server, no daemon, nothing to start.\n#   An existing broken .env.local self-heals: a local PostgreSQL that\n#   refuses the connection now falls back to SQLite automatically\n#   instead of leaving the status light red forever.\n#   PostgreSQL stays fully supported - see the next card if you want it.\n# v1.101.0 installs the official Basalam SDK. Basalam only publishes it for\n# Python (there is no npm package), so sending now tries the real SDK first\n# through a python3 bridge and falls back to the REST API automatically.\npip install --upgrade basalam-sdk || pip install basalam-sdk || true\npython3 -c \"import basalam_sdk, sys; print('basalam-sdk OK')\" || echo \"basalam-sdk not installed - sending will use the REST API only\"\nnpm run deployer:ui\n"}, {"key": "termux-db", "title": "Termux PostgreSQL (optional)", "badge": "Only if you want Postgres", "body": "cd \"$HOME/new/cloudflare-scraper4\"\npkg install -y postgresql\nmkdir -p \"$PREFIX/var/lib/postgresql\"\n[ -f \"$PREFIX/var/lib/postgresql/PG_VERSION\" ] || initdb \"$PREFIX/var/lib/postgresql\"\npg_ctl -D \"$PREFIX/var/lib/postgresql\" -l \"$HOME/scraper4-postgres.log\" start || true\ncreatedb scraper4 || true\nprintf \"DATABASE_URL=postgresql://$(whoami)@localhost:5432/scraper4\\nRUN_WORKER_IN_WEB=true\\n\" > .env.local\ncat .env.local\n# Do not use postgres:postgres on Termux unless you created that role manually.\nnpm run version:check\n# Expected: 1.220.0+\n# This card is OPTIONAL. Termux works out of the box on the built-in Node\n# SQLite database; follow it only if you specifically want PostgreSQL.\n# Switch back to SQLite at any time by putting this line in .env.local:\n#   DATABASE_URL=sqlite:data/scraper4.sqlite\n# PostgreSQL must be started again after every Termux restart, otherwise you\n# get connect ECONNREFUSED 127.0.0.1:5432. Since v1.93.0 the app then falls\n# back to SQLite instead of staying unusable. Start it with:\n#   pg_ctl -D $PREFIX/var/lib/postgresql start\n# Windows users: skip this card. On Windows the deployer uses the built-in Node SQLite database\n# (DATABASE_URL=sqlite:data/scraper4.sqlite) and needs no PostgreSQL service."}, {"key": "docker-db", "title": "Desktop/Codespaces PostgreSQL", "badge": "Docker DB", "body": "cd new/cloudflare-scraper4\ndocker rm -f scraper4-postgres || true\ndocker run --name scraper4-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=scraper4 -p 5432:5432 -d postgres:16\nprintf 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/scraper4\\nRUN_WORKER_IN_WEB=true\\n' > .env.local\nnpm run version:check\n# Expected: 1.220.0+\n# No Docker available? Leave DATABASE_URL empty or set sqlite:data/scraper4.sqlite\n# and the deployer falls back to the built-in Node SQLite database."}, {"key": "render", "title": "Render.com", "badge": "Panel setup", "body": "1) Render Dashboard → New → PostgreSQL\n2) Copy Internal Database URL\n3) Web Service → Environment:\n   DATABASE_URL = Internal Database URL\n   RUN_WORKER_IN_WEB = true\n   ADMIN_TOKEN = long-random-secret\n4) Save Changes → Manual Deploy / Redeploy\n5) After the deploy finishes open https://YOUR-SERVICE.onrender.com/health\n   Expected version: 1.220.0+\n6) The build also installs the Python basalam-sdk (SDK-first Basalam sends);\n   verify it in the libraries card under version."}, {"key": "cloudflare", "title": "Cloudflare Worker", "badge": "Dashboard setup", "body": "Cloudflare Dashboard → Workers & Pages → your Worker\nSettings → Variables and Secrets:\n  VAULT_SECRET = long-random-secret\nBindings:\n  D1 DB binding name = DB\n  Queue binding name = JOBS\nDeployments → Redeploy\nAfter redeploy open https://YOUR-WORKER.workers.dev/api/version\n  Expected version: 1.220.0+\n  WORKER_VERSION in wrangler.toml is kept in sync by: npm run version:sync"}, {"key": "vps", "title": "Ubuntu/Debian VPS", "badge": "Production Node", "body": "sudo apt update\nsudo apt install -y git curl nginx build-essential postgresql postgresql-contrib python3 python3-pip\ncurl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -\nsudo apt install -y nodejs\ngit clone --branch arena/01a09468-new https://github.com/fazilatma/new.git /opt/scraper4-new\ncd /opt/scraper4-new/cloudflare-scraper4\nnpm install\nnode scripts/esbuild-check.mjs\nnpm run version:check\n# Expected: 1.220.0+\nnpm run deployer:ui\n# Browser engines for JavaScript-only shops (skip on a tiny VPS: ~400MB).\nsudo apt-get install -y chromium || sudo apt-get install -y chromium-browser || true\nnpm run browsers:install\n# Official Basalam SDK (SDK-first product sends; REST fallback stays if pip is offline).\nnpm run basalam:install"}, {"key": "api", "title": "API examples", "badge": "Automation", "body": "curl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"target\":\"none\",\"pages\":1,\"details\":true,\"persist\":true}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/run -H 'content-type: application/json' -d '{\"extract\":false,\"target\":\"both\",\"limit\":100}'\ncurl -s http://127.0.0.1:3000/health\n# Expected version: 1.220.0+\n# Manual sync = extract + details + push to WooCommerce and every active Basalam stall:\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/scrape -H 'content-type: application/json' -d '{\"target\":\"both\"}'\n# AI description generator (on by default, uses the master model, fills only empty fields):\ncurl -s http://127.0.0.1:3000/api/ai/description-settings\ncurl -X POST http://127.0.0.1:3000/api/ai/description-settings -H 'content-type: application/json' -d '{\"enabled\":true}'\ncurl -X POST http://127.0.0.1:3000/api/profiles/PROFILE_ID/ai-descriptions -H 'content-type: application/json' -d '{\"limit\":25}'\n# The same three routes exist on the Cloudflare Worker: swap the host for your workers.dev URL."}, {"key": "cpanel", "title": "cPanel Shared Hosting", "badge": "Node.js Selector + Passenger", "body": "# cPanel shared hosting (Setup Node.js App + Phusion Passenger)\n# Full walkthrough: CPANEL-SHARED-HOSTING.md\n\n# 1) BUILD LOCALLY - shared hosting rarely has RAM to build.\ngit clone https://github.com/fazilatma/new.git\ncd new/cloudflare-scraper4\nnpm install\nnpm run render:build\nnpm run version:check          # Expected: 1.220.0+\n\n# 2) UPLOAD to a folder OUTSIDE public_html, e.g. /home/USER/scraper4 :\n#    render-dist/  package.json  scripts/basalam-sdk-bridge.py  scripts/cpanel-app.js\n#    Never upload node_modules (native files are OS-specific) or data/ storage/.\n\n# 3) Rename scripts/cpanel-app.js to app.js in the application root.\n\n# 4) cPanel -> Setup Node.js App -> Create Application\n#    Node.js version   : 22 or newer   (needed for the built-in node:sqlite)\n#    Application root  : scraper4      (NOT inside public_html)\n#    Application URL   : your domain or subdomain\n#    Startup file      : app.js\n#    Application mode  : Production\n\n# 5) Environment variables (same screen). Do NOT set PORT - Passenger assigns it.\n#    ADMIN_TOKEN=<long random string>\n#    VAULT_SECRET=<long random string>\n#    SCRAPER4_SQLITE_PATH=/home/USER/scraper4/data/scraper4.sqlite\n#    LOCAL_SCRAPER_AUTO_UPDATE=0\n#    BASALAM_PYTHON=/home/USER/virtualenv/scraper4py/3.11/bin/python\n\n# 6) Install dependencies. Use the activation line cPanel shows at the top:\nsource /home/USER/nodevenv/scraper4/22/bin/activate\ncd /home/USER/scraper4\nNODE_OPTIONS='--max-old-space-size=512' npm install --omit=dev\n\n# 7) OPTIONAL - official Basalam SDK (cPanel -> Setup Python App, 3.9+):\nsource /home/USER/virtualenv/scraper4py/3.11/bin/activate\npip install basalam-sdk\necho '{\"action\":\"probe\"}' | python /home/USER/scraper4/scripts/basalam-sdk-bridge.py\n\n# 8) Press Restart in cPanel, then verify:\n#    https://your-domain/health   -> {\"ok\":true,...,\"databaseReady\":true}\n\n# NOTES\n# - playwright/puppeteer/crawlee are NOT installable here (each downloads a\n#   ~300MB browser). They are lazy-loaded, so the cheerio/htmlrewriter engines\n#   still work. JavaScript-only shops need Render/VPS/Termux instead.\n# - No PM2/forever/systemd: Passenger is the process manager. Restart from cPanel\n#   (or touch tmp/restart.txt) after every code change.\n# - Node 20 cannot use node:sqlite -> set DATABASE_URL to PostgreSQL instead.\n\n# 9) Confirm the deployed build really is this version:\n#    curl -s https://your-domain/health | grep version   # Expected: 1.220.0+"}];
 const INSTALL_DEPLOY_COMMANDS=INSTALL_COMMAND_GROUPS.map(x=>'# '+x.title+' — '+x.badge+String.fromCharCode(10)+x.body).join(String.fromCharCode(10,10));
 const menuDefs=[
  ['💾 ذخیره و بازیابی همهٔ تنظیمات','backup','بکاپ، بازیابی، نسخه و انتشار در یک پنل یکپارچه در بخش «🔄 نسخهٔ کد» ادغام شده‌اند.','<div class="menu-text">همهٔ ابزارهای بکاپ و بازیابی (فایل، برنچ، بوت‌استرپ) به‌همراه نسخه و جدول برنچ‌ها در یک پنل واحد هستند.</div><div class="menu-actions">'+mButton('📂 باز کردن پنل یکپارچهٔ بکاپ','goto-backup','btn-green')+'</div>'],
- ['📜 گزارش تغییرات کد','changes','نسخهٔ مرجع رابط و رفتار: scraper4.php v10.170. تغییرات مهم این Worker به زبان ساده در این بخش ثبت می‌شوند.','<div class="menu-actions">'+mButton('📋 گزارش تطبیق v10.170','parity','btn-purple')+'</div><div class="change-list"><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۹.۰+</time><br><b>کارت محصول واقعی برای هر موتور در آزمون سه‌صفحه‌ای</b><br>هر ردیف گزارش بنچمارک اکنون یک کارت نمونه با تصویر، عنوان، قیمت، SKU و لینک از محصول واقعی همان موتور دارد؛ ردیف بدون محصول صریحاً نبود نمونه را نشان می‌دهد. نمونه و شمارش کامل‌بودن فیلدها با روشن‌بودن پارسر مرحلهٔ دوم هم حفظ می‌شوند. علت داخلی Crawlee و خطاهای بدون رنگ ANSI در گزارش صفحه‌بندی باقی می‌مانند. نبود کتابخانهٔ Ubuntu و نبود نسخهٔ Chrome راهنمای جداگانه دارند؛ Network API همراه پارسر HTML به‌عنوان ناسازگار کنار گذاشته می‌شود، نه خرابی مرورگر. تنظیمات پارسر و مسیر قدیمی استخراج تغییر نکرده‌اند. نصب وابستگی سیستم‌عامل همچنان باید روی VPS انجام شود و در تست سرعت خودکار اجرا نمی‌شود.</div><details class="change-recent"><summary>🕘 نمایش 48 تغییر اخیرِ دیگر</summary><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۸.۱+</time><br><b>رفع توقف کپی کش روی لینک امن و تشخیص وابستگی سیستم‌عامل</b><br>کش مبدأ و مقصد با مسیر واقعی مقایسه می‌شوند؛ اگر یک پوشه باشند کپی بیهوده انجام نمی‌شود. لینک داخلیِ امن به فایل عادی کپی می‌شود، ولی خروج از کش، چرخه و مقصد نامطمئن همچنان رد می‌شوند. خطای یک کش مانع نمایش آزمون مرورگرها یا کپی کش دیگر نیست. نبود کتابخانه‌ای مانند libatk-1.0.so.0 جداگانه گزارش می‌شود و دیگر دانلود دوبارهٔ مرورگر را تحریک نمی‌کند؛ نصب بسته‌های Ubuntu همچنان اقدام صریح مدیر است. خطای دانلود از gateway کد HTTP و cf-ray را نشان می‌دهد بدون ادعای علت قطعی خطای ۵۰۰. گزارش پشتیبانی مسیر واقعی و وضعیت symlink را هم دارد.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۸.۰+</time><br><b>کپی گزارش کامل نصب مرورگر برای پشتیبانی</b><br>در بخش نصب و تعمیر Playwright، Puppeteer و Crawlee دکمهٔ مستقل کپی گزارش اضافه شد. گزارش تازهٔ سرور علاوه بر لاگ شامل نسخهٔ کد، Node و npm، سیستم‌عامل و معماری، نسخهٔ نصب‌شده و قفل‌شدهٔ کتابخانه‌ها، مسیر اجرایی، کش مبدأ و مقصد، مجوزها، RAM و دیسک، شرایط پروکسی، گزینه‌های اجرای قبلی و نتایج آزمون است. رمزها، توکن‌ها و query آدرس‌ها حذف می‌شوند؛ متن برای بازبینی و کپی دستی هم قابل مشاهده است. محدودیت لاگ ۲۴هزار نویسه و پاک‌شدن تاریخچه پس از ری‌استارت صریح گزارش می‌شود. تولید گزارش هیچ نصب، دانلود یا راه‌اندازی مرورگری انجام نمی‌دهد و سیاست احراز هویت فعلی سرور حفظ شده است.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۷.۰+</time><br><b>نصب مرورگر از gateway کلودفلر و کپی کش موجود با دکمهٔ مستقل</b><br>اگر مسیر Worker در تنظیمات اتصال فعال باشد، دریافت کتابخانه‌های عمومی npm و آرشیو مرورگر از gateway انجام می‌شود؛ شکست پروکسی به اتصال مستقیم تغییر نمی‌کند و رضایت آینه همچنان لازم است. دکمهٔ مستقلِ کپی کش، مرورگرهای موجود همین VPS را از خانهٔ مبدأ به کش کاربر اسکرپر کپی و پوشه‌ها و مجوز اجرا را آماده می‌کند؛ اصل فایل‌ها حذف و فایل مقصد بازنویسی نمی‌شود. این حالت دانلود، sudo یا تغییر مالکیت ندارد و چهار آزمون راه‌اندازی را اجرا می‌کند. دسترسی خواندن مبدأ و سازگاری نسخه و معماری لازم است. آزمون gateway محلی TLS با npm واقعی و فایل‌های مصنوعی گذشت؛ انتقال زندهٔ آرشیو بزرگ از Cloudflare یا اجرای VPS تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۶.۰+</time><br><b>پیشنهاد و آزمایش سلکتور با موتور مرورگری انتخاب‌شده</b><br>در زیرتب‌های ۲ و ۳ سلکتورها، دکمه‌های پیشنهاد خودکار، آزمایش فهرست، آزمایش جزئیات و گالری اکنون انتخاب فعلی دراپ‌داون موتور را حتی پیش از ذخیرهٔ پروفایل ارسال می‌کنند. Playwright، Puppeteer و Crawlee HTML رندرشده را با مسیر مرورگر خود تحویل می‌دهند؛ برای Network API نیز سلکتورها روی DOM مرورگر Playwright آزمایش می‌شوند، نه پاسخ JSON. شکست مرورگر به HTML اولیه fallback نمی‌کند. موتورهای غیرمرورگری مسیر قبلی را نگه می‌دارند و پارسر مرحلهٔ دوم دخالتی در آزمایش DOM ندارد. Cloudflare Worker برای انتخاب مرورگر خطای روشنِ نیاز به Node می‌دهد. آزمون مصنوعی رندر فهرست و جزئیات و انتقال تنظیمات گذشت؛ تأیید زندهٔ سایت یا VPS ادعا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۵.۰+</time><br><b>پارسر اختیاری مرحلهٔ دوم روی HTML دریافت‌شده</b><br>کلید پیش‌فرض خاموش و فهرست هشت‌گزینه‌ای auto، lxml، selectolax، jsonld، next_data، script_json، metadata و heuristic به خانه و فرم پروفایل اضافه شد. خاموش‌بودن دقیقاً مسیر قبلی استخراج را نگه می‌دارد. lxml و selectolax معادل JavaScript هستند، نه کتابخانهٔ Python. انتخاب مشخص بدون fallback به پارسر دیگر روی همان HTML اجرا می‌شود؛ در اسکرول هر snapshot خوانده و محصولات قبلی حفظ می‌شوند. تنظیمات در ذخیرهٔ خودکار و پروفایل می‌مانند. هنگام روشن‌بودن، یادگیری موتور و بازیابی سلکتور خاموش و بنچمارک فقط خواندنی است. ترکیب با Network API صریحاً رد می‌شود؛ Worker همچنان مرورگر ندارد. آزمون‌های مصنوعی و تطبیق مسیر خاموش با نسخهٔ منتشرشده انجام شد؛ تأیید زندهٔ سایت یا VPS ادعا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۴.۱+</time><br><b>اختیاری‌شدن توکن برای نصب مرورگر طبق انتخاب مالک</b><br>نصب مرورگر دیگر شرط جداگانهٔ ADMIN_TOKEN ندارد و از سیاست عمومی API پیروی می‌کند. در اجرای Node می‌توان ADMIN_AUTH_DISABLED=true را در محیط پروژه تنظیم و سرویس را ری‌استارت کرد تا کنترل توکن خاموش شود. مقدار ADMIN_TOKEN دست‌نخورده می‌ماند تا کلید رمزگشایی اطلاعات اتصال تغییر نکند. در این حالت همهٔ APIهای اسکرپر برای هر فرد دارای دسترسی قابل استفاده‌اند؛ تأیید اجرای root و آینه همچنان وجود دارد ولی جای احراز هویت نیست. احراز هویت وب‌کنسول و دیپلویر و موتورهای استخراج تغییر نکردند.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۴.۰+</time><br><b>اقتباس فقط مسیر Playwright از نسخهٔ پایتون</b><br>رفتار render_playwright در برنچ arena/01a0c9ea-new برای اجرای مستقیم Playwright اقتباس شد: User-Agent کروم، اندازهٔ ۱۳۶۶×۷۶۸، منطقهٔ زمانی تهران، آماده‌سازی navigator، بستن پنجره‌های اضافی و دیالوگ‌ها، ترتیب انتظار ناوبری و اسکرول محدود ویژهٔ اسنپ‌شاپ. Chromium کامل همان نصب در صورت وجود ترجیح داده می‌شود؛ مسیر اجرایی صریح همچنان اولویت دارد. دادهٔ hydration به parserهای موجود تحویل داده می‌شود. Puppeteer، Crawlee، نصب مرورگر، مسیر شبکه و parserهای محصول تغییر نکردند؛ طرح قبلی تلاش محافظت‌شده کنار گذاشته شد. آزمون مصنوعی گذشت؛ موفقیت زندهٔ اسنپ‌شاپ روی VPS هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۳.۰+</time><br><b>نصب و تعمیر همهٔ موتورهای مرورگر با یک دکمه داخل اسکرپر</b><br>در بخش نسخهٔ کد، ابزار نصب کتابخانه‌های غایب Playwright، Puppeteer و Crawlee با نسخهٔ قفل‌شده و دانلود Chromium و Chrome اضافه شد. چهار آزمون اجرای مرورگر با نتیجهٔ مستقل انجام می‌شود. ابتدا مرورگر فعلی آزمایش می‌شود؛ سپس دانلود رسمی و در صورت رضایت کاربر آینهٔ npmmirror با نسخهٔ فعلی Playwright امتحان می‌شوند. نصب در محیط و کش همان پروژه انجام می‌شود و فقط اجرای واقعی مرورگر موفقیت محسوب می‌شود. گزارش زنده، مهلت اجرا و جلوگیری از نصب هم‌زمان اضافه شدند. عملیات نیازمند ADMIN_TOKEN است؛ اجرای root تأیید جدا می‌خواهد. نسخهٔ Node، بسته‌های سیستم و مالکیت فایل‌ها تغییر نمی‌کنند. ترموکس از مرورگر سیستم استفاده می‌کند؛ نصب بستهٔ سیستم و انتقال آفلاین خودکار نیستند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۳۰ · 2026-09-21 · نسخهٔ ۱.۲۱۲.۰+</time><br><b>نصب مستقل کنار وب‌کنسول با توقف و حذف از دیپلویر</b><br>حالت parallel با سرویس، حساب، پوشه‌ها، پایگاه داده و کلید مستقل و پورت‌های ۸۸۹۰ و ۳۱۰۰ اضافه شد؛ نصب وب‌کنسول و سرویس قبلی تغییر نمی‌کنند. پنل عمومی جدید و پراکسی اسکرپر پیش از نمایش به ورود با توکن نیاز دارند. دکمه‌های توقف و حذف با تأیید نام نمونه، درخواست محدود را به کنترل‌کنندهٔ روتِ مستقل می‌فرستند. حذف فقط همین نمونه را غیرفعال و فایل‌ها و داده‌هایش را بایگانی می‌کند؛ پاک‌کردن دائمی انجام نمی‌شود. توقف تا شروع با SSH یا بوت بعدی باقی می‌ماند. HTTP رمزگذاری ندارد و منابع کم سرور همچنان محدودیت دارند؛ نصب و حذف واقعی روی VPS کاربر هنوز آزمایش نشده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۸ · 2026-09-19 · نسخهٔ ۱.۲۱۱.۱+</time><br><b>رفع توقف نصب systemd پیش از اولین اجرا</b><br>دستور reset-failed برای سرویس تازه ممکن است بدون وضعیت بارگذاری‌شده خطا بدهد؛ این مرحله اکنون اختیاری است و فعال‌سازی سرویس و تایمر ادامه می‌یابد. خطاهای واقعی daemon-reload، enable و start همچنان نصب را متوقف می‌کنند. راهنمای تکمیل نصب نیمه‌تمام بدون نصب دوباره وابستگی‌ها یا حذف داده‌ها اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۸ · 2026-09-19 · نسخهٔ ۱.۲۱۱.۰+</time><br><b>نصب پایدار Node روی VPS با سرویس مستقل systemd</b><br>نصب‌کنندهٔ اختصاصی با حساب غیرروت، شروع پس از بوت و بازیابی پردازش اضافه شد. دیپلویر و اسکرپر در یک گروه منابع با سقف حافظه و CPU اجرا می‌شوند؛ پایش HTTP مستقل، دیپلویر بی‌پاسخ را پس از مهلت شروع و سه خطای پیاپی بازیابی می‌کند. توقف دستی محترم است. ساخت پروژه فقط هنگام نصب یا تعمیر انجام می‌شود، نه در هر ری‌استارت. مهاجرت، مسیر قدیمی و داده‌ها و کلید vault را حفظ می‌کند؛ مسیرهای خارجی و پورت اشغال‌شده بدون تغییر رد می‌شوند. این سرویس به PHP و بازماندن ترمینال وابسته نیست. اجرای یک‌بارهٔ نصب روی VPS و خاموش‌کردن نگهبان قبلی الزامی است؛ نصب روی سرور کاربر و آزمون ریبوت هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۷ · 2026-09-18 · نسخهٔ ۱.۲۱۰.۰+</time><br><b>بازیابی خودکار اسکرپر و راه‌اندازی پایدار VPS و ترموکس</b><br>خروج عادی ناخواسته، کرش و سیگنال قطع اسکرپر دیگر آن را برای همیشه خاموش نمی‌گذارند؛ دیپلویر با فاصلهٔ افزایشی پنج تا شصت ثانیه تلاش مجدد می‌کند. پس از مهلت اولیهٔ پنج‌دقیقه‌ای، شش بررسی ناموفق پیاپی نیز بازیابی را فعال می‌کند. توقف دستی محترم است و رویداد پردازش قدیمی، اجرای جدید را خاموش نمی‌کند. وضعیت بازیابی و زمان تلاش بعدی در پنل منابع مشخص‌اند. تولید تنظیمات سرویس systemd و termux-services با راهنمای راه‌اندازی پس از بوت اضافه شد؛ نصب روی دستگاه کاربر لازم است. محدودیت باتری Android و قتل کل برنامه توسط سیستم‌عامل تضمین همیشه‌روشن‌بودن را ناممکن می‌کند. آزمون واقعی کرش، راه‌اندازی مجدد و توقف دستی گذشت.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۹.۰+</time><br><b>نمودار مستقل منابع مصرفی پردازش اسکرپر</b><br>کنار آمار میزبان و دیپلویر، CPU و RAM خود پردازش Node اسکرپر با نمودار مستقل نمایش داده می‌شود. اسکرپر شمارنده‌های واقعی خود را در health گزارش می‌کند؛ بنابراین دسترسی محدود ترموکس به procfs مانع خواندن این آمار نیست. شناسهٔ هر راه‌اندازی از جهش کاذب CPU بعد از ری‌استارت جلوگیری می‌کند. درصد CPU نسبت به یک هسته است و مصرف بیش از صد درصد بریده نمی‌شود. توقف، قطع ارتباط یا نسخهٔ قدیمی با پیام روشن مشخص می‌شود. این آمار شامل Chromium و workerهای جداگانه نیست؛ محدودهٔ اندازه‌گیری در پنل نوشته شده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۸.۰+</time><br><b>نمودار زندهٔ CPU و RAM محیط در دیپلویر</b><br>در نمای کلی دیپلویر نمودار مصرف کل CPU و RAM میزبان با نمونه‌برداری دوثانیه‌ای و تاریخچهٔ شش‌دقیقه‌ای اضافه شد. مصرف پردازش خود دیپلویر و محدودیت حافظهٔ کانتینر cgroup v2 جدا نمایش داده می‌شوند؛ آمار میزبان با مصرف فقط اسکرپر اشتباه نمی‌شود. داده‌های غیرقابل دسترس در ترموکس ناشناخته‌اند، نه صفر. نمودارها توقف و ادامه دارند؛ درخواست‌های صفحه در پس‌زمینه متوقف می‌شوند و ارتباط قطع‌شده مشخص است. API از توکن موجود استفاده می‌کند؛ بدون سرویس خارجی، فرمان shell یا ذخیرهٔ تاریخچه روی دیسک. آزمون API واقعی روی لینوکس و آزمون محدودیت Android و نمودارها انجام شد؛ روی دستگاه واقعی ترموکس هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۷.۰+</time><br><b>بازگشت حالت بدون صفحه‌بندی به رفتار ۱.۱۸۰</b><br>برچسب اصلی بدون صفحه‌بندی در هر دو فرم برگشت. در Node این حالت دیگر به اجبار وارد جمع‌آور اسکرول نمی‌شود و دریافت با موتور منتخب، URL ثابت و قواعد توقف قدیمی اجرا می‌شود؛ اگر تعداد صفحات صفر باشد، نبود محصول تازه اجرای دوباره را متوقف می‌کند. Worker رفتار قدیمی دریافت یک URL را حفظ می‌کند. حالت اسکرول صریح، عیب‌یاب سلکتور، چرخهٔ فقط فهرست و جلوگیری از بازنشستگی براساس فهرست ناقص حفظ شدند. مسیر مرورگر قدیمی تضمین عبور از Worker ندارد و این محدودیت در گزارش هشدار داده می‌شود. آزمون پنج دریافت صدتایی و توقف روی پاسخ تکراری اجرا شد؛ رفع صفحهٔ خالی انتخاب بصری یا مشکل زندهٔ ایمالز ادعا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۶.۰+</time><br><b>آزمایشگاه ۵۰۰ محصول و پنج دستهٔ اسکرولی</b><br>فیکسچر مستقل با ۵۰۰ محصول یکتا اضافه شد. آزمون واقعی parser در Worker و Node تعداد، لینک، عنوان، قیمت و تصویر همهٔ محصولات را بررسی می‌کند. جمع‌آور اسکرول با پنج دستهٔ صدتایی، جایگزینی کارت‌های قبلی و تأخیر طولانی شبکه آزموده می‌شود تا توقف روی ۱۰۰ مورد یا حذف محصولات قبلی آشکار شود. این آزمایش جمع‌آوری با زمان و DOM شبیه‌سازی‌شده است، نه اجرای Chromium واقعی روی ترموکس یا VPS؛ مشکل پیمایش زندهٔ ایمالز همچنان تأیید رفع ندارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۵.۰+</time><br><b>بازگرداندن تلاش مجدد پیمایش خالی مرورگر</b><br>مسیر قدیمی مرورگر پس از ERR_ABORTED منتظر آرام‌شدن صفحه می‌ماند و صفحهٔ خالی را دوباره باز می‌کرد؛ مسیر جدید اسکرول این بازیابی را نداشت. اکنون اگر هنوز هیچ درخواستی به رهگیر نرسیده و صفحه خالی باشد، پس از انتظار محدود دقیقاً یک بار با همان مسیر امن تلاش می‌شود. شکست دوباره نتیجهٔ ناقص را موفق اعلام نمی‌کند؛ navigationRetried و توضیح صریح توقف پیش از رهگیری در گزارش ثبت می‌شود. تنظیمات سلکتور، نوع صفحه‌بندی و مسیر غیرمستقیم تغییر نمی‌کند. رگرسیون با مرورگر شبیه‌سازی‌شده بازتولید شد؛ دانلود Chromium در آزمایشگاه ناموفق بود و رفع مشکل زندهٔ ایمالز هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۴.۰+</time><br><b>اسکرول محافظت‌شده و تفکیک خطای مرورگر از سلکتور</b><br>درخواست منابع مرورگر محدودیت زمان و لغو دارد؛ timeout پیمایش فقط پس از تحویل سند از مسیر امن، تطابق URL و آماده‌بودن DOM قابل بازیابی است و سپس جمع‌آوری واقعی اسکرول اجرا می‌شود. شکست منابع مؤثر یا اسکرول نتیجهٔ کامل تولید نمی‌کند و حذف محصولات براساس اسکرول ناقص همچنان ممنوع است. عیب‌یاب هر دو موتور عنوان، قیمت، لینک و تصویر را داخل کارت‌ها می‌سنجد؛ صفر محصول پس از شکست مرورگر دیگر سلکتور معتبر را خراب اعلام نمی‌کند. شمارش واقعی ظرف از شاهد محدود کل صفحه جداست و اختلاف ۵۰/۱۰۰ به‌اشتباه به nth-of-type نسبت داده نمی‌شود. گزارش منابع ناموفق بدون query و با حفظ مسیر غیرمستقیم ارائه می‌شود. آزمون با نمونهٔ مصنوعی صدکارتی انجام شد؛ رفتار زندهٔ ایمالز و استقرار تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۳.۰+</time><br><b>پیشنهاد دستهٔ باسلام، آزمون واقعی صفحه‌بندی و تفکیک دو دکمهٔ اجرا</b><br>دستهٔ موجود یا انتخاب دستی حفظ می‌شود؛ برای محصولات بدون دسته، سرویس پیش‌بینی نسخهٔ دوم باسلام ابتدا امتحان می‌شود. فقط شناسهٔ معتبر و غیرمبهم از فهرست دسته‌ها پذیرفته و ۲۴ ساعت کش می‌شود؛ خطا یا ابهام به مسیر آموخته‌ها و مدل فعلی برمی‌گردد. درخواست محدودیت زمان دارد و توکن در کش نوشته نمی‌شود. تست سه‌صفحه‌ای براساس نوع صفحه‌بندی، لینک واقعی بعدی و محصول تازه را بررسی و گزارش می‌کند؛ URL تکراری، پاسخ تکراری و نبود لینک بعدی موفقیت سه‌صفحه‌ای نیست. حالت بدون صفحه‌بندی یک صفحه و اسکرول در Node با Playwright/Puppeteer تا سه دستهٔ تازه آزمون می‌شود؛ موتور فاقد اسکرول واقعی صریحاً گزارش می‌شود. دکمهٔ بک‌اند فقط فهرست را ذخیره می‌کند و هیچ جزئیات، دسته‌بندی، توضیح‌سازی، بازنشستگی یا ارسالی اجرا نمی‌کند؛ توضیح و دستهٔ قبلی پاک نمی‌شود. همگام‌سازی دستی مستقل از گزینهٔ بدون استخراج، فرآیند کامل تا ارسال به مقصد انتخابی را اجرا می‌کند. برنامهٔ فقط فهرست در صف و تلاش مجدد حفظ می‌شود. آزمون‌ها محلی‌اند؛ اتصال زنده به سرویس پیش‌بینی و سایت کاربر تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۲.۰+</time><br><b>نادیده‌گرفتن پسوند کد در تشخیص تکراری‌ها</b><br>عنوان پایه بدون پسوندهای کد معیار تشخیص تکراری است؛ نمونه‌های «(کد: ایکس)»، کد عددی فارسی، حروف لاتین، پسوندهای سفارشی و چند پسوند پشت‌سرهم پوشش داده شدند. شناسایی پسوند عمومی نسبت به نیم‌فاصلهٔ فارسی نیز مقاوم شد. عنوان واقعی مقصد تغییر نمی‌کند و ویژگی‌های معناداری مانند رنگ حذف نمی‌شوند. جداسازی غرفه‌ها حفظ شده است؛ عنوان پایهٔ یکسان در دو غرفه همچنان تکراری نیست. این قواعد در برنامه‌ریز دفتر حساب و گروه‌بندی پس‌زمینه آزمون شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۱.۰+</time><br><b>عنوان یکسان در غرفه‌های مختلف باسلام تکراری نیست</b><br>بررسی تکراری‌ها برای هر غرفه مستقل است؛ وجود یک عنوان در چند غرفه، مجوز حذف هیچ‌کدام نیست. برنامه‌ریز مغایرت‌گیری اکنون حتی در صورت ورود اشتباهی ردیف‌های دفتر غرفهٔ دیگر، آن‌ها را از گروه حذف کنار می‌گذارد. نگه‌داشتن محصول گران‌تر یا ارزان‌تر فقط میان تکرارهای داخل همان غرفه انجام می‌شود. توضیح این قاعده در رابط اضافه شد و آزمون‌های برنامه‌ریز مشترک و حذف پس‌زمینه، جداسازی غرفه‌ها را پوشش می‌دهند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۰.۰+</time><br><b>دفتر حساب محصولات فعال، زمان ساخت و جزئیات استخراج</b><br>فهرست دفتر حساب فقط محصولات منتشرشدهٔ ووکامرس به‌جز موارد پنهان از کاتالوگ و محصولات فعال باسلام را می‌گیرد؛ موجودی صفر به‌تنهایی باعث حذف محصول قابل مشاهده نمی‌شود. بررسی تکراری‌های مغایرت‌گیری از همین دفتر استفاده می‌کند و پیش از اعمال حذف، همان دفتر تازه‌سازی می‌شود. نسخه‌های قبلی دفتر برای این سیاست تازه‌سازی می‌شوند. مدت واقعی ساخت هر مقصد و کل عملیات به دقیقه ثبت شده و آخرین ساخت کامل از مراجعه‌های کش جدا نگه‌داری می‌شود؛ شکست دریافت به‌عنوان ساخت کامل گزارش نمی‌شود. مدیر وظایف برای استخراج، نام پروفایل و مرحله، شمارنده‌ها، صفحات گزارش‌شده، استفادهٔ مجدد از جزئیات، ارسال‌ها، زمان سپری‌شده، آخرین محصول گزارش‌شده و علت انتظار در صف را نشان می‌دهد. تاریخچهٔ ناموجود صفر فرض نمی‌شود؛ شمارنده‌های جزئی مبتنی بر گزارش موجود هستند. اعتبارسنجی با آزمون‌های محلی است؛ مشاهدهٔ واقعی فروشگاه در حضور افزونه‌های محدودکننده نیازمند بررسی همان سایت است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۱۹۹.۰+</time><br><b>دفتر حساب مشترک مقصدها و ارسال فقط تفاوت‌ها</b><br>فهرست کامل مقصدها با قیمت و مشخصات در دفتر حساب پایدار و جدا برای هر اتصال ذخیره می‌شود؛ مغایرت‌گیری و ارسال از همین مرجع استفاده می‌کنند. ارسال موفق دفتر را به‌روز می‌کند و ارسال یکسانِ تأییدشده تکرار نمی‌شود. فهرست اولیهٔ بدون تغییر از جزئیات قبلی استفاده می‌کند؛ بررسی دوره‌ای شش‌ساعته برای تغییرات فقط در صفحهٔ جزئیات باقی است و قیمت پایه و تنوع‌ها دوباره تعدیل نمی‌شوند. وضعیت، مشاهدهٔ محصولات و مشخصات، تازه‌سازی دستی و پیش‌نمایش موارد حذف‌شده از مبدأ در داشبورد اضافه شد. دریافت ناقص مقصد جایگزین فهرست سالم قبلی نمی‌شود. حذف پیش‌فرض فقط گزارش است؛ اعمال تابع سیاست بازنشستگی، فهرست کامل مبدأ، دفتر تازه، نگاشت متعلق به همان محصول و سقف بیست تغییر است. فهرست ناقص یا اسکرولی نامطمئن مجوز حذف نمی‌دهد. آزمون‌ها محلی‌اند و استقرار یا تأیید زندهٔ مقصدها انجام نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۸.۰+</time><br><b>مرتب‌سازی مغایرت‌گیری و پاسخ زنده برای بررسی‌های طولانی</b><br>دکمه‌های هم‌پوشان بررسی مقصد، جدول‌های قدیمی و وضعیت عمومی از بخش مغایرت‌گیری حذف شدند؛ یک پیش‌نمایش مشترک، اعمال هماهنگ‌سازی و بخش جداگانهٔ تکراری‌ها باقی مانده‌اند. بازسازی نگاشت در ابزار پیشرفتهٔ بسته قرار دارد. بررسی و پیش‌نمایش هماهنگ‌سازی و تکراری‌ها اکنون پاسخ زنده با پیام آغاز و ضربان ده‌ثانیه‌ای دارند تا زمان خواندن مقصدها اتصال بی‌پاسخ نماند. API قدیمی JSON حفظ شده است. قطع ارتباط یا نبود نتیجهٔ نهایی موفقیت تلقی نمی‌شود؛ پیام خطا احتمال ادامهٔ کار سرور و خطر تکرار اعمال/حذف را توضیح می‌دهد. اجرای هم‌زمان از همین مرورگر مهار می‌شود و نمایش جدول آخر به گزارش تازه متصل است. علت دقیق خطای شبکه روی VPS بدون گزارش همان محیط هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۷.۰+</time><br><b>تنظیمات اجرای وظایف تاشو و در ابتدا بسته</b><br>بخش تنظیمات اجرای وظایف در مدیر وظایف اکنون تاشو است و با هر بار بازکردن مدیر وظایف، ابتدا بسته نمایش داده می‌شود تا فعالیت‌ها زودتر دیده شوند. با کلیک یا صفحه‌کلید روی عنوان باز و بسته می‌شود. ذخیرهٔ خودکار، مقدارهای در انتظار ذخیره و بخش داخلی نگهبان حفظ شده‌اند. تازه‌سازی زندهٔ فهرست، حالت باز یا بسته و ورودی‌های در حال ویرایش را تغییر نمی‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۶.۰+</time><br><b>شفافیت قیمت پایه، ارسال سراسری تعدیل ووکامرس و استخراج اسکرولی</b><br>جدول قیمت مقصدها در پنجرهٔ محصول اکنون با قیمت پایهٔ مبدأ، تعدیل پروفایل و قیمت پس از تعدیل پروفایل شروع می‌شود. روش و مقدار تعدیل همراه نتیجه ذخیره می‌شود تا قیمت قبلی با درصد تازه اشتباه نمایش داده نشود. گزارش ارسال هر محصول، قیمت پایه و واحد آن را مستقل از قیمت مقصد نگه می‌دارد؛ برای گزارش قدیمیِ بدون مبنا مقدار ساختگی نمایش داده نمی‌شود. تغییر درصد ووکامرس، برای همهٔ پروفایل‌های فعال حتی با کلید خاموش ووکامرس، کار ارسال فقط به ووکامرس می‌سازد. قصد ارسال پیش از ذخیره ثبت و ارسال نیمه‌تمام قابل تلاش دوباره است؛ اجرای دوره‌ای آن را ادامه می‌دهد. ارسال قیمت از تنظیمات تازه استفاده می‌کند و محصول موجود با شناسه یا SKU به‌روزرسانی می‌شود. حالت تازهٔ «اسکرول تا انتهای فهرست» با یک نشست مرورگر، اسکرول فهرست داخلی، جمع‌آوری کارت‌های ناپدیدشونده، انتظار درخواست‌های شبکه و پنجرهٔ سکون کار می‌کند. حالت قدیمی بدون صفحه‌بندی با موتور مرورگر نیز از این مسیر استفاده می‌کند؛ تک‌صفحه‌ای عادی دیگر چندبار همان URL را نمی‌خواند. سقف زمان یا خطای شبکه موفقیت ناقص محسوب نمی‌شود و اسکن اسکرولی محصولات دیده‌نشده را ناموجود نمی‌کند. اسکرول به Chromium در Node نیاز دارد؛ Worker خطای روشن می‌دهد. آزمایش با فیکسچر تأخیری و فهرست مجازی انجام شده و کامل بودن سایت خاص هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۵.۰+</time><br><b>مدیر وظایف برای فعالیت‌های برنامه، نه فقط استخراج و ارسال</b><br>عیب‌یابی زنده، تست سرعت، درخواست‌های هوش مصنوعی، ورود فایل، پشتیبان‌گیری و عملیات مدیریتی همراه مراحل فعال این مرورگر نمایش داده می‌شوند. اجرای درخواست‌های سرور و کارهای دوره‌ای پاسخ خودکار، تکمیل AI و پشتیبان شاخه در پایگاه داده ثبت می‌شود؛ وضعیت جریان زنده تا پایان خواندن پاسخ حفظ می‌شود. برچسب سرور و مرورگر، زمان سپری‌شده، حذف ردیف تکراری با شناسهٔ مشترک و نمایش پیشرفت نامشخص اضافه شد. قطع ارتباط به معنی توقف قطعی سرور نیست و وضعیت قدیمی تأییدنشده نمایش داده می‌شود. در VPS، آزمون AI، دسته‌بندی و حذف تکراری‌ها نیز در فهرست قرار می‌گیرند و همهٔ کارهای فعال مستقل از محدودیت تاریخچه خوانده می‌شوند. کنترل جابه‌جایی و حذف فقط برای اجراهای پشتیبانی‌شده باقی می‌ماند؛ هنگام قطع ارتباط، فعالیت‌های محلی پنهان نمی‌شوند. تنظیمات اجرای وظایف و ذخیرهٔ خودکار قبلی حفظ شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۴.۰+</time><br><b>انتقال تنظیمات ظرفیت و صف به مدیر وظایف</b><br>تنظیمات تعداد پروفایل‌های همزمان، مهلت و حد خطای متوالی هوش مصنوعی، جلوگیری از صف تکراری، کار رهاشده، قفل کران، نگه‌داری گزارش و نگهبان صف اکنون در بخش «تنظیمات اجرای وظایف» در بالای مدیر وظایف قرار دارند. در منوی عمومی و بخش قدیمی نگهبان فقط میان‌بر دسترسی باقی مانده است؛ فیلد تکراری با مقدار قدیمی وجود ندارد. ذخیرهٔ خودکار و کلیدهای تنظیمات قبلی حفظ شدند و وضعیت ذخیره داخل همان پنجره نیز نمایش داده می‌شود. فرم تنظیمات از فهرست زندهٔ وظایف جداست تا تازه‌سازی سه‌ثانیه‌ای متن در حال ویرایش، تمرکز یا موقعیت فرم را بازسازی نکند. بازکردن دوبارهٔ پنجره، مقدار در انتظار ذخیره یا درخواست در حال ارسال را بر پاسخ قدیمی ترجیح می‌دهد. با خروج از مدیر وظایف به پنجرهٔ دیگر، نظرسنجی آن متوقف می‌شود. چهار آزمون رفتاری برای جایگاه، مقدارهای در حال ذخیره، پایداری فرم و ذخیرهٔ خودکار اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۳.۰+</time><br><b>تست سرعت سه‌صفحه‌ای زنده و ذخیرهٔ خودکار تنظیمات</b><br>تست سرعت اکنون مانند عیب‌یابی، رویداد واقعی هر موتور و هر صفحه را به‌صورت جریان زنده نشان می‌دهد: صفحهٔ در حال دریافت، تعداد محصولات، زمان، موتور در دسترس‌نبودنی، خطا و ذخیرهٔ نتیجه. پاسخ JSON قبلی همچنان برای ابزارهای دیگر موجود است. نتیجهٔ یک آزمون طولانی با کنترل همزمانی ذخیره می‌شود تا تغییر قیمت، مقصدها و سلکتورهای کاربر را با نسخهٔ قدیمی پروفایل جایگزین نکند. ذخیرهٔ خودکار فیلدهای شروع، تنظیمات پروفایل، سلکتورها و گالری، تنظیمات عمومی و اتصال‌ها اصلاح شد؛ ویرایش غرفه، ارائه‌دهنده و قاعدهٔ پاسخِ موجود هم خودکار ذخیره می‌شود. ایجاد اولیهٔ رکورد جدید همچنان با دکمهٔ ایجاد/ذخیره انجام می‌شود. انتخاب‌ها و کلیدها بلافاصله و متن/عدد پس از مکث کوتاه ۲۵۰ میلی‌ثانیه ثبت می‌شوند. نشانگر واقعی وضعیت ذخیره در نوار بالا اضافه شد؛ خطاها پنهان نمی‌شوند و درخواست ناموفق در حافظهٔ همان صفحه برای تلاش بعدی نگه داشته می‌شود. درخواست‌ها سریالی و با تصویر ثابت همان پروفایل اجرا می‌شوند؛ تغییر پروفایل در حین ذخیره باعث نوشتن روی پروفایل دیگر نمی‌شود و پاسخ قدیمی متن در حال تایپ را بازنویسی نمی‌کند. به‌روزرسانی پروفایل فقط فیلدهای ویرایش‌شده را می‌فرستد. تعدیل قیمت بلافاصله روی نتایج ذخیره‌شده اعمال می‌شود؛ ارسال خودکار مستقل و تابع ظرفیت صف است. اعمال همزمانِ یک قیمت یکسان دیگر تعارض کاذب ایجاد نمی‌کند و در PostgreSQL ترتیب کلیدهای JSON ملاک تعارض نیست. آزمون جریان واقعی، ذخیرهٔ ترتیبی و HTTP تغییر قیمت بدون استخراج اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۲.۰+</time><br><b>ظرفیت همزمان پروفایل‌ها، برنامهٔ مراحل وظایف، ارسال خودکار قیمت و عبور از خطاهای هوش مصنوعی</b><br>تعداد پروفایل‌های همزمان از تنظیمات عمومی بین ۱ تا ۸ قابل تغییر است؛ پیش‌فرض ۲ است و ظرفیت تا پایان استخراج، توضیح‌سازی و ارسال نگه داشته می‌شود. کنترل پذیرش در خود پایگاه‌داده انجام می‌شود تا چند اجراکننده یا پیام صف نتوانند سقف را دور بزنند؛ کار بعدی همان پروفایل هم منتظر پایان کار قبلی می‌ماند. اجراکنندهٔ Node اکنون چند مسیر موازی واقعی دارد. پیام اصلی صف Cloudflare هنگام ادامهٔ کار بااولویت‌تر گم نمی‌شود؛ پیام انتظار ظرفیت از انتظار ادامهٔ نقطهٔ بازیابی جدا توضیح داده می‌شود. کارت‌های وظایف، برنامهٔ مراحل و مرحلهٔ فعلی را نشان می‌دهند؛ ارسال ووکامرس و باسلام نیز مرحله‌های جدا دارند. ذخیرهٔ تغییر درصد، ضریب، مبلغ یا گردکردن یک کار ارسال به همهٔ مقصدهای تنظیم‌شده ایجاد می‌کند، حتی با کلید خاموش مقصد در پروفایل. قیمت‌ها ابتدا روی نتایج ذخیره‌شده اعمال می‌شوند؛ تغییرهای تکراری پیش از شروع ارسال ادغام و هنگام اجرای کار قبلی، به‌صورت کار بعدی صف‌بندی می‌شوند. تب ارسال گزارش کارتی و صفحه‌بندی‌شدهٔ هر محصول و نتیجهٔ هر مقصد/غرفه، خطا و علت ارسال‌نشدن را نشان می‌دهد. مهلت زیرمرحله‌های هوش مصنوعی و تعداد خطاهای متوالی قابل تنظیم است؛ پیش‌فرض ۳۰ ثانیه و ۳ محصول است. موفقیت شمارنده را صفر می‌کند؛ پس از رسیدن به حد، ادامهٔ همان زیرمرحله رد می‌شود و ذخیره/ارسال ادامه می‌یابد. شمارنده از پیام‌های ادامهٔ صف عبور می‌کند و پاسخ دیررس محصول اصلی را تغییر نمی‌دهد. آزمون واقعی SQLite برای ظرفیت و HTTP برای ارسال خودکار قیمت و آزمون‌های خرابی هوش مصنوعی اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۱.۰+</time><br><b>رفع جهش پنجرهٔ تأییدنشده‌ها، دفترچهٔ موقت دسته‌ها و تعدیل قیمت روی نتایج ذخیره‌شده</b><br>به‌روزرسانی زندهٔ همان اجرای دسته‌بندی موقعیت اسکرول عمودی/افقی پنجره و جدول را حفظ می‌کند و پنجرهٔ دیگری را به‌زور جایگزین نمی‌کند. برای هر غرفه/محصول، دستهٔ فعلی و پیشنهادهای واقعاً امتحان‌شده پیش از درخواست تغییر ثبت می‌شوند؛ فهرست دسته‌های ارسالی به مدل از گزینه‌های تکراری پاک است، حتی اگر درخواست قبلی موفق یا نتیجهٔ آن مبهم بوده باشد. دفترچه‌های محصولات خارج‌شده تنها پس از اسکن کامل و موفق همهٔ صفحات و غرفه‌ها، با یک حذف گروهی پاک می‌شوند؛ خطا و فهرست ناقص باعث پاک‌سازی نمی‌شود. محاسبهٔ قیمت، گردکردن و پسوند از موتور استخراج به لایهٔ ذخیرهٔ نتایج منتقل شد. ذخیرهٔ تنظیمات پروفایل یا دکمهٔ اعمال در نتایج، محصولات موجود را بدون استخراج دوباره تغییر می‌دهد؛ مبنای قیمت/عنوان حفظ می‌شود تا اعمال تکراری سود یا پسوند را انباشته نکند. برای محصولات قدیمیِ بدون مبنا، مبلغ فعلی ذخیره‌شده مبنای اولین اعمال است. قیمت تنوع‌ها هم تعدیل می‌شود، پسوند نمایشیِ غیرواقعی حذف شد و ارسال از رکورد ذخیره‌شده انجام می‌شود. حداقل قیمت فقط ارسال را محدود می‌کند و نتیجه را حذف نمی‌کند. آزمون‌های دفترچه، اسکرول، صفحه‌بندی امن تغییرات و HTTP واقعیِ تغییر قیمت/عنوان و ارسال اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۰.۰+</time><br><b>رفع گیرکردن کار در صف و بازیابی شروع استخراج/همگام‌سازی</b><br>پردازشگر کلیک و حلقهٔ خودکار در Node/VPS اکنون یک اجراکنندهٔ مشترک دارند: خطای دریافت کار با وقفه دوباره تلاش می‌شود، درخواست شروع هنگام اجرای قبلی گم نمی‌شود و صف پس از دستهٔ ۲۵تایی رها نمی‌ماند. دریافت کار در SQLite با یک دستور اتمیک انجام می‌شود تا اجرای هم‌زمان خطای تراکنش تو‌در‌تو ندهد؛ کوئری خواندن محصولات برای همگام‌سازی نیز با SQLite سازگار شد. دیدن صف در Node کارهای منتظرِ باقی‌مانده از راه‌اندازی قبلی را بیدار می‌کند. کلیک همگام‌سازی نیز کار استخراج منتظر همان پروفایل را بدون ساختن کار تکراری به پردازشگر می‌فرستد. در صفحهٔ کارها دکمهٔ «شروع دوبارهٔ کار در صف» برای هر دو محیط اضافه شد؛ در Cloudflare پیام دوباره به Queue یا اجرای درون‌خطی می‌رود و اتصال consumer/Cron همچنان لازم است. خطای شروع پردازشگر و راهنمای صف طولانی دیگر بی‌صدا نمی‌ماند. آزمون‌های هم‌زمانی SQLite، بازیابی خطا و درخواست واقعی HTTP هر دو دکمه با منبع آفلاین اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۹.۰+</time><br><b>اعمال قطعی تنظیم قیمت پروفایل و دسته‌بندی باسلام پیش از توضیح‌ساز</b><br>تنظیم مبلغ/درصد/ضریب و گردکردن قیمت اکنون پس از استخراج جزئیات و تلاش نجات سلکتورها اعمال می‌شود؛ حداقل قیمت روی همین مبلغ نهایی بررسی و متن قیمت با حفظ واحد ریال/تومان به‌روز می‌شود. Node نیز قیمت صفحهٔ جزئیات را می‌خواند. نقطه‌های بازیابی Worker دادهٔ خام نگه می‌دارند تا ادامه یا تکرار کار باعث افزایش دوبارهٔ قیمت و پسوند عنوان نشود؛ کالاهای بدون قیمت با افزایش مبلغ قیمت‌دار نمی‌شوند. مرحلهٔ مستقل دسته‌بندی باسلام پیش از تولید توضیحات اجرا می‌شود، حتی اگر توضیح‌ساز خاموش باشد: دستهٔ موجود یا تنظیم صریح پروفایل حفظ می‌شود، سپس یادگیری و مدل با شناسه‌های فهرست معتبر بررسی می‌شوند. شناسه/نام/مسیر دسته به توضیح‌ساز می‌رسد و خرابی توضیح‌ساز دستهٔ پیدا‌شده را از بین نمی‌برد. مسیر صف و API مستقیم هر دو اصلاح و آزمون‌های آفلاین اضافه شدند. برای اصلاح قیمت محصولات قبلی، پس از به‌روزرسانی استخراج را دوباره اجرا کنید؛ همگام‌سازی بدون استخراج قیمت ذخیره‌شده را دوباره تغییر نمی‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۸.۰+</time><br><b>آماده‌سازی HTTPS با Caddy، اعلان پس‌زمینهٔ VPS و انتخاب بصری از DOM رندرشده</b><br>ابزارهای تولید امن تنظیمات Caddy، محیط خصوصی HTTPS با حفظ کلید خزانه و کلیدهای Web Push اضافه شدند؛ فایل‌های موجود بازنویسی و DNS یا سرویس زنده خودکار تغییر داده نمی‌شوند. در بخش اعلان‌ها، فعال‌سازی/تست/غیرفعال‌سازی همین دستگاه و بررسی HTTPS آمده است. در Node پایان وظایف و اعلان‌های نسخهٔ دیپلویر از سرور برای اشتراک‌های رمزگذاری‌شده ارسال می‌شوند؛ سرویس‌ورکر بدون ذخیرهٔ صفحات یا توکن‌ها اعلان را نشان می‌دهد. انتخاب بصری، موتور انتخابی و اتصال غیرمستقیم پروفایل را می‌خواند و برای موتورهای مرورگری یک DOM رندرشده می‌سازد؛ این نما مرورگر تعاملی زنده نیست. فریم انتخاب‌گر با sandbox، اسکریپت مجازِ هش‌شده و پیام‌های وابسته به بلیت از داشبورد جدا شده است. مستند نصب HTTPS-PUSH-VISUAL.md و آزمون‌های امنیتی/رگرسیون اضافه شدند؛ فعال‌سازی واقعی دامنه، گواهی و مجوز اعلان روی VPS/دستگاه لازم است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۷.۰+</time><br><b>عیب‌یابی استخراج با نمایش بصری و زندهٔ مراحل روی VPS و Cloudflare</b><br>پنجرهٔ عیب‌یابی دیگر تا پایان عملیات فقط پیام انتظار نشان نمی‌دهد: شروع و نتیجهٔ اتصال به مبدأ، اجرای موتور فهرست، بررسی سلکتورها، کشف کارت‌ها، جزئیات نمونه، پیشنهاد سلکتورها و ذخیرهٔ آن‌ها از سرور به‌صورت زنده ارسال می‌شوند. کارت‌های مرحله با حالت انتظار، اجرا، موفق، ناموفق و بی‌نیاز، زمان سپری‌شده، شمارنده‌ها و تاریخچهٔ رویدادها به‌روز می‌شوند؛ درصد پیشرفت ساختگی نمایش داده نمی‌شود. بستن و بازکردن پنجره همان اجرای جاری را نشان می‌دهد و درخواست تکراری نمی‌سازد. قطع ارتباط یا خطای ذخیره، گزارش ناقص را صریح نشان می‌دهد؛ گزارش نهایی و کپی آن حفظ شده و API قدیمی JSON هم همچنان کار می‌کند. آزمون‌های مستقل هر دو موتور، جریان زنده و رفتار واقعی رابط اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۶.۰+</time><br><b>سازگاری پراکسی query با هدرهای کنترلی و اصلاح قالب آدرس رمزگذاری‌شده</b><br>قالب ?url={url} حتی اگر مرورگر آکولادهای آن را به %7Burl%7D تبدیل کند درست خوانده می‌شود؛ پارامتر url خالی یا قدیمی هم با مقصد جاری جایگزین می‌شود. در هر دو محیط Node و Worker، اگر پراکسی query برای دریافت صفحه ۴۰۳ بدهد فقط یک بار دیگر همان آدرس با X-Proxy-UA و X-Proxy-Referer و بدون هدرهای اضافی تعیین مقصد آزمایش می‌شود؛ مقصد مستقیم جایگزین نمی‌شود و درخواست‌های POST تکرار نمی‌شوند. شکست دوباره، کد هر دو تلاش را نشان می‌دهد. آزمون‌های آفلاین مسیر بازیابی و توقف را پوشش می‌دهند؛ رفع خطای زندهٔ VPS بعد از نصب باید بررسی شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۵.۰+</time><br><b>رفع نادیده‌گرفتن تنظیمات اتصال مبدأ در VPS و یکسان‌سازی قرارداد پراکسی با Worker</b><br>تنظیمات بخش اتصال به سایت مبدأ اکنون در دریافت صفحه، تست دسترسی و عیب‌یابی خوانده می‌شوند؛ تنظیمات AI فقط برای نصب‌های قدیمیِ فاقد تنظیم مستقل مبدأ نقش جایگزین دارند. مسیر Worker در Node مثل نسخهٔ Cloudflare از /https://site استفاده می‌کند؛ پراکسی‌های query با الگوی ?url={url} قابل تنظیم‌اند. دامنهٔ workers.dev در فیلد پراکسی به‌عنوان Worker معکوس شناخته و HTTP آن به HTTPS تبدیل می‌شود. تست و عیب‌یابی ابتدا تنظیمات فرم را ذخیره می‌کنند؛ تست دسترسی تیک اتصال غیرمستقیم پروفایل را رعایت می‌کند و مسیر اتصال در گزارش دیده می‌شود. Worker بدون آدرس دیگر بی‌صدا به اتصال مستقیم برنمی‌گردد. این اصلاح با فیکسچر آفلاین و آزمون رگرسیون بررسی شده؛ تأیید دسترسی زندهٔ ایمالز به اجرای دوباره روی VPS نیاز دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۴.۰+</time><br><b>دیپلویر حالا به سیستم‌عامل هم خبر می‌دهد؛ و همهٔ کارهای دیپلویر به یک بخش مستقل در منوی همبرگری منتقل شد</b><br>این هم روی ۱.۱۸۳.۰ شما نشست (شناسه‌های دور‌برنی که از ۲^۵۳ بزرگ‌ترند دیگر نمی‌شکنند: عدد دقیق از همهٔ مسیرها خوانده و نوشته می‌شود). چون شمارهٔ شما با انتشار یکی‌ساعتهٔ من یکی شد، انتشار من به ۱.۱۸۴.۰+ رفت — مقایسه‌گر نسخهٔ دیپلویر هستهٔ عددی را می‌خواند و + را نمی‌بیند، پس دو انتشار هم‌عدد «تازه‌ترین برنچ» و مُهر نسخه را مبهم می‌کردند؛ کارت شما در فهرست تغییرات اضافه شد و کارش دست‌نخورده مانده است. این برنچ روی ۱.۱۸۲.۰ شما (بازنویسی پنل بکاپ/نسخه با سه زبانه و نصب SDK رسمی باسلام در Node) نشست؛ کارت کتابخانه‌ها، دستورهای نصب و productCodeSuffix شما نگه داشته شد و فقط همان نگهبان تک‌ردیفیِ نتایج که شما با رفع علت کرش درست کرده بودید روی کار شما اضافه شد (خطای یک ردیف کل فهرست را خالی نکند). یک- وقتی اسکن برنچ‌ها نسخه‌ای تازه‌تر از آنچه روی این دستگاه اجرا می‌شود پیدا کند، خبر فقط در لاگ نمی‌ماند: یک اعلان واقعی سیستم‌عامل ارسال می‌شود — روی Termux با termux-notification (کانال و اولویت بالا، قابل تپ)، روی لینوکس با notify-send، روی مک با osascript، روی ویندوز با toast پاورشل، و اگر LOCAL_DEPLOYER_NOTIFY_CMD را ست کرده باشید با همان برنامه. هر رویداد فقط یک‌بار اعلام می‌شود (کلید kind:name:version:sha12 در دفترِ data/.deployer-notices.json که با ری‌استارت هم حفظ می‌شود و با LOCAL_DEPLOYER_NOTIFY_STATE جابه‌جا می‌شود) تا اسکن هر دقیقه به اسپم تبدیل نشود؛ اعلان هیچ‌وقت اسکن را بلوکه یا شکسته نمی‌کند (خطا در همان فهرست آخرین اعلان‌ها نوشته می‌شود). LOCAL_DEPLOYER_NOTIFY=0/no/off آن را خاموش می‌کند و LOCAL_DEPLOYER_NOTIFY_CMD می‌تواند آرگومان هم بگیرد («sh hook.sh») بدون اینکه هیچ‌وقت به shell سپرده شود. اگر دستگاه برنامهٔ اعلان نداشت، خودِ صفحهٔ دیپلویر از طریق Notifications مرورگر اعلام می‌کند و دکمهٔ زنگِ هدر وضعیت مجوز را توضیح می‌دهد. دو- در پنل، بخش «🚀 دیپلویر محلی» کنار «🔄 نسخهٔ کد» اضافه شد و همان کارهای فایل دیپلویر را انجام می‌دهد: خواندن وضعیت واقعی، بررسی نسخهٔ جدید (با همان اعلان سیستمی)، نصب تازه‌ترین برنچ، build اسکریپر، توقفش، npm install، دیتابیس، به‌روزرسانی از git، تست اعلان، و باز کردن خودِ صفحهٔ دیپلویر. درخواست‌ها از همین سرور به 127.0.0.1 فرستاده می‌شود تا مرورگر درگیر توکن و CORS نشود؛ فهرست فرمان‌ها بسته است (نه یک پروکسی عمومی، پس نشانی از بیرون پذیرفته نمی‌شود)، نام برنچ دوباره سخت‌تر اعتبارسنجی می‌شود تا ../../../etc و گزینه‌های شروع‌شده با - به git نرسند، از /api/job فقط پنج فرمان مجاز است، توکن هیچ‌وقت در پاسخ یا صفحه نیست، و اگر دیپلویر خاموش باشد پاسخ ۵۰۳ با دلیل و دستور اجرا می‌آید نه خطای بی‌صدا. روی Worker و Render همین مسیر عمداً ۵۰۱ «این رانتایم دیپلویر محلی ندارد» می‌دهد. سه- جدول برنچ‌ها مثل قبل داخل همان پنل نسخهٔ کد مانده است (تستش آن را آنجا pin کرده) و بخش جدید به همان ارجاع می‌دهد. نگهبان‌ها: worker-tests/deployer-notify.test.mjs (۱۱ تست، با دیپلویر واقعیِ اجراشده و اعلان‌دهندهٔ تقلبی) و worker-tests/deployer-local-panel.test.mjs (۸ تست: فهرست مجاز، اعتبارسنجی ورودی، نشت‌نکردن توکن، هم‌خوانی دکمه‌ها با route‌ها). هر انتشار من علامت + روی شماره دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۳.۰</time><br><b>رفع خطای شناسه‌های بزرگ باسلام (سقف ۲ به توان ۵۳)</b><br>اگر شناسه\u200cٔ محصول باسلام از ۲ به توان ۵۳ بزرگ\u200cتر بود (مثل 3838404244461599744)، خواندن دیتابیس با خطای Value is too large کل عملیات را ناتمام می\u200cگذاشت. حالا همه\u200cٔ محیط\u200cها شناسه\u200cهای بزرگ را با رقم\u200cهای دقیق برمی\u200cگردانند، به\u200cروزرسانی محصول با همان شناسه\u200cٔ دقیق انجام می\u200cشود و خروجی JSON پشتیبان هم سالم می\u200cماند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۲.۰</time><br><b>بازنویسی بخش بکاپ و نسخه + نصب SDK باسلام در Node</b><br>بخش بکاپ/بازیابی/نسخه/انتشار با ۳ زبانه\u200cٔ شماره\u200cدار، کارت\u200cهای مرحله\u200cبه\u200cمرحله و راهنماهای جمع\u200cشونده بازنویسی شد تا در موبایل هم خوانا باشد؛ هیچ دکمه یا تنظیمی حذف نشد. SDK رسمی باسلام حالا با «npm run basalam:install» در همه\u200cٔ محیط\u200cهای Node نصب می\u200cشود (رندر، VPS، ترماکس، ویندوز، دسکتاپ) و کارت کتابخانه\u200cها وضعیت Python و SDK را زنده نشان می\u200cدهد؛ ورکر نبودِ آن\u200cها را صادقانه گزارش می\u200cکند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۱.۰</time><br><b>نمایش نتایج استخراج و پایداری موتورهای مرورگر</b><br>دکمهٔ «نمایش نتایج» گاهی هیچ محصولی نشان نمی\u200cداد: اگر حتی یک محصول بدون پسوند کد در عنوان بود، یک خطا کل فهرست را خالی می\u200cکرد. حالا همهٔ محصولات نمایش داده می\u200cشوند و هر محصول ساده پسوند کد خود را می\u200cگیرد. موتورهای مرورگر هم نوبتی اجرا می\u200cشوند (هر بار فقط یک کرومیوم) تا عیب\u200cیابی و تست هم\u200cزمان روی VPS کم\u200cحافظه باعث کرش نشوند؛ کش خالی مرورگر دیگر «نصب\u200cشده» گزارش نمی\u200cشود و موتور Crawlee هم دیگر پوشهٔ اضافه روی دیسک باقی نمی\u200cگذارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۰.۰</time><br><b>کارکردن اتصال غیرمستقیم مبدأ در Node و گزارش مسیر دریافت</b><br>تیک «اتصال غیرمستقیم به مبدأ» در اجراگرهای Node ذخیره می\u200cشد ولی هیچ درخواستی آن را نمی\u200cخواند؛ حالا عیب\u200cیابی استخراج، تست سرعت ۳ صفحه، استخراج و جزئیات\u200cخوانی مثل ورکر از همان درگاه Worker عبور می\u200cکنند. اگر فروشگاهی IP دستگاه را مستقیم ببندد (خطای ۴۰۳ در Node در حالی که ورکر سالم است)، با روشن\u200cکردن این تیک و واردکردن آدرس Worker در «هوش مصنوعی ← روش اتصال»، دریافت از شبکهٔ کلادفلر انجام می\u200cشود. عیب\u200cیابی حالا مسیر واقعی هر دریافت (مستقیم، Worker یا پروکسی) را هم گزارش می\u200cدهد تا علت بن\u200cبست معلوم باشد. چهار فیلد پروفایل که در Node ذخیره نمی\u200cشدند (اتصال غیرمستقیم، بدون استخراج، دسته\u200cهای جایگزین باسلام و گالری) حالا ماندگارند و جدول تک\u200cمقصد Node هم که در نسخهٔ قبل از کار افتاده بود تعمیر شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۹.۰</time><br><b>سوییچ توضیح‌ساز هر پروفایل، دستهٔ باسلام در غنی‌ساز و بازبینی مغایرت‌گیری</b><br>هر پروفایل حالا تیک «توضیح‌ساز هوش مصنوعی» خودش را دارد (روشن به‌صورت پیش‌فرض)؛ پروفایل‌های خاموش هم از چرخهٔ پس‌زمینه و هم از استخراج رد می‌شوند. غنی‌ساز علاوه بر توضیحات، دستهٔ عددی باسلام هر محصول را هم می‌سازد: اول از آموخته‌ها، وگرنه با یک پیشنهاد مدل روی فهرست زندهٔ باسلام — و ارسال باسلام همین دستهٔ محصول را بر پیش‌فرض پروفایل ترجیح می‌دهد. مغایرت‌گیری هم بازبینی شد: جدول تک‌مقصد در هر دو محیط یک منطق دارد، قیمت‌ها در واحد یکسان مقایسه می‌شوند، رفع مغایرت قیمت واقعاً به باسلام می‌رسد و مقصدهای پاسخ‌نداده دیگر «هماهنگ» نشان داده نمی‌شوند. رفتار در ورکر، رندر، ترموکس، VPS و نصب محلی یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۸.۰</time><br><b>رفع تایمر ۲۱۰ دقیقه‌ای استخراج، توضیح\u200cساز پس\u200cزمینه همیشگی و سوییچ تست دسته\u200cبندی</b><br>تایمر استخراج در Node دیگر از ۲۱۰ دقیقه شروع نمی\u200cشود: زمان‌های SQLite اکنون UTC واقعی\u200cاند و آمار سرعت درست محاسبه می\u200cشود. توضیح\u200cساز هوش مصنوعی حالا همیشه در پس\u200cزمینه روی همه پروفایل\u200cها می\u200cچرخد تا محصولی بدون جزئیات نماند؛ آخرین اجرا در همان بخش نمایش داده می\u200cشود. در پنل «آزمایش یک مدل» و «چت با مدل» یک سوییچ چت/دسته\u200cبندی اضافه شد تا هر مدل را مستقیم روی پیشنهاد دسته باسلام هم بیازمایید. رفتار در ورکر، رندر، ترموکس، VPS و نصب محلی یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۷.۰</time><br><b>کاندید خودکار مدل\u200cهای سبز، دراپ\u200cداون\u200cهای جست\u200cوجوپذیر با نشان سبز و نمایش خودکار نتایج</b><br>بعد از هر تست مدل\u200cها، مدل\u200cهایی که چراغ سبز گرفته\u200cاند به\u200cصورت خودکار کاندید می\u200cشوند (با تیک قابل خاموش\u200cکردن در همان پنل تست). همهٔ دراپ\u200cداون\u200cهای انتخاب مدل جست\u200cوجوپذیر شدند و مدل\u200cهای سبز آخرین تست با زمینهٔ سبز مشخص\u200cاند. بعد از پایان استخراج هم بخش نتایج به\u200cصورت خودکار به\u200cروزرسانی می\u200cشود و دیگر لازم نیست دستی دکمهٔ نمایش نتایج زده شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۶.۰</time><br><b>پوش بخش\u200cبخش بکاپ به برنچ با فایل دیتابیس کنار بخش\u200cها</b><br>هر بکاپ دستی یا زمان\u200cبندی\u200cشده حالا در پوشهٔ خودش با یک JSON خوانا برای هر بخش به\u200cعلاوهٔ manifest.json ذخیره می\u200cشود و در محیط\u200cهای SQLite فایل database.sqlite هم کنار بخش\u200cها می\u200cنشیند تا دیباگ و تست مستقیم روی دیتابیس ممکن شود؛ بکاپ\u200cهای تک\u200cفایل قدیمی هنوز بازیابی می\u200cشوند. بخش نسخه هم خلوت شد: دکمه\u200cهای تکراری حذف و تنظیمات پوش دوره\u200cای داخل یک تاشو جمع شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۵.۰</time><br><b>رفع دوره‌ای خودکار دسته‌بندی باسلام و ترمیم بخش‌های هوش مصنوعی ترموکس/لینوکس</b><br>زیر همان پنجرهٔ شروع دسته‌بندی جمعی می‌شود اجرای خودکار دوره‌ای را فعال کرد (پیش‌فرض هر ۶ ساعت، با انتخاب یکی از سه حالت رأی) و مدل‌های اجتماع را دستی اضافه و حذف کرد؛ نتیجهٔ آخرین اجرا هم همان‌جا نمایش داده می‌شود و در ورکر، رندر، ترموکس، VPS و نصب محلی یکسان کار می‌کند. در اجراگرهای Node، فهرست مدل‌های گفتگو دیگر خالی نیست، اعتبارسنجی گفتگو و کلیدها مثل ورکر شد و تلاش مجدد تکی تست مدل‌ها هم پیاده‌سازی شد؛ بررسی‌های سازگاری چت و استدلال هم از یک منبع مشترک خوانده می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۴.۰</time><br><b>دکمهٔ نصب همیشه اول نصب واقعی را امتحان می‌کند</b><br>دکمهٔ «اجرای این نسخه» دیگر بر اساس آدرس مرورگر حدس نمی‌زند: در همهٔ محیط‌ها اول نصب واقعی از سرور خواسته می‌شود و فقط اگر سرور دیپلویری نداشته باشد، دستور نصب دستی کپی می‌شود — با راهنمای رسیدن به نصب تک‌کلیکی. این مشکل باز کردن داشبورد با IP و دامنه (به‌جای localhost) را هم حل می‌کند.</div></details><details class="change-older"><summary>🗂 نمایش همهٔ تغییرات قدیمی‌تر (187 مورد)</summary><div class="change-older-body"><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۳.۰</time><br><b>پوش خودکار دوره‌ای به برنچ با پیشرفت زنده</b><br>پوش دستی حالا مرحله‌های ارسال به گیت‌هاب (خواندن نسخهٔ فعلی، بعد ارسال با شمارش بایت) را زنده نشان می‌دهد؛ زیر همان دکمه می‌شود پوش خودکار دوره‌ای را فعال کرد تا سرور در فاصله‌های منظم بکاپ کامل را با نام ثابت scheduled-backup.json روی برنچ دلخواه نگه دارد و نتیجهٔ آخرین اجرا را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۲.۰</time><br><b>نصب تک‌کلیکی نسخه از جدول برنچ‌ها</b><br>هر سطر جدول برنچ‌ها دکمهٔ «اجرای این نسخه» گرفت که همان نسخه را روی اسکریپر محلی نصب و اجرا می‌کند؛ بیرون از دستگاه، همان دکمه دستور نصب دستی همان برنچ را کپی می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۱.۰</time><br><b>پوش بکاپ به برنچ فعال شد</b><br>دکمهٔ پوش بکاپ به برنچ با همان توکن ذخیره‌شده (نیازمند دسترسی نوشتن contents) کار می‌کند: بکاپ کامل با نام خودکار روی برنچ می‌نشیند و نتیجه با sha گزارش می‌شود؛ بدون توکن، خطا صادقانه گفته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۰.۰</time><br><b>ذخیرهٔ توکن گیت‌هاب در پیشخوان و پنل تب‌بندی‌شده</b><br>توکن خواندن گیت‌هاب را می‌شود مستقیم در تب برنچ ذخیره کرد (محیط سرور اولویت دارد) و وضعیت فعال با چهار رقم آخر نمایش داده می‌شود؛ پنل بکاپ هم سه زیرتب ماندگار گرفت.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۹.۰</time><br><b>تشخیص صادانهٔ خطاهای گیت‌هاب و پشتیبانی از توکن</b><br>اسکن برنچ‌ها دیگر هر خطای 403 را «محدودیت نرخ» نمی‌نامد: علت واقعی از پاسخ گیت‌هاب خوانده و نمایش داده می‌شود و محدودیت واقعی نرخ هم پنجرهٔ بازنشانی سهمیه را نشان می‌دهد. همهٔ درخواست‌ها user-agent استاندارد دارند و با ست‌کردن GH_BACKUP_TOKEN (حتی توکن بدون دسترسی) سهمیهٔ خواندن به ۵۰۰۰ در ساعت می‌رسد؛ بدون توکن هم مثل قبل کار می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۸.۰</time><br><b>پنل یکپارچهٔ بکاپ با دراپ‌داون برنچ و بازیابی از برنچ</b><br>بکاپ، بازیابی، نسخه و انتشار در یک پنل واحد ادغام شدند و تکست‌باکس‌های ریپو و برنچ به دراپ‌داون خودکار تبدیل شدند؛ برنچِ دارای آخرین نسخهٔ کد به‌صورت پیش‌فرض انتخاب می‌شود. بازیابی از فایل‌های بکاپ روی هر برنچ (با همان صفحهٔ انتخاب بخش‌ها) بدون نیاز به توکن کار می‌کند و دکمهٔ پوش تا زمان ست‌شدن GH_BACKUP_TOKEN غیرفعال است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۷.۰</time><br><b>بازیابی خودکار بوت‌استرپ در رندر</b><br>با هر دیپلوی رندر، اگر دیتابیس کاملاً تازه باشد همهٔ تنظیمات (پروفایل‌ها، محصولات، اتصال‌ها، مدل‌های هوش مصنوعی) به‌صورت خودکار از فایل بوت‌استرپ برمی‌گردند؛ در رندر به‌صورت پیش‌فرض فعال است و دیتابیس پیکربندی‌شده هرگز بازنویسی نمی‌شود. دانلود یک‌کلیکهٔ فایل با راهنمای Secret File، نمایش وضعیت زنده در پنل بکاپ، و رفع دو نقص بازیابی در Node (محصولات پروفایل‌ها گم می‌شد و برون‌ریزی ناقص اتصال‌ها را پاک می‌کرد).</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۶.۰</time><br><b>اجرای مدل دستی بدون نیاز به تست سبز</b><br>حالت‌های «مدل مستر فقط» و «مستر با پشتیبانی کاندیدها» دیگر به نتیجهٔ آخرین تست مدل‌ها کاری ندارند و دقیقاً همان مدل‌هایی را به کار می‌گیرند که دستی انتخاب کرده‌اید؛ اگر مدلی سر اجرا خطا بدهد، همان محصول ناموفق گزارش می‌شود.<br>فقط حالت خودکار «اجتماع چندمدلی» همچنان به مدل‌های موفق آخرین تست محدود است. اگر مدل مستر از فهرست مدل‌ها حذف شده باشد، شروع با راهنمای انتخاب دوبارهٔ مستر متوقف می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۵.۰</time><br><b>بخش غنی‌تر بکاپ و بازیابی: بازرس فایل و بکاپ کامل تک‌کلیکی</b><br>پیش از درون‌ریزی، «بررسی فایل بکاپ» نشان می‌دهد فایل چه دارد: قالب، تاریخ و میزبان ساخت، شمارش پروفایل‌ها، محصولات، اتصال‌ها، ارائه‌دهنده‌ها و آموخته‌ها — با هشدار روشن برای فایل‌های ناشناخته یا خراب؛ همین خلاصه بالای صفحهٔ انتخاب بخش بازیابی هم می‌آید.<br>دکمهٔ «بکاپ کامل» کل بسته را بی‌درنگ دانلود و گزارش می‌کند، هر برون‌ریزی به خاطر سپرده می‌شود و هر دو پنل بکاپ آخرین بکاپ را نشان می‌دهند. کنترل‌های زمان‌بندی بکاپ که در نسخهٔ TypeScript هیچ‌وقت وصل نبودند با همین اقدام‌های واقعی جایگزین شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۴.۰</time><br><b>جست‌وجو در انتخاب مدل مستر</b><br>انتخاب مدل مستر در بخش کاندیدها حالا یک جعبهٔ جست‌وجو با فهرست فیلترشونده است: با تایپ چند حرف، مدل میان ده‌ها ارائه‌دهنده پیدا می‌شود؛ Enter اولین گزینه را برمی‌گزیند و Escape انصراف می‌دهد.<br>اتصال فرم و ذخیره‌سازی عیناً مثل قبل است و همین رفتار در ورکر و همهٔ اجراگرهای Node دیده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۳.۰</time><br><b>سه حالت رأی برای دسته‌بندی جمعی باسلام</b><br>دسته‌بندی همهٔ تأییدنشده‌ها حالا با انتخاب حالت رأی شروع می‌شود: فقط مدل مستر (سریع‌ترین)، مستر با پشتیبانی کاندیدها، یا اجتماع همهٔ مدل‌های موفق (دقیق‌ترین).<br>حالت روی اجرا ذخیره و در پنجرهٔ پیشرفت نمایش داده می‌شود؛ تا وقتی مستر پین نشده باشد دو حالت اول غیرفعال‌اند و رفتار در ورکر و اجراگر Node یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۲.۰</time><br><b>انتقال تزریقگر سلکتور به بخش سلکتورها</b><br>کارت تزریقگر سلکتور (کپی اسکریپت و پیش‌نمایش) از منوی همبرگر به زیربخش «۲. سلکتورها» منتقل شد تا کنار فیلدهایی باشد که خروجی‌اش را می‌گیرند؛ محتوا و دکمه‌ها عیناً همان‌اند و در همه محیط‌ها یکسان سرو می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۱.۰</time><br><b>رفع خطای اسکن برنچ‌ها با انتقال آن به سرور</b><br>مرورگر اجازهٔ تماس مستقیم با GitHub را نداشت (connect-src) و اسکن خطا می‌داد؛ حالا سرور هر دو محیط با کش پنج‌دقیقه‌ای برنچ‌ها را می‌خواند و نسخهٔ هر برنچ را با نسخهٔ در حال اجرا مقایسه می‌کند. اگر GitHub در دسترس نباشد، پیام خطا مرحله و علت را می‌گوید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۰.۰</time><br><b>جدول برنچ‌ها و نصب نسخهٔ هر برنچ در بخش دیپلویر</b><br>بخش دیپلویر حالا با یک دکمه همهٔ برنچ‌ها را از GitHub می‌خواند و نسخهٔ هر برنچ را با نسخهٔ در حال اجرا مقایسه می‌کند؛ روی دستگاه محلی دکمهٔ نصب، تب برنچ‌های دیپلویر را باز می‌کند و روی Cloudflare و Render نام برنچ برای چسباندن در فیلد production کپی می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۵۹.۰</time><br><b>مرتب‌سازی گزارش تغییرات و افزودن بخش دیپلویر به نسخهٔ کد</b><br>تگ اضافهٔ قدیمی که ۱۰۹ مورد را بیرون از تاشو نشان می‌داد حذف و ساختار گزارش تغییرات بازسازی شد؛ همهٔ موارد حالا داخل تاشوی خودشان هستند. بخش قدیمی سازگاری PHP هم با امکانات دیپلویر (اجرای محلی، کپی دستور، نسخهٔ مستقر و راهنمای استقرار) جایگزین شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۵۸.۰</time><br><b>اصلاح راهنمای رفع جاماندگی Cloudflare: بعد از عوض کردن شاخه باید push تازه زد</b><br>دکمهٔ Retry deployment فقط همان کامیت قبلی را دوباره می‌سازد؛ برای گرفتن شاخهٔ production تازه حتماً یک کامیت جدید لازم است. راهنما حالا همین را می‌گوید و روش چک کردن هش کامیت مستقر را هم دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۵۷.۰</time><br><b>رفع جاماندن نسخهٔ Cloudflare: شاخهٔ production درست شد</b><br>مستند استقرار به شاخهٔ قدیمی اشاره داشت و ورکر روی ۱.۱۲۷ مانده بود؛ شاخهٔ production در مستندات به شاخهٔ جاری برگشت و روش جابه‌جایی و استقرار دوبارهٔ آن مرحله به مرحله نوشته شد.<br>تست خودکار از این به بعد شاخهٔ مرده در دستورهای استقرار را رد می‌کند و نام شاخهٔ جاری را با متن مستند چک می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۶.۰</time><br><b>تزریقگر سلکتور در داشبورد: کپی یک‌کلیکی اسکریپت در همه محیط‌ها</b><br>بخش تازه «تزریقگر سلکتور» در منوی داشبورد اسکریپت استخراج خودکار سلکتور را با یک دکمه کپی می‌کند؛ چون رابط همه اجراگرها یکی است، همین بخش در Cloudflare Worker، رندر، ترموکس و VPS دیده می‌شود.<br>متن داشبورد همیشه همان فایل ابزار است و تست خودکار هر مغایرت را لو می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۵.۰</time><br><b>تزریق‌کنندهٔ سلکتور: استخراج خودکار سلکتورها روی صفحهٔ زندهٔ فروشگاه</b><br>فایل tools/selector-injector.js را در کنسول DevTools صفحهٔ فروشگاه بچسبانید تا گرید محصولات را روی همان صفحهٔ رندرشده پیدا کند، پنج سلکتور سازگار با ورکر را بسازد و همان‌جا راستی‌آزمایی کند و پروفایل JSON آمادهٔ درون‌ریزی چاپ کند؛ روی اسنپ‌شاپ همان سلکتورهای پروفایل واقعی را بازتولید می‌کند.<br>با node scripts/make-bookmarklet.mjs نسخهٔ یک‌کلیکی (بوک‌مارک‌لت) ساخته می‌شود؛ راهنمای فارسی در SELECTOR-INJECTOR-FA.md است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۴.۰</time><br><b>پروفایل واقعی اسنپ‌شاپ: ساختار کارت‌ها ذخیره و استخراج ۸ از ۸ تست شد</b><br>ساختار واقعی صفحهٔ فروشگاه (لینکِ دور کارت، عنوان، قیمت فروش جدا از قیمت خط‌خورده) به‌صورت پروفایل قابل‌ویرایش در دیتابیس و فایل JSON آمد؛ تست خودکار روی هر دو موتور هر ۸ کارت را با قیمت فروش درست استخراج می‌کند.<br>ردیف‌های پایین صفحه تا اسکرول تصویر واقعی ندارند و جای‌نگهدار برمی‌گردد؛ رقم‌های فارسی عنوان هم در موتور Worker انگلیسی می‌شوند — هر دو شناخته‌شده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۳.۰</time><br><b>صفحهٔ خالی مرورگر دیگر «فروشگاه ساکت» جا زده نمی‌شود: تلاش مجدد و خطای صادقانه</b><br>اگر کرومیوم پس از رفتن به آدرس روی صفحهٔ خالی بماند (مثل اسنپ‌شاپ با ۳۹ بایت)، موتورها یک بار دیگر می‌روند و اگر باز خالی ماند، همان را با صدای بلند می‌گویند؛ دیگر گزارش «درخواست API دیده نشد» برای صفحه‌ای که اصلاً بارگذاری نشده نمی‌آید.<br>اثر انگشت رندر حالا نشانی نهایی و کد وضعیت ناوبری را هم دارد تا معلوم شود صفحه کجا فرود آمده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۲.۰</time><br><b>اثر انگشت صفحهٔ رندرشده در گزارش عیب‌یابی: دیوار ربات یا پوستهٔ خالی معلوم می‌شود</b><br>اجراهای مرورگریِ بدون محصول حالا اثر انگشتی از آنچه کرومیوم دید به گزارش می‌چسبانند (عنوان صفحه، طول متن، ۵۰۰ نویسهٔ اول متن، شمار اسکریپت/لینک/تصویر و آدرس اسکریپت‌ها)؛ با چسباندن همین گزارش معلوم می‌شود فروشگاه دیوار ضدربات دارد یا پوستهٔ خالی می‌دهد.<br>بدون نیاز به فایل تخلیه یا ترمینال: بلوک snapshot در جزئیات مرحلهٔ استخراج فهرست می‌آید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۱.۰</time><br><b>شنود قابل‌اعتمادتر API: انتظار برای بدنه‌ها، اولویت JSON و آدرس‌های محصولی</b><br>موتور network_api حالا پس از پنجرهٔ انتظار، خوانش همهٔ پاسخ‌های در حال انتقال را تمام می‌کند (قبلاً ممکن بود بدنهٔ کند جا بماند)؛ پاسخی که سرور JSON اعلام می‌کند نگه داشته می‌شود حتی اگر شکل ظاهری‌اش JSON نباشد.<br>وقتی سقف ۵۰ پاسخ پر شود، تازه‌واردهای محصولی (مثل <code dir="ltr">/api/products</code> یا جست‌وجو) جای کم‌ارزش‌ترین نگه‌داشته‌شده را می‌گیرند تا نویز تحلیلی جای محصول را نگیرد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۰.۰</time><br><b>رفع نمایش ندادن نتایج: ردیف خراب دیگر صفحهٔ نتایج را خالی نمی‌کند</b><br>اگر یک ردیف محصول در دیتابیس خراب شده باشد (دادهٔ null)، صفحهٔ نتایج فقط شمارش را نشان می‌داد و فهرست خالی می‌ماند؛ حالا ردیف‌های خراب هم در کوئری (هر دو موتور) و هم در مرورگر نادیده گرفته می‌شوند و بقیهٔ محصولات نمایش داده می‌شوند.<br>ذخیرهٔ محصول نامعتبر هم از این به بعد با خطای روشن رد می‌شود تا ردیف خراب تازه‌ای ساخته نشود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۹.۰</time><br><b>شمارش پاسخ‌های ناموفق API: فرق «تماس نگرفت» با «تماس گرفت ولی رد شد»</b><br>آمار شنود network_api حالا پاسخ‌های ناموفق را هم می‌شمارد (تعداد و آدرس با کد وضعیت)؛ اگر فروشگاه در مرورگر هدلس تماس API بزند ولی همه با 403 یا 429 رد شوند، عیب‌یاب همان را می‌گوید نه «درخواستی دیده نشد».<br>خلاصهٔ «درخواستی دیده نشد» فقط وقتی می‌آید که واقعاً هیچ تماسی دیده نشده باشد؛ فهرست نقطه‌های پایانی تخلیه‌شده هم آدرس‌های ناموفق را دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۸.۰</time><br><b>موتور network_api حالا می‌گوید چه ترافیکی دید: آمار شنود و تخلیهٔ بدنه‌ها</b><br>هر اجرای network_api آمار شنود را گزارش می‌کند (چند پاسخ دیده شد، چند بدنهٔ JSON، چند بایت، چند محصول خوانده شد و فهرست آدرس‌ها)؛ اگر صفحه هیچ درخواست API نزند همان گفته می‌شود و اگر پاسخ بگیرد ولی محصولی خوانده نشود، همان — دیگر محصولی پیدا نشد کلی نیست.<br>واکر API حالا همهٔ کلیدها (مثل <code dir="ltr">hits</code> و <code dir="ltr">docs</code>) را می‌گردد و با <code dir="ltr">SCRAPER4_DUMP_API_DIR</code> بدنه‌های گرفته‌شده برای بررسی ذخیره می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۷.۰</time><br><b>موتور network_api: استخراج از ترافیک API خود صفحه با شنود شبکه</b><br>موتور مرورگری تازه صفحه را در پلی‌رایت باز می‌کند و پاسخ‌های XHR/fetch را (مثل تب Network در دولوپر تولز) می‌گیرد؛ هر بدنهٔ JSON با همان واکر موتورهای script_json و next_data خوانده می‌شود، پس فروشگاهی که فقط از API کاتالوگ می‌گیرد هم بدون سلکتور استخراج می‌شود.<br>آدرس APIهای گرفته‌شده در لاگ چاپ می‌شود (ابزار کشف API)؛ سقف ۵۰ پاسخ و ۸ مگابایت از انفجار حافظه جلوگیری می‌کند و موتور فقط روی Node است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۶.۰</time><br><b>عیب‌یاب صادق برای اجراهای مرورگری: علت را می‌گوید، صفحهٔ عمیق را هشدار می‌دهد</b><br>مرحلهٔ استخراج فهرست حالا لایهٔ برندهٔ مرورگر (browserLayer)، در دسترس بودن مرورگر روی دستگاه و خطای موتور را گزارش می‌کند؛ اگر کرومیوم نصب نباشد همان را می‌گوید، نه «محصولی پیدا نشد» کلی.<br>آدرس صفحه‌های عمیق (مثل page=336) هشدار خودش را پیش از سرزنش سلکتورها می‌گیرد: اول عیب‌یاب روی صفحهٔ اول اجرا شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۵.۰</time><br><b>لایهٔ دوم موتورهای مرورگری: structural و بعد heuristic روی HTML رندرشده</b><br>موتورهای مرورگری (playwright/puppeteer/crawlee) بعد از رندر صفحه اول سلکتورهای ذخیره‌شده را اجرا می‌کنند؛ اگر چیزی پیدا نشد، روی همان HTML رندرشده اول موتور structural و بعد heuristic اجرا می‌شود، پس فروشگاه جاوااسکریپتی مثل اسنپ‌شاپ بدون سلکتور دستی خوانده می‌شود.<br>لایهٔ برنده در لاگ چاپ و در فیلد browserLayer نتیجه گزارش می‌شود؛ اثبات زنده با کرومیوم ترماکس روی آدرس دسته‌بندی اسنپ‌شاپ انجام می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۴.۰</time><br><b>موتور structural در اجراگر Node: استخراج خودکار بدون سلکتور دستی، هم‌ارز پایتون</b><br>اجراگر Node حالا با همان الگوریتم زبانهٔ «استخراج با پایتون» فروشگاه‌های معمولی را می‌خواند: کارت‌های شناخته‌شده (مثل <code dir="ltr">li.product</code> ووکامرس) اول، بعد صعود از لینک محصول و کاتالوگ JSON جاسازی‌شده؛ کارت با داشتن عنوان یا لینک نگه داشته می‌شود و نبود قیمت یا تصویر آن را حذف نمی‌کند.<br>قیمت خط‌خوردهٔ قدیمی (تگ del) پیش از تجزیه حذف می‌شود تا قیمت فروش ببرد؛ موتور فقط روی Node است (بنچمارک Worker آن را ناموجود نشان می‌دهد) و در بنچمارک و هر دو فهرست کشویی موتورها آمده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۳.۰</time><br><b>زبانهٔ «استخراج با پایتون» در دیپلویِر محلی: استخراج خودکار بدون سلکتور دستی</b><br>دیپلویِر محلی حالا <code dir="ltr">scripts/py-auto-extract.py</code> را روی یک صفحهٔ فهرست اجرا می‌کند: تجزیهٔ ساختاری به‌علاوهٔ کشف خودکار محصولات را پیدا می‌کنند و سلکتور صریح (حتی XPath) اختیاری است؛ وضعیت پایتون و وابستگی‌ها با نشان‌گر نمایش داده می‌شود و نصب وابستگی‌ها با یک دکمه انجام می‌شود.<br>راهنمای Termux خط نصب وابستگی‌های پایتون را گرفت؛ جدول نتیجه تعداد، زمان، موتور و سلکتورهای کشف‌شده را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۲.۰</time><br><b>تخلیهٔ HTML رندرشدهٔ مرورگر برای عیب‌یابی سلکتور فروشگاه‌های جاوااسکریپتی</b><br>با <code dir="ltr">SCRAPER4_DUMP_RENDERED_DIR</code> موتورهای مرورگری صفحهٔ رندرشده را ذخیره می‌کنند (۵ رندر اول هر اجرا، هرکدام تا ۲ مگابایت) و نتیجهٔ پیشنهاد خودکار روی همان رندر را در لاگ چاپ می‌کنند؛ فایل را بفرستید تا سلکتور سالم ساخته شود.<br>تخلیه هیچ‌وقت استخراج را خراب نمی‌کند: بدون متغییر محیطی کاملاً خاموش است، خطای نوشتن فقط لاگ می‌شود و سقف تعداد و حجم از پر شدن دیسک جلوگیری می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۱.۰</time><br><b>اجرای XPath چسبانده‌شده، تلاش مجدد روی 429 و بنچمارک از صفحهٔ اول</b><br>سلکتور XPath کپی‌شده از DevTools (مثل <code dir="ltr">//*[@id="…"]/div[1]/…</code>) حالا به CSS تبدیل و اجرا می‌شود و مسیرهای کاملاً موقعیتی روی گرید تکراری باز می‌شوند؛ XPath بیرون از گویش پشتیبانی با نام همان سلکتور خطای صادقانه می‌دهد.<br>خطای 429 (محدودیت نرخ سایت) یک بار با احترام به Retry-After تکرار می‌شود؛ ممنوعیت 403 بدون تلاش اضافه گزارش می‌شود و راهنمای عیب‌یابی خرابی دریافت را از مشکل محتوای صفحه جدا می‌گوید.<br>بنچمارک موتورها همیشه از صفحهٔ اول می‌سنجد: کرسر چسبانده‌شده (<code dir="ltr">?page=336</code>) نادیده گرفته می‌شود ولی فیلترها و مرتب‌سازی می‌مانند و آدرس ذخیره‌شدهٔ پروفایل دست‌نخورده می‌ماند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۰.۰</time><br><b>استخراج نشکستنی: سلکتور خراب، قیمت بدون واحد و پیشنهاد خودکار</b><br>یک سلکتور ذخیره‌شدهٔ خراب دیگر کل استخراج را نمی‌کشد: خطا با نام همان سلکتور گزارش می‌شود و در اجراهای واقعی موتور خودکار جایگزین می‌شود؛ بنچمارک همچنان هر موتور را جداگانه و صادانه می‌سنجد.<br>قیمت‌های بدون واحد پول («۵۲۵٬۰۰۰» بدون تومان، مثل برف‌باکس) حالا خوانده می‌شوند و پیشنهاد خودکار سلکتورها روی فروشگاه‌های Tailwind هم ظرف و عنوان را پیدا می‌کند.<br>ابزار پایتون <code dir="ltr">py-auto-extract</code> هم اضافه شد تا روی گوشی (ترموکس) استخراج خودکار را مستقیم روی سایت زنده راستی‌آزمایی کنید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۹.۰</time><br><b>تشخیص بیلد قدیمی روی پورت و شروع مقاوم در برابر EADDRINUSE</b><br>دیپلویر حالا از خود پورت می‌پرسد چه نسخه‌ای در حال اجراست: اگر بیلد قدیمیِ خودمان باشد، متوقف و بازسازی می‌شود (تک‌دکمهٔ «Rebuild &amp; restart» در بنر) و اگر برنامهٔ دیگری باشد، دست نمی‌خورد و هشدار می‌دهد.<br>اگر جدول سوکت خوانا نباشد (بعضی بیلدهای اندروید)، اسکریپر قدیمی با خط فرمان و شمارهٔ پورت پیدا و متوقف می‌شود؛ اگر اتصال اول به‌خاطر مسابقهٔ هم‌زمان شکست بخورد، یک‌بار خودکار تلاش مجدد می‌شود و خلاصهٔ اسکن همیشه در لاگ ثبت است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۸.۰</time><br><b>خواندن قیمت‌های تزئینی، فروشگاه‌های جاوا و محیط آزمایشگاه آفلاین</b><br>قیمت‌هایی که واحد پولشان با کشیدگی نوشته شده (مثل تومــانـ) یا با <code dir="ltr">&amp;nbsp;</code> از عدد جدا شده‌اند حالا خوانده می‌شوند؛ در کارت‌های حراجی ووکامرس هم قیمت فروش برداشته می‌شود نه قیمت خط‌خورده.<br>فروشگاه‌های جاوامحور پوشش داده شدند: کاتالوگ داخل <code dir="ltr">__NEXT_DATA__</code> (شبیه دیجی‌کالا) و state تزریقی صفحه (شبیه اسنپ‌شاپ) استخراج می‌شوند و لینک‌های دسته‌بندی داخل کارت دیگر محصول تقلبی نمی‌سازند.<br>موتورهای مرورگری در بنچمارک دیگر به‌خاطر اندروید رد نمی‌شوند؛ اگر کرومیوم روی دستگاه باشد (مثل Termux با <code dir="ltr">pkg install chromium</code>) واقعاً اجرا می‌شوند.<br>محیط آزمایشگاه آفلاین به repository اضافه شد (<code dir="ltr">LAB.md</code> + <code dir="ltr">lab-probe</code> + <code dir="ltr">lab-service</code>) تا هر گزارش میدانی اول با فیکسچر بازتولید و روی هر دو موتور راستی‌آزمایی شود؛ نصب‌های Termux و گیرکردن پورت بعد از آپدیت هم رفع شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۷.۰</time><br><b>تشخیص موتوربه‌موتور در تست سرعت و استخراج قوی‌تر کارت‌های فروشگاهی</b><br>تست سرعت ۳ صفحه حالا فقط عدد گزارش نمی‌دهد: هر موتور یک ستون «تشخیص» دارد که می‌گوید چرا موفق یا ناموفق بود — چند کاندیدا دید، چند محصول نگه داشت، چه چیزی و چرا حذف شد، نمونهٔ محصول و قدم بعدی چیست — و دکمهٔ «کپی گزارش کامل» همهٔ این‌ها را یکجا به‌صورت متن ساده کپی می‌کند.<br>موتورها هم روی فروشگاه‌های مدرن قوی‌تر شدند: کشف خودکار کارت‌هایی با کلاس مبهم یا قیمتی بیرون از لینک را پیدا می‌کند، تصویر تنبل (data-src) به‌جای تصویر جایگزین (placeholder) برداشته می‌شود، عنوان‌هایی که بیرون از لینک‌اند نجات داده می‌شوند، و لینک‌های تکراری یک محصول یک‌بار شمرده می‌شوند.<br>روی دستگاهی که مرورگر ندارد (مثل Termux)، موتورهای مرورگری دیگر بیهوده منتظر نمی‌مانند و فوراً با راهنمای نصب رد می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۵.۰</time><br><b>کپی یک‌کلیکهٔ گزارش عیب‌یابی و ذخیرهٔ خودکار سلکتورهای پیداشده</b><br>گزارش عیب‌یابی استخراج حالا دکمهٔ «کپی گزارش کامل» دارد: با یک لمس، همهٔ مرحله‌ها، نشانه‌ها، داده‌ها و راهکارها به‌صورت متن ساده کپی می‌شوند (با راه جایگزین برای مرورگرهایی که دسترسی کلیپ‌برد ندارند). دوم اینکه عیب‌یاب دیگر فقط گزارش نمی‌دهد: اگر سلکتورهای پروفایل هنوز تنظیم نشده باشند (خالی، ناقص یا همان پیش‌فرض ووکامرس) و کشف خودکار روی صفحهٔ واقعی سلکتورِ راستی‌آزمایی‌شده پیدا کند، همان‌ها فوراً در پروفایل ذخیره می‌شوند — مرحلهٔ <code dir="ltr">selectors-auto-saved</code> در گزارش نشان می‌دهد چه چیزی ذخیره شد و تب سلکتورها خودش پُر می‌شود. سلکتورهای کاملاً سفارشی هرگز بازنویسی نمی‌شوند و آزمایش یک نشانی جایگزین هم پروفایل را تغییر نمی‌دهد. سلکتورهای گمشدهٔ جزئیات هم از یک صفحهٔ واقعی محصول پیشنهاد و ذخیره می‌شوند؛ پس از ذخیره، عیب‌یاب را دوباره اجرا کنید تا مرحله‌های فهرست و جزئیات سبز شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۴.۰</time><br><b>تحمل ریدایرکت وسط بارگذاری در موتورهای مرورگر (رفع ERR_ABORTED)</b><br>موتور پلی‌رایت روی گوشی یک قدم جلوتر رفت و با خطای <code dir="ltr">net::ERR_ABORTED</code> مرد: یعنی خودِ فروشگاه وسط بارگذاری ریدایرکت یا رفرش کرد (بررسی کوکی، صفحهٔ ضدربات، روتر فریم‌ورک) و انتظار برای آرام‌شدن شبکه داخل <code dir="ltr">goto</code> همان ریدایرکت عادی را به شکست کامل تبدیل کرد. حالا رفتن به صفحه فقط تا خوانده‌شدن DOM صبر می‌کند، خطای <code dir="ltr">ERR_ABORTED</code> دیگر اجرا را نمی‌کشد (صفحهٔ بعدی می‌نشیند و همان خوانده می‌شود) و برای رندر جاوااسکریپت هم یک فرصت ۱۵ ثانیه‌ای بهترین‌تلاش داده می‌شود. هر دو درایور (پلی‌رایت و پاپتیر) همین رفتار را دارند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۳.۰</time><br><b>رفع خطای «Unsupported platform: android» موتور پلی‌رایت روی گوشی</b><br>عیب‌یاب استخراج روی گوشی با موتور پلی‌رایت خطای <code dir="ltr">Unsupported platform: android</code> می‌داد. علت داخل خودِ پلی‌رایت است: مسیر پوشهٔ مرورگرها را همان لحظهٔ <code dir="ltr">import</code> حساب می‌کند و فقط لینوکس، مک و ویندوز را می‌شناسد، پس روی اندروید پیش از هر اجرایی می‌میرد. حالا اسکریپر روی اندروید متغیر <code dir="ltr">PLAYWRIGHT_BROWSERS_PATH</code> را پیش‌فرض می‌گذارد و چون ما همیشه مرورگر سیستمی را صریح اجرا می‌کنیم، این پوشه هیچ‌وقت استفاده نمی‌شود؛ مقدار صریح شما هم همچنان مقدم است. هر سه موتور با همین یک اصلاح پوشش داده می‌شوند. برای به‌روزرسانی فقط کد را بگیرید و دیپلویر را ری‌استارت کنید؛ نصب مجدد لازم نیست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۲.۰</time><br><b>نصب کامل روی گوشی: رد شدن از اسکریپت‌های نصب در راهنمای ترموکس</b><br>اجرای واقعی روی گوشی نشان داد <code dir="ltr">npm install</code> ساده روی ترموکس می‌میرد: وابستگی wrangler اسکریپت راه‌اندازی workerd را اجرا می‌کند که نسخهٔ اندروید ندارد و npm کل نصب را لغو می‌کند. حالا هر دو راهنمای ترموکس با <code dir="ltr">--ignore-scripts</code> نصب می‌کنند — اسکریپر روی گوشی به هیچ اسکریپت نصبی نیاز ندارد — و شروع کار با <code dir="ltr">npm run deployer:ui</code> است نه <code dir="ltr">npm start</code> که به workerd نیاز دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۱.۰</time><br><b>اجرای هر سه موتور مرورگر روی گوشی (ترموکس)</b><br>پلی‌رایت و پاپتیر از قبل کرومیومِ ترموکس را پیدا می‌کردند، ولی کراولی فقط دنبال مرورگرهای دانلودی می‌گشت — همان‌هایی که روی اندروید اصلاً اجرا نمی‌شوند. حالا هر سه موتور مرورگرِ شناسایی‌شده را با فلگ‌های بدون سندباکس اجرا می‌کنند و <code dir="ltr">npm run browsers:install</code> روی گوشی به‌جای دانلود، کرومیوم سیستمی را با <code dir="ltr">pkg</code> نصب و بررسی می‌کند؛ روی دسکتاپ مثل قبل دانلود می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۰.۰</time><br><b>تعمیر یک‌کلیکهٔ ریموت origin در پنل برنچ‌ها</b><br>اگر پوشهٔ نصب ریموت origin نداشت، هر اسکن برنچ‌ها با خطای خام گیت («origin does not appear to be a git repository») شکست می‌خورد و راه‌حلّی نشان نمی‌داد. حالا اسکنر مشکل واقعی را می‌گوید و پنل برنچ‌ها دکمهٔ «Repair origin remote» نشان می‌دهد که origin را به fazilatma/new وصل و بلافاصله دوباره اسکن می‌کند؛ نصب برنچ و به‌روزرسانی دستی هم به همین راهنما اشاره می‌کنند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۲۹.۰</time><br><b>کشف خودکار سلکتورها در Cloudflare Worker</b><br>قابلیت ۱.۱۲۸.۰ (یافتن خودکار سلکتورهای فروشگاه‌هایی که هرگز پیکربندی نشده‌اند) اکنون در Worker هم کار می‌کند: راستی‌آزمایی با HTMLRewriter، استنتاج ساختاری کارت‌ها از روی HTML، و ذخیرهٔ یک‌بارهٔ سلکتورهای پیداشده در پردازشگر، API و بنچمارک. سلکتورهای کاملاً دستی دست‌نخورده می‌مانند و با autoDiscover=false می‌توان به رفتار قبلی برگشت.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۲۸.۰</time><br><b>کشف خودکار سلکتورها پیش از استخراج (رندر/نود):</b> پروفایل‌های تازه همیشه سلکتورهای پیش‌فرض ووکامرس را داشتند، پس «تنظیم‌نشده» هیچ‌وقت خالی به نظر نمی‌رسید و فروشگاهی که موتورهای خودکار نمی‌خواندند با صفر محصول تمام می‌شد. حالا وقتی سلکتورهای فهرست خالی، ناقص یا هنوز پیش‌فرض باشند، موتور استخراج پیش از شروع، همان صفحهٔ اول را تحلیل می‌کند: اول الگوهای آمادهٔ فروشگاه‌سازها امتحان می‌شود و اگر جواب نداد، تحلیل ساختاری صفحه (خوشه‌بندی کارت‌های لینک‌دارِ دارای تصویر) سلکتورهای ظرف، عنوان، قیمت، لینک و تصویر را می‌سازد. پیشنهادها روی همان صفحه راستی‌آزمایی و فقط در صورت قبولی ذخیره می‌شوند تا استخراج با موتور سلکتوری ادامه یابد؛ سلکتورهای دستی شما دست‌نخورده می‌مانند. عیب‌یاب استخراج هم در اجراهای ناموفق همین پیشنهادها را فقط-خواندنی نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۷.۰</time><br><b>جابه‌جایی render.yaml به ریشهٔ مخزن برای نصب بدون تنظیم دستی:</b> رِندر به‌صورت پیش‌فرض فایل render.yaml را فقط در ریشهٔ مخزن می‌گردد، ولی این فایل داخل پوشهٔ cloudflare-scraper4 بود؛ برای همین یا Blueprint اصلاً پیدا نمی‌شد یا باید دستی مقدار Blueprint Path را وارد می‌کردید. حالا فایل در ریشه است و چون مقدار rootDir داخلش روی cloudflare-scraper4 تنظیم شده، ساخت و اجرا همچنان از پوشهٔ درست پروژه انجام می‌شود. نکتهٔ مهم: package.json ریشهٔ مخزن دستور start را روی «دیپلویر» تنظیم کرده، نه اسکرپر؛ به همین دلیل در نصب قبلی شما صفحهٔ دیپلویر بالا آمد و آن دیپلویر بود که در زمان اجرا render:build را صدا می‌زد و به خطای esbuild می‌خورد. با Blueprint این اتفاق نمی‌افتد چون rootDir و startCommand صریح مشخص شده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۶.۰</time><br><b>به‌کار افتادن موتورهای مرورگر (Playwright و Puppeteer و Crawlee) در استخراج:</b> این موتورها از قبل در زنجیرهٔ استخراج بودند، اما فایل .npmrc عمداً دانلود مرورگر همراهشان را خاموش کرده بود (حدود ۳۰۰ مگابایت که روی میزبان‌های رایگان جا نمی‌شود). نتیجه این بود که هر بار اجرا با خطای «Executable doesn&#39;t exist» شکست می‌خورد و در حالت خودکار این خطا بی‌صدا نادیده گرفته می‌شد؛ یعنی به نظر می‌رسید این موتورها اصلاً استفاده نمی‌شوند. سه اصلاح انجام شد: ۱) اگر مرورگری از قبل روی دستگاه نصب باشد خودکار پیدا و استفاده می‌شود (مسیرهای رایج لینوکس، ترموکس، مک و ویندوز بررسی می‌شوند) و متغیر BROWSER_EXECUTABLE_PATH همچنان اولویت دارد. ۲) اگر هیچ مرورگری نباشد، به‌جای سکوت، در گزارش کار نوشته می‌شود که موتورهای مرورگر اجرا نشدند و دقیقاً چه دستوری باید اجرا شود. ۳) دستور نصب مرورگر به راهنمای نصب «دسکتاپ» و «VPS» هم اضافه شد (قبلاً فقط ترموکس و ویندوز آن را داشتند). برای سایت‌های جاوااسکریپتی کافی است یک‌بار npm run browsers:install را اجرا کنید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۵.۰</time><br><b>رفع شکست نصب روی Render: خطای «Cannot find package esbuild»:</b> رِندر (و هر میزبان مشابه) با NODE_ENV=production نصب می‌کند و در این حالت npm بسته‌های devDependencies را اصلاً نصب نمی‌کند. ابزار ساخت esbuild در همان بخش بود، بنابراین دستور render:build هرگز نمی‌توانست اجرا شود و اسکرپر با کد ۱ بسته می‌شد. حالا esbuild و esbuild-wasm جزو وابستگی‌های اصلی هستند و ساخت پروژه با NODE_ENV=production آزمایش و تأیید شد. پیام خطا هم اصلاح شد: به‌جای اینکه سیستم‌عامل را مقصر بداند، صریح می‌گوید نصب در حالت production انجام شده است. همچنین فایل render.yaml سه ایراد داشت که هر سه رفع شد: نبودِ rootDir (پوشهٔ پروژه)، اجرای کل تست‌ها در مرحلهٔ ساخت (که یک تست ناموفق کل دیپلوی سالم را متوقف می‌کرد) و تنظیم ADMIN_TOKEN که چون داشبورد فیلد ورود توکن ندارد، باعث می‌شد صفحه باز ولی کاملاً خالی بماند و همهٔ درخواست‌ها خطای ۴۰۱ بگیرند. نسخهٔ نود هم روی ۲۲ ثابت شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۲.۰</time><br><b>رفع «۱٬۲۰۰ از ۲۰» و توقف صفحه‌بندی وقتی سایت همان صفحه را تکرار می‌کند:</b> این دو عدد دو چیز متفاوت را می‌شمردند: عدد اول همهٔ آیتم‌های خام اسکن‌شده بود و عدد دوم تعداد محصولات یکتا. وقتی سایت برای همهٔ شماره‌صفحه‌ها همان ۲۰ محصول را برمی‌گرداند، ۶۰ صفحه × ۲۰ = ۱۲۰۰ آیتم اسکن می‌شد ولی فقط ۲۰ محصول یکتا می‌ماند؛ یعنی «۲۰ محصول در نتایج» درست بود و ۱۲۰۰ گمراه‌کننده. حالا هر دو عدد تعداد محصولات یکتا را نشان می‌دهند. مهم‌تر اینکه محافظِ «این صفحه محصول تازه‌ای نداشت» فقط در حالت خودکار (تعداد صفحات = ۰) اجرا می‌شد؛ اگر عدد مشخصی مثل ۶۰ گذاشته بودید، همان صفحهٔ تکراری تا آخر دوباره و دوباره خوانده می‌شد. حالا در هر حالتی، اگر دو صفحهٔ پشت‌سرهم هیچ محصول تازه‌ای نداشته باشند، استخراج متوقف می‌شود و در گزارش هشدار می‌دهد که احتمالاً صفحه‌بندی کار نمی‌کند. اگر واقعاً ۱۲۰۰ محصول دارید، نوع صفحه‌بندی و «مقدار صفحه‌بندی» پروفایل را بررسی کنید؛ نسخهٔ کلودفلر از قبل این محافظ را داشت و تحت تأثیر نبود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۱.۰</time><br><b>نمایش واقعی صفحهٔ محصول در مودال، سلکتور جدول مشخصات و دکمهٔ توقف انتخاب در انتخابگر بصری:</b> ۱) در مودال محصول، توضیحات به‌صورت متن خام داخل کادر لاگ نشان داده می‌شد؛ حالا دقیقاً مثل صفحهٔ محصول رندر می‌شود: تیترها، فهرست‌ها، جدول‌ها، تصاویر و لینک‌ها. برای امنیت، پیش از نمایش هرچه اجراشدنی است (اسکریپت، iframe، فرم و رویدادهای on…) حذف می‌شود و لینک‌ها در تب جدید باز می‌شوند. ۲) به سلکتورهای جزئیات، «جدول مشخصات» اضافه شد. کافی است بلوک مشخصات را انتخاب کنید؛ سه ساختار رایج پشتیبانی می‌شود: جدول (tr/td)، فهرست تعریفی (dt/dd) و فهرست «نام: مقدار». ردیف‌های استخراج‌شده در مودال محصول به‌صورت جدول نمایش داده می‌شوند. ۳) در انتخابگر بصری دکمهٔ «⏸ توقف انتخاب» اضافه شد. با زدن آن، کلیک‌ها دیگر گرفته نمی‌شوند و صفحه عادی کار می‌کند؛ می‌توانید تب‌ها و کشویی‌های صفحهٔ محصول را باز کنید و بعد با «▶ ادامهٔ انتخاب» همان بخش‌های تازه‌باز‌شده را انتخاب کنید. در هر دو نسخهٔ ورکر و نود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۰.۰</time><br><b>رفع گم شدن هزاران محصول در نتایج و نادیده گرفتن محصولات بدون قیمت:</b> ۱) شناسهٔ یکتای هر محصول از روی آدرس آن ساخته می‌شود، اما هنگام ساخت این شناسه <b>کل رشتهٔ پرس‌وجو</b> از آدرس حذف می‌شد. در فروشگاه‌هایی که آدرس محصول به شکل product?id=123 است، آدرس همهٔ محصولات بعد از این حذف یکسان می‌شد؛ یعنی هر ۱۲۰۰ محصول یک شناسه می‌گرفتند و روی هم ذخیره می‌شدند و در نهایت فقط چند مورد باقی می‌ماند. حالا فقط پارامترهای تبلیغاتی (utm و مانند آن) و پارامترهای صفحه‌بندی (page و sort و …) حذف می‌شوند و پارامترهای شناسایی محصول دست‌نخورده می‌مانند. ۲) محصولات بدون قیمت دیگر ذخیره نمی‌شوند: نه در استخراج و نه در درون‌ریزی فایل. چنین محصولی در هیچ مقصدی قابل انتشار نیست (ووکامرس قیمت لازم دارد و باسلام قیمت صفر را رد می‌کند) و فقط فهرست نتایج و جدول مغایرت‌گیری را شلوغ می‌کرد. تعداد محصولات نادیده‌گرفته‌شده در گزارش کار و در پاسخ درون‌ریزی نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۹.۰</time><br><b>علت واقعی خطای ۱۰۴۲ و ۴۰۴ همهٔ مدل‌ها پیدا شد: آدرس دوبار در پراکسی بسته‌بندی می‌شد:</b> پراکسی شما هیچ اشکالی نداشت؛ اشکال از ما بود. تابع networkFetch آدرس مقصد را داخل پراکسی می‌گذاشت (به شکل ?url=https://api.openai.com/…) و بعد نتیجه را به safeFetch می‌داد، و safeFetch دوباره همان تنظیم «روش اتصال» را اعمال می‌کرد و آدرس را <b>بار دوم</b> داخل پراکسی می‌گذاشت. نتیجه این می‌شد که از پراکسی می‌خواستیم خودش را fetch کند؛ و این دقیقاً همان «یک Worker، Worker دیگری از همان حساب را صدا بزند» است که کلودفلر با خطای ۱۰۴۲ رد می‌کند و به همین دلیل همهٔ مدل‌ها ۴۰۴ می‌گرفتند. حالا آدرسی که یک‌بار بسته‌بندی شده دیگر دوباره از مسیر پراکسی عبور داده نمی‌شود؛ هم در تماس واقعی با مدل‌ها و هم در عیب‌یاب. راهنمای نادرست نسخهٔ قبل (فعال کردن پرچم global_fetch_strictly_public) هم حذف شد، چون مشکل از تنظیمات کلودفلر شما نبود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۸.۰</time><br><b>اصلاح راهنمای خطای ۱۰۴۲ برای ترموکس و رفع دانلود بی‌دلیل صفحات در مرحلهٔ جزئیات:</b> ۱) راهنمایی که برای خطای ۱۰۴۲ نوشته بودم مخصوص کلودفلر بود، در حالی که این پیام فقط در نسخهٔ نود (ترموکس، VPS، سی‌پنل) نمایش داده می‌شود. ترموکس اصلاً Worker نیست، پس محدودیت «Worker به Worker» به درخواست شما ربطی ندارد. حالا پیام درست گفته می‌شود: دریافت ۱۰۴۲ در این محیط یعنی روی آن آدرس هیچ Workerِ فعالی مستقر نیست و پاسخ را خودِ لبهٔ کلودفلر داده است؛ راه‌حل، مستقر کردن فایل آمادهٔ scripts/ai-proxy-worker.js روی یک Worker و بررسی مسیر health/ آن است. پرچم global_fetch_strictly_public فقط به‌عنوان نکتهٔ تکمیلی برای کسانی می‌ماند که پراکسی را از داخل یک Worker دیگر صدا می‌زنند. ۲) مرحلهٔ «استخراج جزئیات» حتی وقتی هیچ سلکتور جزئیاتی تنظیم نشده بود، صفحهٔ تک‌تک محصولات را دانلود می‌کرد و هیچ فیلدی پر نمی‌شد؛ یعنی صدها درخواست بی‌فایده. حالا اگر سلکتوری تنظیم نشده باشد، اول به‌صورت خودکار کشف می‌شود و اگر باز هم چیزی پیدا نشد، این مرحله رد می‌شود و در گزارش نوشته می‌شود. در پایان هم تعداد محصولاتی که جزئیاتشان استخراج شد در گزارش کار ثبت می‌گردد. این اصلاح در هر دو نسخهٔ نود و ورکر اعمال شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۷.۰</time><br><b>رفع خطای ۱۰۴۲ پراکسی کلودفلر و افزودن سهمیهٔ اجرای Worker و هوش مصنوعی:</b> ۱) علت خطای «error code: 1042» پیدا شد: کلودفلر اجازه نمی‌دهد یک Worker، Worker دیگری از همان حساب را صدا بزند و لبهٔ شبکه پیش از اجرای پراکسی، ۴۰۴ برمی‌گرداند. راه‌حل رسمی، پرچم سازگاری global_fetch_strictly_public است که به wrangler.toml اضافه شد. شما باید همین پرچم را در پنل کلودفلر برای <b>هر دو</b> Worker (اسکرپر و پراکسی) هم فعال کنید: Settings ← Runtime ← Compatibility flags و سپس Deploy. راه جایگزین: پراکسی را روی حساب کلودفلر دیگری مستقر کنید یا برایش دامنهٔ اختصاصی تعریف کنید. عیب‌یاب هوش مصنوعی هم حالا این خطا را می‌شناسد و دقیقاً همین راهنما را نشان می‌دهد، نه پیام کلی. ۲) عملیات هوش مصنوعی در D1 چیزی نمی‌نویسد، بنابراین در نوار سهمیه دیده نمی‌شد؛ حالا دو ردیف تازه اضافه شد: تعداد اجراهای Worker در روز (سقف ۱۰۰٬۰۰۰) و بیشینهٔ «درخواست بیرونی» در یک اجرا (سقف ۵۰ در پلن رایگان) که سقف واقعیِ تست مدل‌هاست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۶.۰</time><br><b>قیمت هر غرفه در صف ارسال، حذف محصولات اضافهٔ مقصد، جدول تمام‌صفحه و نوار سهمیهٔ D1:</b> ۱) در صف ارسال، قیمت همهٔ غرفه‌ها یکسان نشان داده می‌شد چون هنگام ثبت گزارش، قیمت واقعیِ همان غرفه پاس داده نمی‌شد و قیمت پایهٔ محصول ثبت می‌گردید. حالا قیمت تعدیل‌شدهٔ هر غرفه نمایش داده می‌شود. ۲) دکمهٔ «اجرا و هماهنگ‌سازی» علاوه بر اصلاح قیمت و ارسال محصولات جاافتاده، حالا محصولاتی را که فقط در مقصد هستند هم پاک می‌کند: در ووکامرس حذف واقعی و در باسلام بایگانی (۴۱۸۴). برای ایمنی، فقط محصولاتی حذف می‌شوند که پسوند «(کد ایکس)» دارند؛ هر محصولی که خودِ فروشنده دستی ساخته باشد گزارش می‌شود ولی دست‌نخورده می‌ماند. ۳) دکمهٔ «⛶ نمایش تمام‌صفحهٔ جدول» اضافه شد؛ داخل منوی همبرگری متن‌ها ریز بودند، حالا جدول تمام‌صفحه با فونت بزرگ‌تر باز می‌شود. ۴) در «مدیر وظایف» نوار سهمهٔ روزانهٔ D1 اضافه شد: خواندن و نوشتن مصرف‌شده، درصد، و زمان صفر شدن شمارنده. رنگ نوار بالای ۷۰٪ زرد و بالای ۹۰٪ قرمز می‌شود. در محیط‌های نود (ترموکس، VPS، cPanel) پیام «سقف روزانه ندارد» نشان داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۵.۰</time><br><b>رفع خطای بی‌صدای جدول مغایرت‌گیری:</b> دکمهٔ «پیش‌نمایش» برخلاف دکمهٔ «اجرا» هیچ try/catch و هیچ ردیف زنده‌ای در مدیر وظایف نداشت؛ برای همین اگر درخواست شکست می‌خورد (تایم‌اوت، خطای سرور، یا رسیدن به سقف D1) پنل خالی می‌ماند و هیچ پیامی هیچ‌جا دیده نمی‌شد. حالا هنگام اجرا پیام «در حال خواندن مقصدها…» نشان داده می‌شود، یک ردیف زنده در مدیر وظایف ثبت می‌گردد و اگر خطایی رخ دهد متن کامل خطا داخل همان پنل با هشدار قرمز نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۴.۰</time><br><b>رفع خطای ۴۲۲ «شناسه تصویر الزامی است» — اصلاح اشتباه نسخهٔ ۱.۱۱۰.۰:</b> خبر خوب اینکه خطای ۴۰۱ کاملاً برطرف شد و احراز هویت کار می‌کند. اما در نسخهٔ ۱.۱۱۰.۰ من تابع کمکیِ «غرفه‌های اضافه» را در کد PHP خوانده بودم و اشتباه نتیجه گرفتم که فیلد photo نباید هنگام ساخت ارسال شود. مسیر اصلی ارسال در همان فایل PHP دقیقاً برعکس است: photo و photos را در همان درخواست ساخت می‌فرستد و باسلام هم آن را اجباری می‌داند. قانون واقعی PHP این است: اگر آپلود تصویر موفق بود، شناسه‌ها ارسال می‌شوند و اگر توضیح کوتاه و توضیح کامل هر دو حداقل ۳ نویسه باشند وضعیت ۲۹۷۶ (منتشرشده) می‌شود؛ در غیر این صورت وضعیت ۳۷۹۰ (پیش‌نویس) است تا محصول دست‌کم ثبت شود و رد نشود. حالا دقیقاً همین پیاده شده است. همچنین تا امروز خطای آپلود تصویر بی‌صدا نادیده گرفته می‌شد؛ به همین دلیل خطای ۴۲۲ بدون هیچ توضیحی می‌آمد. حالا اگر آپلود شکست بخورد، نام تصویر و علت دقیق (مثلاً کد HTTP) داخل همان پیام خطا نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۳.۰</time><br><b>علت قطعی ۴۰۱ باسلام پیدا و رفع شد: درخواست‌های مقصد از پراکسیِ استخراج عبور می‌کردند:</b> خروجی عیب‌یاب روی ترموکس نشان داد هر چهار آزمون کد ۲۰۰ می‌گیرند: توکن تا ۲۰۲۷ معتبر است، هر ۱۵ دسترسی را دارد و فهرست محصولات غرفه هم خوانده می‌شود. پس مشکل از توکن نبود، از خود برنامه بود: در نسخهٔ نود، تابع safeFetch بدون هیچ شرطی تنظیمات شبکهٔ «اتصال به سایت مبدأ» را به همهٔ درخواست‌ها اعمال می‌کرد. چون روش اتصال هوش مصنوعی روی Worker تنظیم شده بود، همان تنظیم به درخواست‌های باسلام و ووکامرس هم اعمال می‌شد و آن‌ها از پراکسی عبور می‌کردند؛ آن Worker هدر Authorization را منتقل نمی‌کند، پس باسلام اصلاً توکنی نمی‌دید و «invalid authorization header» می‌داد. خطای ۵۲۲ ووکامرس هم از همین‌جا بود. عیب‌یاب چون مستقیم درخواست می‌زد این مسیر را دور می‌زد و ۲۰۰ می‌گرفت. حالا درخواست‌های مقصد هرگز از پراکسیِ استخراج عبور نمی‌کنند: باسلام از تیک «اتصال غیرمستقیم» خودش پیروی می‌کند و ووکامرس مستقیم می‌رود. استخراج صفحات فروشگاه مثل قبل از پراکسی استفاده می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۲.۰</time><br><b>ابزار عیب‌یاب باسلام برای اجرا روی همان دستگاهی که خطا می‌دهد:</b> چون از این محیط دسترسی شبکه به باسلام وجود ندارد، خطای ۴۰۱ شما اینجا قابل بازتولید نیست و حدس زدن بس است. فایل scripts/basalam-doctor.mjs اضافه شد که روی ترموکس اجرا می‌شود و همان توکن را با چهار حالت مختلف به باسلام می‌فرستد: الف) فقط سه هدر مثل کد PHP، ب) با User-Agent مرورگر، ج) فقط Authorization، د) روی خود مسیر محصولات غرفه. نتیجه دقیقاً می‌گوید مشکل از توکن است یا از شکل هدرها یا از دسترسی غرفه. توکن هرگز چاپ نمی‌شود؛ فقط طول، ساختار، تاریخ انقضا، دسترسی‌ها و یک اثر انگشت کوتاه. اجرا: node scripts/basalam-doctor.mjs &lt;توکن&gt; یا با SCRAPER_URL و ADMIN_TOKEN تا خودش توکن را از برنامهٔ در حال اجرا بخواند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۱.۰</time><br><b>علت واقعی ۴۰۱ باسلام و ۵۲۲ ووکامرس پیدا شد: ما خودمان را مرورگر جا می‌زدیم:</b> مقایسه با کد مرجع PHP نشان داد آن فقط سه هدر می‌فرستد (Accept و Authorization و Content-Type) ولی ما پنج هدر می‌فرستادیم، از جمله یک User-Agent جعلی کروم دسکتاپ و accept-language فارسی. ارسال User-Agent مرورگر به یک API بدون بقیهٔ نشانه‌های مرورگر، یک الگوی شناخته‌شده برای فایروال‌هاست: باسلام پیش از خواندن توکن، درخواست را رد می‌کند و همان را «invalid authorization header» گزارش می‌دهد — دقیقاً به همین دلیل حتی مسیر فقط‌خواندنی users/me هم ۴۰۱ می‌داد و دو توکن سالمِ متفاوت هم‌زمان رد می‌شدند، و ووکامرس هم در همان اجرا خطای ۵۲۲ می‌داد. حالا همهٔ فراخوانی‌های API (باسلام و REST ووکامرس، در هر دو نسخهٔ ورکر و نود) فقط هدرهای خودشان را می‌فرستند، دقیقاً مثل کد PHP. استخراج صفحات فروشگاه همچنان هدرهای مرورگر را دارد چون بعضی سایت‌ها بدون آن صفحهٔ ناقص می‌دهند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۰.۰</time><br><b>تطبیق ارسال باسلام با کد مرجع PHP (scraper4.php نسخهٔ ۱۰.۹۱):</b> فایل مرجع از مخزن fazilatma/code خوانده شد و دو تفاوت اساسی پیدا شد که علت خطای ارسال بود. ۱) کد PHP هر محصول را ابتدا با وضعیت ۳۷۹۰ («پیش‌نویس») می‌سازد، نه ۲۹۷۶ («منتشرشده») که ما می‌فرستادیم. ۲) کد PHP در درخواستِ ساخت، فیلدهای photo و photos را <b>اصلاً ارسال نمی‌کند</b>؛ عکس‌ها و وضعیت نهایی در یک درخواست PATCH جداگانه بعد از ساخت محصول فرستاده می‌شوند. حالا ارسال ما دقیقاً همین دو مرحله را انجام می‌دهد: ساخت پیش‌نویس بدون عکس، سپس PATCH برای انتشار به همراه شناسه‌های عکس. اگر مرحلهٔ دوم خطا بدهد محصول از دست نمی‌رود و در همگام‌سازی بعدی کامل می‌شود. ضمناً تأیید شد هدر احراز هویت PHP هم دقیقاً «Bearer + توکن» است، پس قالب هدر ما از ابتدا درست بوده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۹.۰</time><br><b>بازگشت جدول کامل مغایرت‌گیری وقتی یک مقصد خطا می‌دهد:</b> علت واقعی پیدا شد: در حلقهٔ مغایرت‌گیری، اگر خواندن یک مقصد خطا می‌داد، آن مقصد <b>هیچ سطری</b> تولید نمی‌کرد. وقتی هر سه مقصد خطا می‌دادند، جدول هیچ داده‌ای برای رسم نداشت و محافظ نسخهٔ ۱.۱۰۳.۰ هم آن را با یک پیام خطای ساده جایگزین می‌کرد؛ برای همین جدولی که در نسخه‌های قبل می‌دیدید دیگر نمی‌آمد. حالا مقصدی که پاسخ نمی‌دهد هم برای هر محصول یک خانه تولید می‌کند با وضعیت تازهٔ «مقصد پاسخ نداد» (نشانهٔ ⛔ و رنگ صورتی)، بنابراین جدول کامل با همهٔ محصولات و همهٔ ستون‌های مقصد رسم می‌شود و فهرست خطاها هم بالای آن می‌آید. این وضعیت بالاترین اولویت مرتب‌سازی را دارد تا اول دیده شود. اصلاح در هر دو نسخهٔ ورکر و نود اعمال شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۸.۰</time><br><b>فعال شدن «اتصال غیرمستقیم» باسلام، دستورالعمل cPanel و تاشو شدن فهرست‌ها:</b> ۱) تیک «اتصال غیرمستقیم» در تنظیمات باسلام ذخیره می‌شد ولی هیچ درخواستی آن را نمی‌خواند، یعنی روشن کردنش هیچ اثری نداشت. وقتی هر دو غرفه با دو توکن متفاوت همزمان ۴۰۱ می‌دهند و ووکامرس هم خطای ۵۲۲ می‌دهد، مشکل از توکن نیست؛ لبهٔ شبکهٔ مقصد ترافیک را رد می‌کند. حالا با روشن کردن این تیک، همهٔ درخواست‌های باسلام (users/me، آپلود عکس، ساخت و ویرایش محصول، فهرست محصولات و تغییر وضعیت) از همان Worker واسط عبور می‌کنند و توکن دست‌نخورده منتقل می‌شود. میزبان‌های باسلام هم به فهرست مجاز فایل scripts/ai-proxy-worker.js اضافه شدند وگرنه پراکسی خودش ۴۰۳ می‌داد. اگر تیک روشن باشد ولی آدرس Worker خالی باشد، پیام صریح داده می‌شود. ۲) کارت «cPanel Shared Hosting» با دستورهای کامل به بخش نصب اضافه شد و فایل اجرای آن با پسوند sh دانلود می‌شود. ۳) گزارش تغییرات دیگر یک فهرست بی‌پایان نیست: فقط تازه‌ترین کارت باز است و ۱۴ مورد اخیر دیگر داخل بخش تاشوی «نمایش تغییرات اخیر» رفتند. ۴) دستورالعمل نصب هر محیط (ویندوز، ترموکس، VPS، رندر، کلودفلر، cPanel و بقیه) حالا کشویی است و به‌صورت پیش‌فرض بسته می‌ماند؛ دکمه‌های کپی و دانلود سر جایشان هستند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۷.۰</time><br><b>تشخیص علت واقعی ۴۰۱ باسلام وقتی خود توکن سالم است:</b> بررسی شد که درخواست ما دقیقاً همان چیزی است که SDK رسمی پایتون می‌فرستد: همان آدرس v1/vendors/{id}/products، همان بدنهٔ JSON و همان هدر Bearer. پس وقتی ساختار توکن سالم است ولی باز ۴۰۱ می‌آید، مشکل «قالب هدر» نیست و از روی خود توکن هم قابل تشخیص نیست. حالا در همان لحظهٔ خطا، همان توکن روی مسیر فقط‌خواندنی users/me آزمایش می‌شود و علت دقیق گفته می‌شود: اگر users/me هم ۴۰۱ بدهد یعنی توکن باطل یا نامعتبر است؛ اگر users/me جواب بدهد یعنی توکن سالم است ولی دسترسی «vendor.product.write» ندارد؛ و اگر توکن به غرفهٔ دیگری تعلق داشته باشد، شمارهٔ غرفهٔ واقعی و شمارهٔ تنظیم‌شده کنار هم نشان داده می‌شوند. همچنین اگر فهرست دسترسی‌ها اصلاً داخل توکن نباشد، دیگر پیام گمراه‌کنندهٔ «سالم است» داده نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۶.۰</time><br><b>اجرای پروژه روی هاست اشتراکی cPanel:</b> راهنمای کامل «CPANEL-SHARED-HOSTING.md» و فایل ورودی «scripts/cpanel-app.js» برای Phusion Passenger اضافه شد. با نصب تمیز آزمایش شد: اجرای سرور فقط به ۶ بستهٔ خالص جاوااسکریپت (۵۶ ماژول، ۱۷ مگابایت) و بدون هیچ کامپایلری نیاز دارد؛ playwright و puppeteer و crawlee تنبل بارگذاری می‌شوند و روی هاست اشتراکی قابل حذف‌اند (مرورگر ۳۰۰ مگابایتی دانلود می‌کنند و از سهمیه رد می‌شوند)، و پایگاه‌دادهٔ SQLite از ماژول داخلی node:sqlite می‌آید (نود ۲۲.۵ به بالا) پس better-sqlite3 لازم نیست. نصب SDK پایتون باسلام هم کار می‌کند چون pydantic-core چرخ آمادهٔ manylinux دارد. نکتهٔ مهم: cPanel دستور npm start را اجرا نمی‌کند و پورت را خودش می‌دهد؛ باید فایل شروع app.js باشد و متغیر LOCAL_SCRAPER_AUTO_UPDATE=0 تنظیم شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۵.۰</time><br><b>تشخیص دقیق علت خطای ۴۰۱ باسلام:</b> بررسی شد که هدری که ما می‌فرستیم کاملاً درست است («Bearer» + توکن، بدون نویسهٔ اضافه)؛ پس اگر باز هم «invalid authorization header» می‌گیرید، مشکل از خودِ توکن است نه از قالب هدر. توکن‌های دسترسی شخصی باسلام از نوع JWT هستند، بنابراین حالا بدون هیچ درخواست شبکه‌ای رمزگشایی می‌شوند و دقیقاً گفته می‌شود مشکل چیست: توکن خالی است، هنوز واژهٔ Bearer دارد، فاصله یا خط جدید دارد، تاریخ انقضایش گذشته (با نمایش همان تاریخ)، یا دسترسی «vendor.product.write» را ندارد (با فهرست دسترسی‌های فعلی). این تشخیص هم در متن خطای ارسال و هم در «استعلام جامع باسلام» نمایش داده می‌شود و حتی وقتی اتصال به باسلام برقرار نشود هم کار می‌کند؛ چون کاملاً محلی است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۴.۰</time><br><b>رفع خطای HTTP 401 «invalid authorization header» در ارسال باسلام:</b> اگر توکن را همان‌طور که در مستندات نوشته شده کپی می‌کردید («Bearer eyJ…») همان رشته عیناً ذخیره می‌شد و ما هدر را به شکل «Authorization: Bearer Bearer eyJ…» با دو بار Bearer می‌فرستادیم؛ باسلام آن را نامعتبر می‌داند. حالا توکن هنگام ذخیره و هنگام خواندن پاک‌سازی می‌شود: پیشوندهای Bearer/Token/:Authorization، گیومه‌های دور توکن، فاصله‌های ابتدا و انتها و نویسه‌های نامرئی (نیم‌فاصله، علامت راست‌به‌چپ، فاصلهٔ بدون شکست) حذف می‌شوند. این نویسه‌ها اصلاً در هدر HTTP مجاز نیستند و باعث خطا یا رد شدن درخواست می‌شدند. توکن‌هایی که قبلاً اشتباه ذخیره شده‌اند هم هنگام بارگذاری خودکار اصلاح می‌شوند و نیازی به وارد کردن دوباره نیست. این پاک‌سازی برای غرفه‌های اضافه و متغیر محیطی BASALAM_TOKEN هم اعمال می‌شود. همچنین متن خطای ۴۰۱ حالا راهنمای رفع مشکل را نشان می‌دهد و کنار فیلد توکن نوشته شده که فقط خود توکن بدون واژهٔ Bearer وارد شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۳.۰</time><br><b>رفع خطای ۴۰۴ پراکسی هوش مصنوعی و بازگشت جدول ماتریسی مغایرت‌گیری:</b> ۱) اگر آدرس پراکسی بدون //:https نوشته می‌شد (مثل proxy.fazilat-ma.workers.dev)، آن رشته یک آدرس «نسبی» بود و روی دامنهٔ خود اسکرپر حل می‌شد؛ به همین دلیل همهٔ مدل‌ها خطای ۴۰۴ می‌دادند در حالی که اتصال مستقیم کار می‌کرد. حالا آدرس خودکار اصلاح می‌شود (در هر دو نسخهٔ ورکر و نود، هم برای هوش مصنوعی و هم برای ووکامرس و استخراج). ۲) فایل آمادهٔ scripts/ai-proxy-worker.js اضافه شد؛ اگر ورکر واسط شما مسیر url? یا هدر x-scraper-target را پیاده نکرده باشد، باز هم همه چیز ۴۰۴ می‌شود. این فایل را در یک Worker جدید بگذارید و آدرسش را وارد کنید. ۳) در بخش مغایرت‌گیری، «پیش‌نمایش» همان جدول ماتریسی «اجرا» را نشان می‌دهد (قبلاً فقط تراشه‌های شمارش را نشان می‌داد و جدول فقط بعد از اجرا می‌آمد). ۴) اگر همهٔ مقصدها خطا بدهند (مثل HTTP 401)، دیگر پیام سبز «همهٔ مقصدها با مبدأ یکسان‌اند» نمایش داده نمی‌شود؛ به جای آن هشدار قرمز «هیچ مقصدی پاسخ نداد» با فهرست خطاها می‌آید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۲.۰</time><br><b>رفع خطای HTTP 400 باسلام، نتایج تک‌ستونه با مودال محصول و پرکردن خودکار تنظیمات باسلام:</b> ۱) خطای «photo: Input should be a valid integer» و «status: Field required» برطرف شد. باسلام برای فیلد photo شناسهٔ عددی فایل می‌خواهد نه آدرس تصویر؛ حالا تصاویر ابتدا به /v1/files آپلود می‌شوند و شناسهٔ عددی آن‌ها ارسال می‌شود. فیلد اجباری status (۲۹۷۶ = منتشرشده) اضافه شد و نام درست فیلد قیمت هم primary_price است نه price. اگر آپلود تصویر شکست بخورد، محصول بدون عکس ارسال می‌شود تا کل ارسال از دست نرود. ۲) بخش نتایج تک‌ستونه شد و هر ردیف تصویر، نام همراه پسوند کد، قیمت پایه با خط وسط و قیمت نهایی به تومان (غرفهٔ پیش‌فرض باسلام) را نشان می‌دهد. ۳) با کلیک روی هر محصول، مودال آن باز می‌شود: گالری تصاویر، جدول قیمت نهایی برای همهٔ غرفه‌ها و سایت‌ها (با معادل ریال)، جزئیات محصول، تنوع‌ها و توضیحات کامل. ۴) در تنظیمات باسلام، با زدن دکمهٔ تست، شناسهٔ غرفه و روزهای آماده‌سازی از روی توکن استعلام و خودکار پر می‌شوند؛ برای غرفه‌های اضافه هم شناسه و نام غرفه پر می‌شود. نسخهٔ نود تا امروز فقط /categories را صدا می‌زد و هیچ مشخصاتی برنمی‌گرداند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · 2026-09-10 · نسخهٔ ۱.۱۰۱.۰</time><br><b>ارسال به همهٔ غرفه‌ها با SDK رسمی باسلام، شمارنده‌های کلیک‌شدنی و حذف تکراری‌ها در همهٔ مقصدها:</b> ۱) ارسال باسلام به همهٔ غرفه‌ها انجام می‌شد، اما اگر یک غرفه خطا می‌داد کل حلقه رها می‌شد و موفقیت غرفه‌های قبلی هم گم می‌شد؛ حالا هر غرفه جدا گزارش می‌شود و خطای یکی جلوی بقیه را نمی‌گیرد. ۲) SDK رسمی باسلام فقط برای پایتون منتشر شده و هیچ بستهٔ npm ندارد؛ بنابراین مسیر «اول SDK» همیشه بی‌صدا به API برمی‌گشت. حالا SDK واقعی از طریق پل python3 اجرا می‌شود و اگر پایتون یا SDK نبود، خودکار به API برمی‌گردد. روی ترموکس دستور pip install basalam-sdk به راه‌اندازی اضافه شد. ۳) با کلیک روی شمارنده‌های هر کار، نام محصول، قیمت آن و نام غرفه دیده می‌شود و روی شمارندهٔ خطاها متن کامل خطا نمایش داده می‌شود. در نسخهٔ نود اصلاً جزئیاتی ثبت نمی‌شد و این پنجره خالی بود؛ حالا هر دو نسخه یکسان ثبت می‌کنند. ۴) در بخش مغایرت‌گیری، دکمه‌های «پیش‌نمایش تکراری‌های مقصد» و «حذف تکراری‌ها در همهٔ مقصدها» اضافه شد: عنوان‌های یکسان پس از حذف پسوند «(کد ایکس)» یک گروه تکراری هستند و به‌صورت پیش‌فرض گران‌ترین نسخه نگه داشته و بقیه حذف می‌شوند (ووکامرس حذف واقعی، باسلام بایگانی ۴۱۸۴). محصولات محلی دست‌نخورده می‌مانند. ۵) حذف تکراری سمت سرور که تا امروز فقط روی کلودفلر بود به نسخهٔ نود هم اضافه شد؛ این دکمه‌ها روی ترموکس و VPS بی‌اثر بودند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · 2026-09-10 · نسخهٔ ۱.۱۰۰.۰</time><br><b>آپدیت با ریفرش دیپلویر، حذف جدول خودکار تست مدل‌ها و محدود شدن هماهنگ‌سازی به محصولات دارای پسوند کد:</b> ۱) تا حالا صفحهٔ دیپلویر فقط وضعیت ذخیره‌شده را نشان می‌داد و اگر تایمر پس‌زمینه غیرفعال یا کند بود، کاربر روی نسخهٔ قدیمی می‌ماند. حالا هر بار ریفرش صفحه، همهٔ شاخه‌ها دوباره اسکن و جدیدترین نسخه خودکار نصب می‌شود (با محدودیت ۱۰ ثانیه تا ریفرش‌های پشت‌سرهم فشار نیاورند). ۲) جدول نتایج تست مدل‌های هوش مصنوعی دیگر با هر بار بازکردن صفحه باز نمی‌شود؛ فقط وقتی همان تب پایان یک اجرا را دیده باشد. دکمهٔ «📊 نمایش آخرین جدول» همچنان کار می‌کند. ۳) مغایرت‌گیری و هماهنگ‌سازی فقط روی محصولاتی انجام می‌شود که عنوانشان به پسوند «(کد ایکس)» ختم می‌شود؛ ایکس می‌تواند هر حرف یا عددی باشد (فارسی، عربی یا لاتین). محصولات بدون این پسوند نه مقایسه و نه منتشر می‌شوند و تعدادشان زیر جدول نوشته می‌شود. ۴) ستون تازهٔ «تکراری» در جدول هماهنگ‌سازی نشان می‌دهد چند محصول با نادیده‌گرفتن پسوند کد، عنوان یکسان دارند (مثلاً «نام (کد ۱)» و «نام (کد A2)» می‌شود ۲) و گروه‌های بیش از یکی با رنگ زرد مشخص می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · 2026-09-10 · نسخهٔ ۱.۹۹.۰</time><br><b>پیش‌نمایش تمام‌صفحه، پروکسی برای استخراج، سلکتوریابی خودکار و رفع ایراد موتورهای استخراج:</b> ۱) «پیش‌نمایش هماهنگ‌سازی» حالا تمام‌صفحه باز می‌شود و ستون «پروفایل» که در مرورگر موبایل خالی دیده می‌شد درست شد. ۲) آدرس پروکسی/Worker که در «روش اتصال» وارد می‌کنید تا حالا فقط برای تماس با مدل‌های هوش مصنوعی استفاده می‌شد و صفحات فروشگاه مبدأ مستقیم گرفته می‌شد؛ به همین دلیل با وجود تنظیم پروکسی باز هم خطای تحریم می‌گرفتید. حالا تمام ترافیک استخراج از همان مسیر عبور می‌کند، دکمهٔ عیب‌یابی هم پروکسی را واقعاً تست می‌کند و صفحهٔ چالش ضدربات در اجرای Node هم شناسایی می‌شود. ۳) در مرحلهٔ استخراج جزئیات، اول خود موتور استخراج سلکتورهای گم‌شده را پیدا و دوباره تلاش می‌کند و فقط اگر موفق نشد، توضیح‌ساز هوشمند به‌عنوان فال‌بک وارد می‌شود. ۴) ایراد جزئی موتورهای استخراج رفع شد: انتخاب دستی موتور در اجرای واقعی نادیده گرفته می‌شد و موتورهای کشف خودکار جلوتر از آن اجرا می‌شدند؛ به همین دلیل نتیجهٔ «تست سه صفحه‌ای» با استخراج واقعی فرق داشت. حالا موتور انتخاب‌شده اول اجرا می‌شود و بقیه فقط وقتی آن چیزی پیدا نکند به‌عنوان فال‌بک امتحان می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۸.۰</time><br><b>ضریب تعدیل قیمت برای ووکامرس و غرفهٔ پیش‌فرض باسلام:</b> تا حالا فقط غرفه‌های اضافی باسلام فیلد «تغییر قیمت ٪» داشتند و ووکامرس و غرفهٔ پیش‌فرض به‌صورت ثابت روی صفر بودند. حالا در منوی «🛒 ووکامرس» فیلد «تغییر قیمت ٪» اضافه شده و در «🏪 باسلام» هم برای غرفهٔ پیش‌فرض. این ضریب هم روی قیمتی که به مقصد ارسال می‌شود اعمال می‌گردد (شامل تنوع‌ها) و هم در «مغایرت‌گیری» و «پیش‌نمایش هماهنگ‌سازی» به‌عنوان قیمتِ صحیح در نظر گرفته می‌شود. <b>دکمهٔ پیش‌نمایش هماهنگ‌سازی:</b> این عملیات داخل یک درخواست انجام می‌شود و هیچ اجرای پس‌زمینه‌ای نمی‌ساخت، برای همین در «مدیر وظایف» چیزی دیده نمی‌شد و دکمه مرده به نظر می‌رسید. حالا بلافاصله پیام «در حال خواندن مقصدها…» نشان داده می‌شود و یک ردیف زنده در مدیر وظایف ثبت می‌گردد که در پایان نتیجه را نشان می‌دهد. اگر نتیجه خالی باشد هم دلیلش صریح گفته می‌شود: «هیچ مقصدی تنظیم نشده»، «هنوز محصولی استخراج نشده» یا «همه‌چیز هماهنگ است». <b>گزارش تغییرات کوتاه شد:</b> ۱۱۲ کارت تغییرات همیشه باز بود و رسیدن به بخش‌های پایین منوی همبرگری را طولانی می‌کرد. حالا فقط ۱۲ مورد آخر باز است و بقیه داخل یک بخش جمع‌شدهٔ «نمایش همهٔ تغییرات قدیمی‌تر» با اسکرول داخلی قرار دارند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۷.۱</time><br><b>گزارش نادرست «خطا» در به‌روزرسانی موفق:</b> مرحلهٔ پاک‌کردن credential.helper وقتی اصلاً تنظیم نشده باشد (حالت عادی یک کلون تازه) کد خطا برمی‌گرداند. این مرحله در محاسبهٔ موفقیت کل عملیات شمرده می‌شد، بنابراین یک به‌روزرسانی کاملاً موفق در گزارش با وضعیت ناموفق ثبت می‌شد. حالا این مرحله اختیاری است و در نتیجهٔ نهایی تأثیر نمی‌گذارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۷.۰</time><br><b>پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه نجات:</b> تا امروز «پیشنهاد خودکار» فقط وقتی کار می‌کرد که یک موتور استخراج از قبل محصولی پیدا کرده بود؛ یعنی دقیقاً در بدترین حالت (صفر محصول) هیچ کمکی نمی‌کرد و اجرا با پیام «محصولی پیدا نشد» شکست می‌خورد. حالا در سه حالت به‌صورت خودکار اجرا می‌شود: (۱) وقتی سلکتورهای فهرست خالی‌اند، (۲) وقتی اتصال به سایت برقرار شده اما صفر محصول استخراج شده، (۳) وقتی موتور استخراج هیچ کارتی پیدا نکرده است. در این حالت‌ها سلکتورها دوباره کشف می‌شوند و همان صفحه یک‌بار دیگر استخراج می‌شود؛ اگر جواب داد، اجرا ادامه پیدا می‌کند و در گزارش می‌نویسد چند محصول نجات داده شد. <b>همین مکانیزم برای جزئیات:</b> اگر سلکتورهای جزئیات روی یک محصول واقعی هیچ فیلدی را پر نکنند (یعنی همهٔ محصولات با توضیحات خالی ذخیره می‌شدند)، سلکتورهای جزئیات هم دوباره کشف و آزمایش می‌شوند. <b>در تب سلکتورها:</b> دکمه‌های «آزمایش سلکتورها» و «آزمایش جزئیات» وقتی هیچ فیلدی جواب ندهد، خودشان پیشنهاد خودکار را اجرا می‌کنند و دیگر فقط توصیه‌ٔ متنی نمی‌دهند. این نجات در هر اجرا فقط یک‌بار انجام می‌شود (روی Cloudflare هم در checkpoint ذخیره می‌شود) تا حلقهٔ بی‌پایان ایجاد نشود. <b>رفع خودکارنشدن به‌روزرسانی از گیت‌هاب:</b> نصب‌کنندهٔ محلی هنگام هر بررسی، فایل‌های ردیابی‌نشده (مثل data/ و storage/ و یادداشت‌های شخصی) را «تغییر محلی» حساب می‌کرد و با پیام «auto-update paused» متوقف می‌شد؛ برای همین همیشه باید دستی Upgrade from GitHub می‌زدید. حالا فقط تغییرات فایل‌های ردیابی‌شده شمرده می‌شود (git reset --hard هیچ‌وقت فایل ردیابی‌نشده را پاک نمی‌کند) و یک .gitignore ریشه هم اضافه شد تا پوشه‌های ساخت و داده اصلاً دیده نشوند. به‌روزرسانی خودکار حالا واقعاً خودکار است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۶.۰</time><br><b>جدول رنگی پیش‌نمایش هماهنگ‌سازی:</b> پیش‌تر دکمهٔ «پیش‌نمایش هماهنگ‌سازی» فقط یک متن JSON خام نشان می‌داد. حالا یک جدول ماتریسی است: هر سطر یک محصول و هر ستون یک مقصد (ووکامرس و تک‌تک غرفه‌های باسلام). رنگ هر سلول وضعیت همان محصول در همان مقصد را می‌گوید: سبز = هماهنگ، نارنجی = اختلاف قیمت (قیمت فعلی ← قیمت صحیح)، آبی = در مقصد نیست، قرمز = فقط در مقصد، بنفش = قیمت مبدأ ثبت نشده، خاکستری = به این مقصد ارسال نمی‌شود. هر سلول علاوه بر رنگ، نشانه (✓ ≠ + ! ?) و برچسب فارسی دارد تا فقط به رنگ متکی نباشد، و با نگه‌داشتن ماوس جزئیات کامل (مبدأ، انتظار، مقصد و علت) را نشان می‌دهد. ستون نام محصول هنگام پیمایش افقی ثابت می‌ماند، مشکل‌دارترین محصولات بالا می‌آیند، و راهنمای رنگ‌ها بالای جدول نمایش داده می‌شود. تا وقتی دکمهٔ «اجرا و هماهنگ‌سازی» را نزده‌اید هیچ تغییری در مقصدها ثبت نمی‌شود؛ پس از اجرا هم همین جدول با وضعیت واقعی پس از هماهنگ‌سازی دوباره نشان داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۳.۰</time><br><b>رفع خطای ECONNREFUSED 127.0.0.1:5432 در ترماکس، چراغ قرمز وضعیت و استخراج صفر محصول:</b> در ترماکس با هر بار تازه‌سازی صفحه، خطای connect ECONNREFUSED 127.0.0.1:5432 ظاهر و محو می‌شد و چراغ وضعیت هرگز سبز نمی‌شد. علت: نصب‌کننده برای ترماکس همیشه DATABASE_URL را به PostgreSQL محلی (postgresql://USER@localhost:5432/scraper4) تغییر می‌داد، در حالی که روی گوشی هیچ سرور PostgreSQL نصب نیست. چهار اصلاح: ۱) ترماکس مانند ویندوز به‌صورت پیش‌فرض از SQLite داخلی Node (data/scraper4.sqlite) استفاده می‌کند و هیچ سرویسی لازم نیست؛ اگر خودتان PostgreSQL تنظیم کرده باشید همچنان محترم است. ۲) اگر فایل .env.local قبلاً خراب شده باشد، برنامه هنگام رد شدن اتصال به PostgreSQL محلی، به‌صورت خودکار به SQLite سوئیچ می‌کند (فقط برای دیتابیس محلی؛ دیتابیس راه دور عمداً خطا می‌دهد تا داده‌های واقعی پنهان نشود). ۳) پیام خطای دیتابیس دیگر خالی نیست: AggregateError کتابخانهٔ pg باز می‌شود و دلیل واقعی همراه راه‌حل نمایش داده می‌شود. ۴) خطای دیتابیس دیگر پس از ۶ ثانیه محو نمی‌شود و چراغ وضعیت دقیقاً علت قرمز بودن را نشان می‌دهد. راهنمای ترماکس و کارت PostgreSQL آن نیز به‌روز شد. ۵) استخراج صفر محصول در barfbox: انتخابگر بصری مسیر کامل سند (section.grid > div.card:nth-of-type(1) > …) ذخیره می‌کرد؛ اما استخراج فقط داخل هر کارت را جستجو می‌کند، پس هیچ کارتی عنوان پیدا نمی‌کرد و نتیجه صفر می‌شد، در حالی که بررسی نشانه‌ها (کل صفحه) سبز بود. حالا مسیرهای مطلق داخل هر کارت دوباره لنگر می‌شوند. ۶) سلکتور ظرف که با :nth-of-type(1) فقط یک کارت را می‌گرفت، خودکار به همهٔ کارت‌ها گسترش می‌یابد (در نود و در Cloudflare Worker). ۷) انتخابگر بصری از این پس سلکتور ظرف را تکرارشونده و سلکتور فیلدها را نسبی به ظرف ذخیره می‌کند. ۸) گزارش عیب‌یابی دیگر عدد متناقض نمی‌دهد و تعداد واقعی ظرف‌های استفاده‌شده را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۱.۰</time><br><b>رفع خطای «پیدا نشد ۴۰۴» همهٔ دکمه‌های عیب‌یابی در ترموکس و هر اجرای نود:</b> دکمهٔ «عیب‌یابی استخراج» و بقیهٔ ابزارهای عیب‌یابی فقط روی Cloudflare Worker پیاده‌سازی شده بودند و روی نسخهٔ نود اصلاً مسیری برایشان ثبت نشده بود؛ به همین دلیل با اینکه پیش‌نمایش سلکتور بصری همان سایت را بدون مشکل باز می‌کرد، هر کلیک روی دکمه‌های عیب‌یابی خطای ۴۰۴ می‌داد. با مقایسهٔ مسیرهای ثبت‌شدهٔ دو محیط، سیزده مسیر که داشبورد صدا می‌زد ولی روی نود وجود نداشت شناسایی و اضافه شد: عیب‌یابی استخراج پروفایل، دیباگ جامع، پیشنهاد خودکار سلکتور، تاریخچهٔ ورود اطلاعات و پاک‌کردن آن، اولویت‌بندی کارها و اجراها، فهرست ابزارهای دستیار، کاتالوگ مدل‌های Workers AI و ورود داده‌های یادگیری دسته‌بندی. عیب‌یاب استخراج روی نود همان pipeline واقعی اسکرپر را اجرا می‌کند (دریافت صفحه، استخراج فهرست، بررسی نشانهٔ سلکتورها و استخراج جزئیات) و موتور برنده را هم گزارش می‌دهد، بنابراین گزارش دقیقاً همان چیزی است که در اجرای واقعی رخ می‌دهد. دیباگ جامع هم مخصوص نود بازنویسی شد: به‌جای بررسی D1 و بایندینگ‌های کلودفلر که در گوشی معنایی ندارند، پایگاه‌دادهٔ واقعی در حال استفاده، کامل‌بودن جدول‌ها، ردیف‌های یتیم، کارهای گیرکرده و نبودِ مرورگر روی اندروید را گزارش می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۰.۰</time><br><b>رفع سه ایراد ترموکس: به‌روزرسانی خودکار همراه با ساخت، اجرای واقعی تست مدل‌های هوش مصنوعی، و استخراج‌نشدن پروفایلی که در کلودفلر کار می‌کند:</b> اول، دیپلویر وقتی نسخهٔ تازه‌ای روی شاخه می‌دید کد را می‌گرفت و خودش را دوباره راه‌اندازی می‌کرد، اما اسکرپر را خاموش‌شده رها می‌کرد و کاربر مجبور بود دستی دکمهٔ ساخت و اجرا را بزند؛ حالا اگر اسکرپر در حال اجرا باشد پس از به‌روزرسانی خودکار دوباره بالا می‌آید و چون فرمان اجرای آن با render:build شروع می‌شود، هم دیپلویر و هم اسکرپر با کد جدید ساخته می‌شوند و کاربر فقط کافی است صفحهٔ اسکرپر را تازه کند. دوم، در ترموکس تست مدل‌ها هرگز شروع نمی‌شد و رابط کاربری همیشه «در صف سرور» را نشان می‌داد؛ علت این بود که نسخهٔ نود اصلاً موتور اجرای پس‌زمینه نداشت و آدرس ‎/api/ai/test-runs/current‎ همیشه مقدار خالی برمی‌گرداند، در حالی که مدل‌ها واقعاً آزمایش می‌شدند ولی هیچ گزارشی از پیشرفت ثبت نمی‌شد؛ حالا نسخهٔ نود هم دقیقاً مثل Worker یک اجرای واقعی با وضعیت صف، در حال اجرا و پایان‌یافته می‌سازد و پیشرفت مدل‌به‌مدل، توقف و ادامه را گزارش می‌کند. سوم، پروفایلی که در کلودفلر به‌راحتی محصول استخراج می‌کرد در ترموکس هیچ محصولی نمی‌داد، چون در حالت خودکارِ نسخهٔ نود موتور htmlrewriter اصلاً امتحان نمی‌شد و نوبت به مرورگرهایی می‌رسید که روی اندروید نصب نیستند؛ حالا ترتیب موتورها با Worker یکسان است و موتور ذخیره‌شدهٔ پروفایل هم در ابتدای صف قرار می‌گیرد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۹.۰</time><br><b>اندازه‌گیری واقعی سهمیهٔ باقی‌ماندهٔ Cloudflare D1 پیش از تمام‌شدن آن:</b> تا امروز برنامه فقط بعد از قطع‌شدن سرویس متوجه اتمام سهمیه می‌شد و پیام خطا نشان می‌داد. کلودفلر هیچ API برای گفتنِ «چقدر سهمیه مانده» در اختیار Worker نمی‌گذارد، اما هر کوئری D1 در پاسخ خود دقیقاً گزارش می‌دهد که چند سطر خوانده و چند سطر نوشته است؛ همین دو عدد واحد محاسبهٔ سهمیه در پلن رایگان هستند: روزانه ۵ میلیون سطر خواندن و ۱۰۰ هزار سطر نوشتن، با ریست ۰۰:۰۰ UTC. قبلاً این اطلاعات دور ریخته می‌شد. اکنون همهٔ کوئری‌ها شمارش می‌شوند و مصرف امروز در بخش فعالیت‌ها با دو نوار پیشرفت نمایش داده می‌شود که زیر ۷۰ درصد سبز، از ۷۰ درصد زرد و از ۹۰ درصد قرمز می‌شود. مسیر جدید /api/quota هم همین اعداد را همراه مقدار باقی‌مانده، درصد مصرف و زمان دقیق ریست برمی‌گرداند. نکتهٔ مهم: خودِ شمارنده نباید به مشکل اضافه کند، بنابراین در حافظه جمع می‌شود و حداکثر یک‌بار در دقیقه ذخیره می‌گردد، نه به‌ازای هر کوئری. محدودهٔ اندازه‌گیری صادقانه اعلام می‌شود: این عدد فقط مصرف همین Worker است و مصرف داشبورد کلودفلر، wrangler یا Workerهای دیگرِ همان پایگاه داده در آن دیده نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۸.۰</time><br><b>رفع خطای «ابتدا ADMIN_TOKEN را تعریف کنید» هنگام درون‌ریزی روی ترموکس و ساخت خودکار کلید:</b> روی اجراگر Node، متغیر ADMIN_TOKEN دو کار متفاوت را هم‌زمان انجام می‌داد: هم رمز عبور صندوق رمزنگاری اطلاعات اتصال بود و هم توکن ورود به API. در ترموکس و ویندوز معمولاً این متغیر تعریف نشده است؛ در آن حالت API عمداً بدون احراز هویت باز می‌ماند، اما صندوق هنگام ذخیره خطا می‌داد. نتیجه این بود که خواندن اطلاعات کار می‌کرد ولی هر درون‌ریزی یا ذخیره‌ای با پیام «برای ذخیره امن اطلاعات اتصال، ابتدا ADMIN_TOKEN را ... تعریف کنید» شکست می‌خورد. اکنون اگر ADMIN_TOKEN تعریف نشده باشد، برنامه خودش یک کلید تصادفی ۳۲ بایتی می‌سازد و آن را در فایل data/vault.key با دسترسی فقط مالک ذخیره می‌کند؛ این فایل در data قرار دارد که در گیت نادیده گرفته می‌شود و در راه‌اندازی‌های بعدی همان کلید دوباره استفاده می‌شود تا اطلاعات ذخیره‌شده خوانا بمانند. نکتهٔ امنیتی مهم: عمداً ADMIN_TOKEN ساخته نمی‌شود، چون ساختن آن باعث می‌شد احراز هویت API ناگهان روشن شود و کاربر از داشبورد خودش بیرون بماند؛ کلید تولیدشده فقط رمز صندوق است و هرگز به‌عنوان توکن ورود پذیرفته نمی‌شود. اگر ADMIN_TOKEN را خودتان تعریف کرده باشید، دقیقاً مثل قبل همان استفاده می‌شود و هیچ فایل کلیدی ساخته نمی‌شود. متن خطاها هم اصلاح شد؛ پیام قبلی جملهٔ فارسی و انگلیسی را به‌هم چسبانده بود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۷.۰</time><br><b>رفع کار نکردن دکمه‌ها در آدرس http://localhost:8790/scraper/ در ترموکس:</b> صفحه باز می‌شد ولی هیچ دکمه‌ای کار نمی‌کرد، در حالی که همان صفحه روی http://localhost:3000/ درست بود. علت: داشبورد همهٔ آدرس‌ها را به‌صورت مطلق صدا می‌زد «مثلاً درخواست مستقیم به /api/profiles»؛ وقتی صفحه زیر مسیر /scraper/ باز می‌شد، مرورگر این آدرس‌ها را نسبت به ریشهٔ سایت حل می‌کرد و درخواست به‌جای اسکرپر به خودِ دیپلویر می‌رسید و با خطای ۴۰۱ رد می‌شد. پروکسی دیپلویر برای این حالت به هدر Referer تکیه کرده بود، اما اسکرپر هدر referrer-policy: no-referrer می‌فرستد و مرورگر اصلاً Referer نمی‌فرستد؛ به همین دلیل حتی بارگذاری /dashboard.js و فونت‌ها هم ۴۰۱ می‌شد. اکنون داشبورد مسیر نصب خود را از روی آدرس صفحه تشخیص می‌دهد و همهٔ درخواست‌ها (API، health، فونت‌ها، انتخاب‌گر بصری و خود dashboard.js) نسبی می‌شوند، و آدرس /scraper بدون اسلش پایانی به /scraper/ هدایت می‌شود. رفتار روی پورت ۳۰۰۰ و روی Cloudflare هیچ تغییری نمی‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۶.۰</time><br><b>حذف نام Render از پیام‌های محیط‌هایی که اصلاً Render نیستند:</b> اجراگر Node یک بیلد مشترک است که روی ترموکس، ویندوز، VPS، Codespaces و Render اجرا می‌شود، اما نام Render در متن خطاها و راهنماها ثابت نوشته شده بود. به همین دلیل کاربر ترموکس پیام‌هایی مثل «ADMIN_TOKEN را در Render تعریف کنید» یا «Create Render PostgreSQL» می‌دید، مسیر /api/version مقدار local-node-render برمی‌گرداند، فایل بکاپ با نام scraper4-render ساخته می‌شد و صفحهٔ خطای پایگاه داده خود را «Termux/Render» معرفی می‌کرد. اکنون محیط واقعی تشخیص داده می‌شود (ترموکس از روی android یا PREFIX، ویندوز، Codespaces، Render و VPS ساده) و هر پیام، راهنمای همان محیط را نشان می‌دهد؛ مثلاً روی ترموکس به‌جای پنل Render، دستور pkg install postgresql یا استفاده از پایگاه دادهٔ داخلی SQLite پیشنهاد می‌شود و کلید در فایل .env.local تعریف می‌شود. در سمت Cloudflare هم پیام موتورهای مرورگر که می‌گفت «از Render/VPS استفاده کنید» به فارسی و با نام همهٔ محیط‌های Node بازنویسی شد. نام فایل بکاپ به scraper4-backup تغییر کرد ولی بکاپ‌های قدیمی با نام scraper4-render همچنان قابل بازیابی‌اند (در Worker هم پذیرفته می‌شوند) و فایل نامعتبر همچنان رد می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۵.۰</time><br><b>رفع خطای «کلید API وارد نشده است» برای همهٔ ارائه‌دهنده‌ها در اجراگر Node (ترموکس/ویندوز/سرور):</b> برخلاف تصور اولیه، ایراد از درون‌ریزی نبود؛ درون‌ریز کلیدها را درست می‌خواند و درست ذخیره می‌کرد. مشکل در خواندن کلید هنگام استفاده بود: هر ارائه‌دهنده می‌تواند کلیدهایش را در فهرست apiKeys نگه دارد (رشتهٔ ساده، یا شیء دارای برچسب مثل {label, token}، یا برای Cloudflare شیء {accountId, token})، اما فایل render-src/ai.ts فقط فیلد تکیِ apiKey را می‌خواند و فهرست apiKeys را کاملاً نادیده می‌گرفت. به همین دلیل هر ارائه‌دهنده‌ای که کلیدش از راه درون‌ریزی یا ویرایشگر چندکلیدی ذخیره شده بود، «بدون کلید» دیده می‌شد و تست همهٔ مدل‌ها برای تک‌تک آن‌ها شکست می‌خورد. اکنون همان منطق Worker در Node هم اجرا می‌شود: اول کلید اختصاصی، بعد اولین کلید فعال از فهرست apiKeys (کلید خاموش‌شده بر کلید فعال ترجیح داده نمی‌شود)، و در آخر کلید مشترک. یک ایراد دوم هم رفع شد: خزانهٔ Node فهرست کلیدها را از نوع «رشته» تعریف کرده بود و هر کلید Cloudflare را به یک توکن خالی تبدیل می‌کرد؛ به این ترتیب شناسهٔ حساب (accountId) در هر بار ذخیره از بین می‌رفت و آدرس سرویس Cloudflare دیگر ساخته نمی‌شد. اکنون شناسهٔ حساب، برچسب و وضعیت روشن/خاموش هر کلید مثل Worker حفظ می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۴.۰</time><br><b>رفع «هیچ محصولی روی ترموکس استخراج نمی‌شود» برای پروفایلی که در کلودفلر کامل کار می‌کند:</b> سه ایراد جداگانه دست‌به‌دست هم داده بودند. ۱) «تست سرعت ۳ صفحه» روی اجراگر Node اصلاً موتور htmlrewriter را آزمایش نمی‌کرد؛ یعنی همان موتوری که روی کلودفلر ۶۶۰ محصول استخراج می‌کند هرگز شانس انتخاب‌شدن نداشت (این موتور روی Node هم پیاده‌سازی شده است). حالا آزمایش می‌شود. ۲) انتخاب موتور برنده فقط براساس «محصول در دقیقه» بود، بنابراین موتور heuristic که تنها ۱ محصول تصادفی پیدا کرده بود برندهٔ آزمایش می‌شد و به‌عنوان موتور پیش‌فرض پروفایل ذخیره می‌شد؛ از آن پس هر استخراج با heuristic اجرا می‌شد و صفر محصول می‌داد. اکنون معیار اول «تعداد محصول» است و اگر بهترین موتور کمتر از ۲ محصول پیدا کند، هیچ‌چیز ذخیره نمی‌شود و تنظیم درست شما دست‌نخورده می‌ماند. ۳) اجراگر Node خودش را با عنوان Scraper4Render/1.0 معرفی می‌کرد و هدرهای مرورگر (accept-language و cache-control) را نمی‌فرستاد، در حالی که Worker یک User-Agent واقعی کروم می‌فرستد؛ بسیاری از فروشگاه‌ها به درخواست ربات صفحهٔ ناقص یا صفحهٔ چالش می‌دهند. حالا هر دو اجراگر دقیقاً یک‌شکل درخواست می‌دهند (با USER_AGENT قابل تغییر است). ضمناً موتورهای مرورگر (Playwright/Puppeteer/Crawlee) روی اندروید بیلد ندارند؛ به‌جای خطای ترسناک دانلود، اکنون «در دسترس نیست» علامت می‌خورند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۴.۰</time><br><b>نمایش زندهٔ مرحلهٔ استخراج جزئیات:</b> تا امروز این مرحله کاملاً بی‌صدا بود: شمارندهٔ کار را به‌روز نمی‌کرد و چیزی ذخیره نمی‌کرد، برای همین کارت صف روی اعداد مرحلهٔ فهرست ثابت می‌ماند و معلوم نبود اصلاً کاری در حال انجام است یا برنامه گیر کرده. حالا مرحلهٔ جزئیات شمارندهٔ خودش را دارد (مثلاً «۴۵ از ۳۰۱») و با هر محصول جلو می‌رود؛ نام هر محصولی که جزئیاتش خوانده می‌شود در گزارش زنده ثبت می‌گردد و قابل کلیک است، و در پایان نوشته می‌شود چند محصول واقعاً تکمیل شدند. خطای هر محصول هم جداگانه با نام همان محصول گزارش می‌شود. برای اینکه این کار خودش به پایگاه‌داده فشار نیاورد، وضعیت هر پنج محصول یک‌بار ذخیره می‌شود نه به‌ازای هر محصول. همچنین نام مرحله‌ها دیگر به‌صورت کلید خام مثل details-save-sync نشان داده نمی‌شود و به فارسی نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۳.۰</time><br><b>رفع بازگشت دراپ‌داون صفحه‌بندی به گزینهٔ اول و پیاده‌سازی چهار حالت جامانده:</b> داشبورد هفت حالت صفحه‌بندی نشان می‌داد، اما نسخهٔ نود فقط سه حالت (پارامتر page، مسیر page/2/ و بدون صفحه‌بندی) را می‌پذیرفت؛ هر انتخاب دیگری هنگام ذخیره بی‌صدا به «پارامتر page» تبدیل می‌شد. برای همین دراپ‌داون به گزینهٔ اول برمی‌گشت و فقط یک صفحه استخراج می‌شد. حالا هر هفت حالت هم پذیرفته و هم واقعاً پیاده‌سازی شده‌اند: پارامتر سفارشی، الگوی مسیر با {page}، الگوی کامل URL و «دکمهٔ صفحهٔ بعد». حالت «دکمهٔ صفحهٔ بعد» آدرس قابل‌محاسبه ندارد؛ بنابراین لینک بعدی از خودِ همان صفحه (بدون درخواست اضافه) خوانده می‌شود و اگر پیدا نشود، صفحه‌بندی با پیام روشن پایان می‌یابد. نکته برای سایت شما: آدرس‌هایی مثل page/2/ با گزینهٔ سادهٔ «مسیر page/2/» هم کار می‌کنند و نیازی به سلکتور a.next نیست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۳.۰</time><br><b>رفع ریشه‌ای شکست ساخت اسکریپر روی ترموکس (خطای «cannot find esbuild» و کد خروج ۱):</b> دکمهٔ «باز کردن اسکریپر» روی ترموکس با خطای پراکسی شکست می‌خورد و لاگِ تشخیصیِ نسخهٔ ۱.۸۲.۰ نشان داد علت واقعی چیز دیگری بوده است: دستور render:build اجرا نمی‌شد چون esbuild بارگذاری نمی‌شد، پس فایل render-dist/server.js ساخته نمی‌شد، اسکریپر با کد ۱ بسته می‌شد و پراکسی خطا می‌داد. ریشهٔ مشکل در خودِ کد ما بود: ترموکس سیستم‌عامل خود را android گزارش می‌کند، اما بارگذارِ esbuild فقط ویندوز، مک و لینوکس را می‌شناخت؛ برای android هیچ بسته‌ای برنمی‌گرداند، بنابراین «تعمیر خودکار» عملاً هیچ چیزی نصب نمی‌کرد و همیشه شکست می‌خورد. حتی متن خطا هم به کاربر اندرویدی می‌گفت نصب «ویندوز» خود را درست کند. اکنون سه اصلاح انجام شده است: ۱) بستهٔ درست اندروید شناسایی و نصب می‌شود (@esbuild/android-arm64 و معادل‌های arm و x64)؛ ۲) اگر نسخهٔ بومی به هر دلیلی در دسترس نباشد (حتی بدون اینترنت)، ساخت به‌جای شکست، با نسخهٔ WebAssembly یعنی esbuild-wasm انجام می‌شود که به هیچ فایل اجرایی مخصوص سیستم‌عامل نیاز ندارد؛ این بسته از این پس همیشه نصب می‌شود تا در لحظهٔ نیاز موجود باشد. همچنین اگر esbuild سیستمی روی دستگاه نصب باشد (در ترموکس با pkg install esbuild) از همان استفاده می‌شود. ۳) پیام‌های راهنما دیگر مخصوص ویندوز نیستند و روی ترموکس راه‌حل ترموکس را نشان می‌دهند. در آزمایش، ساخت کامل اسکریپر بدون هیچ نسخهٔ بومی esbuild و بدون دسترسی به اینترنت با موفقیت انجام شد و صفحه با کد ۲۰۰ بالا آمد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۲.۰</time><br><b>خطای پراکسی اسکریپر حالا خودش را معرفی می‌کند و دیپلویرِ قدیمی‌مانده هشدار می‌دهد:</b> پیام «Local scraper proxy failed: connect ECONNREFUSED» فقط دو فیلد داشت، بنابراین از روی آن نمی‌شد فهمید که آیا اصلاحیه اصلاً روی دستگاه نصب شده یا نصب شده و کار نمی‌کند. اکنون همان خطا شمارهٔ نسخهٔ دیپلویری که آن را تولید کرده، وضعیت و کد خروج اسکریپر و چند خط آخر لاگ را همراه دارد. مهم‌تر اینکه دیپلویر یک پروسهٔ طولانی‌عمر است و کد خودش را فقط یک‌بار هنگام اجرا می‌خواند؛ بعد از هر به‌روزرسانی گیت، فایل‌های روی دیسک عوض می‌شوند ولی همان پروسه همچنان کد قدیمی را اجرا می‌کند و باگ‌های ازقبل‌رفع‌شده را دوباره نشان می‌دهد. حالا نسخهٔ روی دیسک با نسخهٔ در حال اجرا مقایسه می‌شود و اگر فرق داشته باشند، هم در ترمینال هنگام راه‌اندازی، هم در /api/status و هم داخل خودِ متن خطا هشدار داده می‌شود که باید دیپلویر را ری‌استارت کنید (Ctrl+C و سپس npm run deployer:ui).</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۱.۰</time><br><b>رفع ریشه‌ای «چرا اصلاحیه به دستگاه نمی‌رسد»: قفل‌فایل ناهماهنگ، به‌روزرسانی خودکار را برای همیشه متوقف می‌کرد:</b> شمارهٔ نسخه در package-lock.json روی ۱.۷۶.۰ جا مانده بود، بنابراین هر بار npm install آن فایل را بازنویسی می‌کرد و درخت کاری همیشه «تغییر ذخیره‌نشده» داشت. به‌روزرسان خودکار دیپلویر (درست و عمدی) روی درخت کثیف اجرا نمی‌شود تا با git reset --hard کار کاربر را از بین نبرد؛ نتیجه این بود که روی هر دستگاهی که یک‌بار وابستگی نصب کرده بود (یعنی همهٔ دستگاه‌ها، از جمله ترموکس) هیچ‌وقت نسخهٔ جدید نصب نمی‌شد و کاربر همچنان خطای قدیمی ECONNREFUSED را می‌دید، حتی بعد از انتشار اصلاحیهٔ نسخهٔ ۱.۸۰.۰. اکنون سه کار انجام شد: قفل‌فایل با نسخهٔ واقعی هماهنگ شد، اسکریپت version:sync آن را برای همیشه هم‌گام نگه می‌دارد و npm run version:check اگر دوباره جدا بیفتد تست را قرمز می‌کند، و به‌روزرسان خودکار تغییرِ صرفاً مربوط به package-lock.json را «سروصدای ماشین» می‌شناسد و آن را برمی‌گرداند؛ هر تغییر واقعی دیگری همچنان به‌روزرسانی را متوقف می‌کند تا کار کاربر حفظ شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۸۰.۰</time><br><b>رفع خطای ECONNREFUSED هنگام زدن دکمهٔ «باز کردن اسکریپر» در دیپلویر (به‌ویژه ترموکس):</b> دکمهٔ باز کردن اسکریپر درخواست را به 127.0.0.1:3000 پراکسی می‌کرد؛ اگر اسکریپر هنوز اجرا نشده بود، دیپلویر آن را استارت می‌زد ولی بدون هیچ انتظاری بلافاصله وصل می‌شد. چون فرمان اسکریپر اول render:build را اجرا می‌کند و این روی ترموکس/ARM ده‌ها ثانیه طول می‌کشد، پورت هنوز باز نبود و کاربر پیام خام «Local scraper proxy failed: connect ECONNREFUSED 127.0.0.1:3000» می‌گرفت؛ در حالی که اسکریپر خراب نبود و فقط در حال ساخته‌شدن بود. اکنون پراکسی تا آماده شدن پورت صبر می‌کند (پیش‌فرض تا ۱۸۰ ثانیه، قابل تنظیم با LOCAL_SCRAPER_PROXY_WAIT_MS) و بدنهٔ درخواست هم حفظ می‌شود تا درخواست‌های POST از بین نروند. یک ایراد دوم هم رفع شد: اگر اسکریپر یک‌بار خطا می‌داد و بسته می‌شد، نگهبانِ startScraper به‌اشتباه فکر می‌کرد هنوز در حال اجراست و هیچ کلیکی دیگر آن را دوباره اجرا نمی‌کرد؛ حالا اسکریپر بسته‌شده دوباره استارت می‌خورد. در صورت شکست واقعی هم به‌جای خطای خام، کد خروج، دلیل و چند خط آخر لاگ اسکریپر نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۹.۰</time><br><b>درون‌ریزی کامل فایل واقعی ارائه‌دهنده‌ها: حفظ نشانه‌های هر مدل، سازنده و همهٔ کلیدهای فعال:</b> در فایل خروجی، هر مدل یک شیء با نشانه‌های خودش است (reasoning برای مدل استدلالی و nonChat برای مدلی که گفت‌وگو نیست، مانند مدل تولید تصویر)، هر ارائه‌دهنده یک vendor دارد و کلیدها با برچسب و کلید روشن/خاموش ذخیره می‌شوند. درون‌ریزی همهٔ این‌ها را دور می‌ریخت و فقط شناسهٔ مدل را نگه می‌داشت؛ نتیجه این بود که مدل استدلالی (مثلاً mistral-small-latest که از روی نامش قابل تشخیص نیست) با بودجهٔ پاسخ کوتاه و temperature اجرا می‌شد و پاسخش نیمه‌کاره می‌ماند، مدل غیرگفت‌وگویی به‌جای «کنار گذاشته شد» با خطا شکست می‌خورد، و کلیدی که کاربر عمداً خاموش کرده بود دوباره روشن وارد می‌شد. اکنون همهٔ این نشانه‌ها هنگام درون‌ریزی خوانده و در خزانه ذخیره می‌شوند (هر دو اجراگر Worker و Node)، کلید خاموش وارد نمی‌شود و حساب Cloudflare با هر دو کلیدش وارد می‌شود. همچنین فهرست مدل‌ها به‌صورت شیء (id/name) و نقشهٔ ارائه‌دهنده‌ها بدون کلید providers و آدرس کامل chat/completions مانند قبل پشتیبانی می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۸.۰</time><br><b>رفع خطای «کلید API وارد نشده است» پس از درون‌ریزی فایل ارائه‌دهنده‌ها:</b> درون‌ریزی فقط سه نام apiKey و api_key و keyValue را می‌شناخت؛ اگر فایل کلید را با نام key، token، apiToken، secret یا authorization ذخیره کرده بود، یا کلیدها در یک نقشهٔ جداگانه (مثل keys یا credentials) بودند، همهٔ ارائه‌دهنده‌ها بدون کلید وارد می‌شدند و تست همهٔ مدل‌ها شکست می‌خورد. اکنون این نام‌ها و ساختارهای تودرتو پشتیبانی می‌شوند، پیشوند Bearer حذف می‌شود، و نقشهٔ جداگانهٔ کلیدها بر اساس شناسه یا نام ارائه‌دهنده خوانده می‌شود. همچنین گزارش درون‌ریزی اکنون هشدار می‌دهد کدام ارائه‌دهنده‌ها بدون کلید وارد شده‌اند (سرویس‌های محلی مانند Ollama که کلید لازم ندارند مستثنا هستند).</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۷.۰</time><br><b>رفع خطای «کلید API وارد نشده است» در تست همهٔ مدل‌ها:</b> منوی همبرگری یک «آدرس سرویس» و «کلید API» مشترک ذخیره می‌کند، اما فهرست ارائه‌دهنده‌ها این کلید را نادیده می‌گرفت؛ به همین دلیل حتی وقتی کلید را درست وارد کرده بودید، تست همهٔ مدل‌ها برای تک‌تک آن‌ها با خطای ناقص بودن تنظیمات شکست می‌خورد. اکنون اگر ارائه‌دهنده کلید اختصاصی نداشته باشد، کلید مشترک به‌کار می‌رود؛ البته فقط وقتی هر دو به یک سرویس (همان دامنه) اشاره کنند تا کلید یک سرویس به سرویس دیگر درز نکند. آدرس سرویس مشترک هم به همین شکل جایگزین می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۶.۰</time><br><b>رفع خطای جاوااسکریپت دیپلویر و مستقل شدن اسکرپر:</b> قالب صفحهٔ دیپلویر به String.raw تبدیل شد؛ پیش از این مسیر ویندوزی «%TEMP%\» کوتیشن را escape می‌کرد، کل اسکریپت با SyntaxError از کار می‌افتاد و هیچ دکمه‌ای کار نمی‌کرد. اکنون اسکرپر همراه نصب/به‌روزرسانی دیپلویر به‌صورت خودکار ساخته و اجرا می‌شود و آدرس آن (http://localhost:3000/ بدون توکن) درست زیر آدرس دیپلویر در ترمینال چاپ می‌شود؛ اسکرپر پروسهٔ جداگانه است و با بستن دیپلویر خاموش نمی‌شود، و دیپلویرِ دوباره اجراشده اسکرپرِ در حال اجرا را می‌پذیرد. همچنین هر دو به‌روزرسان خودکار دیگر روی تغییرات commit نشده «git reset --hard» نمی‌زنند و کار محلی را از بین نمی‌برند. کلیدها: LOCAL_SCRAPER_AUTOSTART و LOCAL_SCRAPER_STOP_WITH_UI.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۵.۰</time><br><b>اصلاح استخراج پروفایل «US Apple Store» و رفع خرابی JSON پروفایل‌های پیش‌فرض:</b> متن SCHEMA به String.raw تبدیل شد؛ پیش از این هر \\" داخل JSON پروفایل‌های پیش‌فرض به " تبدیل می‌شد و هر ۶ پروفایل نمونه بدون هیچ سلکتوری بارگذاری می‌شدند و هیچ محصولی استخراج نمی‌کردند. سلکتور ظرف اپل دیگر «section li» نیست (منوی سراسری و فهرست‌های راهنمای خرید را هم می‌گرفت)، سلکتور لینک به مسیر محصول محدود شد و موتور روی htmlrewriter ثابت شد. همچنین موجودیت‌های HTML در عنوان/قیمت رمزگشایی می‌شوند (مثلاً &amp;amp; → &) و قیمت‌هایی مانند $1,099.00 دیگر ۱۰۹۹۰۰ خوانده نمی‌شوند. مهاجرت 0006 پروفایل ذخیره‌شدهٔ قبلی را هم اصلاح می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۴.۱</time><br><b>حذف پاپ‌آپ «استخراج بک‌اند در صف قرار گرفت»</b><br>پس از زدن دکمهٔ استخراج، یک پنجرهٔ مودال باز می‌شد که باید دستی بسته می‌شد و جلوی دیدن فهرست کارها را می‌گرفت؛ چون شروع کار عملیات خطرناکی نیست، اکنون پیام کوتاه غیرمزاحم (همان نوار اطلاع‌رسانی بالا) نمایش داده می‌شود و جزئیات کامل در کادر خروجی می‌ماند. وضعیت و دکمهٔ توقف همان‌جا در فهرست کارها در دسترس است. اگر شروع استخراج شکست بخورد، همچنان پنجرهٔ خطا نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۴.۰</time><br><b>جدول مغایرت‌گیری مبدأ و مقصد + پیام خطای دقیق در تست مدل‌ها</b><br>۱) تست همهٔ مدل‌ها برای هر ردیف پیام کلی «تنظیمات ارائه‌دهنده/مدل کامل نیست» را نشان می‌داد و معلوم نبود کدام مورد کم است؛ علت: ارائه‌دهنده‌های پیش‌فرض (مانند OpenRouter) با فهرست مدل ولی بدون کلید API ساخته می‌شوند. اکنون دقیقاً نوشته می‌شود که آدرس سرویس، مدل یا کلید API کدام‌یک ثبت نشده و آن ردیف به‌جای شکست، «رد‌شده» علامت می‌خورد (Ollama محلی بدون کلید مجاز است). ۲) جدول مغایرت‌گیری نسخهٔ ۱۰.۱۷۰ پیاده شد: هر محصول دقیقاً در یک دسته قرار می‌گیرد: یکسان، مغایرت قیمت (از ← به)، اضافی در مقصد، در مقصد نیست، بدون قیمت مبدأ. تطبیق عنوان با همان نرمال‌ساز فارسی و حذف پسوند «(کد: ۱۲۳)» انجام می‌شود، و اگر عنوان در مقصد دستی عوض شده باشد از طریق sku و شناسهٔ ثبت‌شده هم تطبیق می‌خورد. دو دکمهٔ «جدول مغایرت» در کارت مغایرت‌گیری اضافه شد و مسیر API جدید /api/maintenance/recon-table/&lt;target&gt; در هر دو اجراگر (Worker و Node) فعال است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۳.۰</time><br><b>هم‌سان‌سازی متن فارسی و توقف حلقهٔ بی‌پایان ادامهٔ خودکار (هم‌ترازی با scraper4.php v10.170)</b><br>۱) نرمال‌ساز متن فارسی تا پیش از این فقط ی/ک را یکدست می‌کرد و حروف عربی ة، ۀ، أ، إ، ؤ و اعراب (ـَُِّ) را رها می‌کرد؛ به همین دلیل یک محصول با دو املای متفاوت دو محصول جداگانه دیده می‌شد و دسته‌بندی، حذف تکراری و پاسخ‌گوی خودکار اشتباه عمل می‌کردند. اکنون هر ۹ نقطهٔ برنامه از یک نرمال‌ساز مشترک استفاده می‌کنند که عیناً مانند suffixTextNormalize عمل می‌کند (فاصلهٔ مجازی، NBSP و ZWJ هم جداکننده حساب می‌شوند). ۲) نگهبان پرونده‌های متوقف تا پیش از این یک کار گیرکرده را بی‌نهایت بار دوباره صف می‌کرد؛ اکنون مانند نسخهٔ PHP اثرانگشت پیشرفت ثبت می‌شود و پس از ۵ تلاش بدون پیشرفت، پرونده با وضعیت «no-progress» متوقف می‌شود تا منابع هدر نرود؛ زدن دکمهٔ ادامه یا ریست، شمارنده را صفر می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۲.۰</time><br><b>فایل اجرای دابل‌کلیکی ویندوز، حذف پاپ‌آپ‌های مزاحم و رفع چند باگ ریشه‌ای</b><br>فایل دانلودی ویندوز تا پیش از این فقط .ps1 بود و ویندوز فایل‌های .ps1 را با دابل‌کلیک اجرا نمی‌کند (آن‌ها را در Notepad باز می‌کند) و سیاست پیش‌فرض ExecutionPolicy هم اجرای اسکریپت دانلودی را می‌بندد؛ اکنون همراه آن یک فایل «scraper4-install-windows-RUN-ME.cmd» ساخته می‌شود که با دابل‌کلیک اجرا می‌شود، خودِ نصب‌کننده را درون خود دارد، آن را با ExecutionPolicy Bypass اجرا می‌کند و پنجره را باز نگه می‌دارد تا خروجی خوانده شود. باگ مهم دیگری در تشخیص esbuild رفع شد: بررسی قبلی فقط import می‌کرد و چون esbuild باینری خود را تنها هنگام اولین build بارگذاری می‌کند، خطای واقعی ویندوز («Cannot find esbuild») اصلاً تشخیص داده نمی‌شد و مسیر تعمیر خودکار هرگز اجرا نمی‌شد؛ حالا با یک transform آزمایشی بررسی می‌شود. تنظیمات ذخیره‌شدهٔ دیپلویر در .env.local هنگام راه‌اندازی خوانده نمی‌شد و بعد از هر بار ری‌استارت به پیش‌فرض برمی‌گشت؛ اکنون خوانده می‌شود. مقدار نامعتبر در بازهٔ اسکن باعث NaN و توقف کامل زمان‌سنج می‌شد و گزینهٔ «هرگز» هم به ۱۵ ثانیه گرد می‌شد؛ هر دو رفع شدند. مسیر پایگاه دادهٔ SQLite برای مسیرهای ویندوزی (sqlite:C:\...) و شکل sqlite:/// اصلاح شد. همچنین پاپ‌آپ‌های تأیید مزاحم برای کارهای بی‌خطر و برگشت‌پذیر (پاک‌کردن فرم سلکتورها، پاک‌کردن فهرست کارهای تمام‌شده، تاریخچهٔ درون‌ریزی و ریست اجراها) حذف شدند و در دیپلویر هیچ پاپ‌آپی باقی نماند؛ برای عملیات واقعاً خطرناک مانند حذف پروفایل، حذف محصول مقصد و ارسال پاسخ به مشتریان، تأیید عمداً حفظ شده و دکمهٔ نصب برنچ به جای پاپ‌آپ، دو مرحله‌ای شده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۱.۰</time><br><b>هم‌سان‌سازی خودکار شمارهٔ نسخه در هدر، گزارش تغییرات و دستورالعمل‌ها</b><br>شمارهٔ نسخه در هدر سایت پیش‌تر ثابت و قدیمی مانده بود (۱.۱۶.۰) و با نسخهٔ واقعی برنامه هم‌خوانی نداشت؛ همچنین پاورقی گزارش تغییرات روی ۱.۶۱.۰ و مقدار پیش‌فرض نمایش نسخه روی ۱.۱۰.۰ جا مانده بود. اکنون تنها مرجع نسخه، فیلد version در package.json است و اسکریپت جدید scripts/sync-version.mjs هدر، پاورقی گزارش تغییرات، مقادیر پیش‌فرض Worker و Render، فایل wrangler.toml و شمارهٔ نسخهٔ داخل دستورالعمل نصب همهٔ محیط‌ها را یکجا به‌روز می‌کند. دستور npm run version:check در تست‌ها اجرا می‌شود و اگر جایی از نسخه عقب بماند، تست شکست می‌خورد تا دیگر نسخه‌ها از هم جدا نیفتند. دستورالعمل هر محیط اجرایی (ویندوز PowerShell و Command Prompt، ترموکس، دسکتاپ، VPS، رندر و کلادفلر) نیز متناسب با همین نسخه بازبینی و به‌روز شد. اشکالی هم در دیپلویر رفع شد که بازهٔ اسکن برنچ‌ها را به‌جای ثانیه، میلی‌ثانیه حساب می‌کرد و انتخاب «هر ۵ دقیقه» عملاً هر ۱۵ ثانیه اجرا می‌شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۰.۰</time><br><b>دیپلویر: اسکن خودکار همهٔ برنچ‌ها، نصب جدیدترین نسخه و ویندوز بدون PostgreSQL</b><br>دیپلویر به‌صورت پیش‌فرض هر ۱ دقیقه همهٔ برنچ‌های ریپو را از GitHub بررسی می‌کند، شماره نسخهٔ هر برنچ را از package.json می‌خواند و جدیدترین نسخه را خودکار نصب می‌کند. در تب جدید Branches جدولی با ستون‌های برنچ، نسخهٔ موجود در آن برنچ، کامیت، وضعیت و دکمهٔ نصب نمایش داده می‌شود. در ویندوز (PowerShell/Command Prompt) دیگر PostgreSQL لازم نیست: پایگاه دادهٔ پیش‌فرض SQLite داخلی Node است و دکمهٔ پایگاه داده همین تنظیم را خودکار در .env.local می‌نویسد. هنگام بیلد اگر esbuild نصب یا سالم نباشد، خودکار دوباره نصب و بررسی می‌شود تا خطای «Cannot find esbuild» در ویندوز پیش نیاید. دستورهای نصب ویندوز با DATABASE_URL=sqlite و بررسی esbuild به‌روز شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>پیش‌فرض‌های AI و دانلود فایل اجرای نصب</b><br>کاتالوگ پیش‌فرض Ollama و OpenRouter با مدل‌های اصلی کاربر اضافه شد تا بدون آپلود دستی در تنظیمات هوش مصنوعی دیده شوند. فرمت JSON شامل کلیدهای provider، فیلد url و مدل‌های object/id نیز پذیرفته می‌شود. کلید API در کد ذخیره نمی‌شود و باید از Secret یا فرم امن وارد شود. در کارت‌های نصب اسکریپر و دیپلویر، دکمهٔ دانلود فایل اجرایی محیط (.ps1/.cmd/.sh/.txt) کنار کپی دستورها اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>هماهنگ‌سازی تست سرعت با استخراج اصلی</b><br>اشکالی رفع شد که وقتی سریع‌ترین موتور تست سرعت به‌عنوان موتور پیش‌فرض ذخیره می‌شد، اجرای اصلی استخراج در مرحلهٔ کشف خودکار با اولین موتور خالی متوقف می‌شد و به موتور انتخاب‌شده نمی‌رسید. اکنون اجرای اصلی مانند تست سرعت تا موتور موفق ادامه می‌دهد و فقط اگر همان موتور انتخاب‌شده هم خروجی نداشت شکست می‌خورد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>رفع خطای npm در بیلد Cloudflare</b><br>نسخهٔ Playwright در package.json و package-lock به آخرین نسخهٔ واقعاً موجود در npm registry یعنی 1.63.0 پین شد و .npmrc برای جلوگیری از دانلود مرورگرها هنگام npm clean-install اضافه شد تا Cloudflare Pages/Workers Build دیگر به دنبال tarball ناموجود playwright-core 1.64.0 نگردد یا در postinstall مرورگرها گیر نکند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>راهنمای نصب ویندوز با انتخاب مسیر نصب</b><br>در بخش نصب/آپدیت، دستورهای جداگانهٔ Windows PowerShell و Command Prompt اضافه شد. هر دو از کاربر مسیر نصب را می‌پرسند، پروژه را همان‌جا clone/update می‌کنند، وابستگی‌ها و مرورگرهای Playwright/Puppeteer را نصب می‌کنند و فایل .env.local را در همان پوشهٔ انتخاب‌شده می‌سازند؛ بنابراین نصب به مسیر پیش‌فرض درایو C محدود نیست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>جزئیات صف و تست سرعت موتورهای استخراج</b><br>کارت‌های صف در صفحهٔ شروع و درون‌ریزی اکنون تعداد صفحات دیده‌شده، تعداد محصولات، میانگین سرعت از شروع اجرا و زمان سپری‌شده را نشان می‌دهند. دکمهٔ «تست سرعت ۳ صفحه» کنار موتور استخراج اضافه شد؛ سه صفحهٔ اول را با موتورهای موجود امتحان می‌کند، سریع‌ترین موتور موفق را در پروفایل ذخیره می‌کند و سرعت/تعداد محصولات هر موتور را کنار گزینه‌های dropdown نمایش می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۴.۰</time><br><b>عیب‌یابی نزدیک موتور استخراج و تست پایدارتر مدل‌های AI</b><br>دکمهٔ عیب‌یابی استخراج به ابتدای صفحهٔ شروع، کنار دراپ‌داون موتور استخراج، اضافه شد و همان پروفایل فعلی را ذخیره و با موتور انتخاب‌شده آزمایش می‌کند. تست مدل‌های هوش مصنوعی اکنون با نمونهٔ سادهٔ انگلیسی «Reply with exactly: SCRAPER4_OK» و مهلت پیش‌فرض ۳۰ ثانیه اجرا می‌شود تا خطای کاذب ناشی از timeout یک‌ثانیه‌ای رخ ندهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۳.۰</time><br><b>رفع استخراج کل صفحه به‌عنوان یک محصول</b><br>موتور metadata دیگر از صفحات دسته‌بندی/لیست محصول یک محصول جعلی با عنوان کل صفحه نمی‌سازد؛ فقط متادیتای واقعی محصول با og:type محصول، تصویر و قیمت معتبر پذیرفته می‌شود. عیب‌یاب استخراج نیز اکنون همان ترتیب واقعی موتورهای استخراج را گزارش می‌کند تا تفاوت بین عیب‌یابی کارت پروفایل و اجرای واقعی کمتر شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۲.۰</time><br><b>استخراج خودکار قبل از سلکتور دستی</b><br>اجرای پروفایل اکنون ابتدا موتورهای کشف خودکار را بدون وابستگی به سلکتورهای دستی امتحان می‌کند و فقط اگر محصولی پیدا نشد به موتور دستی/سلکتورهای ذخیره‌شده برمی‌گردد. وقتی استخراج غیر‌دستی موفق باشد، فقط فیلدهای خالی سلکتورهای دستی فهرست و جزئیات با پیشنهادهای کشف‌شده تکمیل می‌شوند و سلکتورهای کاربر بازنویسی نمی‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۱.۰</time><br><b>منوی نسخهٔ جمع‌شونده، پروفایل‌های تست آمریکا/اروپا و فیلتر محصول واقعی</b><br>بخش نسخهٔ کد در منوی همبرگری به آکاردئون‌های نسخه، کتابخانه‌ها، نصب/آپدیت، بکاپ و گزینه‌های legacy تقسیم شد. دو پروفایل آماده برای تست فروشگاه‌های جاوااسکریپتی US/EU افزوده شد: Next.js Commerce shirts و Apple Store iPhone. موتورهای خودکار/هیورستیک و استخراج از داده‌های جاوااسکریپتی اکنون فقط نامزدهایی را می‌پذیرند که در زمینهٔ محصولی عنوان، تصویر و قیمت واقعی داشته باشند تا لینک‌های متفرقه وارد نتایج نشوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۶۰.۰</time><br><b>جلوگیری از صف تکراری و ذخیرهٔ خودکار سلکتورها</b><br>اگر برای یک پروفایل هر نوع کار استخراج یا ارسال در صف/اجرا باشد، کار تکراری ساخته نمی‌شود تا همان کار تمام شود یا واقعاً از حد ماندگاری عبور کند. استخراج پس از لیست موفق، مرحلهٔ جزئیات را اجرا می‌کند و سلکتورهای تشخیص‌داده‌شدهٔ لیست/جزئیات به‌صورت خودکار در تب سلکتورها ذخیره می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۹.۰</time><br><b>ارسال باسلام با اولویت SDK و fallback API</b><br>مسیر همگام‌سازی باسلام اکنون قبل از API مستقیم، adapter کتابخانهٔ SDK باسلام را امتحان می‌کند؛ اگر SDK در runtime نصب/قابل اجرا نباشد یا متد ایجاد/ویرایش محصول خطا بدهد، همان payload با API رسمی باسلام ارسال می‌شود و در گزارش نتیجه مشخص می‌شود ارسال با SDK بوده یا fallback API.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۸.۰</time><br><b>استعلام زندهٔ کتابخانه‌ها، شروع مطمئن استخراج و حذف نتایج</b><br>اسکریپر و دیپلویر اکنون کتابخانه‌های نصب‌شده/قابل اجرای همان محیط را از API استعلام می‌گیرند. اجرای استخراج تازه، کار فعال گیرکردهٔ قبلی را جایگزین می‌کند و در Render/Local/Termux پردازندهٔ داخلی بلافاصله تحریک می‌شود. در صفحهٔ محصولات هم حذف تک‌نتیجه و حذف همهٔ نتایج یک پروفایل اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۷.۰</time><br><b>اصلاح فهرست کتابخانه‌ها براساس محیط واقعی</b><br>فهرست کتابخانه‌ها دیگر یک لیست عمومی نیست؛ برای Cloudflare Worker فقط runtime ورکر، Hono، D1/Queues و parserهای سازگار نمایش داده می‌شود و Playwright/Puppeteer/Crawlee فقط در محیط‌های Node/Render/VPS/Termux دیده می‌شوند. Deployer هم فهرست را براساس محیط انتخاب‌شده نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۶.۰</time><br><b>فهرست کتابخانه‌های نصب‌شده در اسکریپر و دیپلویر</b><br>در بخش نصب/نسخهٔ اسکریپر و در رابط deployer، کتابخانه‌ها و ابزارهای نصب‌شده براساس نوع نمایش داده می‌شوند: runtime/API، استخراج HTML، مرورگرهای Playwright/Puppeteer/Crawlee، ورودی/بکاپ، ذخیره‌سازی و ابزارهای بیلد/دیپلوی. Termux نیز پکیج‌های سیستمی لازم مانند Chromium و gh را جداگانه نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۵.۰</time><br><b>همسان‌سازی با scraper4.php v10.170</b><br>اجرای محلی/ترموکس دیگر الزاماً به PostgreSQL نیاز ندارد و در نبود DATABASE_URL یک دیتابیس SQLite محلی می‌سازد؛ سلامت نصب نوع دیتابیس را نشان می‌دهد و خودآزمون با PostgreSQL یا SQLite کار می‌کند. این تغییر ادامهٔ منطق ledger محلی v10.170 است تا صف‌ها، پروفایل‌ها، محصولات و checkpointها در اجرای مستقل پایدار بمانند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>جابجایی موتور استخراج، نصب مرورگرهای Termux و اصلاح اجرای تکراری</b><br>دراپ‌داون موتور از کارت‌های فهرست پروفایل حذف شد و به فرم ویرایش پروفایل و بخش شروع کنار مقصد همگام‌سازی منتقل شد. دستورهای Termux اکنون Chromium و نصب Playwright/Puppeteer را هم آماده می‌کنند. اجرای محلی/Termux scraper نیز وضعیت آپدیت را دوره‌ای بررسی می‌کند و پس از آپدیت با کمک deployer دوباره راه‌اندازی می‌شود. اجرای inline/API دیگر استخراج صفرمحصول را موفق نشان نمی‌دهد و تلاش استخراج جزئیات بعد از فهرست محصولات حفظ شده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>اصلاح نسخه در Termux و انتخابگر اختصاصی فایل JSON</b><br>سرور محلی/Termux اکنون شماره نسخه را از package.json در /health، /api/version و /api/activity برمی‌گرداند و صفحهٔ اصلی با no-store سرو می‌شود تا هدر و پنجره‌های نسخه بعد از آپدیت خودکار عدد قدیمی نشان ندهند. برای فایل‌های تنظیمات هم انتخابگر اختصاصی داخل برنامه اضافه شد؛ پس از انتخاب چند فایل از Android/Chrome، خود برنامه JSONها را جدیدترین‌به‌قدیمی‌ترین مرتب می‌کند و امکان فعال‌کردن دقیق فایل دلخواه را می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>کوچک‌سازی هدر چسبان موبایل و افزودن میانبرهای سریع</b><br>هدر ثابت موبایل از حالت بزرگ و مزاحم به نوار فشردهٔ حدود ۳۴ پیکسل تبدیل شد، فاصلهٔ بالای صفحه و ارتفاع تب‌های پایین کمتر شد و میانبرهای کاربردی شروع، استخراج، صف، منو و فعالیت زنده مستقیماً روی هدر قرار گرفتند تا در Termux/موبایل فضای بیشتری برای کار اصلی باقی بماند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>تعداد صفحات پیش‌فرض اتوماتیک و آماده‌سازی آپدیت خودکار Termux</b><br>فیلد تعداد صفحات در شروع و سلکتورها از این نسخه پیش‌فرض ۰ دارد؛ ۰ یعنی استخراج اتوماتیک تا صفحهٔ خالی یا پایان pagination با سقف ایمنی ۱۰۰ صفحه. deployer محلی/Termux نیز به آپدیت خودکار از GitHub مجهز شد تا پس از این نسخه، کد، فایل اسکریپر و خود deployer بدون وارد کردن دستی دستورهای fetch/reset تازه شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>فیلتر JSON و انتخاب جدیدترین فایل در همهٔ انتخابگرهای تنظیمات</b><br>انتخابگرهای فایل تنظیمات کلی، مهاجرت پروفایل/تنظیمات، بکاپ، تنظیمات هوش مصنوعی و یادگیری دسته‌بندی فقط JSON قبول می‌کنند، انتخاب چند فایل را پشتیبانی می‌کنند و داخل برنامه فایل‌های انتخاب‌شده را براساس lastModified از جدیدترین به قدیمی‌ترین مرتب کرده و جدیدترین فایل JSON را برای import استفاده می‌کنند. فایل‌های غیر JSON نادیده گرفته و پیام واضح نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>افزودن دستورالعمل آپدیت کد در deployer و خود اسکریپر</b><br>کارت Update existing clone / Worker به دستورهای نصب اضافه شد و همان دستورها داخل scraper4.ts نیز ثبت شد: تنظیم درست credential.helper، fetch/reset branch ثابت arena/01a0765b-new، نصب مجدد npm و چک نسخه. برای Cloudflare هم مسیر Dashboard → Workers & Pages → Deployments → Redeploy توضیح داده شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>یکسان‌سازی کامل تجربهٔ نصب و دستورها داخل خود اسکریپر</b><br>بخش نسخه/نصب خود برنامهٔ اسکریپر مثل deployer کارت‌های جداگانهٔ VS Code، Termux، دیتابیس Termux، Docker، Render، Cloudflare، VPS و API دارد و برای هر محیط دکمهٔ Copy all اضافه شد. این UI از همان DASHBOARD مشترک استفاده می‌کند، بنابراین در Cloudflare Worker، Termux، Render و اجرای محلی ظاهر و مسیر کار یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>یکسان‌سازی رابط Termux/Render با Cloudflare Worker</b><br>سرور محلی Node/Termux اکنون همان DASHBOARD و DASHBOARD_JS نسخهٔ Cloudflare Worker را سرو می‌کند و routeهای سازگار پایه مثل /api/activity، /api/version، /api/ai/chat-models و endpointهای ایجنت/تست AI را برای جلوگیری از تفاوت شدید UI فراهم می‌کند. صفحهٔ setup جداگانه به /setup منتقل شد و فونت‌های فارسی نیز در runtime محلی سرو می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>افزودن راهنمای Termux credential و PostgreSQL داخل scraper4.ts</b><br>توضیحات خود فایل اسکریپر با هشدار واضح دربارهٔ مقدار غلط credential.helper و خطای role &quot;postgres&quot; does not exist در Termux به‌روز شد؛ دستورهای نصب PostgreSQL، ساخت DATABASE_URL با $(whoami)، و نمونهٔ خروجی درست نیز داخل فایل و راهنمای نصب آمده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>اصلاح اتصال PostgreSQL در Termux</b><br>در Termux دیگر URL پیش‌فرض postgres:postgres استفاده نمی‌شود؛ deployer نام کاربر واقعی Android/Termux را تشخیص می‌دهد و DATABASE_URL مؤثر را به postgresql://USER@localhost:5432/scraper4 تغییر می‌دهد. همچنین اگر .env.local هنوز placeholder HOST یا postgres:postgres لوکال داشته باشد، هنگام اجرای scraper به URL مناسب Termux اصلاح می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۴۴.۰</time><br><b>رفع قطعی اجرا نشدن JavaScript در deployer</b><br>escape شدن newlineهای داخل script خروجی اصلاح شد؛ نسخهٔ قبلی ممکن بود در مرورگر SyntaxError بدهد و صفحه روی Detecting environment بماند. اکنون HTML تولیدشده نیز با parser جداگانه کنترل شد و endpoint وضعیت پاسخ معتبر می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۴۳.۰</time><br><b>رفع گیر کردن deployer روی Detecting environment</b><br>اسکریپت رابط deployer دیگر به globalهای خودکارِ element id مثل status/env/port وابسته نیست، همهٔ handlerها صریحاً روی window ثبت می‌شوند و خطاهای UI داخل لاگ نمایش داده می‌شوند؛ بنابراین دکمه‌های نصب، دیتابیس، scraper و copy دوباره قابل کلیک و پایدار هستند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۴۲.۰</time><br><b>بازطراحی deployer، نصب دیتابیس و کپی یک‌مرحله‌ای دستورها</b><br>deployer محلی با رابط شهودی‌تر بازطراحی شد: محیط اجرا را خودکار تشخیص می‌دهد، کارت وضعیت دیتابیس دارد، برای محیط‌های قابل نصب دکمهٔ Install / connect database اجرا می‌کند و برای Render/Cloudflare/Vercel دستورالعمل پنلی نشان می‌دهد. خطای getaddrinfo ENOTFOUND HOST نیز به‌صورت واضح توضیح داده می‌شود. بخش دستورالعمل‌ها به کارت‌های جداگانه برای VS Code، Termux، دیتابیس Docker، دیتابیس Termux، Render، Cloudflare و API تبدیل شد و هر کارت دکمهٔ Copy all دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۴۱.۰</time><br><b>رفع دستور git pull در Termux پس از gh login</b><br>در Termux clone با gh موفق بود، اما git pull هنوز از credential helper خراب استفاده می‌کرد و دوباره Username/Password می‌خواست. دستورالعمل‌ها اکنون پس از ورود GitHub، gh auth setup-git و credential.helper محلی «!gh auth git-credential» را روی ریپوی clone شده تنظیم می‌کنند. دکمهٔ Update from GitHub در deployer محلی هم قبل از fetch همین تنظیم را اعمال می‌کند. همچنین برای خطای ETIMEDOUT npm راهنمای retry/timeout اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۴۰.۰</time><br><b>توقف اجباری کارهای گیرکرده و جلوگیری از ادامهٔ دوبارهٔ توقف دستی</b><br>دکمهٔ توقف در کارت وظیفه اکنون کارهای queued/running را بلافاصله به وضعیت stopped/finished می‌برد و checkpoint آن‌ها را پاک می‌کند؛ بنابراین اگر استخراج روی عددی مثل ۱۲۰ محصول گیر کند، منتظر پایان پردازش داخلی نمی‌ماند. نگهبان خودکار نیز دیگر کارهایی را که کاربر دستی متوقف کرده است دوباره در صف قرار نمی‌دهد و فقط failed یا running واقعاً stale را ادامه می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۹.۰</time><br><b>پذیرش VAULT_TOKEN به‌عنوان alias و پیام دقیق‌تر تنظیم Secret</b><br>اگر در Cloudflare به‌جای VAULT_SECRET اشتباهاً VAULT_TOKEN ساخته شده باشد، Worker اکنون آن را هم برای رمزگذاری vault می‌پذیرد. پیام خطا و صفحهٔ راه‌اندازی نیز دقیق‌تر شد تا روشن باشد نام اصلی Secret باید دقیقاً VAULT_SECRET، با حداقل ۸ کاراکتر و پس از آن Redeploy لازم است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۸.۰</time><br><b>نمایش سرعت زندهٔ استخراج و API مستقیم استخراج/ارسال</b><br>کارت‌های وظایف استخراج و ارسال اکنون موتور استفاده‌شده و سرعت لحظه‌ای «محصول/دقیقه» را نشان می‌دهند تا مقایسهٔ موتورهای استخراج آسان شود. همچنین endpointهای مستقیم /api/profiles/:id/run، /api/profiles/:id/extract و /api/extract/:id اضافه شد تا با فراخوانی API بتوان محصولات استخراج‌شده را دریافت کرد یا همان درخواست را به ارسال ووکامرس/باسلام/هر دو مقصد تبدیل کرد. دستورهای Termux نیز برای repo خصوصی به gh auth login تغییر کرد، چون GitHub password را قبول نمی‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۷.۰</time><br><b>دستورهای امن‌تر Termux و رفع خطای GitHub password/auth</b><br>بخش دستورالعمل‌های نصب برای Android/Termux بازنویسی شد: اجرای دستورها از HOME، پاک‌کردن clone ناقص، حذف credential helper خراب Termux، استفاده از URL خام بدون Markdown، clone مستقیم روی branch پروژه، و مسیرهای جایگزین gh auth login یا SSH برای مخازن خصوصی اضافه شد. همچنین توضیح داده شد که GitHub دیگر password را برای git clone قبول نمی‌کند و نباید داخل /storage/emulated/0 نصب را ادامه داد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۶.۰</time><br><b>موتور استخراج داخل پروفایل‌های ذخیره‌شده + ادامهٔ خودکار تسک‌های گیرکرده و ناموفق</b><br>فهرست پروفایل‌های ذخیره‌شده حالا برای هر پروفایل یک dropdown مستقیم «موتور استخراج» دارد؛ انتخاب آن فوری ذخیره می‌شود و همان پروفایل با موتور جدید اجرا می‌شود. نگهبان صف نیز گزینهٔ «ادامهٔ خودکار همه وظایف گیرکرده و ناموفق» دارد که از ابتدا روشن است: تسک‌های failed/stopped و running قدیمی دوباره queued می‌شوند و در Worker و Render/Node به‌صورت پیش‌فرض ادامه پیدا می‌کنند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۵.۰</time><br><b>اجرای محلی واقعی با deployer اول + مستندسازی نصب در منوی همبرگری</b><br>از این نسخه مسیر محلی مستقل از Cloudflare شفاف شد: ابتدا پنل deployer اجرا می‌شود، سپس کاربر از تب Local scraper دکمهٔ Build & start local scraper را می‌زند و با Open scraper dashboard صفحهٔ اسکرپر Node/Render را در پنجرهٔ جدید باز می‌کند. دستورهای کامل copy-paste برای VS Code، Codespaces، Termux، VPS، Render و Cloudflare نیز در بخش نسخه/نصب منوی همبرگری اضافه شد. همچنین تغییرات اخیر شامل پروفایل‌های آمادهٔ SnappShop و Mantoopatris، موتور مستر هر پروفایل، هم‌ترازی نسخه‌های PHP/Python و تبدیل امن قیمت باسلام به ریال در همین انتشار ثبت شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۴.۰</time><br><b>کاهش ۲ برابری نوشتن‌های D1 در همهٔ اجراهای پس‌زمینه + رفتار هوشمند هنگام پر شدن سهمیه</b><br>چون هر گام از هر اجرای پس‌زمینه به ذخیرهٔ وضعیت در D1 نیاز دارد، وقتی سهمیهٔ روزانهٔ نوشتن (۱۰۰٬۰۰۰ در پلن رایگان، ریست ۰۰:۰۰ UTC) تمام شود، همه‌چیز متوقف می‌ماند. در این نسخه قفل اجرا و آزادسازی قفل (دو نوشتن در هر پیام صف) حذف و به‌جای آن checkpoint هر اجرا با مقایسه‌و‌به‌روزرسانی اتمی (CAS) ذخیره می‌شود: هر پیام صف حالا فقط ۱ نوشتن انجام می‌دهد و دو تحویل هم‌زمان نمی‌توانند یک checkpoint را دوبار پردازش کنند. نتیجه: مصرف نوشتنِ تست مدل‌ها، حذف تکراری‌ها و دسته‌بندی حدود ۲ برابر کمتر می‌شود. اگر باز هم سهمیه تمام شود، اجرا به‌جای تلاش بی‌پایان، تمیز متوقف می‌شود و بعد از ریست ۰۰:۰۰ UTC خودکار ادامه می‌یابد؛ در تسک منیجر بنر «سهمیهٔ نوشتن D1 تمام شده» نمایش داده می‌شود و مصرف‌کنندهٔ صف در این حالت به‌جای retry بی‌نهایت، پیام را می‌بندد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۳.۰</time><br><b>کاهش مصرف سهمیهٔ نوشتن D1 (رفع «you exceeded write operations quota» در حذف تکراری‌ها)</b><br>خطای «you exceeded write operations quota» مربوط به محدودیت پایگاه‌دادهٔ Cloudflare D1 است نه Worker: در پلن رایگان فقط ۱۰۰٬۰۰۰ عملیات نوشتن (INSERT/UPDATE/DELETE) در هر شبانه‌روز دارید که ساعت ۰۰:۰۰ UTC ریست می‌شود و بعد از آن تا فردا هیچ نوشتنی انجام نمی‌شود. حذف تکراری‌ها پرکاربرترین عملیات نوشتن بود: هر پیام صف تقریباً ۴ نوشتن انجام می‌داد (قفل + شروع + پایان + آزادکردن) و فقط ۴ نسخه حذف می‌کرد — یعنی تقریباً ۱ نوشتن به‌ازای هر نسخهٔ تکراری. حالا هر پیام تا ۱۰ نسخه حذف می‌کند (۲.۵ برابر کمتر) و نوشتنِ شروعِ زائد در اجراهای پس‌زمینه (حذف تکراری، دسته‌بندی، تست مدل‌ها) حذف شد؛ مجموعاً مصرف نوشتنِ حذف تکراری‌ها حدود ۳ برابر کمتر می‌شود و تست جدیدی هم تعداد نوشتن‌ها را سقف می‌گیرد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۲.۰</time><br><b>رفع گیرکردن فرآیند تست مدل‌ها + حذف کارها و اجراها از تیم منیجر</b><br>مشکل تست مدل‌ها ریشه در مصرف‌کنندهٔ صف داشت: وقتی چند اجرا/کار در صف بودند، هر پیام صف فقط پراولویت‌ترین را برمی‌داشت و پیام اجراهای دیگر مصرف می‌شد بدون اینکه دوباره به صف برگردد؛ در نتیجه صف خالی می‌شد و اجرای تست مدل‌ها تا دقیقه‌ها متوقف می‌ماند و نگهبان صف آن را «گیرکرده» تشخیص می‌داد و مدل‌ها را رد می‌کرد. حالا اگر اجرای پراولویت نتواند قفل بگیرد (هم‌زمان در حال پردازش باشد)، اجرای همان پیامِ رسیده پردازش می‌شود و اگر اجرایی به‌خاطر اولویت کنار گذاشته شود، پیامش با تأخیر کوتاه دوباره به صف برمی‌گردد تا هیچ اجرایی گرسنه نماند. در تیم منیجر هم دکمهٔ 🗑 کنار هر کار (در صف، در حال اجرا، آخرین کارها) و کنار هر اجرای پس‌زمینه اضافه شد: حذف کار از صف، پاک‌کردن اجرا (تست مدل‌ها، حذف تکراری، دسته‌بندی، ایجنتیک) و دکمهٔ «🗑 پاک‌سازی» برای پاک‌کردن یک‌جا همهٔ کارهای پایان‌یافته؛ کار در حال اجرا قابل حذف نیست و حذف یک کار اولویتِ آن را هم از حافظه پاک می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۱.۰</time><br><b>ذخیرهٔ مطمئن حساب دوم کلودفلر و اطمینان از دوبرابر شدن فهرست تست</b><br>حساب جدید کلودفلر که با «افزودن کلید» اضافه می‌شود، حالا مطمئن ذخیره می‌شود: هر چیزی که در ردیف حساب تایپ کنید فوراً در state ثبت می‌شود تا هیچ به‌روزرسانی فرمی مقادیر را پاک نکند، دکمهٔ «تست» هر حساب مقدار همان ردیف را می‌خواند (نه حساب اول)، و فیلد توکن بالای فرم برای حساب اول مقدار واقعی توکن را نشان می‌دهد. بعد از ذخیره، اگر بیش از یک کلید باشد پیام تأیید «N کلید ذخیره شد؛ هر مدل با پسوند [K۲] و بالاتر جداگانه تست می‌شود» نمایش داده می‌شود و کارت ارائه‌دهنده «N مدل × K کلید = M ورودی تست» را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۰.۰</time><br><b>با افزودن کلید دوم، فهرست تست مدل‌ها دو برابر و با پسوند [K۲]/[K۳] تفکیک می‌شود</b><br>هر مدل یک ارائه‌دهنده، برای هر کلید API آن جداگانه تست می‌شود: کلید دوم به‌بعد هر مدل را با پسوند [K۲]/[K۳] (و با همان کلید خودش) آزمایش می‌کند. در بخش «تست مدل‌ها» خط «ورودی‌های تست» تعداد کل ورودی‌ها (مدل‌ها × کلیدها) را زنده نشان می‌دهد و با روشن/خاموش کردن «فقط کاندیدها» به‌روز می‌شود؛ در پیشرفت زنده، نام آخرین مدل هم پسوند کلیدش را دارد و جدول نتایج هر ردیف را با همان پسوند نشان می‌دهد. باگ ذخیره‌سازی حساب‌های Cloudflare هم رفع شد: هنگام ذخیرهٔ ارائه‌دهندهٔ کلودفلر، Account ID و توکن هر حساب از ردیف‌های خودش خوانده می‌شود (قبلاً حساب اضافه ذخیره نمی‌شد و در نتیجه فهرست تست دو برابر نمی‌شد).</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۹.۰</time><br><b>اولویت‌بندی اجراهای پس‌زمینه با کشیدن + باز کردن پنجرهٔ هر اجرا</b><br>در مدیر وظایف، اجراهای پس‌زمینه (تست مدل‌ها، حذف تکراری، دسته‌بندی، ایجنتیک) هم مثل کارهای صف قابل اولویت‌بندی شدند: با کشیدن یا دکمه‌های ▲▼ ترتیب پردازش آن‌ها را مشخص کنید — اجرای بالایی زودتر پردازش می‌شود و این ترتیب روی سرور ذخیره می‌شود (حتی با بسته بودن مرورگر). با کلیک روی هر اجرا هم وارد پنجرهٔ همان اجرا می‌شوید: تست مدل‌ها به تب «تست مدل‌ها» می‌رود، حذف تکراری پنجرهٔ اجرای زندهٔ خودش را باز می‌کند، دسته‌بندی مودال پیشرفت دسته‌بندی همهٔ تأییدنشده‌ها را نشان می‌دهد و ایجنتیک به تب ایجنتیک می‌رود و لاگ اجرا را باز می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۸.۰</time><br><b>اولویت‌بندی کارها با کشیدن بالا/پایین در مدیر وظایف</b><br>در مدیر وظایف، کارهای در انتظار صف (استخراج/همگام‌سازی) حالا قابل مرتب‌سازی هستند: با گرفتن و کشیدن هر کار (یا دکمه‌های ▲▼ کنار آن) ترتیب اجرا را مشخص کنید — کار بالایی زودتر اجرا می‌شود و رتبهٔ هر کار کنارش نمایش داده می‌شود. این ترتیب روی سرور ذخیره می‌شود و هنگام پردازش صف رعایت می‌شود، حتی وقتی مرورگر بسته است؛ کارهای جدید بعد از کارهای اولویت‌دار می‌نشینند. کار در حال اجرا ثابت می‌ماند و قابل جابه‌جایی نیست.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۷.۱</time><br><b>لیست کشویی ارائه‌دهنده‌ها با هدر چسبان و توضیحات جمع‌شده</b><br>هر ارائه‌دهنده در لیست به‌صورت کارت کشویی (باز/بسته) نمایش داده می‌شود؛ وقتی باز باشد هدر آن هنگام اسکرول به بالای صفحه می‌چسبد. بعد از ویرایش (ذخیره یا انصراف) همان وضعیت باز/بستهٔ قبلی بازیابی می‌شود. باکس‌های توضیح منو هم به‌صورت کشویی با حالت اولیهٔ جمع‌شده درآمدند تا صفحه خلوت‌تر شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۷.۰</time><br><b>مدیر وظایف — فعالیت‌های پشتصحنه به‌صورت زنده</b><br>دکمهٔ «⚡ فعالیت زنده» در هدر، یک مودال سبک باز می‌کند که هر ۳ ثانیه وضعیت پشتصحنه را به‌روز می‌کند: کارهای فعال صف (استخراج/همگام‌سازی با نوار پیشرفت)، اجراهای پس‌زمینه (تست مدل‌ها، حذف تکراری، دسته‌بندی، ایجنتیک)، وضعیت کران و آخرین کارها. polling فقط وقتی مودال باز است کار می‌کند و با بستن آن متوقف می‌شود؛ endpoint سبک /api/activity فقط خلاصه برمی‌گرداند تا سایت سنگین نشود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۶.۲</time><br><b>رفع خطای «aiEditorAccounts is not defined» در ویرایش ارائه‌دهنده</b><br>تعریف state مربوط به حساب‌های Cloudflare از فایل گم شده بود و با کلیک «ویرایش» هر ارائه‌دهنده خطا می‌داد؛ تعریف بازگردانده شد و تست بازدارنده اضافه شد تا دیگر تکرار نشود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۶.۱</time><br><b>دکمهٔ تست کنار هر کلید API اضافی در همهٔ ارائه‌دهنده‌ها</b><br>در ویرایش هر ارائه‌دهنده (کلودفلر یا معمولی)، کنار هر کلید API اضافه‌شده دکمهٔ «تست» هست که همان کلید را مستقیم با اولین مدل گفت‌وگویی امتحان می‌کند؛ برای حساب‌های Cloudflare هم هر حساب (Account ID + توکن) دکمهٔ تست جداگانه دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۶.۰</time><br><b>چند حساب Cloudflare با تست جداگانه برای هر حساب</b><br>برای ارائه‌دهنده‌های Cloudflare، «کلید دوم» حالا یعنی «حساب دوم»: هنگام افزودن حساب جدید، Account ID و توکن API با هم وارد می‌شوند تا وقتی اعتبار یک حساب تمام شود، مدل‌ها خودکار با حساب بعدی (بک‌آپ) آزمایش شوند. کنار هر حساب و هر کلید API دکمهٔ «تست» اضافه شد که همان اعتبار را مستقیم امتحان می‌کند. برون‌ریزی/درون‌ریزی هم آرایهٔ حساب‌ها را کامل نگه می‌دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۵.۰</time><br><b>راحتی در تب سلکتور: تب‌های چسبان، انتخاب محصول بدون تایپ، قیمت در جزئیات و گالری از تصاویر تنوع‌ها</b><br>سه تب بالای تب سلکتور هنگام پیمایش چسبان می‌مانند. در «جزئیات محصول» به‌جای تایپ دستی آدرس، یک دراپ‌داون از محصولات ذخیره‌شدهٔ همان پروفایل آمده و انتخاب هر محصول آدرس را خودکار پر می‌کند. فیلد «قیمت» به آیتم‌های جزئیات اضافه شد (سلکتور قیمت در صفحهٔ محصول). در بخش گالری، روش جدید «تصاویر تنوع‌ها» اضافه شد: تصاویر داخل عناصر تنوع (نه فقط متن آن‌ها) به‌عنوان گالری عکس جمع می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۴.۰</time><br><b>انتخاب بخش و زیربخش در درون‌ریزی و برون‌ریزی تنظیمات</b><br>هم برون‌ریزی و هم درون‌ریزی فایل تنظیمات حالا یک مودال انتخاب بخش دارد: پروفایل‌ها (با زیربخش‌های «تنظیمات پروفایل‌ها» و «محصولات پروفایل‌ها»)، اتصال‌ها (ووکامرس / باسلام / هوش مصنوعی / اعلان‌ها جداگانه)، یادگیری دسته‌بندی، پاسخ خودکار و تنظیمات سیستمی. محصولات هر پروفایل در فایل خروجی جدا (profile_products.json) ذخیره می‌شوند تا بتوانید فقط محصولات یا فقط تنظیمات را منتقل کنید؛ درون‌ریزی جزئی هم اتصال‌های انتخاب‌نشده را دست‌نخورده نگه می‌دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۳.۰</time><br><b>فیلدهای جداگانهٔ Account ID و API Token برای کلودفلر AI</b><br>هنگام ویرایش ارائه‌دهندهٔ Cloudflare AI، دو پارامتر لازم به‌صورت فیلدهای جدا باز می‌شود (شناسهٔ حساب و توکن API) و آدرس پایه از روی آنها ساخته می‌شود. در فایل برون‌ریزی، این دو پارامتر به‌صورت صریح نوشته می‌شوند و در درون‌ریزی دوباره به آدرس پایه تبدیل می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۲.۰</time><br><b>رفع خطاهای مدل‌های کلودفلر و دسته‌بندی جمعی هوشمند</b><br>مسیر اشتباه meta-llama حذف و برای مدل‌های تصویری ورودی text نیز امتحان می‌شود. در دسته‌بندی جمعی باسلام، دستهٔ فعلی هر محصول اول بررسی می‌شود، دسته‌های امتحان‌شده و ناموفق در حافظه ذخیره و در اجراهای بعدی رد می‌شوند، و رأی‌گیری چندمدله با توقف زودهنگام به اکثریت سریع‌تر می‌رسد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۱.۰</time><br><b>چند کلید API برای هر ارائه‌دهندهٔ هوش مصنوعی</b><br>در ویرایش هر ارائه‌دهنده می‌توانید چند کلید API اضافه یا حذف کنید (کلید اول اصلی است). مدل‌های کلیدهای دوم به بعد در همهٔ فهرست‌ها، تست‌ها، چت و ایجنتیک با پسوند [K۲] / [K۳] مشخص می‌شوند و هرکدام با همان کلید خودشان آزمایش می‌شوند؛ فایل برون‌ریزی محرمانه هم همهٔ کلیدها را شامل می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۰.۰</time><br><b>پیش‌نمایش شکیل درون‌ریزی و کاتالوگ کامل مدل‌های Workers AI</b><br>جدول پیش‌نمایش بعد از تحلیل فایل، سرستون‌های قابل‌نگاشت (از جمله ویژگی‌ها) و کلیک روی هر ردیف برای مودال جزئیات دارد. کاتالوگ کامل ۸۴ مدل Workers AI با شناسه‌ها و وضعیت «منسوخ» در راهنمای ایجنتیک قابل مشاهده و فیلتر است.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۱۹.۰</time><br><b>تصحیح نام مدل‌های Workers AI و نگاشت ویژگی‌های فایل درون‌ریزی</b><br>مدل‌های بازنشسته (Llama 3.1، Llama 4 Maverick، Qwen2.5-Coder) حذف و مدل‌های فعلی (Qwen 3.8، GPT-OSS 120B، DeepSeek V4، GLM-5.2، Kimi K2.7) با شناسهٔ دقیق اضافه شدند؛ Leanstral 1.5 جایگزین Leanstral 2603 شد. در درون‌ریزی، فیلد بی‌کاربرد «وضعیت اولیه در ووکامرس» حذف و نگاشت ستون‌های فایل به ویژگی‌های محصول (نام:مقدار) اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۱۸.۰</time><br><b>درون‌ریزی هوشمند، چت با مدل‌ها و بازآرایی ایجنتیک</b><br>درون‌ریزی سه‌مرحله‌ای شد: انتخاب فایل با کشیدن‌ورها، تحلیل خودکار ستون‌ها با نگاشت و گزارش مشکلات، و پیش‌نمایش قبل از ورود؛ تاریخچهٔ درون‌ریزی هم ذخیره می‌شود. تب «چت با مدل‌ها» با فیلترهای فقط چت/فراخوانی ابزار/استدلالی اضافه شد و عملیات ایجنتیک به چهار زیر-تب منظم شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۱۷.۰</time><br><b>عملیات ایجنتیک با مدل‌های فراخوانی‌ابزار</b><br>تب جدید «عملیات ایجنتیک» در هوش مصنوعی: مدل‌های رایگان دارای فراخوانی ابزار، پرامپت‌های زمان‌بندی‌شده با اجرای خودکار، لاگ زندهٔ هر اجرا و ابزارهای خواندنی سرورساید (وضعیت سایت، جست‌وجو، تکراری‌ها، آمار مقصدها). حذف تکراری‌های باسلام و ووکامرس با معیار و پسوند قابل‌ویرایش و اجرای کاملاً سرورساید ارتقا یافت.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۶.۰</time><br><b>حذف سرورساید تکراری‌های ووکامرس و باسلام</b><br>ابزار جدید «حذف تکراری‌های مقصد» کل عملیات را روی صف Cloudflare اجرا می‌کند؛ فهرست‌گیری صفحه‌به‌صفحه، گروه‌بندی و حذف با checkpoint در D1 پیش می‌رود و با بستن مرورگر یا کندی شبکه قطع نمی‌شود، پس خطای شبکهٔ قبلی رخ نمی‌دهد. معیار نگهداری بین محصولات همنام قابل انتخاب است: جدیدتر، قدیمی‌تر، ارزان‌تر یا گران‌تر بماند. فرمت پسوند کد هم قابل ویرایش است — مثلاً (کد:x) یا #x که x یک عدد چندرقمی است و ارقام فارسی هم شمرده می‌شوند — تا نسخه‌های پسوند‌دار همنام شناخته شوند. پیش‌نمایش هیچ تغییری نمی‌دهد؛ حذف واقعی ووکامرس به زباله‌دان و باسلام به بایگانی ۴۱۸۴ می‌رود که هر دو برگشت‌پذیرند و توقف امن، ادامه از checkpoint و گزارش کامل گروه‌ها دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۵.۰</time><br><b>تست موازی مدل هم‌ردیف ارائه‌دهنده‌ها</b><br>در هر نوبت، مدل اول همهٔ ارائه‌دهنده‌های روشن همزمان آزمایش می‌شود، سپس مدل دوم همه، و همین‌طور تا آخر. این کار فهرست را سریع‌تر تمام می‌کند و خطای محدودیت نرخ یک ارائه‌دهنده را کم می‌کند. همان ترتیب در رد مدل گیرکرده و تلاش‌های مجدد پایانی هم به‌کار می‌رود. خطاهای شکل درخواست مثل max_tokens یا temperature با payload سازگار تکرار می‌شوند. درخواست‌های OpenRouter با User-Agent اختصاصی و هدرهای HTTP-Referer / X-Title ارسال می‌شوند تا خطای ۴۰۳ «Access denied by security policy» رخ ندهد؛ همان تلاش در رد مدل گیرکرده هم تکرار می‌شود. خطاهای اتمام اعتبار بدون تغییر می‌مانند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۴.۰</time><br><b>دانلود آشکار فایل برون‌ریزی محرمانه</b><br>دکمهٔ برون‌ریزی محرمانه دیگر فایل را پنهان ذخیره نمی‌کند؛ پنجرهٔ دانلود مرورگر باز می‌شود و در مودال یک دکمهٔ مشخص «دانلود فایل JSON در مرورگر» با نام فایل دیده می‌شود. فایل روی سرور ذخیره نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۳.۰</time><br><b>مهلت قابل‌تنظیم برای رد مدل گیرکرده</b><br>تایم‌اوت رد خودکار مدل‌هایی که پاسخ نمی‌دهند از صفحهٔ تست هوش مصنوعی قابل تنظیم است و پیش‌فرض آن ۱۰۰۰ میلی‌ثانیه است. مقدار ذخیره‌شده روی سرور، بدون باز بودن مرورگر، اعمال می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۲.۰</time><br><b>تلاش مجدد جداگانه برای پاسخ پیام و دسته‌بندی</b><br>در مودال جزئیات هر ردیف جدول نتایج تست مدل‌ها، کنار باکس پاسخ پیام و باکس پاسخ دسته‌بندی دکمهٔ تلاش مجدد آمده است. همان دکمه‌ها در خود جدول هم هستند و فقط همان بخش دوباره روی سرور آزمایش می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۱.۰</time><br><b>کران یک‌دقیقه‌ای، تنظیمات عمومی سرورساید و Batch API</b><br>ضربان کران Cloudflare از پنج دقیقه به هر دقیقه کاهش یافت و بدون باز بودن مرورگر اجرا می‌شود. قفل ضد هم‌پوشانی، نگهبان صف، پینگ کران، جلوگیری از تکرار صف، تعداد گزارش‌ها و همگام‌سازی محتوا از تنظیمات عمومی روی سرور اعمال می‌شوند. مدل‌هایی که فقط از Batch API در دسترس‌اند (پیام «Use the /api/beta/batches endpoint») با همان اندپوینت OpenRouter اجرا و تا آماده شدن نتیجه پیگیری می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۰.۰</time><br><b>اتوسیو تنظیمات و تلاش مجدد مدل‌های آویزان</b><br>هر تغییری در تنظیمات منو، اتصال‌ها و پروفایل ذخیره‌شده بدون دکمهٔ ذخیره، خودکار در سرور ثبت می‌شود. مدل‌هایی که در تست همهٔ مدل‌ها آویزان یا تایم‌اوت شوند، پس از پایان دور اول تا سه بار دوباره امتحان می‌شوند. کران داخلی Worker هر دقیقه صف، همگام‌سازی دوره‌ای پروفایل‌ها، نگهبان اجراهای گیرکرده، پاسخ خودکار و گزارش شبانه را جلو می‌برد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۹.۰</time><br><b>نگهبان واقعی تست مدل‌ها و رد خودکار گیرها</b><br>اگر مدلی پاسخ ندهد، صف دیگر چند دقیقه معطل نمی‌ماند: مهلت هر مدل کوتاه است، نگهبان با هر به‌روزرسانی پیشرفت، مدل گیرکرده را رد می‌کند و تست ادامه می‌یابد. زیر دکمه‌های تست، زمان از آخرین مدل، میانگین زمان مدل‌ها، زمان مدل فعلی و تخمین باقی‌مانده دیده می‌شود. تست دسته‌بندی برای مدل ناموفق پیام دیگر اجرا نمی‌شود تا صف سریع‌تر حرکت کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۸.۰</time><br><b>نسخه در هدر، شمارنده‌های فشردهٔ تست مدل‌ها و پایداری اجرای گیرکرده</b><br>شماره نسخه اکنون در وسط هدر سایت دیده می‌شود و با لمس آن، همین گزارش تغییرات باز می‌شود. در مودال نتایج تست مدل‌های هوش مصنوعی، باکس بزرگ قرمز/سبز با توضیحات حذف شد و چند شمارندهٔ جمع‌وجور جای آن را گرفت. اگر اجرای تست پیش نرود، دکمهٔ توقف کار نکند یا ادامه نگیرد، پس از چند دقیقه بازیابی می‌شود و دکمهٔ «پاک‌کردن اجرای گیرکرده» کل اجرا را ریست می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۷.۰</time><br><b>منوی پایدار، ۱۲ پوستهٔ رنگی و پشتیبانی مدل‌های استدلالی</b><br>دکمهٔ تمام‌عرض داخل سرصفحهٔ منو قرار گرفت و دیگر پشت کشو نمی‌افتد؛ سر هر بخش باز هنگام پیمایش چسبان می‌ماند و اسکرول داخلی مزاحم حذف شد. دوازده رنگ‌بندی سراسری با پیش‌نمایش زنده به تنظیمات عمومی افزوده شد. مدل‌های استدلالی Together و خانواده‌های شناخته‌شده با بودجهٔ پاسخ بیشتر و استخراج مقاوم پاسخ نهایی در دسته‌بندی و پاسخ مشتری فعال‌اند و برای مدل‌های ناشناخته تیک دستی «استدلالی» کنار هر مدل وجود دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۶.۰</time><br><b>تب شروع کامل و همهٔ مدل‌های Text-to-text میسترال</b><br>تب شروع مطابق نسخهٔ مرجع با مدیریت پروفایل، همگام‌سازی دوره‌ای، مقصدها، محدوده و صفحه‌بندی، حالت خودکار یا دستی، عیب‌یابی، استخراج بک‌اند و صف عملیاتی بازسازی شد و همهٔ دکمه‌ها به API واقعی Worker متصل‌اند. کاتالوگ رسمی Text-to-text میسترال نیز به یازده مدل ارتقا یافت؛ OCR و Embedding از endpoint اختصاصی خود آزمایش می‌شوند و به‌درستی از انتخاب‌های گفت‌وگویی و دسته‌بندی کنار گذاشته می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۵.۰</time><br><b>برون‌ریزی امن تنظیمات AI و کاتالوگ به‌روز Mistral</b><br>اکنون تنظیمات ارائه‌دهنده‌ها، کاندیدها، مدل مستر و مسیر شبکه با یک دکمه در فایل JSON قابل دانلود و دوباره قابل درون‌ریزی است؛ رابط پیش از دانلود، محرمانه‌بودن فایل و وجود احتمالی کلیدهای API را روشن اعلام می‌کند. ده مدل فعلی و سازگار با Chat Completions از منبع رسمی Mistral افزوده شده‌اند، بدون اینکه کلید API، آدرس یا وضعیت ارائه‌دهندهٔ موجود کاربر بازنویسی شود؛ مدل‌های نیازمند endpoint اختصاصی عمداً وارد این فهرست نشده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۴.۰</time><br><b>اجرای پایدار سرورساید، دسته‌بندی همهٔ تأییدنشده‌ها و فونت واقعی</b><br>تست مدل‌های هوش مصنوعی اکنون در Queue و D1 روی سرور ادامه پیدا می‌کند و پس از refresh یا بستن صفحه، وضعیت و نتیجهٔ ذخیره‌شده بازیابی می‌شود؛ توقف امن و ادامه از checkpoint نیز دارد. دسته‌بندی هوشمند باسلام همهٔ صفحات و همهٔ غرفه‌های محصولات تأییدنشده را در یک اجرای پایدار پوشش می‌دهد و پیشرفت و نتایج را نشان می‌دهد. فایل‌های CSS و WOFF2 فونت‌های فارسی نیز از همان دامنهٔ Worker بارگذاری و روی کل رابط اعمال می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۳.۰</time><br><b>تست پایدار AI، گفتگوهای کامل باسلام، فونت فارسی و جدول واقعی محصولات</b><br>آزمون همهٔ مدل‌ها در قطع موقت ارتباط سه بار با فاصلهٔ افزایشی تلاش می‌کند، اجرای نیمه‌تمام را ادامه می‌دهد و با replay امن یک مدل را دوباره اجرا نمی‌کند؛ پاسخ پیام «سلام»، خطای همان پاسخ و شمارنده‌های مستقل پیام و دسته‌بندی نیز روشن نمایش داده می‌شوند. پنجرهٔ گفتگوهای باسلام فهرست، خوانده‌نشده‌ها، جست‌وجو و پیام‌های هر گفتگو را نمایش می‌دهد. انتخاب فونت فارسی کل سایت و نمایش ردیفی به‌صورت جدول واقعی نیز اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۲.۰</time><br><b>رفع ۵۲۲ ووکامرس و مدیریت دیداری محصولات و صف</b><br>حالت شبکهٔ مستقیم، خودکار یا Worker اختصاصی ووکامرس اضافه شد؛ در حالت خودکار خطاهای لبهٔ Cloudflare مانند ۵۲۲ از مسیر جایگزین تکرار و نتیجه با راهنمای ساده نمایش داده می‌شود. ووکامرس و باسلام اکنون مدیریت مودالی کارتی/ردیفی، انتخاب تکی و همه، بخش مستقل محصولات تأییدنشده و دسته‌بندی با مدل‌های موفق آخرین آزمون دارند. آزمون مدل‌ها نوار پیشرفت و آمار زنده دارد و شمارنده‌های صف، فهرست محصول و جزئیات رنگی تغییر قیمت را باز می‌کنند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۱.۰</time><br><b>دسته‌بندی تکی و گروهی محصولات باسلام</b><br>از مدیریت جامع محصولات می‌توان دسته را به روش دستی، نیمه‌هوشمند براساس آموخته‌ها یا هوشمند با حداکثر پنج مدل انتخاب کرد؛ پیشنهاد هر محصول پیش از پیش‌نمایش قابل اصلاح است و فقط پس از پیش‌نمایش واقعی و تأیید صریح اعمال می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۱.۰</time><br><b>جدول کامل‌تر آزمون مدل‌های هوش مصنوعی</b><br>جدول نتایج اکنون فیلتر، جست‌وجو و مرتب‌سازی همهٔ سرستون‌ها، نتیجهٔ مستقل دسته‌بندی با عنوان پیش‌فرض «ادو پرفیوم» و جزئیات پاسخ خام مدل و دسته‌بندی را نمایش می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۰.۱</time><br><b>رفع توقف استخراج روی تصویر و عناصر بدون تگ پایان</b><br>parser فهرست و جزئیات دیگر برای عناصری مانند تصویر، ورودی و منبع، callback پایان ثبت نمی‌کند؛ بنابراین خطای «Parser error: No end tag» مرحلهٔ دوم استخراج برطرف شده و لینک، تصویر، قیمت و سایر attributeها نیز حفظ می‌شوند. این اصلاح با همان ساختار و سلکتورهای Tailwind گزارش‌شده در آزمون رگرسیون پوشش داده شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۰.۱</time><br><b>بازیابی خودکار آخرین پروفایل</b><br>پس از بازکردن یا refresh صفحه، آخرین پروفایل معتبر به‌صورت خودکار انتخاب و بارگذاری می‌شود. انتخاب پروفایل میان خانه، تنظیمات، فرم ویرایش و بخش‌های وابسته هماهنگ است و اگر پروفایل حذف شده باشد، برنامه به انتخاب امن بعدی برمی‌گردد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۰.۱</time><br><b>تست‌های پایدارتر هوش مصنوعی و انتخابگر بصری</b><br>آزمون مدل‌های AI به‌صورت صفحه‌بندی‌شده و یک مدل در هر invocation اجرا می‌شود تا با سقف پلن رایگان سازگار باشد؛ انتخابگر بصری فهرست و جزئیات نیز مستقل شده و count، preview و navigation روشن‌تری دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>بازچینی مفهومی همهٔ بخش‌ها</b><br>محتوای باقی‌مانده براساس جریان تعریف منبع، استخراج، بررسی نتیجه، ارسال و نگهداری مرتب شد: سلکتورها سه‌مرحله‌ای، نتیجه‌ها مقدم بر ابزار فایل، امکانات فنی جمع‌شونده و ۱۸ ابزار منو در چهار گروه موضوعی قرار گرفتند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>بازطراحی چهار مسیر اصلی کار</b><br>صفحه‌های شروع، تنظیمات، ارسال و درون‌ریزی با ساختار کارت‌های تو‌در‌تو، کنترل‌های بزرگ، حالت خودکار/دستی، صف‌های خلاصه و دکمه‌های عملیاتی تمام‌عرض مطابق تصاویر مرجع بازچینی شدند؛ همهٔ عملیات به همان APIهای واقعی متصل‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>درون‌ریزی واقعی CSV و Excel</b><br>فایل‌های CSV و XLSX تا ۱۰ مگابایت با عنوان‌های فارسی و انگلیسی تحلیل می‌شوند؛ وضعیت اولیهٔ ووکامرس، قیمت، موجودی، تصویر، برند، SKU، دسته‌بندی و توضیحات نیز حفظ می‌شوند و نتیجه در یک گزارش جامع نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>بازطراحی کامل رابط موبایل</b><br>پوستهٔ سرمه‌ای، کارت‌ها و ورودی‌های بزرگ، کنترل‌های شناور، دکمه‌های سبز و فیروزه‌ای و نوار شش‌گزینه‌ای ثابت پایین مطابق رابط مرجع اضافه شد؛ ترتیب و نام تب‌ها ساده‌تر شده و نسخهٔ دسکتاپ نیز واکنش‌گرا باقی مانده است.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>رفع توقف دکمه‌ها و بازیابی تنظیمات</b><br>اتصال قدیمی به ورودی فایل حذف‌شده باعث توقف راه‌اندازی JavaScript می‌شد. راه‌اندازی مقاوم شد و انتخاب فایل اکنون وضعیت، نتیجهٔ بازیابی و خطا را شفاف نمایش می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>مدیریت جامع مقصد</b><br>فهرست صفحه‌بندی‌شده، جست‌وجوی واقعی، تب وضعیت، انتخاب غرفه، ویرایش تکی، پیش‌نمایش و اعمال گروهی و بایگانی صحیح باسلام اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸</time><br><b>رفع مسیر Cloudflare Workers AI</b><br>endpoint بومی ai/run از Chat Completions جدا شد؛ مدل سازمان‌دار، payloadهای native و fallback سازگار همراه گزارش امن هر تلاش اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸</time><br><b>عیب‌یاب استخراج واقعی</b><br>دریافت شبکه، HTML واقعی، سلکتورها، parser فهرست و نمونهٔ جزئیات مرحله‌به‌مرحله آزمایش می‌شوند تا شکست واقعی قابل تشخیص باشد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸</time><br><b>رابط مدرن‌تر</b><br>محیط مدیریت مقصد، کارت‌ها، فرم‌ها، رنگ‌ها، ناوبری دسکتاپ/موبایل و گزارش‌های جامع بازطراحی شدند.</div></div></details></div><div id="changesResult" class="logs">نسخهٔ فعلی Worker: ۱.۲۱۹.۰+ · مرجع: scraper4.php v10.170 · جزئیات تطبیق با دکمهٔ بالا</div>'],
+ ['📜 گزارش تغییرات کد','changes','نسخهٔ مرجع رابط و رفتار: scraper4.php v10.170. تغییرات مهم این Worker به زبان ساده در این بخش ثبت می‌شوند.','<div class="menu-actions">'+mButton('📋 گزارش تطبیق v10.170','parity','btn-purple')+'</div><div class="change-list"><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۲۰.۰+</time><br><b>جزئیات خودکار نمونه، صفحهٔ کامل محصول و دستورهای نصب قابل کپی</b><br>دو تیک مستقل و پیش‌فرض خاموش برای جزئیات خودکار در تست سه‌صفحه‌ای و عیب‌یابی اضافه شد. با فعال‌بودن، یک نمونهٔ واقعی از هر موتور با دریافت‌کنندهٔ همان موتور و کشف خودکار سلکتور جزئیات خوانده می‌شود؛ زمان و شکست جزئیات مستقل از نتیجهٔ فهرست است. کلیک روی کارت، توضیحات کامل، گالری، SKU، برند و سایر فیلدهای موجود را باز می‌کند و بازگشت، گزارش قبلی را حفظ می‌کند. سلکتورهای آزمایشی جزئیات و محصول کامل در پروفایل ذخیره نمی‌شوند؛ نمونه‌های بسیار بزرگ با هشدار محدود می‌شوند. در بخش کتابخانه‌ها و تعمیر مرورگر، دستورهای قابل کپی Ubuntu، Playwright، Puppeteer، Termux، وابستگی‌های قفل‌شده و بررسی کش اضافه شد. تفاوت apt، کاربر سرویس و مسیر gateway صریح است؛ هیچ نصب سیستم‌عاملی خودکار اجرا نمی‌شود.</div><details class="change-recent"><summary>🕘 نمایش 49 تغییر اخیرِ دیگر</summary><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۹.۰+</time><br><b>کارت محصول واقعی برای هر موتور در آزمون سه‌صفحه‌ای</b><br>هر ردیف گزارش بنچمارک اکنون یک کارت نمونه با تصویر، عنوان، قیمت، SKU و لینک از محصول واقعی همان موتور دارد؛ ردیف بدون محصول صریحاً نبود نمونه را نشان می‌دهد. نمونه و شمارش کامل‌بودن فیلدها با روشن‌بودن پارسر مرحلهٔ دوم هم حفظ می‌شوند. علت داخلی Crawlee و خطاهای بدون رنگ ANSI در گزارش صفحه‌بندی باقی می‌مانند. نبود کتابخانهٔ Ubuntu و نبود نسخهٔ Chrome راهنمای جداگانه دارند؛ Network API همراه پارسر HTML به‌عنوان ناسازگار کنار گذاشته می‌شود، نه خرابی مرورگر. تنظیمات پارسر و مسیر قدیمی استخراج تغییر نکرده‌اند. نصب وابستگی سیستم‌عامل همچنان باید روی VPS انجام شود و در تست سرعت خودکار اجرا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۸.۱+</time><br><b>رفع توقف کپی کش روی لینک امن و تشخیص وابستگی سیستم‌عامل</b><br>کش مبدأ و مقصد با مسیر واقعی مقایسه می‌شوند؛ اگر یک پوشه باشند کپی بیهوده انجام نمی‌شود. لینک داخلیِ امن به فایل عادی کپی می‌شود، ولی خروج از کش، چرخه و مقصد نامطمئن همچنان رد می‌شوند. خطای یک کش مانع نمایش آزمون مرورگرها یا کپی کش دیگر نیست. نبود کتابخانه‌ای مانند libatk-1.0.so.0 جداگانه گزارش می‌شود و دیگر دانلود دوبارهٔ مرورگر را تحریک نمی‌کند؛ نصب بسته‌های Ubuntu همچنان اقدام صریح مدیر است. خطای دانلود از gateway کد HTTP و cf-ray را نشان می‌دهد بدون ادعای علت قطعی خطای ۵۰۰. گزارش پشتیبانی مسیر واقعی و وضعیت symlink را هم دارد.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۸.۰+</time><br><b>کپی گزارش کامل نصب مرورگر برای پشتیبانی</b><br>در بخش نصب و تعمیر Playwright، Puppeteer و Crawlee دکمهٔ مستقل کپی گزارش اضافه شد. گزارش تازهٔ سرور علاوه بر لاگ شامل نسخهٔ کد، Node و npm، سیستم‌عامل و معماری، نسخهٔ نصب‌شده و قفل‌شدهٔ کتابخانه‌ها، مسیر اجرایی، کش مبدأ و مقصد، مجوزها، RAM و دیسک، شرایط پروکسی، گزینه‌های اجرای قبلی و نتایج آزمون است. رمزها، توکن‌ها و query آدرس‌ها حذف می‌شوند؛ متن برای بازبینی و کپی دستی هم قابل مشاهده است. محدودیت لاگ ۲۴هزار نویسه و پاک‌شدن تاریخچه پس از ری‌استارت صریح گزارش می‌شود. تولید گزارش هیچ نصب، دانلود یا راه‌اندازی مرورگری انجام نمی‌دهد و سیاست احراز هویت فعلی سرور حفظ شده است.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۷.۰+</time><br><b>نصب مرورگر از gateway کلودفلر و کپی کش موجود با دکمهٔ مستقل</b><br>اگر مسیر Worker در تنظیمات اتصال فعال باشد، دریافت کتابخانه‌های عمومی npm و آرشیو مرورگر از gateway انجام می‌شود؛ شکست پروکسی به اتصال مستقیم تغییر نمی‌کند و رضایت آینه همچنان لازم است. دکمهٔ مستقلِ کپی کش، مرورگرهای موجود همین VPS را از خانهٔ مبدأ به کش کاربر اسکرپر کپی و پوشه‌ها و مجوز اجرا را آماده می‌کند؛ اصل فایل‌ها حذف و فایل مقصد بازنویسی نمی‌شود. این حالت دانلود، sudo یا تغییر مالکیت ندارد و چهار آزمون راه‌اندازی را اجرا می‌کند. دسترسی خواندن مبدأ و سازگاری نسخه و معماری لازم است. آزمون gateway محلی TLS با npm واقعی و فایل‌های مصنوعی گذشت؛ انتقال زندهٔ آرشیو بزرگ از Cloudflare یا اجرای VPS تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۶.۰+</time><br><b>پیشنهاد و آزمایش سلکتور با موتور مرورگری انتخاب‌شده</b><br>در زیرتب‌های ۲ و ۳ سلکتورها، دکمه‌های پیشنهاد خودکار، آزمایش فهرست، آزمایش جزئیات و گالری اکنون انتخاب فعلی دراپ‌داون موتور را حتی پیش از ذخیرهٔ پروفایل ارسال می‌کنند. Playwright، Puppeteer و Crawlee HTML رندرشده را با مسیر مرورگر خود تحویل می‌دهند؛ برای Network API نیز سلکتورها روی DOM مرورگر Playwright آزمایش می‌شوند، نه پاسخ JSON. شکست مرورگر به HTML اولیه fallback نمی‌کند. موتورهای غیرمرورگری مسیر قبلی را نگه می‌دارند و پارسر مرحلهٔ دوم دخالتی در آزمایش DOM ندارد. Cloudflare Worker برای انتخاب مرورگر خطای روشنِ نیاز به Node می‌دهد. آزمون مصنوعی رندر فهرست و جزئیات و انتقال تنظیمات گذشت؛ تأیید زندهٔ سایت یا VPS ادعا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۵.۰+</time><br><b>پارسر اختیاری مرحلهٔ دوم روی HTML دریافت‌شده</b><br>کلید پیش‌فرض خاموش و فهرست هشت‌گزینه‌ای auto، lxml، selectolax، jsonld، next_data، script_json، metadata و heuristic به خانه و فرم پروفایل اضافه شد. خاموش‌بودن دقیقاً مسیر قبلی استخراج را نگه می‌دارد. lxml و selectolax معادل JavaScript هستند، نه کتابخانهٔ Python. انتخاب مشخص بدون fallback به پارسر دیگر روی همان HTML اجرا می‌شود؛ در اسکرول هر snapshot خوانده و محصولات قبلی حفظ می‌شوند. تنظیمات در ذخیرهٔ خودکار و پروفایل می‌مانند. هنگام روشن‌بودن، یادگیری موتور و بازیابی سلکتور خاموش و بنچمارک فقط خواندنی است. ترکیب با Network API صریحاً رد می‌شود؛ Worker همچنان مرورگر ندارد. آزمون‌های مصنوعی و تطبیق مسیر خاموش با نسخهٔ منتشرشده انجام شد؛ تأیید زندهٔ سایت یا VPS ادعا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۴.۱+</time><br><b>اختیاری‌شدن توکن برای نصب مرورگر طبق انتخاب مالک</b><br>نصب مرورگر دیگر شرط جداگانهٔ ADMIN_TOKEN ندارد و از سیاست عمومی API پیروی می‌کند. در اجرای Node می‌توان ADMIN_AUTH_DISABLED=true را در محیط پروژه تنظیم و سرویس را ری‌استارت کرد تا کنترل توکن خاموش شود. مقدار ADMIN_TOKEN دست‌نخورده می‌ماند تا کلید رمزگشایی اطلاعات اتصال تغییر نکند. در این حالت همهٔ APIهای اسکرپر برای هر فرد دارای دسترسی قابل استفاده‌اند؛ تأیید اجرای root و آینه همچنان وجود دارد ولی جای احراز هویت نیست. احراز هویت وب‌کنسول و دیپلویر و موتورهای استخراج تغییر نکردند.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۴.۰+</time><br><b>اقتباس فقط مسیر Playwright از نسخهٔ پایتون</b><br>رفتار render_playwright در برنچ arena/01a0c9ea-new برای اجرای مستقیم Playwright اقتباس شد: User-Agent کروم، اندازهٔ ۱۳۶۶×۷۶۸، منطقهٔ زمانی تهران، آماده‌سازی navigator، بستن پنجره‌های اضافی و دیالوگ‌ها، ترتیب انتظار ناوبری و اسکرول محدود ویژهٔ اسنپ‌شاپ. Chromium کامل همان نصب در صورت وجود ترجیح داده می‌شود؛ مسیر اجرایی صریح همچنان اولویت دارد. دادهٔ hydration به parserهای موجود تحویل داده می‌شود. Puppeteer، Crawlee، نصب مرورگر، مسیر شبکه و parserهای محصول تغییر نکردند؛ طرح قبلی تلاش محافظت‌شده کنار گذاشته شد. آزمون مصنوعی گذشت؛ موفقیت زندهٔ اسنپ‌شاپ روی VPS هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۷/۰۳ · 2026-09-25 · نسخهٔ ۱.۲۱۳.۰+</time><br><b>نصب و تعمیر همهٔ موتورهای مرورگر با یک دکمه داخل اسکرپر</b><br>در بخش نسخهٔ کد، ابزار نصب کتابخانه‌های غایب Playwright، Puppeteer و Crawlee با نسخهٔ قفل‌شده و دانلود Chromium و Chrome اضافه شد. چهار آزمون اجرای مرورگر با نتیجهٔ مستقل انجام می‌شود. ابتدا مرورگر فعلی آزمایش می‌شود؛ سپس دانلود رسمی و در صورت رضایت کاربر آینهٔ npmmirror با نسخهٔ فعلی Playwright امتحان می‌شوند. نصب در محیط و کش همان پروژه انجام می‌شود و فقط اجرای واقعی مرورگر موفقیت محسوب می‌شود. گزارش زنده، مهلت اجرا و جلوگیری از نصب هم‌زمان اضافه شدند. عملیات نیازمند ADMIN_TOKEN است؛ اجرای root تأیید جدا می‌خواهد. نسخهٔ Node، بسته‌های سیستم و مالکیت فایل‌ها تغییر نمی‌کنند. ترموکس از مرورگر سیستم استفاده می‌کند؛ نصب بستهٔ سیستم و انتقال آفلاین خودکار نیستند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۳۰ · 2026-09-21 · نسخهٔ ۱.۲۱۲.۰+</time><br><b>نصب مستقل کنار وب‌کنسول با توقف و حذف از دیپلویر</b><br>حالت parallel با سرویس، حساب، پوشه‌ها، پایگاه داده و کلید مستقل و پورت‌های ۸۸۹۰ و ۳۱۰۰ اضافه شد؛ نصب وب‌کنسول و سرویس قبلی تغییر نمی‌کنند. پنل عمومی جدید و پراکسی اسکرپر پیش از نمایش به ورود با توکن نیاز دارند. دکمه‌های توقف و حذف با تأیید نام نمونه، درخواست محدود را به کنترل‌کنندهٔ روتِ مستقل می‌فرستند. حذف فقط همین نمونه را غیرفعال و فایل‌ها و داده‌هایش را بایگانی می‌کند؛ پاک‌کردن دائمی انجام نمی‌شود. توقف تا شروع با SSH یا بوت بعدی باقی می‌ماند. HTTP رمزگذاری ندارد و منابع کم سرور همچنان محدودیت دارند؛ نصب و حذف واقعی روی VPS کاربر هنوز آزمایش نشده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۸ · 2026-09-19 · نسخهٔ ۱.۲۱۱.۱+</time><br><b>رفع توقف نصب systemd پیش از اولین اجرا</b><br>دستور reset-failed برای سرویس تازه ممکن است بدون وضعیت بارگذاری‌شده خطا بدهد؛ این مرحله اکنون اختیاری است و فعال‌سازی سرویس و تایمر ادامه می‌یابد. خطاهای واقعی daemon-reload، enable و start همچنان نصب را متوقف می‌کنند. راهنمای تکمیل نصب نیمه‌تمام بدون نصب دوباره وابستگی‌ها یا حذف داده‌ها اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۸ · 2026-09-19 · نسخهٔ ۱.۲۱۱.۰+</time><br><b>نصب پایدار Node روی VPS با سرویس مستقل systemd</b><br>نصب‌کنندهٔ اختصاصی با حساب غیرروت، شروع پس از بوت و بازیابی پردازش اضافه شد. دیپلویر و اسکرپر در یک گروه منابع با سقف حافظه و CPU اجرا می‌شوند؛ پایش HTTP مستقل، دیپلویر بی‌پاسخ را پس از مهلت شروع و سه خطای پیاپی بازیابی می‌کند. توقف دستی محترم است. ساخت پروژه فقط هنگام نصب یا تعمیر انجام می‌شود، نه در هر ری‌استارت. مهاجرت، مسیر قدیمی و داده‌ها و کلید vault را حفظ می‌کند؛ مسیرهای خارجی و پورت اشغال‌شده بدون تغییر رد می‌شوند. این سرویس به PHP و بازماندن ترمینال وابسته نیست. اجرای یک‌بارهٔ نصب روی VPS و خاموش‌کردن نگهبان قبلی الزامی است؛ نصب روی سرور کاربر و آزمون ریبوت هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۷ · 2026-09-18 · نسخهٔ ۱.۲۱۰.۰+</time><br><b>بازیابی خودکار اسکرپر و راه‌اندازی پایدار VPS و ترموکس</b><br>خروج عادی ناخواسته، کرش و سیگنال قطع اسکرپر دیگر آن را برای همیشه خاموش نمی‌گذارند؛ دیپلویر با فاصلهٔ افزایشی پنج تا شصت ثانیه تلاش مجدد می‌کند. پس از مهلت اولیهٔ پنج‌دقیقه‌ای، شش بررسی ناموفق پیاپی نیز بازیابی را فعال می‌کند. توقف دستی محترم است و رویداد پردازش قدیمی، اجرای جدید را خاموش نمی‌کند. وضعیت بازیابی و زمان تلاش بعدی در پنل منابع مشخص‌اند. تولید تنظیمات سرویس systemd و termux-services با راهنمای راه‌اندازی پس از بوت اضافه شد؛ نصب روی دستگاه کاربر لازم است. محدودیت باتری Android و قتل کل برنامه توسط سیستم‌عامل تضمین همیشه‌روشن‌بودن را ناممکن می‌کند. آزمون واقعی کرش، راه‌اندازی مجدد و توقف دستی گذشت.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۹.۰+</time><br><b>نمودار مستقل منابع مصرفی پردازش اسکرپر</b><br>کنار آمار میزبان و دیپلویر، CPU و RAM خود پردازش Node اسکرپر با نمودار مستقل نمایش داده می‌شود. اسکرپر شمارنده‌های واقعی خود را در health گزارش می‌کند؛ بنابراین دسترسی محدود ترموکس به procfs مانع خواندن این آمار نیست. شناسهٔ هر راه‌اندازی از جهش کاذب CPU بعد از ری‌استارت جلوگیری می‌کند. درصد CPU نسبت به یک هسته است و مصرف بیش از صد درصد بریده نمی‌شود. توقف، قطع ارتباط یا نسخهٔ قدیمی با پیام روشن مشخص می‌شود. این آمار شامل Chromium و workerهای جداگانه نیست؛ محدودهٔ اندازه‌گیری در پنل نوشته شده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۸.۰+</time><br><b>نمودار زندهٔ CPU و RAM محیط در دیپلویر</b><br>در نمای کلی دیپلویر نمودار مصرف کل CPU و RAM میزبان با نمونه‌برداری دوثانیه‌ای و تاریخچهٔ شش‌دقیقه‌ای اضافه شد. مصرف پردازش خود دیپلویر و محدودیت حافظهٔ کانتینر cgroup v2 جدا نمایش داده می‌شوند؛ آمار میزبان با مصرف فقط اسکرپر اشتباه نمی‌شود. داده‌های غیرقابل دسترس در ترموکس ناشناخته‌اند، نه صفر. نمودارها توقف و ادامه دارند؛ درخواست‌های صفحه در پس‌زمینه متوقف می‌شوند و ارتباط قطع‌شده مشخص است. API از توکن موجود استفاده می‌کند؛ بدون سرویس خارجی، فرمان shell یا ذخیرهٔ تاریخچه روی دیسک. آزمون API واقعی روی لینوکس و آزمون محدودیت Android و نمودارها انجام شد؛ روی دستگاه واقعی ترموکس هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۷.۰+</time><br><b>بازگشت حالت بدون صفحه‌بندی به رفتار ۱.۱۸۰</b><br>برچسب اصلی بدون صفحه‌بندی در هر دو فرم برگشت. در Node این حالت دیگر به اجبار وارد جمع‌آور اسکرول نمی‌شود و دریافت با موتور منتخب، URL ثابت و قواعد توقف قدیمی اجرا می‌شود؛ اگر تعداد صفحات صفر باشد، نبود محصول تازه اجرای دوباره را متوقف می‌کند. Worker رفتار قدیمی دریافت یک URL را حفظ می‌کند. حالت اسکرول صریح، عیب‌یاب سلکتور، چرخهٔ فقط فهرست و جلوگیری از بازنشستگی براساس فهرست ناقص حفظ شدند. مسیر مرورگر قدیمی تضمین عبور از Worker ندارد و این محدودیت در گزارش هشدار داده می‌شود. آزمون پنج دریافت صدتایی و توقف روی پاسخ تکراری اجرا شد؛ رفع صفحهٔ خالی انتخاب بصری یا مشکل زندهٔ ایمالز ادعا نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۶.۰+</time><br><b>آزمایشگاه ۵۰۰ محصول و پنج دستهٔ اسکرولی</b><br>فیکسچر مستقل با ۵۰۰ محصول یکتا اضافه شد. آزمون واقعی parser در Worker و Node تعداد، لینک، عنوان، قیمت و تصویر همهٔ محصولات را بررسی می‌کند. جمع‌آور اسکرول با پنج دستهٔ صدتایی، جایگزینی کارت‌های قبلی و تأخیر طولانی شبکه آزموده می‌شود تا توقف روی ۱۰۰ مورد یا حذف محصولات قبلی آشکار شود. این آزمایش جمع‌آوری با زمان و DOM شبیه‌سازی‌شده است، نه اجرای Chromium واقعی روی ترموکس یا VPS؛ مشکل پیمایش زندهٔ ایمالز همچنان تأیید رفع ندارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۵.۰+</time><br><b>بازگرداندن تلاش مجدد پیمایش خالی مرورگر</b><br>مسیر قدیمی مرورگر پس از ERR_ABORTED منتظر آرام‌شدن صفحه می‌ماند و صفحهٔ خالی را دوباره باز می‌کرد؛ مسیر جدید اسکرول این بازیابی را نداشت. اکنون اگر هنوز هیچ درخواستی به رهگیر نرسیده و صفحه خالی باشد، پس از انتظار محدود دقیقاً یک بار با همان مسیر امن تلاش می‌شود. شکست دوباره نتیجهٔ ناقص را موفق اعلام نمی‌کند؛ navigationRetried و توضیح صریح توقف پیش از رهگیری در گزارش ثبت می‌شود. تنظیمات سلکتور، نوع صفحه‌بندی و مسیر غیرمستقیم تغییر نمی‌کند. رگرسیون با مرورگر شبیه‌سازی‌شده بازتولید شد؛ دانلود Chromium در آزمایشگاه ناموفق بود و رفع مشکل زندهٔ ایمالز هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۴.۰+</time><br><b>اسکرول محافظت‌شده و تفکیک خطای مرورگر از سلکتور</b><br>درخواست منابع مرورگر محدودیت زمان و لغو دارد؛ timeout پیمایش فقط پس از تحویل سند از مسیر امن، تطابق URL و آماده‌بودن DOM قابل بازیابی است و سپس جمع‌آوری واقعی اسکرول اجرا می‌شود. شکست منابع مؤثر یا اسکرول نتیجهٔ کامل تولید نمی‌کند و حذف محصولات براساس اسکرول ناقص همچنان ممنوع است. عیب‌یاب هر دو موتور عنوان، قیمت، لینک و تصویر را داخل کارت‌ها می‌سنجد؛ صفر محصول پس از شکست مرورگر دیگر سلکتور معتبر را خراب اعلام نمی‌کند. شمارش واقعی ظرف از شاهد محدود کل صفحه جداست و اختلاف ۵۰/۱۰۰ به‌اشتباه به nth-of-type نسبت داده نمی‌شود. گزارش منابع ناموفق بدون query و با حفظ مسیر غیرمستقیم ارائه می‌شود. آزمون با نمونهٔ مصنوعی صدکارتی انجام شد؛ رفتار زندهٔ ایمالز و استقرار تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۳.۰+</time><br><b>پیشنهاد دستهٔ باسلام، آزمون واقعی صفحه‌بندی و تفکیک دو دکمهٔ اجرا</b><br>دستهٔ موجود یا انتخاب دستی حفظ می‌شود؛ برای محصولات بدون دسته، سرویس پیش‌بینی نسخهٔ دوم باسلام ابتدا امتحان می‌شود. فقط شناسهٔ معتبر و غیرمبهم از فهرست دسته‌ها پذیرفته و ۲۴ ساعت کش می‌شود؛ خطا یا ابهام به مسیر آموخته‌ها و مدل فعلی برمی‌گردد. درخواست محدودیت زمان دارد و توکن در کش نوشته نمی‌شود. تست سه‌صفحه‌ای براساس نوع صفحه‌بندی، لینک واقعی بعدی و محصول تازه را بررسی و گزارش می‌کند؛ URL تکراری، پاسخ تکراری و نبود لینک بعدی موفقیت سه‌صفحه‌ای نیست. حالت بدون صفحه‌بندی یک صفحه و اسکرول در Node با Playwright/Puppeteer تا سه دستهٔ تازه آزمون می‌شود؛ موتور فاقد اسکرول واقعی صریحاً گزارش می‌شود. دکمهٔ بک‌اند فقط فهرست را ذخیره می‌کند و هیچ جزئیات، دسته‌بندی، توضیح‌سازی، بازنشستگی یا ارسالی اجرا نمی‌کند؛ توضیح و دستهٔ قبلی پاک نمی‌شود. همگام‌سازی دستی مستقل از گزینهٔ بدون استخراج، فرآیند کامل تا ارسال به مقصد انتخابی را اجرا می‌کند. برنامهٔ فقط فهرست در صف و تلاش مجدد حفظ می‌شود. آزمون‌ها محلی‌اند؛ اتصال زنده به سرویس پیش‌بینی و سایت کاربر تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۲.۰+</time><br><b>نادیده‌گرفتن پسوند کد در تشخیص تکراری‌ها</b><br>عنوان پایه بدون پسوندهای کد معیار تشخیص تکراری است؛ نمونه‌های «(کد: ایکس)»، کد عددی فارسی، حروف لاتین، پسوندهای سفارشی و چند پسوند پشت‌سرهم پوشش داده شدند. شناسایی پسوند عمومی نسبت به نیم‌فاصلهٔ فارسی نیز مقاوم شد. عنوان واقعی مقصد تغییر نمی‌کند و ویژگی‌های معناداری مانند رنگ حذف نمی‌شوند. جداسازی غرفه‌ها حفظ شده است؛ عنوان پایهٔ یکسان در دو غرفه همچنان تکراری نیست. این قواعد در برنامه‌ریز دفتر حساب و گروه‌بندی پس‌زمینه آزمون شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۱.۰+</time><br><b>عنوان یکسان در غرفه‌های مختلف باسلام تکراری نیست</b><br>بررسی تکراری‌ها برای هر غرفه مستقل است؛ وجود یک عنوان در چند غرفه، مجوز حذف هیچ‌کدام نیست. برنامه‌ریز مغایرت‌گیری اکنون حتی در صورت ورود اشتباهی ردیف‌های دفتر غرفهٔ دیگر، آن‌ها را از گروه حذف کنار می‌گذارد. نگه‌داشتن محصول گران‌تر یا ارزان‌تر فقط میان تکرارهای داخل همان غرفه انجام می‌شود. توضیح این قاعده در رابط اضافه شد و آزمون‌های برنامه‌ریز مشترک و حذف پس‌زمینه، جداسازی غرفه‌ها را پوشش می‌دهند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۲۰۰.۰+</time><br><b>دفتر حساب محصولات فعال، زمان ساخت و جزئیات استخراج</b><br>فهرست دفتر حساب فقط محصولات منتشرشدهٔ ووکامرس به‌جز موارد پنهان از کاتالوگ و محصولات فعال باسلام را می‌گیرد؛ موجودی صفر به‌تنهایی باعث حذف محصول قابل مشاهده نمی‌شود. بررسی تکراری‌های مغایرت‌گیری از همین دفتر استفاده می‌کند و پیش از اعمال حذف، همان دفتر تازه‌سازی می‌شود. نسخه‌های قبلی دفتر برای این سیاست تازه‌سازی می‌شوند. مدت واقعی ساخت هر مقصد و کل عملیات به دقیقه ثبت شده و آخرین ساخت کامل از مراجعه‌های کش جدا نگه‌داری می‌شود؛ شکست دریافت به‌عنوان ساخت کامل گزارش نمی‌شود. مدیر وظایف برای استخراج، نام پروفایل و مرحله، شمارنده‌ها، صفحات گزارش‌شده، استفادهٔ مجدد از جزئیات، ارسال‌ها، زمان سپری‌شده، آخرین محصول گزارش‌شده و علت انتظار در صف را نشان می‌دهد. تاریخچهٔ ناموجود صفر فرض نمی‌شود؛ شمارنده‌های جزئی مبتنی بر گزارش موجود هستند. اعتبارسنجی با آزمون‌های محلی است؛ مشاهدهٔ واقعی فروشگاه در حضور افزونه‌های محدودکننده نیازمند بررسی همان سایت است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۶ · 2026-09-17 · نسخهٔ ۱.۱۹۹.۰+</time><br><b>دفتر حساب مشترک مقصدها و ارسال فقط تفاوت‌ها</b><br>فهرست کامل مقصدها با قیمت و مشخصات در دفتر حساب پایدار و جدا برای هر اتصال ذخیره می‌شود؛ مغایرت‌گیری و ارسال از همین مرجع استفاده می‌کنند. ارسال موفق دفتر را به‌روز می‌کند و ارسال یکسانِ تأییدشده تکرار نمی‌شود. فهرست اولیهٔ بدون تغییر از جزئیات قبلی استفاده می‌کند؛ بررسی دوره‌ای شش‌ساعته برای تغییرات فقط در صفحهٔ جزئیات باقی است و قیمت پایه و تنوع‌ها دوباره تعدیل نمی‌شوند. وضعیت، مشاهدهٔ محصولات و مشخصات، تازه‌سازی دستی و پیش‌نمایش موارد حذف‌شده از مبدأ در داشبورد اضافه شد. دریافت ناقص مقصد جایگزین فهرست سالم قبلی نمی‌شود. حذف پیش‌فرض فقط گزارش است؛ اعمال تابع سیاست بازنشستگی، فهرست کامل مبدأ، دفتر تازه، نگاشت متعلق به همان محصول و سقف بیست تغییر است. فهرست ناقص یا اسکرولی نامطمئن مجوز حذف نمی‌دهد. آزمون‌ها محلی‌اند و استقرار یا تأیید زندهٔ مقصدها انجام نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۸.۰+</time><br><b>مرتب‌سازی مغایرت‌گیری و پاسخ زنده برای بررسی‌های طولانی</b><br>دکمه‌های هم‌پوشان بررسی مقصد، جدول‌های قدیمی و وضعیت عمومی از بخش مغایرت‌گیری حذف شدند؛ یک پیش‌نمایش مشترک، اعمال هماهنگ‌سازی و بخش جداگانهٔ تکراری‌ها باقی مانده‌اند. بازسازی نگاشت در ابزار پیشرفتهٔ بسته قرار دارد. بررسی و پیش‌نمایش هماهنگ‌سازی و تکراری‌ها اکنون پاسخ زنده با پیام آغاز و ضربان ده‌ثانیه‌ای دارند تا زمان خواندن مقصدها اتصال بی‌پاسخ نماند. API قدیمی JSON حفظ شده است. قطع ارتباط یا نبود نتیجهٔ نهایی موفقیت تلقی نمی‌شود؛ پیام خطا احتمال ادامهٔ کار سرور و خطر تکرار اعمال/حذف را توضیح می‌دهد. اجرای هم‌زمان از همین مرورگر مهار می‌شود و نمایش جدول آخر به گزارش تازه متصل است. علت دقیق خطای شبکه روی VPS بدون گزارش همان محیط هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۷.۰+</time><br><b>تنظیمات اجرای وظایف تاشو و در ابتدا بسته</b><br>بخش تنظیمات اجرای وظایف در مدیر وظایف اکنون تاشو است و با هر بار بازکردن مدیر وظایف، ابتدا بسته نمایش داده می‌شود تا فعالیت‌ها زودتر دیده شوند. با کلیک یا صفحه‌کلید روی عنوان باز و بسته می‌شود. ذخیرهٔ خودکار، مقدارهای در انتظار ذخیره و بخش داخلی نگهبان حفظ شده‌اند. تازه‌سازی زندهٔ فهرست، حالت باز یا بسته و ورودی‌های در حال ویرایش را تغییر نمی‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۶.۰+</time><br><b>شفافیت قیمت پایه، ارسال سراسری تعدیل ووکامرس و استخراج اسکرولی</b><br>جدول قیمت مقصدها در پنجرهٔ محصول اکنون با قیمت پایهٔ مبدأ، تعدیل پروفایل و قیمت پس از تعدیل پروفایل شروع می‌شود. روش و مقدار تعدیل همراه نتیجه ذخیره می‌شود تا قیمت قبلی با درصد تازه اشتباه نمایش داده نشود. گزارش ارسال هر محصول، قیمت پایه و واحد آن را مستقل از قیمت مقصد نگه می‌دارد؛ برای گزارش قدیمیِ بدون مبنا مقدار ساختگی نمایش داده نمی‌شود. تغییر درصد ووکامرس، برای همهٔ پروفایل‌های فعال حتی با کلید خاموش ووکامرس، کار ارسال فقط به ووکامرس می‌سازد. قصد ارسال پیش از ذخیره ثبت و ارسال نیمه‌تمام قابل تلاش دوباره است؛ اجرای دوره‌ای آن را ادامه می‌دهد. ارسال قیمت از تنظیمات تازه استفاده می‌کند و محصول موجود با شناسه یا SKU به‌روزرسانی می‌شود. حالت تازهٔ «اسکرول تا انتهای فهرست» با یک نشست مرورگر، اسکرول فهرست داخلی، جمع‌آوری کارت‌های ناپدیدشونده، انتظار درخواست‌های شبکه و پنجرهٔ سکون کار می‌کند. حالت قدیمی بدون صفحه‌بندی با موتور مرورگر نیز از این مسیر استفاده می‌کند؛ تک‌صفحه‌ای عادی دیگر چندبار همان URL را نمی‌خواند. سقف زمان یا خطای شبکه موفقیت ناقص محسوب نمی‌شود و اسکن اسکرولی محصولات دیده‌نشده را ناموجود نمی‌کند. اسکرول به Chromium در Node نیاز دارد؛ Worker خطای روشن می‌دهد. آزمایش با فیکسچر تأخیری و فهرست مجازی انجام شده و کامل بودن سایت خاص هنوز تأیید نشده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۵.۰+</time><br><b>مدیر وظایف برای فعالیت‌های برنامه، نه فقط استخراج و ارسال</b><br>عیب‌یابی زنده، تست سرعت، درخواست‌های هوش مصنوعی، ورود فایل، پشتیبان‌گیری و عملیات مدیریتی همراه مراحل فعال این مرورگر نمایش داده می‌شوند. اجرای درخواست‌های سرور و کارهای دوره‌ای پاسخ خودکار، تکمیل AI و پشتیبان شاخه در پایگاه داده ثبت می‌شود؛ وضعیت جریان زنده تا پایان خواندن پاسخ حفظ می‌شود. برچسب سرور و مرورگر، زمان سپری‌شده، حذف ردیف تکراری با شناسهٔ مشترک و نمایش پیشرفت نامشخص اضافه شد. قطع ارتباط به معنی توقف قطعی سرور نیست و وضعیت قدیمی تأییدنشده نمایش داده می‌شود. در VPS، آزمون AI، دسته‌بندی و حذف تکراری‌ها نیز در فهرست قرار می‌گیرند و همهٔ کارهای فعال مستقل از محدودیت تاریخچه خوانده می‌شوند. کنترل جابه‌جایی و حذف فقط برای اجراهای پشتیبانی‌شده باقی می‌ماند؛ هنگام قطع ارتباط، فعالیت‌های محلی پنهان نمی‌شوند. تنظیمات اجرای وظایف و ذخیرهٔ خودکار قبلی حفظ شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۴.۰+</time><br><b>انتقال تنظیمات ظرفیت و صف به مدیر وظایف</b><br>تنظیمات تعداد پروفایل‌های همزمان، مهلت و حد خطای متوالی هوش مصنوعی، جلوگیری از صف تکراری، کار رهاشده، قفل کران، نگه‌داری گزارش و نگهبان صف اکنون در بخش «تنظیمات اجرای وظایف» در بالای مدیر وظایف قرار دارند. در منوی عمومی و بخش قدیمی نگهبان فقط میان‌بر دسترسی باقی مانده است؛ فیلد تکراری با مقدار قدیمی وجود ندارد. ذخیرهٔ خودکار و کلیدهای تنظیمات قبلی حفظ شدند و وضعیت ذخیره داخل همان پنجره نیز نمایش داده می‌شود. فرم تنظیمات از فهرست زندهٔ وظایف جداست تا تازه‌سازی سه‌ثانیه‌ای متن در حال ویرایش، تمرکز یا موقعیت فرم را بازسازی نکند. بازکردن دوبارهٔ پنجره، مقدار در انتظار ذخیره یا درخواست در حال ارسال را بر پاسخ قدیمی ترجیح می‌دهد. با خروج از مدیر وظایف به پنجرهٔ دیگر، نظرسنجی آن متوقف می‌شود. چهار آزمون رفتاری برای جایگاه، مقدارهای در حال ذخیره، پایداری فرم و ذخیرهٔ خودکار اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۳.۰+</time><br><b>تست سرعت سه‌صفحه‌ای زنده و ذخیرهٔ خودکار تنظیمات</b><br>تست سرعت اکنون مانند عیب‌یابی، رویداد واقعی هر موتور و هر صفحه را به‌صورت جریان زنده نشان می‌دهد: صفحهٔ در حال دریافت، تعداد محصولات، زمان، موتور در دسترس‌نبودنی، خطا و ذخیرهٔ نتیجه. پاسخ JSON قبلی همچنان برای ابزارهای دیگر موجود است. نتیجهٔ یک آزمون طولانی با کنترل همزمانی ذخیره می‌شود تا تغییر قیمت، مقصدها و سلکتورهای کاربر را با نسخهٔ قدیمی پروفایل جایگزین نکند. ذخیرهٔ خودکار فیلدهای شروع، تنظیمات پروفایل، سلکتورها و گالری، تنظیمات عمومی و اتصال‌ها اصلاح شد؛ ویرایش غرفه، ارائه‌دهنده و قاعدهٔ پاسخِ موجود هم خودکار ذخیره می‌شود. ایجاد اولیهٔ رکورد جدید همچنان با دکمهٔ ایجاد/ذخیره انجام می‌شود. انتخاب‌ها و کلیدها بلافاصله و متن/عدد پس از مکث کوتاه ۲۵۰ میلی‌ثانیه ثبت می‌شوند. نشانگر واقعی وضعیت ذخیره در نوار بالا اضافه شد؛ خطاها پنهان نمی‌شوند و درخواست ناموفق در حافظهٔ همان صفحه برای تلاش بعدی نگه داشته می‌شود. درخواست‌ها سریالی و با تصویر ثابت همان پروفایل اجرا می‌شوند؛ تغییر پروفایل در حین ذخیره باعث نوشتن روی پروفایل دیگر نمی‌شود و پاسخ قدیمی متن در حال تایپ را بازنویسی نمی‌کند. به‌روزرسانی پروفایل فقط فیلدهای ویرایش‌شده را می‌فرستد. تعدیل قیمت بلافاصله روی نتایج ذخیره‌شده اعمال می‌شود؛ ارسال خودکار مستقل و تابع ظرفیت صف است. اعمال همزمانِ یک قیمت یکسان دیگر تعارض کاذب ایجاد نمی‌کند و در PostgreSQL ترتیب کلیدهای JSON ملاک تعارض نیست. آزمون جریان واقعی، ذخیرهٔ ترتیبی و HTTP تغییر قیمت بدون استخراج اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۲.۰+</time><br><b>ظرفیت همزمان پروفایل‌ها، برنامهٔ مراحل وظایف، ارسال خودکار قیمت و عبور از خطاهای هوش مصنوعی</b><br>تعداد پروفایل‌های همزمان از تنظیمات عمومی بین ۱ تا ۸ قابل تغییر است؛ پیش‌فرض ۲ است و ظرفیت تا پایان استخراج، توضیح‌سازی و ارسال نگه داشته می‌شود. کنترل پذیرش در خود پایگاه‌داده انجام می‌شود تا چند اجراکننده یا پیام صف نتوانند سقف را دور بزنند؛ کار بعدی همان پروفایل هم منتظر پایان کار قبلی می‌ماند. اجراکنندهٔ Node اکنون چند مسیر موازی واقعی دارد. پیام اصلی صف Cloudflare هنگام ادامهٔ کار بااولویت‌تر گم نمی‌شود؛ پیام انتظار ظرفیت از انتظار ادامهٔ نقطهٔ بازیابی جدا توضیح داده می‌شود. کارت‌های وظایف، برنامهٔ مراحل و مرحلهٔ فعلی را نشان می‌دهند؛ ارسال ووکامرس و باسلام نیز مرحله‌های جدا دارند. ذخیرهٔ تغییر درصد، ضریب، مبلغ یا گردکردن یک کار ارسال به همهٔ مقصدهای تنظیم‌شده ایجاد می‌کند، حتی با کلید خاموش مقصد در پروفایل. قیمت‌ها ابتدا روی نتایج ذخیره‌شده اعمال می‌شوند؛ تغییرهای تکراری پیش از شروع ارسال ادغام و هنگام اجرای کار قبلی، به‌صورت کار بعدی صف‌بندی می‌شوند. تب ارسال گزارش کارتی و صفحه‌بندی‌شدهٔ هر محصول و نتیجهٔ هر مقصد/غرفه، خطا و علت ارسال‌نشدن را نشان می‌دهد. مهلت زیرمرحله‌های هوش مصنوعی و تعداد خطاهای متوالی قابل تنظیم است؛ پیش‌فرض ۳۰ ثانیه و ۳ محصول است. موفقیت شمارنده را صفر می‌کند؛ پس از رسیدن به حد، ادامهٔ همان زیرمرحله رد می‌شود و ذخیره/ارسال ادامه می‌یابد. شمارنده از پیام‌های ادامهٔ صف عبور می‌کند و پاسخ دیررس محصول اصلی را تغییر نمی‌دهد. آزمون واقعی SQLite برای ظرفیت و HTTP برای ارسال خودکار قیمت و آزمون‌های خرابی هوش مصنوعی اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۱.۰+</time><br><b>رفع جهش پنجرهٔ تأییدنشده‌ها، دفترچهٔ موقت دسته‌ها و تعدیل قیمت روی نتایج ذخیره‌شده</b><br>به‌روزرسانی زندهٔ همان اجرای دسته‌بندی موقعیت اسکرول عمودی/افقی پنجره و جدول را حفظ می‌کند و پنجرهٔ دیگری را به‌زور جایگزین نمی‌کند. برای هر غرفه/محصول، دستهٔ فعلی و پیشنهادهای واقعاً امتحان‌شده پیش از درخواست تغییر ثبت می‌شوند؛ فهرست دسته‌های ارسالی به مدل از گزینه‌های تکراری پاک است، حتی اگر درخواست قبلی موفق یا نتیجهٔ آن مبهم بوده باشد. دفترچه‌های محصولات خارج‌شده تنها پس از اسکن کامل و موفق همهٔ صفحات و غرفه‌ها، با یک حذف گروهی پاک می‌شوند؛ خطا و فهرست ناقص باعث پاک‌سازی نمی‌شود. محاسبهٔ قیمت، گردکردن و پسوند از موتور استخراج به لایهٔ ذخیرهٔ نتایج منتقل شد. ذخیرهٔ تنظیمات پروفایل یا دکمهٔ اعمال در نتایج، محصولات موجود را بدون استخراج دوباره تغییر می‌دهد؛ مبنای قیمت/عنوان حفظ می‌شود تا اعمال تکراری سود یا پسوند را انباشته نکند. برای محصولات قدیمیِ بدون مبنا، مبلغ فعلی ذخیره‌شده مبنای اولین اعمال است. قیمت تنوع‌ها هم تعدیل می‌شود، پسوند نمایشیِ غیرواقعی حذف شد و ارسال از رکورد ذخیره‌شده انجام می‌شود. حداقل قیمت فقط ارسال را محدود می‌کند و نتیجه را حذف نمی‌کند. آزمون‌های دفترچه، اسکرول، صفحه‌بندی امن تغییرات و HTTP واقعیِ تغییر قیمت/عنوان و ارسال اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۹۰.۰+</time><br><b>رفع گیرکردن کار در صف و بازیابی شروع استخراج/همگام‌سازی</b><br>پردازشگر کلیک و حلقهٔ خودکار در Node/VPS اکنون یک اجراکنندهٔ مشترک دارند: خطای دریافت کار با وقفه دوباره تلاش می‌شود، درخواست شروع هنگام اجرای قبلی گم نمی‌شود و صف پس از دستهٔ ۲۵تایی رها نمی‌ماند. دریافت کار در SQLite با یک دستور اتمیک انجام می‌شود تا اجرای هم‌زمان خطای تراکنش تو‌در‌تو ندهد؛ کوئری خواندن محصولات برای همگام‌سازی نیز با SQLite سازگار شد. دیدن صف در Node کارهای منتظرِ باقی‌مانده از راه‌اندازی قبلی را بیدار می‌کند. کلیک همگام‌سازی نیز کار استخراج منتظر همان پروفایل را بدون ساختن کار تکراری به پردازشگر می‌فرستد. در صفحهٔ کارها دکمهٔ «شروع دوبارهٔ کار در صف» برای هر دو محیط اضافه شد؛ در Cloudflare پیام دوباره به Queue یا اجرای درون‌خطی می‌رود و اتصال consumer/Cron همچنان لازم است. خطای شروع پردازشگر و راهنمای صف طولانی دیگر بی‌صدا نمی‌ماند. آزمون‌های هم‌زمانی SQLite، بازیابی خطا و درخواست واقعی HTTP هر دو دکمه با منبع آفلاین اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۹.۰+</time><br><b>اعمال قطعی تنظیم قیمت پروفایل و دسته‌بندی باسلام پیش از توضیح‌ساز</b><br>تنظیم مبلغ/درصد/ضریب و گردکردن قیمت اکنون پس از استخراج جزئیات و تلاش نجات سلکتورها اعمال می‌شود؛ حداقل قیمت روی همین مبلغ نهایی بررسی و متن قیمت با حفظ واحد ریال/تومان به‌روز می‌شود. Node نیز قیمت صفحهٔ جزئیات را می‌خواند. نقطه‌های بازیابی Worker دادهٔ خام نگه می‌دارند تا ادامه یا تکرار کار باعث افزایش دوبارهٔ قیمت و پسوند عنوان نشود؛ کالاهای بدون قیمت با افزایش مبلغ قیمت‌دار نمی‌شوند. مرحلهٔ مستقل دسته‌بندی باسلام پیش از تولید توضیحات اجرا می‌شود، حتی اگر توضیح‌ساز خاموش باشد: دستهٔ موجود یا تنظیم صریح پروفایل حفظ می‌شود، سپس یادگیری و مدل با شناسه‌های فهرست معتبر بررسی می‌شوند. شناسه/نام/مسیر دسته به توضیح‌ساز می‌رسد و خرابی توضیح‌ساز دستهٔ پیدا‌شده را از بین نمی‌برد. مسیر صف و API مستقیم هر دو اصلاح و آزمون‌های آفلاین اضافه شدند. برای اصلاح قیمت محصولات قبلی، پس از به‌روزرسانی استخراج را دوباره اجرا کنید؛ همگام‌سازی بدون استخراج قیمت ذخیره‌شده را دوباره تغییر نمی‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۸.۰+</time><br><b>آماده‌سازی HTTPS با Caddy، اعلان پس‌زمینهٔ VPS و انتخاب بصری از DOM رندرشده</b><br>ابزارهای تولید امن تنظیمات Caddy، محیط خصوصی HTTPS با حفظ کلید خزانه و کلیدهای Web Push اضافه شدند؛ فایل‌های موجود بازنویسی و DNS یا سرویس زنده خودکار تغییر داده نمی‌شوند. در بخش اعلان‌ها، فعال‌سازی/تست/غیرفعال‌سازی همین دستگاه و بررسی HTTPS آمده است. در Node پایان وظایف و اعلان‌های نسخهٔ دیپلویر از سرور برای اشتراک‌های رمزگذاری‌شده ارسال می‌شوند؛ سرویس‌ورکر بدون ذخیرهٔ صفحات یا توکن‌ها اعلان را نشان می‌دهد. انتخاب بصری، موتور انتخابی و اتصال غیرمستقیم پروفایل را می‌خواند و برای موتورهای مرورگری یک DOM رندرشده می‌سازد؛ این نما مرورگر تعاملی زنده نیست. فریم انتخاب‌گر با sandbox، اسکریپت مجازِ هش‌شده و پیام‌های وابسته به بلیت از داشبورد جدا شده است. مستند نصب HTTPS-PUSH-VISUAL.md و آزمون‌های امنیتی/رگرسیون اضافه شدند؛ فعال‌سازی واقعی دامنه، گواهی و مجوز اعلان روی VPS/دستگاه لازم است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۷.۰+</time><br><b>عیب‌یابی استخراج با نمایش بصری و زندهٔ مراحل روی VPS و Cloudflare</b><br>پنجرهٔ عیب‌یابی دیگر تا پایان عملیات فقط پیام انتظار نشان نمی‌دهد: شروع و نتیجهٔ اتصال به مبدأ، اجرای موتور فهرست، بررسی سلکتورها، کشف کارت‌ها، جزئیات نمونه، پیشنهاد سلکتورها و ذخیرهٔ آن‌ها از سرور به‌صورت زنده ارسال می‌شوند. کارت‌های مرحله با حالت انتظار، اجرا، موفق، ناموفق و بی‌نیاز، زمان سپری‌شده، شمارنده‌ها و تاریخچهٔ رویدادها به‌روز می‌شوند؛ درصد پیشرفت ساختگی نمایش داده نمی‌شود. بستن و بازکردن پنجره همان اجرای جاری را نشان می‌دهد و درخواست تکراری نمی‌سازد. قطع ارتباط یا خطای ذخیره، گزارش ناقص را صریح نشان می‌دهد؛ گزارش نهایی و کپی آن حفظ شده و API قدیمی JSON هم همچنان کار می‌کند. آزمون‌های مستقل هر دو موتور، جریان زنده و رفتار واقعی رابط اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۶.۰+</time><br><b>سازگاری پراکسی query با هدرهای کنترلی و اصلاح قالب آدرس رمزگذاری‌شده</b><br>قالب ?url={url} حتی اگر مرورگر آکولادهای آن را به %7Burl%7D تبدیل کند درست خوانده می‌شود؛ پارامتر url خالی یا قدیمی هم با مقصد جاری جایگزین می‌شود. در هر دو محیط Node و Worker، اگر پراکسی query برای دریافت صفحه ۴۰۳ بدهد فقط یک بار دیگر همان آدرس با X-Proxy-UA و X-Proxy-Referer و بدون هدرهای اضافی تعیین مقصد آزمایش می‌شود؛ مقصد مستقیم جایگزین نمی‌شود و درخواست‌های POST تکرار نمی‌شوند. شکست دوباره، کد هر دو تلاش را نشان می‌دهد. آزمون‌های آفلاین مسیر بازیابی و توقف را پوشش می‌دهند؛ رفع خطای زندهٔ VPS بعد از نصب باید بررسی شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۵.۰+</time><br><b>رفع نادیده‌گرفتن تنظیمات اتصال مبدأ در VPS و یکسان‌سازی قرارداد پراکسی با Worker</b><br>تنظیمات بخش اتصال به سایت مبدأ اکنون در دریافت صفحه، تست دسترسی و عیب‌یابی خوانده می‌شوند؛ تنظیمات AI فقط برای نصب‌های قدیمیِ فاقد تنظیم مستقل مبدأ نقش جایگزین دارند. مسیر Worker در Node مثل نسخهٔ Cloudflare از /https://site استفاده می‌کند؛ پراکسی‌های query با الگوی ?url={url} قابل تنظیم‌اند. دامنهٔ workers.dev در فیلد پراکسی به‌عنوان Worker معکوس شناخته و HTTP آن به HTTPS تبدیل می‌شود. تست و عیب‌یابی ابتدا تنظیمات فرم را ذخیره می‌کنند؛ تست دسترسی تیک اتصال غیرمستقیم پروفایل را رعایت می‌کند و مسیر اتصال در گزارش دیده می‌شود. Worker بدون آدرس دیگر بی‌صدا به اتصال مستقیم برنمی‌گردد. این اصلاح با فیکسچر آفلاین و آزمون رگرسیون بررسی شده؛ تأیید دسترسی زندهٔ ایمالز به اجرای دوباره روی VPS نیاز دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۴.۰+</time><br><b>دیپلویر حالا به سیستم‌عامل هم خبر می‌دهد؛ و همهٔ کارهای دیپلویر به یک بخش مستقل در منوی همبرگری منتقل شد</b><br>این هم روی ۱.۱۸۳.۰ شما نشست (شناسه‌های دور‌برنی که از ۲^۵۳ بزرگ‌ترند دیگر نمی‌شکنند: عدد دقیق از همهٔ مسیرها خوانده و نوشته می‌شود). چون شمارهٔ شما با انتشار یکی‌ساعتهٔ من یکی شد، انتشار من به ۱.۱۸۴.۰+ رفت — مقایسه‌گر نسخهٔ دیپلویر هستهٔ عددی را می‌خواند و + را نمی‌بیند، پس دو انتشار هم‌عدد «تازه‌ترین برنچ» و مُهر نسخه را مبهم می‌کردند؛ کارت شما در فهرست تغییرات اضافه شد و کارش دست‌نخورده مانده است. این برنچ روی ۱.۱۸۲.۰ شما (بازنویسی پنل بکاپ/نسخه با سه زبانه و نصب SDK رسمی باسلام در Node) نشست؛ کارت کتابخانه‌ها، دستورهای نصب و productCodeSuffix شما نگه داشته شد و فقط همان نگهبان تک‌ردیفیِ نتایج که شما با رفع علت کرش درست کرده بودید روی کار شما اضافه شد (خطای یک ردیف کل فهرست را خالی نکند). یک- وقتی اسکن برنچ‌ها نسخه‌ای تازه‌تر از آنچه روی این دستگاه اجرا می‌شود پیدا کند، خبر فقط در لاگ نمی‌ماند: یک اعلان واقعی سیستم‌عامل ارسال می‌شود — روی Termux با termux-notification (کانال و اولویت بالا، قابل تپ)، روی لینوکس با notify-send، روی مک با osascript، روی ویندوز با toast پاورشل، و اگر LOCAL_DEPLOYER_NOTIFY_CMD را ست کرده باشید با همان برنامه. هر رویداد فقط یک‌بار اعلام می‌شود (کلید kind:name:version:sha12 در دفترِ data/.deployer-notices.json که با ری‌استارت هم حفظ می‌شود و با LOCAL_DEPLOYER_NOTIFY_STATE جابه‌جا می‌شود) تا اسکن هر دقیقه به اسپم تبدیل نشود؛ اعلان هیچ‌وقت اسکن را بلوکه یا شکسته نمی‌کند (خطا در همان فهرست آخرین اعلان‌ها نوشته می‌شود). LOCAL_DEPLOYER_NOTIFY=0/no/off آن را خاموش می‌کند و LOCAL_DEPLOYER_NOTIFY_CMD می‌تواند آرگومان هم بگیرد («sh hook.sh») بدون اینکه هیچ‌وقت به shell سپرده شود. اگر دستگاه برنامهٔ اعلان نداشت، خودِ صفحهٔ دیپلویر از طریق Notifications مرورگر اعلام می‌کند و دکمهٔ زنگِ هدر وضعیت مجوز را توضیح می‌دهد. دو- در پنل، بخش «🚀 دیپلویر محلی» کنار «🔄 نسخهٔ کد» اضافه شد و همان کارهای فایل دیپلویر را انجام می‌دهد: خواندن وضعیت واقعی، بررسی نسخهٔ جدید (با همان اعلان سیستمی)، نصب تازه‌ترین برنچ، build اسکریپر، توقفش، npm install، دیتابیس، به‌روزرسانی از git، تست اعلان، و باز کردن خودِ صفحهٔ دیپلویر. درخواست‌ها از همین سرور به 127.0.0.1 فرستاده می‌شود تا مرورگر درگیر توکن و CORS نشود؛ فهرست فرمان‌ها بسته است (نه یک پروکسی عمومی، پس نشانی از بیرون پذیرفته نمی‌شود)، نام برنچ دوباره سخت‌تر اعتبارسنجی می‌شود تا ../../../etc و گزینه‌های شروع‌شده با - به git نرسند، از /api/job فقط پنج فرمان مجاز است، توکن هیچ‌وقت در پاسخ یا صفحه نیست، و اگر دیپلویر خاموش باشد پاسخ ۵۰۳ با دلیل و دستور اجرا می‌آید نه خطای بی‌صدا. روی Worker و Render همین مسیر عمداً ۵۰۱ «این رانتایم دیپلویر محلی ندارد» می‌دهد. سه- جدول برنچ‌ها مثل قبل داخل همان پنل نسخهٔ کد مانده است (تستش آن را آنجا pin کرده) و بخش جدید به همان ارجاع می‌دهد. نگهبان‌ها: worker-tests/deployer-notify.test.mjs (۱۱ تست، با دیپلویر واقعیِ اجراشده و اعلان‌دهندهٔ تقلبی) و worker-tests/deployer-local-panel.test.mjs (۸ تست: فهرست مجاز، اعتبارسنجی ورودی، نشت‌نکردن توکن، هم‌خوانی دکمه‌ها با route‌ها). هر انتشار من علامت + روی شماره دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۳.۰</time><br><b>رفع خطای شناسه‌های بزرگ باسلام (سقف ۲ به توان ۵۳)</b><br>اگر شناسه\u200cٔ محصول باسلام از ۲ به توان ۵۳ بزرگ\u200cتر بود (مثل 3838404244461599744)، خواندن دیتابیس با خطای Value is too large کل عملیات را ناتمام می\u200cگذاشت. حالا همه\u200cٔ محیط\u200cها شناسه\u200cهای بزرگ را با رقم\u200cهای دقیق برمی\u200cگردانند، به\u200cروزرسانی محصول با همان شناسه\u200cٔ دقیق انجام می\u200cشود و خروجی JSON پشتیبان هم سالم می\u200cماند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۲.۰</time><br><b>بازنویسی بخش بکاپ و نسخه + نصب SDK باسلام در Node</b><br>بخش بکاپ/بازیابی/نسخه/انتشار با ۳ زبانه\u200cٔ شماره\u200cدار، کارت\u200cهای مرحله\u200cبه\u200cمرحله و راهنماهای جمع\u200cشونده بازنویسی شد تا در موبایل هم خوانا باشد؛ هیچ دکمه یا تنظیمی حذف نشد. SDK رسمی باسلام حالا با «npm run basalam:install» در همه\u200cٔ محیط\u200cهای Node نصب می\u200cشود (رندر، VPS، ترماکس، ویندوز، دسکتاپ) و کارت کتابخانه\u200cها وضعیت Python و SDK را زنده نشان می\u200cدهد؛ ورکر نبودِ آن\u200cها را صادقانه گزارش می\u200cکند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۱.۰</time><br><b>نمایش نتایج استخراج و پایداری موتورهای مرورگر</b><br>دکمهٔ «نمایش نتایج» گاهی هیچ محصولی نشان نمی\u200cداد: اگر حتی یک محصول بدون پسوند کد در عنوان بود، یک خطا کل فهرست را خالی می\u200cکرد. حالا همهٔ محصولات نمایش داده می\u200cشوند و هر محصول ساده پسوند کد خود را می\u200cگیرد. موتورهای مرورگر هم نوبتی اجرا می\u200cشوند (هر بار فقط یک کرومیوم) تا عیب\u200cیابی و تست هم\u200cزمان روی VPS کم\u200cحافظه باعث کرش نشوند؛ کش خالی مرورگر دیگر «نصب\u200cشده» گزارش نمی\u200cشود و موتور Crawlee هم دیگر پوشهٔ اضافه روی دیسک باقی نمی\u200cگذارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۸۰.۰</time><br><b>کارکردن اتصال غیرمستقیم مبدأ در Node و گزارش مسیر دریافت</b><br>تیک «اتصال غیرمستقیم به مبدأ» در اجراگرهای Node ذخیره می\u200cشد ولی هیچ درخواستی آن را نمی\u200cخواند؛ حالا عیب\u200cیابی استخراج، تست سرعت ۳ صفحه، استخراج و جزئیات\u200cخوانی مثل ورکر از همان درگاه Worker عبور می\u200cکنند. اگر فروشگاهی IP دستگاه را مستقیم ببندد (خطای ۴۰۳ در Node در حالی که ورکر سالم است)، با روشن\u200cکردن این تیک و واردکردن آدرس Worker در «هوش مصنوعی ← روش اتصال»، دریافت از شبکهٔ کلادفلر انجام می\u200cشود. عیب\u200cیابی حالا مسیر واقعی هر دریافت (مستقیم، Worker یا پروکسی) را هم گزارش می\u200cدهد تا علت بن\u200cبست معلوم باشد. چهار فیلد پروفایل که در Node ذخیره نمی\u200cشدند (اتصال غیرمستقیم، بدون استخراج، دسته\u200cهای جایگزین باسلام و گالری) حالا ماندگارند و جدول تک\u200cمقصد Node هم که در نسخهٔ قبل از کار افتاده بود تعمیر شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۹.۰</time><br><b>سوییچ توضیح‌ساز هر پروفایل، دستهٔ باسلام در غنی‌ساز و بازبینی مغایرت‌گیری</b><br>هر پروفایل حالا تیک «توضیح‌ساز هوش مصنوعی» خودش را دارد (روشن به‌صورت پیش‌فرض)؛ پروفایل‌های خاموش هم از چرخهٔ پس‌زمینه و هم از استخراج رد می‌شوند. غنی‌ساز علاوه بر توضیحات، دستهٔ عددی باسلام هر محصول را هم می‌سازد: اول از آموخته‌ها، وگرنه با یک پیشنهاد مدل روی فهرست زندهٔ باسلام — و ارسال باسلام همین دستهٔ محصول را بر پیش‌فرض پروفایل ترجیح می‌دهد. مغایرت‌گیری هم بازبینی شد: جدول تک‌مقصد در هر دو محیط یک منطق دارد، قیمت‌ها در واحد یکسان مقایسه می‌شوند، رفع مغایرت قیمت واقعاً به باسلام می‌رسد و مقصدهای پاسخ‌نداده دیگر «هماهنگ» نشان داده نمی‌شوند. رفتار در ورکر، رندر، ترموکس، VPS و نصب محلی یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۸.۰</time><br><b>رفع تایمر ۲۱۰ دقیقه‌ای استخراج، توضیح\u200cساز پس\u200cزمینه همیشگی و سوییچ تست دسته\u200cبندی</b><br>تایمر استخراج در Node دیگر از ۲۱۰ دقیقه شروع نمی\u200cشود: زمان‌های SQLite اکنون UTC واقعی\u200cاند و آمار سرعت درست محاسبه می\u200cشود. توضیح\u200cساز هوش مصنوعی حالا همیشه در پس\u200cزمینه روی همه پروفایل\u200cها می\u200cچرخد تا محصولی بدون جزئیات نماند؛ آخرین اجرا در همان بخش نمایش داده می\u200cشود. در پنل «آزمایش یک مدل» و «چت با مدل» یک سوییچ چت/دسته\u200cبندی اضافه شد تا هر مدل را مستقیم روی پیشنهاد دسته باسلام هم بیازمایید. رفتار در ورکر، رندر، ترموکس، VPS و نصب محلی یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۷.۰</time><br><b>کاندید خودکار مدل\u200cهای سبز، دراپ\u200cداون\u200cهای جست\u200cوجوپذیر با نشان سبز و نمایش خودکار نتایج</b><br>بعد از هر تست مدل\u200cها، مدل\u200cهایی که چراغ سبز گرفته\u200cاند به\u200cصورت خودکار کاندید می\u200cشوند (با تیک قابل خاموش\u200cکردن در همان پنل تست). همهٔ دراپ\u200cداون\u200cهای انتخاب مدل جست\u200cوجوپذیر شدند و مدل\u200cهای سبز آخرین تست با زمینهٔ سبز مشخص\u200cاند. بعد از پایان استخراج هم بخش نتایج به\u200cصورت خودکار به\u200cروزرسانی می\u200cشود و دیگر لازم نیست دستی دکمهٔ نمایش نتایج زده شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۶.۰</time><br><b>پوش بخش\u200cبخش بکاپ به برنچ با فایل دیتابیس کنار بخش\u200cها</b><br>هر بکاپ دستی یا زمان\u200cبندی\u200cشده حالا در پوشهٔ خودش با یک JSON خوانا برای هر بخش به\u200cعلاوهٔ manifest.json ذخیره می\u200cشود و در محیط\u200cهای SQLite فایل database.sqlite هم کنار بخش\u200cها می\u200cنشیند تا دیباگ و تست مستقیم روی دیتابیس ممکن شود؛ بکاپ\u200cهای تک\u200cفایل قدیمی هنوز بازیابی می\u200cشوند. بخش نسخه هم خلوت شد: دکمه\u200cهای تکراری حذف و تنظیمات پوش دوره\u200cای داخل یک تاشو جمع شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۵ · 2026-09-16 · نسخهٔ ۱.۱۷۵.۰</time><br><b>رفع دوره‌ای خودکار دسته‌بندی باسلام و ترمیم بخش‌های هوش مصنوعی ترموکس/لینوکس</b><br>زیر همان پنجرهٔ شروع دسته‌بندی جمعی می‌شود اجرای خودکار دوره‌ای را فعال کرد (پیش‌فرض هر ۶ ساعت، با انتخاب یکی از سه حالت رأی) و مدل‌های اجتماع را دستی اضافه و حذف کرد؛ نتیجهٔ آخرین اجرا هم همان‌جا نمایش داده می‌شود و در ورکر، رندر، ترموکس، VPS و نصب محلی یکسان کار می‌کند. در اجراگرهای Node، فهرست مدل‌های گفتگو دیگر خالی نیست، اعتبارسنجی گفتگو و کلیدها مثل ورکر شد و تلاش مجدد تکی تست مدل‌ها هم پیاده‌سازی شد؛ بررسی‌های سازگاری چت و استدلال هم از یک منبع مشترک خوانده می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۴.۰</time><br><b>دکمهٔ نصب همیشه اول نصب واقعی را امتحان می‌کند</b><br>دکمهٔ «اجرای این نسخه» دیگر بر اساس آدرس مرورگر حدس نمی‌زند: در همهٔ محیط‌ها اول نصب واقعی از سرور خواسته می‌شود و فقط اگر سرور دیپلویری نداشته باشد، دستور نصب دستی کپی می‌شود — با راهنمای رسیدن به نصب تک‌کلیکی. این مشکل باز کردن داشبورد با IP و دامنه (به‌جای localhost) را هم حل می‌کند.</div></details><details class="change-older"><summary>🗂 نمایش همهٔ تغییرات قدیمی‌تر (187 مورد)</summary><div class="change-older-body"><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۳.۰</time><br><b>پوش خودکار دوره‌ای به برنچ با پیشرفت زنده</b><br>پوش دستی حالا مرحله‌های ارسال به گیت‌هاب (خواندن نسخهٔ فعلی، بعد ارسال با شمارش بایت) را زنده نشان می‌دهد؛ زیر همان دکمه می‌شود پوش خودکار دوره‌ای را فعال کرد تا سرور در فاصله‌های منظم بکاپ کامل را با نام ثابت scheduled-backup.json روی برنچ دلخواه نگه دارد و نتیجهٔ آخرین اجرا را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۲.۰</time><br><b>نصب تک‌کلیکی نسخه از جدول برنچ‌ها</b><br>هر سطر جدول برنچ‌ها دکمهٔ «اجرای این نسخه» گرفت که همان نسخه را روی اسکریپر محلی نصب و اجرا می‌کند؛ بیرون از دستگاه، همان دکمه دستور نصب دستی همان برنچ را کپی می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۱.۰</time><br><b>پوش بکاپ به برنچ فعال شد</b><br>دکمهٔ پوش بکاپ به برنچ با همان توکن ذخیره‌شده (نیازمند دسترسی نوشتن contents) کار می‌کند: بکاپ کامل با نام خودکار روی برنچ می‌نشیند و نتیجه با sha گزارش می‌شود؛ بدون توکن، خطا صادقانه گفته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۴ · 2026-09-15 · نسخهٔ ۱.۱۷۰.۰</time><br><b>ذخیرهٔ توکن گیت‌هاب در پیشخوان و پنل تب‌بندی‌شده</b><br>توکن خواندن گیت‌هاب را می‌شود مستقیم در تب برنچ ذخیره کرد (محیط سرور اولویت دارد) و وضعیت فعال با چهار رقم آخر نمایش داده می‌شود؛ پنل بکاپ هم سه زیرتب ماندگار گرفت.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۹.۰</time><br><b>تشخیص صادانهٔ خطاهای گیت‌هاب و پشتیبانی از توکن</b><br>اسکن برنچ‌ها دیگر هر خطای 403 را «محدودیت نرخ» نمی‌نامد: علت واقعی از پاسخ گیت‌هاب خوانده و نمایش داده می‌شود و محدودیت واقعی نرخ هم پنجرهٔ بازنشانی سهمیه را نشان می‌دهد. همهٔ درخواست‌ها user-agent استاندارد دارند و با ست‌کردن GH_BACKUP_TOKEN (حتی توکن بدون دسترسی) سهمیهٔ خواندن به ۵۰۰۰ در ساعت می‌رسد؛ بدون توکن هم مثل قبل کار می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۸.۰</time><br><b>پنل یکپارچهٔ بکاپ با دراپ‌داون برنچ و بازیابی از برنچ</b><br>بکاپ، بازیابی، نسخه و انتشار در یک پنل واحد ادغام شدند و تکست‌باکس‌های ریپو و برنچ به دراپ‌داون خودکار تبدیل شدند؛ برنچِ دارای آخرین نسخهٔ کد به‌صورت پیش‌فرض انتخاب می‌شود. بازیابی از فایل‌های بکاپ روی هر برنچ (با همان صفحهٔ انتخاب بخش‌ها) بدون نیاز به توکن کار می‌کند و دکمهٔ پوش تا زمان ست‌شدن GH_BACKUP_TOKEN غیرفعال است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۷.۰</time><br><b>بازیابی خودکار بوت‌استرپ در رندر</b><br>با هر دیپلوی رندر، اگر دیتابیس کاملاً تازه باشد همهٔ تنظیمات (پروفایل‌ها، محصولات، اتصال‌ها، مدل‌های هوش مصنوعی) به‌صورت خودکار از فایل بوت‌استرپ برمی‌گردند؛ در رندر به‌صورت پیش‌فرض فعال است و دیتابیس پیکربندی‌شده هرگز بازنویسی نمی‌شود. دانلود یک‌کلیکهٔ فایل با راهنمای Secret File، نمایش وضعیت زنده در پنل بکاپ، و رفع دو نقص بازیابی در Node (محصولات پروفایل‌ها گم می‌شد و برون‌ریزی ناقص اتصال‌ها را پاک می‌کرد).</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۶.۰</time><br><b>اجرای مدل دستی بدون نیاز به تست سبز</b><br>حالت‌های «مدل مستر فقط» و «مستر با پشتیبانی کاندیدها» دیگر به نتیجهٔ آخرین تست مدل‌ها کاری ندارند و دقیقاً همان مدل‌هایی را به کار می‌گیرند که دستی انتخاب کرده‌اید؛ اگر مدلی سر اجرا خطا بدهد، همان محصول ناموفق گزارش می‌شود.<br>فقط حالت خودکار «اجتماع چندمدلی» همچنان به مدل‌های موفق آخرین تست محدود است. اگر مدل مستر از فهرست مدل‌ها حذف شده باشد، شروع با راهنمای انتخاب دوبارهٔ مستر متوقف می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۵.۰</time><br><b>بخش غنی‌تر بکاپ و بازیابی: بازرس فایل و بکاپ کامل تک‌کلیکی</b><br>پیش از درون‌ریزی، «بررسی فایل بکاپ» نشان می‌دهد فایل چه دارد: قالب، تاریخ و میزبان ساخت، شمارش پروفایل‌ها، محصولات، اتصال‌ها، ارائه‌دهنده‌ها و آموخته‌ها — با هشدار روشن برای فایل‌های ناشناخته یا خراب؛ همین خلاصه بالای صفحهٔ انتخاب بخش بازیابی هم می‌آید.<br>دکمهٔ «بکاپ کامل» کل بسته را بی‌درنگ دانلود و گزارش می‌کند، هر برون‌ریزی به خاطر سپرده می‌شود و هر دو پنل بکاپ آخرین بکاپ را نشان می‌دهند. کنترل‌های زمان‌بندی بکاپ که در نسخهٔ TypeScript هیچ‌وقت وصل نبودند با همین اقدام‌های واقعی جایگزین شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۴.۰</time><br><b>جست‌وجو در انتخاب مدل مستر</b><br>انتخاب مدل مستر در بخش کاندیدها حالا یک جعبهٔ جست‌وجو با فهرست فیلترشونده است: با تایپ چند حرف، مدل میان ده‌ها ارائه‌دهنده پیدا می‌شود؛ Enter اولین گزینه را برمی‌گزیند و Escape انصراف می‌دهد.<br>اتصال فرم و ذخیره‌سازی عیناً مثل قبل است و همین رفتار در ورکر و همهٔ اجراگرهای Node دیده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۳.۰</time><br><b>سه حالت رأی برای دسته‌بندی جمعی باسلام</b><br>دسته‌بندی همهٔ تأییدنشده‌ها حالا با انتخاب حالت رأی شروع می‌شود: فقط مدل مستر (سریع‌ترین)، مستر با پشتیبانی کاندیدها، یا اجتماع همهٔ مدل‌های موفق (دقیق‌ترین).<br>حالت روی اجرا ذخیره و در پنجرهٔ پیشرفت نمایش داده می‌شود؛ تا وقتی مستر پین نشده باشد دو حالت اول غیرفعال‌اند و رفتار در ورکر و اجراگر Node یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۲.۰</time><br><b>انتقال تزریقگر سلکتور به بخش سلکتورها</b><br>کارت تزریقگر سلکتور (کپی اسکریپت و پیش‌نمایش) از منوی همبرگر به زیربخش «۲. سلکتورها» منتقل شد تا کنار فیلدهایی باشد که خروجی‌اش را می‌گیرند؛ محتوا و دکمه‌ها عیناً همان‌اند و در همه محیط‌ها یکسان سرو می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۱.۰</time><br><b>رفع خطای اسکن برنچ‌ها با انتقال آن به سرور</b><br>مرورگر اجازهٔ تماس مستقیم با GitHub را نداشت (connect-src) و اسکن خطا می‌داد؛ حالا سرور هر دو محیط با کش پنج‌دقیقه‌ای برنچ‌ها را می‌خواند و نسخهٔ هر برنچ را با نسخهٔ در حال اجرا مقایسه می‌کند. اگر GitHub در دسترس نباشد، پیام خطا مرحله و علت را می‌گوید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۶۰.۰</time><br><b>جدول برنچ‌ها و نصب نسخهٔ هر برنچ در بخش دیپلویر</b><br>بخش دیپلویر حالا با یک دکمه همهٔ برنچ‌ها را از GitHub می‌خواند و نسخهٔ هر برنچ را با نسخهٔ در حال اجرا مقایسه می‌کند؛ روی دستگاه محلی دکمهٔ نصب، تب برنچ‌های دیپلویر را باز می‌کند و روی Cloudflare و Render نام برنچ برای چسباندن در فیلد production کپی می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۵۹.۰</time><br><b>مرتب‌سازی گزارش تغییرات و افزودن بخش دیپلویر به نسخهٔ کد</b><br>تگ اضافهٔ قدیمی که ۱۰۹ مورد را بیرون از تاشو نشان می‌داد حذف و ساختار گزارش تغییرات بازسازی شد؛ همهٔ موارد حالا داخل تاشوی خودشان هستند. بخش قدیمی سازگاری PHP هم با امکانات دیپلویر (اجرای محلی، کپی دستور، نسخهٔ مستقر و راهنمای استقرار) جایگزین شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۵۸.۰</time><br><b>اصلاح راهنمای رفع جاماندگی Cloudflare: بعد از عوض کردن شاخه باید push تازه زد</b><br>دکمهٔ Retry deployment فقط همان کامیت قبلی را دوباره می‌سازد؛ برای گرفتن شاخهٔ production تازه حتماً یک کامیت جدید لازم است. راهنما حالا همین را می‌گوید و روش چک کردن هش کامیت مستقر را هم دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۳ · 2026-09-14 · نسخهٔ ۱.۱۵۷.۰</time><br><b>رفع جاماندن نسخهٔ Cloudflare: شاخهٔ production درست شد</b><br>مستند استقرار به شاخهٔ قدیمی اشاره داشت و ورکر روی ۱.۱۲۷ مانده بود؛ شاخهٔ production در مستندات به شاخهٔ جاری برگشت و روش جابه‌جایی و استقرار دوبارهٔ آن مرحله به مرحله نوشته شد.<br>تست خودکار از این به بعد شاخهٔ مرده در دستورهای استقرار را رد می‌کند و نام شاخهٔ جاری را با متن مستند چک می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۶.۰</time><br><b>تزریقگر سلکتور در داشبورد: کپی یک‌کلیکی اسکریپت در همه محیط‌ها</b><br>بخش تازه «تزریقگر سلکتور» در منوی داشبورد اسکریپت استخراج خودکار سلکتور را با یک دکمه کپی می‌کند؛ چون رابط همه اجراگرها یکی است، همین بخش در Cloudflare Worker، رندر، ترموکس و VPS دیده می‌شود.<br>متن داشبورد همیشه همان فایل ابزار است و تست خودکار هر مغایرت را لو می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۵.۰</time><br><b>تزریق‌کنندهٔ سلکتور: استخراج خودکار سلکتورها روی صفحهٔ زندهٔ فروشگاه</b><br>فایل tools/selector-injector.js را در کنسول DevTools صفحهٔ فروشگاه بچسبانید تا گرید محصولات را روی همان صفحهٔ رندرشده پیدا کند، پنج سلکتور سازگار با ورکر را بسازد و همان‌جا راستی‌آزمایی کند و پروفایل JSON آمادهٔ درون‌ریزی چاپ کند؛ روی اسنپ‌شاپ همان سلکتورهای پروفایل واقعی را بازتولید می‌کند.<br>با node scripts/make-bookmarklet.mjs نسخهٔ یک‌کلیکی (بوک‌مارک‌لت) ساخته می‌شود؛ راهنمای فارسی در SELECTOR-INJECTOR-FA.md است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۴.۰</time><br><b>پروفایل واقعی اسنپ‌شاپ: ساختار کارت‌ها ذخیره و استخراج ۸ از ۸ تست شد</b><br>ساختار واقعی صفحهٔ فروشگاه (لینکِ دور کارت، عنوان، قیمت فروش جدا از قیمت خط‌خورده) به‌صورت پروفایل قابل‌ویرایش در دیتابیس و فایل JSON آمد؛ تست خودکار روی هر دو موتور هر ۸ کارت را با قیمت فروش درست استخراج می‌کند.<br>ردیف‌های پایین صفحه تا اسکرول تصویر واقعی ندارند و جای‌نگهدار برمی‌گردد؛ رقم‌های فارسی عنوان هم در موتور Worker انگلیسی می‌شوند — هر دو شناخته‌شده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۳.۰</time><br><b>صفحهٔ خالی مرورگر دیگر «فروشگاه ساکت» جا زده نمی‌شود: تلاش مجدد و خطای صادقانه</b><br>اگر کرومیوم پس از رفتن به آدرس روی صفحهٔ خالی بماند (مثل اسنپ‌شاپ با ۳۹ بایت)، موتورها یک بار دیگر می‌روند و اگر باز خالی ماند، همان را با صدای بلند می‌گویند؛ دیگر گزارش «درخواست API دیده نشد» برای صفحه‌ای که اصلاً بارگذاری نشده نمی‌آید.<br>اثر انگشت رندر حالا نشانی نهایی و کد وضعیت ناوبری را هم دارد تا معلوم شود صفحه کجا فرود آمده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۲.۰</time><br><b>اثر انگشت صفحهٔ رندرشده در گزارش عیب‌یابی: دیوار ربات یا پوستهٔ خالی معلوم می‌شود</b><br>اجراهای مرورگریِ بدون محصول حالا اثر انگشتی از آنچه کرومیوم دید به گزارش می‌چسبانند (عنوان صفحه، طول متن، ۵۰۰ نویسهٔ اول متن، شمار اسکریپت/لینک/تصویر و آدرس اسکریپت‌ها)؛ با چسباندن همین گزارش معلوم می‌شود فروشگاه دیوار ضدربات دارد یا پوستهٔ خالی می‌دهد.<br>بدون نیاز به فایل تخلیه یا ترمینال: بلوک snapshot در جزئیات مرحلهٔ استخراج فهرست می‌آید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۱.۰</time><br><b>شنود قابل‌اعتمادتر API: انتظار برای بدنه‌ها، اولویت JSON و آدرس‌های محصولی</b><br>موتور network_api حالا پس از پنجرهٔ انتظار، خوانش همهٔ پاسخ‌های در حال انتقال را تمام می‌کند (قبلاً ممکن بود بدنهٔ کند جا بماند)؛ پاسخی که سرور JSON اعلام می‌کند نگه داشته می‌شود حتی اگر شکل ظاهری‌اش JSON نباشد.<br>وقتی سقف ۵۰ پاسخ پر شود، تازه‌واردهای محصولی (مثل <code dir="ltr">/api/products</code> یا جست‌وجو) جای کم‌ارزش‌ترین نگه‌داشته‌شده را می‌گیرند تا نویز تحلیلی جای محصول را نگیرد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۵۰.۰</time><br><b>رفع نمایش ندادن نتایج: ردیف خراب دیگر صفحهٔ نتایج را خالی نمی‌کند</b><br>اگر یک ردیف محصول در دیتابیس خراب شده باشد (دادهٔ null)، صفحهٔ نتایج فقط شمارش را نشان می‌داد و فهرست خالی می‌ماند؛ حالا ردیف‌های خراب هم در کوئری (هر دو موتور) و هم در مرورگر نادیده گرفته می‌شوند و بقیهٔ محصولات نمایش داده می‌شوند.<br>ذخیرهٔ محصول نامعتبر هم از این به بعد با خطای روشن رد می‌شود تا ردیف خراب تازه‌ای ساخته نشود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۹.۰</time><br><b>شمارش پاسخ‌های ناموفق API: فرق «تماس نگرفت» با «تماس گرفت ولی رد شد»</b><br>آمار شنود network_api حالا پاسخ‌های ناموفق را هم می‌شمارد (تعداد و آدرس با کد وضعیت)؛ اگر فروشگاه در مرورگر هدلس تماس API بزند ولی همه با 403 یا 429 رد شوند، عیب‌یاب همان را می‌گوید نه «درخواستی دیده نشد».<br>خلاصهٔ «درخواستی دیده نشد» فقط وقتی می‌آید که واقعاً هیچ تماسی دیده نشده باشد؛ فهرست نقطه‌های پایانی تخلیه‌شده هم آدرس‌های ناموفق را دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۸.۰</time><br><b>موتور network_api حالا می‌گوید چه ترافیکی دید: آمار شنود و تخلیهٔ بدنه‌ها</b><br>هر اجرای network_api آمار شنود را گزارش می‌کند (چند پاسخ دیده شد، چند بدنهٔ JSON، چند بایت، چند محصول خوانده شد و فهرست آدرس‌ها)؛ اگر صفحه هیچ درخواست API نزند همان گفته می‌شود و اگر پاسخ بگیرد ولی محصولی خوانده نشود، همان — دیگر محصولی پیدا نشد کلی نیست.<br>واکر API حالا همهٔ کلیدها (مثل <code dir="ltr">hits</code> و <code dir="ltr">docs</code>) را می‌گردد و با <code dir="ltr">SCRAPER4_DUMP_API_DIR</code> بدنه‌های گرفته‌شده برای بررسی ذخیره می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۷.۰</time><br><b>موتور network_api: استخراج از ترافیک API خود صفحه با شنود شبکه</b><br>موتور مرورگری تازه صفحه را در پلی‌رایت باز می‌کند و پاسخ‌های XHR/fetch را (مثل تب Network در دولوپر تولز) می‌گیرد؛ هر بدنهٔ JSON با همان واکر موتورهای script_json و next_data خوانده می‌شود، پس فروشگاهی که فقط از API کاتالوگ می‌گیرد هم بدون سلکتور استخراج می‌شود.<br>آدرس APIهای گرفته‌شده در لاگ چاپ می‌شود (ابزار کشف API)؛ سقف ۵۰ پاسخ و ۸ مگابایت از انفجار حافظه جلوگیری می‌کند و موتور فقط روی Node است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۶.۰</time><br><b>عیب‌یاب صادق برای اجراهای مرورگری: علت را می‌گوید، صفحهٔ عمیق را هشدار می‌دهد</b><br>مرحلهٔ استخراج فهرست حالا لایهٔ برندهٔ مرورگر (browserLayer)، در دسترس بودن مرورگر روی دستگاه و خطای موتور را گزارش می‌کند؛ اگر کرومیوم نصب نباشد همان را می‌گوید، نه «محصولی پیدا نشد» کلی.<br>آدرس صفحه‌های عمیق (مثل page=336) هشدار خودش را پیش از سرزنش سلکتورها می‌گیرد: اول عیب‌یاب روی صفحهٔ اول اجرا شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۵.۰</time><br><b>لایهٔ دوم موتورهای مرورگری: structural و بعد heuristic روی HTML رندرشده</b><br>موتورهای مرورگری (playwright/puppeteer/crawlee) بعد از رندر صفحه اول سلکتورهای ذخیره‌شده را اجرا می‌کنند؛ اگر چیزی پیدا نشد، روی همان HTML رندرشده اول موتور structural و بعد heuristic اجرا می‌شود، پس فروشگاه جاوااسکریپتی مثل اسنپ‌شاپ بدون سلکتور دستی خوانده می‌شود.<br>لایهٔ برنده در لاگ چاپ و در فیلد browserLayer نتیجه گزارش می‌شود؛ اثبات زنده با کرومیوم ترماکس روی آدرس دسته‌بندی اسنپ‌شاپ انجام می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۲ · 2026-09-13 · نسخهٔ ۱.۱۴۴.۰</time><br><b>موتور structural در اجراگر Node: استخراج خودکار بدون سلکتور دستی، هم‌ارز پایتون</b><br>اجراگر Node حالا با همان الگوریتم زبانهٔ «استخراج با پایتون» فروشگاه‌های معمولی را می‌خواند: کارت‌های شناخته‌شده (مثل <code dir="ltr">li.product</code> ووکامرس) اول، بعد صعود از لینک محصول و کاتالوگ JSON جاسازی‌شده؛ کارت با داشتن عنوان یا لینک نگه داشته می‌شود و نبود قیمت یا تصویر آن را حذف نمی‌کند.<br>قیمت خط‌خوردهٔ قدیمی (تگ del) پیش از تجزیه حذف می‌شود تا قیمت فروش ببرد؛ موتور فقط روی Node است (بنچمارک Worker آن را ناموجود نشان می‌دهد) و در بنچمارک و هر دو فهرست کشویی موتورها آمده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۳.۰</time><br><b>زبانهٔ «استخراج با پایتون» در دیپلویِر محلی: استخراج خودکار بدون سلکتور دستی</b><br>دیپلویِر محلی حالا <code dir="ltr">scripts/py-auto-extract.py</code> را روی یک صفحهٔ فهرست اجرا می‌کند: تجزیهٔ ساختاری به‌علاوهٔ کشف خودکار محصولات را پیدا می‌کنند و سلکتور صریح (حتی XPath) اختیاری است؛ وضعیت پایتون و وابستگی‌ها با نشان‌گر نمایش داده می‌شود و نصب وابستگی‌ها با یک دکمه انجام می‌شود.<br>راهنمای Termux خط نصب وابستگی‌های پایتون را گرفت؛ جدول نتیجه تعداد، زمان، موتور و سلکتورهای کشف‌شده را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۲.۰</time><br><b>تخلیهٔ HTML رندرشدهٔ مرورگر برای عیب‌یابی سلکتور فروشگاه‌های جاوااسکریپتی</b><br>با <code dir="ltr">SCRAPER4_DUMP_RENDERED_DIR</code> موتورهای مرورگری صفحهٔ رندرشده را ذخیره می‌کنند (۵ رندر اول هر اجرا، هرکدام تا ۲ مگابایت) و نتیجهٔ پیشنهاد خودکار روی همان رندر را در لاگ چاپ می‌کنند؛ فایل را بفرستید تا سلکتور سالم ساخته شود.<br>تخلیه هیچ‌وقت استخراج را خراب نمی‌کند: بدون متغییر محیطی کاملاً خاموش است، خطای نوشتن فقط لاگ می‌شود و سقف تعداد و حجم از پر شدن دیسک جلوگیری می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۱.۰</time><br><b>اجرای XPath چسبانده‌شده، تلاش مجدد روی 429 و بنچمارک از صفحهٔ اول</b><br>سلکتور XPath کپی‌شده از DevTools (مثل <code dir="ltr">//*[@id="…"]/div[1]/…</code>) حالا به CSS تبدیل و اجرا می‌شود و مسیرهای کاملاً موقعیتی روی گرید تکراری باز می‌شوند؛ XPath بیرون از گویش پشتیبانی با نام همان سلکتور خطای صادقانه می‌دهد.<br>خطای 429 (محدودیت نرخ سایت) یک بار با احترام به Retry-After تکرار می‌شود؛ ممنوعیت 403 بدون تلاش اضافه گزارش می‌شود و راهنمای عیب‌یابی خرابی دریافت را از مشکل محتوای صفحه جدا می‌گوید.<br>بنچمارک موتورها همیشه از صفحهٔ اول می‌سنجد: کرسر چسبانده‌شده (<code dir="ltr">?page=336</code>) نادیده گرفته می‌شود ولی فیلترها و مرتب‌سازی می‌مانند و آدرس ذخیره‌شدهٔ پروفایل دست‌نخورده می‌ماند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۴۰.۰</time><br><b>استخراج نشکستنی: سلکتور خراب، قیمت بدون واحد و پیشنهاد خودکار</b><br>یک سلکتور ذخیره‌شدهٔ خراب دیگر کل استخراج را نمی‌کشد: خطا با نام همان سلکتور گزارش می‌شود و در اجراهای واقعی موتور خودکار جایگزین می‌شود؛ بنچمارک همچنان هر موتور را جداگانه و صادانه می‌سنجد.<br>قیمت‌های بدون واحد پول («۵۲۵٬۰۰۰» بدون تومان، مثل برف‌باکس) حالا خوانده می‌شوند و پیشنهاد خودکار سلکتورها روی فروشگاه‌های Tailwind هم ظرف و عنوان را پیدا می‌کند.<br>ابزار پایتون <code dir="ltr">py-auto-extract</code> هم اضافه شد تا روی گوشی (ترموکس) استخراج خودکار را مستقیم روی سایت زنده راستی‌آزمایی کنید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۹.۰</time><br><b>تشخیص بیلد قدیمی روی پورت و شروع مقاوم در برابر EADDRINUSE</b><br>دیپلویر حالا از خود پورت می‌پرسد چه نسخه‌ای در حال اجراست: اگر بیلد قدیمیِ خودمان باشد، متوقف و بازسازی می‌شود (تک‌دکمهٔ «Rebuild &amp; restart» در بنر) و اگر برنامهٔ دیگری باشد، دست نمی‌خورد و هشدار می‌دهد.<br>اگر جدول سوکت خوانا نباشد (بعضی بیلدهای اندروید)، اسکریپر قدیمی با خط فرمان و شمارهٔ پورت پیدا و متوقف می‌شود؛ اگر اتصال اول به‌خاطر مسابقهٔ هم‌زمان شکست بخورد، یک‌بار خودکار تلاش مجدد می‌شود و خلاصهٔ اسکن همیشه در لاگ ثبت است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۸.۰</time><br><b>خواندن قیمت‌های تزئینی، فروشگاه‌های جاوا و محیط آزمایشگاه آفلاین</b><br>قیمت‌هایی که واحد پولشان با کشیدگی نوشته شده (مثل تومــانـ) یا با <code dir="ltr">&amp;nbsp;</code> از عدد جدا شده‌اند حالا خوانده می‌شوند؛ در کارت‌های حراجی ووکامرس هم قیمت فروش برداشته می‌شود نه قیمت خط‌خورده.<br>فروشگاه‌های جاوامحور پوشش داده شدند: کاتالوگ داخل <code dir="ltr">__NEXT_DATA__</code> (شبیه دیجی‌کالا) و state تزریقی صفحه (شبیه اسنپ‌شاپ) استخراج می‌شوند و لینک‌های دسته‌بندی داخل کارت دیگر محصول تقلبی نمی‌سازند.<br>موتورهای مرورگری در بنچمارک دیگر به‌خاطر اندروید رد نمی‌شوند؛ اگر کرومیوم روی دستگاه باشد (مثل Termux با <code dir="ltr">pkg install chromium</code>) واقعاً اجرا می‌شوند.<br>محیط آزمایشگاه آفلاین به repository اضافه شد (<code dir="ltr">LAB.md</code> + <code dir="ltr">lab-probe</code> + <code dir="ltr">lab-service</code>) تا هر گزارش میدانی اول با فیکسچر بازتولید و روی هر دو موتور راستی‌آزمایی شود؛ نصب‌های Termux و گیرکردن پورت بعد از آپدیت هم رفع شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۷.۰</time><br><b>تشخیص موتوربه‌موتور در تست سرعت و استخراج قوی‌تر کارت‌های فروشگاهی</b><br>تست سرعت ۳ صفحه حالا فقط عدد گزارش نمی‌دهد: هر موتور یک ستون «تشخیص» دارد که می‌گوید چرا موفق یا ناموفق بود — چند کاندیدا دید، چند محصول نگه داشت، چه چیزی و چرا حذف شد، نمونهٔ محصول و قدم بعدی چیست — و دکمهٔ «کپی گزارش کامل» همهٔ این‌ها را یکجا به‌صورت متن ساده کپی می‌کند.<br>موتورها هم روی فروشگاه‌های مدرن قوی‌تر شدند: کشف خودکار کارت‌هایی با کلاس مبهم یا قیمتی بیرون از لینک را پیدا می‌کند، تصویر تنبل (data-src) به‌جای تصویر جایگزین (placeholder) برداشته می‌شود، عنوان‌هایی که بیرون از لینک‌اند نجات داده می‌شوند، و لینک‌های تکراری یک محصول یک‌بار شمرده می‌شوند.<br>روی دستگاهی که مرورگر ندارد (مثل Termux)، موتورهای مرورگری دیگر بیهوده منتظر نمی‌مانند و فوراً با راهنمای نصب رد می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۵.۰</time><br><b>کپی یک‌کلیکهٔ گزارش عیب‌یابی و ذخیرهٔ خودکار سلکتورهای پیداشده</b><br>گزارش عیب‌یابی استخراج حالا دکمهٔ «کپی گزارش کامل» دارد: با یک لمس، همهٔ مرحله‌ها، نشانه‌ها، داده‌ها و راهکارها به‌صورت متن ساده کپی می‌شوند (با راه جایگزین برای مرورگرهایی که دسترسی کلیپ‌برد ندارند). دوم اینکه عیب‌یاب دیگر فقط گزارش نمی‌دهد: اگر سلکتورهای پروفایل هنوز تنظیم نشده باشند (خالی، ناقص یا همان پیش‌فرض ووکامرس) و کشف خودکار روی صفحهٔ واقعی سلکتورِ راستی‌آزمایی‌شده پیدا کند، همان‌ها فوراً در پروفایل ذخیره می‌شوند — مرحلهٔ <code dir="ltr">selectors-auto-saved</code> در گزارش نشان می‌دهد چه چیزی ذخیره شد و تب سلکتورها خودش پُر می‌شود. سلکتورهای کاملاً سفارشی هرگز بازنویسی نمی‌شوند و آزمایش یک نشانی جایگزین هم پروفایل را تغییر نمی‌دهد. سلکتورهای گمشدهٔ جزئیات هم از یک صفحهٔ واقعی محصول پیشنهاد و ذخیره می‌شوند؛ پس از ذخیره، عیب‌یاب را دوباره اجرا کنید تا مرحله‌های فهرست و جزئیات سبز شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۴.۰</time><br><b>تحمل ریدایرکت وسط بارگذاری در موتورهای مرورگر (رفع ERR_ABORTED)</b><br>موتور پلی‌رایت روی گوشی یک قدم جلوتر رفت و با خطای <code dir="ltr">net::ERR_ABORTED</code> مرد: یعنی خودِ فروشگاه وسط بارگذاری ریدایرکت یا رفرش کرد (بررسی کوکی، صفحهٔ ضدربات، روتر فریم‌ورک) و انتظار برای آرام‌شدن شبکه داخل <code dir="ltr">goto</code> همان ریدایرکت عادی را به شکست کامل تبدیل کرد. حالا رفتن به صفحه فقط تا خوانده‌شدن DOM صبر می‌کند، خطای <code dir="ltr">ERR_ABORTED</code> دیگر اجرا را نمی‌کشد (صفحهٔ بعدی می‌نشیند و همان خوانده می‌شود) و برای رندر جاوااسکریپت هم یک فرصت ۱۵ ثانیه‌ای بهترین‌تلاش داده می‌شود. هر دو درایور (پلی‌رایت و پاپتیر) همین رفتار را دارند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۳.۰</time><br><b>رفع خطای «Unsupported platform: android» موتور پلی‌رایت روی گوشی</b><br>عیب‌یاب استخراج روی گوشی با موتور پلی‌رایت خطای <code dir="ltr">Unsupported platform: android</code> می‌داد. علت داخل خودِ پلی‌رایت است: مسیر پوشهٔ مرورگرها را همان لحظهٔ <code dir="ltr">import</code> حساب می‌کند و فقط لینوکس، مک و ویندوز را می‌شناسد، پس روی اندروید پیش از هر اجرایی می‌میرد. حالا اسکریپر روی اندروید متغیر <code dir="ltr">PLAYWRIGHT_BROWSERS_PATH</code> را پیش‌فرض می‌گذارد و چون ما همیشه مرورگر سیستمی را صریح اجرا می‌کنیم، این پوشه هیچ‌وقت استفاده نمی‌شود؛ مقدار صریح شما هم همچنان مقدم است. هر سه موتور با همین یک اصلاح پوشش داده می‌شوند. برای به‌روزرسانی فقط کد را بگیرید و دیپلویر را ری‌استارت کنید؛ نصب مجدد لازم نیست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۲.۰</time><br><b>نصب کامل روی گوشی: رد شدن از اسکریپت‌های نصب در راهنمای ترموکس</b><br>اجرای واقعی روی گوشی نشان داد <code dir="ltr">npm install</code> ساده روی ترموکس می‌میرد: وابستگی wrangler اسکریپت راه‌اندازی workerd را اجرا می‌کند که نسخهٔ اندروید ندارد و npm کل نصب را لغو می‌کند. حالا هر دو راهنمای ترموکس با <code dir="ltr">--ignore-scripts</code> نصب می‌کنند — اسکریپر روی گوشی به هیچ اسکریپت نصبی نیاز ندارد — و شروع کار با <code dir="ltr">npm run deployer:ui</code> است نه <code dir="ltr">npm start</code> که به workerd نیاز دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۱.۰</time><br><b>اجرای هر سه موتور مرورگر روی گوشی (ترموکس)</b><br>پلی‌رایت و پاپتیر از قبل کرومیومِ ترموکس را پیدا می‌کردند، ولی کراولی فقط دنبال مرورگرهای دانلودی می‌گشت — همان‌هایی که روی اندروید اصلاً اجرا نمی‌شوند. حالا هر سه موتور مرورگرِ شناسایی‌شده را با فلگ‌های بدون سندباکس اجرا می‌کنند و <code dir="ltr">npm run browsers:install</code> روی گوشی به‌جای دانلود، کرومیوم سیستمی را با <code dir="ltr">pkg</code> نصب و بررسی می‌کند؛ روی دسکتاپ مثل قبل دانلود می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۳۰.۰</time><br><b>تعمیر یک‌کلیکهٔ ریموت origin در پنل برنچ‌ها</b><br>اگر پوشهٔ نصب ریموت origin نداشت، هر اسکن برنچ‌ها با خطای خام گیت («origin does not appear to be a git repository») شکست می‌خورد و راه‌حلّی نشان نمی‌داد. حالا اسکنر مشکل واقعی را می‌گوید و پنل برنچ‌ها دکمهٔ «Repair origin remote» نشان می‌دهد که origin را به fazilatma/new وصل و بلافاصله دوباره اسکن می‌کند؛ نصب برنچ و به‌روزرسانی دستی هم به همین راهنما اشاره می‌کنند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۲۹.۰</time><br><b>کشف خودکار سلکتورها در Cloudflare Worker</b><br>قابلیت ۱.۱۲۸.۰ (یافتن خودکار سلکتورهای فروشگاه‌هایی که هرگز پیکربندی نشده‌اند) اکنون در Worker هم کار می‌کند: راستی‌آزمایی با HTMLRewriter، استنتاج ساختاری کارت‌ها از روی HTML، و ذخیرهٔ یک‌بارهٔ سلکتورهای پیداشده در پردازشگر، API و بنچمارک. سلکتورهای کاملاً دستی دست‌نخورده می‌مانند و با autoDiscover=false می‌توان به رفتار قبلی برگشت.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۱ · 2026-09-12 · نسخهٔ ۱.۱۲۸.۰</time><br><b>کشف خودکار سلکتورها پیش از استخراج (رندر/نود):</b> پروفایل‌های تازه همیشه سلکتورهای پیش‌فرض ووکامرس را داشتند، پس «تنظیم‌نشده» هیچ‌وقت خالی به نظر نمی‌رسید و فروشگاهی که موتورهای خودکار نمی‌خواندند با صفر محصول تمام می‌شد. حالا وقتی سلکتورهای فهرست خالی، ناقص یا هنوز پیش‌فرض باشند، موتور استخراج پیش از شروع، همان صفحهٔ اول را تحلیل می‌کند: اول الگوهای آمادهٔ فروشگاه‌سازها امتحان می‌شود و اگر جواب نداد، تحلیل ساختاری صفحه (خوشه‌بندی کارت‌های لینک‌دارِ دارای تصویر) سلکتورهای ظرف، عنوان، قیمت، لینک و تصویر را می‌سازد. پیشنهادها روی همان صفحه راستی‌آزمایی و فقط در صورت قبولی ذخیره می‌شوند تا استخراج با موتور سلکتوری ادامه یابد؛ سلکتورهای دستی شما دست‌نخورده می‌مانند. عیب‌یاب استخراج هم در اجراهای ناموفق همین پیشنهادها را فقط-خواندنی نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۷.۰</time><br><b>جابه‌جایی render.yaml به ریشهٔ مخزن برای نصب بدون تنظیم دستی:</b> رِندر به‌صورت پیش‌فرض فایل render.yaml را فقط در ریشهٔ مخزن می‌گردد، ولی این فایل داخل پوشهٔ cloudflare-scraper4 بود؛ برای همین یا Blueprint اصلاً پیدا نمی‌شد یا باید دستی مقدار Blueprint Path را وارد می‌کردید. حالا فایل در ریشه است و چون مقدار rootDir داخلش روی cloudflare-scraper4 تنظیم شده، ساخت و اجرا همچنان از پوشهٔ درست پروژه انجام می‌شود. نکتهٔ مهم: package.json ریشهٔ مخزن دستور start را روی «دیپلویر» تنظیم کرده، نه اسکرپر؛ به همین دلیل در نصب قبلی شما صفحهٔ دیپلویر بالا آمد و آن دیپلویر بود که در زمان اجرا render:build را صدا می‌زد و به خطای esbuild می‌خورد. با Blueprint این اتفاق نمی‌افتد چون rootDir و startCommand صریح مشخص شده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۶.۰</time><br><b>به‌کار افتادن موتورهای مرورگر (Playwright و Puppeteer و Crawlee) در استخراج:</b> این موتورها از قبل در زنجیرهٔ استخراج بودند، اما فایل .npmrc عمداً دانلود مرورگر همراهشان را خاموش کرده بود (حدود ۳۰۰ مگابایت که روی میزبان‌های رایگان جا نمی‌شود). نتیجه این بود که هر بار اجرا با خطای «Executable doesn&#39;t exist» شکست می‌خورد و در حالت خودکار این خطا بی‌صدا نادیده گرفته می‌شد؛ یعنی به نظر می‌رسید این موتورها اصلاً استفاده نمی‌شوند. سه اصلاح انجام شد: ۱) اگر مرورگری از قبل روی دستگاه نصب باشد خودکار پیدا و استفاده می‌شود (مسیرهای رایج لینوکس، ترموکس، مک و ویندوز بررسی می‌شوند) و متغیر BROWSER_EXECUTABLE_PATH همچنان اولویت دارد. ۲) اگر هیچ مرورگری نباشد، به‌جای سکوت، در گزارش کار نوشته می‌شود که موتورهای مرورگر اجرا نشدند و دقیقاً چه دستوری باید اجرا شود. ۳) دستور نصب مرورگر به راهنمای نصب «دسکتاپ» و «VPS» هم اضافه شد (قبلاً فقط ترموکس و ویندوز آن را داشتند). برای سایت‌های جاوااسکریپتی کافی است یک‌بار npm run browsers:install را اجرا کنید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۵.۰</time><br><b>رفع شکست نصب روی Render: خطای «Cannot find package esbuild»:</b> رِندر (و هر میزبان مشابه) با NODE_ENV=production نصب می‌کند و در این حالت npm بسته‌های devDependencies را اصلاً نصب نمی‌کند. ابزار ساخت esbuild در همان بخش بود، بنابراین دستور render:build هرگز نمی‌توانست اجرا شود و اسکرپر با کد ۱ بسته می‌شد. حالا esbuild و esbuild-wasm جزو وابستگی‌های اصلی هستند و ساخت پروژه با NODE_ENV=production آزمایش و تأیید شد. پیام خطا هم اصلاح شد: به‌جای اینکه سیستم‌عامل را مقصر بداند، صریح می‌گوید نصب در حالت production انجام شده است. همچنین فایل render.yaml سه ایراد داشت که هر سه رفع شد: نبودِ rootDir (پوشهٔ پروژه)، اجرای کل تست‌ها در مرحلهٔ ساخت (که یک تست ناموفق کل دیپلوی سالم را متوقف می‌کرد) و تنظیم ADMIN_TOKEN که چون داشبورد فیلد ورود توکن ندارد، باعث می‌شد صفحه باز ولی کاملاً خالی بماند و همهٔ درخواست‌ها خطای ۴۰۱ بگیرند. نسخهٔ نود هم روی ۲۲ ثابت شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۲.۰</time><br><b>رفع «۱٬۲۰۰ از ۲۰» و توقف صفحه‌بندی وقتی سایت همان صفحه را تکرار می‌کند:</b> این دو عدد دو چیز متفاوت را می‌شمردند: عدد اول همهٔ آیتم‌های خام اسکن‌شده بود و عدد دوم تعداد محصولات یکتا. وقتی سایت برای همهٔ شماره‌صفحه‌ها همان ۲۰ محصول را برمی‌گرداند، ۶۰ صفحه × ۲۰ = ۱۲۰۰ آیتم اسکن می‌شد ولی فقط ۲۰ محصول یکتا می‌ماند؛ یعنی «۲۰ محصول در نتایج» درست بود و ۱۲۰۰ گمراه‌کننده. حالا هر دو عدد تعداد محصولات یکتا را نشان می‌دهند. مهم‌تر اینکه محافظِ «این صفحه محصول تازه‌ای نداشت» فقط در حالت خودکار (تعداد صفحات = ۰) اجرا می‌شد؛ اگر عدد مشخصی مثل ۶۰ گذاشته بودید، همان صفحهٔ تکراری تا آخر دوباره و دوباره خوانده می‌شد. حالا در هر حالتی، اگر دو صفحهٔ پشت‌سرهم هیچ محصول تازه‌ای نداشته باشند، استخراج متوقف می‌شود و در گزارش هشدار می‌دهد که احتمالاً صفحه‌بندی کار نمی‌کند. اگر واقعاً ۱۲۰۰ محصول دارید، نوع صفحه‌بندی و «مقدار صفحه‌بندی» پروفایل را بررسی کنید؛ نسخهٔ کلودفلر از قبل این محافظ را داشت و تحت تأثیر نبود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۱.۰</time><br><b>نمایش واقعی صفحهٔ محصول در مودال، سلکتور جدول مشخصات و دکمهٔ توقف انتخاب در انتخابگر بصری:</b> ۱) در مودال محصول، توضیحات به‌صورت متن خام داخل کادر لاگ نشان داده می‌شد؛ حالا دقیقاً مثل صفحهٔ محصول رندر می‌شود: تیترها، فهرست‌ها، جدول‌ها، تصاویر و لینک‌ها. برای امنیت، پیش از نمایش هرچه اجراشدنی است (اسکریپت، iframe، فرم و رویدادهای on…) حذف می‌شود و لینک‌ها در تب جدید باز می‌شوند. ۲) به سلکتورهای جزئیات، «جدول مشخصات» اضافه شد. کافی است بلوک مشخصات را انتخاب کنید؛ سه ساختار رایج پشتیبانی می‌شود: جدول (tr/td)، فهرست تعریفی (dt/dd) و فهرست «نام: مقدار». ردیف‌های استخراج‌شده در مودال محصول به‌صورت جدول نمایش داده می‌شوند. ۳) در انتخابگر بصری دکمهٔ «⏸ توقف انتخاب» اضافه شد. با زدن آن، کلیک‌ها دیگر گرفته نمی‌شوند و صفحه عادی کار می‌کند؛ می‌توانید تب‌ها و کشویی‌های صفحهٔ محصول را باز کنید و بعد با «▶ ادامهٔ انتخاب» همان بخش‌های تازه‌باز‌شده را انتخاب کنید. در هر دو نسخهٔ ورکر و نود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۰.۰</time><br><b>رفع گم شدن هزاران محصول در نتایج و نادیده گرفتن محصولات بدون قیمت:</b> ۱) شناسهٔ یکتای هر محصول از روی آدرس آن ساخته می‌شود، اما هنگام ساخت این شناسه <b>کل رشتهٔ پرس‌وجو</b> از آدرس حذف می‌شد. در فروشگاه‌هایی که آدرس محصول به شکل product?id=123 است، آدرس همهٔ محصولات بعد از این حذف یکسان می‌شد؛ یعنی هر ۱۲۰۰ محصول یک شناسه می‌گرفتند و روی هم ذخیره می‌شدند و در نهایت فقط چند مورد باقی می‌ماند. حالا فقط پارامترهای تبلیغاتی (utm و مانند آن) و پارامترهای صفحه‌بندی (page و sort و …) حذف می‌شوند و پارامترهای شناسایی محصول دست‌نخورده می‌مانند. ۲) محصولات بدون قیمت دیگر ذخیره نمی‌شوند: نه در استخراج و نه در درون‌ریزی فایل. چنین محصولی در هیچ مقصدی قابل انتشار نیست (ووکامرس قیمت لازم دارد و باسلام قیمت صفر را رد می‌کند) و فقط فهرست نتایج و جدول مغایرت‌گیری را شلوغ می‌کرد. تعداد محصولات نادیده‌گرفته‌شده در گزارش کار و در پاسخ درون‌ریزی نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۹.۰</time><br><b>علت واقعی خطای ۱۰۴۲ و ۴۰۴ همهٔ مدل‌ها پیدا شد: آدرس دوبار در پراکسی بسته‌بندی می‌شد:</b> پراکسی شما هیچ اشکالی نداشت؛ اشکال از ما بود. تابع networkFetch آدرس مقصد را داخل پراکسی می‌گذاشت (به شکل ?url=https://api.openai.com/…) و بعد نتیجه را به safeFetch می‌داد، و safeFetch دوباره همان تنظیم «روش اتصال» را اعمال می‌کرد و آدرس را <b>بار دوم</b> داخل پراکسی می‌گذاشت. نتیجه این می‌شد که از پراکسی می‌خواستیم خودش را fetch کند؛ و این دقیقاً همان «یک Worker، Worker دیگری از همان حساب را صدا بزند» است که کلودفلر با خطای ۱۰۴۲ رد می‌کند و به همین دلیل همهٔ مدل‌ها ۴۰۴ می‌گرفتند. حالا آدرسی که یک‌بار بسته‌بندی شده دیگر دوباره از مسیر پراکسی عبور داده نمی‌شود؛ هم در تماس واقعی با مدل‌ها و هم در عیب‌یاب. راهنمای نادرست نسخهٔ قبل (فعال کردن پرچم global_fetch_strictly_public) هم حذف شد، چون مشکل از تنظیمات کلودفلر شما نبود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۸.۰</time><br><b>اصلاح راهنمای خطای ۱۰۴۲ برای ترموکس و رفع دانلود بی‌دلیل صفحات در مرحلهٔ جزئیات:</b> ۱) راهنمایی که برای خطای ۱۰۴۲ نوشته بودم مخصوص کلودفلر بود، در حالی که این پیام فقط در نسخهٔ نود (ترموکس، VPS، سی‌پنل) نمایش داده می‌شود. ترموکس اصلاً Worker نیست، پس محدودیت «Worker به Worker» به درخواست شما ربطی ندارد. حالا پیام درست گفته می‌شود: دریافت ۱۰۴۲ در این محیط یعنی روی آن آدرس هیچ Workerِ فعالی مستقر نیست و پاسخ را خودِ لبهٔ کلودفلر داده است؛ راه‌حل، مستقر کردن فایل آمادهٔ scripts/ai-proxy-worker.js روی یک Worker و بررسی مسیر health/ آن است. پرچم global_fetch_strictly_public فقط به‌عنوان نکتهٔ تکمیلی برای کسانی می‌ماند که پراکسی را از داخل یک Worker دیگر صدا می‌زنند. ۲) مرحلهٔ «استخراج جزئیات» حتی وقتی هیچ سلکتور جزئیاتی تنظیم نشده بود، صفحهٔ تک‌تک محصولات را دانلود می‌کرد و هیچ فیلدی پر نمی‌شد؛ یعنی صدها درخواست بی‌فایده. حالا اگر سلکتوری تنظیم نشده باشد، اول به‌صورت خودکار کشف می‌شود و اگر باز هم چیزی پیدا نشد، این مرحله رد می‌شود و در گزارش نوشته می‌شود. در پایان هم تعداد محصولاتی که جزئیاتشان استخراج شد در گزارش کار ثبت می‌گردد. این اصلاح در هر دو نسخهٔ نود و ورکر اعمال شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۷.۰</time><br><b>رفع خطای ۱۰۴۲ پراکسی کلودفلر و افزودن سهمیهٔ اجرای Worker و هوش مصنوعی:</b> ۱) علت خطای «error code: 1042» پیدا شد: کلودفلر اجازه نمی‌دهد یک Worker، Worker دیگری از همان حساب را صدا بزند و لبهٔ شبکه پیش از اجرای پراکسی، ۴۰۴ برمی‌گرداند. راه‌حل رسمی، پرچم سازگاری global_fetch_strictly_public است که به wrangler.toml اضافه شد. شما باید همین پرچم را در پنل کلودفلر برای <b>هر دو</b> Worker (اسکرپر و پراکسی) هم فعال کنید: Settings ← Runtime ← Compatibility flags و سپس Deploy. راه جایگزین: پراکسی را روی حساب کلودفلر دیگری مستقر کنید یا برایش دامنهٔ اختصاصی تعریف کنید. عیب‌یاب هوش مصنوعی هم حالا این خطا را می‌شناسد و دقیقاً همین راهنما را نشان می‌دهد، نه پیام کلی. ۲) عملیات هوش مصنوعی در D1 چیزی نمی‌نویسد، بنابراین در نوار سهمیه دیده نمی‌شد؛ حالا دو ردیف تازه اضافه شد: تعداد اجراهای Worker در روز (سقف ۱۰۰٬۰۰۰) و بیشینهٔ «درخواست بیرونی» در یک اجرا (سقف ۵۰ در پلن رایگان) که سقف واقعیِ تست مدل‌هاست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۶.۰</time><br><b>قیمت هر غرفه در صف ارسال، حذف محصولات اضافهٔ مقصد، جدول تمام‌صفحه و نوار سهمیهٔ D1:</b> ۱) در صف ارسال، قیمت همهٔ غرفه‌ها یکسان نشان داده می‌شد چون هنگام ثبت گزارش، قیمت واقعیِ همان غرفه پاس داده نمی‌شد و قیمت پایهٔ محصول ثبت می‌گردید. حالا قیمت تعدیل‌شدهٔ هر غرفه نمایش داده می‌شود. ۲) دکمهٔ «اجرا و هماهنگ‌سازی» علاوه بر اصلاح قیمت و ارسال محصولات جاافتاده، حالا محصولاتی را که فقط در مقصد هستند هم پاک می‌کند: در ووکامرس حذف واقعی و در باسلام بایگانی (۴۱۸۴). برای ایمنی، فقط محصولاتی حذف می‌شوند که پسوند «(کد ایکس)» دارند؛ هر محصولی که خودِ فروشنده دستی ساخته باشد گزارش می‌شود ولی دست‌نخورده می‌ماند. ۳) دکمهٔ «⛶ نمایش تمام‌صفحهٔ جدول» اضافه شد؛ داخل منوی همبرگری متن‌ها ریز بودند، حالا جدول تمام‌صفحه با فونت بزرگ‌تر باز می‌شود. ۴) در «مدیر وظایف» نوار سهمهٔ روزانهٔ D1 اضافه شد: خواندن و نوشتن مصرف‌شده، درصد، و زمان صفر شدن شمارنده. رنگ نوار بالای ۷۰٪ زرد و بالای ۹۰٪ قرمز می‌شود. در محیط‌های نود (ترموکس، VPS، cPanel) پیام «سقف روزانه ندارد» نشان داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۵.۰</time><br><b>رفع خطای بی‌صدای جدول مغایرت‌گیری:</b> دکمهٔ «پیش‌نمایش» برخلاف دکمهٔ «اجرا» هیچ try/catch و هیچ ردیف زنده‌ای در مدیر وظایف نداشت؛ برای همین اگر درخواست شکست می‌خورد (تایم‌اوت، خطای سرور، یا رسیدن به سقف D1) پنل خالی می‌ماند و هیچ پیامی هیچ‌جا دیده نمی‌شد. حالا هنگام اجرا پیام «در حال خواندن مقصدها…» نشان داده می‌شود، یک ردیف زنده در مدیر وظایف ثبت می‌گردد و اگر خطایی رخ دهد متن کامل خطا داخل همان پنل با هشدار قرمز نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۴.۰</time><br><b>رفع خطای ۴۲۲ «شناسه تصویر الزامی است» — اصلاح اشتباه نسخهٔ ۱.۱۱۰.۰:</b> خبر خوب اینکه خطای ۴۰۱ کاملاً برطرف شد و احراز هویت کار می‌کند. اما در نسخهٔ ۱.۱۱۰.۰ من تابع کمکیِ «غرفه‌های اضافه» را در کد PHP خوانده بودم و اشتباه نتیجه گرفتم که فیلد photo نباید هنگام ساخت ارسال شود. مسیر اصلی ارسال در همان فایل PHP دقیقاً برعکس است: photo و photos را در همان درخواست ساخت می‌فرستد و باسلام هم آن را اجباری می‌داند. قانون واقعی PHP این است: اگر آپلود تصویر موفق بود، شناسه‌ها ارسال می‌شوند و اگر توضیح کوتاه و توضیح کامل هر دو حداقل ۳ نویسه باشند وضعیت ۲۹۷۶ (منتشرشده) می‌شود؛ در غیر این صورت وضعیت ۳۷۹۰ (پیش‌نویس) است تا محصول دست‌کم ثبت شود و رد نشود. حالا دقیقاً همین پیاده شده است. همچنین تا امروز خطای آپلود تصویر بی‌صدا نادیده گرفته می‌شد؛ به همین دلیل خطای ۴۲۲ بدون هیچ توضیحی می‌آمد. حالا اگر آپلود شکست بخورد، نام تصویر و علت دقیق (مثلاً کد HTTP) داخل همان پیام خطا نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۳.۰</time><br><b>علت قطعی ۴۰۱ باسلام پیدا و رفع شد: درخواست‌های مقصد از پراکسیِ استخراج عبور می‌کردند:</b> خروجی عیب‌یاب روی ترموکس نشان داد هر چهار آزمون کد ۲۰۰ می‌گیرند: توکن تا ۲۰۲۷ معتبر است، هر ۱۵ دسترسی را دارد و فهرست محصولات غرفه هم خوانده می‌شود. پس مشکل از توکن نبود، از خود برنامه بود: در نسخهٔ نود، تابع safeFetch بدون هیچ شرطی تنظیمات شبکهٔ «اتصال به سایت مبدأ» را به همهٔ درخواست‌ها اعمال می‌کرد. چون روش اتصال هوش مصنوعی روی Worker تنظیم شده بود، همان تنظیم به درخواست‌های باسلام و ووکامرس هم اعمال می‌شد و آن‌ها از پراکسی عبور می‌کردند؛ آن Worker هدر Authorization را منتقل نمی‌کند، پس باسلام اصلاً توکنی نمی‌دید و «invalid authorization header» می‌داد. خطای ۵۲۲ ووکامرس هم از همین‌جا بود. عیب‌یاب چون مستقیم درخواست می‌زد این مسیر را دور می‌زد و ۲۰۰ می‌گرفت. حالا درخواست‌های مقصد هرگز از پراکسیِ استخراج عبور نمی‌کنند: باسلام از تیک «اتصال غیرمستقیم» خودش پیروی می‌کند و ووکامرس مستقیم می‌رود. استخراج صفحات فروشگاه مثل قبل از پراکسی استفاده می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۲.۰</time><br><b>ابزار عیب‌یاب باسلام برای اجرا روی همان دستگاهی که خطا می‌دهد:</b> چون از این محیط دسترسی شبکه به باسلام وجود ندارد، خطای ۴۰۱ شما اینجا قابل بازتولید نیست و حدس زدن بس است. فایل scripts/basalam-doctor.mjs اضافه شد که روی ترموکس اجرا می‌شود و همان توکن را با چهار حالت مختلف به باسلام می‌فرستد: الف) فقط سه هدر مثل کد PHP، ب) با User-Agent مرورگر، ج) فقط Authorization، د) روی خود مسیر محصولات غرفه. نتیجه دقیقاً می‌گوید مشکل از توکن است یا از شکل هدرها یا از دسترسی غرفه. توکن هرگز چاپ نمی‌شود؛ فقط طول، ساختار، تاریخ انقضا، دسترسی‌ها و یک اثر انگشت کوتاه. اجرا: node scripts/basalam-doctor.mjs &lt;توکن&gt; یا با SCRAPER_URL و ADMIN_TOKEN تا خودش توکن را از برنامهٔ در حال اجرا بخواند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۱.۰</time><br><b>علت واقعی ۴۰۱ باسلام و ۵۲۲ ووکامرس پیدا شد: ما خودمان را مرورگر جا می‌زدیم:</b> مقایسه با کد مرجع PHP نشان داد آن فقط سه هدر می‌فرستد (Accept و Authorization و Content-Type) ولی ما پنج هدر می‌فرستادیم، از جمله یک User-Agent جعلی کروم دسکتاپ و accept-language فارسی. ارسال User-Agent مرورگر به یک API بدون بقیهٔ نشانه‌های مرورگر، یک الگوی شناخته‌شده برای فایروال‌هاست: باسلام پیش از خواندن توکن، درخواست را رد می‌کند و همان را «invalid authorization header» گزارش می‌دهد — دقیقاً به همین دلیل حتی مسیر فقط‌خواندنی users/me هم ۴۰۱ می‌داد و دو توکن سالمِ متفاوت هم‌زمان رد می‌شدند، و ووکامرس هم در همان اجرا خطای ۵۲۲ می‌داد. حالا همهٔ فراخوانی‌های API (باسلام و REST ووکامرس، در هر دو نسخهٔ ورکر و نود) فقط هدرهای خودشان را می‌فرستند، دقیقاً مثل کد PHP. استخراج صفحات فروشگاه همچنان هدرهای مرورگر را دارد چون بعضی سایت‌ها بدون آن صفحهٔ ناقص می‌دهند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۱۰.۰</time><br><b>تطبیق ارسال باسلام با کد مرجع PHP (scraper4.php نسخهٔ ۱۰.۹۱):</b> فایل مرجع از مخزن fazilatma/code خوانده شد و دو تفاوت اساسی پیدا شد که علت خطای ارسال بود. ۱) کد PHP هر محصول را ابتدا با وضعیت ۳۷۹۰ («پیش‌نویس») می‌سازد، نه ۲۹۷۶ («منتشرشده») که ما می‌فرستادیم. ۲) کد PHP در درخواستِ ساخت، فیلدهای photo و photos را <b>اصلاً ارسال نمی‌کند</b>؛ عکس‌ها و وضعیت نهایی در یک درخواست PATCH جداگانه بعد از ساخت محصول فرستاده می‌شوند. حالا ارسال ما دقیقاً همین دو مرحله را انجام می‌دهد: ساخت پیش‌نویس بدون عکس، سپس PATCH برای انتشار به همراه شناسه‌های عکس. اگر مرحلهٔ دوم خطا بدهد محصول از دست نمی‌رود و در همگام‌سازی بعدی کامل می‌شود. ضمناً تأیید شد هدر احراز هویت PHP هم دقیقاً «Bearer + توکن» است، پس قالب هدر ما از ابتدا درست بوده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۹.۰</time><br><b>بازگشت جدول کامل مغایرت‌گیری وقتی یک مقصد خطا می‌دهد:</b> علت واقعی پیدا شد: در حلقهٔ مغایرت‌گیری، اگر خواندن یک مقصد خطا می‌داد، آن مقصد <b>هیچ سطری</b> تولید نمی‌کرد. وقتی هر سه مقصد خطا می‌دادند، جدول هیچ داده‌ای برای رسم نداشت و محافظ نسخهٔ ۱.۱۰۳.۰ هم آن را با یک پیام خطای ساده جایگزین می‌کرد؛ برای همین جدولی که در نسخه‌های قبل می‌دیدید دیگر نمی‌آمد. حالا مقصدی که پاسخ نمی‌دهد هم برای هر محصول یک خانه تولید می‌کند با وضعیت تازهٔ «مقصد پاسخ نداد» (نشانهٔ ⛔ و رنگ صورتی)، بنابراین جدول کامل با همهٔ محصولات و همهٔ ستون‌های مقصد رسم می‌شود و فهرست خطاها هم بالای آن می‌آید. این وضعیت بالاترین اولویت مرتب‌سازی را دارد تا اول دیده شود. اصلاح در هر دو نسخهٔ ورکر و نود اعمال شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۸.۰</time><br><b>فعال شدن «اتصال غیرمستقیم» باسلام، دستورالعمل cPanel و تاشو شدن فهرست‌ها:</b> ۱) تیک «اتصال غیرمستقیم» در تنظیمات باسلام ذخیره می‌شد ولی هیچ درخواستی آن را نمی‌خواند، یعنی روشن کردنش هیچ اثری نداشت. وقتی هر دو غرفه با دو توکن متفاوت همزمان ۴۰۱ می‌دهند و ووکامرس هم خطای ۵۲۲ می‌دهد، مشکل از توکن نیست؛ لبهٔ شبکهٔ مقصد ترافیک را رد می‌کند. حالا با روشن کردن این تیک، همهٔ درخواست‌های باسلام (users/me، آپلود عکس، ساخت و ویرایش محصول، فهرست محصولات و تغییر وضعیت) از همان Worker واسط عبور می‌کنند و توکن دست‌نخورده منتقل می‌شود. میزبان‌های باسلام هم به فهرست مجاز فایل scripts/ai-proxy-worker.js اضافه شدند وگرنه پراکسی خودش ۴۰۳ می‌داد. اگر تیک روشن باشد ولی آدرس Worker خالی باشد، پیام صریح داده می‌شود. ۲) کارت «cPanel Shared Hosting» با دستورهای کامل به بخش نصب اضافه شد و فایل اجرای آن با پسوند sh دانلود می‌شود. ۳) گزارش تغییرات دیگر یک فهرست بی‌پایان نیست: فقط تازه‌ترین کارت باز است و ۱۴ مورد اخیر دیگر داخل بخش تاشوی «نمایش تغییرات اخیر» رفتند. ۴) دستورالعمل نصب هر محیط (ویندوز، ترموکس، VPS، رندر، کلودفلر، cPanel و بقیه) حالا کشویی است و به‌صورت پیش‌فرض بسته می‌ماند؛ دکمه‌های کپی و دانلود سر جایشان هستند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۷.۰</time><br><b>تشخیص علت واقعی ۴۰۱ باسلام وقتی خود توکن سالم است:</b> بررسی شد که درخواست ما دقیقاً همان چیزی است که SDK رسمی پایتون می‌فرستد: همان آدرس v1/vendors/{id}/products، همان بدنهٔ JSON و همان هدر Bearer. پس وقتی ساختار توکن سالم است ولی باز ۴۰۱ می‌آید، مشکل «قالب هدر» نیست و از روی خود توکن هم قابل تشخیص نیست. حالا در همان لحظهٔ خطا، همان توکن روی مسیر فقط‌خواندنی users/me آزمایش می‌شود و علت دقیق گفته می‌شود: اگر users/me هم ۴۰۱ بدهد یعنی توکن باطل یا نامعتبر است؛ اگر users/me جواب بدهد یعنی توکن سالم است ولی دسترسی «vendor.product.write» ندارد؛ و اگر توکن به غرفهٔ دیگری تعلق داشته باشد، شمارهٔ غرفهٔ واقعی و شمارهٔ تنظیم‌شده کنار هم نشان داده می‌شوند. همچنین اگر فهرست دسترسی‌ها اصلاً داخل توکن نباشد، دیگر پیام گمراه‌کنندهٔ «سالم است» داده نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۶.۰</time><br><b>اجرای پروژه روی هاست اشتراکی cPanel:</b> راهنمای کامل «CPANEL-SHARED-HOSTING.md» و فایل ورودی «scripts/cpanel-app.js» برای Phusion Passenger اضافه شد. با نصب تمیز آزمایش شد: اجرای سرور فقط به ۶ بستهٔ خالص جاوااسکریپت (۵۶ ماژول، ۱۷ مگابایت) و بدون هیچ کامپایلری نیاز دارد؛ playwright و puppeteer و crawlee تنبل بارگذاری می‌شوند و روی هاست اشتراکی قابل حذف‌اند (مرورگر ۳۰۰ مگابایتی دانلود می‌کنند و از سهمیه رد می‌شوند)، و پایگاه‌دادهٔ SQLite از ماژول داخلی node:sqlite می‌آید (نود ۲۲.۵ به بالا) پس better-sqlite3 لازم نیست. نصب SDK پایتون باسلام هم کار می‌کند چون pydantic-core چرخ آمادهٔ manylinux دارد. نکتهٔ مهم: cPanel دستور npm start را اجرا نمی‌کند و پورت را خودش می‌دهد؛ باید فایل شروع app.js باشد و متغیر LOCAL_SCRAPER_AUTO_UPDATE=0 تنظیم شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۵.۰</time><br><b>تشخیص دقیق علت خطای ۴۰۱ باسلام:</b> بررسی شد که هدری که ما می‌فرستیم کاملاً درست است («Bearer» + توکن، بدون نویسهٔ اضافه)؛ پس اگر باز هم «invalid authorization header» می‌گیرید، مشکل از خودِ توکن است نه از قالب هدر. توکن‌های دسترسی شخصی باسلام از نوع JWT هستند، بنابراین حالا بدون هیچ درخواست شبکه‌ای رمزگشایی می‌شوند و دقیقاً گفته می‌شود مشکل چیست: توکن خالی است، هنوز واژهٔ Bearer دارد، فاصله یا خط جدید دارد، تاریخ انقضایش گذشته (با نمایش همان تاریخ)، یا دسترسی «vendor.product.write» را ندارد (با فهرست دسترسی‌های فعلی). این تشخیص هم در متن خطای ارسال و هم در «استعلام جامع باسلام» نمایش داده می‌شود و حتی وقتی اتصال به باسلام برقرار نشود هم کار می‌کند؛ چون کاملاً محلی است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۴.۰</time><br><b>رفع خطای HTTP 401 «invalid authorization header» در ارسال باسلام:</b> اگر توکن را همان‌طور که در مستندات نوشته شده کپی می‌کردید («Bearer eyJ…») همان رشته عیناً ذخیره می‌شد و ما هدر را به شکل «Authorization: Bearer Bearer eyJ…» با دو بار Bearer می‌فرستادیم؛ باسلام آن را نامعتبر می‌داند. حالا توکن هنگام ذخیره و هنگام خواندن پاک‌سازی می‌شود: پیشوندهای Bearer/Token/:Authorization، گیومه‌های دور توکن، فاصله‌های ابتدا و انتها و نویسه‌های نامرئی (نیم‌فاصله، علامت راست‌به‌چپ، فاصلهٔ بدون شکست) حذف می‌شوند. این نویسه‌ها اصلاً در هدر HTTP مجاز نیستند و باعث خطا یا رد شدن درخواست می‌شدند. توکن‌هایی که قبلاً اشتباه ذخیره شده‌اند هم هنگام بارگذاری خودکار اصلاح می‌شوند و نیازی به وارد کردن دوباره نیست. این پاک‌سازی برای غرفه‌های اضافه و متغیر محیطی BASALAM_TOKEN هم اعمال می‌شود. همچنین متن خطای ۴۰۱ حالا راهنمای رفع مشکل را نشان می‌دهد و کنار فیلد توکن نوشته شده که فقط خود توکن بدون واژهٔ Bearer وارد شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۳.۰</time><br><b>رفع خطای ۴۰۴ پراکسی هوش مصنوعی و بازگشت جدول ماتریسی مغایرت‌گیری:</b> ۱) اگر آدرس پراکسی بدون //:https نوشته می‌شد (مثل proxy.fazilat-ma.workers.dev)، آن رشته یک آدرس «نسبی» بود و روی دامنهٔ خود اسکرپر حل می‌شد؛ به همین دلیل همهٔ مدل‌ها خطای ۴۰۴ می‌دادند در حالی که اتصال مستقیم کار می‌کرد. حالا آدرس خودکار اصلاح می‌شود (در هر دو نسخهٔ ورکر و نود، هم برای هوش مصنوعی و هم برای ووکامرس و استخراج). ۲) فایل آمادهٔ scripts/ai-proxy-worker.js اضافه شد؛ اگر ورکر واسط شما مسیر url? یا هدر x-scraper-target را پیاده نکرده باشد، باز هم همه چیز ۴۰۴ می‌شود. این فایل را در یک Worker جدید بگذارید و آدرسش را وارد کنید. ۳) در بخش مغایرت‌گیری، «پیش‌نمایش» همان جدول ماتریسی «اجرا» را نشان می‌دهد (قبلاً فقط تراشه‌های شمارش را نشان می‌داد و جدول فقط بعد از اجرا می‌آمد). ۴) اگر همهٔ مقصدها خطا بدهند (مثل HTTP 401)، دیگر پیام سبز «همهٔ مقصدها با مبدأ یکسان‌اند» نمایش داده نمی‌شود؛ به جای آن هشدار قرمز «هیچ مقصدی پاسخ نداد» با فهرست خطاها می‌آید.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۰۲.۰</time><br><b>رفع خطای HTTP 400 باسلام، نتایج تک‌ستونه با مودال محصول و پرکردن خودکار تنظیمات باسلام:</b> ۱) خطای «photo: Input should be a valid integer» و «status: Field required» برطرف شد. باسلام برای فیلد photo شناسهٔ عددی فایل می‌خواهد نه آدرس تصویر؛ حالا تصاویر ابتدا به /v1/files آپلود می‌شوند و شناسهٔ عددی آن‌ها ارسال می‌شود. فیلد اجباری status (۲۹۷۶ = منتشرشده) اضافه شد و نام درست فیلد قیمت هم primary_price است نه price. اگر آپلود تصویر شکست بخورد، محصول بدون عکس ارسال می‌شود تا کل ارسال از دست نرود. ۲) بخش نتایج تک‌ستونه شد و هر ردیف تصویر، نام همراه پسوند کد، قیمت پایه با خط وسط و قیمت نهایی به تومان (غرفهٔ پیش‌فرض باسلام) را نشان می‌دهد. ۳) با کلیک روی هر محصول، مودال آن باز می‌شود: گالری تصاویر، جدول قیمت نهایی برای همهٔ غرفه‌ها و سایت‌ها (با معادل ریال)، جزئیات محصول، تنوع‌ها و توضیحات کامل. ۴) در تنظیمات باسلام، با زدن دکمهٔ تست، شناسهٔ غرفه و روزهای آماده‌سازی از روی توکن استعلام و خودکار پر می‌شوند؛ برای غرفه‌های اضافه هم شناسه و نام غرفه پر می‌شود. نسخهٔ نود تا امروز فقط /categories را صدا می‌زد و هیچ مشخصاتی برنمی‌گرداند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · 2026-09-10 · نسخهٔ ۱.۱۰۱.۰</time><br><b>ارسال به همهٔ غرفه‌ها با SDK رسمی باسلام، شمارنده‌های کلیک‌شدنی و حذف تکراری‌ها در همهٔ مقصدها:</b> ۱) ارسال باسلام به همهٔ غرفه‌ها انجام می‌شد، اما اگر یک غرفه خطا می‌داد کل حلقه رها می‌شد و موفقیت غرفه‌های قبلی هم گم می‌شد؛ حالا هر غرفه جدا گزارش می‌شود و خطای یکی جلوی بقیه را نمی‌گیرد. ۲) SDK رسمی باسلام فقط برای پایتون منتشر شده و هیچ بستهٔ npm ندارد؛ بنابراین مسیر «اول SDK» همیشه بی‌صدا به API برمی‌گشت. حالا SDK واقعی از طریق پل python3 اجرا می‌شود و اگر پایتون یا SDK نبود، خودکار به API برمی‌گردد. روی ترموکس دستور pip install basalam-sdk به راه‌اندازی اضافه شد. ۳) با کلیک روی شمارنده‌های هر کار، نام محصول، قیمت آن و نام غرفه دیده می‌شود و روی شمارندهٔ خطاها متن کامل خطا نمایش داده می‌شود. در نسخهٔ نود اصلاً جزئیاتی ثبت نمی‌شد و این پنجره خالی بود؛ حالا هر دو نسخه یکسان ثبت می‌کنند. ۴) در بخش مغایرت‌گیری، دکمه‌های «پیش‌نمایش تکراری‌های مقصد» و «حذف تکراری‌ها در همهٔ مقصدها» اضافه شد: عنوان‌های یکسان پس از حذف پسوند «(کد ایکس)» یک گروه تکراری هستند و به‌صورت پیش‌فرض گران‌ترین نسخه نگه داشته و بقیه حذف می‌شوند (ووکامرس حذف واقعی، باسلام بایگانی ۴۱۸۴). محصولات محلی دست‌نخورده می‌مانند. ۵) حذف تکراری سمت سرور که تا امروز فقط روی کلودفلر بود به نسخهٔ نود هم اضافه شد؛ این دکمه‌ها روی ترموکس و VPS بی‌اثر بودند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · 2026-09-10 · نسخهٔ ۱.۱۰۰.۰</time><br><b>آپدیت با ریفرش دیپلویر، حذف جدول خودکار تست مدل‌ها و محدود شدن هماهنگ‌سازی به محصولات دارای پسوند کد:</b> ۱) تا حالا صفحهٔ دیپلویر فقط وضعیت ذخیره‌شده را نشان می‌داد و اگر تایمر پس‌زمینه غیرفعال یا کند بود، کاربر روی نسخهٔ قدیمی می‌ماند. حالا هر بار ریفرش صفحه، همهٔ شاخه‌ها دوباره اسکن و جدیدترین نسخه خودکار نصب می‌شود (با محدودیت ۱۰ ثانیه تا ریفرش‌های پشت‌سرهم فشار نیاورند). ۲) جدول نتایج تست مدل‌های هوش مصنوعی دیگر با هر بار بازکردن صفحه باز نمی‌شود؛ فقط وقتی همان تب پایان یک اجرا را دیده باشد. دکمهٔ «📊 نمایش آخرین جدول» همچنان کار می‌کند. ۳) مغایرت‌گیری و هماهنگ‌سازی فقط روی محصولاتی انجام می‌شود که عنوانشان به پسوند «(کد ایکس)» ختم می‌شود؛ ایکس می‌تواند هر حرف یا عددی باشد (فارسی، عربی یا لاتین). محصولات بدون این پسوند نه مقایسه و نه منتشر می‌شوند و تعدادشان زیر جدول نوشته می‌شود. ۴) ستون تازهٔ «تکراری» در جدول هماهنگ‌سازی نشان می‌دهد چند محصول با نادیده‌گرفتن پسوند کد، عنوان یکسان دارند (مثلاً «نام (کد ۱)» و «نام (کد A2)» می‌شود ۲) و گروه‌های بیش از یکی با رنگ زرد مشخص می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · 2026-09-10 · نسخهٔ ۱.۹۹.۰</time><br><b>پیش‌نمایش تمام‌صفحه، پروکسی برای استخراج، سلکتوریابی خودکار و رفع ایراد موتورهای استخراج:</b> ۱) «پیش‌نمایش هماهنگ‌سازی» حالا تمام‌صفحه باز می‌شود و ستون «پروفایل» که در مرورگر موبایل خالی دیده می‌شد درست شد. ۲) آدرس پروکسی/Worker که در «روش اتصال» وارد می‌کنید تا حالا فقط برای تماس با مدل‌های هوش مصنوعی استفاده می‌شد و صفحات فروشگاه مبدأ مستقیم گرفته می‌شد؛ به همین دلیل با وجود تنظیم پروکسی باز هم خطای تحریم می‌گرفتید. حالا تمام ترافیک استخراج از همان مسیر عبور می‌کند، دکمهٔ عیب‌یابی هم پروکسی را واقعاً تست می‌کند و صفحهٔ چالش ضدربات در اجرای Node هم شناسایی می‌شود. ۳) در مرحلهٔ استخراج جزئیات، اول خود موتور استخراج سلکتورهای گم‌شده را پیدا و دوباره تلاش می‌کند و فقط اگر موفق نشد، توضیح‌ساز هوشمند به‌عنوان فال‌بک وارد می‌شود. ۴) ایراد جزئی موتورهای استخراج رفع شد: انتخاب دستی موتور در اجرای واقعی نادیده گرفته می‌شد و موتورهای کشف خودکار جلوتر از آن اجرا می‌شدند؛ به همین دلیل نتیجهٔ «تست سه صفحه‌ای» با استخراج واقعی فرق داشت. حالا موتور انتخاب‌شده اول اجرا می‌شود و بقیه فقط وقتی آن چیزی پیدا نکند به‌عنوان فال‌بک امتحان می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۸.۰</time><br><b>ضریب تعدیل قیمت برای ووکامرس و غرفهٔ پیش‌فرض باسلام:</b> تا حالا فقط غرفه‌های اضافی باسلام فیلد «تغییر قیمت ٪» داشتند و ووکامرس و غرفهٔ پیش‌فرض به‌صورت ثابت روی صفر بودند. حالا در منوی «🛒 ووکامرس» فیلد «تغییر قیمت ٪» اضافه شده و در «🏪 باسلام» هم برای غرفهٔ پیش‌فرض. این ضریب هم روی قیمتی که به مقصد ارسال می‌شود اعمال می‌گردد (شامل تنوع‌ها) و هم در «مغایرت‌گیری» و «پیش‌نمایش هماهنگ‌سازی» به‌عنوان قیمتِ صحیح در نظر گرفته می‌شود. <b>دکمهٔ پیش‌نمایش هماهنگ‌سازی:</b> این عملیات داخل یک درخواست انجام می‌شود و هیچ اجرای پس‌زمینه‌ای نمی‌ساخت، برای همین در «مدیر وظایف» چیزی دیده نمی‌شد و دکمه مرده به نظر می‌رسید. حالا بلافاصله پیام «در حال خواندن مقصدها…» نشان داده می‌شود و یک ردیف زنده در مدیر وظایف ثبت می‌گردد که در پایان نتیجه را نشان می‌دهد. اگر نتیجه خالی باشد هم دلیلش صریح گفته می‌شود: «هیچ مقصدی تنظیم نشده»، «هنوز محصولی استخراج نشده» یا «همه‌چیز هماهنگ است». <b>گزارش تغییرات کوتاه شد:</b> ۱۱۲ کارت تغییرات همیشه باز بود و رسیدن به بخش‌های پایین منوی همبرگری را طولانی می‌کرد. حالا فقط ۱۲ مورد آخر باز است و بقیه داخل یک بخش جمع‌شدهٔ «نمایش همهٔ تغییرات قدیمی‌تر» با اسکرول داخلی قرار دارند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۷.۱</time><br><b>گزارش نادرست «خطا» در به‌روزرسانی موفق:</b> مرحلهٔ پاک‌کردن credential.helper وقتی اصلاً تنظیم نشده باشد (حالت عادی یک کلون تازه) کد خطا برمی‌گرداند. این مرحله در محاسبهٔ موفقیت کل عملیات شمرده می‌شد، بنابراین یک به‌روزرسانی کاملاً موفق در گزارش با وضعیت ناموفق ثبت می‌شد. حالا این مرحله اختیاری است و در نتیجهٔ نهایی تأثیر نمی‌گذارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۷.۰</time><br><b>پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه نجات:</b> تا امروز «پیشنهاد خودکار» فقط وقتی کار می‌کرد که یک موتور استخراج از قبل محصولی پیدا کرده بود؛ یعنی دقیقاً در بدترین حالت (صفر محصول) هیچ کمکی نمی‌کرد و اجرا با پیام «محصولی پیدا نشد» شکست می‌خورد. حالا در سه حالت به‌صورت خودکار اجرا می‌شود: (۱) وقتی سلکتورهای فهرست خالی‌اند، (۲) وقتی اتصال به سایت برقرار شده اما صفر محصول استخراج شده، (۳) وقتی موتور استخراج هیچ کارتی پیدا نکرده است. در این حالت‌ها سلکتورها دوباره کشف می‌شوند و همان صفحه یک‌بار دیگر استخراج می‌شود؛ اگر جواب داد، اجرا ادامه پیدا می‌کند و در گزارش می‌نویسد چند محصول نجات داده شد. <b>همین مکانیزم برای جزئیات:</b> اگر سلکتورهای جزئیات روی یک محصول واقعی هیچ فیلدی را پر نکنند (یعنی همهٔ محصولات با توضیحات خالی ذخیره می‌شدند)، سلکتورهای جزئیات هم دوباره کشف و آزمایش می‌شوند. <b>در تب سلکتورها:</b> دکمه‌های «آزمایش سلکتورها» و «آزمایش جزئیات» وقتی هیچ فیلدی جواب ندهد، خودشان پیشنهاد خودکار را اجرا می‌کنند و دیگر فقط توصیه‌ٔ متنی نمی‌دهند. این نجات در هر اجرا فقط یک‌بار انجام می‌شود (روی Cloudflare هم در checkpoint ذخیره می‌شود) تا حلقهٔ بی‌پایان ایجاد نشود. <b>رفع خودکارنشدن به‌روزرسانی از گیت‌هاب:</b> نصب‌کنندهٔ محلی هنگام هر بررسی، فایل‌های ردیابی‌نشده (مثل data/ و storage/ و یادداشت‌های شخصی) را «تغییر محلی» حساب می‌کرد و با پیام «auto-update paused» متوقف می‌شد؛ برای همین همیشه باید دستی Upgrade from GitHub می‌زدید. حالا فقط تغییرات فایل‌های ردیابی‌شده شمرده می‌شود (git reset --hard هیچ‌وقت فایل ردیابی‌نشده را پاک نمی‌کند) و یک .gitignore ریشه هم اضافه شد تا پوشه‌های ساخت و داده اصلاً دیده نشوند. به‌روزرسانی خودکار حالا واقعاً خودکار است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۶.۰</time><br><b>جدول رنگی پیش‌نمایش هماهنگ‌سازی:</b> پیش‌تر دکمهٔ «پیش‌نمایش هماهنگ‌سازی» فقط یک متن JSON خام نشان می‌داد. حالا یک جدول ماتریسی است: هر سطر یک محصول و هر ستون یک مقصد (ووکامرس و تک‌تک غرفه‌های باسلام). رنگ هر سلول وضعیت همان محصول در همان مقصد را می‌گوید: سبز = هماهنگ، نارنجی = اختلاف قیمت (قیمت فعلی ← قیمت صحیح)، آبی = در مقصد نیست، قرمز = فقط در مقصد، بنفش = قیمت مبدأ ثبت نشده، خاکستری = به این مقصد ارسال نمی‌شود. هر سلول علاوه بر رنگ، نشانه (✓ ≠ + ! ?) و برچسب فارسی دارد تا فقط به رنگ متکی نباشد، و با نگه‌داشتن ماوس جزئیات کامل (مبدأ، انتظار، مقصد و علت) را نشان می‌دهد. ستون نام محصول هنگام پیمایش افقی ثابت می‌ماند، مشکل‌دارترین محصولات بالا می‌آیند، و راهنمای رنگ‌ها بالای جدول نمایش داده می‌شود. تا وقتی دکمهٔ «اجرا و هماهنگ‌سازی» را نزده‌اید هیچ تغییری در مقصدها ثبت نمی‌شود؛ پس از اجرا هم همین جدول با وضعیت واقعی پس از هماهنگ‌سازی دوباره نشان داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۳.۰</time><br><b>رفع خطای ECONNREFUSED 127.0.0.1:5432 در ترماکس، چراغ قرمز وضعیت و استخراج صفر محصول:</b> در ترماکس با هر بار تازه‌سازی صفحه، خطای connect ECONNREFUSED 127.0.0.1:5432 ظاهر و محو می‌شد و چراغ وضعیت هرگز سبز نمی‌شد. علت: نصب‌کننده برای ترماکس همیشه DATABASE_URL را به PostgreSQL محلی (postgresql://USER@localhost:5432/scraper4) تغییر می‌داد، در حالی که روی گوشی هیچ سرور PostgreSQL نصب نیست. چهار اصلاح: ۱) ترماکس مانند ویندوز به‌صورت پیش‌فرض از SQLite داخلی Node (data/scraper4.sqlite) استفاده می‌کند و هیچ سرویسی لازم نیست؛ اگر خودتان PostgreSQL تنظیم کرده باشید همچنان محترم است. ۲) اگر فایل .env.local قبلاً خراب شده باشد، برنامه هنگام رد شدن اتصال به PostgreSQL محلی، به‌صورت خودکار به SQLite سوئیچ می‌کند (فقط برای دیتابیس محلی؛ دیتابیس راه دور عمداً خطا می‌دهد تا داده‌های واقعی پنهان نشود). ۳) پیام خطای دیتابیس دیگر خالی نیست: AggregateError کتابخانهٔ pg باز می‌شود و دلیل واقعی همراه راه‌حل نمایش داده می‌شود. ۴) خطای دیتابیس دیگر پس از ۶ ثانیه محو نمی‌شود و چراغ وضعیت دقیقاً علت قرمز بودن را نشان می‌دهد. راهنمای ترماکس و کارت PostgreSQL آن نیز به‌روز شد. ۵) استخراج صفر محصول در barfbox: انتخابگر بصری مسیر کامل سند (section.grid > div.card:nth-of-type(1) > …) ذخیره می‌کرد؛ اما استخراج فقط داخل هر کارت را جستجو می‌کند، پس هیچ کارتی عنوان پیدا نمی‌کرد و نتیجه صفر می‌شد، در حالی که بررسی نشانه‌ها (کل صفحه) سبز بود. حالا مسیرهای مطلق داخل هر کارت دوباره لنگر می‌شوند. ۶) سلکتور ظرف که با :nth-of-type(1) فقط یک کارت را می‌گرفت، خودکار به همهٔ کارت‌ها گسترش می‌یابد (در نود و در Cloudflare Worker). ۷) انتخابگر بصری از این پس سلکتور ظرف را تکرارشونده و سلکتور فیلدها را نسبی به ظرف ذخیره می‌کند. ۸) گزارش عیب‌یابی دیگر عدد متناقض نمی‌دهد و تعداد واقعی ظرف‌های استفاده‌شده را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۱.۰</time><br><b>رفع خطای «پیدا نشد ۴۰۴» همهٔ دکمه‌های عیب‌یابی در ترموکس و هر اجرای نود:</b> دکمهٔ «عیب‌یابی استخراج» و بقیهٔ ابزارهای عیب‌یابی فقط روی Cloudflare Worker پیاده‌سازی شده بودند و روی نسخهٔ نود اصلاً مسیری برایشان ثبت نشده بود؛ به همین دلیل با اینکه پیش‌نمایش سلکتور بصری همان سایت را بدون مشکل باز می‌کرد، هر کلیک روی دکمه‌های عیب‌یابی خطای ۴۰۴ می‌داد. با مقایسهٔ مسیرهای ثبت‌شدهٔ دو محیط، سیزده مسیر که داشبورد صدا می‌زد ولی روی نود وجود نداشت شناسایی و اضافه شد: عیب‌یابی استخراج پروفایل، دیباگ جامع، پیشنهاد خودکار سلکتور، تاریخچهٔ ورود اطلاعات و پاک‌کردن آن، اولویت‌بندی کارها و اجراها، فهرست ابزارهای دستیار، کاتالوگ مدل‌های Workers AI و ورود داده‌های یادگیری دسته‌بندی. عیب‌یاب استخراج روی نود همان pipeline واقعی اسکرپر را اجرا می‌کند (دریافت صفحه، استخراج فهرست، بررسی نشانهٔ سلکتورها و استخراج جزئیات) و موتور برنده را هم گزارش می‌دهد، بنابراین گزارش دقیقاً همان چیزی است که در اجرای واقعی رخ می‌دهد. دیباگ جامع هم مخصوص نود بازنویسی شد: به‌جای بررسی D1 و بایندینگ‌های کلودفلر که در گوشی معنایی ندارند، پایگاه‌دادهٔ واقعی در حال استفاده، کامل‌بودن جدول‌ها، ردیف‌های یتیم، کارهای گیرکرده و نبودِ مرورگر روی اندروید را گزارش می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۹۰.۰</time><br><b>رفع سه ایراد ترموکس: به‌روزرسانی خودکار همراه با ساخت، اجرای واقعی تست مدل‌های هوش مصنوعی، و استخراج‌نشدن پروفایلی که در کلودفلر کار می‌کند:</b> اول، دیپلویر وقتی نسخهٔ تازه‌ای روی شاخه می‌دید کد را می‌گرفت و خودش را دوباره راه‌اندازی می‌کرد، اما اسکرپر را خاموش‌شده رها می‌کرد و کاربر مجبور بود دستی دکمهٔ ساخت و اجرا را بزند؛ حالا اگر اسکرپر در حال اجرا باشد پس از به‌روزرسانی خودکار دوباره بالا می‌آید و چون فرمان اجرای آن با render:build شروع می‌شود، هم دیپلویر و هم اسکرپر با کد جدید ساخته می‌شوند و کاربر فقط کافی است صفحهٔ اسکرپر را تازه کند. دوم، در ترموکس تست مدل‌ها هرگز شروع نمی‌شد و رابط کاربری همیشه «در صف سرور» را نشان می‌داد؛ علت این بود که نسخهٔ نود اصلاً موتور اجرای پس‌زمینه نداشت و آدرس ‎/api/ai/test-runs/current‎ همیشه مقدار خالی برمی‌گرداند، در حالی که مدل‌ها واقعاً آزمایش می‌شدند ولی هیچ گزارشی از پیشرفت ثبت نمی‌شد؛ حالا نسخهٔ نود هم دقیقاً مثل Worker یک اجرای واقعی با وضعیت صف، در حال اجرا و پایان‌یافته می‌سازد و پیشرفت مدل‌به‌مدل، توقف و ادامه را گزارش می‌کند. سوم، پروفایلی که در کلودفلر به‌راحتی محصول استخراج می‌کرد در ترموکس هیچ محصولی نمی‌داد، چون در حالت خودکارِ نسخهٔ نود موتور htmlrewriter اصلاً امتحان نمی‌شد و نوبت به مرورگرهایی می‌رسید که روی اندروید نصب نیستند؛ حالا ترتیب موتورها با Worker یکسان است و موتور ذخیره‌شدهٔ پروفایل هم در ابتدای صف قرار می‌گیرد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۹.۰</time><br><b>اندازه‌گیری واقعی سهمیهٔ باقی‌ماندهٔ Cloudflare D1 پیش از تمام‌شدن آن:</b> تا امروز برنامه فقط بعد از قطع‌شدن سرویس متوجه اتمام سهمیه می‌شد و پیام خطا نشان می‌داد. کلودفلر هیچ API برای گفتنِ «چقدر سهمیه مانده» در اختیار Worker نمی‌گذارد، اما هر کوئری D1 در پاسخ خود دقیقاً گزارش می‌دهد که چند سطر خوانده و چند سطر نوشته است؛ همین دو عدد واحد محاسبهٔ سهمیه در پلن رایگان هستند: روزانه ۵ میلیون سطر خواندن و ۱۰۰ هزار سطر نوشتن، با ریست ۰۰:۰۰ UTC. قبلاً این اطلاعات دور ریخته می‌شد. اکنون همهٔ کوئری‌ها شمارش می‌شوند و مصرف امروز در بخش فعالیت‌ها با دو نوار پیشرفت نمایش داده می‌شود که زیر ۷۰ درصد سبز، از ۷۰ درصد زرد و از ۹۰ درصد قرمز می‌شود. مسیر جدید /api/quota هم همین اعداد را همراه مقدار باقی‌مانده، درصد مصرف و زمان دقیق ریست برمی‌گرداند. نکتهٔ مهم: خودِ شمارنده نباید به مشکل اضافه کند، بنابراین در حافظه جمع می‌شود و حداکثر یک‌بار در دقیقه ذخیره می‌گردد، نه به‌ازای هر کوئری. محدودهٔ اندازه‌گیری صادقانه اعلام می‌شود: این عدد فقط مصرف همین Worker است و مصرف داشبورد کلودفلر، wrangler یا Workerهای دیگرِ همان پایگاه داده در آن دیده نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۸.۰</time><br><b>رفع خطای «ابتدا ADMIN_TOKEN را تعریف کنید» هنگام درون‌ریزی روی ترموکس و ساخت خودکار کلید:</b> روی اجراگر Node، متغیر ADMIN_TOKEN دو کار متفاوت را هم‌زمان انجام می‌داد: هم رمز عبور صندوق رمزنگاری اطلاعات اتصال بود و هم توکن ورود به API. در ترموکس و ویندوز معمولاً این متغیر تعریف نشده است؛ در آن حالت API عمداً بدون احراز هویت باز می‌ماند، اما صندوق هنگام ذخیره خطا می‌داد. نتیجه این بود که خواندن اطلاعات کار می‌کرد ولی هر درون‌ریزی یا ذخیره‌ای با پیام «برای ذخیره امن اطلاعات اتصال، ابتدا ADMIN_TOKEN را ... تعریف کنید» شکست می‌خورد. اکنون اگر ADMIN_TOKEN تعریف نشده باشد، برنامه خودش یک کلید تصادفی ۳۲ بایتی می‌سازد و آن را در فایل data/vault.key با دسترسی فقط مالک ذخیره می‌کند؛ این فایل در data قرار دارد که در گیت نادیده گرفته می‌شود و در راه‌اندازی‌های بعدی همان کلید دوباره استفاده می‌شود تا اطلاعات ذخیره‌شده خوانا بمانند. نکتهٔ امنیتی مهم: عمداً ADMIN_TOKEN ساخته نمی‌شود، چون ساختن آن باعث می‌شد احراز هویت API ناگهان روشن شود و کاربر از داشبورد خودش بیرون بماند؛ کلید تولیدشده فقط رمز صندوق است و هرگز به‌عنوان توکن ورود پذیرفته نمی‌شود. اگر ADMIN_TOKEN را خودتان تعریف کرده باشید، دقیقاً مثل قبل همان استفاده می‌شود و هیچ فایل کلیدی ساخته نمی‌شود. متن خطاها هم اصلاح شد؛ پیام قبلی جملهٔ فارسی و انگلیسی را به‌هم چسبانده بود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۷.۰</time><br><b>رفع کار نکردن دکمه‌ها در آدرس http://localhost:8790/scraper/ در ترموکس:</b> صفحه باز می‌شد ولی هیچ دکمه‌ای کار نمی‌کرد، در حالی که همان صفحه روی http://localhost:3000/ درست بود. علت: داشبورد همهٔ آدرس‌ها را به‌صورت مطلق صدا می‌زد «مثلاً درخواست مستقیم به /api/profiles»؛ وقتی صفحه زیر مسیر /scraper/ باز می‌شد، مرورگر این آدرس‌ها را نسبت به ریشهٔ سایت حل می‌کرد و درخواست به‌جای اسکرپر به خودِ دیپلویر می‌رسید و با خطای ۴۰۱ رد می‌شد. پروکسی دیپلویر برای این حالت به هدر Referer تکیه کرده بود، اما اسکرپر هدر referrer-policy: no-referrer می‌فرستد و مرورگر اصلاً Referer نمی‌فرستد؛ به همین دلیل حتی بارگذاری /dashboard.js و فونت‌ها هم ۴۰۱ می‌شد. اکنون داشبورد مسیر نصب خود را از روی آدرس صفحه تشخیص می‌دهد و همهٔ درخواست‌ها (API، health، فونت‌ها، انتخاب‌گر بصری و خود dashboard.js) نسبی می‌شوند، و آدرس /scraper بدون اسلش پایانی به /scraper/ هدایت می‌شود. رفتار روی پورت ۳۰۰۰ و روی Cloudflare هیچ تغییری نمی‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۶.۰</time><br><b>حذف نام Render از پیام‌های محیط‌هایی که اصلاً Render نیستند:</b> اجراگر Node یک بیلد مشترک است که روی ترموکس، ویندوز، VPS، Codespaces و Render اجرا می‌شود، اما نام Render در متن خطاها و راهنماها ثابت نوشته شده بود. به همین دلیل کاربر ترموکس پیام‌هایی مثل «ADMIN_TOKEN را در Render تعریف کنید» یا «Create Render PostgreSQL» می‌دید، مسیر /api/version مقدار local-node-render برمی‌گرداند، فایل بکاپ با نام scraper4-render ساخته می‌شد و صفحهٔ خطای پایگاه داده خود را «Termux/Render» معرفی می‌کرد. اکنون محیط واقعی تشخیص داده می‌شود (ترموکس از روی android یا PREFIX، ویندوز، Codespaces، Render و VPS ساده) و هر پیام، راهنمای همان محیط را نشان می‌دهد؛ مثلاً روی ترموکس به‌جای پنل Render، دستور pkg install postgresql یا استفاده از پایگاه دادهٔ داخلی SQLite پیشنهاد می‌شود و کلید در فایل .env.local تعریف می‌شود. در سمت Cloudflare هم پیام موتورهای مرورگر که می‌گفت «از Render/VPS استفاده کنید» به فارسی و با نام همهٔ محیط‌های Node بازنویسی شد. نام فایل بکاپ به scraper4-backup تغییر کرد ولی بکاپ‌های قدیمی با نام scraper4-render همچنان قابل بازیابی‌اند (در Worker هم پذیرفته می‌شوند) و فایل نامعتبر همچنان رد می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۵.۰</time><br><b>رفع خطای «کلید API وارد نشده است» برای همهٔ ارائه‌دهنده‌ها در اجراگر Node (ترموکس/ویندوز/سرور):</b> برخلاف تصور اولیه، ایراد از درون‌ریزی نبود؛ درون‌ریز کلیدها را درست می‌خواند و درست ذخیره می‌کرد. مشکل در خواندن کلید هنگام استفاده بود: هر ارائه‌دهنده می‌تواند کلیدهایش را در فهرست apiKeys نگه دارد (رشتهٔ ساده، یا شیء دارای برچسب مثل {label, token}، یا برای Cloudflare شیء {accountId, token})، اما فایل render-src/ai.ts فقط فیلد تکیِ apiKey را می‌خواند و فهرست apiKeys را کاملاً نادیده می‌گرفت. به همین دلیل هر ارائه‌دهنده‌ای که کلیدش از راه درون‌ریزی یا ویرایشگر چندکلیدی ذخیره شده بود، «بدون کلید» دیده می‌شد و تست همهٔ مدل‌ها برای تک‌تک آن‌ها شکست می‌خورد. اکنون همان منطق Worker در Node هم اجرا می‌شود: اول کلید اختصاصی، بعد اولین کلید فعال از فهرست apiKeys (کلید خاموش‌شده بر کلید فعال ترجیح داده نمی‌شود)، و در آخر کلید مشترک. یک ایراد دوم هم رفع شد: خزانهٔ Node فهرست کلیدها را از نوع «رشته» تعریف کرده بود و هر کلید Cloudflare را به یک توکن خالی تبدیل می‌کرد؛ به این ترتیب شناسهٔ حساب (accountId) در هر بار ذخیره از بین می‌رفت و آدرس سرویس Cloudflare دیگر ساخته نمی‌شد. اکنون شناسهٔ حساب، برچسب و وضعیت روشن/خاموش هر کلید مثل Worker حفظ می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۴.۰</time><br><b>رفع «هیچ محصولی روی ترموکس استخراج نمی‌شود» برای پروفایلی که در کلودفلر کامل کار می‌کند:</b> سه ایراد جداگانه دست‌به‌دست هم داده بودند. ۱) «تست سرعت ۳ صفحه» روی اجراگر Node اصلاً موتور htmlrewriter را آزمایش نمی‌کرد؛ یعنی همان موتوری که روی کلودفلر ۶۶۰ محصول استخراج می‌کند هرگز شانس انتخاب‌شدن نداشت (این موتور روی Node هم پیاده‌سازی شده است). حالا آزمایش می‌شود. ۲) انتخاب موتور برنده فقط براساس «محصول در دقیقه» بود، بنابراین موتور heuristic که تنها ۱ محصول تصادفی پیدا کرده بود برندهٔ آزمایش می‌شد و به‌عنوان موتور پیش‌فرض پروفایل ذخیره می‌شد؛ از آن پس هر استخراج با heuristic اجرا می‌شد و صفر محصول می‌داد. اکنون معیار اول «تعداد محصول» است و اگر بهترین موتور کمتر از ۲ محصول پیدا کند، هیچ‌چیز ذخیره نمی‌شود و تنظیم درست شما دست‌نخورده می‌ماند. ۳) اجراگر Node خودش را با عنوان Scraper4Render/1.0 معرفی می‌کرد و هدرهای مرورگر (accept-language و cache-control) را نمی‌فرستاد، در حالی که Worker یک User-Agent واقعی کروم می‌فرستد؛ بسیاری از فروشگاه‌ها به درخواست ربات صفحهٔ ناقص یا صفحهٔ چالش می‌دهند. حالا هر دو اجراگر دقیقاً یک‌شکل درخواست می‌دهند (با USER_AGENT قابل تغییر است). ضمناً موتورهای مرورگر (Playwright/Puppeteer/Crawlee) روی اندروید بیلد ندارند؛ به‌جای خطای ترسناک دانلود، اکنون «در دسترس نیست» علامت می‌خورند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۴.۰</time><br><b>نمایش زندهٔ مرحلهٔ استخراج جزئیات:</b> تا امروز این مرحله کاملاً بی‌صدا بود: شمارندهٔ کار را به‌روز نمی‌کرد و چیزی ذخیره نمی‌کرد، برای همین کارت صف روی اعداد مرحلهٔ فهرست ثابت می‌ماند و معلوم نبود اصلاً کاری در حال انجام است یا برنامه گیر کرده. حالا مرحلهٔ جزئیات شمارندهٔ خودش را دارد (مثلاً «۴۵ از ۳۰۱») و با هر محصول جلو می‌رود؛ نام هر محصولی که جزئیاتش خوانده می‌شود در گزارش زنده ثبت می‌گردد و قابل کلیک است، و در پایان نوشته می‌شود چند محصول واقعاً تکمیل شدند. خطای هر محصول هم جداگانه با نام همان محصول گزارش می‌شود. برای اینکه این کار خودش به پایگاه‌داده فشار نیاورد، وضعیت هر پنج محصول یک‌بار ذخیره می‌شود نه به‌ازای هر محصول. همچنین نام مرحله‌ها دیگر به‌صورت کلید خام مثل details-save-sync نشان داده نمی‌شود و به فارسی نوشته می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۲۰ · 2026-09-11 · نسخهٔ ۱.۱۲۳.۰</time><br><b>رفع بازگشت دراپ‌داون صفحه‌بندی به گزینهٔ اول و پیاده‌سازی چهار حالت جامانده:</b> داشبورد هفت حالت صفحه‌بندی نشان می‌داد، اما نسخهٔ نود فقط سه حالت (پارامتر page، مسیر page/2/ و بدون صفحه‌بندی) را می‌پذیرفت؛ هر انتخاب دیگری هنگام ذخیره بی‌صدا به «پارامتر page» تبدیل می‌شد. برای همین دراپ‌داون به گزینهٔ اول برمی‌گشت و فقط یک صفحه استخراج می‌شد. حالا هر هفت حالت هم پذیرفته و هم واقعاً پیاده‌سازی شده‌اند: پارامتر سفارشی، الگوی مسیر با {page}، الگوی کامل URL و «دکمهٔ صفحهٔ بعد». حالت «دکمهٔ صفحهٔ بعد» آدرس قابل‌محاسبه ندارد؛ بنابراین لینک بعدی از خودِ همان صفحه (بدون درخواست اضافه) خوانده می‌شود و اگر پیدا نشود، صفحه‌بندی با پیام روشن پایان می‌یابد. نکته برای سایت شما: آدرس‌هایی مثل page/2/ با گزینهٔ سادهٔ «مسیر page/2/» هم کار می‌کنند و نیازی به سلکتور a.next نیست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۳.۰</time><br><b>رفع ریشه‌ای شکست ساخت اسکریپر روی ترموکس (خطای «cannot find esbuild» و کد خروج ۱):</b> دکمهٔ «باز کردن اسکریپر» روی ترموکس با خطای پراکسی شکست می‌خورد و لاگِ تشخیصیِ نسخهٔ ۱.۸۲.۰ نشان داد علت واقعی چیز دیگری بوده است: دستور render:build اجرا نمی‌شد چون esbuild بارگذاری نمی‌شد، پس فایل render-dist/server.js ساخته نمی‌شد، اسکریپر با کد ۱ بسته می‌شد و پراکسی خطا می‌داد. ریشهٔ مشکل در خودِ کد ما بود: ترموکس سیستم‌عامل خود را android گزارش می‌کند، اما بارگذارِ esbuild فقط ویندوز، مک و لینوکس را می‌شناخت؛ برای android هیچ بسته‌ای برنمی‌گرداند، بنابراین «تعمیر خودکار» عملاً هیچ چیزی نصب نمی‌کرد و همیشه شکست می‌خورد. حتی متن خطا هم به کاربر اندرویدی می‌گفت نصب «ویندوز» خود را درست کند. اکنون سه اصلاح انجام شده است: ۱) بستهٔ درست اندروید شناسایی و نصب می‌شود (@esbuild/android-arm64 و معادل‌های arm و x64)؛ ۲) اگر نسخهٔ بومی به هر دلیلی در دسترس نباشد (حتی بدون اینترنت)، ساخت به‌جای شکست، با نسخهٔ WebAssembly یعنی esbuild-wasm انجام می‌شود که به هیچ فایل اجرایی مخصوص سیستم‌عامل نیاز ندارد؛ این بسته از این پس همیشه نصب می‌شود تا در لحظهٔ نیاز موجود باشد. همچنین اگر esbuild سیستمی روی دستگاه نصب باشد (در ترموکس با pkg install esbuild) از همان استفاده می‌شود. ۳) پیام‌های راهنما دیگر مخصوص ویندوز نیستند و روی ترموکس راه‌حل ترموکس را نشان می‌دهند. در آزمایش، ساخت کامل اسکریپر بدون هیچ نسخهٔ بومی esbuild و بدون دسترسی به اینترنت با موفقیت انجام شد و صفحه با کد ۲۰۰ بالا آمد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۲.۰</time><br><b>خطای پراکسی اسکریپر حالا خودش را معرفی می‌کند و دیپلویرِ قدیمی‌مانده هشدار می‌دهد:</b> پیام «Local scraper proxy failed: connect ECONNREFUSED» فقط دو فیلد داشت، بنابراین از روی آن نمی‌شد فهمید که آیا اصلاحیه اصلاً روی دستگاه نصب شده یا نصب شده و کار نمی‌کند. اکنون همان خطا شمارهٔ نسخهٔ دیپلویری که آن را تولید کرده، وضعیت و کد خروج اسکریپر و چند خط آخر لاگ را همراه دارد. مهم‌تر اینکه دیپلویر یک پروسهٔ طولانی‌عمر است و کد خودش را فقط یک‌بار هنگام اجرا می‌خواند؛ بعد از هر به‌روزرسانی گیت، فایل‌های روی دیسک عوض می‌شوند ولی همان پروسه همچنان کد قدیمی را اجرا می‌کند و باگ‌های ازقبل‌رفع‌شده را دوباره نشان می‌دهد. حالا نسخهٔ روی دیسک با نسخهٔ در حال اجرا مقایسه می‌شود و اگر فرق داشته باشند، هم در ترمینال هنگام راه‌اندازی، هم در /api/status و هم داخل خودِ متن خطا هشدار داده می‌شود که باید دیپلویر را ری‌استارت کنید (Ctrl+C و سپس npm run deployer:ui).</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۹ · ۲۰۲۶-۰۹-۱۰ · نسخهٔ ۱.۸۱.۰</time><br><b>رفع ریشه‌ای «چرا اصلاحیه به دستگاه نمی‌رسد»: قفل‌فایل ناهماهنگ، به‌روزرسانی خودکار را برای همیشه متوقف می‌کرد:</b> شمارهٔ نسخه در package-lock.json روی ۱.۷۶.۰ جا مانده بود، بنابراین هر بار npm install آن فایل را بازنویسی می‌کرد و درخت کاری همیشه «تغییر ذخیره‌نشده» داشت. به‌روزرسان خودکار دیپلویر (درست و عمدی) روی درخت کثیف اجرا نمی‌شود تا با git reset --hard کار کاربر را از بین نبرد؛ نتیجه این بود که روی هر دستگاهی که یک‌بار وابستگی نصب کرده بود (یعنی همهٔ دستگاه‌ها، از جمله ترموکس) هیچ‌وقت نسخهٔ جدید نصب نمی‌شد و کاربر همچنان خطای قدیمی ECONNREFUSED را می‌دید، حتی بعد از انتشار اصلاحیهٔ نسخهٔ ۱.۸۰.۰. اکنون سه کار انجام شد: قفل‌فایل با نسخهٔ واقعی هماهنگ شد، اسکریپت version:sync آن را برای همیشه هم‌گام نگه می‌دارد و npm run version:check اگر دوباره جدا بیفتد تست را قرمز می‌کند، و به‌روزرسان خودکار تغییرِ صرفاً مربوط به package-lock.json را «سروصدای ماشین» می‌شناسد و آن را برمی‌گرداند؛ هر تغییر واقعی دیگری همچنان به‌روزرسانی را متوقف می‌کند تا کار کاربر حفظ شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۸۰.۰</time><br><b>رفع خطای ECONNREFUSED هنگام زدن دکمهٔ «باز کردن اسکریپر» در دیپلویر (به‌ویژه ترموکس):</b> دکمهٔ باز کردن اسکریپر درخواست را به 127.0.0.1:3000 پراکسی می‌کرد؛ اگر اسکریپر هنوز اجرا نشده بود، دیپلویر آن را استارت می‌زد ولی بدون هیچ انتظاری بلافاصله وصل می‌شد. چون فرمان اسکریپر اول render:build را اجرا می‌کند و این روی ترموکس/ARM ده‌ها ثانیه طول می‌کشد، پورت هنوز باز نبود و کاربر پیام خام «Local scraper proxy failed: connect ECONNREFUSED 127.0.0.1:3000» می‌گرفت؛ در حالی که اسکریپر خراب نبود و فقط در حال ساخته‌شدن بود. اکنون پراکسی تا آماده شدن پورت صبر می‌کند (پیش‌فرض تا ۱۸۰ ثانیه، قابل تنظیم با LOCAL_SCRAPER_PROXY_WAIT_MS) و بدنهٔ درخواست هم حفظ می‌شود تا درخواست‌های POST از بین نروند. یک ایراد دوم هم رفع شد: اگر اسکریپر یک‌بار خطا می‌داد و بسته می‌شد، نگهبانِ startScraper به‌اشتباه فکر می‌کرد هنوز در حال اجراست و هیچ کلیکی دیگر آن را دوباره اجرا نمی‌کرد؛ حالا اسکریپر بسته‌شده دوباره استارت می‌خورد. در صورت شکست واقعی هم به‌جای خطای خام، کد خروج، دلیل و چند خط آخر لاگ اسکریپر نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۹.۰</time><br><b>درون‌ریزی کامل فایل واقعی ارائه‌دهنده‌ها: حفظ نشانه‌های هر مدل، سازنده و همهٔ کلیدهای فعال:</b> در فایل خروجی، هر مدل یک شیء با نشانه‌های خودش است (reasoning برای مدل استدلالی و nonChat برای مدلی که گفت‌وگو نیست، مانند مدل تولید تصویر)، هر ارائه‌دهنده یک vendor دارد و کلیدها با برچسب و کلید روشن/خاموش ذخیره می‌شوند. درون‌ریزی همهٔ این‌ها را دور می‌ریخت و فقط شناسهٔ مدل را نگه می‌داشت؛ نتیجه این بود که مدل استدلالی (مثلاً mistral-small-latest که از روی نامش قابل تشخیص نیست) با بودجهٔ پاسخ کوتاه و temperature اجرا می‌شد و پاسخش نیمه‌کاره می‌ماند، مدل غیرگفت‌وگویی به‌جای «کنار گذاشته شد» با خطا شکست می‌خورد، و کلیدی که کاربر عمداً خاموش کرده بود دوباره روشن وارد می‌شد. اکنون همهٔ این نشانه‌ها هنگام درون‌ریزی خوانده و در خزانه ذخیره می‌شوند (هر دو اجراگر Worker و Node)، کلید خاموش وارد نمی‌شود و حساب Cloudflare با هر دو کلیدش وارد می‌شود. همچنین فهرست مدل‌ها به‌صورت شیء (id/name) و نقشهٔ ارائه‌دهنده‌ها بدون کلید providers و آدرس کامل chat/completions مانند قبل پشتیبانی می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۸.۰</time><br><b>رفع خطای «کلید API وارد نشده است» پس از درون‌ریزی فایل ارائه‌دهنده‌ها:</b> درون‌ریزی فقط سه نام apiKey و api_key و keyValue را می‌شناخت؛ اگر فایل کلید را با نام key، token، apiToken، secret یا authorization ذخیره کرده بود، یا کلیدها در یک نقشهٔ جداگانه (مثل keys یا credentials) بودند، همهٔ ارائه‌دهنده‌ها بدون کلید وارد می‌شدند و تست همهٔ مدل‌ها شکست می‌خورد. اکنون این نام‌ها و ساختارهای تودرتو پشتیبانی می‌شوند، پیشوند Bearer حذف می‌شود، و نقشهٔ جداگانهٔ کلیدها بر اساس شناسه یا نام ارائه‌دهنده خوانده می‌شود. همچنین گزارش درون‌ریزی اکنون هشدار می‌دهد کدام ارائه‌دهنده‌ها بدون کلید وارد شده‌اند (سرویس‌های محلی مانند Ollama که کلید لازم ندارند مستثنا هستند).</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۷.۰</time><br><b>رفع خطای «کلید API وارد نشده است» در تست همهٔ مدل‌ها:</b> منوی همبرگری یک «آدرس سرویس» و «کلید API» مشترک ذخیره می‌کند، اما فهرست ارائه‌دهنده‌ها این کلید را نادیده می‌گرفت؛ به همین دلیل حتی وقتی کلید را درست وارد کرده بودید، تست همهٔ مدل‌ها برای تک‌تک آن‌ها با خطای ناقص بودن تنظیمات شکست می‌خورد. اکنون اگر ارائه‌دهنده کلید اختصاصی نداشته باشد، کلید مشترک به‌کار می‌رود؛ البته فقط وقتی هر دو به یک سرویس (همان دامنه) اشاره کنند تا کلید یک سرویس به سرویس دیگر درز نکند. آدرس سرویس مشترک هم به همین شکل جایگزین می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۶.۰</time><br><b>رفع خطای جاوااسکریپت دیپلویر و مستقل شدن اسکرپر:</b> قالب صفحهٔ دیپلویر به String.raw تبدیل شد؛ پیش از این مسیر ویندوزی «%TEMP%\» کوتیشن را escape می‌کرد، کل اسکریپت با SyntaxError از کار می‌افتاد و هیچ دکمه‌ای کار نمی‌کرد. اکنون اسکرپر همراه نصب/به‌روزرسانی دیپلویر به‌صورت خودکار ساخته و اجرا می‌شود و آدرس آن (http://localhost:3000/ بدون توکن) درست زیر آدرس دیپلویر در ترمینال چاپ می‌شود؛ اسکرپر پروسهٔ جداگانه است و با بستن دیپلویر خاموش نمی‌شود، و دیپلویرِ دوباره اجراشده اسکرپرِ در حال اجرا را می‌پذیرد. همچنین هر دو به‌روزرسان خودکار دیگر روی تغییرات commit نشده «git reset --hard» نمی‌زنند و کار محلی را از بین نمی‌برند. کلیدها: LOCAL_SCRAPER_AUTOSTART و LOCAL_SCRAPER_STOP_WITH_UI.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۵.۰</time><br><b>اصلاح استخراج پروفایل «US Apple Store» و رفع خرابی JSON پروفایل‌های پیش‌فرض:</b> متن SCHEMA به String.raw تبدیل شد؛ پیش از این هر \\" داخل JSON پروفایل‌های پیش‌فرض به " تبدیل می‌شد و هر ۶ پروفایل نمونه بدون هیچ سلکتوری بارگذاری می‌شدند و هیچ محصولی استخراج نمی‌کردند. سلکتور ظرف اپل دیگر «section li» نیست (منوی سراسری و فهرست‌های راهنمای خرید را هم می‌گرفت)، سلکتور لینک به مسیر محصول محدود شد و موتور روی htmlrewriter ثابت شد. همچنین موجودیت‌های HTML در عنوان/قیمت رمزگشایی می‌شوند (مثلاً &amp;amp; → &) و قیمت‌هایی مانند $1,099.00 دیگر ۱۰۹۹۰۰ خوانده نمی‌شوند. مهاجرت 0006 پروفایل ذخیره‌شدهٔ قبلی را هم اصلاح می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۴.۱</time><br><b>حذف پاپ‌آپ «استخراج بک‌اند در صف قرار گرفت»</b><br>پس از زدن دکمهٔ استخراج، یک پنجرهٔ مودال باز می‌شد که باید دستی بسته می‌شد و جلوی دیدن فهرست کارها را می‌گرفت؛ چون شروع کار عملیات خطرناکی نیست، اکنون پیام کوتاه غیرمزاحم (همان نوار اطلاع‌رسانی بالا) نمایش داده می‌شود و جزئیات کامل در کادر خروجی می‌ماند. وضعیت و دکمهٔ توقف همان‌جا در فهرست کارها در دسترس است. اگر شروع استخراج شکست بخورد، همچنان پنجرهٔ خطا نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۸ · ۲۰۲۶-۰۹-۰۹ · نسخهٔ ۱.۷۴.۰</time><br><b>جدول مغایرت‌گیری مبدأ و مقصد + پیام خطای دقیق در تست مدل‌ها</b><br>۱) تست همهٔ مدل‌ها برای هر ردیف پیام کلی «تنظیمات ارائه‌دهنده/مدل کامل نیست» را نشان می‌داد و معلوم نبود کدام مورد کم است؛ علت: ارائه‌دهنده‌های پیش‌فرض (مانند OpenRouter) با فهرست مدل ولی بدون کلید API ساخته می‌شوند. اکنون دقیقاً نوشته می‌شود که آدرس سرویس، مدل یا کلید API کدام‌یک ثبت نشده و آن ردیف به‌جای شکست، «رد‌شده» علامت می‌خورد (Ollama محلی بدون کلید مجاز است). ۲) جدول مغایرت‌گیری نسخهٔ ۱۰.۱۷۰ پیاده شد: هر محصول دقیقاً در یک دسته قرار می‌گیرد: یکسان، مغایرت قیمت (از ← به)، اضافی در مقصد، در مقصد نیست، بدون قیمت مبدأ. تطبیق عنوان با همان نرمال‌ساز فارسی و حذف پسوند «(کد: ۱۲۳)» انجام می‌شود، و اگر عنوان در مقصد دستی عوض شده باشد از طریق sku و شناسهٔ ثبت‌شده هم تطبیق می‌خورد. دو دکمهٔ «جدول مغایرت» در کارت مغایرت‌گیری اضافه شد و مسیر API جدید /api/maintenance/recon-table/&lt;target&gt; در هر دو اجراگر (Worker و Node) فعال است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۳.۰</time><br><b>هم‌سان‌سازی متن فارسی و توقف حلقهٔ بی‌پایان ادامهٔ خودکار (هم‌ترازی با scraper4.php v10.170)</b><br>۱) نرمال‌ساز متن فارسی تا پیش از این فقط ی/ک را یکدست می‌کرد و حروف عربی ة، ۀ، أ، إ، ؤ و اعراب (ـَُِّ) را رها می‌کرد؛ به همین دلیل یک محصول با دو املای متفاوت دو محصول جداگانه دیده می‌شد و دسته‌بندی، حذف تکراری و پاسخ‌گوی خودکار اشتباه عمل می‌کردند. اکنون هر ۹ نقطهٔ برنامه از یک نرمال‌ساز مشترک استفاده می‌کنند که عیناً مانند suffixTextNormalize عمل می‌کند (فاصلهٔ مجازی، NBSP و ZWJ هم جداکننده حساب می‌شوند). ۲) نگهبان پرونده‌های متوقف تا پیش از این یک کار گیرکرده را بی‌نهایت بار دوباره صف می‌کرد؛ اکنون مانند نسخهٔ PHP اثرانگشت پیشرفت ثبت می‌شود و پس از ۵ تلاش بدون پیشرفت، پرونده با وضعیت «no-progress» متوقف می‌شود تا منابع هدر نرود؛ زدن دکمهٔ ادامه یا ریست، شمارنده را صفر می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۲.۰</time><br><b>فایل اجرای دابل‌کلیکی ویندوز، حذف پاپ‌آپ‌های مزاحم و رفع چند باگ ریشه‌ای</b><br>فایل دانلودی ویندوز تا پیش از این فقط .ps1 بود و ویندوز فایل‌های .ps1 را با دابل‌کلیک اجرا نمی‌کند (آن‌ها را در Notepad باز می‌کند) و سیاست پیش‌فرض ExecutionPolicy هم اجرای اسکریپت دانلودی را می‌بندد؛ اکنون همراه آن یک فایل «scraper4-install-windows-RUN-ME.cmd» ساخته می‌شود که با دابل‌کلیک اجرا می‌شود، خودِ نصب‌کننده را درون خود دارد، آن را با ExecutionPolicy Bypass اجرا می‌کند و پنجره را باز نگه می‌دارد تا خروجی خوانده شود. باگ مهم دیگری در تشخیص esbuild رفع شد: بررسی قبلی فقط import می‌کرد و چون esbuild باینری خود را تنها هنگام اولین build بارگذاری می‌کند، خطای واقعی ویندوز («Cannot find esbuild») اصلاً تشخیص داده نمی‌شد و مسیر تعمیر خودکار هرگز اجرا نمی‌شد؛ حالا با یک transform آزمایشی بررسی می‌شود. تنظیمات ذخیره‌شدهٔ دیپلویر در .env.local هنگام راه‌اندازی خوانده نمی‌شد و بعد از هر بار ری‌استارت به پیش‌فرض برمی‌گشت؛ اکنون خوانده می‌شود. مقدار نامعتبر در بازهٔ اسکن باعث NaN و توقف کامل زمان‌سنج می‌شد و گزینهٔ «هرگز» هم به ۱۵ ثانیه گرد می‌شد؛ هر دو رفع شدند. مسیر پایگاه دادهٔ SQLite برای مسیرهای ویندوزی (sqlite:C:\...) و شکل sqlite:/// اصلاح شد. همچنین پاپ‌آپ‌های تأیید مزاحم برای کارهای بی‌خطر و برگشت‌پذیر (پاک‌کردن فرم سلکتورها، پاک‌کردن فهرست کارهای تمام‌شده، تاریخچهٔ درون‌ریزی و ریست اجراها) حذف شدند و در دیپلویر هیچ پاپ‌آپی باقی نماند؛ برای عملیات واقعاً خطرناک مانند حذف پروفایل، حذف محصول مقصد و ارسال پاسخ به مشتریان، تأیید عمداً حفظ شده و دکمهٔ نصب برنچ به جای پاپ‌آپ، دو مرحله‌ای شده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۱.۰</time><br><b>هم‌سان‌سازی خودکار شمارهٔ نسخه در هدر، گزارش تغییرات و دستورالعمل‌ها</b><br>شمارهٔ نسخه در هدر سایت پیش‌تر ثابت و قدیمی مانده بود (۱.۱۶.۰) و با نسخهٔ واقعی برنامه هم‌خوانی نداشت؛ همچنین پاورقی گزارش تغییرات روی ۱.۶۱.۰ و مقدار پیش‌فرض نمایش نسخه روی ۱.۱۰.۰ جا مانده بود. اکنون تنها مرجع نسخه، فیلد version در package.json است و اسکریپت جدید scripts/sync-version.mjs هدر، پاورقی گزارش تغییرات، مقادیر پیش‌فرض Worker و Render، فایل wrangler.toml و شمارهٔ نسخهٔ داخل دستورالعمل نصب همهٔ محیط‌ها را یکجا به‌روز می‌کند. دستور npm run version:check در تست‌ها اجرا می‌شود و اگر جایی از نسخه عقب بماند، تست شکست می‌خورد تا دیگر نسخه‌ها از هم جدا نیفتند. دستورالعمل هر محیط اجرایی (ویندوز PowerShell و Command Prompt، ترموکس، دسکتاپ، VPS، رندر و کلادفلر) نیز متناسب با همین نسخه بازبینی و به‌روز شد. اشکالی هم در دیپلویر رفع شد که بازهٔ اسکن برنچ‌ها را به‌جای ثانیه، میلی‌ثانیه حساب می‌کرد و انتخاب «هر ۵ دقیقه» عملاً هر ۱۵ ثانیه اجرا می‌شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۷۰.۰</time><br><b>دیپلویر: اسکن خودکار همهٔ برنچ‌ها، نصب جدیدترین نسخه و ویندوز بدون PostgreSQL</b><br>دیپلویر به‌صورت پیش‌فرض هر ۱ دقیقه همهٔ برنچ‌های ریپو را از GitHub بررسی می‌کند، شماره نسخهٔ هر برنچ را از package.json می‌خواند و جدیدترین نسخه را خودکار نصب می‌کند. در تب جدید Branches جدولی با ستون‌های برنچ، نسخهٔ موجود در آن برنچ، کامیت، وضعیت و دکمهٔ نصب نمایش داده می‌شود. در ویندوز (PowerShell/Command Prompt) دیگر PostgreSQL لازم نیست: پایگاه دادهٔ پیش‌فرض SQLite داخلی Node است و دکمهٔ پایگاه داده همین تنظیم را خودکار در .env.local می‌نویسد. هنگام بیلد اگر esbuild نصب یا سالم نباشد، خودکار دوباره نصب و بررسی می‌شود تا خطای «Cannot find esbuild» در ویندوز پیش نیاید. دستورهای نصب ویندوز با DATABASE_URL=sqlite و بررسی esbuild به‌روز شدند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>پیش‌فرض‌های AI و دانلود فایل اجرای نصب</b><br>کاتالوگ پیش‌فرض Ollama و OpenRouter با مدل‌های اصلی کاربر اضافه شد تا بدون آپلود دستی در تنظیمات هوش مصنوعی دیده شوند. فرمت JSON شامل کلیدهای provider، فیلد url و مدل‌های object/id نیز پذیرفته می‌شود. کلید API در کد ذخیره نمی‌شود و باید از Secret یا فرم امن وارد شود. در کارت‌های نصب اسکریپر و دیپلویر، دکمهٔ دانلود فایل اجرایی محیط (.ps1/.cmd/.sh/.txt) کنار کپی دستورها اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>هماهنگ‌سازی تست سرعت با استخراج اصلی</b><br>اشکالی رفع شد که وقتی سریع‌ترین موتور تست سرعت به‌عنوان موتور پیش‌فرض ذخیره می‌شد، اجرای اصلی استخراج در مرحلهٔ کشف خودکار با اولین موتور خالی متوقف می‌شد و به موتور انتخاب‌شده نمی‌رسید. اکنون اجرای اصلی مانند تست سرعت تا موتور موفق ادامه می‌دهد و فقط اگر همان موتور انتخاب‌شده هم خروجی نداشت شکست می‌خورد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>رفع خطای npm در بیلد Cloudflare</b><br>نسخهٔ Playwright در package.json و package-lock به آخرین نسخهٔ واقعاً موجود در npm registry یعنی 1.63.0 پین شد و .npmrc برای جلوگیری از دانلود مرورگرها هنگام npm clean-install اضافه شد تا Cloudflare Pages/Workers Build دیگر به دنبال tarball ناموجود playwright-core 1.64.0 نگردد یا در postinstall مرورگرها گیر نکند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>راهنمای نصب ویندوز با انتخاب مسیر نصب</b><br>در بخش نصب/آپدیت، دستورهای جداگانهٔ Windows PowerShell و Command Prompt اضافه شد. هر دو از کاربر مسیر نصب را می‌پرسند، پروژه را همان‌جا clone/update می‌کنند، وابستگی‌ها و مرورگرهای Playwright/Puppeteer را نصب می‌کنند و فایل .env.local را در همان پوشهٔ انتخاب‌شده می‌سازند؛ بنابراین نصب به مسیر پیش‌فرض درایو C محدود نیست.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۹.۰</time><br><b>جزئیات صف و تست سرعت موتورهای استخراج</b><br>کارت‌های صف در صفحهٔ شروع و درون‌ریزی اکنون تعداد صفحات دیده‌شده، تعداد محصولات، میانگین سرعت از شروع اجرا و زمان سپری‌شده را نشان می‌دهند. دکمهٔ «تست سرعت ۳ صفحه» کنار موتور استخراج اضافه شد؛ سه صفحهٔ اول را با موتورهای موجود امتحان می‌کند، سریع‌ترین موتور موفق را در پروفایل ذخیره می‌کند و سرعت/تعداد محصولات هر موتور را کنار گزینه‌های dropdown نمایش می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۴.۰</time><br><b>عیب‌یابی نزدیک موتور استخراج و تست پایدارتر مدل‌های AI</b><br>دکمهٔ عیب‌یابی استخراج به ابتدای صفحهٔ شروع، کنار دراپ‌داون موتور استخراج، اضافه شد و همان پروفایل فعلی را ذخیره و با موتور انتخاب‌شده آزمایش می‌کند. تست مدل‌های هوش مصنوعی اکنون با نمونهٔ سادهٔ انگلیسی «Reply with exactly: SCRAPER4_OK» و مهلت پیش‌فرض ۳۰ ثانیه اجرا می‌شود تا خطای کاذب ناشی از timeout یک‌ثانیه‌ای رخ ندهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۳.۰</time><br><b>رفع استخراج کل صفحه به‌عنوان یک محصول</b><br>موتور metadata دیگر از صفحات دسته‌بندی/لیست محصول یک محصول جعلی با عنوان کل صفحه نمی‌سازد؛ فقط متادیتای واقعی محصول با og:type محصول، تصویر و قیمت معتبر پذیرفته می‌شود. عیب‌یاب استخراج نیز اکنون همان ترتیب واقعی موتورهای استخراج را گزارش می‌کند تا تفاوت بین عیب‌یابی کارت پروفایل و اجرای واقعی کمتر شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۲.۰</time><br><b>استخراج خودکار قبل از سلکتور دستی</b><br>اجرای پروفایل اکنون ابتدا موتورهای کشف خودکار را بدون وابستگی به سلکتورهای دستی امتحان می‌کند و فقط اگر محصولی پیدا نشد به موتور دستی/سلکتورهای ذخیره‌شده برمی‌گردد. وقتی استخراج غیر‌دستی موفق باشد، فقط فیلدهای خالی سلکتورهای دستی فهرست و جزئیات با پیشنهادهای کشف‌شده تکمیل می‌شوند و سلکتورهای کاربر بازنویسی نمی‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۷ · ۲۰۲۶-۰۹-۰۸ · نسخهٔ ۱.۶۱.۰</time><br><b>منوی نسخهٔ جمع‌شونده، پروفایل‌های تست آمریکا/اروپا و فیلتر محصول واقعی</b><br>بخش نسخهٔ کد در منوی همبرگری به آکاردئون‌های نسخه، کتابخانه‌ها، نصب/آپدیت، بکاپ و گزینه‌های legacy تقسیم شد. دو پروفایل آماده برای تست فروشگاه‌های جاوااسکریپتی US/EU افزوده شد: Next.js Commerce shirts و Apple Store iPhone. موتورهای خودکار/هیورستیک و استخراج از داده‌های جاوااسکریپتی اکنون فقط نامزدهایی را می‌پذیرند که در زمینهٔ محصولی عنوان، تصویر و قیمت واقعی داشته باشند تا لینک‌های متفرقه وارد نتایج نشوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۶۰.۰</time><br><b>جلوگیری از صف تکراری و ذخیرهٔ خودکار سلکتورها</b><br>اگر برای یک پروفایل هر نوع کار استخراج یا ارسال در صف/اجرا باشد، کار تکراری ساخته نمی‌شود تا همان کار تمام شود یا واقعاً از حد ماندگاری عبور کند. استخراج پس از لیست موفق، مرحلهٔ جزئیات را اجرا می‌کند و سلکتورهای تشخیص‌داده‌شدهٔ لیست/جزئیات به‌صورت خودکار در تب سلکتورها ذخیره می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۹.۰</time><br><b>ارسال باسلام با اولویت SDK و fallback API</b><br>مسیر همگام‌سازی باسلام اکنون قبل از API مستقیم، adapter کتابخانهٔ SDK باسلام را امتحان می‌کند؛ اگر SDK در runtime نصب/قابل اجرا نباشد یا متد ایجاد/ویرایش محصول خطا بدهد، همان payload با API رسمی باسلام ارسال می‌شود و در گزارش نتیجه مشخص می‌شود ارسال با SDK بوده یا fallback API.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۸.۰</time><br><b>استعلام زندهٔ کتابخانه‌ها، شروع مطمئن استخراج و حذف نتایج</b><br>اسکریپر و دیپلویر اکنون کتابخانه‌های نصب‌شده/قابل اجرای همان محیط را از API استعلام می‌گیرند. اجرای استخراج تازه، کار فعال گیرکردهٔ قبلی را جایگزین می‌کند و در Render/Local/Termux پردازندهٔ داخلی بلافاصله تحریک می‌شود. در صفحهٔ محصولات هم حذف تک‌نتیجه و حذف همهٔ نتایج یک پروفایل اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۷.۰</time><br><b>اصلاح فهرست کتابخانه‌ها براساس محیط واقعی</b><br>فهرست کتابخانه‌ها دیگر یک لیست عمومی نیست؛ برای Cloudflare Worker فقط runtime ورکر، Hono، D1/Queues و parserهای سازگار نمایش داده می‌شود و Playwright/Puppeteer/Crawlee فقط در محیط‌های Node/Render/VPS/Termux دیده می‌شوند. Deployer هم فهرست را براساس محیط انتخاب‌شده نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۶.۰</time><br><b>فهرست کتابخانه‌های نصب‌شده در اسکریپر و دیپلویر</b><br>در بخش نصب/نسخهٔ اسکریپر و در رابط deployer، کتابخانه‌ها و ابزارهای نصب‌شده براساس نوع نمایش داده می‌شوند: runtime/API، استخراج HTML، مرورگرهای Playwright/Puppeteer/Crawlee، ورودی/بکاپ، ذخیره‌سازی و ابزارهای بیلد/دیپلوی. Termux نیز پکیج‌های سیستمی لازم مانند Chromium و gh را جداگانه نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۵.۰</time><br><b>همسان‌سازی با scraper4.php v10.170</b><br>اجرای محلی/ترموکس دیگر الزاماً به PostgreSQL نیاز ندارد و در نبود DATABASE_URL یک دیتابیس SQLite محلی می‌سازد؛ سلامت نصب نوع دیتابیس را نشان می‌دهد و خودآزمون با PostgreSQL یا SQLite کار می‌کند. این تغییر ادامهٔ منطق ledger محلی v10.170 است تا صف‌ها، پروفایل‌ها، محصولات و checkpointها در اجرای مستقل پایدار بمانند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>جابجایی موتور استخراج، نصب مرورگرهای Termux و اصلاح اجرای تکراری</b><br>دراپ‌داون موتور از کارت‌های فهرست پروفایل حذف شد و به فرم ویرایش پروفایل و بخش شروع کنار مقصد همگام‌سازی منتقل شد. دستورهای Termux اکنون Chromium و نصب Playwright/Puppeteer را هم آماده می‌کنند. اجرای محلی/Termux scraper نیز وضعیت آپدیت را دوره‌ای بررسی می‌کند و پس از آپدیت با کمک deployer دوباره راه‌اندازی می‌شود. اجرای inline/API دیگر استخراج صفرمحصول را موفق نشان نمی‌دهد و تلاش استخراج جزئیات بعد از فهرست محصولات حفظ شده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>اصلاح نسخه در Termux و انتخابگر اختصاصی فایل JSON</b><br>سرور محلی/Termux اکنون شماره نسخه را از package.json در /health، /api/version و /api/activity برمی‌گرداند و صفحهٔ اصلی با no-store سرو می‌شود تا هدر و پنجره‌های نسخه بعد از آپدیت خودکار عدد قدیمی نشان ندهند. برای فایل‌های تنظیمات هم انتخابگر اختصاصی داخل برنامه اضافه شد؛ پس از انتخاب چند فایل از Android/Chrome، خود برنامه JSONها را جدیدترین‌به‌قدیمی‌ترین مرتب می‌کند و امکان فعال‌کردن دقیق فایل دلخواه را می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>کوچک‌سازی هدر چسبان موبایل و افزودن میانبرهای سریع</b><br>هدر ثابت موبایل از حالت بزرگ و مزاحم به نوار فشردهٔ حدود ۳۴ پیکسل تبدیل شد، فاصلهٔ بالای صفحه و ارتفاع تب‌های پایین کمتر شد و میانبرهای کاربردی شروع، استخراج، صف، منو و فعالیت زنده مستقیماً روی هدر قرار گرفتند تا در Termux/موبایل فضای بیشتری برای کار اصلی باقی بماند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>تعداد صفحات پیش‌فرض اتوماتیک و آماده‌سازی آپدیت خودکار Termux</b><br>فیلد تعداد صفحات در شروع و سلکتورها از این نسخه پیش‌فرض ۰ دارد؛ ۰ یعنی استخراج اتوماتیک تا صفحهٔ خالی یا پایان pagination با سقف ایمنی ۱۰۰ صفحه. deployer محلی/Termux نیز به آپدیت خودکار از GitHub مجهز شد تا پس از این نسخه، کد، فایل اسکریپر و خود deployer بدون وارد کردن دستی دستورهای fetch/reset تازه شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>فیلتر JSON و انتخاب جدیدترین فایل در همهٔ انتخابگرهای تنظیمات</b><br>انتخابگرهای فایل تنظیمات کلی، مهاجرت پروفایل/تنظیمات، بکاپ، تنظیمات هوش مصنوعی و یادگیری دسته‌بندی فقط JSON قبول می‌کنند، انتخاب چند فایل را پشتیبانی می‌کنند و داخل برنامه فایل‌های انتخاب‌شده را براساس lastModified از جدیدترین به قدیمی‌ترین مرتب کرده و جدیدترین فایل JSON را برای import استفاده می‌کنند. فایل‌های غیر JSON نادیده گرفته و پیام واضح نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>افزودن دستورالعمل آپدیت کد در deployer و خود اسکریپر</b><br>کارت Update existing clone / Worker به دستورهای نصب اضافه شد و همان دستورها داخل scraper4.ts نیز ثبت شد: تنظیم درست credential.helper، fetch/reset branch ثابت arena/01a0765b-new، نصب مجدد npm و چک نسخه. برای Cloudflare هم مسیر Dashboard → Workers & Pages → Deployments → Redeploy توضیح داده شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>یکسان‌سازی کامل تجربهٔ نصب و دستورها داخل خود اسکریپر</b><br>بخش نسخه/نصب خود برنامهٔ اسکریپر مثل deployer کارت‌های جداگانهٔ VS Code، Termux، دیتابیس Termux، Docker، Render، Cloudflare، VPS و API دارد و برای هر محیط دکمهٔ Copy all اضافه شد. این UI از همان DASHBOARD مشترک استفاده می‌کند، بنابراین در Cloudflare Worker، Termux، Render و اجرای محلی ظاهر و مسیر کار یکسان است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>یکسان‌سازی رابط Termux/Render با Cloudflare Worker</b><br>سرور محلی Node/Termux اکنون همان DASHBOARD و DASHBOARD_JS نسخهٔ Cloudflare Worker را سرو می‌کند و routeهای سازگار پایه مثل /api/activity، /api/version، /api/ai/chat-models و endpointهای ایجنت/تست AI را برای جلوگیری از تفاوت شدید UI فراهم می‌کند. صفحهٔ setup جداگانه به /setup منتقل شد و فونت‌های فارسی نیز در runtime محلی سرو می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>افزودن راهنمای Termux credential و PostgreSQL داخل scraper4.ts</b><br>توضیحات خود فایل اسکریپر با هشدار واضح دربارهٔ مقدار غلط credential.helper و خطای role &quot;postgres&quot; does not exist در Termux به‌روز شد؛ دستورهای نصب PostgreSQL، ساخت DATABASE_URL با $(whoami)، و نمونهٔ خروجی درست نیز داخل فایل و راهنمای نصب آمده است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۵۴.۰</time><br><b>اصلاح اتصال PostgreSQL در Termux</b><br>در Termux دیگر URL پیش‌فرض postgres:postgres استفاده نمی‌شود؛ deployer نام کاربر واقعی Android/Termux را تشخیص می‌دهد و DATABASE_URL مؤثر را به postgresql://USER@localhost:5432/scraper4 تغییر می‌دهد. همچنین اگر .env.local هنوز placeholder HOST یا postgres:postgres لوکال داشته باشد، هنگام اجرای scraper به URL مناسب Termux اصلاح می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۴۴.۰</time><br><b>رفع قطعی اجرا نشدن JavaScript در deployer</b><br>escape شدن newlineهای داخل script خروجی اصلاح شد؛ نسخهٔ قبلی ممکن بود در مرورگر SyntaxError بدهد و صفحه روی Detecting environment بماند. اکنون HTML تولیدشده نیز با parser جداگانه کنترل شد و endpoint وضعیت پاسخ معتبر می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۶ · ۲۰۲۶-۰۹-۰۷ · نسخهٔ ۱.۴۳.۰</time><br><b>رفع گیر کردن deployer روی Detecting environment</b><br>اسکریپت رابط deployer دیگر به globalهای خودکارِ element id مثل status/env/port وابسته نیست، همهٔ handlerها صریحاً روی window ثبت می‌شوند و خطاهای UI داخل لاگ نمایش داده می‌شوند؛ بنابراین دکمه‌های نصب، دیتابیس، scraper و copy دوباره قابل کلیک و پایدار هستند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۴۲.۰</time><br><b>بازطراحی deployer، نصب دیتابیس و کپی یک‌مرحله‌ای دستورها</b><br>deployer محلی با رابط شهودی‌تر بازطراحی شد: محیط اجرا را خودکار تشخیص می‌دهد، کارت وضعیت دیتابیس دارد، برای محیط‌های قابل نصب دکمهٔ Install / connect database اجرا می‌کند و برای Render/Cloudflare/Vercel دستورالعمل پنلی نشان می‌دهد. خطای getaddrinfo ENOTFOUND HOST نیز به‌صورت واضح توضیح داده می‌شود. بخش دستورالعمل‌ها به کارت‌های جداگانه برای VS Code، Termux، دیتابیس Docker، دیتابیس Termux، Render، Cloudflare و API تبدیل شد و هر کارت دکمهٔ Copy all دارد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۴۱.۰</time><br><b>رفع دستور git pull در Termux پس از gh login</b><br>در Termux clone با gh موفق بود، اما git pull هنوز از credential helper خراب استفاده می‌کرد و دوباره Username/Password می‌خواست. دستورالعمل‌ها اکنون پس از ورود GitHub، gh auth setup-git و credential.helper محلی «!gh auth git-credential» را روی ریپوی clone شده تنظیم می‌کنند. دکمهٔ Update from GitHub در deployer محلی هم قبل از fetch همین تنظیم را اعمال می‌کند. همچنین برای خطای ETIMEDOUT npm راهنمای retry/timeout اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۴۰.۰</time><br><b>توقف اجباری کارهای گیرکرده و جلوگیری از ادامهٔ دوبارهٔ توقف دستی</b><br>دکمهٔ توقف در کارت وظیفه اکنون کارهای queued/running را بلافاصله به وضعیت stopped/finished می‌برد و checkpoint آن‌ها را پاک می‌کند؛ بنابراین اگر استخراج روی عددی مثل ۱۲۰ محصول گیر کند، منتظر پایان پردازش داخلی نمی‌ماند. نگهبان خودکار نیز دیگر کارهایی را که کاربر دستی متوقف کرده است دوباره در صف قرار نمی‌دهد و فقط failed یا running واقعاً stale را ادامه می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۹.۰</time><br><b>پذیرش VAULT_TOKEN به‌عنوان alias و پیام دقیق‌تر تنظیم Secret</b><br>اگر در Cloudflare به‌جای VAULT_SECRET اشتباهاً VAULT_TOKEN ساخته شده باشد، Worker اکنون آن را هم برای رمزگذاری vault می‌پذیرد. پیام خطا و صفحهٔ راه‌اندازی نیز دقیق‌تر شد تا روشن باشد نام اصلی Secret باید دقیقاً VAULT_SECRET، با حداقل ۸ کاراکتر و پس از آن Redeploy لازم است.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۸.۰</time><br><b>نمایش سرعت زندهٔ استخراج و API مستقیم استخراج/ارسال</b><br>کارت‌های وظایف استخراج و ارسال اکنون موتور استفاده‌شده و سرعت لحظه‌ای «محصول/دقیقه» را نشان می‌دهند تا مقایسهٔ موتورهای استخراج آسان شود. همچنین endpointهای مستقیم /api/profiles/:id/run، /api/profiles/:id/extract و /api/extract/:id اضافه شد تا با فراخوانی API بتوان محصولات استخراج‌شده را دریافت کرد یا همان درخواست را به ارسال ووکامرس/باسلام/هر دو مقصد تبدیل کرد. دستورهای Termux نیز برای repo خصوصی به gh auth login تغییر کرد، چون GitHub password را قبول نمی‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۷.۰</time><br><b>دستورهای امن‌تر Termux و رفع خطای GitHub password/auth</b><br>بخش دستورالعمل‌های نصب برای Android/Termux بازنویسی شد: اجرای دستورها از HOME، پاک‌کردن clone ناقص، حذف credential helper خراب Termux، استفاده از URL خام بدون Markdown، clone مستقیم روی branch پروژه، و مسیرهای جایگزین gh auth login یا SSH برای مخازن خصوصی اضافه شد. همچنین توضیح داده شد که GitHub دیگر password را برای git clone قبول نمی‌کند و نباید داخل /storage/emulated/0 نصب را ادامه داد.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۶.۰</time><br><b>موتور استخراج داخل پروفایل‌های ذخیره‌شده + ادامهٔ خودکار تسک‌های گیرکرده و ناموفق</b><br>فهرست پروفایل‌های ذخیره‌شده حالا برای هر پروفایل یک dropdown مستقیم «موتور استخراج» دارد؛ انتخاب آن فوری ذخیره می‌شود و همان پروفایل با موتور جدید اجرا می‌شود. نگهبان صف نیز گزینهٔ «ادامهٔ خودکار همه وظایف گیرکرده و ناموفق» دارد که از ابتدا روشن است: تسک‌های failed/stopped و running قدیمی دوباره queued می‌شوند و در Worker و Render/Node به‌صورت پیش‌فرض ادامه پیدا می‌کنند.</div><div class="change-item"><time>۱۴۰۵/۰۶/۱۵ · ۲۰۲۶-۰۹-۰۶ · نسخهٔ ۱.۳۵.۰</time><br><b>اجرای محلی واقعی با deployer اول + مستندسازی نصب در منوی همبرگری</b><br>از این نسخه مسیر محلی مستقل از Cloudflare شفاف شد: ابتدا پنل deployer اجرا می‌شود، سپس کاربر از تب Local scraper دکمهٔ Build & start local scraper را می‌زند و با Open scraper dashboard صفحهٔ اسکرپر Node/Render را در پنجرهٔ جدید باز می‌کند. دستورهای کامل copy-paste برای VS Code، Codespaces، Termux، VPS، Render و Cloudflare نیز در بخش نسخه/نصب منوی همبرگری اضافه شد. همچنین تغییرات اخیر شامل پروفایل‌های آمادهٔ SnappShop و Mantoopatris، موتور مستر هر پروفایل، هم‌ترازی نسخه‌های PHP/Python و تبدیل امن قیمت باسلام به ریال در همین انتشار ثبت شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۴.۰</time><br><b>کاهش ۲ برابری نوشتن‌های D1 در همهٔ اجراهای پس‌زمینه + رفتار هوشمند هنگام پر شدن سهمیه</b><br>چون هر گام از هر اجرای پس‌زمینه به ذخیرهٔ وضعیت در D1 نیاز دارد، وقتی سهمیهٔ روزانهٔ نوشتن (۱۰۰٬۰۰۰ در پلن رایگان، ریست ۰۰:۰۰ UTC) تمام شود، همه‌چیز متوقف می‌ماند. در این نسخه قفل اجرا و آزادسازی قفل (دو نوشتن در هر پیام صف) حذف و به‌جای آن checkpoint هر اجرا با مقایسه‌و‌به‌روزرسانی اتمی (CAS) ذخیره می‌شود: هر پیام صف حالا فقط ۱ نوشتن انجام می‌دهد و دو تحویل هم‌زمان نمی‌توانند یک checkpoint را دوبار پردازش کنند. نتیجه: مصرف نوشتنِ تست مدل‌ها، حذف تکراری‌ها و دسته‌بندی حدود ۲ برابر کمتر می‌شود. اگر باز هم سهمیه تمام شود، اجرا به‌جای تلاش بی‌پایان، تمیز متوقف می‌شود و بعد از ریست ۰۰:۰۰ UTC خودکار ادامه می‌یابد؛ در تسک منیجر بنر «سهمیهٔ نوشتن D1 تمام شده» نمایش داده می‌شود و مصرف‌کنندهٔ صف در این حالت به‌جای retry بی‌نهایت، پیام را می‌بندد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۳.۰</time><br><b>کاهش مصرف سهمیهٔ نوشتن D1 (رفع «you exceeded write operations quota» در حذف تکراری‌ها)</b><br>خطای «you exceeded write operations quota» مربوط به محدودیت پایگاه‌دادهٔ Cloudflare D1 است نه Worker: در پلن رایگان فقط ۱۰۰٬۰۰۰ عملیات نوشتن (INSERT/UPDATE/DELETE) در هر شبانه‌روز دارید که ساعت ۰۰:۰۰ UTC ریست می‌شود و بعد از آن تا فردا هیچ نوشتنی انجام نمی‌شود. حذف تکراری‌ها پرکاربرترین عملیات نوشتن بود: هر پیام صف تقریباً ۴ نوشتن انجام می‌داد (قفل + شروع + پایان + آزادکردن) و فقط ۴ نسخه حذف می‌کرد — یعنی تقریباً ۱ نوشتن به‌ازای هر نسخهٔ تکراری. حالا هر پیام تا ۱۰ نسخه حذف می‌کند (۲.۵ برابر کمتر) و نوشتنِ شروعِ زائد در اجراهای پس‌زمینه (حذف تکراری، دسته‌بندی، تست مدل‌ها) حذف شد؛ مجموعاً مصرف نوشتنِ حذف تکراری‌ها حدود ۳ برابر کمتر می‌شود و تست جدیدی هم تعداد نوشتن‌ها را سقف می‌گیرد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۲.۰</time><br><b>رفع گیرکردن فرآیند تست مدل‌ها + حذف کارها و اجراها از تیم منیجر</b><br>مشکل تست مدل‌ها ریشه در مصرف‌کنندهٔ صف داشت: وقتی چند اجرا/کار در صف بودند، هر پیام صف فقط پراولویت‌ترین را برمی‌داشت و پیام اجراهای دیگر مصرف می‌شد بدون اینکه دوباره به صف برگردد؛ در نتیجه صف خالی می‌شد و اجرای تست مدل‌ها تا دقیقه‌ها متوقف می‌ماند و نگهبان صف آن را «گیرکرده» تشخیص می‌داد و مدل‌ها را رد می‌کرد. حالا اگر اجرای پراولویت نتواند قفل بگیرد (هم‌زمان در حال پردازش باشد)، اجرای همان پیامِ رسیده پردازش می‌شود و اگر اجرایی به‌خاطر اولویت کنار گذاشته شود، پیامش با تأخیر کوتاه دوباره به صف برمی‌گردد تا هیچ اجرایی گرسنه نماند. در تیم منیجر هم دکمهٔ 🗑 کنار هر کار (در صف، در حال اجرا، آخرین کارها) و کنار هر اجرای پس‌زمینه اضافه شد: حذف کار از صف، پاک‌کردن اجرا (تست مدل‌ها، حذف تکراری، دسته‌بندی، ایجنتیک) و دکمهٔ «🗑 پاک‌سازی» برای پاک‌کردن یک‌جا همهٔ کارهای پایان‌یافته؛ کار در حال اجرا قابل حذف نیست و حذف یک کار اولویتِ آن را هم از حافظه پاک می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۱.۰</time><br><b>ذخیرهٔ مطمئن حساب دوم کلودفلر و اطمینان از دوبرابر شدن فهرست تست</b><br>حساب جدید کلودفلر که با «افزودن کلید» اضافه می‌شود، حالا مطمئن ذخیره می‌شود: هر چیزی که در ردیف حساب تایپ کنید فوراً در state ثبت می‌شود تا هیچ به‌روزرسانی فرمی مقادیر را پاک نکند، دکمهٔ «تست» هر حساب مقدار همان ردیف را می‌خواند (نه حساب اول)، و فیلد توکن بالای فرم برای حساب اول مقدار واقعی توکن را نشان می‌دهد. بعد از ذخیره، اگر بیش از یک کلید باشد پیام تأیید «N کلید ذخیره شد؛ هر مدل با پسوند [K۲] و بالاتر جداگانه تست می‌شود» نمایش داده می‌شود و کارت ارائه‌دهنده «N مدل × K کلید = M ورودی تست» را نشان می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۳۰.۰</time><br><b>با افزودن کلید دوم، فهرست تست مدل‌ها دو برابر و با پسوند [K۲]/[K۳] تفکیک می‌شود</b><br>هر مدل یک ارائه‌دهنده، برای هر کلید API آن جداگانه تست می‌شود: کلید دوم به‌بعد هر مدل را با پسوند [K۲]/[K۳] (و با همان کلید خودش) آزمایش می‌کند. در بخش «تست مدل‌ها» خط «ورودی‌های تست» تعداد کل ورودی‌ها (مدل‌ها × کلیدها) را زنده نشان می‌دهد و با روشن/خاموش کردن «فقط کاندیدها» به‌روز می‌شود؛ در پیشرفت زنده، نام آخرین مدل هم پسوند کلیدش را دارد و جدول نتایج هر ردیف را با همان پسوند نشان می‌دهد. باگ ذخیره‌سازی حساب‌های Cloudflare هم رفع شد: هنگام ذخیرهٔ ارائه‌دهندهٔ کلودفلر، Account ID و توکن هر حساب از ردیف‌های خودش خوانده می‌شود (قبلاً حساب اضافه ذخیره نمی‌شد و در نتیجه فهرست تست دو برابر نمی‌شد).</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۹.۰</time><br><b>اولویت‌بندی اجراهای پس‌زمینه با کشیدن + باز کردن پنجرهٔ هر اجرا</b><br>در مدیر وظایف، اجراهای پس‌زمینه (تست مدل‌ها، حذف تکراری، دسته‌بندی، ایجنتیک) هم مثل کارهای صف قابل اولویت‌بندی شدند: با کشیدن یا دکمه‌های ▲▼ ترتیب پردازش آن‌ها را مشخص کنید — اجرای بالایی زودتر پردازش می‌شود و این ترتیب روی سرور ذخیره می‌شود (حتی با بسته بودن مرورگر). با کلیک روی هر اجرا هم وارد پنجرهٔ همان اجرا می‌شوید: تست مدل‌ها به تب «تست مدل‌ها» می‌رود، حذف تکراری پنجرهٔ اجرای زندهٔ خودش را باز می‌کند، دسته‌بندی مودال پیشرفت دسته‌بندی همهٔ تأییدنشده‌ها را نشان می‌دهد و ایجنتیک به تب ایجنتیک می‌رود و لاگ اجرا را باز می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۸.۰</time><br><b>اولویت‌بندی کارها با کشیدن بالا/پایین در مدیر وظایف</b><br>در مدیر وظایف، کارهای در انتظار صف (استخراج/همگام‌سازی) حالا قابل مرتب‌سازی هستند: با گرفتن و کشیدن هر کار (یا دکمه‌های ▲▼ کنار آن) ترتیب اجرا را مشخص کنید — کار بالایی زودتر اجرا می‌شود و رتبهٔ هر کار کنارش نمایش داده می‌شود. این ترتیب روی سرور ذخیره می‌شود و هنگام پردازش صف رعایت می‌شود، حتی وقتی مرورگر بسته است؛ کارهای جدید بعد از کارهای اولویت‌دار می‌نشینند. کار در حال اجرا ثابت می‌ماند و قابل جابه‌جایی نیست.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۷.۱</time><br><b>لیست کشویی ارائه‌دهنده‌ها با هدر چسبان و توضیحات جمع‌شده</b><br>هر ارائه‌دهنده در لیست به‌صورت کارت کشویی (باز/بسته) نمایش داده می‌شود؛ وقتی باز باشد هدر آن هنگام اسکرول به بالای صفحه می‌چسبد. بعد از ویرایش (ذخیره یا انصراف) همان وضعیت باز/بستهٔ قبلی بازیابی می‌شود. باکس‌های توضیح منو هم به‌صورت کشویی با حالت اولیهٔ جمع‌شده درآمدند تا صفحه خلوت‌تر شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۷.۰</time><br><b>مدیر وظایف — فعالیت‌های پشتصحنه به‌صورت زنده</b><br>دکمهٔ «⚡ فعالیت زنده» در هدر، یک مودال سبک باز می‌کند که هر ۳ ثانیه وضعیت پشتصحنه را به‌روز می‌کند: کارهای فعال صف (استخراج/همگام‌سازی با نوار پیشرفت)، اجراهای پس‌زمینه (تست مدل‌ها، حذف تکراری، دسته‌بندی، ایجنتیک)، وضعیت کران و آخرین کارها. polling فقط وقتی مودال باز است کار می‌کند و با بستن آن متوقف می‌شود؛ endpoint سبک /api/activity فقط خلاصه برمی‌گرداند تا سایت سنگین نشود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۶.۲</time><br><b>رفع خطای «aiEditorAccounts is not defined» در ویرایش ارائه‌دهنده</b><br>تعریف state مربوط به حساب‌های Cloudflare از فایل گم شده بود و با کلیک «ویرایش» هر ارائه‌دهنده خطا می‌داد؛ تعریف بازگردانده شد و تست بازدارنده اضافه شد تا دیگر تکرار نشود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۶.۱</time><br><b>دکمهٔ تست کنار هر کلید API اضافی در همهٔ ارائه‌دهنده‌ها</b><br>در ویرایش هر ارائه‌دهنده (کلودفلر یا معمولی)، کنار هر کلید API اضافه‌شده دکمهٔ «تست» هست که همان کلید را مستقیم با اولین مدل گفت‌وگویی امتحان می‌کند؛ برای حساب‌های Cloudflare هم هر حساب (Account ID + توکن) دکمهٔ تست جداگانه دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۶.۰</time><br><b>چند حساب Cloudflare با تست جداگانه برای هر حساب</b><br>برای ارائه‌دهنده‌های Cloudflare، «کلید دوم» حالا یعنی «حساب دوم»: هنگام افزودن حساب جدید، Account ID و توکن API با هم وارد می‌شوند تا وقتی اعتبار یک حساب تمام شود، مدل‌ها خودکار با حساب بعدی (بک‌آپ) آزمایش شوند. کنار هر حساب و هر کلید API دکمهٔ «تست» اضافه شد که همان اعتبار را مستقیم امتحان می‌کند. برون‌ریزی/درون‌ریزی هم آرایهٔ حساب‌ها را کامل نگه می‌دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۵.۰</time><br><b>راحتی در تب سلکتور: تب‌های چسبان، انتخاب محصول بدون تایپ، قیمت در جزئیات و گالری از تصاویر تنوع‌ها</b><br>سه تب بالای تب سلکتور هنگام پیمایش چسبان می‌مانند. در «جزئیات محصول» به‌جای تایپ دستی آدرس، یک دراپ‌داون از محصولات ذخیره‌شدهٔ همان پروفایل آمده و انتخاب هر محصول آدرس را خودکار پر می‌کند. فیلد «قیمت» به آیتم‌های جزئیات اضافه شد (سلکتور قیمت در صفحهٔ محصول). در بخش گالری، روش جدید «تصاویر تنوع‌ها» اضافه شد: تصاویر داخل عناصر تنوع (نه فقط متن آن‌ها) به‌عنوان گالری عکس جمع می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۴.۰</time><br><b>انتخاب بخش و زیربخش در درون‌ریزی و برون‌ریزی تنظیمات</b><br>هم برون‌ریزی و هم درون‌ریزی فایل تنظیمات حالا یک مودال انتخاب بخش دارد: پروفایل‌ها (با زیربخش‌های «تنظیمات پروفایل‌ها» و «محصولات پروفایل‌ها»)، اتصال‌ها (ووکامرس / باسلام / هوش مصنوعی / اعلان‌ها جداگانه)، یادگیری دسته‌بندی، پاسخ خودکار و تنظیمات سیستمی. محصولات هر پروفایل در فایل خروجی جدا (profile_products.json) ذخیره می‌شوند تا بتوانید فقط محصولات یا فقط تنظیمات را منتقل کنید؛ درون‌ریزی جزئی هم اتصال‌های انتخاب‌نشده را دست‌نخورده نگه می‌دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۳.۰</time><br><b>فیلدهای جداگانهٔ Account ID و API Token برای کلودفلر AI</b><br>هنگام ویرایش ارائه‌دهندهٔ Cloudflare AI، دو پارامتر لازم به‌صورت فیلدهای جدا باز می‌شود (شناسهٔ حساب و توکن API) و آدرس پایه از روی آنها ساخته می‌شود. در فایل برون‌ریزی، این دو پارامتر به‌صورت صریح نوشته می‌شوند و در درون‌ریزی دوباره به آدرس پایه تبدیل می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۲.۰</time><br><b>رفع خطاهای مدل‌های کلودفلر و دسته‌بندی جمعی هوشمند</b><br>مسیر اشتباه meta-llama حذف و برای مدل‌های تصویری ورودی text نیز امتحان می‌شود. در دسته‌بندی جمعی باسلام، دستهٔ فعلی هر محصول اول بررسی می‌شود، دسته‌های امتحان‌شده و ناموفق در حافظه ذخیره و در اجراهای بعدی رد می‌شوند، و رأی‌گیری چندمدله با توقف زودهنگام به اکثریت سریع‌تر می‌رسد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۱.۰</time><br><b>چند کلید API برای هر ارائه‌دهندهٔ هوش مصنوعی</b><br>در ویرایش هر ارائه‌دهنده می‌توانید چند کلید API اضافه یا حذف کنید (کلید اول اصلی است). مدل‌های کلیدهای دوم به بعد در همهٔ فهرست‌ها، تست‌ها، چت و ایجنتیک با پسوند [K۲] / [K۳] مشخص می‌شوند و هرکدام با همان کلید خودشان آزمایش می‌شوند؛ فایل برون‌ریزی محرمانه هم همهٔ کلیدها را شامل می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۲۰.۰</time><br><b>پیش‌نمایش شکیل درون‌ریزی و کاتالوگ کامل مدل‌های Workers AI</b><br>جدول پیش‌نمایش بعد از تحلیل فایل، سرستون‌های قابل‌نگاشت (از جمله ویژگی‌ها) و کلیک روی هر ردیف برای مودال جزئیات دارد. کاتالوگ کامل ۸۴ مدل Workers AI با شناسه‌ها و وضعیت «منسوخ» در راهنمای ایجنتیک قابل مشاهده و فیلتر است.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۱۹.۰</time><br><b>تصحیح نام مدل‌های Workers AI و نگاشت ویژگی‌های فایل درون‌ریزی</b><br>مدل‌های بازنشسته (Llama 3.1، Llama 4 Maverick، Qwen2.5-Coder) حذف و مدل‌های فعلی (Qwen 3.8، GPT-OSS 120B، DeepSeek V4، GLM-5.2، Kimi K2.7) با شناسهٔ دقیق اضافه شدند؛ Leanstral 1.5 جایگزین Leanstral 2603 شد. در درون‌ریزی، فیلد بی‌کاربرد «وضعیت اولیه در ووکامرس» حذف و نگاشت ستون‌های فایل به ویژگی‌های محصول (نام:مقدار) اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۱۸.۰</time><br><b>درون‌ریزی هوشمند، چت با مدل‌ها و بازآرایی ایجنتیک</b><br>درون‌ریزی سه‌مرحله‌ای شد: انتخاب فایل با کشیدن‌ورها، تحلیل خودکار ستون‌ها با نگاشت و گزارش مشکلات، و پیش‌نمایش قبل از ورود؛ تاریخچهٔ درون‌ریزی هم ذخیره می‌شود. تب «چت با مدل‌ها» با فیلترهای فقط چت/فراخوانی ابزار/استدلالی اضافه شد و عملیات ایجنتیک به چهار زیر-تب منظم شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۱ · ۲۰۲۶-۰۸-۲۲ · نسخهٔ ۱.۱۷.۰</time><br><b>عملیات ایجنتیک با مدل‌های فراخوانی‌ابزار</b><br>تب جدید «عملیات ایجنتیک» در هوش مصنوعی: مدل‌های رایگان دارای فراخوانی ابزار، پرامپت‌های زمان‌بندی‌شده با اجرای خودکار، لاگ زندهٔ هر اجرا و ابزارهای خواندنی سرورساید (وضعیت سایت، جست‌وجو، تکراری‌ها، آمار مقصدها). حذف تکراری‌های باسلام و ووکامرس با معیار و پسوند قابل‌ویرایش و اجرای کاملاً سرورساید ارتقا یافت.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۶.۰</time><br><b>حذف سرورساید تکراری‌های ووکامرس و باسلام</b><br>ابزار جدید «حذف تکراری‌های مقصد» کل عملیات را روی صف Cloudflare اجرا می‌کند؛ فهرست‌گیری صفحه‌به‌صفحه، گروه‌بندی و حذف با checkpoint در D1 پیش می‌رود و با بستن مرورگر یا کندی شبکه قطع نمی‌شود، پس خطای شبکهٔ قبلی رخ نمی‌دهد. معیار نگهداری بین محصولات همنام قابل انتخاب است: جدیدتر، قدیمی‌تر، ارزان‌تر یا گران‌تر بماند. فرمت پسوند کد هم قابل ویرایش است — مثلاً (کد:x) یا #x که x یک عدد چندرقمی است و ارقام فارسی هم شمرده می‌شوند — تا نسخه‌های پسوند‌دار همنام شناخته شوند. پیش‌نمایش هیچ تغییری نمی‌دهد؛ حذف واقعی ووکامرس به زباله‌دان و باسلام به بایگانی ۴۱۸۴ می‌رود که هر دو برگشت‌پذیرند و توقف امن، ادامه از checkpoint و گزارش کامل گروه‌ها دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۵.۰</time><br><b>تست موازی مدل هم‌ردیف ارائه‌دهنده‌ها</b><br>در هر نوبت، مدل اول همهٔ ارائه‌دهنده‌های روشن همزمان آزمایش می‌شود، سپس مدل دوم همه، و همین‌طور تا آخر. این کار فهرست را سریع‌تر تمام می‌کند و خطای محدودیت نرخ یک ارائه‌دهنده را کم می‌کند. همان ترتیب در رد مدل گیرکرده و تلاش‌های مجدد پایانی هم به‌کار می‌رود. خطاهای شکل درخواست مثل max_tokens یا temperature با payload سازگار تکرار می‌شوند. درخواست‌های OpenRouter با User-Agent اختصاصی و هدرهای HTTP-Referer / X-Title ارسال می‌شوند تا خطای ۴۰۳ «Access denied by security policy» رخ ندهد؛ همان تلاش در رد مدل گیرکرده هم تکرار می‌شود. خطاهای اتمام اعتبار بدون تغییر می‌مانند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۴.۰</time><br><b>دانلود آشکار فایل برون‌ریزی محرمانه</b><br>دکمهٔ برون‌ریزی محرمانه دیگر فایل را پنهان ذخیره نمی‌کند؛ پنجرهٔ دانلود مرورگر باز می‌شود و در مودال یک دکمهٔ مشخص «دانلود فایل JSON در مرورگر» با نام فایل دیده می‌شود. فایل روی سرور ذخیره نمی‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۳.۰</time><br><b>مهلت قابل‌تنظیم برای رد مدل گیرکرده</b><br>تایم‌اوت رد خودکار مدل‌هایی که پاسخ نمی‌دهند از صفحهٔ تست هوش مصنوعی قابل تنظیم است و پیش‌فرض آن ۱۰۰۰ میلی‌ثانیه است. مقدار ذخیره‌شده روی سرور، بدون باز بودن مرورگر، اعمال می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۲.۰</time><br><b>تلاش مجدد جداگانه برای پاسخ پیام و دسته‌بندی</b><br>در مودال جزئیات هر ردیف جدول نتایج تست مدل‌ها، کنار باکس پاسخ پیام و باکس پاسخ دسته‌بندی دکمهٔ تلاش مجدد آمده است. همان دکمه‌ها در خود جدول هم هستند و فقط همان بخش دوباره روی سرور آزمایش می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۱.۰</time><br><b>کران یک‌دقیقه‌ای، تنظیمات عمومی سرورساید و Batch API</b><br>ضربان کران Cloudflare از پنج دقیقه به هر دقیقه کاهش یافت و بدون باز بودن مرورگر اجرا می‌شود. قفل ضد هم‌پوشانی، نگهبان صف، پینگ کران، جلوگیری از تکرار صف، تعداد گزارش‌ها و همگام‌سازی محتوا از تنظیمات عمومی روی سرور اعمال می‌شوند. مدل‌هایی که فقط از Batch API در دسترس‌اند (پیام «Use the /api/beta/batches endpoint») با همان اندپوینت OpenRouter اجرا و تا آماده شدن نتیجه پیگیری می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۱۰.۰</time><br><b>اتوسیو تنظیمات و تلاش مجدد مدل‌های آویزان</b><br>هر تغییری در تنظیمات منو، اتصال‌ها و پروفایل ذخیره‌شده بدون دکمهٔ ذخیره، خودکار در سرور ثبت می‌شود. مدل‌هایی که در تست همهٔ مدل‌ها آویزان یا تایم‌اوت شوند، پس از پایان دور اول تا سه بار دوباره امتحان می‌شوند. کران داخلی Worker هر دقیقه صف، همگام‌سازی دوره‌ای پروفایل‌ها، نگهبان اجراهای گیرکرده، پاسخ خودکار و گزارش شبانه را جلو می‌برد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۹.۰</time><br><b>نگهبان واقعی تست مدل‌ها و رد خودکار گیرها</b><br>اگر مدلی پاسخ ندهد، صف دیگر چند دقیقه معطل نمی‌ماند: مهلت هر مدل کوتاه است، نگهبان با هر به‌روزرسانی پیشرفت، مدل گیرکرده را رد می‌کند و تست ادامه می‌یابد. زیر دکمه‌های تست، زمان از آخرین مدل، میانگین زمان مدل‌ها، زمان مدل فعلی و تخمین باقی‌مانده دیده می‌شود. تست دسته‌بندی برای مدل ناموفق پیام دیگر اجرا نمی‌شود تا صف سریع‌تر حرکت کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۳۰ · ۲۰۲۶-۰۸-۲۱ · نسخهٔ ۱.۸.۰</time><br><b>نسخه در هدر، شمارنده‌های فشردهٔ تست مدل‌ها و پایداری اجرای گیرکرده</b><br>شماره نسخه اکنون در وسط هدر سایت دیده می‌شود و با لمس آن، همین گزارش تغییرات باز می‌شود. در مودال نتایج تست مدل‌های هوش مصنوعی، باکس بزرگ قرمز/سبز با توضیحات حذف شد و چند شمارندهٔ جمع‌وجور جای آن را گرفت. اگر اجرای تست پیش نرود، دکمهٔ توقف کار نکند یا ادامه نگیرد، پس از چند دقیقه بازیابی می‌شود و دکمهٔ «پاک‌کردن اجرای گیرکرده» کل اجرا را ریست می‌کند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۷.۰</time><br><b>منوی پایدار، ۱۲ پوستهٔ رنگی و پشتیبانی مدل‌های استدلالی</b><br>دکمهٔ تمام‌عرض داخل سرصفحهٔ منو قرار گرفت و دیگر پشت کشو نمی‌افتد؛ سر هر بخش باز هنگام پیمایش چسبان می‌ماند و اسکرول داخلی مزاحم حذف شد. دوازده رنگ‌بندی سراسری با پیش‌نمایش زنده به تنظیمات عمومی افزوده شد. مدل‌های استدلالی Together و خانواده‌های شناخته‌شده با بودجهٔ پاسخ بیشتر و استخراج مقاوم پاسخ نهایی در دسته‌بندی و پاسخ مشتری فعال‌اند و برای مدل‌های ناشناخته تیک دستی «استدلالی» کنار هر مدل وجود دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۶.۰</time><br><b>تب شروع کامل و همهٔ مدل‌های Text-to-text میسترال</b><br>تب شروع مطابق نسخهٔ مرجع با مدیریت پروفایل، همگام‌سازی دوره‌ای، مقصدها، محدوده و صفحه‌بندی، حالت خودکار یا دستی، عیب‌یابی، استخراج بک‌اند و صف عملیاتی بازسازی شد و همهٔ دکمه‌ها به API واقعی Worker متصل‌اند. کاتالوگ رسمی Text-to-text میسترال نیز به یازده مدل ارتقا یافت؛ OCR و Embedding از endpoint اختصاصی خود آزمایش می‌شوند و به‌درستی از انتخاب‌های گفت‌وگویی و دسته‌بندی کنار گذاشته می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۵.۰</time><br><b>برون‌ریزی امن تنظیمات AI و کاتالوگ به‌روز Mistral</b><br>اکنون تنظیمات ارائه‌دهنده‌ها، کاندیدها، مدل مستر و مسیر شبکه با یک دکمه در فایل JSON قابل دانلود و دوباره قابل درون‌ریزی است؛ رابط پیش از دانلود، محرمانه‌بودن فایل و وجود احتمالی کلیدهای API را روشن اعلام می‌کند. ده مدل فعلی و سازگار با Chat Completions از منبع رسمی Mistral افزوده شده‌اند، بدون اینکه کلید API، آدرس یا وضعیت ارائه‌دهندهٔ موجود کاربر بازنویسی شود؛ مدل‌های نیازمند endpoint اختصاصی عمداً وارد این فهرست نشده‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۴.۰</time><br><b>اجرای پایدار سرورساید، دسته‌بندی همهٔ تأییدنشده‌ها و فونت واقعی</b><br>تست مدل‌های هوش مصنوعی اکنون در Queue و D1 روی سرور ادامه پیدا می‌کند و پس از refresh یا بستن صفحه، وضعیت و نتیجهٔ ذخیره‌شده بازیابی می‌شود؛ توقف امن و ادامه از checkpoint نیز دارد. دسته‌بندی هوشمند باسلام همهٔ صفحات و همهٔ غرفه‌های محصولات تأییدنشده را در یک اجرای پایدار پوشش می‌دهد و پیشرفت و نتایج را نشان می‌دهد. فایل‌های CSS و WOFF2 فونت‌های فارسی نیز از همان دامنهٔ Worker بارگذاری و روی کل رابط اعمال می‌شوند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۳.۰</time><br><b>تست پایدار AI، گفتگوهای کامل باسلام، فونت فارسی و جدول واقعی محصولات</b><br>آزمون همهٔ مدل‌ها در قطع موقت ارتباط سه بار با فاصلهٔ افزایشی تلاش می‌کند، اجرای نیمه‌تمام را ادامه می‌دهد و با replay امن یک مدل را دوباره اجرا نمی‌کند؛ پاسخ پیام «سلام»، خطای همان پاسخ و شمارنده‌های مستقل پیام و دسته‌بندی نیز روشن نمایش داده می‌شوند. پنجرهٔ گفتگوهای باسلام فهرست، خوانده‌نشده‌ها، جست‌وجو و پیام‌های هر گفتگو را نمایش می‌دهد. انتخاب فونت فارسی کل سایت و نمایش ردیفی به‌صورت جدول واقعی نیز اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۲.۰</time><br><b>رفع ۵۲۲ ووکامرس و مدیریت دیداری محصولات و صف</b><br>حالت شبکهٔ مستقیم، خودکار یا Worker اختصاصی ووکامرس اضافه شد؛ در حالت خودکار خطاهای لبهٔ Cloudflare مانند ۵۲۲ از مسیر جایگزین تکرار و نتیجه با راهنمای ساده نمایش داده می‌شود. ووکامرس و باسلام اکنون مدیریت مودالی کارتی/ردیفی، انتخاب تکی و همه، بخش مستقل محصولات تأییدنشده و دسته‌بندی با مدل‌های موفق آخرین آزمون دارند. آزمون مدل‌ها نوار پیشرفت و آمار زنده دارد و شمارنده‌های صف، فهرست محصول و جزئیات رنگی تغییر قیمت را باز می‌کنند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۱.۰</time><br><b>دسته‌بندی تکی و گروهی محصولات باسلام</b><br>از مدیریت جامع محصولات می‌توان دسته را به روش دستی، نیمه‌هوشمند براساس آموخته‌ها یا هوشمند با حداکثر پنج مدل انتخاب کرد؛ پیشنهاد هر محصول پیش از پیش‌نمایش قابل اصلاح است و فقط پس از پیش‌نمایش واقعی و تأیید صریح اعمال می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۱.۰</time><br><b>جدول کامل‌تر آزمون مدل‌های هوش مصنوعی</b><br>جدول نتایج اکنون فیلتر، جست‌وجو و مرتب‌سازی همهٔ سرستون‌ها، نتیجهٔ مستقل دسته‌بندی با عنوان پیش‌فرض «ادو پرفیوم» و جزئیات پاسخ خام مدل و دسته‌بندی را نمایش می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۰.۱</time><br><b>رفع توقف استخراج روی تصویر و عناصر بدون تگ پایان</b><br>parser فهرست و جزئیات دیگر برای عناصری مانند تصویر، ورودی و منبع، callback پایان ثبت نمی‌کند؛ بنابراین خطای «Parser error: No end tag» مرحلهٔ دوم استخراج برطرف شده و لینک، تصویر، قیمت و سایر attributeها نیز حفظ می‌شوند. این اصلاح با همان ساختار و سلکتورهای Tailwind گزارش‌شده در آزمون رگرسیون پوشش داده شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۰.۱</time><br><b>بازیابی خودکار آخرین پروفایل</b><br>پس از بازکردن یا refresh صفحه، آخرین پروفایل معتبر به‌صورت خودکار انتخاب و بارگذاری می‌شود. انتخاب پروفایل میان خانه، تنظیمات، فرم ویرایش و بخش‌های وابسته هماهنگ است و اگر پروفایل حذف شده باشد، برنامه به انتخاب امن بعدی برمی‌گردد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۹ · ۲۰۲۶-۰۸-۲۰ · نسخهٔ ۱.۰.۱</time><br><b>تست‌های پایدارتر هوش مصنوعی و انتخابگر بصری</b><br>آزمون مدل‌های AI به‌صورت صفحه‌بندی‌شده و یک مدل در هر invocation اجرا می‌شود تا با سقف پلن رایگان سازگار باشد؛ انتخابگر بصری فهرست و جزئیات نیز مستقل شده و count، preview و navigation روشن‌تری دارد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>بازچینی مفهومی همهٔ بخش‌ها</b><br>محتوای باقی‌مانده براساس جریان تعریف منبع، استخراج، بررسی نتیجه، ارسال و نگهداری مرتب شد: سلکتورها سه‌مرحله‌ای، نتیجه‌ها مقدم بر ابزار فایل، امکانات فنی جمع‌شونده و ۱۸ ابزار منو در چهار گروه موضوعی قرار گرفتند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>بازطراحی چهار مسیر اصلی کار</b><br>صفحه‌های شروع، تنظیمات، ارسال و درون‌ریزی با ساختار کارت‌های تو‌در‌تو، کنترل‌های بزرگ، حالت خودکار/دستی، صف‌های خلاصه و دکمه‌های عملیاتی تمام‌عرض مطابق تصاویر مرجع بازچینی شدند؛ همهٔ عملیات به همان APIهای واقعی متصل‌اند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>درون‌ریزی واقعی CSV و Excel</b><br>فایل‌های CSV و XLSX تا ۱۰ مگابایت با عنوان‌های فارسی و انگلیسی تحلیل می‌شوند؛ وضعیت اولیهٔ ووکامرس، قیمت، موجودی، تصویر، برند، SKU، دسته‌بندی و توضیحات نیز حفظ می‌شوند و نتیجه در یک گزارش جامع نمایش داده می‌شود.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>بازطراحی کامل رابط موبایل</b><br>پوستهٔ سرمه‌ای، کارت‌ها و ورودی‌های بزرگ، کنترل‌های شناور، دکمه‌های سبز و فیروزه‌ای و نوار شش‌گزینه‌ای ثابت پایین مطابق رابط مرجع اضافه شد؛ ترتیب و نام تب‌ها ساده‌تر شده و نسخهٔ دسکتاپ نیز واکنش‌گرا باقی مانده است.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>رفع توقف دکمه‌ها و بازیابی تنظیمات</b><br>اتصال قدیمی به ورودی فایل حذف‌شده باعث توقف راه‌اندازی JavaScript می‌شد. راه‌اندازی مقاوم شد و انتخاب فایل اکنون وضعیت، نتیجهٔ بازیابی و خطا را شفاف نمایش می‌دهد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸ · ۲۰۲۶-۰۸-۱۹</time><br><b>مدیریت جامع مقصد</b><br>فهرست صفحه‌بندی‌شده، جست‌وجوی واقعی، تب وضعیت، انتخاب غرفه، ویرایش تکی، پیش‌نمایش و اعمال گروهی و بایگانی صحیح باسلام اضافه شد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸</time><br><b>رفع مسیر Cloudflare Workers AI</b><br>endpoint بومی ai/run از Chat Completions جدا شد؛ مدل سازمان‌دار، payloadهای native و fallback سازگار همراه گزارش امن هر تلاش اضافه شدند.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸</time><br><b>عیب‌یاب استخراج واقعی</b><br>دریافت شبکه، HTML واقعی، سلکتورها، parser فهرست و نمونهٔ جزئیات مرحله‌به‌مرحله آزمایش می‌شوند تا شکست واقعی قابل تشخیص باشد.</div><div class="change-item"><time>۱۴۰۵/۰۵/۲۸</time><br><b>رابط مدرن‌تر</b><br>محیط مدیریت مقصد، کارت‌ها، فرم‌ها، رنگ‌ها، ناوبری دسکتاپ/موبایل و گزارش‌های جامع بازطراحی شدند.</div></div></details></div><div id="changesResult" class="logs">نسخهٔ فعلی Worker: ۱.۲۲۰.۰+ · مرجع: scraper4.php v10.170 · جزئیات تطبیق با دکمهٔ بالا</div>'],
  ['🔄 نسخهٔ کد','version','نسخه، نصب، بکاپ و کتابخانه‌ها به‌صورت تب/آکاردئون مرتب شده‌اند تا منوی همبرگری خلوت بماند.',[
    '<div class="version-tabs"><details open id="unifiedBackupDetails"><summary>💾 بکاپ، بازیابی، نسخه و انتشار</summary><div class="version-panel"><div class="utabs"><button type="button" class="btn btn-blue btn-sm utab" data-utab="backup"><span class="utab-num">۱</span><span class="utab-text">💾 بکاپ و بازیابی<small>گرفتن و برگرداندن از فایل</small></span></button><button type="button" class="btn btn-gray btn-sm utab" data-utab="branch"><span class="utab-num">۲</span><span class="utab-text">🌿 برنچ<small>بکاپ روی گیت‌هاب</small></span></button><button type="button" class="btn btn-gray btn-sm utab" data-utab="version"><span class="utab-num">۳</span><span class="utab-text">🔍 نسخه و انتشار<small>دیپلویر و جدول برنچ‌ها</small></span></button></div><div class="utup active" id="utup-backup"><section class="ustep"><header class="ustep-head"><span class="ustep-num">۱</span><span class="ustep-title">گرفتن بکاپ<small>دانلود فوری همهٔ تنظیمات</small></span></header><div class="ustep-body"><div id="bkLastLine" class="menu-text">🕘 هنوز بکاپی گرفته نشده است.</div><div class="menu-actions">'+mButton('⬆ بکاپ کامل همین حالا','backup-full','btn-green')+mButton('🧩 برون‌ریزی با انتخاب بخش','backup','btn-blue')+'</div></div></section><section class="ustep"><header class="ustep-head"><span class="ustep-num">۲</span><span class="ustep-title">بازیابی از فایل<small>برگرداندن یک بکاپ ذخیره‌شده</small></span></header><div class="ustep-body">'+mFile('bkFile')+'<div class="menu-actions">'+mButton('♻️ بازیابی از فایل','bk-restore','btn-orange')+mButton('🔍 بررسی فایل','backup-inspect','btn-purple')+'</div></div></section><section class="ustep"><header class="ustep-head"><span class="ustep-num">۳</span><span class="ustep-title">بوت‌استرپ رندر<small>ساخت بکاپ راه‌انداز برای Render</small></span></header><div class="ustep-body"><div class="menu-actions">'+mButton('🚀 بوت‌استرپ رندر','backup-bootstrap','btn-green')+'</div><input id="backupInspectFile" type="file" accept=".json,application/json" hidden><div id="bkBootstrapLine" class="menu-text">🚀 بوت‌استرپ: در حال بررسی…</div></div></section></div><div class="utup" id="utup-branch"><section class="ustep"><header class="ustep-head"><span class="ustep-num">۱</span><span class="ustep-title">اتصال به گیت‌هاب<small>مخزن، برنچ و توکن</small></span></header><div class="ustep-body"><div class="inline-form">'+mSelect('ریپو:','vcRepo',[['fazilatma/new','fazilatma/new'],['custom','✏️ مخزن دلخواه…']],null)+mInput('مخزن دلخواه:','vcRepoCustom','text','','owner/repo')+mSelect('برنچ:','vcBranch',[['','—']],null)+mInput('پوشه:','vcPath','text','backups','backups')+'</div><div class="menu-text" id="vcBranchStatus">🌿 برنچ‌ها هنوز خوانده نشده‌اند.</div><div class="inline-form">'+mInput('توکن گیت‌هاب:','ghToken','password','','ghp_… / github_pat_…',BSET('githubBackupToken'))+'</div><div class="menu-text" id="ghTokenStatus">🔑 وضعیت توکن: در حال بررسی…</div></div></section><section class="ustep"><header class="ustep-head"><span class="ustep-num">۲</span><span class="ustep-title">بازیابی از برنچ<small>انتخاب و برگرداندن یک بکاپ</small></span></header><div class="ustep-body"><div class="inline-form">'+mSelect('بکاپ:','vcFile',[['','—']],null)+mButton('🔄 به‌روزرسانی فایل‌ها','branch-files-refresh','btn-blue')+mButton('📥 بازیابی از برنچ','branch-restore','btn-orange')+'</div><div class="menu-text" id="vcFileStatus">📂 فایل‌ها هنوز خوانده نشده‌اند.</div></div></section><section class="ustep"><header class="ustep-head"><span class="ustep-num">۳</span><span class="ustep-title">پوش بکاپ به برنچ<small>ذخیرهٔ بکاپ روی گیت‌هاب</small></span></header><div class="ustep-body"><details class="uhelp"><summary>؟ راهنمای پوش بکاپ</summary><div class="help-box">⬆ پوش بکاپ به برنچ فعال است: هر بکاپ در یک پوشهٔ جدا با نام خودکار ذخیره می‌شود؛ هر بخش (پروفایل‌ها، اتصال‌ها و…) یک فایل JSON خواناست و در محیط‌های SQLite فایل database.sqlite هم کنارشان می‌نشیند. توکن باید دسترسی نوشتن محتوا (contents) روی این مخزن داشته باشد؛ همان توکن بالا استفاده می‌شود و اگر GH_BACKUP_TOKEN در محیط سرور هم ست شده باشد، همان اولویت دارد. ⚠️ روی مخزن عمومی، بکاپ رمزننشده شامل کلیدها و توکن‌هاست — برای بکاپ از مخزن خصوصی استفاده کنید.</div></details><div class="menu-actions">'+mButton('⬆ پوش بکاپ به برنچ','branch-push','btn-green')+'</div><details class="sched-push"><summary>⏰ پوش خودکار دوره‌ای</summary><div class="inline-form">'+mCheck('پوش خودکار دوره‌ای فعال باشد','schedPushEnabled',BSET('branchPush.enabled'),false)+mInput('فاصله (دقیقه):','schedPushInterval','number','360','360 (بین ۵ تا ۱۰۰۸۰)',BSET('branchPush.intervalMin'))+'</div><div class="inline-form">'+mInput('ریپو:','schedPushRepo','text','','owner/repo (خالی = پیش‌فرض)',BSET('branchPush.repo'))+mInput('برنچ:','schedPushBranch','text','','مثلاً main — اجباری',BSET('branchPush.branch'))+mInput('پوشه:','schedPushPath','text','','backups',BSET('branchPush.path'))+'</div><div class="help-box">هر چند دقیقه یک‌بار، بکاپ کامل بخش‌بخش با نام ثابت scheduled-backup در پوشهٔ بالا روی برنچ بالا ذخیره/به‌روزرسانی می‌شود (هر بخش یک فایل خوانا + database.sqlite در محیط‌های SQLite). برنچ اجباری است و اگر خالی بماند پوش زمان‌بندی‌شده رد می‌شود. فاصله بین ۵ تا ۱۰۰۸۰ دقیقه است (پیش‌فرض ۳۶۰) و تغییرها خودکار ذخیره می‌شوند.</div><div class="menu-actions">'+mButton('📋 کپی انتخاب فعلی','sched-push-copy','btn-gray')+mButton('🔄 وضعیت آخرین پوش','sched-push-refresh','btn-blue')+'</div><div class="menu-text" id="schedPushStatus">⏰ پوش زمان‌بندی‌شده هنوز اجرا نشده است.</div></details></div></section></div><div class="utup" id="utup-version"><section class="ustep"><header class="ustep-head"><span class="ustep-num">۱</span><span class="ustep-title">نسخهٔ فعلی<small>مشاهدهٔ نسخه و روش انتشار</small></span></header><div class="ustep-body">'+mButton('🔍 بررسی نسخه/انتشار','version-info','btn-blue')+'<div class="help-box">Cloudflare: از Dashboard → Workers & Pages → Deployments آخرین commit را Redeploy کنید. Local/Termux: از کارت Update existing clone استفاده کنید.</div></div></section><section class="ustep"><header class="ustep-head"><span class="ustep-num">۲</span><span class="ustep-title">🚀 دیپلویر و جدول برنچ‌ها<small>اجرای نسخه‌ها از همین‌جا</small></span></header><div class="ustep-body"><details class="uhelp"><summary>؟ دیپلویر چطور کار می‌کند؟</summary><div class=\"help-box\">دیپلویر محلی روی همین دستگاه اجرا می‌شود و اسکریپر محلی را می‌سازد و روشن نگه می‌دارد. روی Cloudflare و Render انتشار با push به شاخهٔ production انجام می‌شود و صفحهٔ دیپلویر جداگانه وجود ندارد.</div></details><div class=\"menu-text\" id=\"deployerEnvHint\">…</div><div class=\"menu-actions\"><a class=\"btn btn-green btn-sm\" href=\"http://localhost:8790\" target=\"_blank\" rel=\"noreferrer\">🌐 باز کردن دیپلویر محلی</a><button type=\"button\" class=\"btn btn-blue btn-sm\" data-copy-install=\"deployer\">📋 کپی دستور اجرای دیپلویر</button><span class=\"copy-flash\" id=\"copyInstall-deployer\"></span><a class=\"btn btn-gray btn-sm\" href=\"https://github.com/fazilatma/new/blob/arena/01a09468-new/cloudflare-scraper4/CLOUDFLARE-WORKER.md\" target=\"_blank\" rel=\"noreferrer\">📖 راهنمای استقرار</a></div></div></section><section class="ustep"><header class="ustep-head"><span class="ustep-num">۳</span><span class="ustep-title">جدول برنچ‌ها و اجرای نسخه<small>انتخاب نسخه و نصب با یک دکمه</small></span></header><div class="ustep-body"><div class=\"menu-text\">جدول برنچ‌ها از GitHub خوانده می‌شود؛ با دکمهٔ «اجرای این نسخه» همان نسخه مستقیم نصب و اجرا می‌شود. اگر سرور دیپلویری نداشته باشد، همان دکمه دستور نصب دستی را کپی می‌کند.</div><div class=\"menu-actions\">'+mButton('🔍 اسکن برنچ‌ها','deployer-scan-branches','btn-blue')+'<span class=\"menu-text\" id=\"deployerRunningVer\"></span></div><div id=\"deployerBranches\"></div></div></section></div><section class="ustep ustatus"><header class="ustep-head"><span class="ustep-num">📡</span><span class="ustep-title">وضعیت آخرین عملیات</span></header><div class="ustep-body"><div id="transferStatus" class="menu-text">—</div></div></section></div></details>',
-   '<details><summary>🌐 نصب و تعمیر Playwright، Puppeteer و Crawlee</summary><div class="version-panel"><p>ویژهٔ اجرای Node روی VPS و کامپیوتر؛ در Cloudflare نصب محلی ممکن نیست. کتابخانه‌های غایب Playwright، Puppeteer و Crawlee با نسخهٔ قفل‌شدهٔ پروژه نصب می‌شوند؛ مرورگرهای Chromium و Chrome با کش کاربر سرویس بررسی و دانلود می‌شوند. اگر مسیر Cloudflare Worker در تنظیمات اتصال فعال باشد، نصب کتابخانه و دانلود مرورگر از همان gateway انجام می‌شود؛ شکست آن به اتصال مستقیم تغییر نمی‌کند. دکمهٔ کپی فقط کش مرورگرهای موجود همین VPS را بدون دانلود و بدون حذف اصل فایل‌ها به کش کاربر سرویس منتقل می‌کند. مبدأ پیش‌فرض /root/.cache است؛ مدیر می‌تواند BROWSER_CACHE_SOURCE_HOME را تغییر دهد. دسترسی خواندن مبدأ لازم است و sudo خودکار اجرا نمی‌شود. اجرای هر دو موتور و راه‌اندازهای Crawlee جداگانه آزموده می‌شود. الزام جداگانه‌ای به ADMIN_TOKEN ندارد؛ سیاست احراز هویت عمومی سرور اعمال می‌شود. با خاموش بودن احراز هویت، هر فرد دارای دسترسی به اسکرپر می‌تواند نصب را اجرا کند.</p><label><input type="checkbox" id="browserRepairMirror"> اجازهٔ تلاش از آینهٔ شخص ثالث npmmirror پس از شکست منبع رسمی؛ دانلود نرم‌افزار اجرایی از شخص ثالث را می‌پذیرم.</label><br><label><input type="checkbox" id="browserRepairRoot"> اگر این اسکرپر با root اجرا می‌شود، اجرای نصب، کپی کش و آزمون با همین دسترسی را می‌پذیرم؛ اجرای اسکرپر با root توصیه نمی‌شود.</label><div class="menu-actions">'+mButton('🛠 نصب و تست همهٔ موتورهای مرورگر','browser-repair-start','btn-green')+mButton('📁 کپی مرورگرهای موجود و آماده‌سازی پوشه‌ها','browser-cache-reuse','btn-gray')+mButton('🔄 وضعیت و گزارش نصب','browser-repair-status','btn-blue')+mButton('📋 کپی گزارش کامل برای پشتیبانی','browser-repair-copy','btn-purple')+'</div><p>گزارش کپی شامل وضعیت سیستم، نسخه‌ها، مسیرها، مجوزها، تنظیمات شبکه و لاگ است. پیش از ارسال، مسیرها و نام میزبان‌ها را بررسی کنید؛ اطلاعات محرمانه حذف می‌شود.</p><textarea id="browserRepairReport" readonly hidden dir="ltr" style="width:100%;min-height:220px" aria-label="گزارش نصب مرورگر برای کپی دستی"></textarea><pre id="browserRepairLog" class="logs" dir="ltr" aria-live="polite">هنوز شروع نشده است.</pre><p>هیچ تغییر نسخهٔ Node، نصب بستهٔ سیستم‌عامل، تغییر مالکیت یا ری‌استارت خودکاری انجام نمی‌شود. قطع اینترنت یا نبود کتابخانه‌های سیستم ممکن است نیازمند اقدام مدیر باشد. پس از موفقیت، عیب‌یاب استخراج را دوباره اجرا کنید.</p></div></details>',
-   '<details><summary>📚 کتابخانه‌های نصب‌شده/قابل اجرا</summary><div class="version-panel">'+INSTALLED_LIBRARY_HTML+'</div></details>',
+   '<details><summary>🌐 نصب و تعمیر Playwright، Puppeteer و Crawlee</summary><div class="version-panel">'+browserManualHtml()+'<p>ویژهٔ اجرای Node روی VPS و کامپیوتر؛ در Cloudflare نصب محلی ممکن نیست. کتابخانه‌های غایب Playwright، Puppeteer و Crawlee با نسخهٔ قفل‌شدهٔ پروژه نصب می‌شوند؛ مرورگرهای Chromium و Chrome با کش کاربر سرویس بررسی و دانلود می‌شوند. اگر مسیر Cloudflare Worker در تنظیمات اتصال فعال باشد، نصب کتابخانه و دانلود مرورگر از همان gateway انجام می‌شود؛ شکست آن به اتصال مستقیم تغییر نمی‌کند. دکمهٔ کپی فقط کش مرورگرهای موجود همین VPS را بدون دانلود و بدون حذف اصل فایل‌ها به کش کاربر سرویس منتقل می‌کند. مبدأ پیش‌فرض /root/.cache است؛ مدیر می‌تواند BROWSER_CACHE_SOURCE_HOME را تغییر دهد. دسترسی خواندن مبدأ لازم است و sudo خودکار اجرا نمی‌شود. اجرای هر دو موتور و راه‌اندازهای Crawlee جداگانه آزموده می‌شود. الزام جداگانه‌ای به ADMIN_TOKEN ندارد؛ سیاست احراز هویت عمومی سرور اعمال می‌شود. با خاموش بودن احراز هویت، هر فرد دارای دسترسی به اسکرپر می‌تواند نصب را اجرا کند.</p><label><input type="checkbox" id="browserRepairMirror"> اجازهٔ تلاش از آینهٔ شخص ثالث npmmirror پس از شکست منبع رسمی؛ دانلود نرم‌افزار اجرایی از شخص ثالث را می‌پذیرم.</label><br><label><input type="checkbox" id="browserRepairRoot"> اگر این اسکرپر با root اجرا می‌شود، اجرای نصب، کپی کش و آزمون با همین دسترسی را می‌پذیرم؛ اجرای اسکرپر با root توصیه نمی‌شود.</label><div class="menu-actions">'+mButton('🛠 نصب و تست همهٔ موتورهای مرورگر','browser-repair-start','btn-green')+mButton('📁 کپی مرورگرهای موجود و آماده‌سازی پوشه‌ها','browser-cache-reuse','btn-gray')+mButton('🔄 وضعیت و گزارش نصب','browser-repair-status','btn-blue')+mButton('📋 کپی گزارش کامل برای پشتیبانی','browser-repair-copy','btn-purple')+'</div><p>گزارش کپی شامل وضعیت سیستم، نسخه‌ها، مسیرها، مجوزها، تنظیمات شبکه و لاگ است. پیش از ارسال، مسیرها و نام میزبان‌ها را بررسی کنید؛ اطلاعات محرمانه حذف می‌شود.</p><textarea id="browserRepairReport" readonly hidden dir="ltr" style="width:100%;min-height:220px" aria-label="گزارش نصب مرورگر برای کپی دستی"></textarea><pre id="browserRepairLog" class="logs" dir="ltr" aria-live="polite">هنوز شروع نشده است.</pre><p>هیچ تغییر نسخهٔ Node، نصب بستهٔ سیستم‌عامل، تغییر مالکیت یا ری‌استارت خودکاری انجام نمی‌شود. قطع اینترنت یا نبود کتابخانه‌های سیستم ممکن است نیازمند اقدام مدیر باشد. پس از موفقیت، عیب‌یاب استخراج را دوباره اجرا کنید.</p></div></details>',
+   '<details><summary>📚 کتابخانه‌های نصب‌شده/قابل اجرا</summary><div class="version-panel">'+INSTALLED_LIBRARY_HTML+browserManualHtml()+'</div></details>',
    '<details><summary>🧭 دستورهای نصب و آپدیت</summary><div class="version-panel"><div class="help-box">دستورهای کامل نصب/دیپلوی و اجرای محلی: اول deployer را اجرا کنید؛ بعد از داخل deployer دکمهٔ اجرای scraper را بزنید.</div><div class="install-command-hero"><b>🧭 نصب یکسان در همه محیط‌ها</b><br>همین کارت‌ها در Cloudflare Worker، Render، Termux و اجرای محلی نمایش داده می‌شوند. هر کارت دکمهٔ کپی یک‌باره دارد.</div><div class="menu-actions"><button type="button" class="btn btn-green btn-sm" data-copy-install="all">📋 کپی همهٔ دستورها</button><span id="installCopyAllStatus" class="copy-flash"></span></div><div id="installCommandCards" class="install-command-grid"></div><textarea id="installAllCommands" readonly dir="ltr" style="width:100%;min-height:260px;white-space:pre;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px">'+INSTALL_DEPLOY_COMMANDS+'</textarea></div></details>',
    '</div>'
- ].join('')+'<div id="versionResult" class="logs">نسخهٔ فعلی: ۱.۲۱۹.۰+ · مرجع: scraper4.php v10.170 · انتشار از Cloudflare Deployments یا deployer محلی</div>'],
+ ].join('')+'<div id="versionResult" class="logs">نسخهٔ فعلی: ۱.۲۲۰.۰+ · مرجع: scraper4.php v10.170 · انتشار از Cloudflare Deployments یا deployer محلی</div>'],
  ['🚀 دیپلویر محلی','deployer-local','همهٔ کارهای فایل دیپلویر از همین‌جا: وضعیت واقعی، بررسی نسخهٔ جدید با اعلان سیستمی، نصب تازه‌ترین برنچ، build و روشن نگه داشتن scraper4.js روی همین ماشین، دیتابیس، و آخرین تغییرات. درخواست‌ها از همین سرور به دیپلویر محلی فرستاده می‌شوند؛ اگر دیپلویر روشن نباشد پیامش همین‌جا نوشته می‌شود. جدول برنچ‌ها مثل قبل در بخش «🔄 نسخهٔ کد» است.','<div class="version-panel"><div class="help-box">این بخش مستقیم با سرور دیپلویرِ همین دستگاه حرف می‌زند؛ توکن از فایل محلی خوانده می‌شود و هیچ‌وقت در پاسخ‌ها یا لینک‌ها نمی‌آید. «بررسی نسخهٔ جدید» علاوه بر جدول، اعلان واقعی سیستمی هم می‌فرستد (روی Termux با termux-notification).</div><div id="deployerLocalStatus" class="menu-text">برای دیدن وضعیت، دکمهٔ «خواندن وضعیت» را بزنید.</div><div class="menu-actions">'+mButton("🔄 خواندن وضعیت","dep-status","btn-blue")+mButton("🔍 بررسی نسخهٔ جدید","dep-scan","btn-purple")+mButton("⬇ نصب newest روی این دستگاه","dep-install-latest","btn-green")+'</div><div class="menu-actions">'+mButton("🧱 build اسکریپر","dep-scraper-restart","btn-purple")+mButton("⏹ توقف اسکریپر","dep-scraper-stop","btn-gray")+mButton("📦 npm install","dep-npm","btn-gray")+'</div><div class="menu-actions">'+mButton("🗄 دیتابیس","dep-database","btn-blue")+mButton("🔢 به‌روزرسانی از git","dep-update","btn-green")+mButton("🔔 تست اعلان سیستمی","dep-notify","btn-gray")+mButton("🌐 باز کردن صفحهٔ دیپلویر","deployer-open","btn-gray")+'</div><div class="menu-text" id="depNotifyState">—</div><div class="menu-text" id="depFlash"></div><div id="depRecent" class="menu-text"></div></div>'],
  ['🛒 ووکامرس','woo','اتصال، وضعیت انتشار، دسته و موجودی پیش‌فرض مطابق پنل مرجع.',[
    mInput('آدرس:','wcUrl','url','','https://yourstore.com',BCON('woo.url')),mInput('Key:','wcCK','text','','ck_...',BCON('woo.key')),mInput('Secret:','wcCS','password','','cs_...',BCON('woo.secret')),mSelect('روش اتصال:','wcNetMode',[['auto','خودکار؛ در خطای ۵۲۲ مسیر جایگزین را امتحان کن'],['direct','فقط مستقیم'],['worker','فقط Reverse Worker']],BCON('woo.network.mode')),mInput('آدرس Worker جایگزین:','wcNetWorker','url','','https://proxy.example.workers.dev/{url}',BCON('woo.network.workerUrl')),mInput('تغییر قیمت ٪:','wcPricePercent','number','0','مثلاً 10 یعنی ۱۰٪ گران‌تر',BCON('woo.pricePercent')),'<div class="help-box">ضریب تعدیل قیمت ووکامرس: روی هر قیمتی که به این مقصد ارسال می‌شود اعمال می‌گردد و در «مغایرت‌گیری» و «پیش‌نمایش هماهنگ‌سازی» هم همین قیمت، قیمتِ صحیح در نظر گرفته می‌شود. صفر یعنی قیمت مبدأ بدون تغییر. مثال: قیمت مبدأ ۱۰۰٬۰۰۰ با ۱۰٪ می‌شود ۱۱۰٬۰۰۰.</div>','<div class="help-box">خطای ۵۲۲ معمولاً یعنی Cloudflare به هاست فروشگاه نمی‌رسد، نه اینکه Key اشتباه است. در حالت خودکار، پس از ۵۲۲ درخواست یک‌بار از Reverse Worker مجاز شما تکرار می‌شود.</div>',mSelect('وضعیت:','wcSt',[['draft','پیش‌نویس'],['publish','منتشر']],BSET('woo.status')),mSelect('دسته:','wcCat',[['','--']],BCON('woo.categoryId')),mButton('🔄','woo-categories'),mInput('شناسه دستی:','wcCatManual','number','','مثلاً ۱۲۳'),mButton('✓ اعمال','woo-category-apply','btn-green'),mCheck('موجودی','wcMS',BSET('woo.manageStock'),false),mInput('تعداد موجودی','wcSQ','number','10','',BSET('woo.stock')),mButton('🔗 تست','test-woo','btn-blue'),mButton('💾 ذخیره','save-connections','btn-green')
@@ -15726,7 +17756,7 @@ async function deployerBranchAction(branch){if(deployerEnvKind()==='local'){wind
 async function copyInstallCommand(key){const text=installCommandText(key);if(!text)return;try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove()}const el=key==='all'?$('installCopyAllStatus'):$('copyInstall-'+key);if(el){el.textContent='کپی شد';setTimeout(()=>{if(el)el.textContent=''},1800)}notice('دستورها کپی شد.','ok')}catch(error){notice('کپی خودکار ممکن نشد؛ متن را دستی انتخاب کنید.','error')}};
 function diagnosticReportText(entry){const d=entry.report,labels={configuration:'پیکربندی',network:'دریافت شبکه','list-extraction':'استخراج فهرست','selector-discovery':'کشف خودکار سلکتورها','selector-evidence':'نشانه‌های سلکتور','detail-extraction':'استخراج جزئیات','selectors-auto-saved':'ذخیرهٔ خودکار سلکتورها'},lines=['Scraper4 extraction diagnostic · '+entry.profile+' · '+entry.at,'URL: '+(d.finalUrl||d.url||'-'),'result: '+(d.ok?'OK':'FAIL')+' · products: '+(d.productCount||0)+' · durationMs: '+(d.durationMs||0)+(d.usedEngine?' · engine: '+d.usedEngine:'')];for(const stage of (d.stages||[])){const details={...stage};delete details.name;delete details.ok;delete details.summary;lines.push('',(stage.ok?'[ok] ':'[FAIL] ')+(labels[stage.name]||stage.name)+': '+(stage.summary||''),pretty(details))}if((d.recommendations||[]).length){lines.push('','recommendations:');for(const r of d.recommendations)lines.push('- '+r)}return lines.join('\n')}
 async function copyDiagnosticReport(){const entry=lastDiagnosticReport;if(!entry||!entry.report){notice('اول عیب‌یابی را اجرا کنید.','error');return}const text=diagnosticReportText(entry);try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove()}notice('گزارش عیب‌یابی کپی شد.','ok')}catch(error){notice('کپی خودکار ممکن نشد؛ متن را دستی انتخاب کنید.','error')}}
-function benchmarkReportText(entry){const d=entry.report,lines=['Scraper4 engine benchmark · '+entry.profile+' · '+entry.at,'pages: '+(d.pages||3)+(d.fastest?' · fastest: '+d.fastest.engine+' ('+d.fastest.products+' products)':' · fastest: none')];for(const r of (d.results||[])){lines.push('',(r.skipped?'[SKIP] ':r.ok?'[ok] ':'[FAIL] ')+r.engine+': products='+(r.products||0)+' pages='+(r.pagesScanned||0)+' ms='+(r.elapsedMs||0)+(r.error?' error='+r.error:''));if(r.pagination)lines.push('  pagination='+pretty(r.pagination));const g=r.diagnosis;if(g){lines.push('  candidates='+(g.candidates==null?'?':g.candidates)+' extracted='+(g.extracted==null?'?':g.extracted)+' complete='+pretty(g.complete)+' signals='+pretty(g.signals));for(const reason of (g.dropReasons||[]))lines.push('  reason: '+reason);lines.push('  hint: '+(g.hint||''));if(g.sample)lines.push('  sample: '+pretty(g.sample));if(g.failure)lines.push('  action: '+pretty(g.failure))}}if((d.recommendations||[]).length){lines.push('','recommendations:');for(const x of d.recommendations)lines.push('- '+x)}return lines.join('\n')}
+function benchmarkReportText(entry){const d=entry.report,lines=['Scraper4 engine benchmark · '+entry.profile+' · '+entry.at,'pages: '+(d.pages||3)+(d.fastest?' · fastest: '+d.fastest.engine+' ('+d.fastest.products+' products)':' · fastest: none')];for(const r of (d.results||[])){lines.push('',(r.skipped?'[SKIP] ':r.ok?'[ok] ':'[FAIL] ')+r.engine+': products='+(r.products||0)+' pages='+(r.pagesScanned||0)+' ms='+(r.elapsedMs||0)+(r.error?' error='+r.error:''));if(r.pagination)lines.push('  pagination='+pretty(r.pagination));const g=r.diagnosis;if(g){lines.push('  candidates='+(g.candidates==null?'?':g.candidates)+' extracted='+(g.extracted==null?'?':g.extracted)+' complete='+pretty(g.complete)+' signals='+pretty(g.signals));for(const reason of (g.dropReasons||[]))lines.push('  reason: '+reason);lines.push('  hint: '+(g.hint||''));if(g.sample)lines.push('  sample: '+pretty(g.sample));if(g.failure)lines.push('  action: '+pretty(g.failure));if(r.detail)lines.push('  automaticDetail: '+pretty(r.detail))}}if((d.recommendations||[]).length){lines.push('','recommendations:');for(const x of d.recommendations)lines.push('- '+x)}return lines.join('\n')}
 async function copyBenchmarkReport(){const entry=lastBenchmarkReport;if(!entry||!entry.report){notice('اول تست سرعت را اجرا کنید.','error');return}const text=benchmarkReportText(entry);try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove()}notice('گزارش تست سرعت کپی شد.','ok')}catch(error){notice('کپی خودکار ممکن نشد؛ متن را دستی انتخاب کنید.','error')}}
 function initMenu(){$('menuSections').innerHTML='<div class="drawer-guide"><b>ابزارهای تکمیلی</b>کارهای اصلی در شش بخش پایین صفحه‌اند. اینجا فقط تنظیمات تخصصی و عملیات نگهداری، براساس موضوع گروه‌بندی شده‌اند.</div>'+menuDefs.map(([title,key,desc,content],index)=>(menuGroupAt[index]?'<div class="menu-group-label">'+menuGroupAt[index]+'</div>':'')+'<section class="menu-section" data-menu="'+key+'"><button class="menu-title"><span>'+title+'</span><i>▼</i></button><div class="menu-content"><details class="menu-desc"><summary>ℹ️ توضیح این بخش</summary><p class="menu-text">'+desc+'</p></details>'+content+'</div></section>').join('');renderThemeSwatches();renderInstallCommandCards();renderDeployerEnvHint();if(deployerEnvKind()==='local')renderDeployerLocal();renderInjectorPreview()}
 function initFields(){ $('selectorGrid').innerHTML=listFields.map(([id,label])=>fieldHtml(id,label,id==='container'?'li.product':id==='title'?'h2':id==='price'?'.price':id==='link'?'a[href]':'img')).join(''); $('detailGrid').innerHTML=detailFields.map(([id,label])=>fieldHtml(id,label,'')).join('');galModeChanged();updateDetailSummary();initAutoSave() }
@@ -16599,9 +18629,9 @@ if(action==='ai-key-add'){const isCf=$('aiCloudflareBox')&&!$('aiCloudflareBox')
 if(action==='save'){clearTimeout(autoSaveTimer);return await saveSettings()}if(action==='save-connections'){clearTimeout(autoSaveTimer);return await saveConnections()}if(action==='save-all'){clearTimeout(autoSaveTimer);await saveSettings();await saveConnections();openResultModal('💾 ذخیرهٔ کامل',{ok:true,summary:'تنظیمات عمومی و همهٔ اتصال‌ها ذخیره شدند. ذخیرهٔ خودکار هم فعال است.'});return}if(action==='bk-restore')return openJsonPicker($('bkFile'),'transferStatus');if(action==='goto-backup'){const d=$('unifiedBackupDetails');if(d){d.open=true;try{d.scrollIntoView()}catch{}}return}if(action==='branch-restore')return doBranchRestore();if(action==='branch-push')return doBranchPush();if(action==='sched-push-copy'){copySchedPushCurrent();return}if(action==='sched-push-refresh')return renderSchedPushStatus();if(action==='branch-files-refresh')return refreshBranchFiles();if(action==='version-info'){const d=await api('/api/version');openResultModal('🔄 اطلاعات نسخه و انتشار',{...d,summary:'انتشار و بازگشت نسخه در Cloudflare Dashboard ← Workers & Pages ← Deployments انجام می‌شود.',recommendations:['برای بازگشت، Deployment سالم قبلی را انتخاب و Rollback کنید.','Worker برخلاف PHP فایل نصب‌کننده روی هاست اجرا نمی‌کند.']});return}if(action==='reload')return location.reload();if(action==='csv-export'){const id=$('transferProfile').value.trim();if(!id)throw Error('شناسه پروفایل را وارد کنید.');activateProfile(id);const r=await activityFetch(U('/api/profiles/'+encodeURIComponent(id)+'/export.csv'),{headers:headers()});if(!r.ok)throw Error('خروجی CSV ناموفق بود.');const blob=await r.blob(),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=id+'.csv';a.click();URL.revokeObjectURL(a.href);return notice('فایل CSV دانلود شد.')}if(action==='ai-desc-save'){const enabled=$('aiDescEnabled')?.checked!==false;const d=await api('/api/ai/description-settings',{method:'POST',body:JSON.stringify({enabled})});return notice(d.settings?.enabled?'\u062a\u0648\u0636\u06cc\u062d\u200c\u0633\u0627\u0632 \u0641\u0639\u0627\u0644 \u0634\u062f.':'\u062a\u0648\u0636\u06cc\u062d\u200c\u0633\u0627\u0632 \u062e\u0627\u0645\u0648\u0634 \u0634\u062f.','ok')}if(action==='ai-desc-run'){const id=$('aiDescProfile')?.value||state.selected;if(!id)return notice('\u0627\u0628\u062a\u062f\u0627 \u06cc\u06a9 \u067e\u0631\u0648\u0641\u0627\u06cc\u0644 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f.','error');const d=await api('/api/profiles/'+encodeURIComponent(id)+'/ai-descriptions',{method:'POST',body:JSON.stringify({limit:25})});if($('aiDescResult'))$('aiDescResult').innerHTML='<div class="visual-row">'+esc('\u0645\u062f\u0644: '+(d.model||'\u2014'))+' \u00b7 '+esc('\u0628\u0631\u0631\u0633\u06cc: '+fa(d.candidates||0))+' \u00b7 '+esc('\u062a\u06a9\u0645\u06cc\u0644: '+fa(d.filled||0))+' \u00b7 '+esc('\u0646\u0627\u0645\u0648\u0641\u0642: '+fa(d.failed||0))+'</div>'+(d.failures||[]).map(f=>'<div class="visual-row">'+esc(f.title||'')+' \u2014 '+esc(f.error||'')+'</div>').join('');output(d);return notice(d.filled?('\u062a\u0648\u0636\u06cc\u062d '+fa(d.filled)+' \u0645\u062d\u0635\u0648\u0644 \u0633\u0627\u062e\u062a\u0647 \u0634\u062f.'):'\u0645\u062d\u0635\u0648\u0644 \u0646\u0627\u0642\u0635\u06cc \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f \u06cc\u0627 \u0633\u0627\u062e\u062a \u0627\u0646\u062c\u0627\u0645 \u0646\u0634\u062f.',d.filled?'ok':'info')}if(action==='ai-diagnose'){await saveConnections();const d=await api('/api/ai/diagnose',{method:'POST',body:'{}'});openStageModal('🩺 عیب‌یابی اتصال هوش مصنوعی',d);output(d);return notice(d.ok?'اتصال هوش مصنوعی سالم است.':'عیب‌یابی مشکل اتصال را پیدا کرد.',d.ok?'ok':'error')}if(action==='selftest'||action==='parity'||action==='debug'){const path=action==='selftest'?'/api/selftest':action==='debug'?'/api/debug':'/api/parity',d=await api(path);$('selftestResult').textContent=JSON.stringify(d,null,2);output(d);const label=action==='debug'?'دیباگ جامع':action==='selftest'?'خودآزمون':'گزارش تطبیق';openResultModal(label,d);return notice(d.ok?label+' با موفقیت تمام شد.':label+' موارد نیازمند بررسی دارد.',d.ok?'ok':'error')}if(action==='products'){drawer(false);return tab('products')}if(action==='health'){const d=await activityFetch(U('/health')).then(r=>r.json());output(d);openResultModal('❤️ نتیجه بررسی سلامت Worker',d);return notice('سلامت سرویس بررسی شد.')}if(action==='backup-full')return doFullBackup();if(action==='backup-bootstrap')return doBootstrapDownload();if(action==='backup-inspect'){const picker=$('backupInspectFile');if(picker)picker.click();return}if(action==='backup')return openExportSectionsModal();if(action==='woo-categories'){await saveConnections();const d=await api('/api/categories/woo'),select=$('wcCat'),current=String(state.connections?.woo?.categoryId||'');select.innerHTML='<option value="">— انتخاب دسته —</option>'+d.items.map(x=>'<option value="'+escAttr(x.id)+'">'+esc(x.name)+' (#'+esc(x.id)+')</option>').join('');if(current)select.value=current;openResultModal('🗂 دسته‌های ووکامرس',{ok:true,total:d.items.length,raw:d.items});return notice(fa(d.items.length)+' دسته بارگذاری شد.')}if(action==='woo-category-apply'){const value=Number($('wcCatManual').value||$('wcCat').value);if(!value)throw Error('یک دسته انتخاب کنید یا شناسهٔ دستی معتبر بنویسید.');state.connections.woo.categoryId=value;if(!$('wcCat').querySelector('option[value="'+value+'"]'))$('wcCat').insertAdjacentHTML('beforeend','<option value="'+value+'">شناسه '+fa(value)+'</option>');$('wcCat').value=String(value);await saveConnections();return notice('دستهٔ پیش‌فرض ووکامرس اعمال شد.')}if(action.startsWith('test-')){const target=action.slice(5);let body={};if(target==='ai')body={provider:$('aiProviderSel')?.value||'',model:$('aiSingleModelSel')?.value||'',prompt:$('aiSinglePrompt')?.value||'سلام'};if(target==='ai'&&aiSingleMode==='category'){await saveConnections();const provider=$('aiProviderSel')?.value||'',model=($('aiSingleModelSel')?.value||'').replace(/::k\d+$/,''),title=($('aiSinglePrompt')?.value||'').trim();if(!provider||!model)return notice('یک ارائه‌دهنده و مدل انتخاب کنید.','error');if(!title)return notice('عنوان محصول را بنویسید.','error');const d=await api('/api/destination/basalam/category/suggest',{method:'POST',body:JSON.stringify({title,mode:'ai',modelKey:provider+'::'+model})});output(d);openResultModal('🗂️ پیشنهاد دسته‌بندی باسلام',d);return notice(d.ok?'دسته پیشنهاد شد.':'پیشنهاد دسته ناموفق بود.',d.ok?'ok':'error')}await saveConnections();const d=await api('/api/test-connection/'+target,{method:'POST',body:JSON.stringify(body)});output(d);if(target==='basalam'&&d.ok){const filled=applyBasalamAutofill(d);if(filled.length){await saveConnections();notice('پر شد: '+filled.join('، '),'ok')}}openResultModal(target==='woo'?'🔗 استعلام جامع ووکامرس':target==='basalam'?'🔗 استعلام جامع باسلام':'🤖 آزمایش جامع مدل هوش مصنوعی',d);return notice(d.ok?'اتصال موفق بود.':'اتصال ناموفق بود.',d.ok?'ok':'error')}if(action==='ai-test-all'||action==='ai-test-candidates'){await saveConnections();return runAiModelTests(action==='ai-test-candidates'||Boolean($('aiTestOnlyUntested')?.checked))}if(action==='ai-test-stop')return controlAiModelTests('stop');if(action==='ai-test-resume')return controlAiModelTests('resume');if(action==='ai-test-reset')return controlAiModelTests('reset');if(action==='ai-test-results'){const current=await api('/api/ai/test-runs/current');if(current.run?.result?.results?.length){openAiTable(aiRunPayload(current.run));return}const d=await api('/api/ai/test-results');openAiTable(d);return}if(action==='ai-vote-master'){await saveConnections();const ai=state.connections.ai||{},d=await api('/api/ai/vote',{method:'POST',body:JSON.stringify({task:'manual',winner:ai.master,candidates:ai.candidates||[]})});output(d);openResultModal('🏆 نتیجهٔ ثبت رأی',{...d,raw:d.leaderboard});return notice('رأی ثبت شد.')}if(action==='ai-leaderboard'){const d=await api('/api/ai/leaderboard');output(d);openResultModal('📊 جدول امتیاز مدل‌های هوش مصنوعی',{...d,raw:d.leaderboard});return}if(action.startsWith('notify-')){await saveConnections();const preset=notifyTestPayload(action),channel=preset?preset.channel:action.slice(7),d=await api('/api/notifications/test',{method:'POST',body:JSON.stringify({channel,text:preset?preset.text:'پیام آزمایشی اسکرپر ۴'})});output(d);openResultModal('🔔 نتیجهٔ تست اعلان '+channel,d);return notice(d.ok?'پیام آزمایشی ارسال شد.':'ارسال پیام آزمایشی ناموفق بود.',d.ok?'ok':'error')}if(action==='dupes-preview'||action==='dupes-apply'){const apply=action==='dupes-apply';const keep=$('dupKeep')?.value==='cheapest'?'cheapest':'expensive';const keepLabel=keep==='cheapest'?'ارزان‌تر':'گران‌تر';if(apply&&!confirm('تکراری‌های همهٔ مقصدها (ووکامرس و همهٔ غرفه‌های باسلام) حذف شوند؟ در هر گروه فقط «'+keepLabel+'» باقی می‌ماند. محصولات محلی دست‌نخورده می‌مانند.'))return;const taskKey='dupes-'+(apply?'apply':'preview'),taskName=apply?'🗑 حذف تکراری‌های مقصد':'👁 پیش‌نمایش تکراری‌ها';const box=$('reconResult');if(box)box.innerHTML='<div class="muted">⏳ در حال خواندن همهٔ مقصدها و یافتن تکراری‌ها…</div>';localTaskStart(taskKey,taskName,'در حال بررسی مقصدها…');let d;try{d=await maintenanceRequest('/api/maintenance/duplicates',{method:'POST',body:JSON.stringify({confirm:apply?'APPLY':'',keep,limit:1000})})}catch(error){localTaskEnd(taskKey,false,error.message||'خطا');if(box)box.innerHTML='<div class="result-summary bad">'+esc(error.message||'خطا')+'</div>';throw error}localTaskEnd(taskKey,d.ok!==false,apply?(fa(d.deleted||0)+' حذف، '+fa(d.archived||0)+' بایگانی'):(fa(d.planned||0)+' تکراری'));if(box)box.innerHTML=renderDuplicateReport(d,keepLabel);output(d);return notice(apply?('حذف تکراری‌ها: '+fa(d.deleted||0)+' حذف، '+fa(d.archived||0)+' بایگانی، '+fa((d.failed||[]).length)+' ناموفق'):('تکراری‌های یافت‌شده: '+fa(d.planned||0)),d.ok!==false?'ok':'error')}if(action==='recon-unified'){const box=$('reconResult');if(box)box.innerHTML='<div class="muted">⏳ در حال خواندن مقصدها و مقایسهٔ محصولات…</div>';localTaskStart('recon-unified-preview','👁 پیش‌نمایش هماهنگ‌سازی','در حال مقایسهٔ مبدأ و مقصدها…');let d;try{d=await maintenanceRequest('/api/maintenance/recon-unified',{method:'POST',body:JSON.stringify({profileId:$('reconAllProfiles')?.checked?'':(state.selected||'')})})}catch(error){const text=error&&error.message?error.message:String(error);localTaskEnd('recon-unified-preview',false,text);if(box)box.innerHTML='<div class="rc-banner rc-bad">⛔ ساخت جدول ناموفق بود: '+esc(text)+'</div>';return notice(text,'error')}localTaskEnd('recon-unified-preview',d.ok!==false,fa(d.rows?d.rows.length:0)+' ردیف');lastReconReport=d;if(box)box.innerHTML=renderReconMatrix(d,{limit:400,applied:false});output(d);return notice(d.inSync?'\u0647\u0645\u0647\u0654 \u0645\u0642\u0635\u062f\u0647\u0627 \u0628\u0627 \u0645\u0628\u062f\u0623 \u06cc\u06a9\u0633\u0627\u0646\u200c\u0627\u0646\u062f.':('\u0645\u063a\u0627\u06cc\u0631\u062a: '+fa(d.priceDiff)+' \u0642\u06cc\u0645\u062a\u060c '+fa(d.missing)+' \u0646\u0628\u0648\u062f \u062f\u0631 \u0645\u0642\u0635\u062f\u060c '+fa(d.extra)+' \u0627\u0636\u0627\u0641\u06cc'),d.inSync?'ok':'error')}if(action==='recon-unified-preview'||action==='recon-unified-apply'){const apply=action.endsWith('apply');const taskKey='recon-unified-'+(apply?'apply':'preview');const taskName=apply?'⚡ همگام‌سازی یکپارچه':'👁 پیش‌نمایش هماهنگ‌سازی';if(apply&&!confirm('\u0642\u06cc\u0645\u062a\u200c\u0647\u0627 \u0648 \u0645\u062d\u0635\u0648\u0644\u0627\u062a \u0646\u0627\u0642\u0635 \u0631\u0648\u06cc \u0645\u0642\u0635\u062f\u0647\u0627 \u0648\u0627\u0642\u0639\u0627\u064b \u0627\u0639\u0645\u0627\u0644 \u0634\u0648\u062f\u061f'))return;const box=$('reconResult');if(box)box.innerHTML='<div class="muted">⏳ در حال خواندن مقصدها و مقایسهٔ محصولات…</div>';localTaskStart(taskKey,taskName,'در حال مقایسهٔ مبدأ و مقصدها…');let d;try{d=await maintenanceRequest('/api/maintenance/recon-unified/apply',{method:'POST',body:JSON.stringify({profileId:$('reconAllProfiles')?.checked?'':(state.selected||''),confirm:apply?'APPLY':'',limit:200})})}catch(error){localTaskEnd(taskKey,false,error.message||'خطا');if(box)box.innerHTML='<div class="result-summary bad">'+esc(error.message||'خطا')+'</div>';throw error}localTaskEnd(taskKey,d.ok!==false,apply?(fa(d.changed||0)+' مورد هماهنگ شد'):(fa(d.planned||0)+' اقدام آمادهٔ اجراست'));lastReconReport=d;const html=renderReconMatrix(d,{limit:400,applied:apply});$('reconResult').innerHTML=html;output(d);modalShell(apply?'\u26a1 \u0646\u062a\u06cc\u062c\u0647\u0654 \u0647\u0645\u0627\u0647\u0646\u06af\u200c\u0633\u0627\u0632\u06cc':'\ud83d\udc41 \u067e\u06cc\u0634\u200c\u0646\u0645\u0627\u06cc\u0634 \u0647\u0645\u0627\u0647\u0646\u06af\u200c\u0633\u0627\u0632\u06cc',html);document.getElementById('resultModal')?.classList.add('result-modal-full');return notice(apply?(fa(d.changed||0)+' \u0645\u0648\u0631\u062f \u0647\u0645\u0627\u0647\u0646\u06af \u0634\u062f.'):(fa(d.planned||0)+' \u0627\u0642\u062f\u0627\u0645 \u0622\u0645\u0627\u062f\u0647\u0654 \u0627\u062c\u0631\u0627\u0633\u062a.'),d.ok?'ok':'error')}if(action.startsWith('recontable-')){const target=action.slice('recontable-'.length);const d=await api('/api/maintenance/recon-table/'+target,{method:'POST',body:JSON.stringify({profileId:state.selected||''})});$('reconResult').innerHTML=renderReconTable(d);output(d);return notice(d.inSync?'مبدأ و مقصد یکسان‌اند.':'جدول مغایرت آماده شد: '+d.priceDiff+' مغایرت قیمت، '+d.missing+' نبود در مقصد، '+d.extra+' اضافی در مقصد.',d.inSync?'ok':'error')}if(action.startsWith('recon-')||action.startsWith('rebuild-')){const [kind,target]=action.split('-'),d=await api('/api/maintenance/'+kind+'/'+target,{method:'POST',body:JSON.stringify({profileId:state.selected||''})});$('reconResult').textContent=JSON.stringify(d.report||d,null,2);output(d);openResultModal((kind==='recon'?'🔍 مغایرت‌گیری ':'🔗 بازسازی نگاشت ')+(target==='woo'?'ووکامرس':'باسلام'),d);return notice(kind==='recon'?'مغایرت‌گیری تمام شد.':'نگاشت مقصد بازسازی شد.')}if(action.startsWith('retire-')){const parts=action.split('-'),apply=parts[1]==='apply',target=parts[2]||'woo';if(apply&&!confirm('عملیات روی مقصد واقعاً اعمال شود؟'))return;const retireAction=String(nestedGet(state.settings,'retire.mode')||$('retireMode')?.value||'report'),d=await api('/api/maintenance/retire/'+target,{method:'POST',body:JSON.stringify({profileId:state.selected||'',action:retireAction,confirm:apply?'APPLY':''})});output(d);openResultModal('🗑 گزارش محصولات حذف‌شدهٔ مقصد',d);return notice(apply?fa(d.changed)+' محصول مقصد تغییر کرد.':fa(d.count)+' محصول حذف‌شده پیدا شد.',d.failed?.length?'error':'ok')}if(action==='bulk-preview'||action==='bulk-apply'){const apply=action.endsWith('apply');if(apply&&!confirm('تغییر گروهی روی مقصد اعمال شود؟ این عملیات واقعی است.'))return;const body={profileId:$('bulkProfile').value.trim(),query:$('bulkQuery').value,prefix:$('bulkPrefix').value,suffix:$('bulkSuffix').value,pricePercent:Number($('bulkPrice').value),stock:$('bulkStock').value,confirm:apply?'APPLY':''},d=await api('/api/maintenance/bulk/'+$('bulkTarget').value,{method:'POST',body:JSON.stringify(body)});$('bulkResult').textContent=JSON.stringify(d,null,2);output(d);return notice(apply?fa(d.changed)+' محصول ویرایش شد.':fa(d.count)+' محصول در پیش‌نمایش است.',d.failed?.length?'error':'ok')}if(action.startsWith('dest-')){const target=$('bulkTarget').value,id=Number($('destProductId').value);let d;if(action==='dest-overview')d=await api('/api/destination/'+target+'/overview');else if(action==='dest-list')d=await api('/api/destination/'+target+'/products?limit=100');else if(action==='dest-duplicates'){const body={keep:($('dedupKeep')&&$('dedupKeep').value)||'newest',suffixFormats:($('dedupSuffix')&&$('dedupSuffix').value)||'',apply:false};const started=await api('/api/destination/'+target+'/dedup-runs',{method:'POST',body:JSON.stringify(body)});dedupLastStatus='queued';renderDedupRun(started.run);notice(started.existing?'اجرای قبلی هنوز فعال است.':'بررسی تکراری‌ها سرورساید آغاز شد؛ نتیجه به‌صورت زنده نمایش داده می‌شود.','info');return openDedupLiveModal()}else if(action==='dest-status'){if(!id||!confirm('وضعیت محصول مقصد تغییر کند؟'))return;d=await api('/api/destination/'+target+'/'+id+'/status',{method:'POST',body:JSON.stringify({status:$('destStatus').value,confirm:'APPLY'})})}else{if(!id||!confirm('محصول مقصد حذف شود؟'))return;d=await api('/api/destination/'+target+'/'+id+'?confirm=DELETE',{method:'DELETE'})}$('bulkResult').textContent=JSON.stringify(d.items||d.groups||d,null,2);output(d);return notice('عملیات مدیریت مقصد انجام شد.')}if(action==='photo-preview'||action==='photo-apply'){const apply=action.endsWith('apply');if(apply&&!confirm('تصاویر روی ووکامرس ثبت شوند؟'))return;const d=await api('/api/maintenance/photo-fix',{method:'POST',body:JSON.stringify({profileId:$('photoProfile').value.trim(),confirm:apply?'APPLY':''})});$('photoResult').textContent=JSON.stringify(d,null,2);output(d);return notice(apply?fa(d.changed)+' تصویر ثبت شد.':fa(d.count)+' محصول بدون تصویر پیدا شد.',d.failed?.length?'error':'ok')}if(action==='cat-learn'||action==='cat-test'||action==='cat-list'){let d;if(action==='cat-list')d=await api('/api/category-learning');else{const title=$('catTestTitle')?.value||'';if(!title)throw Error('یک عنوان نمونه بنویسید.');d=await api('/api/category-learning/'+(action==='cat-learn'?'record':'test'),{method:'POST',body:JSON.stringify({title,categoryId:Number($('catId')?.value||0),categoryName:$('catName')?.value||'',maxWords:Number($('catLearnWords')?.value||5)})})}$('catResult').textContent=JSON.stringify(d.items||d.result||d,null,2);output(d);openResultModal(action==='cat-test'?'🧪 نتیجهٔ آزمایش دسته‌بندی':'📚 داده‌های یادگیری دسته‌بندی',d);return notice(action==='cat-learn'?'یادگیری ثبت شد.':'نتیجه آماده است.')}if(action==='ar-test'||action==='ar-preview'||action==='ar-run'||action==='ar-log'){await saveSettings();let d;if(action==='ar-test')d=await api('/api/autoreply/test',{method:'POST',body:JSON.stringify({text:$('arTestText').value})});else if(action==='ar-log')d=await api('/api/autoreply/log');else{const apply=action==='ar-run';if(apply&&!confirm('پاسخ‌ها واقعاً برای مشتریان ارسال شوند؟'))return;d=await api('/api/autoreply/run',{method:'POST',body:JSON.stringify({confirm:apply?'APPLY':''})})}$('arResult').textContent=JSON.stringify(d.items||d.result||d,null,2);output(d);openResultModal(action==='ar-test'?'🧪 نتیجهٔ جامع تست پاسخ خودکار':action==='ar-preview'?'👁 پیش‌نمایش پاسخ‌های خودکار':action==='ar-log'?'📜 گزارش پاسخ‌های خودکار':'🤖 نتیجهٔ اجرای پاسخ خودکار',d);return notice(action==='ar-run'?fa(d.replied)+' پاسخ ارسال شد.':'نتیجه پاسخ خودکار آماده شد.',d.failed?'error':'ok')}if(action==='digest-preview'||action==='digest-send'){await saveSettings();const send=action==='digest-send';if(send&&!confirm('گزارش همین حالا به پیام‌رسان‌ها ارسال شود؟'))return;const d=await api('/api/digest',{method:'POST',body:JSON.stringify({confirm:send?'SEND':''})});$('digestResult').textContent=JSON.stringify(d,null,2);output(d);return notice(send?'گزارش ارسال شد.':'پیش‌نمایش گزارش ساخته شد.')}if(action==='chats')return openBasalamChats();if(action==='orders'){const d=await api('/api/basalam/orders');$('digestResult').textContent=JSON.stringify(d.items,null,2);output(d);openResultModal('🧾 سفارش‌های باسلام',{...d,raw:d.items});return notice(fa(d.items.length)+' سفارش دریافت شد.')}if(action==='watchdog'){const d=await api('/api/queue-watchdog',{method:'POST',body:JSON.stringify({minutes:Math.max(1,Math.ceil(Number($('stallAfter').value||300)/60)),autoContinue:$('autoContinueJobs')?.checked!==false})});const affected=Number(d.recovered||d.reaped||0),summary=d.autoContinue?fa(affected)+' کار گیرکرده/ناموفق دوباره در صف ادامه قرار گرفت.':fa(affected)+' کار متوقف‌شده بسته شد.';output(d);openResultModal('🩺 نتیجهٔ بررسی نگهبان صف',{...d,summary});return notice(summary,d.ok?'ok':'error')}if(action==='source-test'){await saveSettings({silent:true});const selected=state.profiles.find(p=>p.id===state.selected),url=$('sourceTestUrl').value.trim()||selected?.url||$('url').value.trim();if(!url)throw Error('آدرس آزمایش را وارد یا یک پروفایل انتخاب کنید.');const d=await api('/api/source-test',{method:'POST',body:JSON.stringify({url,profileId:selected?.id})});output(d);openResultModal('🌐 نتیجهٔ تست دسترسی به منبع',d);return notice('دسترسی موفق: '+fa(d.bytes)+' بایت')}if(action==='stats'||action==='stats-woo'||action==='stats-basalam'){const d=await api('/api/profile-stats');$('menuStats').textContent=JSON.stringify(d.items,null,2);output(d);openResultModal('📊 آمار محصولات هر پروفایل',{...d,target:action==='stats'?'all':action.slice(6)});return notice('آمار ساخته شد.')}if(action==='editor-woo'||action==='editor-basalam'){drawer(false);tab('destination');return openDestinationManager(action==='editor-basalam'?'basalam':'woo')}if(action.startsWith('dedup-'))return handleDedupAction(action.slice(6));if(action.startsWith('agent-'))return handleAgentAction(action.slice(6));if(action==='category-import')return openJsonPicker($('categoryImportFile'),'catResult');if(action==='category-export'){const d=await api('/api/category-learning?limit=5000'),blob=new Blob([JSON.stringify(d.items||[],null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='category-learning.json';a.click();URL.revokeObjectURL(a.href);openResultModal('⬇️ گزارش پشتیبان یادگیری دسته‌بندی',{ok:true,total:(d.items||[]).length,summary:'فایل داده‌های واقعی یادگیری دسته‌بندی دانلود شد.'});return notice(fa((d.items||[]).length)+' مورد در فایل پشتیبان ذخیره شد.')}notice('این ابزار از صفحه محصولات یا صف‌ها اجرا می‌شود.','info')}catch(error){const detail={ok:false,phase:'dashboard',error:error?.message||String(error),recommendations:['تنظیمات واردشده را بررسی و دوباره تلاش کنید.','اگر خطا مربوط به شبکه است، اتصال اینترنت سرویس مقصد و آدرس API را بررسی کنید.']};notice(detail.error,'error');output(detail);openResultModal('⚠️ جزئیات خطا',detail)}}
 async function importCsv(file,profileId='',wooStatus='',statusId='csvStatus'){const status=$(statusId);try{const id=profileId||$('transferProfile').value.trim();if(!id)throw Error('ابتدا پروفایل مقصد را انتخاب کنید.');activateProfile(id);if(!file)throw Error('یک فایل CSV یا Excel انتخاب کنید.');if(status){status.hidden=false;status.textContent='⏳ در حال آپلود، تحلیل و ورود محصولات…'}const xlsx=/\.xlsx$/i.test(file.name),query='?format='+(xlsx?'xlsx':'csv')+(wooStatus?'&wooStatus='+encodeURIComponent(wooStatus):''),d=await api('/api/profiles/'+encodeURIComponent(id)+'/import'+query,{method:'POST',headers:{'content-type':xlsx?'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'text/csv; charset=utf-8'},body:file});if(status){status.hidden=false;status.textContent='✅ '+fa(d.imported)+' محصول وارد شد · خطا '+fa(d.failed)}output(d);notice('درون‌ریزی فایل تمام شد.',d.failed?'error':'ok');openResultModal('📥 گزارش آپلود و تحلیل فایل',{...d,summary:fa(d.imported)+' محصول از '+fa(d.rows)+' ردیف فایل وارد پروفایل شد.',recommendations:d.failed?['جزئیات خطاهای هر ردیف را در پاسخ خام بررسی کنید.']:['اکنون محصولات آمادهٔ بازبینی یا ارسال به مقصد هستند.']});return d}catch(error){if(status){status.hidden=false;status.textContent='❌ '+error.message}notice(error.message,'error');openResultModal('⚠️ خطای درون‌ریزی فایل',{ok:false,error:error.message,recommendations:['فایل CSV با UTF-8 یا فایل Excel با پسوند xlsx انتخاب کنید.','وجود ستون نام محصول و قیمت را بررسی کنید.']});throw error}}
 function fa(value){return Number(value||0).toLocaleString('fa-IR')}
-function faVersion(value){return String(value||'1.219.0+').replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d])}
+function faVersion(value){return String(value||'1.220.0+').replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d])}
 function tab(name){document.querySelectorAll('.main-tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));document.querySelectorAll('.tab-pane').forEach(x=>x.classList.toggle('active',x.id==='pane-'+name));if(['jobs','home','destination'].includes(name)&&state.connected)loadJobs(name==='jobs');if(['products','home','settings','destination','jobs'].includes(name))syncProfileSelects()}
-async function connect(){try{const lastProfileId=rememberedProfileId()||state.selected,[profiles,status,health,settings,connections]=await Promise.all([api('/api/profiles'),api('/api/status'),fetch(U('/health')).then(r=>r.json()),api('/api/settings'),api('/api/connections')]);state.profiles=profiles.profiles;state.settings=settings.settings||{};state.connections=connections.connections||{};state.connections.basalam=state.connections.basalam||{};state.connections.basalam.shops=Array.isArray(state.connections.basalam.shops)?state.connections.basalam.shops:[];state.connections.ai=state.connections.ai||{};state.connections.ai.providers=Array.isArray(state.connections.ai.providers)?state.connections.ai.providers:[];state.connections.ai.candidates=Array.isArray(state.connections.ai.candidates)?state.connections.ai.candidates:[];applySettings();applyConnections();refreshVisualEditors();state.connected=true;if(lastProfileId&&state.profiles.some(profile=>profile.id===lastProfileId))editProfile(lastProfileId,false);else{if(lastProfileId)forgetRememberedProfile(lastProfileId);clearForm()}renderStatus(status,health);await loadJobs(false);refreshCurrentAiRun(false);refreshCurrentCategoryRun(true);$('topDot').className='dot ok';$('topText').textContent='آماده · '+fa(state.profiles.length)+' پروفایل';if($('topVersionNum'))$('topVersionNum').textContent=faVersion(health.version||'1.219.0+');notice(state.selected?'آخرین پروفایل «'+(state.profiles.find(profile=>profile.id===state.selected)?.name||state.selected)+'» بارگذاری شد.':'اطلاعات با موفقیت بارگذاری شد.');output(status);tab('home')}catch(error){state.connected=false;$('topDot').className='dot err';let detail=error&&error.message?error.message:String(error),label='خطا در بارگذاری';try{const h=await activityFetch(U('/health')).then(r=>r.json());if(h&&h.databaseReady===false){label='پایگاه داده متصل نیست';detail=h.databaseError||detail;setState('dbState',false)}}catch{}$('topText').textContent=label;notice(detail,'error',true);output({error:detail})}}
+async function connect(){try{const lastProfileId=rememberedProfileId()||state.selected,[profiles,status,health,settings,connections]=await Promise.all([api('/api/profiles'),api('/api/status'),fetch(U('/health')).then(r=>r.json()),api('/api/settings'),api('/api/connections')]);state.profiles=profiles.profiles;state.settings=settings.settings||{};state.connections=connections.connections||{};state.connections.basalam=state.connections.basalam||{};state.connections.basalam.shops=Array.isArray(state.connections.basalam.shops)?state.connections.basalam.shops:[];state.connections.ai=state.connections.ai||{};state.connections.ai.providers=Array.isArray(state.connections.ai.providers)?state.connections.ai.providers:[];state.connections.ai.candidates=Array.isArray(state.connections.ai.candidates)?state.connections.ai.candidates:[];applySettings();applyConnections();refreshVisualEditors();state.connected=true;if(lastProfileId&&state.profiles.some(profile=>profile.id===lastProfileId))editProfile(lastProfileId,false);else{if(lastProfileId)forgetRememberedProfile(lastProfileId);clearForm()}renderStatus(status,health);await loadJobs(false);refreshCurrentAiRun(false);refreshCurrentCategoryRun(true);$('topDot').className='dot ok';$('topText').textContent='آماده · '+fa(state.profiles.length)+' پروفایل';if($('topVersionNum'))$('topVersionNum').textContent=faVersion(health.version||'1.220.0+');notice(state.selected?'آخرین پروفایل «'+(state.profiles.find(profile=>profile.id===state.selected)?.name||state.selected)+'» بارگذاری شد.':'اطلاعات با موفقیت بارگذاری شد.');output(status);tab('home')}catch(error){state.connected=false;$('topDot').className='dot err';let detail=error&&error.message?error.message:String(error),label='خطا در بارگذاری';try{const h=await activityFetch(U('/health')).then(r=>r.json());if(h&&h.databaseReady===false){label='پایگاه داده متصل نیست';detail=h.databaseError||detail;setState('dbState',false)}}catch{}$('topText').textContent=label;notice(detail,'error',true);output({error:detail})}}
 function renderStatus(status,health){$('statProfiles').textContent=fa(state.profiles.length);$('statRunning').textContent=fa((status.jobs||[]).filter(j=>['queued','running'].includes(j.status)).length);$('statFailed').textContent=fa((status.jobs||[]).filter(j=>j.status==='failed').length);setState('dbState',health.databaseReady);setState('wooState',status.connections.woo);setState('basalamState',status.connections.basalam);setState('workerState',health.workerInWeb)}
 function setState(id,on){const el=$(id);el.textContent=on?'فعال':'غیرفعال';el.className=on?'on':'off'}
 function renderProfiles(){const box=$('profileList');box.innerHTML=state.profiles.map(p=>'<div class="profile '+(state.selected===p.id?'selected':'')+'"><div class="profile-title"><span>'+esc(p.name)+'</span><span class="chip">'+(p.enabled?'فعال':'خاموش')+'</span></div><div class="profile-url">'+esc(p.url)+'</div><div class="profile-meta"><span class="chip">'+fa(p.pages)+' صفحه</span><span class="chip">'+(p.intervalMinutes?fa(p.intervalMinutes)+' دقیقه':'دستی')+'</span><span class="chip">موتور: '+esc(p.extractionEngine||'auto')+'</span>'+(p.extractionEngineMaster?'<span class="chip">مستر: '+esc(p.extractionEngineMaster)+'</span>':'')+(p.syncWoo?'<span class="chip">Woo</span>':'')+(p.syncBasalam?'<span class="chip">Basalam</span>':'')+'</div><div class="profile-actions"><button class="btn btn-blue btn-sm" data-paction="scrape" data-id="'+escAttr(p.id)+'">▶ استخراج</button><button class="btn btn-green btn-sm" data-paction="sync" data-id="'+escAttr(p.id)+'">↥ ارسال</button><button class="btn btn-gray btn-sm" data-paction="diagnose" data-id="'+escAttr(p.id)+'">🩺 عیب‌یابی</button><button class="btn btn-purple btn-sm" data-paction="edit" data-id="'+escAttr(p.id)+'">✎ ویرایش</button><button class="btn btn-red btn-sm" data-paction="delete" data-id="'+escAttr(p.id)+'">حذف</button></div></div>').join('')||'<div class="empty">پروفایلی وجود ندارد؛ از تب سلکتورها بسازید.</div>';syncProfileSelects()}
@@ -16786,19 +18816,26 @@ function destinationEditPayload(product){const body={shopId:product.shopId},titl
 async function openDestinationEditor(summary){modalShell('⏳ دریافت جزئیات محصول','<div class="dest-loading">در حال دریافت اطلاعات کامل محصول…</div>');try{const data=await api('/api/destination/'+dest.target+'/product/'+summary.id+'?shop='+encodeURIComponent(summary.shopId||'')),p=data.product,extra=dest.target==='basalam'?'<div><label>روز آماده‌سازی</label><input id="dp_preparation_days" type="number" min="0" value="'+escAttr(p.raw?.preparation_days??p.raw?.revision?.data?.preparation_days??'')+'"></div><div><label>وزن محصول (گرم)</label><input id="dp_weight" type="number" min="0" value="'+escAttr(p.raw?.weight??p.raw?.revision?.data?.weight??'')+'"></div><div><label>وزن بسته (گرم)</label><input id="dp_package_weight" type="number" min="0" value="'+escAttr(p.raw?.package_weight??p.raw?.revision?.data?.package_weight??'')+'"></div>':'';modalShell('✎ ویرایش '+(dest.target==='woo'?'ووکامرس':'باسلام')+' · #'+fa(p.id),'<p class="modal-note">قیمت در رابط به تومان است. دکمهٔ پیش‌نمایش هیچ تغییری در فروشگاه ایجاد نمی‌کند.</p><div class="inline-form"><div class="wide"><label>عنوان</label><input id="dpTitle" value="'+escAttr(p.title)+'"></div><div><label>قیمت (تومان)</label><input id="dpPrice" type="number" min="0" value="'+escAttr(p.price)+'"></div><div><label>موجودی</label><input id="dpStock" type="number" min="0" value="'+(p.stock===null?'':escAttr(p.stock))+'"></div><div><label>وضعیت</label><select id="dpStatus">'+destinationStatusOptions(p.status)+'</select></div><div><label>SKU</label><input id="dpSku" value="'+escAttr(p.sku||'')+'" '+(dest.target==='basalam'?'disabled':'')+'></div><div><label>شناسه دسته</label><input id="dpCategory" type="number" min="0" value="'+escAttr(p.categoryId||'')+'"></div>'+extra+'<div class="wide"><label>توضیح کوتاه</label><textarea id="dpShort" rows="3">'+esc(p.shortDescription||'')+'</textarea></div><div class="wide"><label>توضیحات کامل</label><textarea id="dpDescription" rows="7">'+esc(p.description||'')+'</textarea></div></div><div id="dpPreview"></div><div class="bulk-actions"><button class="btn btn-purple" data-dp-action="preview">👁 پیش‌نمایش</button><button class="btn btn-green" data-dp-action="apply">✓ اعمال واقعی</button><button class="btn btn-red" data-dp-action="delete">'+(dest.target==='basalam'?'🗄 بایگانی':'🗑 انتقال به زباله‌دان')+'</button></div>');const root=$('resultModal');root.onclick=async event=>{if(event.target===root||event.target.closest('[data-modal-action="close"]'))return root.remove();const button=event.target.closest('[data-dp-action]');if(!button)return;try{const action=button.dataset.dpAction;if(action==='delete'){root.remove();return deleteDestinationProduct(p)}const body=destinationEditPayload(p),apply=action==='apply';if(apply&&!confirm('تغییرات واقعاً روی محصول مقصد اعمال شوند؟'))return;body.confirm=apply?'APPLY':'';busy(button,true);const result=await api('/api/destination/'+dest.target+'/'+p.id+'/update',{method:'POST',body:JSON.stringify(body)});if(apply){openResultModal('✓ نتیجه ویرایش محصول',{...result,raw:result.product||result.changes});await loadDestination(true)}else $('dpPreview').innerHTML='<div class="result-summary '+(result.changed?'ok':'bad')+'"><b>'+(result.changed?'تغییرات قابل اعمال':'تغییری نسبت به مقصد ثبت نشده')+'</b><div class="raw-block">'+esc(pretty(result.changes||{}))+'</div></div>'}catch(error){openResultModal('⚠️ خطای ویرایش محصول',{ok:false,error:error.message})}finally{busy(button,false)}}}catch(error){openResultModal('⚠️ خطای دریافت جزئیات محصول',{ok:false,error:error.message,recommendations:['شناسه محصول، غرفه و دسترسی توکن را بررسی کنید.']})}}
 function destinationBulkBody(remove=false){const ops={};if(remove)ops.delete=true;else{const priceOp=$('destPriceOp').value,priceValue=$('destPriceValue').value.trim();if(priceOp)ops.price={op:priceOp,val:priceValue};if($('destBulkStock').value!=='')ops.stock=Number($('destBulkStock').value);if($('destBulkStatus').value)ops.status=$('destBulkStatus').value;if($('destTitlePrefix').value)ops.titlePrefix=$('destTitlePrefix').value;if($('destTitleSuffix').value)ops.titleSuffix=$('destTitleSuffix').value;if($('destBulkShort').value)ops.shortDescription=$('destBulkShort').value;if($('destBulkDesc').value)ops.description=$('destBulkDesc').value}return{ids:destinationRefs(),ops}}
 async function runDestinationBulk(apply=false,remove=false){if(!dest.selected.size)throw Error('ابتدا حداقل یک محصول را انتخاب کنید.');if(dest.selected.size>20)throw Error('در هر نوبت حداکثر ۲۰ محصول قابل انتخاب است.');if(apply&&!confirm((remove?(dest.target==='basalam'?'محصولات انتخاب‌شده بایگانی':'محصولات انتخاب‌شده حذف'):'تغییرات گروهی اعمال')+' شوند؟ این عملیات واقعی است.'))return;const button=remove?(apply?$('destBulkDelete'):$('destBulkDeletePreview')):apply?$('destBulkApply'):$('destBulkPreview'),body=destinationBulkBody(remove);if(apply)body.confirm='APPLY';busy(button,true);try{const d=await api('/api/destination/'+dest.target+'/bulk',{method:'POST',body:JSON.stringify(body)});openResultModal((d.dryRun?'👁 پیش‌نمایش':'✓ نتیجه')+' '+(remove?(dest.target==='basalam'?'بایگانی گروهی':'حذف گروهی'):'ویرایش گروهی'),{...d,raw:d.items,recommendations:d.dryRun?['هیچ تغییری اعمال نشده است؛ سطرهای پاسخ خام را بازبینی و سپس دکمه اعمال را بزنید.']:d.failed?['ردیف‌های دارای error را بررسی و فقط همان موارد را دوباره اجرا کنید.']:['عملیات روی مقصد کامل شد.']});output(d);if(!d.dryRun){dest.selected.clear();await loadDestination(true)}}finally{busy(button,false)}}
+async function copyBrowserCommand(button){const area=button.closest('[data-browser-command]')?.querySelector('textarea');if(!area)return;try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(area.value);else{area.focus();area.select();if(!document.execCommand('copy'))throw Error('clipboard unavailable')}notice('دستور کپی شد؛ هنوز اجرا نشده است.','ok')}catch{area.focus();area.select();notice('کپی خودکار ممکن نشد؛ متن انتخاب‌شده را دستی کپی کنید.','error')}}
+function diagnosticSampleCard(row,kind,index){const card=benchmarkSampleCard(row),status=typeof row.detail?.ok==='boolean'?(row.detail.ok?'جزئیات استخراج شد':'جزئیات ناموفق: '+(row.detail.error||'')):'جزئیات خودکار اجرا نشده است';return '<div data-sample-view="'+escAttr(kind)+'" data-sample-index="'+index+'">'+card+'<p>'+esc(status)+(row.detail?.elapsedMs!==undefined?' · '+fa(row.detail.elapsedMs)+' ms':'')+'</p>'+(row.sample?'<button type="button" class="btn btn-blue btn-sm" data-open-sample>نمایش صفحهٔ کامل محصول</button>':'')+'</div>'}
+function openDiagnosticProduct(kind,index){const row=kind==='benchmark'?lastBenchmarkReport?.report?.results?.[index]:{sample:lastDiagnosticReport?.report?.sample,detail:lastDiagnosticReport?.report?.detail},p=row?.sample;if(!p)return;const safe=value=>{try{const u=new URL(String(value||''));return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return ''}},images=[...new Set([p.image,...(Array.isArray(p.images)?p.images:[])].map(safe).filter(Boolean))];
+ const fields=['sku','brand','stock','weight','category','tags','specs','variations','variationGroups','variationPrices'].filter(k=>p[k]!==undefined&&p[k]!==null&&p[k]!=='');
+ const root=document.createElement('div');root.className='result-modal';root.style.zIndex='5000';root.innerHTML='<div class="result-box" role="dialog" aria-modal="true" aria-label="جزئیات محصول نمونه"><div class="result-head"><b>'+esc(p.title||'محصول نمونه')+'</b><button class="btn btn-gray" data-sample-close>بازگشت به گزارش</button></div><div class="result-body"><h2>'+esc(p.title||'بدون عنوان')+'</h2><p>'+esc(p.priceText||String(p.price??'—'))+'</p><p>'+esc(row.detail?.error||row.detail?.warning||(row.detail?.ok?'استخراج جزئیات انجام شد؛ فیلدهای غایب در منبع پیدا نشدند.':'جزئیات خودکار این نمونه اجرا نشده است.'))+'</p><div class="pgallery">'+images.map(u=>'<img loading="lazy" referrerpolicy="no-referrer" src="'+escAttr(u)+'" alt="">').join('')+'</div>'+fields.map(k=>'<h4>'+esc(k)+'</h4><div class="raw-block">'+esc(pretty(p[k]))+'</div>').join('')+'<h4>توضیح کوتاه</h4><div class="pdesc">'+esc(p.shortDesc||'ثبت نشده')+'</div><h4>توضیحات کامل</h4><div class="pdesc">'+diagnosticDescription(p.longDesc||'ثبت نشده')+'</div>'+(safe(p.url)?'<a href="'+escAttr(safe(p.url))+'" target="_blank" rel="noopener noreferrer">صفحهٔ مبدأ ↗</a>':'')+'</div></div>';document.body.appendChild(root);const previous=document.activeElement,close=()=>{root.remove();previous?.focus?.()};root.onclick=e=>{if(e.target===root||e.target.closest('[data-sample-close]'))close()};root.onkeydown=e=>{if(e.key==='Escape'){e.stopPropagation();close()}};root.querySelector('button').focus();
+}
+function diagnosticDescription(html){const host=document.createElement('template');host.innerHTML=String(html);host.content.querySelectorAll('script,style,iframe,object,embed,svg,math').forEach(n=>n.remove());return esc([...host.content.childNodes].map(n=>n.textContent||'').join(String.fromCharCode(10))).split(String.fromCharCode(10)).join('<br>')}
 function benchmarkSampleCard(row){
  const p=row.sample||row.diagnosis?.sample,safeUrl=value=>{try{const u=new URL(String(value||''));return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return ''}};
  if(!p)return '<article class="benchmark-sample" style="min-width:180px;padding:10px;border:1px solid #475569;border-radius:10px"><b>'+esc(row.engine)+'</b><p>محصول نمونه‌ای استخراج نشد.</p></article>';
  const image=safeUrl(p.image),url=safeUrl(p.url);
  return '<article class="benchmark-sample" style="min-width:180px;max-width:260px;padding:10px;border:1px solid #475569;border-radius:10px">'+(image?'<img loading="lazy" referrerpolicy="no-referrer" src="'+escAttr(image)+'" alt="" style="width:100%;height:140px;object-fit:contain">':'<p>بدون تصویر</p>')+'<h4>'+esc(p.title||'بدون عنوان')+'</h4><p>'+esc(p.priceText||String(p.price??'—'))+'</p>'+(p.sku?'<small>SKU: '+esc(p.sku)+'</small>':'')+(url?'<p><a href="'+escAttr(url)+'" target="_blank" rel="noopener noreferrer">مشاهدهٔ محصول</a></p>':'')+'<small>نمونهٔ واقعی همین ردیف · '+esc(row.engine)+'</small></article>';
 }
-async function benchmarkHomeEngines(){const button=$('homeBenchmarkEngines');busy(button,true);let live;try{const profile=await saveHomeProfile(true);live=openDiagnosticProgress(profile,profile.id,true);if(!live)return;live.panel.querySelector('.diag-live-hero strong').textContent='تست زندهٔ سرعت سه صفحه';const response=await activityFetch(U('/api/profiles/'+encodeURIComponent(profile.id)+'/benchmark-engines?live=1'),{method:'POST',headers:headers(),body:'{}'});const d=await readDiagnosticStream(response,live.observe);d.activity=live.activity;lastBenchmarkReport={profile:(profile&&(profile.name||profile.id))||'',at:new Date().toISOString(),report:d};await refreshProfiles();const updated=state.profiles.find(p=>p.id===profile.id)||profile;applyEngineBenchmarkLabels(updated);if($('homeProfile').value===profile.id&&!autoSaveDrafts.has('profile:'+profile.id)&&!autoSaveRunning&&$('homeExtractionEngine'))$('homeExtractionEngine').value=updated.extractionEngine||'auto';const rows=(d.results||[]).map(r=>'<tr><td>'+esc(r.engine)+'</td><td>'+(r.skipped?'—':r.ok?'✓':'✗')+'</td><td>'+fa(r.pagesScanned||0)+'</td><td>'+fa(r.products||0)+'</td><td>'+fa(r.elapsedMs||0)+' ms</td><td>'+fa(r.productsPerMinute||0)+'</td><td>'+esc(r.error||'')+'</td><td>'+esc((r.diagnosis&&r.diagnosis.hint)||'—')+(r.pagination?'<p>نوع صفحه‌بندی: '+esc(r.pagination.mode)+' · انتقال تأییدشده: '+fa(r.pagination.transitionsVerified||0)+' · وضعیت: '+esc(r.pagination.status)+'</p><details><summary>گزارش آزمون صفحهٔ بعد</summary><pre>'+esc(pretty(r.pagination))+'</pre></details>':'')+(r.diagnosis?.failure?.command?'<pre dir="ltr">'+esc(r.diagnosis.failure.command)+'</pre>':'')+(r.diagnosis?'<details><summary>جزئیات</summary><div class="raw-block">'+esc(pretty(r.diagnosis))+'</div></details>':'')+'</td><td>'+benchmarkSampleCard(r)+'</td></tr>').join('');if(live.panel.isConnected)modalShell('🏁 نتیجهٔ تست سرعت موتورهای استخراج','<div class="result-summary '+(d.ok?'ok':'bad')+'"><b>'+(d.fastest?'سریع‌ترین موتور: '+esc(d.fastest.engine):'هیچ موتوری معیار استخراج و صفحه‌بندی را تأیید نکرد')+'</b><br>براساس نوع صفحه‌بندی تا سه صفحه یا دستهٔ اسکرول آزمایش شد؛ حالت بدون صفحه‌بندی فقط یک صفحه است. تغییر URL بدون محصول تازه موفقیت نیست؛ ویرایش‌های همزمان پروفایل حفظ می‌شوند. نتیجهٔ ذخیره: '+(d.productParser?'فقط خواندنی؛ پارسر '+esc(d.productParser)+' و تنظیمات پروفایل ثابت ماندند.':d.profileUpdated===false?'ذخیره نشد؛ پروفایل همزمان تغییر کرد یا حذف شد.':'گزارش ثبت شد.')+'</div><div class="menu-actions"><button class="btn btn-gray btn-sm" data-modal-action="copy-benchmark">📋 کپی گزارش کامل</button></div><div style="overflow-x:auto"><table class="result-table"><thead><tr><th>موتور</th><th>وضعیت</th><th>صفحات</th><th>محصولات</th><th>زمان</th><th>محصول/دقیقه</th><th>خطا</th><th>تشخیص</th><th>محصول نمونه</th></tr></thead><tbody>'+rows+'</tbody></table></div>');notice(d.fastest?(d.profileUpdated!==false&&updated.extractionEngine===d.fastest.engine?'موتور '+d.fastest.engine+' به‌عنوان پیش‌فرض ذخیره شد.':'گزارش آماده است؛ انتخاب جدید شما در پروفایل حفظ شد.'):'هیچ موتوری محصول کافی پیدا نکرد.',d.fastest?'ok':'error')}catch(error){if(live)live.finish(error);else openResultModal('⚠️ خطای تست سرعت موتورهای استخراج',{ok:false,error:error.message})}finally{if(live&&!live.finished)live.finish();busy(button,false)}}
+async function benchmarkHomeEngines(){const button=$('homeBenchmarkEngines');busy(button,true);let live;try{const profile=await saveHomeProfile(true);live=openDiagnosticProgress(profile,profile.id,true);if(!live)return;live.panel.querySelector('.diag-live-hero strong').textContent='تست زندهٔ سرعت سه صفحه';const response=await activityFetch(U('/api/profiles/'+encodeURIComponent(profile.id)+'/benchmark-engines?live=1'),{method:'POST',headers:headers(),body:JSON.stringify({withDetails:!!$('benchmarkAutoDetails')?.checked})});const d=await readDiagnosticStream(response,live.observe);d.activity=live.activity;lastBenchmarkReport={profile:(profile&&(profile.name||profile.id))||'',at:new Date().toISOString(),report:d};await refreshProfiles();const updated=state.profiles.find(p=>p.id===profile.id)||profile;applyEngineBenchmarkLabels(updated);if($('homeProfile').value===profile.id&&!autoSaveDrafts.has('profile:'+profile.id)&&!autoSaveRunning&&$('homeExtractionEngine'))$('homeExtractionEngine').value=updated.extractionEngine||'auto';const rows=(d.results||[]).map(r=>'<tr><td>'+esc(r.engine)+'</td><td>'+(r.skipped?'—':r.ok?'✓':'✗')+'</td><td>'+fa(r.pagesScanned||0)+'</td><td>'+fa(r.products||0)+'</td><td>'+fa(r.elapsedMs||0)+' ms</td><td>'+fa(r.productsPerMinute||0)+'</td><td>'+esc(r.error||'')+'</td><td>'+esc((r.diagnosis&&r.diagnosis.hint)||'—')+(r.pagination?'<p>نوع صفحه‌بندی: '+esc(r.pagination.mode)+' · انتقال تأییدشده: '+fa(r.pagination.transitionsVerified||0)+' · وضعیت: '+esc(r.pagination.status)+'</p><details><summary>گزارش آزمون صفحهٔ بعد</summary><pre>'+esc(pretty(r.pagination))+'</pre></details>':'')+(r.diagnosis?.failure?.command?'<pre dir="ltr">'+esc(r.diagnosis.failure.command)+'</pre>':'')+(r.diagnosis?'<details><summary>جزئیات</summary><div class="raw-block">'+esc(pretty(r.diagnosis))+'</div></details>':'')+'</td><td>'+diagnosticSampleCard(r,'benchmark',d.results.indexOf(r))+'</td></tr>').join('');if(live.panel.isConnected)modalShell('🏁 نتیجهٔ تست سرعت موتورهای استخراج','<div class="result-summary '+(d.ok?'ok':'bad')+'"><b>'+(d.fastest?'سریع‌ترین موتور: '+esc(d.fastest.engine):'هیچ موتوری معیار استخراج و صفحه‌بندی را تأیید نکرد')+'</b><br>براساس نوع صفحه‌بندی تا سه صفحه یا دستهٔ اسکرول آزمایش شد؛ حالت بدون صفحه‌بندی فقط یک صفحه است. تغییر URL بدون محصول تازه موفقیت نیست؛ ویرایش‌های همزمان پروفایل حفظ می‌شوند. نتیجهٔ ذخیره: '+(d.productParser?'فقط خواندنی؛ پارسر '+esc(d.productParser)+' و تنظیمات پروفایل ثابت ماندند.':d.profileUpdated===false?'ذخیره نشد؛ پروفایل همزمان تغییر کرد یا حذف شد.':'گزارش ثبت شد.')+'</div><div class="menu-actions"><button class="btn btn-gray btn-sm" data-modal-action="copy-benchmark">📋 کپی گزارش کامل</button></div><div style="overflow-x:auto"><table class="result-table"><thead><tr><th>موتور</th><th>وضعیت</th><th>صفحات</th><th>محصولات</th><th>زمان</th><th>محصول/دقیقه</th><th>خطا</th><th>تشخیص</th><th>محصول نمونه</th></tr></thead><tbody>'+rows+'</tbody></table></div>');notice(d.fastest?(d.profileUpdated!==false&&updated.extractionEngine===d.fastest.engine?'موتور '+d.fastest.engine+' به‌عنوان پیش‌فرض ذخیره شد.':'گزارش آماده است؛ انتخاب جدید شما در پروفایل حفظ شد.'):'هیچ موتوری محصول کافی پیدا نکرد.',d.fastest?'ok':'error')}catch(error){if(live)live.finish(error);else openResultModal('⚠️ خطای تست سرعت موتورهای استخراج',{ok:false,error:error.message})}finally{if(live&&!live.finished)live.finish();busy(button,false)}}
 const diagnosticLabels={'benchmark-network':'دریافت صفحهٔ مبنا','benchmark-save':'ذخیرهٔ نتیجهٔ تست سرعت',configuration:'پیکربندی',network:'اتصال و دریافت صفحه','selector-verification':'راستی‌آزمایی سلکتورها','list-extraction':'اجرای موتور استخراج','selector-evidence':'بررسی سلکتورها','selector-discovery':'کشف کارت‌های محصول','detail-extraction':'جزئیات نمونهٔ محصول','detail-discovery':'پیشنهاد سلکتور جزئیات','selectors-auto-saved':'ذخیرهٔ سلکتورها'};
 let activeExtractionDiagnostic=null;
 function diagnosticStageHtml(event){const status=event.status||'waiting',label=diagnosticLabels[event.name]||event.name,details={...event};for(const key of ['type','name','status','summary','at','sequence','elapsedMs','ok'])delete details[key];const icon=status==='running'?'◌':status==='success'?'✓':status==='error'?'✗':status==='skipped'?'↷':'○';return '<div class="diag-stage-head"><span class="diag-stage-icon" aria-hidden="true">'+icon+'</span><b>'+esc(label)+'</b><span>'+esc({waiting:'در انتظار',running:'در حال انجام',success:'انجام شد',error:'ناموفق',skipped:'نیاز نبود'}[status]||status)+'</span></div><p>'+esc(event.summary||'هنوز شروع نشده است.')+'</p>'+((event.elapsedMs!=null)?'<small>زمان از شروع: '+fa((event.elapsedMs/1000).toFixed(1))+' ثانیه</small>':'')+(Object.keys(details).length?'<details><summary>داده‌های این مرحله</summary><pre class="raw-block">'+esc(pretty(details))+'</pre></details>':'')}
 async function readDiagnosticStream(response,onEvent){if(!response.ok){let text=await response.text();try{const error=JSON.parse(text);text=error.error||error.detail||text}catch{}throw Error(text||'HTTP '+response.status)}if(!(response.headers.get('content-type')||'').includes('application/x-ndjson')){const report=await response.json();onEvent({type:'result',report});return report}if(!response.body)throw Error('مرورگر امکان دریافت جریان زنده را ندارد.');const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',report,complete=false;function consume(line){if(!line.trim())return;const event=JSON.parse(line);const task=localTasks.get(responseActivities.get(response));if(task&&event.type==='progress'){task.phase=event.name||task.phase;task.detail=event.summary||task.detail;if(activityVisible)renderActivity(activityData||{})}if(event.type==='result')activityResponseResult(response,event.report);onEvent(event);if(event.type==='result'){report=event.report;complete=true}if(event.type==='error')throw Error(event.error||'عیب‌یابی متوقف شد.')}try{while(true){const chunk=await reader.read();pending+=decoder.decode(chunk.value||new Uint8Array(),{stream:!chunk.done});let nl;while((nl=pending.indexOf('\n'))>=0){const line=pending.slice(0,nl);pending=pending.slice(nl+1);consume(line)}if(pending.length>8000000)throw Error('اندازهٔ پیام عیب‌یابی بیش از حد مجاز است.');if(chunk.done)break}if(pending.trim())consume(pending);if(!complete)throw Error('ارتباط زنده پیش از دریافت گزارش نهایی قطع شد؛ نتیجهٔ کامل تأیید نشده است.');return report}catch(error){try{await reader.cancel()}catch{}throw error}finally{reader.releaseLock()}}
 function openDiagnosticProgress(profile,id,benchmark=false){if(activeExtractionDiagnostic){modalShell('🩺 عیب‌یابی زنده · '+activeExtractionDiagnostic.name,'');$('resultModal').querySelector('.result-body').appendChild(activeExtractionDiagnostic.panel);notice('یک عیب‌یابی در حال اجراست؛ وضعیت همان اجرا نمایش داده شد.','info');return null}modalShell('🩺 عیب‌یابی زنده · '+(profile?.name||id),'<section class="diagnostic-live"><div class="diag-live-hero"><span class="diag-live-dot"></span><strong>اجرای زندهٔ عیب‌یابی</strong><span data-diag-clock>۰ ثانیه</span></div><p data-diag-status role="status" aria-live="polite">در حال ذخیرهٔ تنظیمات و شروع درخواست…</p><div class="diag-live-meter" role="progressbar" aria-label="عیب‌یابی در حال اجرا"><span></span></div><div class="diag-live-counts" data-diag-counts>مراحل پس از اجرای واقعی به‌روز می‌شوند.</div><div class="diag-live-stages" data-diag-stages></div><details class="diag-activity"><summary>رویدادهای زنده و زمان هر فعالیت</summary><ol data-diag-activity></ol></details><p class="muted">بستن پنجره فقط نمایش را پنهان می‌کند؛ با زدن دوبارهٔ عیب‌یابی می‌توانید همین اجرا را ببینید.</p></section>');const panel=$('resultModal').querySelector('.diagnostic-live'),started=Date.now(),cards=new Map(),activity=[],run={name:profile?.name||id,panel,activity,lastEventAt:Date.now(),finished:false};activeExtractionDiagnostic=run;const stageList=panel.querySelector('[data-diag-stages]'),status=panel.querySelector('[data-diag-status]');for(const name of (benchmark?['benchmark-network','benchmark-save']:['network','list-extraction','selector-evidence','detail-extraction','selectors-auto-saved'])){const card=document.createElement('article');card.className='diag-live-stage waiting';card.innerHTML=diagnosticStageHtml({name,status:'waiting'});stageList.appendChild(card);cards.set(name,{card,status:'waiting'})}run.observe=event=>{run.lastEventAt=Date.now();if(event.type==='heartbeat'||event.type==='started')return;if(event.type==='result')return;if(event.type==='error'){status.textContent=event.error;return}if(event.type!=='progress')return;activity.push(event);let row=cards.get(event.name);if(!row){const card=document.createElement('article');stageList.appendChild(card);row={card};cards.set(event.name,row)}row.status=event.status;row.card.className='diag-live-stage '+event.status;row.card.innerHTML=diagnosticStageHtml(event);status.textContent=event.summary;const item=document.createElement('li');item.textContent=((event.elapsedMs||0)/1000).toFixed(1)+'s · '+(diagnosticLabels[event.name]||event.name)+' · '+event.summary;panel.querySelector('[data-diag-activity]').appendChild(item);const values=[...cards.values()];panel.querySelector('[data-diag-counts]').textContent='✓ '+fa(values.filter(x=>x.status==='success').length)+' انجام‌شده · ✗ '+fa(values.filter(x=>x.status==='error').length)+' ناموفق · ◌ '+fa(values.filter(x=>x.status==='running').length)+' در حال انجام'};run.timer=setInterval(()=>{panel.querySelector('[data-diag-clock]').textContent=fa(Math.floor((Date.now()-started)/1000))+' ثانیه';if(Date.now()-run.lastEventAt>15000)status.textContent='هنوز گزارش تازه‌ای نرسیده است؛ منتظر پاسخ سرور…'},1000);run.finish=error=>{run.finished=true;clearInterval(run.timer);panel.classList.add('finished');panel.querySelector('[role="progressbar"]').remove();if(error){panel.classList.add('failed');status.textContent='⚠️ '+error.message;for(const [name,row] of cards)if(row.status==='running'){row.status='error';row.card.className='diag-live-stage error';row.card.innerHTML=diagnosticStageHtml({name,status:'error',summary:'نتیجهٔ این مرحله دریافت نشد؛ ارتباط یا اجرای عیب‌یابی قطع شد.'})}const note=document.createElement('p');note.textContent='گزارش کامل دریافت نشد. رویدادهای بالا فقط مراحل دریافت‌شده تا زمان قطع ارتباط هستند.';panel.appendChild(note)}if(activeExtractionDiagnostic===run)activeExtractionDiagnostic=null};return run}
-async function runExtractionDiagnostic(id){const profile=state.profiles.find(x=>x.id===id),live=openDiagnosticProgress(profile,id);if(!live)return;if(profile)activateProfile(id);try{await saveSettings({silent:true});const response=await activityFetch(U('/api/profiles/'+encodeURIComponent(id)+'/extraction-diagnostic?live=1'),{method:'POST',headers:headers(),body:'{}'});const d=await readDiagnosticStream(response,live.observe);d.activity=live.activity;lastDiagnosticReport={profile:profile?.name||id,at:new Date().toISOString(),report:d};const labels={configuration:'پیکربندی',network:'دریافت شبکه', 'list-extraction':'استخراج فهرست','selector-evidence':'نشانه‌های سلکتور','selector-discovery':'کشف خودکار سلکتورها','selectors-auto-saved':'ذخیرهٔ خودکار سلکتورها','detail-extraction':'استخراج جزئیات'},stages=(d.stages||[]).map(stage=>{const details={...stage};delete details.name;delete details.ok;delete details.summary;return '<div class="stage-card '+(stage.ok?'ok':'bad')+'"><b>'+(stage.ok?'✓ ':'✗ ')+esc(labels[stage.name]||stage.name)+'</b><p>'+esc(stage.summary||'')+'</p><details><summary>نمایش داده‌های این مرحله</summary><div class="raw-block">'+esc(pretty(details))+'</div></details></div>'}).join(''),recommendations=(d.recommendations||[]).length?'<h3>راهکار پیشنهادی</h3><ul style="font-size:11px;line-height:2">'+d.recommendations.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':'';if(live.panel.isConnected)modalShell('🩺 گزارش استخراج واقعی · '+(profile?.name||id),'<div class="result-summary '+(d.ok?'ok':'bad')+'"><b>'+(d.ok?'pipeline واقعی با موفقیت محصول پیدا کرد.':'یک یا چند مرحلهٔ واقعی استخراج ناموفق است.')+'</b><br>محصول پیدا‌شده: '+fa(d.productCount||0)+' · زمان: '+fa(d.durationMs||0)+' میلی‌ثانیه</div><div class="menu-actions"><button class="btn btn-gray btn-sm" data-modal-action="copy-diagnostic">📋 کپی گزارش کامل</button></div><div class="stage-list">'+stages+'</div>'+recommendations+'<details><summary>رویدادهای ثبت‌شده در اجرای زنده</summary><div class="raw-block">'+esc(pretty(live.activity))+'</div></details><h3>نشانی آزمایش‌شده</h3><div class="raw-block">'+esc(d.finalUrl||d.url||'—')+'</div>');output(d);notice(d.ok?'عیب‌یابی استخراج موفق بود.':'عیب‌یابی علت شکست را مشخص کرد.',d.ok?'ok':'error')}catch(error){live.finish(error);lastDiagnosticReport={profile:profile?.name||id,at:new Date().toISOString(),report:{ok:false,incomplete:true,error:error.message,activity:live.activity}};output(lastDiagnosticReport.report);notice(error.message,'error')}finally{if(!live.finished)live.finish()}}
+async function runExtractionDiagnostic(id){const profile=state.profiles.find(x=>x.id===id),live=openDiagnosticProgress(profile,id);if(!live)return;if(profile)activateProfile(id);try{await saveSettings({silent:true});const response=await activityFetch(U('/api/profiles/'+encodeURIComponent(id)+'/extraction-diagnostic?live=1'),{method:'POST',headers:headers(),body:JSON.stringify({withDetails:!!$('diagnosticAutoDetails')?.checked})});const d=await readDiagnosticStream(response,live.observe);d.activity=live.activity;lastDiagnosticReport={profile:profile?.name||id,at:new Date().toISOString(),report:d};const labels={configuration:'پیکربندی',network:'دریافت شبکه', 'list-extraction':'استخراج فهرست','selector-evidence':'نشانه‌های سلکتور','selector-discovery':'کشف خودکار سلکتورها','selectors-auto-saved':'ذخیرهٔ خودکار سلکتورها','detail-extraction':'استخراج جزئیات'},stages=(d.stages||[]).map(stage=>{const details={...stage};delete details.name;delete details.ok;delete details.summary;return '<div class="stage-card '+(stage.ok?'ok':'bad')+'"><b>'+(stage.ok?'✓ ':'✗ ')+esc(labels[stage.name]||stage.name)+'</b><p>'+esc(stage.summary||'')+'</p><details><summary>نمایش داده‌های این مرحله</summary><div class="raw-block">'+esc(pretty(details))+'</div></details></div>'}).join(''),recommendations=(d.recommendations||[]).length?'<h3>راهکار پیشنهادی</h3><ul style="font-size:11px;line-height:2">'+d.recommendations.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':'';if(live.panel.isConnected)modalShell('🩺 گزارش استخراج واقعی · '+(profile?.name||id),'<div class="result-summary '+(d.ok?'ok':'bad')+'"><b>'+(d.ok?'pipeline واقعی با موفقیت محصول پیدا کرد.':'یک یا چند مرحلهٔ واقعی استخراج ناموفق است.')+'</b><br>محصول پیدا‌شده: '+fa(d.productCount||0)+' · زمان: '+fa(d.durationMs||0)+' میلی‌ثانیه</div><div class="menu-actions"><button class="btn btn-gray btn-sm" data-modal-action="copy-diagnostic">📋 کپی گزارش کامل</button></div>'+diagnosticSampleCard({engine:d.usedEngine||profile?.extractionEngine||'auto',sample:d.sample,detail:d.detail},'diagnostic',0)+'<div class="stage-list">'+stages+'</div>'+recommendations+'<details><summary>رویدادهای ثبت‌شده در اجرای زنده</summary><div class="raw-block">'+esc(pretty(live.activity))+'</div></details><h3>نشانی آزمایش‌شده</h3><div class="raw-block">'+esc(d.finalUrl||d.url||'—')+'</div>');output(d);notice(d.ok?'عیب‌یابی استخراج موفق بود.':'عیب‌یابی علت شکست را مشخص کرد.',d.ok?'ok':'error')}catch(error){live.finish(error);lastDiagnosticReport={profile:profile?.name||id,at:new Date().toISOString(),report:{ok:false,incomplete:true,error:error.message,activity:live.activity}};output(lastDiagnosticReport.report);notice(error.message,'error')}finally{if(!live.finished)live.finish()}}
 function productSuffixFormats(){const raw=($('dedupSuffix')&&$('dedupSuffix').value)||(state.settings&&state.settings.dedup&&state.settings.dedup.suffixFormats)||'';const list=String(raw).split(/[,،|\n]+/).map(x=>x.trim()).filter(x=>x&&/[xX]/.test(x));return list.length?list:['(کد:x)','#x']}
 function productRowFailureHtml(p,error){const what=esc(String((p&&(p.title||p.sourceKey))||'نتیجهٔ نامشخص'));return '<article class="product" style="border-color:#f87171;background:#2a1116"><div class="thumb">⚠️</div><div class="pbody"><div class="ptitle">'+what+'</div><div class="pmeta">نمایش این نتیجه خطا داد؛ متن خطا: '+esc(error instanceof Error?error.message:String(error))+'</div></div></article>'}
 function productCodeSuffix(p){const formats=productSuffixFormats();const generic=/[\[(]\s*(?:کد|كد|code|sku)\s*[:：#-]?\s*[\p{L}\p{N}][\p{L}\p{N}\s._\/-]{0,40}?\s*[\])]\s*$/iu;const title=String(p.title||'');const found=title.match(generic);if(found)return found[0].trim();return ''}
@@ -17079,6 +19116,7 @@ function renderUnifiedRecon(d){
       +'</tr></thead><tbody>'+body+'</tbody></table></div>'+more);
 }
 function renderReconTable(d){if(!d||!Array.isArray(d.rows))return '<div style="color:#f87171">پاسخ نامعتبر بود.</div>';const meta=reconBucketMeta();const chips=Object.keys(meta).map(k=>'<span style="display:inline-block;margin:2px 4px;padding:3px 9px;border-radius:999px;background:'+meta[k][1]+'22;color:'+meta[k][1]+';font-size:11px">'+meta[k][0]+': '+(d[k]||0)+'</span>').join('');const head='<div style="margin-bottom:6px">'+chips+'<span style="font-size:11px;color:#94a3b8;margin-right:6px">مبدأ '+d.local+' · مقصد '+d.remote+'</span></div>';if(d.inSync)return head+'<div style="color:#34d399;font-size:12px">✅ هیچ مغایرتی پیدا نشد؛ مبدأ و مقصد یکسان‌اند.</div>';const order={unreachable:0,priceDiff:1,missing:2,extra:3,noPrice:4,matched:5};const rows=d.rows.slice().sort((a,b)=>(order[a.bucket]-order[b.bucket])||String(a.title).localeCompare(String(b.title),'fa'));const shown=rows.slice(0,300);const body=shown.map(r=>'<tr>'+'<td style="padding:4px 6px;color:'+meta[r.bucket][1]+';white-space:nowrap">'+meta[r.bucket][0]+'</td>'+'<td style="padding:4px 6px">'+esc(r.title||r.remoteTitle)+'</td>'+'<td style="padding:4px 6px;text-align:left;white-space:nowrap">'+reconMoney(r.sourcePrice)+'</td>'+'<td style="padding:4px 6px;text-align:left;white-space:nowrap">'+reconMoney(r.remotePrice)+'</td>'+'<td style="padding:4px 6px;text-align:left;white-space:nowrap;color:'+(r.delta?'#fbbf24':'#64748b')+'">'+(r.delta?(r.delta>0?'+':'')+Number(r.delta).toLocaleString('fa-IR'):'—')+'</td>'+'<td style="padding:4px 6px;font-size:10px;color:#94a3b8">'+esc(r.why||'')+'</td>'+'</tr>').join('');const more=rows.length>shown.length?'<div style="font-size:11px;color:#94a3b8;margin-top:4px">… و '+(rows.length-shown.length)+' ردیف دیگر (برای فهرست کامل خروجی JSON را ببینید).</div>':'';return head+'<div style="max-height:420px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">'+'<thead><tr style="position:sticky;top:0;background:#0f172a;color:#93c5fd">'+'<th style="padding:5px 6px;text-align:right">وضعیت</th><th style="padding:5px 6px;text-align:right">عنوان</th>'+'<th style="padding:5px 6px;text-align:left">قیمت مبدأ</th><th style="padding:5px 6px;text-align:left">قیمت مقصد</th>'+'<th style="padding:5px 6px;text-align:left">اختلاف</th><th style="padding:5px 6px;text-align:right">توضیح</th></tr></thead>'+'<tbody>'+body+'</tbody></table></div>'+more;}
+document.addEventListener('click',event=>{const copy=event.target.closest('[data-copy-browser-command]');if(copy){copyBrowserCommand(copy);return}const card=event.target.closest('[data-sample-view]');if(card&&!event.target.closest('a'))openDiagnosticProduct(card.dataset.sampleView,Number(card.dataset.sampleIndex));});
 initMenu();$('sendProfile')?.addEventListener('change',()=>{deliveryReportPage=0;renderJobs()});$('destinationJobs')?.addEventListener('click',event=>{const button=event.target.closest('[data-delivery-page]');if(button){deliveryReportPage+=Number(button.dataset.deliveryPage)||0;renderJobs()}});prepareJsonFileInputs();initBranchBackupControls();initUnifiedTabs();initFields();if(!aiProgressTick)aiProgressTick=setInterval(()=>{if(lastAiView&&['queued','running','retrying','starting','watchdog-skip'].includes(lastAiView.status))updateAiTestProgress(lastAiView.result,lastAiView.status)},1000);$('activityBtn')?.addEventListener('click',openActivityManager);$('topHomeBtn')?.addEventListener('click',()=>tab('home'));$('topJobsBtn')?.addEventListener('click',()=>tab('jobs'));$('topMenuBtn')?.addEventListener('click',()=>drawer(true));$('topRunBtn')?.addEventListener('click',()=>{tab('home');$('homeBackend')?.click()});$('topVersion')?.addEventListener('click',()=>{drawer(true);const section=document.querySelector('[data-menu="changes"]');if(!section)return;section.classList.add('open');section.scrollIntoView({block:'center',behavior:'smooth'})});$('hamburgerBtn')?.addEventListener('click',()=>drawer(true));$('drawerClose')?.addEventListener('click',()=>drawer(false));$('drawerOverlay')?.addEventListener('click',()=>drawer(false));$('drawerFull')?.addEventListener('click',()=>{const full=$('drawer').classList.toggle('full-drawer');$('drawerFull').classList.toggle('active',full);if(full)drawer(true)});$('csvExportMain')?.addEventListener('click',()=>menuAction('csv-export'));$('goImportTab')?.addEventListener('click',()=>tab('jobs'));$('menuSections')?.addEventListener('click',event=>{const title=event.target.closest('.menu-title');if(title)return title.closest('.menu-section').classList.toggle('open');const theme=event.target.closest('[data-theme-choice]');if(theme){$('siteTheme').value=theme.dataset.themeChoice;applySiteTheme(theme.dataset.themeChoice);return}const aiSubTab=event.target.closest('[data-agent-sub]');if(aiSubTab)return agentSubTab(aiSubTab.dataset.agentSub);const aiTabButton=event.target.closest('[data-ai-tab]');if(aiTabButton)return aiTab(aiTabButton.dataset.aiTab);const aiJump=event.target.closest('[data-ai-jump]');if(aiJump)return aiTab(aiJump.dataset.aiJump);const chatFilterBtn=event.target.closest('[data-chat-filter]');if(chatFilterBtn)return chatFilterToggle(chatFilterBtn.dataset.chatFilter);const singleModeBtn=event.target.closest('[data-single-mode]');if(singleModeBtn)return singleModeToggle(singleModeBtn.dataset.singleMode);const chatModeBtn=event.target.closest('[data-chat-mode]');if(chatModeBtn)return chatModeToggle(chatModeBtn.dataset.chatMode);const chatClearBtn=event.target.closest('[data-chat-clear]');if(chatClearBtn)return chatClear();const agentTpl=event.target.closest('[data-agent-tpl]');if(agentTpl)return applyAgentTemplate(Number(agentTpl.dataset.agentTpl));const previewRow=event.target.closest('.preview-row');if(previewRow&&importAnalysis){openImportRowModal(importAnalysis,importAnalysis.samples[Number(previewRow.dataset.row)],Number(previewRow.dataset.row));return}const copy=event.target.closest('[data-copy-install]');if(copy){copyInstallCommand(copy.dataset.copyInstall);return}const dbr=event.target.closest('[data-deployer-branch]');if(dbr){deployerBranchAction(dbr.dataset.deployerBranch);return}const ins=event.target.closest('[data-install-branch]');if(ins){installBranchVersion(ins.dataset.installBranch);return}const download=event.target.closest('[data-download-install]');if(download){downloadInstallScript(download.dataset.downloadInstall);return}const button=event.target.closest('[data-ma]');if(button)menuAction(button.dataset.ma)});$('menuSections')?.addEventListener('change',event=>{const input=event.target;if(input.matches('.head-map-sel')){const sel=input,value=sel.value;if(importAnalysis){importAnalysis.mapping=(importAnalysis.mapping||[]).filter(m=>m.column!==sel.dataset.headCol);if(value)importAnalysis.mapping.push({column:sel.dataset.headCol,field:value});renderImportMapping(importAnalysis);renderImportPreview(importAnalysis)}return}if(input.id==='siteFont')applySiteFont(input.value);else if(input.id==='siteTheme')applySiteTheme(input.value);else if(input.matches('[data-ai-reasoning-index]')){const model=aiEditorModels[Number(input.dataset.aiReasoningIndex)];if(input.checked)aiEditorReasoning.add(model);else aiEditorReasoning.delete(model);renderAiEditModels()}else if(input.matches('[data-provider-toggle]')){const p=state.connections.ai.providers[Number(input.dataset.providerToggle)];if(p){p.enabled=input.checked;saveConnections().then(renderAiProviders).catch(e=>openResultModal('⚠️ خطای ذخیره',{ok:false,error:e.message}))}}else if(input.id==='aiProviderSel')fillAiModels('aiProviderSel','aiSingleModelSel');else if(input.id==='aiCandProvSel')fillAiModels('aiCandProvSel','aiCandModelSel')});$('csvImportFile')?.addEventListener('change',event=>{if(event.target.files[0])importCsv(event.target.files[0]).catch(()=>{})});$('aiImportFile')?.addEventListener('change',event=>{try{const file=newestJsonFile(event.target);if(file)importAiFile(file).catch(error=>openResultModal('⚠️ خطای فایل ارائه‌دهنده',{ok:false,error:error.message,recommendations:['فایل باید JSON معتبر و شامل providers باشد.']}))}catch(error){notice(error.message,'error')}event.target.value=''});for(const id of ['bkFile']){$(id)?.addEventListener('change',event=>{try{const file=newestJsonFile(event.target,'transferStatus');if(file)restoreSettingsFile(file).catch(error=>{notice(error.message,'error');openResultModal('⚠️ خطای بازیابی',{ok:false,phase:'settings-import',error:error.message,recommendations:['فایل JSON خروجی همین بخش را انتخاب کنید.','اگر فایل قدیمی PHP است، از بخش مهاجرت نیز می‌توانید آن را وارد کنید.']})})}catch(error){notice(error.message,'error')}event.target.value=''})};$('backupInspectFile')?.addEventListener('change',event=>{try{const file=event.target.files&&event.target.files[0];if(file)inspectBackupFile(file).catch(error=>{notice(error.message,'error');openResultModal('⚠️ خطای بررسی فایل',{ok:false,phase:'backup-inspect',error:error.message})})}catch(error){notice(error.message,'error')}event.target.value=''});$('categoryImportFile')?.addEventListener('change',event=>{let file;try{file=newestJsonFile(event.target,'catResult')}catch(error){notice(error.message,'error');event.target.value='';return}(async()=>{const raw=JSON.parse(await file.text()),d=await api('/api/category-learning/import',{method:'POST',body:JSON.stringify(raw)});$('catResult').textContent=JSON.stringify(d,null,2);openResultModal('⬆️ گزارش بازیابی یادگیری دسته‌بندی',d);notice(fa(d.imported)+' مورد بازیابی شد.')})().catch(error=>openResultModal('⚠️ خطای فایل یادگیری',{ok:false,error:error.message}));event.target.value=''});$('profileImportFile')?.addEventListener('change',event=>{try{const files=sortedJsonFiles(event.target);$('profileImportStatus').textContent=files[0]?'جدیدترین فایل JSON انتخاب شد: '+files[0].name+'\nترتیب جدیدترین به قدیمی‌ترین:\n'+jsonFileSummary(files):'هنوز فایل JSON انتخاب نشده است.';if(event.target.files.length&&files.length!==event.target.files.length)notice('فقط فایل‌های JSON پذیرفته می‌شوند؛ موارد دیگر نادیده گرفته شدند.','info')}catch(error){$('profileImportStatus').textContent='❌ '+error.message}});document.querySelectorAll('.main-tab').forEach(b=>b.addEventListener('click',()=>{tab(b.dataset.tab);if(b.dataset.tab==='selector')loadDetailSampleProducts()}));$('detailSampleSelect')?.addEventListener('change',e=>{const url=e.target.value;if(url&&$('detailSampleUrl'))$('detailSampleUrl').value=url});$('detailSamplesReload')?.addEventListener('click',loadDetailSampleProducts);$('aiEditKeys')?.addEventListener('input',event=>{const el=event.target;if(!el||!el.closest)return;if(el.matches&&el.matches('[data-ai-account-id],[data-ai-account-token]')){const row=el.closest('.ai-account-row'),rows=row?[...(row.parentElement?.children||[])]:[],i=rows.indexOf(row);if(i>=0&&Array.isArray(aiEditorAccounts)){const prev=aiEditorAccounts[i]||{};aiEditorAccounts[i]={accountId:el.matches('[data-ai-account-id]')?el.value.trim():(prev.accountId||''),token:el.matches('[data-ai-account-token]')?el.value.trim():(prev.token||'')}}}else if(el.matches&&el.matches('[data-ai-key]')){const i=Number(el.dataset.aiKey);if(Number.isInteger(i)&&i>=0&&Array.isArray(aiEditorKeys))aiEditorKeys[i]=el.value.trim()}});$('aiEditBase')?.addEventListener('input',()=>{const isCf=aiIsCloudflareBase($('aiEditBase').value),box=$('aiCloudflareBox');if(box)box.hidden=!isCf;if(isCf&&!$('aiEditAccountId').value)$('aiEditAccountId').value=aiCloudflareAccountFromBase($('aiEditBase').value)});document.querySelectorAll('.sub-tab').forEach(b=>b.addEventListener('click',()=>subTab(b.dataset.sub)));$('refreshAll')?.addEventListener('click',connect);$('homeProfile')?.addEventListener('change',event=>{const id=event.target.value;if(id)editProfile(id,false);else clearForm()});$('homeSaveProfile')?.addEventListener('click',()=>saveHomeProfile().catch(()=>{}));$('homeDeleteProfile')?.addEventListener('click',()=>deleteHomeProfile().catch(error=>openResultModal('⚠️ حذف پروفایل ناموفق بود',{ok:false,error:error.message})));$('homeSyncEnabled')?.addEventListener('change',updateHomeSyncUi);$('homeSyncInterval')?.addEventListener('change',updateHomeSyncUi);$('homeSyncTarget')?.addEventListener('change',event=>applyHomeTarget(event.target.value));$('homeSyncWoo')?.addEventListener('change',updateHomeTargetFromChecks);$('homeSyncBasalam')?.addEventListener('change',updateHomeTargetFromChecks);$('homeAutoMode')?.addEventListener('click',()=>{$('homeAutoMode').classList.add('active');$('homeManualMode').classList.remove('active');notice('حالت خودکار فعال است؛ تنظیمات بالا ذخیره و روی صف واقعی اجرا می‌شوند.','info')});$('homeManualMode')?.addEventListener('click',()=>{$('homeManualMode').classList.add('active');$('homeAutoMode').classList.remove('active');if($('homeProfile').value)activateProfile($('homeProfile').value);else{$('name').value=$('homeProfileName').value;$('url').value=$('homeUrl').value;$('pages').value=$('homePages').value;$('pagination').value=$('homePagination').value;$('paginationValue').value=$('homePaginationValue').value;$('networkIndirect').checked=$('homeNetworkIndirect').checked;$('noExtract').checked=$('homeNoExtract').checked}tab('selector');subTab('basic');notice('حالت دستی باز شد؛ سلکتورها را با انتخاب بصری یا فرم دقیق تنظیم کنید.','info')});$('homeScrape')?.addEventListener('click',()=>startHomeExtraction('auto'));$('homeBackend')?.addEventListener('click',()=>startHomeExtraction('backend'));async function runHomeDiagnostic(buttonId){const button=$(buttonId);busy(button,true);try{const profile=await saveHomeProfile(true);await runExtractionDiagnostic(profile.id)}catch(error){openResultModal('⚠️ شروع آزمایشی ناموفق بود',{ok:false,error:error.message})}finally{busy(button,false)}}$('homeDiagnose')?.addEventListener('click',()=>runHomeDiagnostic('homeDiagnose'));$('homeTopDiagnose')?.addEventListener('click',()=>runHomeDiagnostic('homeTopDiagnose'));$('homeBenchmarkEngines')?.addEventListener('click',benchmarkHomeEngines);$('homeReset')?.addEventListener('click',()=>{const profile=state.profiles.find(p=>p.id===$('homeProfile').value);renderHomeProfile(profile||null);notice(profile?'فرم به آخرین نسخهٔ ذخیره‌شده برگشت.':'فرم پروفایل تازه پاک شد.','info')});$('homeRefreshJobs')?.addEventListener('click',()=>loadJobs(true));$('homeClearJobs')?.addEventListener('click',clearJobs);$('homeOpenJobs')?.addEventListener('click',()=>tab('jobs'));$('homeJobs')?.addEventListener('click',event=>{const button=event.target.closest('[data-home-job]');if(!button)return;if(button.dataset.homeJob==='open')return tab('jobs');jobAction(button.dataset.homeJob,button.dataset.id)});$('settingsProfile')?.addEventListener('change',event=>{if(event.target.value)editProfile(event.target.value,false);else clearForm();tab('settings')});for(const id of ['productProfile','transferProfile','photoProfile','sendProfile','importProfile'])$(id)?.addEventListener('change',event=>{if(event.target.value)activateProfile(event.target.value)});$('settingsOpenSelector')?.addEventListener('click',()=>{const id=$('settingsProfile').value;if(id)editProfile(id);else notice('ابتدا یک پروفایل انتخاب کنید.','error')});$('savePriceSettings')?.addEventListener('click',()=>saveProfile(false,true));$('quickWoo')?.addEventListener('click',()=>{if(!$('sendAllProducts').checked)return notice('برای ارسال سریع، گزینهٔ ارسال همهٔ محصولات را فعال کنید.','error');createJob($('sendProfile').value,'sync','woo',false).catch(error=>notice(error.message,'error'))});$('quickBasalam')?.addEventListener('click',()=>{if(!$('sendAllProducts').checked)return notice('برای ارسال سریع، گزینهٔ ارسال همهٔ محصولات را فعال کنید.','error');createJob($('sendProfile').value,'sync','basalam',false).catch(error=>notice(error.message,'error'))});$('quickRefreshJobs')?.addEventListener('click',()=>loadJobs());$('importFile')?.addEventListener('change',event=>{importSelectedFile=event.target.files[0]||null;setImportDrop(importSelectedFile)});$('workersCatalogFilter')?.addEventListener('change',()=>loadWorkersCatalog());$('aiTestOnlyUntested')?.addEventListener('change',renderAiTestEstimate);$('chatSend')?.addEventListener('click',()=>chatSend());$('chatInput')?.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chatSend()}});$('importDropZone')?.addEventListener('click',()=>$('importFile').click());$('importDropZone')?.addEventListener('dragover',e=>{e.preventDefault();$('importDropZone').classList.add('over')});$('importDropZone')?.addEventListener('dragleave',()=>$('importDropZone').classList.remove('over'));$('importDropZone')?.addEventListener('drop',e=>{e.preventDefault();$('importDropZone').classList.remove('over');const f=e.dataTransfer.files?.[0];if(f){(function(){const dt=new DataTransfer();dt.items.add(f);$('importFile').files=dt.files})();importSelectedFile=f;setImportDrop(f)}});$('importAnalyze')?.addEventListener('click',()=>analyzeImport().catch(()=>{}));$('importMapping')?.addEventListener('change',()=>{if(importAnalysis)renderImportPreview(importAnalysis)});$('importPriceUnit')?.addEventListener('change',()=>{if(importAnalysis)renderImportPreview(importAnalysis)});$('importExecute')?.addEventListener('click',()=>executeImport().catch(()=>{}));$('importTemplate')?.addEventListener('click',downloadImportTemplate);$('importHistoryRefresh')?.addEventListener('click',loadImportHistory);$('importHistoryClear')?.addEventListener('click',async()=>{await api('/api/import/history/clear',{method:'POST',body:'{}'});loadImportHistory()});loadImportHistory();for(const id of ['homeJobs','destinationJobs'])$(id)?.addEventListener('click',event=>{const metric=event.target.closest('[data-job-metric]');if(metric)return openJobMetric(metric.dataset.id,metric.dataset.jobMetric);const button=event.target.closest('[data-job-action]');if(button)jobAction(button.dataset.jobAction,button.dataset.id)});$('newProfileBtn')?.addEventListener('click',()=>{clearForm();tab('selector')});$('clearForm')?.addEventListener('click',clearForm);$('saveBtn')?.addEventListener('click',()=>saveProfile(false));$('scrapeForm')?.addEventListener('click',()=>saveProfile(true));$('openVisual')?.addEventListener('click',()=>openVisual('list'));$('openDetailVisual')?.addEventListener('click',()=>openVisual('detail'));$('closeVisual')?.addEventListener('click',closeVisual);$('visualFrame')?.addEventListener('load',()=>{if($('visualFrame').src==='about:blank')return;$('visualLoading').hidden=true;$('visualFrame').hidden=false});$('visualModal')?.addEventListener('click',event=>{if(event.target===$('visualModal'))closeVisual()});window.addEventListener('message',visualMessage);$('suggestSelectors')?.addEventListener('click',suggestSelectorFields);$('injectorCopyBtn')?.addEventListener('click',()=>copyInjectorScript());$('suggestDetails')?.addEventListener('click',suggestDetailFields);$('testSelectors')?.addEventListener('click',testSelectors);$('testDetails')?.addEventListener('click',testDetailSelectors);$('clearDetails')?.addEventListener('click',clearDetailSelectors);$('detailGrid')?.addEventListener('input',updateDetailSummary);for(const id of ['galBox','galSelectors','galPattern','galFrom','galTo','galMax','galSkipFirst'])$(id)?.addEventListener('input',updateDetailSummary);$('galMode')?.addEventListener('change',galModeChanged);$('testGallery')?.addEventListener('click',testGallery);document.querySelectorAll('[data-open-destination]').forEach(button=>button.addEventListener('click',()=>openDestinationManager(button.dataset.openDestination).catch(error=>openResultModal('⚠️ خطای مدیریت مقصد',{ok:false,error:error.message}))));$('destinationManagerClose')?.addEventListener('click',closeDestinationManager);$('destinationManagerModal')?.addEventListener('click',event=>{if(event.target===$('destinationManagerModal'))closeDestinationManager()});document.querySelectorAll('[data-dest-target]').forEach(button=>button.addEventListener('click',()=>setDestinationTarget(button.dataset.destTarget,true)));document.querySelectorAll('[data-dest-view]').forEach(button=>button.addEventListener('click',()=>setDestinationView(button.dataset.destView)));$('destSelectAll')?.addEventListener('change',event=>selectDestinationPage(event.target.checked));$('destUnapprovedSelect')?.addEventListener('click',startCategoryAllRun);$('destLoad')?.addEventListener('click',()=>{dest.page=1;loadDestination(true)});$('destReset')?.addEventListener('click',()=>{$('destSearch').value='';$('destShop').value=dest.target==='woo'?'default':'all';dest.page=1;dest.status='all';loadDestination(true)});$('destSearch')?.addEventListener('keydown',event=>{if(event.key==='Enter'){dest.page=1;loadDestination(true)}});$('destShop')?.addEventListener('change',()=>{dest.page=1;loadDestination(true)});$('destPerPage')?.addEventListener('change',()=>{dest.page=1;loadDestination(false)});$('destStatusPills')?.addEventListener('click',event=>{const button=event.target.closest('[data-dest-status]');if(button){dest.status=button.dataset.destStatus;dest.page=1;loadDestination(false)}});$('destProducts')?.addEventListener('change',event=>{const checkbox=event.target.closest('[data-dest-select]');if(checkbox){const key=checkbox.dataset.destSelect,product=destinationProductByKey(key);if(checkbox.checked&&dest.selected.size>=20){checkbox.checked=false;return notice('حداکثر ۲۰ محصول را در هر نوبت انتخاب کنید.','error')}if(checkbox.checked&&product)dest.selected.set(key,product);else dest.selected.delete(key);updateDestinationSelection()}});$('destProducts')?.addEventListener('click',event=>{const button=event.target.closest('[data-dest-action]');if(button)destinationCardAction(button.dataset.destAction,button.dataset.key).catch(error=>openResultModal('⚠️ خطای عملیات مقصد',{ok:false,error:error.message}))});$('destPrev')?.addEventListener('click',()=>{if(dest.page>1){dest.page--;loadDestination(false)}});$('destNext')?.addEventListener('click',()=>{if(dest.page<dest.totalPages){dest.page++;loadDestination(false)}});$('destClearSelection')?.addEventListener('click',()=>{dest.selected.clear();renderDestination()});$('destBulkCategory')?.addEventListener('click',()=>openDestinationCategoryManager([...dest.selected.values()]).catch(error=>openResultModal('⚠️ خطای دسته‌بندی',{ok:false,error:error.message})));$('destBulkPreview')?.addEventListener('click',()=>runDestinationBulk(false,false).catch(error=>openResultModal('⚠️ خطای پیش‌نمایش',{ok:false,error:error.message})));$('destBulkApply')?.addEventListener('click',()=>runDestinationBulk(true,false).catch(error=>openResultModal('⚠️ خطای ویرایش گروهی',{ok:false,error:error.message})));$('destBulkDeletePreview')?.addEventListener('click',()=>runDestinationBulk(false,true).catch(error=>openResultModal('⚠️ خطای پیش‌نمایش حذف گروهی',{ok:false,error:error.message})));$('destBulkDelete')?.addEventListener('click',()=>runDestinationBulk(true,true).catch(error=>openResultModal('⚠️ خطای حذف گروهی',{ok:false,error:error.message})));$('applyResultSettings')?.addEventListener('click',async()=>{const id=$('productProfile').value;if(!id)return notice('پروفایل را انتخاب کنید.','error');const button=$('applyResultSettings');busy(button,true);try{await applySavedResults(id)}catch(error){notice(error.message,'error')}finally{busy(button,false)}});$('loadProducts')?.addEventListener('click',loadProducts);$('productSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter')loadProducts()});$('products')?.addEventListener('click',e=>{const del=e.target.closest('[data-product-delete]');if(del)return deleteProductResult(del.dataset.productDelete).catch(error=>notice(error.message,'error'));if(e.target.closest('[data-product-clear]'))return clearProductResults().catch(error=>notice(error.message,'error'));const open=e.target.closest('[data-product-open]');if(open)return openProductModal(open.dataset.productOpen);});$('refreshJobs')?.addEventListener('click',()=>loadJobs());$('clearJobs')?.addEventListener('click',clearJobs);$('importBtn')?.addEventListener('click',importProfiles);$('profileList')?.addEventListener('click',e=>{const b=e.target.closest('[data-paction]');if(b)profileAction(b.dataset.paction,b.dataset.id)});$('jobs')?.addEventListener('click',e=>{const metric=e.target.closest('[data-job-metric]');if(metric)return openJobMetric(metric.dataset.id,metric.dataset.jobMetric);const b=e.target.closest('[data-job-action]');if(b)jobAction(b.dataset.jobAction,b.dataset.id)});setDestinationTarget('woo',false);clearForm();loadRuntimeLibraries();connect();
 // ─── Agentic AI (عملیات ایجنتیک) ─────────────────────────────────────────────
 let agentPollTimer=0,agentAutoOpenOnDone=false,agentTemplates=[],agentData={models:[],configured:[],tools:[],prompts:[],runs:[],current:null};
@@ -17439,1979 +19477,6 @@ function createAiStageRunner(io) {
 // worker-src/processor.ts
 init_db();
 init_env();
-
-// worker-src/selector-engine.ts
-function isBrowserSelectorEngine(engine) {
-  return ["playwright", "puppeteer", "crawlee_playwright", "network_api"].includes(engine || "");
-}
-function requireStaticSelectorEngine(engine) {
-  if (isBrowserSelectorEngine(engine)) throw Error("\u0622\u0632\u0645\u0627\u06CC\u0634 \u0648 \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0633\u0644\u06A9\u062A\u0648\u0631 \u0628\u0627 \u0645\u0648\u062A\u0648\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u06CC \u0628\u0647 \u0627\u062C\u0631\u0627\u06CC Node \u0631\u0648\u06CC VPS \u06CC\u0627 Termux \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F\u061B Cloudflare Worker \u0646\u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u0645\u0631\u0648\u0631\u06AF\u0631 \u0627\u062C\u0631\u0627 \u06A9\u0646\u062F.");
-}
-
-// worker-src/scraper.ts
-init_result_adjustments();
-init_db();
-init_utils();
-
-// worker-src/types.ts
-var DEFAULT_SELECTORS = {
-  container: "li.product",
-  title: "h2, h3, .woocommerce-loop-product__title",
-  price: ".price, .amount",
-  link: "a[href]",
-  image: "img"
-};
-
-// worker-src/scraper.ts
-var DEFAULT_CONTAINER = '.product, li.product, article.product, .product-item, .product-card, [data-product-id], [itemtype*="Product"]';
-var FALLBACKS = {
-  title: '.woocommerce-loop-product__title, .product-title, .product-name, [itemprop="name"], h1, h2, h3',
-  price: '.price ins, .sale-price, [itemprop="price"], .price, .amount, [data-price]',
-  link: 'a.woocommerce-LoopProduct-link, a.product-link, a[href*="/product/"], a[href*="/products/"], a[href]',
-  image: 'img.wp-post-image, img.product-image, [itemprop="image"], picture img, img, source',
-  sku: '[data-sku], [itemprop="sku"], .sku'
-};
-var DETAIL_KEYS = ["shortDesc", "price", "sku", "category", "tags", "weight", "stock", "brand"];
-var IMAGE_ATTRS = ["data-zoom-image", "data-large_image", "data-large-image", "data-full", "data-src", "data-lazy-src", "data-original", "src", "content", "href"];
-var LINK_ATTRS = ["data-href", "href", "data-url", "data-link", "data-product-url", "data-product-link", "content"];
-function onclickUrl(element) {
-  return element.getAttribute("onclick")?.match(/(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i)?.[1] || "";
-}
-var TITLE_ATTRS = ["data-title", "title", "aria-label", "content"];
-var PRICE_ATTRS = ["data-price", "data-regular-price", "data-sale-price", "content", "value"];
-var SKU_ATTRS = ["data-sku", "data-product-sku", "content", "value"];
-var VOID_TAGS = /* @__PURE__ */ new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-function hasEndTag(element) {
-  return !VOID_TAGS.has(String(element.tagName || "").toLowerCase());
-}
-async function sourceKey(value) {
-  return (await sha256(value)).slice(0, 32);
-}
-async function sourceText(url, indirect = false, maxBytes = 8e6) {
-  const network = resolveSourceNetwork((await getState("settings", {}))?.source, (await loadConnections()).ai.network, url);
-  const useWorker = Boolean(network.workerUrl) && (indirect || network.mode === "worker");
-  if (useWorker) {
-    try {
-      return { ...await safeTextViaWorker(url, network.workerUrl, maxBytes), route: "worker" };
-    } catch (error) {
-      throw new Error(`${error instanceof Error ? error.message : String(error)} (route: worker)\u061B \u0642\u0631\u0627\u0631\u062F\u0627\u062F \u0622\u062F\u0631\u0633 \u067E\u0631\u0627\u06A9\u0633\u06CC \u0648 \u0645\u062C\u0648\u0632 \u062F\u0627\u0645\u0646\u0647\u0654 \u0645\u0628\u062F\u0623 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.`);
-    }
-  }
-  if (network.mode === "worker" && !network.workerUrl) throw new Error("Worker URL \u062F\u0631 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0627\u062A\u0635\u0627\u0644 \u0645\u0628\u062F\u0623 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.");
-  if (network.mode === "proxy") throw new Error("\u067E\u0631\u0648\u06A9\u0633\u06CC CONNECT \u062F\u0631 Cloudflare \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u0646\u0645\u06CC\u200C\u0634\u0648\u062F\u061B \u0631\u0648\u0634 Worker / \u067E\u0631\u0648\u06A9\u0633\u06CC \u0645\u0639\u06A9\u0648\u0633 \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F.");
-  if (indirect && network.mode !== "worker") throw new Error("\u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0645\u0628\u062F\u0623 \u062F\u0631 Cloudflare \u0641\u0642\u0637 \u0628\u0627 \u0631\u0648\u0634 Worker URL \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u0645\u06CC\u200C\u0634\u0648\u062F. (\u062F\u0631 \u0645\u062D\u06CC\u0637 Cloudflare \u067E\u0631\u0648\u06A9\u0633\u06CC HTTP \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0646\u06CC\u0633\u062A\u061B \u0622\u062F\u0631\u0633 Worker \u0648\u0627\u0633\u0637 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.)");
-  return { ...await safeText(url, maxBytes), route: "direct" };
-}
-function toAbsoluteUrl(value, base) {
-  try {
-    return new URL(value, base).href;
-  } catch {
-    return "";
-  }
-}
-var TRACKING_PARAMS = /^(utm_.+|fbclid|gclid|yclid|mc_cid|mc_eid|ref|ref_.*|source)$/i;
-var PAGING_PARAMS = /^(page|paged|p|offset|start|limit|per_page|perpage|sort|order|orderby|view|display)$/i;
-function selectorParts(selector) {
-  const out = [], value = String(selector || "");
-  let part = "", round = 0, square = 0, quote = "";
-  for (const char of value) {
-    if (quote) {
-      part += char;
-      if (char === quote) quote = "";
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      part += char;
-    } else if (char === "(") {
-      round++;
-      part += char;
-    } else if (char === ")") {
-      round = Math.max(0, round - 1);
-      part += char;
-    } else if (char === "[") {
-      square++;
-      part += char;
-    } else if (char === "]") {
-      square = Math.max(0, square - 1);
-      part += char;
-    } else if (char === "," && !round && !square) {
-      if (part.trim()) out.push(part.trim());
-      part = "";
-    } else part += char;
-  }
-  if (part.trim()) out.push(part.trim());
-  return out;
-}
-function multilineSelectorParts(selector) {
-  return String(selector || "").split(/[\r\n|]+/).flatMap((part) => selectorParts(part)).filter(Boolean);
-}
-function isXPathSelector(selector) {
-  const value = String(selector || "").trim();
-  if (!value) return false;
-  if (/^(\(\/\/|\/\/|\/html\b|\/\*|\.\/\/|\.\/)/.test(value)) return true;
-  return value.startsWith("/") && (value.includes("@") || value.includes("["));
-}
-function splitOutsideXPath(input, seps) {
-  const parts = [];
-  let depth = 0, quote = "", current2 = "";
-  for (const ch of input) {
-    if (quote) {
-      current2 += ch;
-      if (ch === quote) quote = "";
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      current2 += ch;
-      continue;
-    }
-    if (ch === "[") depth++;
-    else if (ch === "]") depth = Math.max(0, depth - 1);
-    if (depth === 0 && seps.includes(ch)) {
-      parts.push(current2);
-      current2 = "";
-      continue;
-    }
-    current2 += ch;
-  }
-  parts.push(current2);
-  return parts;
-}
-function splitXPathAnd(predicate) {
-  const parts = [];
-  let depth = 0, quote = "", current2 = "";
-  for (let i = 0; i < predicate.length; i++) {
-    const ch = predicate[i];
-    if (quote) {
-      current2 += ch;
-      if (ch === quote) quote = "";
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      current2 += ch;
-      continue;
-    }
-    if (ch === "[" || ch === "(") depth++;
-    else if (ch === "]" || ch === ")") depth = Math.max(0, depth - 1);
-    if (depth === 0 && predicate.startsWith(" and ", i)) {
-      parts.push(current2);
-      current2 = "";
-      i += 4;
-      continue;
-    }
-    current2 += ch;
-  }
-  parts.push(current2);
-  return parts;
-}
-function xpathSinglePredicateToCss(part, tag) {
-  const nth = tag === "*" ? "nth-child" : "nth-of-type", last = tag === "*" ? "last-child" : "last-of-type";
-  let match2 = part.match(/^(\d+)$/) || part.match(/^position\(\)\s*=\s*(\d+)$/);
-  if (match2) return `:${nth}(${match2[1]})`;
-  if (/^last\(\)$/.test(part)) return `:${last}`;
-  match2 = part.match(/^@([\w.-]+)\s*=\s*("([^"]*)"|'([^']*)')$/);
-  if (match2) return `[${match2[1]}="${String(match2[3] ?? match2[4] ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-  match2 = part.match(/^(contains|starts-with|ends-with)\(\s*@([\w.-]+)\s*,\s*("([^"]*)"|'([^']*)')\s*\)$/);
-  if (match2) {
-    const operator = match2[1] === "contains" ? "*=" : match2[1] === "starts-with" ? "^=" : "$=";
-    return `[${match2[2]}${operator}"${String(match2[4] ?? match2[5] ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-  }
-  return null;
-}
-function xpathPredicateToCss(predicate, tag) {
-  let css = "";
-  for (const raw2 of splitXPathAnd(predicate.trim())) {
-    const converted = xpathSinglePredicateToCss(raw2.trim(), tag);
-    if (converted === null) return null;
-    css += converted;
-  }
-  return css;
-}
-function xpathParseStep(raw2) {
-  const bracket = raw2.indexOf("["), tag = (bracket < 0 ? raw2 : raw2.slice(0, bracket)).trim();
-  if (!/^(\*|[A-Za-z_][\w.-]*)$/.test(tag)) return null;
-  const predicates = [];
-  if (bracket >= 0) {
-    const rest = raw2.slice(bracket);
-    let cursor = 0;
-    while (cursor < rest.length) {
-      if (rest[cursor] !== "[") return null;
-      let depth = 0, quote = "", end = cursor;
-      for (; end < rest.length; end++) {
-        const ch = rest[end];
-        if (quote) {
-          if (ch === quote) quote = "";
-        } else if (ch === '"' || ch === "'") quote = ch;
-        else if (ch === "[") depth++;
-        else if (ch === "]") {
-          depth--;
-          if (depth === 0) break;
-        }
-      }
-      if (depth !== 0) return null;
-      predicates.push(rest.slice(cursor + 1, end).trim());
-      cursor = end + 1;
-      while (rest[cursor] === " " || rest[cursor] === "	") cursor++;
-    }
-  }
-  return { tag, predicates };
-}
-function xpathSingleToCss(input) {
-  if (input.startsWith("(")) return null;
-  let cursor = 0, pendingAxis = "descendant", scoped = false;
-  if (input.startsWith(".//")) cursor = 3;
-  else if (input.startsWith("./")) {
-    cursor = 2;
-    pendingAxis = "child";
-    scoped = true;
-  } else if (input.startsWith("//")) cursor = 2;
-  else if (input.startsWith("/")) {
-    cursor = 1;
-    pendingAxis = "child";
-  } else return null;
-  const steps = [];
-  while (cursor < input.length) {
-    let end = cursor, depth = 0, quote = "";
-    for (; end < input.length; end++) {
-      const ch = input[end];
-      if (quote) {
-        if (ch === quote) quote = "";
-      } else if (ch === '"' || ch === "'") quote = ch;
-      else if (ch === "[") depth++;
-      else if (ch === "]") {
-        depth--;
-        if (depth < 0) return null;
-      } else if (ch === "/" && depth === 0) break;
-    }
-    const step = xpathParseStep(input.slice(cursor, end).trim());
-    if (!step) return null;
-    steps.push({ ...step, axis: pendingAxis });
-    if (end >= input.length) break;
-    if (input[end + 1] === "/") {
-      pendingAxis = "descendant";
-      cursor = end + 2;
-    } else {
-      pendingAxis = "child";
-      cursor = end + 1;
-    }
-  }
-  if (!steps.length) return null;
-  let css = scoped ? ":scope" : "";
-  for (let index = 0; index < steps.length; index++) {
-    const step = steps[index];
-    let chunk = step.tag === "*" ? "" : cssEscapeIdent(step.tag);
-    for (const predicate of step.predicates) {
-      const converted = xpathPredicateToCss(predicate, step.tag);
-      if (converted === null) return null;
-      chunk += converted;
-    }
-    if (!chunk) chunk = "*";
-    if (index > 0) css += step.axis === "descendant" ? " " : " > ";
-    else if (scoped) css += " > ";
-    css += chunk;
-  }
-  return css || null;
-}
-function xpathToCss(selector) {
-  const input = String(selector || "").trim();
-  if (!isXPathSelector(input)) return null;
-  const arms = splitOutsideXPath(input, "|");
-  if (arms.length > 1) {
-    const converted = [];
-    for (const arm of arms) {
-      const css = xpathSingleToCss(arm.trim());
-      if (css === null) return null;
-      converted.push(css);
-    }
-    return converted.join(", ");
-  }
-  return xpathSingleToCss(input);
-}
-function safeOn(rewriter, selector, handler) {
-  const css = xpathToCss(selector) ?? selector;
-  try {
-    rewriter.on(css, handler);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function cleanText(value) {
-  return normalizeDigits2(decodeEntities(String(value || ""))).replace(/[\u200c\u200e\u200f\u202a-\u202e]/g, " ").replace(/\s+/g, " ").trim();
-}
-function decodeEntities(value) {
-  if (!value.includes("&")) return value;
-  return value.replace(/&(?:nbsp|#160|#xa0);/gi, " ").replace(/&(?:quot|#34|#x22);/gi, '"').replace(/&(?:apos|#39|#x27);/gi, "'").replace(/&(?:lt|#60|#x3c);/gi, "<").replace(/&(?:gt|#62|#x3e);/gi, ">").replace(/&#(\d{1,7});/g, (_, code) => safeCodePoint(Number(code))).replace(/&#x([0-9a-f]{1,6});/gi, (_, code) => safeCodePoint(parseInt(code, 16))).replace(/&(?:amp|#38|#x26);/gi, "&");
-}
-function safeCodePoint(code) {
-  if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "";
-  try {
-    return String.fromCodePoint(code);
-  } catch {
-    return "";
-  }
-}
-function normalizeDigits2(value) {
-  return String(value || "").replace(/[۰-۹]/g, (d) => String("\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9".indexOf(d))).replace(/[٠-٩]/g, (d) => String("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669".indexOf(d)));
-}
-function firstAttribute(element, names) {
-  for (const name of names) {
-    const value = element.getAttribute(name);
-    if (value && value.trim()) return value.trim();
-  }
-  return "";
-}
-function srcsetValue(value) {
-  const items = String(value || "").split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
-    const match2 = part.match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)(w|x))?$/i);
-    return { url: match2?.[1] || part.split(/\s+/)[0], score: Number(match2?.[2] || 1) * (match2?.[3]?.toLowerCase() === "x" ? 1e4 : 1) };
-  }).filter((item) => item.url);
-  return items.sort((a, b) => b.score - a.score)[0]?.url || "";
-}
-function elementValue(field, element, text = "") {
-  if (field === "link") return firstAttribute(element, LINK_ATTRS) || onclickUrl(element);
-  if (field === "image") return firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("data-srcset") || element.getAttribute("srcset") || "");
-  if (field === "title") return cleanText(text) || firstAttribute(element, TITLE_ATTRS);
-  if (field === "price") return cleanText(text) || firstAttribute(element, PRICE_ATTRS);
-  if (field === "sku") return cleanText(text) || firstAttribute(element, SKU_ATTRS);
-  return cleanText(text);
-}
-function canonicalUrl(value, baseUrl, stripAllQuery = false) {
-  const raw2 = String(value || "").trim();
-  if (!raw2 || /^(?:#|javascript:|mailto:|tel:|data:|blob:)/i.test(raw2)) return "";
-  const absolute = toAbsoluteUrl(raw2.replace(/&amp;/gi, "&"), baseUrl);
-  if (!absolute || !/^(https?):/i.test(absolute)) return "";
-  try {
-    const url = new URL(absolute);
-    url.hash = "";
-    if (stripAllQuery) {
-      for (const key2 of [...url.searchParams.keys()]) {
-        if (TRACKING_PARAMS.test(key2) || PAGING_PARAMS.test(key2)) url.searchParams.delete(key2);
-      }
-      url.searchParams.sort();
-    } else for (const key2 of [...url.searchParams.keys()]) if (TRACKING_PARAMS.test(key2)) url.searchParams.delete(key2);
-    url.pathname = url.pathname.replace(/\/{2,}/g, "/");
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return absolute;
-  }
-}
-function imageUrl(value, baseUrl) {
-  const raw2 = String(value || "").trim();
-  if (!raw2 || /^(data:|blob:|javascript:|#)/i.test(raw2) || /(?:placeholder|spacer|transparent|loading)(?:[-_.]|$)/i.test(raw2)) return "";
-  const absolute = toAbsoluteUrl(raw2.replace(/&amp;/gi, "&"), baseUrl);
-  return /^(https?):/i.test(absolute) ? absolute : "";
-}
-function galleryKey(url) {
-  return url.replace(/-\d{2,4}x\d{2,4}(?=\.[a-z]{3,5}(?:[?#]|$))/i, "").replace(/[?#].*$/, "");
-}
-function addGalleryImage(images, raw2, baseUrl, max2 = 30) {
-  const url = imageUrl(raw2, baseUrl);
-  if (url && images.length < Math.max(1, Math.min(30, max2)) && !images.some((existing) => galleryKey(existing) === galleryKey(url))) images.push(url);
-}
-function linkScore(value) {
-  if (!value || /^(javascript:|mailto:|tel:|#)/i.test(value)) return -1e3;
-  let score = 0;
-  if (/\/products?\//i.test(value)) score += 40;
-  if (/[?&](?:add-to-cart|remove_item)=|\/cart\/?|wishlist|compare/i.test(value)) score -= 200;
-  return score;
-}
-function setCardValue(card, field, value, rank, baseUrl) {
-  let clean2 = String(value || "").trim();
-  if (field === "link") {
-    clean2 = canonicalUrl(clean2, baseUrl);
-    rank += linkScore(clean2);
-  } else if (field === "image") clean2 = imageUrl(clean2, baseUrl);
-  else clean2 = cleanText(clean2);
-  if (!clean2) return;
-  const previous = card.values[field];
-  if (!previous || rank > previous.rank) card.values[field] = { value: clean2, rank };
-}
-var CardHandler = class {
-  constructor(output, baseUrl) {
-    this.output = output;
-    this.baseUrl = baseUrl;
-  }
-  stack = [];
-  element(element) {
-    const card = { values: {} };
-    this.stack.push(card);
-    setCardValue(card, "link", firstAttribute(element, LINK_ATTRS), 15, this.baseUrl);
-    setCardValue(card, "image", firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("srcset") || ""), 15, this.baseUrl);
-    setCardValue(card, "title", firstAttribute(element, TITLE_ATTRS), 15, this.baseUrl);
-    setCardValue(card, "price", firstAttribute(element, PRICE_ATTRS), 15, this.baseUrl);
-    setCardValue(card, "sku", firstAttribute(element, SKU_ATTRS), 15, this.baseUrl);
-    if (!hasEndTag(element)) {
-      this.stack.pop();
-      this.output.push(card);
-      return;
-    }
-    element.onEndTag(() => {
-      const ended = this.stack.pop();
-      if (ended) this.output.push(ended);
-    });
-  }
-  current() {
-    return this.stack[this.stack.length - 1];
-  }
-};
-var CardFieldHandler = class {
-  constructor(cards, field, rank, baseUrl) {
-    this.cards = cards;
-    this.field = field;
-    this.rank = rank;
-    this.baseUrl = baseUrl;
-  }
-  captures = [];
-  element(element) {
-    const card = this.cards.current();
-    if (!card || this.captures.some((capture2) => capture2.card === card)) return;
-    const immediate = elementValue(this.field, element);
-    if (immediate) setCardValue(card, this.field, immediate, this.rank + 2, this.baseUrl);
-    if (this.field === "link" || this.field === "image" || !hasEndTag(element)) return;
-    const capture = { card, text: "", element };
-    this.captures.push(capture);
-    element.onEndTag(() => {
-      setCardValue(card, this.field, elementValue(this.field, element, capture.text), this.rank, this.baseUrl);
-      const index = this.captures.indexOf(capture);
-      if (index >= 0) this.captures.splice(index, 1);
-    });
-  }
-  text(chunk) {
-    for (const capture of this.captures) capture.text += chunk.text;
-  }
-};
-function numberFromText(value) {
-  const normalized = normalizeDigits2(value).replace(/[٬،]/g, ",").replace(/\u00a0/g, " ");
-  const matches = normalized.match(/\d[\d\s,._]{0,30}\d|\d/g) || [];
-  const numbers = matches.map((raw2) => {
-    let token = raw2.trim().replace(/\s/g, "");
-    if (/^\d+[.,]\d{1,2}$/.test(token) && !/[٬،]/.test(raw2)) return Number(token.replace(",", "."));
-    if (/^\d{1,3}(?:,\d{3})+\.\d{1,2}$/.test(token)) return Number(token.replace(/,/g, ""));
-    if (/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(token)) return Number(token.replace(/\./g, "").replace(",", "."));
-    token = token.replace(/[^\d]/g, "");
-    return Number(token || 0);
-  }).filter((n) => Number.isFinite(n) && n >= 0);
-  return numbers.length ? Math.max(...numbers) : 0;
-}
-async function parseJsonLdProducts(html, baseUrl) {
-  const products = [];
-  for (const match2 of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
-    try {
-      const data = JSON.parse(match2[1].replace(/^\s*<!--|-->\s*$/g, ""));
-      const walk = (node, insideVariant = false) => {
-        if (!node || typeof node !== "object") return;
-        if (Array.isArray(node)) {
-          node.forEach((item2) => walk(item2, insideVariant));
-          return;
-        }
-        const item = node, types = Array.isArray(item["@type"]) ? item["@type"] : [item["@type"]];
-        if (!insideVariant && types.some((type) => String(type || "").toLowerCase() === "product")) {
-          const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers || {};
-          const image = Array.isArray(item.image) ? item.image[0] : typeof item.image === "object" ? item.image?.url : item.image, imageValue3 = imageUrl(String(image || ""), baseUrl);
-          const title = cleanText(item.name || "");
-          const url = canonicalUrl(item.url || item["@id"] || "", baseUrl), availability = String(offers.availability || "");
-          const priceText = cleanText(String(offers.price || offers.lowPrice || ""));
-          if (title && imageValue3 && priceText && numberFromText(priceText) > 0) products.push({ sourceKey: "", title, price: numberFromText(priceText), priceText, url, image: imageValue3, images: imageValue3 ? [imageValue3] : [], sku: cleanText(String(item.sku || item.mpn || "")), brand: cleanText(String(typeof item.brand === "object" ? item.brand?.name : item.brand || "")), shortDesc: cleanText(String(item.description || "")), longDesc: "", stock: /outofstock|soldout|discontinued/i.test(availability) ? 0 : void 0, weight: void 0, category: cleanText(String(item.category || "")), tags: cleanText(Array.isArray(item.keywords) ? item.keywords.join(", ") : String(item.keywords || "")), variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
-        }
-        for (const [key2, value] of Object.entries(item)) walk(value, insideVariant || key2 === "hasVariant" || key2 === "isVariantOf");
-      };
-      walk(data);
-    } catch {
-    }
-  }
-  return products;
-}
-async function parseCards(html, baseUrl, selectors) {
-  const cards = [];
-  const cardHandler = new CardHandler(cards, baseUrl);
-  const rewriter = new HTMLRewriter();
-  const containers = selectorParts(selectors.container || DEFAULT_CONTAINER).map((selector) => selector.includes(":nth-of-type(") ? selector.replace(/:nth-of-type\(\d+\)/g, "").trim() || selector : selector);
-  let validContainer = false;
-  for (const selector of containers) validContainer = safeOn(rewriter, selector, cardHandler) || validContainer;
-  if (!validContainer) throw new Error("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0645\u062D\u0635\u0648\u0644 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A.");
-  for (const field of ["title", "price", "link", "image", "sku"]) {
-    const configured = selectorParts(selectors[field]);
-    for (const selector of configured) {
-      safeOn(rewriter, selector, new CardFieldHandler(cardHandler, field, 100, baseUrl));
-      if (field === "image") for (const suffix of ["img", "source", "a"]) safeOn(rewriter, `${selector} ${suffix}`, new CardFieldHandler(cardHandler, field, 99, baseUrl));
-      if (field === "link") for (const suffix of ["a[href]", "[data-href]", "[data-url]", "[data-link]", "[data-product-url]", "[data-product-link]", "[onclick]"]) safeOn(rewriter, `${selector} ${suffix}`, new CardFieldHandler(cardHandler, field, 99, baseUrl));
-    }
-    for (const selector of selectorParts(FALLBACKS[field])) safeOn(rewriter, selector, new CardFieldHandler(cardHandler, field, 10, baseUrl));
-  }
-  try {
-    await rewriter.transform(new Response(html, { headers: { "content-type": "text/html; charset=UTF-8" } })).text();
-  } catch (error) {
-    throw new Error(`\u067E\u0631\u062F\u0627\u0632\u0634 HTML \u0641\u0647\u0631\u0633\u062A \u0634\u06A9\u0633\u062A \u062E\u0648\u0631\u062F: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  const output = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const card of cards) {
-    let title = card.values.title?.value || "", url = card.values.link?.value || "", image = card.values.image?.value || "";
-    const priceText = card.values.price?.value || "", sku = card.values.sku?.value || "";
-    if (!title && url) {
-      try {
-        title = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "").replace(/[-_]+/g, " ");
-      } catch {
-      }
-    }
-    if (!title && !url) continue;
-    const identity = url ? canonicalUrl(url, baseUrl, true) : `${title}|${priceText}`;
-    const key2 = await sourceKey(identity);
-    if (seen.has(key2)) continue;
-    seen.add(key2);
-    output.push({ sourceKey: key2, title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku, shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
-  }
-  const structured = await parseJsonLdProducts(html, baseUrl), byKey = /* @__PURE__ */ new Map(), byUrl = /* @__PURE__ */ new Map(), bySku = /* @__PURE__ */ new Map(), byTitle = /* @__PURE__ */ new Map();
-  const addUnique = (map2, key2, product) => {
-    if (key2) map2.set(key2, map2.has(key2) ? null : product);
-  };
-  for (const product of structured) {
-    const identity = product.url ? canonicalUrl(product.url, baseUrl, true) : `${product.title}|${product.priceText}`;
-    product.sourceKey = await sourceKey(identity);
-    byKey.set(product.sourceKey, product);
-    addUnique(byUrl, canonicalUrl(product.url, baseUrl, true), product);
-    addUnique(bySku, cleanText(product.sku || "").toLowerCase(), product);
-    addUnique(byTitle, cleanText(product.title).toLowerCase(), product);
-  }
-  for (let index = 0; index < output.length; index++) {
-    const product = output[index], urlKey = canonicalUrl(product.url, baseUrl, true), skuKey = cleanText(product.sku || "").toLowerCase(), titleKey = cleanText(product.title).toLowerCase();
-    const fallback = byKey.get(product.sourceKey) || byUrl.get(urlKey) || bySku.get(skuKey) || byTitle.get(titleKey) || null;
-    if (!fallback) continue;
-    const merged = { ...fallback, ...product, title: product.title || fallback.title, price: product.price > 0 ? product.price : fallback.price, priceText: product.priceText || fallback.priceText, url: product.url || fallback.url, image: product.image || fallback.image, images: product.images.length ? product.images : fallback.images, shortDesc: product.shortDesc || fallback.shortDesc, longDesc: product.longDesc || fallback.longDesc, sku: product.sku || fallback.sku, brand: product.brand || fallback.brand, stock: product.stock ?? fallback.stock, weight: product.weight ?? fallback.weight, category: product.category || fallback.category, tags: product.tags || fallback.tags, variations: product.variations?.length ? product.variations : fallback.variations, variationGroups: product.variationGroups?.length ? product.variationGroups : fallback.variationGroups, variationPrices: Object.keys(product.variationPrices || {}).length ? product.variationPrices : fallback.variationPrices };
-    const mergedIdentity = merged.url ? canonicalUrl(merged.url, baseUrl, true) : `${merged.title}|${merged.priceText}`;
-    merged.sourceKey = await sourceKey(mergedIdentity);
-    output[index] = merged;
-    byKey.delete(fallback.sourceKey);
-  }
-  const final = [], finalSeen = /* @__PURE__ */ new Set();
-  for (const product of [...output, ...byKey.values()]) if (!finalSeen.has(product.sourceKey)) {
-    finalSeen.add(product.sourceKey);
-    final.push(product);
-  }
-  return final;
-}
-var DETAIL_ATTRS = { shortDesc: ["data-description", "data-summary", "content", "title", "aria-label"], sku: SKU_ATTRS, category: ["data-category", "data-category-name", "content", "title"], tags: ["data-tags", "data-keywords", "content"], weight: ["data-weight", "data-product-weight", "content", "value"], stock: ["data-stock", "data-quantity", "data-stock-quantity", "content", "value"], brand: ["data-brand", "data-brand-name", "content", "title"] };
-var ScalarHandler = class {
-  constructor(key2, values) {
-    this.key = key2;
-    this.values = values;
-  }
-  captures = [];
-  element(element) {
-    if (this.values.get(this.key) || this.captures.length) return;
-    const immediate = firstAttribute(element, DETAIL_ATTRS[this.key] || ["data-value", "content", "value"]);
-    if (immediate) this.values.set(this.key, cleanText(immediate));
-    if (!hasEndTag(element)) return;
-    const capture = { text: "", element };
-    this.captures.push(capture);
-    element.onEndTag(() => {
-      if (!this.values.get(this.key)) {
-        const value = cleanText(capture.text);
-        if (value) this.values.set(this.key, value);
-      }
-      const index = this.captures.indexOf(capture);
-      if (index >= 0) this.captures.splice(index, 1);
-    });
-  }
-  text(chunk) {
-    for (const capture of this.captures) capture.text += chunk.text;
-  }
-};
-var DetailImageHandler = class {
-  constructor(result, baseUrl) {
-    this.result = result;
-    this.baseUrl = baseUrl;
-  }
-  element(element) {
-    if (this.result.mainImage) return;
-    const value = firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("data-srcset") || element.getAttribute("srcset") || "");
-    this.result.mainImage = imageUrl(value, this.baseUrl);
-  }
-};
-var GalleryHandler = class {
-  constructor(images, baseUrl, max2 = 30) {
-    this.images = images;
-    this.baseUrl = baseUrl;
-    this.max = max2;
-  }
-  element(element) {
-    const candidates = [...IMAGE_ATTRS.map((attr) => element.getAttribute(attr) || ""), element.getAttribute("href") || "", element.getAttribute("content") || "", srcsetValue(element.getAttribute("data-srcset") || ""), srcsetValue(element.getAttribute("srcset") || "")];
-    for (const candidate of candidates) addGalleryImage(this.images, candidate, this.baseUrl, this.max);
-  }
-};
-var LongDescriptionHandler = class {
-  constructor(marker) {
-    this.marker = marker;
-  }
-  element(element) {
-    element.before(`<!--${this.marker}:START-->`, { html: true });
-    element.after(`<!--${this.marker}:END-->`, { html: true });
-  }
-};
-var SanitizeHandler = class {
-  element(element) {
-    for (const [name] of Array.from(element.attributes)) if (/^on/i.test(name) || name.toLowerCase() === "srcdoc") element.removeAttribute(name);
-    for (const name of ["href", "src", "data-src"]) {
-      const value = element.getAttribute(name);
-      if (value && /^\s*(?:javascript|data\s*:\s*text\/html)/i.test(value)) element.removeAttribute(name);
-    }
-  }
-};
-var RemoveHandler = class {
-  element(element) {
-    element.remove();
-  }
-};
-function variationName(element) {
-  return cleanText(firstAttribute(element, ["data-attribute_name", "data-attribute-name", "data-name", "name", "data-label", "aria-label"]));
-}
-var VariationContext = class {
-  stack = [];
-  current() {
-    return this.stack[this.stack.length - 1] || "";
-  }
-};
-var VariationScopeHandler = class {
-  constructor(context) {
-    this.context = context;
-  }
-  element(element) {
-    if (!hasEndTag(element)) return;
-    const name = variationName(element);
-    this.context.stack.push(name);
-    element.onEndTag(() => this.context.stack.pop());
-  }
-};
-function mergeVariation(result, element, text, baseUrl, inheritedName = "") {
-  const attrs = Object.fromEntries(Array.from(element.attributes));
-  let json3 = {};
-  for (const key2 of ["data-product_variation", "data-variation", "data-product-variation"]) {
-    try {
-      if (attrs[key2]) json3 = JSON.parse(attrs[key2]);
-    } catch {
-    }
-  }
-  const name = variationName(element) || cleanText(String(json3.attribute_name || json3.name || "")) || inheritedName;
-  const explicitValue = firstAttribute(element, ["data-value", "value", "data-variation", "data-slug"]) || String(json3.variation || json3.value || "");
-  const tag = String(element.tagName || "").toLowerCase();
-  if (!name && !explicitValue && !["option", "button", "input"].includes(tag)) return;
-  const value = cleanText(explicitValue || text);
-  if (!value || /^(انتخاب|choose|select|لطفا)/i.test(value)) return;
-  const label = cleanText(text);
-  for (const item of [value, label]) if (item && item.length <= 180 && !result.variations.includes(item)) result.variations.push(item);
-  if (name) {
-    let group = result.variationGroups.find((group2) => group2.name === name);
-    if (!group) {
-      group = { name, values: [] };
-      result.variationGroups.push(group);
-    }
-    if (!group.values.includes(value)) group.values.push(value);
-  }
-  const price = numberFromText(String(json3.display_price || json3.price || firstAttribute(element, ["data-display_price", "data-display-price", "data-price", "data-regular-price", "data-sale-price"]) || text));
-  if (price > 0) {
-    result.variationPrices[value] = price;
-    if (label) result.variationPrices[label] = price;
-  }
-  const variationImage = String(json3.image?.full_src || json3.image?.src || json3.image || firstAttribute(element, IMAGE_ATTRS) || "");
-  addGalleryImage(result.images, variationImage, baseUrl);
-}
-var VariationHandler = class {
-  constructor(result, baseUrl, context) {
-    this.result = result;
-    this.baseUrl = baseUrl;
-    this.context = context;
-  }
-  captures = [];
-  element(element) {
-    if (!hasEndTag(element)) {
-      mergeVariation(this.result, element, "", this.baseUrl, this.context.current());
-      return;
-    }
-    const capture = { element, text: "" };
-    this.captures.push(capture);
-    element.onEndTag(() => {
-      mergeVariation(this.result, element, capture.text, this.baseUrl, this.context.current());
-      const index = this.captures.indexOf(capture);
-      if (index >= 0) this.captures.splice(index, 1);
-    });
-  }
-  text(chunk) {
-    for (const capture of this.captures) capture.text += chunk.text;
-  }
-};
-function parseSpecFragment(html) {
-  if (!html) return [];
-  const rows2 = [];
-  const cell = (value) => cleanText(value.replace(/<[^>]*>/g, " "));
-  for (const match2 of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)) {
-    const cells = [...match2[1].matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)\s*>/gi)].map((m) => cell(m[1]));
-    if (cells.length >= 2 && cells[0] && cells[1]) rows2.push({ name: cells[0], value: cells.slice(1).filter(Boolean).join(" ") });
-  }
-  if (!rows2.length) {
-    const terms = [...html.matchAll(/<dt\b[^>]*>([\s\S]*?)<\/dt\s*>/gi)].map((m) => cell(m[1]));
-    const values = [...html.matchAll(/<dd\b[^>]*>([\s\S]*?)<\/dd\s*>/gi)].map((m) => cell(m[1]));
-    terms.forEach((name, index) => {
-      const value = values[index] || "";
-      if (name && value) rows2.push({ name, value });
-    });
-  }
-  if (!rows2.length) for (const match2 of html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)) {
-    const parts = cell(match2[1]).split(/\s*[:：]\s*/);
-    if (parts.length >= 2 && parts[0] && parts[1]) rows2.push({ name: parts[0], value: parts.slice(1).join(": ") });
-  }
-  return rows2.filter((row) => row.name && row.value).slice(0, 60);
-}
-function extractMarkedFragment(html, marker) {
-  const start = `<!--${marker}:START-->`, end = `<!--${marker}:END-->`, from = html.indexOf(start);
-  if (from < 0) return "";
-  const to = html.indexOf(end, from + start.length);
-  return to < 0 ? "" : html.slice(from + start.length, to).trim();
-}
-function stripUnsafeHtml(html) {
-  return html.replace(/<(script|style|iframe|object|embed|form)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<(script|style|iframe|object|embed|form)\b[^>]*\/?\s*>/gi, "").replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "").replace(/\s+(href|src|srcdoc)\s*=\s*(["'])\s*(?:javascript|data\s*:\s*text\/html)[\s\S]*?\2/gi, "");
-}
-async function parseDetailPage(html, baseUrl, selectors) {
-  const result = { shortDesc: "", longDesc: "", price: "", sku: "", brand: "", stock: "", weight: "", category: "", tags: "", mainImage: "", images: [], variations: [], variationGroups: [], variationPrices: {} };
-  const values = /* @__PURE__ */ new Map(), rewriter = new HTMLRewriter();
-  for (const key2 of DETAIL_KEYS) for (const selector of selectorParts(selectors[key2])) safeOn(rewriter, selector, new ScalarHandler(key2, values));
-  const marker = `SCRAPER4_${Math.random().toString(36).slice(2)}`;
-  for (const selector of selectorParts(selectors.longDesc)) {
-    safeOn(rewriter, selector, new LongDescriptionHandler(marker));
-  }
-  const specsMarker = `SCRAPER4S_${Math.random().toString(36).slice(2)}`;
-  for (const selector of multilineSelectorParts(selectors.specs)) {
-    safeOn(rewriter, selector, new LongDescriptionHandler(specsMarker));
-    for (const suffix of ["script", "style", "iframe", "object", "embed", "form"]) safeOn(rewriter, `${selector} ${suffix}`, new RemoveHandler());
-    safeOn(rewriter, `${selector} *`, new SanitizeHandler());
-  }
-  const detailImage = new DetailImageHandler(result, baseUrl);
-  for (const selector of selectorParts(selectors.detailImage)) {
-    safeOn(rewriter, selector, detailImage);
-    for (const suffix of ["img", "source", "a[href]", "[data-src]", "[data-large_image]", "[data-zoom-image]"]) safeOn(rewriter, `${selector} ${suffix}`, detailImage);
-  }
-  const galleryMax = Math.max(1, Math.min(30, Math.trunc(Number(selectors.galleryMax) || 30)));
-  const galleryImages = [], gallery = new GalleryHandler(galleryImages, baseUrl, galleryMax);
-  for (const selector of multilineSelectorParts(selectors.gallery)) {
-    safeOn(rewriter, selector, gallery);
-    for (const suffix of ["img", "source", "a", "meta", "[data-src]", "[data-zoom-image]"]) safeOn(rewriter, `${selector} ${suffix}`, gallery);
-  }
-  const includeGallery = multilineSelectorParts(selectors.gallery).length > 0;
-  const variationContext = new VariationContext();
-  for (const selector of multilineSelectorParts(selectors.variations)) {
-    safeOn(rewriter, `${selector} select`, new VariationScopeHandler(variationContext));
-    safeOn(rewriter, selector, new VariationHandler(result, baseUrl, variationContext));
-    for (const suffix of ["option", "button", "input", "[data-value]", "[data-variation]", "[data-product_variation]"]) safeOn(rewriter, `${selector} ${suffix}`, new VariationHandler(result, baseUrl, variationContext));
-    if (includeGallery) for (const suffix of ["img", "source", "a[href]", "[data-src]", "[data-large_image]", "[data-zoom-image]"]) safeOn(rewriter, `${selector} ${suffix}`, gallery);
-  }
-  let transformed = "";
-  try {
-    transformed = await rewriter.transform(new Response(html, { headers: { "content-type": "text/html; charset=UTF-8" } })).text();
-  } catch (error) {
-    throw new Error(`\u067E\u0631\u062F\u0627\u0632\u0634 HTML \u062C\u0632\u0626\u06CC\u0627\u062A \u0634\u06A9\u0633\u062A \u062E\u0648\u0631\u062F: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  for (const key2 of DETAIL_KEYS) result[key2] = values.get(key2) || "";
-  result.longDesc = stripUnsafeHtml(extractMarkedFragment(transformed, marker));
-  const specRows = parseSpecFragment(extractMarkedFragment(transformed, specsMarker));
-  if (specRows.length) result.specs = specRows;
-  if (includeGallery) for (const image of result.images) addGalleryImage(galleryImages, image, baseUrl, galleryMax);
-  result.images = galleryImages;
-  applyJsonLdDetail(html, baseUrl, result, galleryMax, includeGallery);
-  if (selectors.gallerySkipFirst && result.images.length) result.images = result.images.slice(1);
-  result.variations = [...new Set(result.variations.map(cleanText).filter(Boolean))];
-  result.variationGroups = result.variationGroups.filter((group) => group.name && group.values.length).map((group) => ({ ...group, values: [...new Set(group.values.map(cleanText).filter(Boolean))] }));
-  return result;
-}
-function applyJsonLdDetail(html, baseUrl, result, galleryMax = 30, includeGallery = true) {
-  const imageValue3 = (raw2) => String(typeof raw2 === "object" ? raw2?.url || raw2?.contentUrl || raw2?.["@id"] || "" : raw2 || "");
-  const addVariant = (variant) => {
-    if (!variant || typeof variant !== "object") return;
-    const groups = [];
-    for (const key2 of ["color", "size", "material", "pattern"]) {
-      const value = cleanText(String(variant[key2] || ""));
-      if (value) groups.push([key2, value]);
-    }
-    const properties = Array.isArray(variant.additionalProperty) ? variant.additionalProperty : [variant.additionalProperty];
-    for (const property of properties) if (property && typeof property === "object") {
-      const name = cleanText(String(property.name || property.propertyID || "\u0648\u06CC\u0698\u06AF\u06CC")), value = cleanText(String(property.value || property.valueReference?.name || ""));
-      if (value) groups.push([name, value]);
-    }
-    if (!groups.length && variant.isVariantOf) {
-      const value = cleanText(String(variant.name || ""));
-      if (value) groups.push(["\u062A\u0646\u0648\u0639", value]);
-    }
-    const offer = Array.isArray(variant.offers) ? variant.offers[0] : variant.offers || {}, price = numberFromText(String(offer.price || offer.lowPrice || offer.highPrice || ""));
-    for (const [name, value] of groups) {
-      if (!result.variations.includes(value)) result.variations.push(value);
-      let group = result.variationGroups.find((item) => item.name === name);
-      if (!group) {
-        group = { name, values: [] };
-        result.variationGroups.push(group);
-      }
-      if (!group.values.includes(value)) group.values.push(value);
-      if (price > 0) result.variationPrices[value] = price;
-    }
-    if (includeGallery) {
-      const images = Array.isArray(variant.image) ? variant.image : [variant.image];
-      for (const raw2 of images) addGalleryImage(result.images, imageValue3(raw2), baseUrl, galleryMax);
-    }
-  };
-  for (const match2 of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) try {
-    const root = JSON.parse(match2[1].replace(/^\s*<!--|-->\s*$/g, "")), queue = [root];
-    while (queue.length) {
-      const node = queue.shift();
-      if (!node || typeof node !== "object") continue;
-      if (Array.isArray(node)) {
-        queue.push(...node);
-        continue;
-      }
-      queue.push(...Object.values(node).filter((value) => value && typeof value === "object"));
-      const types = (Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]]).map((type) => String(type || "").toLowerCase());
-      if (!types.includes("product") && !types.includes("productgroup")) continue;
-      if (types.includes("product")) {
-        if (!result.sku) result.sku = cleanText(String(node.sku || node.mpn || ""));
-        if (!result.brand) result.brand = cleanText(String(typeof node.brand === "object" ? node.brand?.name : node.brand || ""));
-        if (!result.category) result.category = cleanText(String(node.category || ""));
-        if (!result.tags) result.tags = cleanText(Array.isArray(node.keywords) ? node.keywords.join(", ") : String(node.keywords || ""));
-        if (!result.shortDesc) result.shortDesc = cleanText(String(node.description || ""));
-        if (!result.weight) result.weight = cleanText(String(typeof node.weight === "object" ? node.weight.value || node.weight.valueReference?.value || "" : node.weight || ""));
-        const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers || {}, availability = String(offer.availability || "");
-        if (!result.stock && /outofstock|soldout|discontinued/i.test(availability)) result.stock = "0";
-        const images = Array.isArray(node.image) ? node.image : [node.image];
-        if (!result.mainImage) for (const raw2 of images) {
-          const candidate = imageUrl(imageValue3(raw2), baseUrl);
-          if (candidate) {
-            result.mainImage = candidate;
-            break;
-          }
-        }
-        if (includeGallery) for (const raw2 of images) addGalleryImage(result.images, imageValue3(raw2), baseUrl, galleryMax);
-        if (node.isVariantOf) addVariant(node);
-      }
-      const variants = Array.isArray(node.hasVariant) ? node.hasVariant : [node.hasVariant];
-      for (const variant of variants) addVariant(variant);
-    }
-  } catch {
-  }
-}
-function hasDetailSelectors(selectors) {
-  return [...DETAIL_KEYS, "longDesc", "detailImage", "gallery", "variations"].some((key2) => String(selectors[key2] || "").trim().length > 0);
-}
-async function scrapeDetails(product, selectors, indirect = false, maxBytes = 4e6) {
-  if (!product.url || !hasDetailSelectors(selectors)) return product;
-  const { text } = await sourceText(product.url, indirect, maxBytes);
-  const detail = await parseDetailPage(text, product.url, selectors);
-  const mainImage = detail.mainImage || product.image || "", images = [...new Set([mainImage, ...detail.images].filter(Boolean))];
-  const detailPrice = detail.price ? numberFromText(detail.price) : 0;
-  return { ...product, price: detailPrice > 0 ? detailPrice : product.price, priceText: detailPrice > 0 ? detail.price || product.priceText : product.priceText, shortDesc: detail.shortDesc || product.shortDesc, longDesc: detail.longDesc || product.longDesc, sku: detail.sku || product.sku, brand: detail.brand || product.brand, stock: detail.stock ? numberFromText(detail.stock) : product.stock, weight: detail.weight ? numberFromText(detail.weight) : product.weight, category: detail.category || product.category, tags: detail.tags || product.tags, images, image: mainImage || images[0] || product.image, variations: detail.variations.length ? detail.variations : product.variations || [], variationGroups: detail.variationGroups.length ? detail.variationGroups : product.variationGroups || [], variationPrices: Object.keys(detail.variationPrices).length ? detail.variationPrices : product.variationPrices || {} };
-}
-async function extractVariations(html, baseUrl, selector) {
-  const parsed = await parseDetailPage(html, baseUrl, { variations: selector });
-  return { variations: parsed.variations, variationGroups: parsed.variationGroups, variationPrices: parsed.variationPrices, images: parsed.images };
-}
-async function extractSelectorValues(html, baseUrl, selector, type) {
-  if (type === "variations") {
-    const result = await extractVariations(html, baseUrl, selector);
-    return result.variations || [];
-  }
-  const values = [];
-  class ValueHandler {
-    captures = [];
-    element(element) {
-      if (type === "link") {
-        const value = canonicalUrl(firstAttribute(element, LINK_ATTRS) || onclickUrl(element), baseUrl);
-        if (value) values.push(value);
-        return;
-      }
-      if (type === "image") {
-        const value = imageUrl(firstAttribute(element, IMAGE_ATTRS) || srcsetValue(element.getAttribute("srcset") || ""), baseUrl);
-        if (value) values.push(value);
-        return;
-      }
-      if (!hasEndTag(element)) {
-        const value = firstAttribute(element, [...TITLE_ATTRS, ...PRICE_ATTRS, ...SKU_ATTRS]);
-        if (value) values.push(cleanText(value));
-        return;
-      }
-      const capture = { element, text: "" };
-      this.captures.push(capture);
-      element.onEndTag(() => {
-        const value = cleanText(capture.text) || firstAttribute(element, [...TITLE_ATTRS, ...PRICE_ATTRS, ...SKU_ATTRS]);
-        if (value) values.push(value);
-        const i = this.captures.indexOf(capture);
-        if (i >= 0) this.captures.splice(i, 1);
-      });
-    }
-    text(chunk) {
-      for (const capture of this.captures) capture.text += chunk.text;
-    }
-  }
-  const rewriter = new HTMLRewriter(), handler = new ValueHandler();
-  let valid = false;
-  for (const part of selectorParts(selector)) valid = safeOn(rewriter, part, handler) || valid;
-  if (!valid) throw new Error("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A.");
-  await rewriter.transform(new Response(html)).text();
-  return [...new Set(values)].slice(0, 100);
-}
-var NextLinkHandler = class {
-  constructor(baseUrl) {
-    this.baseUrl = baseUrl;
-  }
-  url = "";
-  element(element) {
-    if (!this.url) this.url = canonicalUrl(firstAttribute(element, LINK_ATTRS), this.baseUrl);
-  }
-};
-var NODE_ONLY_ENGINES = /* @__PURE__ */ new Set(["playwright", "puppeteer", "crawlee_playwright", "structural", "network_api"]);
-var WORKER_DISCOVERY_ENGINES = ["jsonld", "next_data", "script_json", "heuristic", "metadata"];
-var WORKER_MANUAL_ENGINES = /* @__PURE__ */ new Set(["htmlrewriter", "cheerio"]);
-var WORKER_AUTO_ENGINES = [...WORKER_DISCOVERY_ENGINES, "htmlrewriter"];
-function engineOrder(requested, master, autoFirst = true) {
-  const out = [], add = (engine) => {
-    if (engine && !out.includes(engine)) out.push(engine);
-  };
-  if (!autoFirst && requested !== "auto") {
-    add(requested);
-    return out;
-  }
-  if (requested !== "auto") {
-    add(requested);
-    if (master && !NODE_ONLY_ENGINES.has(master) && !WORKER_MANUAL_ENGINES.has(master)) add(master);
-    for (const engine of WORKER_AUTO_ENGINES) add(engine);
-    return out;
-  }
-  if (master && !NODE_ONLY_ENGINES.has(master) && !WORKER_MANUAL_ENGINES.has(master)) add(master);
-  for (const engine of WORKER_DISCOVERY_ENGINES) add(engine);
-  for (const engine of WORKER_AUTO_ENGINES) add(engine);
-  return out;
-}
-async function scrapeListPage(url, selectors, nextSelector = "", indirect = false, engine = "auto", master, autoFirst = true, autoDiscover = true, scrollToEnd = false, productParser) {
-  if (scrollToEnd) throw Error("\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627 \u0628\u0647 \u0645\u0631\u0648\u0631\u06AF\u0631 Node \u0631\u0648\u06CC VPS/Termux/Render \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F\u061B Worker \u0641\u0642\u0637 HTML \u0627\u0648\u0644\u06CC\u0647 \u0631\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u062F.");
-  const page = await sourceText(url, indirect), next = new NextLinkHandler(page.url);
-  if (nextSelector) {
-    const rewriter = new HTMLRewriter();
-    for (const selector of selectorParts(nextSelector)) safeOn(rewriter, selector, next);
-    await rewriter.transform(new Response(page.text)).text();
-  }
-  if (productParser) {
-    if (NODE_ONLY_ENGINES.has(engine)) throw Error("Selected page loader requires Node");
-    const started2 = Date.now();
-    return { products: await parseProductDocument(page.text, page.url, selectors, productParser), nextUrl: next.url, url: page.url, usedEngine: engine, elapsedMs: Date.now() - started2, selectorsUsed: selectors };
-  }
-  let ensured = { selectors, method: "" };
-  if (autoDiscover) {
-    try {
-      ensured = await ensureListSelectors(page.text, page.url, selectors);
-    } catch {
-    }
-  }
-  const started = Date.now(), result = await parseByEngine(page.text, page.url, ensured.selectors, engine, master, autoFirst);
-  return { products: result.products, nextUrl: next.url, url: page.url, usedEngine: result.usedEngine, elapsedMs: Date.now() - started, selectorsUsed: ensured.selectors, discoveredSelectors: ensured.discovered, discoveryMethod: ensured.method, engineError: result.engineError };
-}
-async function parseProductDocument(html, base, selectors, parser) {
-  const embedded = async (mode) => {
-    const out = [];
-    for (const value of embeddedProductData(html, mode)) walkObjects(value, base, out);
-    return finalizeFound(out, base);
-  };
-  const cards = async () => {
-    let active3 = selectors;
-    if (listSelectorsStatus(selectors) !== "custom") {
-      const found = await discoverListSelectorsFromHtml(html, base);
-      if (found.selectors.container) active3 = { ...selectors, ...found.selectors };
-    }
-    return parseCards(html, base, active3);
-  };
-  return finalizeFound(await parseDownloadedProducts(parser, { lxml: cards, selectolax: cards, jsonld: () => parseJsonLdProducts(html, base), next_data: () => embedded("next_data"), script_json: async () => [...await parseJsonLdProducts(html, base), ...await embedded("script_json"), ...await extractScriptJsonProducts(html, base)], metadata: () => extractMetadataProduct(html, base), heuristic: () => extractHeuristicProducts(html, base) }), base);
-}
-async function parseByEngine(html, baseUrl, selectors, engine, master, autoFirst = true) {
-  if (engine !== "auto" && NODE_ONLY_ENGINES.has(engine)) throw new Error(`\u0645\u0648\u062A\u0648\u0631 ${engine} \u0628\u0647 \u0627\u062C\u0631\u0627\u06AF\u0631 Node \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F (Termux\u060C \u0648\u06CC\u0646\u062F\u0648\u0632\u060C VPS \u06CC\u0627 Render). ${engine === "structural" ? "Cloudflare Worker \u0645\u0648\u062A\u0648\u0631 DOM (cheerio) \u0646\u062F\u0627\u0631\u062F\u061B \u0627\u0632 heuristic \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F." : "Cloudflare Worker \u0646\u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u0645\u0631\u0648\u0631\u06AF\u0631 \u0627\u062C\u0631\u0627 \u06A9\u0646\u062F\u061B \u0627\u0632 htmlrewriter \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u06A9\u0646\u06CC\u062F."}`);
-  const tryOne = async (name) => {
-    if (name === "htmlrewriter" || name === "cheerio") return parseCards(html, baseUrl, selectors);
-    if (name === "jsonld") return parseJsonLdProducts(html, baseUrl);
-    if (name === "next_data") return extractNextDataProducts(html, baseUrl);
-    if (name === "metadata") return extractMetadataProduct(html, baseUrl);
-    if (name === "script_json") return extractScriptJsonProducts(html, baseUrl);
-    if (name === "heuristic") return extractHeuristicProducts(html, baseUrl);
-    return [];
-  };
-  let firstError = null, explicitError = null;
-  for (const name of engineOrder(engine, master, autoFirst)) {
-    try {
-      const products = dedupeProducts(await tryOne(name));
-      if (products.length) return { products, usedEngine: name };
-    } catch (error) {
-      if (!firstError) firstError = error;
-      if (engine !== "auto" && name === engine && !explicitError) explicitError = error;
-    }
-  }
-  if (!autoFirst && firstError) throw firstError;
-  const engineError = explicitError instanceof Error ? explicitError.message : explicitError ? String(explicitError) : void 0;
-  return { products: [], usedEngine: engine, engineError };
-}
-function dedupeProducts(products) {
-  const seen = /* @__PURE__ */ new Set(), out = [];
-  for (const p of products) {
-    const key2 = p.sourceKey || p.url || p.title;
-    if (!key2 || seen.has(key2)) continue;
-    seen.add(key2);
-    out.push(p);
-  }
-  return out;
-}
-function productFromObject(obj, baseUrl) {
-  if (!obj || typeof obj !== "object") return null;
-  const title = cleanText(String(obj.name || obj.title || obj.productName || obj.label || ""));
-  const offer = Array.isArray(obj.offers) ? obj.offers[0] : obj.offers || obj.offer || {};
-  const priceText = cleanText(String(obj.price || obj.finalPrice || obj.salePrice || obj.sellingPrice || obj.priceText || offer.price || offer.lowPrice || offer.highPrice || ""));
-  const rawUrl = String(obj.url || obj.href || obj.link || obj.webUrl || obj.canonicalUrl || (typeof obj.slug === "string" ? obj.slug.startsWith("/") ? obj.slug : `/product/${obj.slug}` : "") || "");
-  const url = canonicalUrl(rawUrl, baseUrl);
-  const image = imageUrl(firstImageValue(obj.image || obj.images || obj.thumbnail || obj.cover || obj.imageUrl || obj.picture), baseUrl);
-  if (!title || !image || !priceText || numberFromText(priceText) <= 0) return null;
-  return { sourceKey: "", title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku: cleanText(String(obj.sku || obj.id || "")), shortDesc: cleanText(String(obj.description || "")), longDesc: "", brand: cleanText(String(typeof obj.brand === "object" ? obj.brand?.name : obj.brand || "")), stock: void 0, weight: void 0, category: cleanText(String(obj.category || "")), tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() };
-}
-function firstImageValue(value) {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return firstImageValue(value[0]);
-  if (typeof value === "object") return String(value.url || value.src || value.href || value.original || value.medium || value.large || "");
-  return "";
-}
-async function finalizeFound(products, baseUrl) {
-  const out = [];
-  for (const p of products) {
-    const identity = p.url ? canonicalUrl(p.url, baseUrl, true) : `${p.title}|${p.priceText}`;
-    p.sourceKey = await sourceKey(identity);
-    out.push(p);
-  }
-  return dedupeProducts(out);
-}
-function walkObjects(value, baseUrl, out, depth = 0) {
-  if (!value || depth > 12 || out.length > 1e3) return;
-  if (Array.isArray(value)) {
-    for (const item of value) walkObjects(item, baseUrl, out, depth + 1);
-    return;
-  }
-  if (typeof value !== "object") return;
-  const p = productFromObject(value, baseUrl);
-  if (p) out.push(p);
-  for (const [key2, v] of Object.entries(value)) if (/product|item|result|data|pageProps|props|list|card|entity|catalog|shop|store/i.test(key2)) walkObjects(v, baseUrl, out, depth + 1);
-}
-async function extractNextDataProducts(html, baseUrl) {
-  const m = html.match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
-  if (!m) return [];
-  try {
-    const out = [];
-    walkObjects(JSON.parse(decodeHtml(m[1])), baseUrl, out);
-    return finalizeFound(out, baseUrl);
-  } catch {
-    return [];
-  }
-}
-function decodeHtml(value) {
-  return value.replace(/&nbsp;|&#160;|&#xa0;/gi, " ").replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-}
-function stripHtml(value) {
-  return cleanText(decodeHtml(value.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")));
-}
-function metaContent(html, key2) {
-  const escaped = key2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${escaped}["'])[^>]*content=["']([^"']+)["'][^>]*>`, "i");
-  return decodeHtml(html.match(re)?.[1] || "");
-}
-function enclosingOpen(html, pos, tag, endTag) {
-  let extra = 0, cursor = pos;
-  while (cursor > 0) {
-    const closeAt = html.lastIndexOf(endTag, cursor - 1), openAt = html.lastIndexOf("<" + tag, cursor - 1);
-    if (openAt < 0) return -1;
-    if (closeAt > openAt) {
-      extra++;
-      cursor = closeAt;
-      continue;
-    }
-    if (extra === 0) return openAt;
-    extra--;
-    cursor = openAt;
-  }
-  return -1;
-}
-function matchingClose(html, openPos, tag, endTag) {
-  const openEnd = html.indexOf(">", openPos);
-  if (openEnd < 0) return -1;
-  let depth = 1, cursor = openEnd + 1;
-  while (depth > 0) {
-    if (cursor - openPos > 6e3) return -1;
-    const nextOpen = html.indexOf("<" + tag, cursor), nextClose = html.indexOf(endTag, cursor);
-    if (nextClose < 0) return -1;
-    if (nextOpen >= 0 && nextOpen < nextClose) {
-      depth++;
-      cursor = nextOpen + 1;
-    } else {
-      depth--;
-      if (depth === 0) return nextClose;
-      cursor = nextClose + endTag.length;
-    }
-  }
-  return -1;
-}
-function enclosingChunks(html, index) {
-  const out = [];
-  let cursor = index;
-  for (let level = 0; level < 6 && cursor > 0; level++) {
-    let best = "", bestOpen = -1;
-    for (const [tag, endTag] of [["article", "</article>"], ["li", "</li>"], ["tr", "</tr>"], ["div", "</div>"]]) {
-      const open = enclosingOpen(html, cursor, tag, endTag);
-      if (open < 0 || index - open > 1800) continue;
-      const end = matchingClose(html, open, tag, endTag);
-      if (end < 0 || end - open > 5e3) continue;
-      const chunk = html.slice(open, end + endTag.length);
-      if (!best || chunk.length < best.length) {
-        best = chunk;
-        bestOpen = open;
-      }
-    }
-    if (!best || bestOpen < 0) break;
-    out.push(best);
-    cursor = bestOpen;
-  }
-  return out;
-}
-function productContextChunk(html, index, anchor) {
-  void anchor;
-  const candidates = enclosingChunks(html, index);
-  if (!candidates.length) return "";
-  return candidates.find((chunk) => /<img\b/i.test(chunk) && chunkHasPriceText(stripPriceFormatChars(stripHtml(chunk)))) || candidates[0];
-}
-async function extractMetadataProduct(html, baseUrl) {
-  const title = metaContent(html, "og:title") || metaContent(html, "twitter:title") || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
-  if (!title) return [];
-  const ogType = (metaContent(html, "og:type") || "").toLowerCase(), priceText = metaContent(html, "product:price:amount") || metaContent(html, "og:price:amount") || "", url = canonicalUrl(metaContent(html, "og:url") || baseUrl, baseUrl), image = imageUrl(metaContent(html, "og:image") || metaContent(html, "twitter:image"), baseUrl), price = numberFromText(priceText);
-  if (!/(?:product|product.item)/i.test(ogType) || !priceText || price <= 0 || !image) return [];
-  return finalizeFound([{ sourceKey: "", title, price, priceText, url, image, images: image ? [image] : [], sku: "", shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() }], baseUrl);
-}
-async function extractScriptJsonProducts(html, baseUrl) {
-  const out = [];
-  for (const m of html.matchAll(/<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)) {
-    const body = decodeHtml(m[1].trim());
-    if (!/(product|products|price|__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__)/i.test(body)) continue;
-    for (const j of body.matchAll(/(?:window\.)?(?:__NUXT__|__APOLLO_STATE__|__PRELOADED_STATE__|__INITIAL_STATE__)?\s*=\s*(\{[\s\S]{50,200000}\}|\[[\s\S]{50,200000}\])\s*;?/g)) {
-      try {
-        walkObjects(JSON.parse(j[1]), baseUrl, out);
-      } catch {
-      }
-    }
-  }
-  return finalizeFound(out, baseUrl);
-}
-function chunkTitle(chunk) {
-  let best = "";
-  for (const m of chunk.matchAll(/<(span|div|p|h5|h6|strong|b|em|li|td)\b[^>]*>([^<>]{6,160})<\/\1>/gi)) {
-    const text = cleanText(decodeHtml(m[2] || ""));
-    if (text.length >= 6 && text.length > best.length && !looksLikePrice(text)) best = text;
-  }
-  return best;
-}
-function heuristicImage(chunk, baseUrl) {
-  const tag = chunk.match(/<img\b[^>]*>/i)?.[0] || "";
-  const dataSrc = tag.match(/\sdata-(?:src|lazy-src|lazyload|original|image)\s*=\s*["']([^"']+)["']/i)?.[1] || "";
-  const srcAttr = (tag.match(/\ssrc(?:set)?\s*=\s*["']([^"']+)["']/i)?.[1] || "").split(",")[0].trim().split(/\s+/)[0];
-  return imageUrl(decodeHtml(dataSrc || srcAttr), baseUrl);
-}
-var NON_PRODUCT_URL_RE = /[\/-](category|categories|collection|collections|tag|tags|brand|brands|search|blog|news|page)([\/?#]|$)/i;
-async function extractHeuristicProducts(html, baseUrl) {
-  const out = [];
-  const seenUrls = /* @__PURE__ */ new Set();
-  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) {
-    const url = canonicalUrl(decodeHtml(m[1]), baseUrl);
-    if (!url || seenUrls.has(url) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(url) || NON_PRODUCT_URL_RE.test(url)) continue;
-    const chunk = productContextChunk(html, m.index || 0, m[0]);
-    if (!chunk) continue;
-    const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || "") || cleanText(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || "")) || stripHtml(m[2]) || chunkTitle(chunk);
-    const image = heuristicImage(chunk, baseUrl);
-    const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, " "))));
-    if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue;
-    seenUrls.add(url);
-    out.push({ sourceKey: "", title, price: numberFromText(priceText), priceText, url, image, images: image ? [image] : [], sku: "", shortDesc: "", longDesc: "", brand: "", stock: void 0, weight: void 0, category: "", tags: "", variations: [], variationGroups: [], variationPrices: {}, sourcePage: baseUrl, scrapedAt: (/* @__PURE__ */ new Date()).toISOString() });
-  }
-  return finalizeFound(out, baseUrl);
-}
-var countMatches = (html, re) => {
-  const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-  let n = 0;
-  global.lastIndex = 0;
-  while (global.exec(html)) {
-    n++;
-    if (n > 5e3) break;
-  }
-  return n;
-};
-function invalidSelectorMessage(error) {
-  const msg3 = error instanceof Error ? error.message : String(error || "");
-  if (!msg3) return "";
-  if (msg3.startsWith("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631")) return msg3;
-  if (/attribute selector|didn't terminate|not a valid selector|unknown pseudo/i.test(msg3)) return `\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631: ${msg3}`;
-  return "";
-}
-function fetchErrorHint(error) {
-  const message2 = error instanceof Error ? error.message : String(error || "");
-  if (!message2 || /سلکتور نامعتبر/.test(message2)) return "";
-  if (/HTTP 429/.test(message2)) return "\u0633\u0627\u06CC\u062A \u062F\u0631\u062E\u0648\u0627\u0633\u062A\u200C\u0647\u0627 \u0631\u0627 \u0645\u062D\u062F\u0648\u062F \u06A9\u0631\u062F\u0647 (\u062E\u0637\u0627\u06CC 429)\u061B \u06CC\u06A9 \u062F\u0642\u06CC\u0642\u0647 \u0635\u0628\u0631 \u06A9\u0646\u06CC\u062F \u0648 \u0628\u0639\u062F \u0628\u0627 \u0635\u0641\u062D\u0647\u200C\u0647\u0627\u06CC \u06A9\u0645\u062A\u0631 \u062F\u0648\u0628\u0627\u0631\u0647 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.";
-  if (/HTTP 403/.test(message2)) return "\u0633\u0627\u06CC\u062A \u062F\u0633\u062A\u0631\u0633\u06CC \u0631\u0627 \u0628\u0633\u062A (\u062E\u0637\u0627\u06CC 403)\u061B \u0645\u0639\u0645\u0648\u0644\u0627\u064B IP \u062F\u06CC\u062A\u0627\u0633\u0646\u062A\u0631 \u06CC\u0627 VPN \u0627\u0633\u062A. \u0627\u062A\u0635\u0627\u0644 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 (Worker \u0648\u0627\u0633\u0637) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-  if (/مهلت|timeout|timed out|abort|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|Failed to fetch|network|Network|ERR_|HTTP (502|503|504)/.test(message2)) return "\u062F\u0631\u06CC\u0627\u0641\u062A \u0635\u0641\u062D\u0647 \u0627\u0632 \u0633\u0627\u06CC\u062A \u0646\u0627\u0645\u0648\u0641\u0642 \u0628\u0648\u062F\u061B \u0622\u062F\u0631\u0633\u060C \u0627\u062A\u0635\u0627\u0644 \u0627\u06CC\u0646\u062A\u0631\u0646\u062A \u0648 \u0648\u0636\u0639\u06CC\u062A \u0633\u0627\u06CC\u062A \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F \u0648 \u062F\u0648\u0628\u0627\u0631\u0647 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.";
-  return "";
-}
-async function diagnoseBenchmarkEngine(engine, html, baseUrl, selectors, products, error = "") {
-  const list = Array.isArray(products) ? products : [];
-  const complete = { title: 0, price: 0, link: 0, image: 0 };
-  for (const p of list) {
-    if (p.title) complete.title++;
-    if (Number(p.price) > 0) complete.price++;
-    if (p.url) complete.link++;
-    if (p.image) complete.image++;
-  }
-  const first = list.find((p) => p.title || p.url) || list[0];
-  const sample = first ? { title: String(first.title || ""), priceText: String(first.priceText || ""), url: String(first.url || ""), image: String(first.image || "") } : null;
-  const dropReasons = [];
-  const signals = {};
-  const text = String(html || "");
-  let candidates = 0, hint = "";
-  const partialNote = () => {
-    const missing = [];
-    if (complete.title < list.length) missing.push("\u0639\u0646\u0648\u0627\u0646");
-    if (complete.price < list.length) missing.push("\u0642\u06CC\u0645\u062A");
-    if (complete.link < list.length) missing.push("\u0644\u06CC\u0646\u06A9");
-    if (complete.image < list.length) missing.push("\u062A\u0635\u0648\u06CC\u0631");
-    return missing.length ? ` \u0648\u0644\u06CC ${list.length - Math.min(complete.title, complete.price, complete.link, complete.image)} \u0645\u062D\u0635\u0648\u0644 ${missing.join("/")} \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0631\u0646\u062F` : "";
-  };
-  if (!text) {
-    candidates = list.length;
-    signals.pageFetched = false;
-    if (error) dropReasons.push(error);
-    else if (!list.length) dropReasons.push("\u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 \u0628\u0631\u0627\u06CC \u0628\u0631\u0631\u0633\u06CC \u0633\u06CC\u06AF\u0646\u0627\u0644\u200C\u0647\u0627 \u062F\u0631\u06CC\u0627\u0641\u062A \u0646\u0634\u062F \u0648 \u0645\u062D\u0635\u0648\u0644\u06CC \u0647\u0645 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u0634\u062F.");
-    hint = list.length ? `\u0645\u0648\u062A\u0648\u0631 ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u06A9\u0631\u062F (\u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 \u0628\u0631\u0627\u06CC \u0628\u0631\u0631\u0633\u06CC \u0639\u0645\u06CC\u0642 \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0646\u0628\u0648\u062F).` : "\u062F\u0633\u062A\u0631\u0633\u06CC \u0634\u0628\u06A9\u0647 \u0628\u0647 \u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 \u0646\u0627\u0645\u0648\u0641\u0642 \u0628\u0648\u062F\u061B \u0622\u062F\u0631\u0633 \u0648 \u0627\u062A\u0635\u0627\u0644 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.";
-    if (!list.length) {
-      const bad = invalidSelectorMessage(error), fetch2 = fetchErrorHint(error);
-      if (bad) hint = "\u06CC\u06A9\u06CC \u0627\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u062E\u0631\u0627\u0628 \u0627\u0633\u062A\u061B \u0622\u0646 \u0631\u0627 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0627\u0644\u0645 \u0633\u0627\u062E\u062A\u0647 \u0634\u0648\u0646\u062F.";
-      else if (fetch2) hint = fetch2;
-    }
-    return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
-  }
-  signals.pageFetched = true;
-  if (engine === "cheerio" || engine === "htmlrewriter") {
-    let verified = null;
-    try {
-      verified = await verifyListSelectors(text, baseUrl, selectors);
-    } catch {
-      verified = null;
-    }
-    const containers = verified?.containerCount || 0, titles = verified?.title.count || 0, prices = verified?.price.count || 0, links = verified?.link.count || 0, images = verified?.image.count || 0;
-    candidates = containers;
-    signals.containers = containers;
-    signals.titles = titles;
-    signals.prices = prices;
-    signals.links = links;
-    signals.images = images;
-    const containerSel = String(selectors?.container || "").trim();
-    const badSelector = invalidSelectorMessage(error) || verified?.error || "";
-    if (badSelector) {
-      dropReasons.push(badSelector);
-      hint = "\u06CC\u06A9\u06CC \u0627\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u062E\u0631\u0627\u0628 \u0627\u0633\u062A\u061B \u0622\u0646 \u0631\u0627 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0627\u0644\u0645 \u0633\u0627\u062E\u062A\u0647 \u0634\u0648\u0646\u062F.";
-    } else if (!containerSel) {
-      dropReasons.push("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0628\u062F\u0648\u0646 \u0638\u0631\u0641 \u0646\u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u062F \u06A9\u0627\u0631\u062A\u06CC \u067E\u06CC\u062F\u0627 \u06A9\u0646\u062F.");
-      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.";
-    } else if (!containers) {
-      dropReasons.push(`\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \xAB${containerSel}\xBB \u0647\u06CC\u0686 \u06A9\u0627\u0631\u062A\u06CC \u062F\u0631 \u0635\u0641\u062D\u0647 \u067E\u06CC\u062F\u0627 \u0646\u06A9\u0631\u062F.`);
-      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0627\u0634\u062A\u0628\u0627\u0647 \u0627\u0633\u062A \u06CC\u0627 \u0635\u0641\u062D\u0647 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u06CC \u0627\u0633\u062A\u061B \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.";
-    } else if (!titles) {
-      dropReasons.push(`${containers} \u06A9\u0627\u0631\u062A \u067E\u06CC\u062F\u0627 \u0634\u062F \u0648\u0644\u06CC \u062F\u0627\u062E\u0644 \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u0639\u0646\u0648\u0627\u0646\u06CC \u0646\u06CC\u0633\u062A\u061B \u06CC\u0639\u0646\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631 \u0639\u0646\u0648\u0627\u0646 \u0628\u06CC\u0631\u0648\u0646 \u0627\u0632 \u0638\u0631\u0641 \u0631\u0627 \u0645\u06CC\u200C\u0628\u06CC\u0646\u062F \u06CC\u0627 \u0638\u0631\u0641 \u06A9\u0644 \u0641\u0647\u0631\u0633\u062A \u0631\u0627 \u06AF\u0631\u0641\u062A\u0647 \u0627\u0633\u062A.`);
-      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0639\u0646\u0648\u0627\u0646 \u0628\u0627\u06CC\u062F \u0646\u0633\u0628\u062A \u0628\u0647 \u0638\u0631\u0641 \u062F\u0627\u062E\u0644\u06CC \u0628\u0627\u0634\u062F\u060C \u06CC\u0627 \u0638\u0631\u0641 \u0628\u0627\u06CC\u062F \u0647\u0631 \u06A9\u0627\u0631\u062A \u0628\u0627\u0634\u062F \u0646\u0647 \u06A9\u0644 \u0641\u0647\u0631\u0633\u062A.";
-    } else if (!list.length) {
-      if (error) dropReasons.push(error);
-      if (!prices) dropReasons.push(`${containers} \u06A9\u0627\u0631\u062A \u0648 ${titles} \u0639\u0646\u0648\u0627\u0646 \u0647\u0633\u062A \u0648\u0644\u06CC \u0642\u06CC\u0645\u062A \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.`);
-      if (!links) dropReasons.push("\u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
-      if (!images) dropReasons.push("\u062A\u0635\u0648\u06CC\u0631 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
-      if (!dropReasons.length) dropReasons.push(`${containers} \u06A9\u0627\u0631\u062A \u062F\u06CC\u062F\u0647 \u0634\u062F \u0648\u0644\u06CC \u0647\u06CC\u0686 \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u0634\u062F.`);
-      hint = "\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0639\u0646\u0648\u0627\u0646/\u0642\u06CC\u0645\u062A/\u0644\u06CC\u0646\u06A9/\u062A\u0635\u0648\u06CC\u0631 \u0631\u0627 \u0646\u0633\u0628\u062A \u0628\u0647 \u0638\u0631\u0641 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F.";
-    } else {
-      if (containers > list.length) dropReasons.push(`\u0627\u0632 ${containers} \u06A9\u0627\u0631\u062A\u060C ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0646\u06AF\u0647 \u062F\u0627\u0634\u062A\u0647 \u0634\u062F\u061B \u0628\u0642\u06CC\u0647 \u0639\u0646\u0648\u0627\u0646/\u0642\u06CC\u0645\u062A/\u062A\u0635\u0648\u06CC\u0631 \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0634\u062A\u0646\u062F.`);
-      hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
-    }
-  } else if (engine === "jsonld") {
-    const blocks = [...text.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1] || "");
-    const productBlocks = blocks.filter((b) => /"@type"\s*:\s*"(Product|ItemList|ProductGroup|Offer|AggregateOffer|SearchResultsPage)"/i.test(b)).length;
-    candidates = countMatches(text, /"@type"\s*:\s*"Product"/i) + countMatches(text, /"@type"\s*:\s*"ListItem"/i);
-    signals.ldBlocks = blocks.length;
-    signals.productBlocks = productBlocks;
-    if (!blocks.length) {
-      dropReasons.push("\u0635\u0641\u062D\u0647 \u0647\u06CC\u0686 \u0628\u0644\u0648\u06A9 JSON-LD \u0646\u062F\u0627\u0631\u062F.");
-      hint = "\u0627\u06CC\u0646 \u0633\u0627\u06CC\u062A \u062F\u0627\u062F\u0647\u0654 \u0633\u0627\u062E\u062A\u200C\u06CC\u0627\u0641\u062A\u0647 \u0646\u062F\u0627\u0631\u062F\u061B htmlrewriter \u06CC\u0627 heuristic \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else if (!list.length) {
-      dropReasons.push(`${blocks.length} \u0628\u0644\u0648\u06A9 JSON-LD \u0647\u0633\u062A \u0648\u0644\u06CC \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u0645\u062D\u0635\u0648\u0644 \u06CC\u0627 \u0641\u0647\u0631\u0633\u062A \u0645\u062D\u0635\u0648\u0644 \u0646\u06CC\u0633\u062A.`);
-      hint = "\u0628\u0644\u0648\u06A9\u200C\u0647\u0627\u06CC JSON-LD \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u0645\u062D\u0635\u0648\u0644 \u0646\u062F\u0627\u0631\u0646\u062F\u061B htmlrewriter \u06CC\u0627 heuristic \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 JSON-LD \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
-  } else if (engine === "next_data") {
-    const m = text.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i), payload = m?.[1] || "";
-    candidates = countMatches(payload, /"(price|priceText|finalPrice|salePrice)"\s*:/i);
-    signals.hasNextData = Boolean(m);
-    signals.nextBytes = payload.length;
-    signals.priceKeys = candidates;
-    if (!m) {
-      dropReasons.push("\u0635\u0641\u062D\u0647 \u062F\u0627\u062F\u0647\u0654 __NEXT_DATA__ \u0646\u062F\u0627\u0631\u062F (\u0633\u0627\u06CC\u062A Next.js \u0646\u06CC\u0633\u062A).");
-      hint = "\u0627\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631 \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u0633\u0627\u06CC\u062A\u200C\u0647\u0627\u06CC Next.js \u0627\u0633\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else if (!list.length) {
-      dropReasons.push("\u062F\u0627\u062F\u0647\u0654 __NEXT_DATA__ \u0647\u0633\u062A \u0648\u0644\u06CC \u0645\u0648\u062A\u0648\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0632 \u0622\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u06A9\u0631\u062F\u061B \u0633\u0627\u062E\u062A\u0627\u0631 \u06A9\u0627\u062A\u0627\u0644\u0648\u06AF \u0628\u0627 \u0627\u0644\u06AF\u0648\u0647\u0627\u06CC \u0634\u0646\u0627\u062E\u062A\u0647\u200C\u0634\u062F\u0647 \u0641\u0631\u0642 \u062F\u0627\u0631\u062F.");
-      hint = "\u06A9\u0627\u062A\u0627\u0644\u0648\u06AF \u062F\u0627\u062E\u0644 __NEXT_DATA__ \u0633\u0627\u062E\u062A\u0627\u0631 \u063A\u06CC\u0631\u0627\u0633\u062A\u0627\u0646\u062F\u0627\u0631\u062F \u062F\u0627\u0631\u062F\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 __NEXT_DATA__ \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
-  } else if (engine === "script_json") {
-    const inline = [...text.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1] || "");
-    const withProduct = inline.filter((s) => /"(price|priceText|finalPrice|salePrice)"\s*:/i.test(s) && /"(title|name|productName)"\s*:/i.test(s)).length;
-    candidates = countMatches(text, /"(price|priceText|finalPrice|salePrice)"\s*:/i);
-    signals.inlineScripts = inline.length;
-    signals.productScripts = withProduct;
-    signals.priceKeys = candidates;
-    if (!withProduct) {
-      dropReasons.push("\u0647\u06CC\u0686 \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u062F\u0631\u0648\u0646\u200C\u062E\u0637\u06CC\u200C\u0627\u06CC \u0622\u0628\u062C\u06A9\u062A \u0645\u062D\u0635\u0648\u0644 (\u0646\u0627\u0645+\u0642\u06CC\u0645\u062A) \u0646\u062F\u0627\u0631\u062F.");
-      hint = "\u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u06A9\u0627\u062A\u0627\u0644\u0648\u06AF JSON \u062F\u0631 \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0646\u062F\u0627\u0631\u062F\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else if (!list.length) {
-      dropReasons.push(`${withProduct} \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u062F\u0627\u062F\u0647\u0654 \u0645\u062D\u0635\u0648\u0644\u200C\u062F\u0627\u0631 \u0647\u0633\u062A \u0648\u0644\u06CC \u0645\u0648\u062A\u0648\u0631 \u0646\u062A\u0648\u0627\u0646\u0633\u062A \u0622\u0646\u200C\u0647\u0627 \u0631\u0627 \u0628\u062E\u0648\u0627\u0646\u062F (\u0633\u0627\u062E\u062A\u0627\u0631 \u063A\u06CC\u0631\u0627\u0633\u062A\u0627\u0646\u062F\u0627\u0631\u062F).`);
-      hint = "\u0633\u0627\u062E\u062A\u0627\u0631 JSON \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u200C\u0647\u0627 \u063A\u06CC\u0631\u0627\u0633\u062A\u0627\u0646\u062F\u0627\u0631\u062F \u0627\u0633\u062A\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 JSON \u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
-  } else if (engine === "metadata") {
-    const og = countMatches(text, /<meta\b[^>]*property=["']og:/i);
-    candidates = /<meta\b[^>]*property=["']og:title["']/i.test(text) ? 1 : 0;
-    signals.ogTags = og;
-    if (!og) {
-      dropReasons.push("\u0635\u0641\u062D\u0647 \u0645\u062A\u0627\u062A\u06AF OpenGraph \u0646\u062F\u0627\u0631\u062F.");
-      hint = "\u0627\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631 \u0641\u0642\u0637 \u0628\u0631\u0627\u06CC \u0635\u0641\u062D\u0627\u062A \u062F\u0627\u0631\u0627\u06CC \u0645\u062A\u0627\u062A\u06AF og \u0627\u0633\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else if (!list.length) {
-      dropReasons.push("\u0645\u062A\u0627\u062A\u06AF og \u0647\u0633\u062A \u0648\u0644\u06CC \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644\u06CC \u0627\u0632 \u0622\u0646 \u0633\u0627\u062E\u062A\u0647 \u0646\u0634\u062F (\u0627\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631 \u062A\u06A9\u200C\u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0633\u062A \u0648 \u0628\u0631\u0627\u06CC \u0635\u0641\u062D\u0647\u0654 \u0641\u0647\u0631\u0633\u062A \u0645\u0646\u0627\u0633\u0628 \u0646\u06CC\u0633\u062A).");
-      hint = "\u0645\u0648\u062A\u0648\u0631 metadata \u0628\u0631\u0627\u06CC \u0635\u0641\u062D\u0647\u0654 \u062C\u0632\u0626\u06CC\u0627\u062A \u062A\u06A9\u200C\u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u060C \u0646\u0647 \u0641\u0647\u0631\u0633\u062A\u061B heuristic \u06CC\u0627 \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0632 \u0645\u062A\u0627\u062A\u06AF\u200C\u0647\u0627 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F${partialNote()}.`;
-  } else if (engine === "heuristic") {
-    let anchors = 0;
-    for (const m of text.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
-      if (/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(m[1] || "") && !NON_PRODUCT_URL_RE.test(m[1] || "")) anchors++;
-      if (anchors > 5e3) break;
-    }
-    const priceHints = countMatches(stripPriceFormatChars(stripHtml(text)), PRICE_HINT_RE), barePrices = countMatches(stripHtml(text), THOUSANDS_RE), images = countMatches(text, /<img\b/i);
-    candidates = anchors;
-    signals.productAnchors = anchors;
-    signals.priceHints = priceHints;
-    signals.barePrices = barePrices;
-    signals.images = images;
-    if (!anchors) {
-      dropReasons.push("\u0647\u06CC\u0686 \u0644\u06CC\u0646\u06A9\u06CC \u0628\u0627 \u0627\u0644\u06AF\u0648\u06CC \u0622\u062F\u0631\u0633 \u0645\u062D\u0635\u0648\u0644 (/product/ \u060C/shop/ \u060Csnp- \u0648\u2026) \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
-      hint = "\u0622\u062F\u0631\u0633 \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0627\u06CC\u0646 \u0633\u0627\u06CC\u062A \u0627\u0644\u06AF\u0648\u06CC \u0634\u0646\u0627\u062E\u062A\u0647\u200C\u0634\u062F\u0647 \u0646\u062F\u0627\u0631\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC (htmlrewriter) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else if (!list.length) {
-      if (error) dropReasons.push(error);
-      dropReasons.push(`${anchors} \u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u0647\u0633\u062A \u0648\u0644\u06CC \u0647\u06CC\u0686\u200C\u06A9\u062F\u0627\u0645 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u06CC \u0628\u0627 \u062A\u0635\u0648\u06CC\u0631+\u0642\u06CC\u0645\u062A \u06A9\u0627\u0645\u0644 \u0646\u0628\u0648\u062F\u0646\u062F (\u062D\u0630\u0641 \u0634\u062F\u0646\u062F).`);
-      if (!priceHints && !barePrices) dropReasons.push("\u062F\u0631 \u06A9\u0644 \u0635\u0641\u062D\u0647 \u0647\u06CC\u0686 \u0645\u062A\u0646 \u0642\u06CC\u0645\u062A\u200C\u062F\u0627\u0631\u06CC (\u062A\u0648\u0645\u0627\u0646/\u0631\u06CC\u0627\u0644/\u2026) \u062F\u06CC\u062F\u0647 \u0646\u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0645\u06CC\u200C\u0622\u06CC\u0646\u062F.");
-      else if (!priceHints) dropReasons.push(`${barePrices} \u0639\u062F\u062F \u0647\u0632\u0627\u0631\u06AF\u0627\u0646\u200C\u0628\u0646\u062F\u06CC\u200C\u0634\u062F\u0647 \u0628\u062F\u0648\u0646 \u0648\u0627\u062D\u062F \u067E\u0648\u0644\u06CC \u062F\u06CC\u062F\u0647 \u0634\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0648\u0627\u062D\u062F \u067E\u0648\u0644 \u0628\u0627 \u0627\u0633\u062A\u0627\u06CC\u0644/\u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0627\u0636\u0627\u0641\u0647 \u0645\u06CC\u200C\u0634\u0648\u062F \u06CC\u0627 \u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u062F\u0627\u06CC\u0646\u0627\u0645\u06CC\u06A9\u200C\u0627\u0646\u062F.`);
-      hint = !priceHints ? "\u0642\u06CC\u0645\u062A\u200C\u0647\u0627 \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0628\u0627 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0645\u06CC\u200C\u0634\u0648\u0646\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u06CC (\u0646\u0645\u0627\u06CC\u0634\u06CC) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F." : "\u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u062A\u0635\u0648\u06CC\u0631 \u06CC\u0627 \u0642\u06CC\u0645\u062A \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0631\u0646\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u06CC (htmlrewriter) \u0631\u0627 \u0627\u0645\u062A\u062D\u0627\u0646 \u06A9\u0646\u06CC\u062F.";
-    } else {
-      if (anchors > list.length) dropReasons.push(`\u0627\u0632 ${anchors} \u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644\u060C ${list.length} \u0645\u062D\u0635\u0648\u0644 \u06A9\u0627\u0645\u0644 \u0646\u06AF\u0647 \u062F\u0627\u0634\u062A\u0647 \u0634\u062F\u061B \u0628\u0642\u06CC\u0647 \u062A\u0635\u0648\u06CC\u0631/\u0642\u06CC\u0645\u062A/\u0639\u0646\u0648\u0627\u0646 \u06A9\u0627\u0645\u0644 \u0646\u062F\u0627\u0634\u062A\u0646\u062F.`);
-      hint = `\u0645\u0648\u062A\u0648\u0631 \u0633\u0627\u0644\u0645 \u0627\u0633\u062A: ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0628\u062F\u0648\u0646 \u0646\u06CC\u0627\u0632 \u0628\u0647 \u0633\u0644\u06A9\u062A\u0648\u0631 \u067E\u06CC\u062F\u0627 \u0634\u062F${partialNote()}.`;
-    }
-  } else {
-    candidates = list.length;
-    signals.note = "engine-specific signals are not measured for this engine";
-    if (error) dropReasons.push(error);
-    else if (!list.length) dropReasons.push("\u0645\u0648\u062A\u0648\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u06A9\u0631\u062F.");
-    const badSelectorError = invalidSelectorMessage(error);
-    hint = list.length ? `\u0645\u0648\u062A\u0648\u0631 ${list.length} \u0645\u062D\u0635\u0648\u0644 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u06A9\u0631\u062F${partialNote()}.` : badSelectorError ? "\u06CC\u06A9\u06CC \u0627\u0632 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0630\u062E\u06CC\u0631\u0647\u200C\u0634\u062F\u0647 \u062E\u0631\u0627\u0628 \u0627\u0633\u062A\u061B \u0622\u0646 \u0631\u0627 \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F \u06CC\u0627 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0633\u0627\u0644\u0645 \u0633\u0627\u062E\u062A\u0647 \u0634\u0648\u0646\u062F." : error || "\u0645\u0648\u062A\u0648\u0631 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u06A9\u0631\u062F\u061B \u062E\u0637\u0627 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.";
-  }
-  if (error && !dropReasons.includes(error) && !dropReasons.some((reason) => reason.includes(error)) && !list.length) dropReasons.unshift(error);
-  const fetchHint = !list.length ? fetchErrorHint(error) : "";
-  if (fetchHint && !dropReasons.some((reason) => String(reason).includes("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u0627\u0645\u0639\u062A\u0628\u0631"))) hint = fetchHint;
-  return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
-}
-async function diagnoseExtraction(profile, urlOverride = "", onProgress) {
-  const started = Date.now(), url = String(urlOverride || profile.url || "").trim(), stages = [], recommendations = [];
-  const progress = diagnosticProgress(onProgress);
-  const add = (name, ok, summary, details = {}) => {
-    const stage = { name, ok, summary, ...details };
-    stages.push(stage);
-    progress.finish(stage);
-  };
-  if (!url) {
-    add("configuration", false, "\u0622\u062F\u0631\u0633 \u0645\u0628\u062F\u0623 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.");
-    return { ok: false, profileId: profile.id, url, stages, selectorsToSave: {}, recommendations: ["\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 \u0641\u0647\u0631\u0633\u062A \u0645\u062D\u0635\u0648\u0644\u0627\u062A \u0631\u0627 \u062F\u0631 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F."] };
-  }
-  let page;
-  try {
-    progress.begin("network", "\u062F\u0631 \u062D\u0627\u0644 \u0627\u062A\u0635\u0627\u0644 \u0628\u0647 \u0645\u0628\u062F\u0623 \u0648 \u062F\u0631\u06CC\u0627\u0641\u062A HTML\u2026", { url, indirect: Boolean(profile.networkIndirect) });
-    page = await sourceText(url, Boolean(profile.networkIndirect));
-    const bytes = new TextEncoder().encode(page.text).byteLength, title = cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, " ") || "");
-    add("network", true, `\u0635\u0641\u062D\u0647 \u0628\u0627 ${bytes.toLocaleString("fa-IR")} \u0628\u0627\u06CC\u062A \u062F\u0631\u06CC\u0627\u0641\u062A \u0634\u062F.`, { requestedUrl: url, finalUrl: page.url, contentType: page.contentType, bytes, title, route: page.route, indirect: Boolean(profile.networkIndirect) });
-  } catch (error) {
-    const text = error instanceof Error ? error.message : String(error);
-    add("network", false, text, { requestedUrl: url, indirect: Boolean(profile.networkIndirect) });
-    recommendations.push(/ضدربات|چالش/.test(text) ? "\u0633\u0627\u06CC\u062A \u0635\u0641\u062D\u0647\u0654 \u0636\u062F\u0631\u0628\u0627\u062A \u0628\u0631\u06AF\u0631\u062F\u0627\u0646\u062F\u0647 \u0627\u0633\u062A\u061B \u062F\u0633\u062A\u0631\u0633\u06CC Worker \u0631\u0627 \u062F\u0631 \u0645\u0628\u062F\u0623 \u0645\u062C\u0627\u0632 \u06A9\u0646\u06CC\u062F \u06CC\u0627 Worker \u0648\u0627\u0633\u0637 \u0645\u0639\u062A\u0628\u0631 \u062A\u0646\u0638\u06CC\u0645 \u06A9\u0646\u06CC\u062F." : "\u0622\u062F\u0631\u0633\u060C \u062F\u0633\u062A\u0631\u0633\u06CC \u0639\u0645\u0648\u0645\u06CC \u0633\u0627\u06CC\u062A \u0648 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0631\u0648\u0634 \u0627\u062A\u0635\u0627\u0644 \u0645\u0628\u062F\u0623 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.");
-    return { ok: false, profileId: profile.id, url, startedAt: new Date(Date.now() - (Date.now() - started)).toISOString(), durationMs: Date.now() - started, stages, selectorsToSave: {}, recommendations };
-  }
-  let products = [];
-  const selectorsToSave = {}, overriddenTestUrl = String(urlOverride || "").trim().length > 0 && url !== String(profile.url || "").trim();
-  try {
-    progress.begin("list-extraction", "\u062F\u0631 \u062D\u0627\u0644 \u0627\u062C\u0631\u0627\u06CC \u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0641\u0647\u0631\u0633\u062A\u2026", { engine: profile.extractionEngine || "auto" });
-    let listSelectors = profile.selectors;
-    progress.begin("selector-verification", "\u062F\u0631 \u062D\u0627\u0644 \u06A9\u0634\u0641 \u0648 \u0631\u0627\u0633\u062A\u06CC\u200C\u0622\u0632\u0645\u0627\u06CC\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0641\u0647\u0631\u0633\u062A\u2026");
-    let selectorCheckOk = true;
-    try {
-      const ensured = selectedProductParser(profile) ? { selectors: profile.selectors, discovered: void 0 } : await ensureListSelectors(page.text, page.url, profile.selectors);
-      listSelectors = ensured.selectors;
-      if (!overriddenTestUrl && ensured.discovered) {
-        for (const [key2, value] of Object.entries(ensured.discovered)) if (String(value || "").trim()) selectorsToSave[key2] = String(value);
-      }
-    } catch {
-      selectorCheckOk = false;
-    }
-    progress.finish({ name: "selector-verification", ok: selectorCheckOk, summary: selectorCheckOk ? "\u0628\u0631\u0631\u0633\u06CC \u0627\u0648\u0644\u06CC\u0647 \u067E\u0627\u06CC\u0627\u0646 \u06CC\u0627\u0641\u062A\u061B \u0645\u0648\u062A\u0648\u0631 \u0628\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0645\u0648\u062C\u0648\u062F \u06CC\u0627 \u06A9\u0634\u0641\u200C\u0634\u062F\u0647 \u0627\u062C\u0631\u0627 \u0645\u06CC\u200C\u0634\u0648\u062F." : "\u0628\u0631\u0631\u0633\u06CC \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u06A9\u0627\u0645\u0644 \u0646\u0634\u062F\u061B \u0645\u0648\u062A\u0648\u0631 \u0628\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0645\u0648\u062C\u0648\u062F \u0627\u062F\u0627\u0645\u0647 \u0645\u06CC\u200C\u062F\u0647\u062F." });
-    if (profile.pagination === "scroll") throw Error("\u0627\u0633\u06A9\u0631\u0648\u0644 \u062A\u0627 \u0627\u0646\u062A\u0647\u0627 \u0628\u0647 \u0627\u062C\u0631\u0627\u06AF\u0631 Node \u0648 \u0645\u0631\u0648\u0631\u06AF\u0631 Chromium \u0646\u06CC\u0627\u0632 \u062F\u0627\u0631\u062F\u061B HTML \u0627\u0648\u0644\u06CC\u0647 \u0641\u0647\u0631\u0633\u062A \u06A9\u0627\u0645\u0644 \u0646\u06CC\u0633\u062A.");
-    const parser = selectedProductParser(profile);
-    if (parser && NODE_ONLY_ENGINES.has(profile.extractionEngine)) throw Error("Selected page loader requires Node");
-    const engineResult = parser ? { products: await parseProductDocument(page.text, page.url, profile.selectors, parser), usedEngine: profile.extractionEngine, engineError: void 0 } : await parseByEngine(page.text, page.url, listSelectors, profile.extractionEngine || "auto", profile.extractionEngineMaster);
-    products = engineResult.products;
-    const complete = { title: products.filter((x) => x.title).length, price: products.filter((x) => x.price > 0).length, link: products.filter((x) => x.url).length, image: products.filter((x) => x.image).length, sku: products.filter((x) => x.sku).length };
-    add("list-extraction", products.length > 0, products.length ? `${products.length.toLocaleString("fa-IR")} \u0645\u062D\u0635\u0648\u0644 \u0628\u0627 pipeline \u0648\u0627\u0642\u0639\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0634\u062F.` : "\u0647\u06CC\u0686 \u0645\u062D\u0635\u0648\u0644\u06CC \u0627\u0632 \u0645\u0648\u062A\u0648\u0631\u0647\u0627\u06CC \u062E\u0648\u062F\u06A9\u0627\u0631 \u06CC\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062F\u0633\u062A\u06CC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0646\u0634\u062F.", { count: products.length, usedEngine: engineResult.usedEngine, ...parser ? { productParser: parser } : {}, ...engineResult.engineError ? { engineError: engineResult.engineError } : {}, complete, selectors: profile.selectors, samples: products.slice(0, 5).map((x) => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
-  } catch (error) {
-    add("list-extraction", false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
-  }
-  if (!products.length) {
-    try {
-      progress.begin("selector-discovery", "\u062F\u0631 \u062D\u0627\u0644 \u062C\u0633\u062A\u200C\u0648\u062C\u0648\u06CC \u0633\u0627\u062E\u062A\u0627\u0631 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC \u0645\u062D\u0635\u0648\u0644\u2026");
-      const discovery = await discoverListSelectorsFromHtml(page.text, page.url);
-      const proposed = Object.entries(discovery.selectors).filter(([, value]) => String(value || "").trim());
-      if (discovery.method !== "none" && proposed.length >= 2 && discovery.selectors.container && discovery.selectors.title) {
-        add("selector-discovery", true, `\u0645\u0648\u062A\u0648\u0631 \u0627\u0633\u062A\u062E\u0631\u0627\u062C ${discovery.containerCount.toLocaleString("fa-IR")} \u06A9\u0627\u0631\u062A \u0645\u062D\u0635\u0648\u0644 \u0631\u0627 \u0628\u062F\u0648\u0646 \u0646\u06CC\u0627\u0632 \u0628\u0647 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062F\u0633\u062A\u06CC \u067E\u06CC\u062F\u0627 \u06A9\u0631\u062F (\u0631\u0648\u0634: ${discovery.method === "structural" ? "\u062A\u062D\u0644\u06CC\u0644 \u0633\u0627\u062E\u062A\u0627\u0631\u06CC \u0635\u0641\u062D\u0647" : discovery.method === "mixed" ? "\u062A\u0631\u06A9\u06CC\u0628\u06CC" : "\u0627\u0644\u06AF\u0648\u0647\u0627\u06CC \u0622\u0645\u0627\u062F\u0647"})\u061B \u0627\u06CC\u0646 \u06CC\u0627\u0641\u062A\u0647 \u0645\u0631\u0628\u0648\u0637 \u0628\u0647 HTML \u0627\u0648\u0644\u06CC\u0647 \u0627\u0633\u062A \u0648 \u0645\u0648\u0641\u0642\u06CC\u062A \u0645\u0631\u0648\u0631\u06AF\u0631 \u06CC\u0627 \u0627\u0633\u06A9\u0631\u0648\u0644 \u0631\u0627 \u062B\u0627\u0628\u062A \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.`, { method: discovery.method, selectors: discovery.selectors, evidence: discovery.evidence, containerCount: discovery.containerCount });
-        if (!Object.keys(selectorsToSave).length && !(await verifyListSelectors(page.text, page.url, profile.selectors)).ok) recommendations.push("\u062F\u06A9\u0645\u0647\u0654 \xAB\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\xBB \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F \u062A\u0627 \u0647\u0645\u06CC\u0646 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u067E\u06CC\u062F\u0627\u0634\u062F\u0647 \u0630\u062E\u06CC\u0631\u0647 \u0634\u0648\u0646\u062F\u060C \u0633\u067E\u0633 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0631\u0627 \u062F\u0648\u0628\u0627\u0631\u0647 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F.");
-      } else {
-        add("selector-discovery", false, "\u06A9\u0634\u0641 \u062E\u0648\u062F\u06A9\u0627\u0631 \u0647\u0645 \u0627\u0644\u06AF\u0648\u06CC \u06A9\u0627\u0631\u062A \u0645\u062D\u0635\u0648\u0644\u06CC \u062F\u0631 \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u067E\u06CC\u062F\u0627 \u0646\u06A9\u0631\u062F\u061B \u0627\u062D\u062A\u0645\u0627\u0644\u0627\u064B \u0635\u0641\u062D\u0647 \u062C\u0627\u0648\u0627\u0627\u0633\u06A9\u0631\u06CC\u067E\u062A\u06CC \u0627\u0633\u062A (\u067E\u0633 \u0627\u0632 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u06A9\u0627\u0645\u0644 \u0631\u0646\u062F\u0631 \u0645\u06CC\u200C\u0634\u0648\u062F)\u060C \u0646\u06CC\u0627\u0632\u0645\u0646\u062F \u0648\u0631\u0648\u062F \u0627\u0633\u062A\u060C \u06CC\u0627 \u0645\u062D\u0635\u0648\u0644\u06CC \u062F\u0631 \u0622\u0646 \u0646\u06CC\u0633\u062A.", { method: discovery.method });
-      }
-    } catch (error) {
-      progress.finish({ name: "selector-discovery", ok: false, summary: String(error) });
-    }
-  }
-  progress.begin("selector-evidence", "\u062F\u0631 \u062D\u0627\u0644 \u0628\u0631\u0631\u0633\u06CC \u062A\u06A9\u200C\u062A\u06A9 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u0631\u0648\u06CC HTML \u0648\u0627\u0642\u0639\u06CC\u2026");
-  const evidence = {};
-  for (const field of ["container", "title", "price", "link", "image"]) {
-    progress.begin("selector-evidence", "\u062F\u0631 \u062D\u0627\u0644 \u0628\u0631\u0631\u0633\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631 " + field, { field });
-    const selector = String(profile.selectors[field] || "").trim();
-    if (!selector) {
-      evidence[field] = { ok: false, count: 0, error: "\u0633\u0644\u06A9\u062A\u0648\u0631 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A" };
-      continue;
-    }
-    try {
-      const type = field === "link" ? "link" : field === "image" ? "image" : "text", values = await extractSelectorValues(page.text, page.url, selector, type);
-      evidence[field] = { ok: values.length > 0, count: values.length, sample: values.slice(0, 3) };
-    } catch (error) {
-      evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-  const scoped = await verifyListSelectors(page.text, page.url, { ...profile.selectors, ...selectorsToSave });
-  const containerCount = scoped.containerCount;
-  const evidenceOk = containerCount > 0 && Number(scoped.title.count || 0) > 0;
-  const scopedEvidence = { container: { ok: containerCount > 0, count: containerCount }, ...Object.fromEntries(["title", "price", "link", "image"].map((key2) => [key2, { ...scoped[key2], ok: scoped[key2].count > 0 }])) };
-  add(
-    "selector-evidence",
-    evidenceOk,
-    evidenceOk ? "\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC \u0648\u0627\u0642\u0639\u06CC HTML \u0627\u0648\u0644\u06CC\u0647 \u0645\u0639\u062A\u0628\u0631\u0646\u062F\u061B \u0646\u062A\u06CC\u062C\u0647\u0654 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0648 \u0627\u0633\u06A9\u0631\u0648\u0644 \u062C\u062F\u0627\u06AF\u0627\u0646\u0647 \u0628\u0631\u0631\u0633\u06CC \u0645\u06CC\u200C\u0634\u0648\u062F." : "\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u06CC\u0627 \u0639\u0646\u0648\u0627\u0646 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC HTML \u0627\u0648\u0644\u06CC\u0647 \u0646\u062A\u06CC\u062C\u0647 \u0646\u062F\u0627\u062F.",
-    { evidence: scopedEvidence, containerCount, cardsSampled: scoped.cardsSampled, documentEvidence: evidence, scope: "\u0639\u0646\u0648\u0627\u0646\u060C \u0642\u06CC\u0645\u062A\u060C \u0644\u06CC\u0646\u06A9 \u0648 \u062A\u0635\u0648\u06CC\u0631 \u0641\u0642\u0637 \u062F\u0627\u062E\u0644 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627 \u0628\u0631\u0631\u0633\u06CC \u0634\u062F\u0646\u062F\u061B \u0634\u0627\u0647\u062F \u06A9\u0644 \u0635\u0641\u062D\u0647 \u0646\u0645\u0648\u0646\u0647\u0654 \u0645\u062D\u062F\u0648\u062F \u0627\u0633\u062A." }
-  );
-  let detail = null;
-  progress.begin("detail-extraction", "\u062F\u0631 \u062D\u0627\u0644 \u0628\u0631\u0631\u0633\u06CC \u0646\u0645\u0648\u0646\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 \u0648 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062C\u0632\u0626\u06CC\u0627\u062A\u2026");
-  const candidate = products.find((product) => product.url);
-  if (candidate && hasDetailSelectors(profile.selectors)) try {
-    const extracted = await scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect));
-    detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || "").length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images.length, variations: extracted.variations?.slice(0, 20) };
-    add("detail-extraction", true, "\u0635\u0641\u062D\u0647\u0654 \u062C\u0632\u0626\u06CC\u0627\u062A \u0646\u0645\u0648\u0646\u0647 \u0628\u0627 pipeline \u0648\u0627\u0642\u0639\u06CC \u067E\u0631\u062F\u0627\u0632\u0634 \u0634\u062F.", { sample: detail });
-  } catch (error) {
-    add("detail-extraction", false, error instanceof Error ? error.message : String(error), { url: candidate.url });
-  }
-  else add("detail-extraction", true, candidate ? "\u0628\u0631\u0627\u06CC \u0627\u06CC\u0646 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062C\u0632\u0626\u06CC\u0627\u062A \u062A\u0646\u0638\u06CC\u0645 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A." : "\u0645\u062D\u0635\u0648\u0644 \u062F\u0627\u0631\u0627\u06CC \u0644\u06CC\u0646\u06A9 \u0628\u0631\u0627\u06CC \u062A\u0633\u062A \u062C\u0632\u0626\u06CC\u0627\u062A \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.", { skipped: true });
-  const detailSample = candidate && candidate.url ? candidate.url : "";
-  if (!overriddenTestUrl && detailSample) {
-    const missingDetail = ["shortDesc", "price", "longDesc", "sku", "category", "tags", "weight", "stock", "brand", "detailImage", "gallery", "variations"].filter((key2) => !String(profile.selectors[key2] || "").trim());
-    if (missingDetail.length) try {
-      progress.begin("detail-discovery", "\u062F\u0631 \u062D\u0627\u0644 \u062F\u0631\u06CC\u0627\u0641\u062A \u0635\u0641\u062D\u0647\u0654 \u0645\u062D\u0635\u0648\u0644 \u0628\u0631\u0627\u06CC \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A\u2026");
-      const suggested = await suggestSelectors(detailSample, "detail");
-      for (const [key2, value] of Object.entries(suggested.selectors || {})) if (String(value || "").trim() && missingDetail.includes(key2)) selectorsToSave[key2] = String(value);
-      progress.finish({ name: "detail-discovery", ok: true, summary: "\u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u062C\u0632\u0626\u06CC\u0627\u062A \u0628\u0631\u0631\u0633\u06CC \u0634\u062F." });
-    } catch (error) {
-      progress.finish({ name: "detail-discovery", ok: false, summary: String(error) });
-    }
-  }
-  if (Object.keys(selectorsToSave).length) recommendations.push("\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u067E\u06CC\u062F\u0627\u0634\u062F\u0647 \u0628\u0647\u200C\u0635\u0648\u0631\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u062F\u0631 \u062A\u0628 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627 \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F\u0646\u062F\u061B \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0631\u0627 \u062F\u0648\u0628\u0627\u0631\u0647 \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F.");
-  const deepPage = Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i) || [])[2] || 0);
-  if (!products.length && deepPage > 1) recommendations.push(`\u0622\u062F\u0631\u0633 \u0635\u0641\u062D\u0647\u0654 ${deepPage.toLocaleString("fa-IR")} \u0627\u0633\u062A\u061B \u0627\u0648\u0644 \u0647\u0645\u06CC\u0646 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628 \u0631\u0627 \u0631\u0648\u06CC \u0635\u0641\u062D\u0647\u0654 \u0627\u0648\u0644 (\u0628\u062F\u0648\u0646 \u067E\u0627\u0631\u0627\u0645\u062A\u0631 \u0635\u0641\u062D\u0647) \u0627\u062C\u0631\u0627 \u06A9\u0646\u06CC\u062F \u2014 \u0635\u0641\u062D\u0647\u200C\u0647\u0627\u06CC \u0639\u0645\u06CC\u0642 \u0627\u063A\u0644\u0628 \u062E\u0627\u0644\u06CC\u200C\u0627\u0646\u062F \u06CC\u0627 \u0633\u0627\u062E\u062A\u0627\u0631 \u062F\u06CC\u06AF\u0631\u06CC \u062F\u0627\u0631\u0646\u062F.`);
-  if (!products.length && !evidenceOk) recommendations.push("\u0633\u0644\u06A9\u062A\u0648\u0631 \u0638\u0631\u0641 \u0645\u062D\u0635\u0648\u0644 \u0631\u0627 \u0628\u0627 HTML \u0648\u0627\u0642\u0639\u06CC \u0627\u0635\u0644\u0627\u062D \u06A9\u0646\u06CC\u062F\u061B \u067E\u06CC\u0634\u0646\u0647\u0627\u062F \u062E\u0648\u062F\u06A9\u0627\u0631 \u0631\u0627 \u0627\u062C\u0631\u0627 \u0648 \u0633\u067E\u0633 \u062F\u0648\u0628\u0627\u0631\u0647 \u0647\u0645\u06CC\u0646 \u0639\u06CC\u0628\u200C\u06CC\u0627\u0628 \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F.");
-  else if (products.length) {
-    if (!products.some((x) => x.price > 0)) recommendations.push("\u0645\u062D\u0635\u0648\u0644 \u067E\u06CC\u062F\u0627 \u0634\u062F\u0647 \u0648\u0644\u06CC \u0642\u06CC\u0645\u062A \u0635\u0641\u0631 \u0627\u0633\u062A\u061B \u0633\u0644\u06A9\u062A\u0648\u0631 \u0642\u06CC\u0645\u062A \u0648 \u0648\u0627\u062D\u062F/\u0645\u062A\u0646 \u0642\u06CC\u0645\u062A \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.");
-    if (!products.some((x) => x.url)) recommendations.push("\u0644\u06CC\u0646\u06A9 \u0645\u062D\u0635\u0648\u0644 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A\u061B \u0633\u0644\u06A9\u062A\u0648\u0631 \u0644\u06CC\u0646\u06A9 \u0628\u0627\u06CC\u062F \u0628\u0647 \u0639\u0646\u0635\u0631 a \u06CC\u0627 \u0648\u06CC\u0698\u06AF\u06CC href/data-url \u0628\u0631\u0633\u062F.");
-    if (!products.some((x) => x.image)) recommendations.push("\u062A\u0635\u0648\u06CC\u0631 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A\u061B data-src\u060C srcset \u06CC\u0627 \u0633\u0644\u06A9\u062A\u0648\u0631 \u062A\u0635\u0648\u06CC\u0631 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F.");
-  }
-  if (!products.length && evidenceOk) recommendations.push("\u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u0641\u0639\u0644\u06CC \u062F\u0631 \u06A9\u0627\u0631\u062A\u200C\u0647\u0627\u06CC HTML \u0627\u0648\u0644\u06CC\u0647 \u0645\u0639\u062A\u0628\u0631\u0646\u062F\u061B \u062E\u0637\u0627\u06CC \u0645\u0631\u062D\u0644\u0647\u0654 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\u060C \u0645\u0631\u0648\u0631\u06AF\u0631 \u0648 \u0627\u0631\u062A\u0628\u0627\u0637 \u063A\u06CC\u0631\u0645\u0633\u062A\u0642\u06CC\u0645 \u0631\u0627 \u0628\u0631\u0631\u0633\u06CC \u06A9\u0646\u06CC\u062F. \u0635\u0641\u0631 \u0645\u062D\u0635\u0648\u0644 \u067E\u0633 \u0627\u0632 \u062E\u0637\u0627\u06CC \u0645\u0631\u0648\u0631\u06AF\u0631 \u062F\u0644\u06CC\u0644 \u062E\u0631\u0627\u0628\u06CC \u0633\u0644\u06A9\u062A\u0648\u0631 \u0646\u06CC\u0633\u062A \u0648 \u06A9\u0627\u0645\u0644\u200C\u0634\u062F\u0646 \u0627\u0633\u06A9\u0631\u0648\u0644 \u0631\u0627 \u062A\u0623\u06CC\u06CC\u062F \u0646\u0645\u06CC\u200C\u06A9\u0646\u062F.");
-  const failed = stages.filter((stage) => !stage.ok);
-  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, startedAt: new Date(Date.now() - (Date.now() - started)).toISOString(), durationMs: Date.now() - started, productCount: products.length, stages, recommendations, detail, selectorsToSave };
-}
-function pageUrl(profile, page) {
-  const url = new URL(profile.url);
-  if (page <= 1 || profile.pagination === "scroll" || profile.pagination === "none" || profile.pagination === "next_selector") return url.href;
-  const pageNumber = (base) => Math.max(1, base) + (page - 1);
-  if (profile.pagination === "full_pattern") return profile.paginationValue.split("{page}").join(String(pageNumber(1)));
-  if (profile.pagination === "path_page" || profile.pagination === "path_pattern") {
-    const next = profile.pagination === "path_page" ? pageNumber(Number(url.pathname.match(/\/page\/(\d+)\/?$/i)?.[1] || 1)) : page;
-    const pattern = profile.pagination === "path_page" ? "/page/{page}/" : profile.paginationValue || "/page/{page}/";
-    const basePath = url.pathname.replace(/\/page\/\d+\/?$/i, "").replace(/\/$/, "");
-    return url.origin + basePath + pattern.split("{page}").join(String(next));
-  }
-  const param = profile.pagination === "query_custom" ? profile.paginationValue || "paged" : "page", current2 = Number(url.searchParams.get(param) || 1);
-  url.hash = "";
-  url.searchParams.set(param, String(pageNumber(current2)));
-  return url.href;
-}
-function benchmarkProbeUrl(profile) {
-  try {
-    const pagination = String(profile?.pagination || "query");
-    if (pagination === "scroll" || pagination === "none" || pagination === "next_selector" || pagination === "full_pattern") return profile.url;
-    const url = new URL(profile.url);
-    url.hash = "";
-    if (pagination === "path_page" || pagination === "path_pattern") {
-      url.pathname = url.pathname.replace(/\/page\/\d+\/?$/i, "") || "/";
-      return url.href;
-    }
-    const custom = pagination === "query_custom" ? String(profile?.paginationValue || "paged") : "page";
-    for (const param of /* @__PURE__ */ new Set([custom, "page", "paged"])) url.searchParams.delete(param);
-    return url.href;
-  } catch {
-    return profile.url;
-  }
-}
-async function mapLimit(items, limit, fn) {
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
-    while (true) {
-      const index = next++;
-      if (index >= items.length) return;
-      await fn(items[index], index);
-    }
-  }));
-}
-async function testSelector(url, selector, type = "text", engine) {
-  requireStaticSelectorEngine(engine);
-  const page = await safeText(url, 4e6), values = await extractSelectorValues(page.text, page.url, selector, type === "link" ? "link" : type === "image" ? "image" : "text");
-  return { count: values.length, values: values.slice(0, 20) };
-}
-async function testVariations(url, selector, engine) {
-  requireStaticSelectorEngine(engine);
-  const page = await safeText(url, 4e6);
-  return { url: page.url, ...await extractVariations(page.text, page.url, selector) };
-}
-async function testGallery(url, selector, max2 = 30, skipFirst = false, engine) {
-  requireStaticSelectorEngine(engine);
-  const page = await safeText(url, 4e6), detail = await parseDetailPage(page.text, page.url, { gallery: selector, galleryMax: max2, gallerySkipFirst: skipFirst });
-  return { url: page.url, count: detail.images.length, values: detail.images };
-}
-var SUGGESTION_CANDIDATES = {
-  container: { selectors: [
-    "li.product",
-    "article.product",
-    ".products .product",
-    ".product-card",
-    ".product-item",
-    "[data-product-id]",
-    // Generic / non-WooCommerce grids (1.128.0 on Render/Node, 1.129.0 on the
-    // Worker). Platform-specific guesses stay first; these only win when
-    // nothing above matched. Structural inference below is the real fallback
-    // when none of these exist either.
-    "article",
-    '[class*="product-card"]',
-    '[class*="product-item"]',
-    '[class*="product-box"]',
-    "[data-product]",
-    ".grid-item",
-    ".product",
-    ".product-box",
-    ".item-card"
-  ] },
-  title: { selectors: [
-    ".woocommerce-loop-product__title",
-    ".product-title",
-    ".card-title",
-    "h2",
-    "h3",
-    '[itemprop="name"]',
-    ".product-name",
-    '[class*="product-title"]',
-    '[class*="product-name"]',
-    ".name",
-    "h4"
-  ] },
-  price: { selectors: [
-    ".price ins",
-    ".sale-price",
-    ".price",
-    '[itemprop="price"]',
-    ".amount",
-    '[class*="price"]',
-    ".money",
-    "[data-price]",
-    ".product-price"
-  ] },
-  link: { type: "link", selectors: ["a.woocommerce-LoopProduct-link", "a.product-link", 'a[href*="/product/"]', "a[href]", "h2 a", "h3 a", "article a[href]"] },
-  image: { type: "image", selectors: ["img.wp-post-image", "img.product-image", "picture img", "img", ".product-media img", "article img"] },
-  shortDesc: { selectors: [".woocommerce-product-details__short-description", ".short-description", '[itemprop="description"]', ".product-info", ".short-desc", '[class*="short-description"]'] },
-  longDesc: { selectors: ["#tab-description", ".woocommerce-Tabs-panel--description", ".product-description", ".description", ".product-tabs", '[class*="description"]'] },
-  sku: { selectors: [".sku", '[itemprop="sku"]', "[data-sku]", '[class*="sku"]'] },
-  brand: { selectors: [".brand", '[itemprop="brand"]', ".product-brand", '[class*="brand"]'] },
-  stock: { selectors: [".stock", '[itemprop="availability"]', ".inventory"] },
-  weight: { selectors: [".product_weight", ".weight", "[data-weight]"] },
-  category: { selectors: [".posted_in", ".product_meta .category", ".breadcrumb"] },
-  tags: { selectors: [".tagged_as", ".product_meta .tags", '[rel="tag"]'] },
-  detailImage: { type: "image", selectors: [".woocommerce-product-gallery__image img", ".product-main-image img", "img.wp-post-image", '[itemprop="image"]'] },
-  gallery: { type: "image", selectors: [".woocommerce-product-gallery img", ".product-gallery img", "[data-gallery] img", ".gallery img", ".product-images img", '[class*="gallery"] img'] },
-  variations: { selectors: [".variations", ".variations_form", "[data-product_variations]", ".product-options"] }
-};
-async function suggestSelectors(url, mode = "all", engine) {
-  requireStaticSelectorEngine(engine);
-  const page = await safeText(url, 4e6), selectors = {}, evidence = {};
-  if (mode === "list" || mode === "all") {
-    const found = await discoverListSelectorsFromHtml(page.text, page.url);
-    for (const [key2, value] of Object.entries(found.selectors)) if (value) selectors[key2] = value;
-    for (const [key2, value] of Object.entries(found.evidence)) evidence[key2] = value;
-    evidence.discoveryMethod = found.method;
-    evidence.containerCount = found.containerCount;
-  }
-  if (mode === "detail" || mode === "all") {
-    const wanted = ["shortDesc", "price", "longDesc", "sku", "category", "tags", "weight", "stock", "brand", "detailImage", "gallery", "variations"];
-    for (const field of wanted) {
-      const config = SUGGESTION_CANDIDATES[field];
-      if (!config) continue;
-      for (const candidate of config.selectors) try {
-        const values = await extractSelectorValues(page.text, page.url, candidate, config.type || "text");
-        const count = values.length, minimum = 1;
-        if (count >= minimum) {
-          selectors[field] = candidate;
-          evidence[field] = { count, sample: values[0] || "" };
-          break;
-        }
-      } catch {
-      }
-    }
-  }
-  return { url: page.url, mode, selectors, evidence };
-}
-var LIST_SELECTOR_KEYS = ["container", "title", "price", "link", "image"];
-function listSelectorsStatus(selectors) {
-  const values = LIST_SELECTOR_KEYS.map((key2) => String(selectors?.[key2] || "").trim());
-  if (values.every((value) => !value)) return "empty";
-  if (values.some((value) => !value)) return "partial";
-  const isDefault = LIST_SELECTOR_KEYS.every((key2) => String(selectors?.[key2]).trim() === String(DEFAULT_SELECTORS[key2]));
-  return isDefault ? "default" : "custom";
-}
-var emptyVerification = (containerCount = 0) => ({
-  containerCount,
-  cardsSampled: 0,
-  title: { count: 0, sample: "" },
-  price: { count: 0, sample: "" },
-  link: { count: 0, sample: "" },
-  image: { count: 0, sample: "" },
-  ok: false
-});
-async function countSelectorMatches(html, selector) {
-  let count = 0;
-  const rewriter = new HTMLRewriter(), handler = { element() {
-    count++;
-  } };
-  let valid = false;
-  for (const part of selectorParts(selector)) valid = safeOn(rewriter, part, handler) || valid;
-  if (!valid) return 0;
-  try {
-    await rewriter.transform(new Response(html)).text();
-  } catch {
-    return 0;
-  }
-  return count;
-}
-function descendantSelector(container, field) {
-  const combos = [];
-  for (const outer of selectorParts(container).slice(0, 4)) for (const inner of selectorParts(field).slice(0, 4)) combos.push(`${outer} ${inner}`);
-  return combos.join(", ");
-}
-async function verifyListSelectors(html, baseUrl, selectors) {
-  const container = String(selectors?.container || "").trim();
-  if (!container || !html) return emptyVerification();
-  const containerCount = await countSelectorMatches(html, container);
-  if (containerCount < 1) return emptyVerification(containerCount);
-  const [titleHits, priceHits, linkHits, imageHits] = await Promise.all([
-    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.title || ""), "text").catch(() => []),
-    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.price || ""), "text").catch(() => []),
-    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.link || ""), "link").catch(() => []),
-    extractSelectorValues(html, baseUrl, descendantSelector(container, selectors.image || ""), "image").catch(() => [])
-  ]);
-  const moneyHits = priceHits.filter((value) => numberFromText(value) > 0);
-  const evidence = (hits) => ({ count: hits.length, sample: (hits[0] || "").slice(0, 200) });
-  const needed = Math.max(1, Math.ceil(Math.min(containerCount, 12) / 2));
-  return { containerCount, cardsSampled: Math.min(containerCount, 12), title: evidence(titleHits), price: evidence(moneyHits), link: evidence(linkHits), image: evidence(imageHits), ok: containerCount >= 2 && titleHits.length >= needed };
-}
-var PRICE_HINT_RE = /[۰-۹٠-٩\d][۰-۹٠-٩\d,٬.,\s]{0,30}\s*(?:تومان|تومن|ریال|IRR|IRT|USD|EUR|GBP|€|\$|£|TL|₺|AED|درهم|﷼)/i;
-var THOUSANDS_RE = /[0-9۰-۹٠-٩]{1,3}([,٬.][0-9۰-۹٠-٩]{3})+/;
-var THOUSANDS_GLOBAL_RE = new RegExp(THOUSANDS_RE.source, "g");
-function chunkHasPriceText(plainText) {
-  return PRICE_HINT_RE.test(plainText) || THOUSANDS_RE.test(plainText);
-}
-function heuristicPriceText(plainText) {
-  const hint = plainText.match(PRICE_HINT_RE)?.[0];
-  if (hint) return cleanText(hint);
-  let best = "";
-  for (const m of plainText.matchAll(THOUSANDS_GLOBAL_RE)) {
-    if (m[0].replace(/[^\d۰-۹٠-٩]/g, "").length > best.replace(/[^\d۰-۹٠-٩]/g, "").length) best = m[0];
-  }
-  return cleanText(best);
-}
-var PRICE_FORMAT_CHARS_RE = /[ـ‌‍﻿]/g;
-function stripPriceFormatChars(value) {
-  return value.replace(PRICE_FORMAT_CHARS_RE, "");
-}
-function looksLikePrice(text) {
-  const value = stripPriceFormatChars(cleanText(text));
-  if (!value || value.length > 80) return false;
-  if (PRICE_HINT_RE.test(value)) return numberFromText(value) > 0;
-  return THOUSANDS_RE.test(value) && numberFromText(value) > 0;
-}
-function cssEscapeIdent(value) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char).replace(/^(\d)/, "\\3$1 ");
-}
-var VOLATILE_CLASS_RE = /^(active|selected|current|open|opened|hover|focus|disabled|loading|ng-|v-|is-|has-|js-)/i;
-var HASH_CLASS_RE = /^[a-f0-9]{6,}$/i;
-function stableClasses(classAttr) {
-  const all = String(classAttr || "").split(/\s+/).filter(Boolean);
-  const stable2 = all.filter((name) => name.length <= 40 && !VOLATILE_CLASS_RE.test(name) && !HASH_CLASS_RE.test(name));
-  const rank = (name) => (/[^a-zA-Z0-9_-]/.test(name) ? 100 : 0) + name.length;
-  return [...new Set(stable2)].sort((a, b) => rank(a) - rank(b));
-}
-function selectorForTagClasses(tag, classAttr) {
-  const base = /^[a-z][a-z0-9]*$/i.test(tag) ? tag.toLowerCase() : "div";
-  const classes = stableClasses(classAttr);
-  if (classes.length >= 2) return `${base}.${cssEscapeIdent(classes[0])}.${cssEscapeIdent(classes[1])}`;
-  if (classes.length === 1) return `${base}.${cssEscapeIdent(classes[0])}`;
-  return base;
-}
-async function discoverListSelectorsFromHtml(html, baseUrl) {
-  const selectors = {};
-  const evidence = {};
-  for (const field of LIST_SELECTOR_KEYS) {
-    const config = SUGGESTION_CANDIDATES[field];
-    for (const candidate of config.selectors) {
-      try {
-        const values = await extractSelectorValues(html, baseUrl, candidate, config.type || "text");
-        const minimum = field === "container" ? 2 : 1;
-        if (values.length >= minimum) {
-          selectors[field] = candidate;
-          evidence[field] = { count: values.length, sample: (values[0] || "").slice(0, 200), via: "curated" };
-          break;
-        }
-      } catch {
-      }
-    }
-  }
-  const curatedSelectors = { ...selectors };
-  const curatedEvidence = { ...evidence };
-  let structuralSelectors = null;
-  let structuralEvidence = {};
-  if (!selectors.container || !selectors.title) {
-    try {
-      const structural = await inferStructuralListSelectors(html, baseUrl);
-      if (structural) {
-        structuralSelectors = { ...structural.selectors };
-        structuralEvidence = { ...structural.evidence };
-        for (const [key2, value] of Object.entries(structural.selectors)) {
-          if (value && !selectors[key2]) {
-            selectors[key2] = value;
-            evidence[key2] = { ...structural.evidence[key2] || {}, via: "structural" };
-          }
-        }
-      }
-    } catch {
-    }
-  }
-  const mergedMethod = !structuralSelectors ? "curated" : curatedSelectors.container && curatedSelectors.title ? "mixed" : "structural";
-  const candidates = [
-    { sel: selectors, ev: evidence, method: mergedMethod },
-    ...structuralSelectors ? [{ sel: structuralSelectors, ev: structuralEvidence, method: "structural" }] : [],
-    { sel: curatedSelectors, ev: curatedEvidence, method: "curated" }
-  ];
-  let containerCount = 0;
-  for (const candidate of candidates) {
-    if (!candidate.sel.container || !candidate.sel.title) continue;
-    const verified = await verifyListSelectors(html, baseUrl, { ...DEFAULT_SELECTORS, ...candidate.sel });
-    containerCount = verified.containerCount;
-    if (verified.ok) return { selectors: candidate.sel, evidence: candidate.ev, method: candidate.method, containerCount };
-  }
-  return { selectors: {}, evidence: {}, method: "none", containerCount };
-}
-function contextChunks(html, index, anchorOpen) {
-  void anchorOpen;
-  const chunks = [];
-  const close = html.indexOf("</a>", index);
-  if (close > index && close - index < 6e3) chunks.push(html.slice(index, close + 4));
-  let cursor = index;
-  for (let depth = 0; depth < 4; depth++) {
-    let best = "", bestOpen = -1;
-    for (const [tag, endTag] of [["article", "</article>"], ["li", "</li>"], ["tr", "</tr>"], ["div", "</div>"]]) {
-      const open = enclosingOpen(html, cursor, tag, endTag);
-      if (open < 0 || cursor - open > 1800) continue;
-      const end = matchingClose(html, open, tag, endTag);
-      if (end < 0 || end - open > 5e3) continue;
-      const chunk = html.slice(open, end + endTag.length);
-      if (!best || chunk.length < best.length) {
-        best = chunk;
-        bestOpen = open;
-      }
-    }
-    if (!best || bestOpen < 0) break;
-    chunks.push(best);
-    cursor = bestOpen;
-  }
-  return chunks;
-}
-async function inferStructuralListSelectors(html, baseUrl) {
-  const groups = /* @__PURE__ */ new Map();
-  const anchors = [];
-  try {
-    const anchorRe = /<a\b[^>]*href=["']([^"']*)["'][^>]*>/gi;
-    let match2;
-    while ((match2 = anchorRe.exec(html)) && anchors.length < 800) anchors.push(match2);
-  } catch {
-    return null;
-  }
-  if (anchors.length < 2) return null;
-  for (const anchor of anchors) {
-    const href = String(anchor[1] || "").trim();
-    if (!href || href === "#" || /^javascript:/i.test(href)) continue;
-    for (const chunk of contextChunks(html, anchor.index, anchor[0])) {
-      const open = chunk.match(/^<(\w+)\b([^>]*)>/);
-      if (!open) continue;
-      const tag = open[1].toLowerCase();
-      if (!tag || tag === "html" || tag === "body") continue;
-      const text = stripHtml(chunk);
-      if (!text || text.length < 12 || text.length > 1500) continue;
-      if (!/<img\b/i.test(chunk)) continue;
-      if ((chunk.match(/<a\b[^>]*href\s*=/gi) || []).length > 4) continue;
-      const classAttr = open[2].match(/\bclass=["']([^"']*)["']/)?.[1] || "";
-      const signature = selectorForTagClasses(tag, classAttr);
-      if (!signature.includes(".") && tag !== "li" && tag !== "article") continue;
-      let group = groups.get(signature);
-      if (!group) {
-        group = { chunks: [], seen: /* @__PURE__ */ new Set(), priceHits: 0 };
-        groups.set(signature, group);
-      }
-      if (group.seen.has(chunk)) continue;
-      group.seen.add(chunk);
-      group.chunks.push(chunk);
-      if (PRICE_HINT_RE.test(stripPriceFormatChars(text)) || THOUSANDS_RE.test(text)) group.priceHits++;
-    }
-  }
-  const clusters = [...groups.entries()].map(([selector, group]) => ({ selector, chunks: group.chunks, priceHits: group.priceHits })).filter((cluster) => cluster.chunks.length >= 2).sort((a, b) => b.chunks.length * (1 + b.priceHits) - a.chunks.length * (1 + a.priceHits));
-  for (const cluster of clusters.slice(0, 5)) {
-    const derived = deriveStructuralFieldSelectors(cluster.chunks.slice(0, 8));
-    if (!derived || !derived.title) continue;
-    const linkSelector = derived.cardIsLink ? cluster.selector : "a[href]";
-    const merged = { ...DEFAULT_SELECTORS, container: cluster.selector, title: derived.title, price: derived.price || "", link: linkSelector, image: "img" };
-    const verified = await verifyListSelectors(html, baseUrl, merged);
-    if (!verified.ok) continue;
-    return {
-      selectors: { container: cluster.selector, title: derived.title, ...derived.price ? { price: derived.price } : {}, link: linkSelector, image: "img" },
-      evidence: {
-        container: { count: verified.containerCount, sample: cluster.selector },
-        title: verified.title,
-        price: verified.price,
-        link: verified.link,
-        image: verified.image
-      }
-    };
-  }
-  return null;
-}
-var BLOCK_TAG_RE = /<(div|ul|ol|li|table|section|article|header|footer|main|form|p|h[1-6])\b/i;
-function deriveStructuralFieldSelectors(sampleChunks) {
-  const titleVotes = /* @__PURE__ */ new Map();
-  const priceVotes = /* @__PURE__ */ new Map();
-  let cardIsLink = 0;
-  const classOf = (attrs) => attrs.match(/\bclass=["']([^"']*)["']/)?.[1] || "";
-  for (const chunk of sampleChunks) {
-    if (/^<a\b/i.test(chunk)) cardIsLink++;
-    let titleSig = "";
-    const headingH = chunk.match(/<h([1-4])\b([^>]*)>([\s\S]{0,600}?)<\/h[1-4]>/i);
-    const headingProp = !headingH ? chunk.match(/<([a-z][a-z0-9]*)\b([^>]*itemprop=["']name["'][^>]*)>([\s\S]{0,600}?)<\/\1>/i) : null;
-    const heading = headingH || headingProp;
-    if (heading) {
-      const text = stripHtml(heading[3] || "");
-      if (text.length >= 8 && text.length <= 200 && !looksLikePrice(text)) {
-        const tag = headingH ? `h${headingH[1]}` : headingProp?.[1] || "div";
-        titleSig = selectorForTagClasses(tag, classOf(heading[2] || ""));
-      }
-    } else {
-      let bestLen = 0, bestIndex = -1;
-      const considerTitle = (tag, attrs, rawInner, index) => {
-        const text = stripHtml(rawInner);
-        if (text.length >= 15 && text.length <= 160 && (text.length > bestLen || text.length === bestLen && index > bestIndex) && !looksLikePrice(text)) {
-          bestLen = text.length;
-          bestIndex = index;
-          titleSig = selectorForTagClasses(tag, classOf(attrs));
-        }
-      };
-      for (const m of chunk.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([^<>]{15,160})<\/\1>/gi)) considerTitle(m[1], m[2] || "", m[3] || "", m.index ?? 0);
-      const body = chunk.replace(/^<[a-z][a-z0-9]*\b[^>]*>/i, "");
-      for (const m of body.matchAll(/<(span|div|p|a|li|td|strong|b)\b([^>]*)>([\s\S]{15,220}?)<\/\1>/gi)) {
-        const inner = m[3] || "";
-        if (!/[<>]/.test(inner)) continue;
-        if (BLOCK_TAG_RE.test(inner)) continue;
-        considerTitle(m[1], m[2] || "", inner, m.index ?? 0);
-      }
-    }
-    if (titleSig) {
-      const vote = titleVotes.get(titleSig) || { count: 0, bonus: /^h[1-4][.]/.test(titleSig) ? 2 : 0 };
-      vote.count++;
-      titleVotes.set(titleSig, vote);
-    }
-    const priceCandidates = [];
-    const considerPrice = (tag, attrs, rawInner, index) => {
-      const text = stripHtml(rawInner);
-      if (!text || text.length > 80 || !looksLikePrice(text)) return;
-      priceCandidates.push({ sig: selectorForTagClasses(tag, classOf(attrs)), length: text.length, index });
-    };
-    for (const m of chunk.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>([^<>]{1,80})<\/\1>/gi)) considerPrice(m[1], m[2] || "", m[3] || "", m.index ?? 0);
-    const priceBody = chunk.replace(/^<[a-z][a-z0-9]*\b[^>]*>/i, "");
-    for (const m of priceBody.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>([\s\S]{1,160}?)<\/\1>/gi)) {
-      const inner = m[3] || "";
-      if (!/[<>]/.test(inner)) continue;
-      if (BLOCK_TAG_RE.test(inner)) continue;
-      considerPrice(m[1], m[2] || "", inner, m.index ?? 0);
-    }
-    priceCandidates.sort((a, b) => a.length - b.length || b.index - a.index);
-    if (priceCandidates.length) {
-      const winner = priceCandidates[0].sig;
-      const vote = priceVotes.get(winner) || { count: 0, length: priceCandidates[0].length };
-      vote.count++;
-      priceVotes.set(winner, vote);
-    }
-  }
-  const titleWinner = [...titleVotes.entries()].sort((a, b) => b[1].count * 10 + b[1].bonus - (a[1].count * 10 + a[1].bonus))[0];
-  if (!titleWinner) return null;
-  const priceWinner = [...priceVotes.entries()].sort((a, b) => b[1].count - a[1].count || a[1].length - b[1].length)[0];
-  return { title: titleWinner[0], price: priceWinner ? priceWinner[0] : "", cardIsLink: cardIsLink * 2 >= sampleChunks.length };
-}
-async function ensureListSelectors(html, baseUrl, selectors) {
-  if (listSelectorsStatus(selectors) === "custom") return { selectors, method: "" };
-  if ((await verifyListSelectors(html, baseUrl, selectors)).ok) return { selectors, method: "" };
-  const found = await discoverListSelectorsFromHtml(html, baseUrl);
-  const merged = { ...selectors, ...found.selectors };
-  if (found.method !== "none" && found.selectors.container && found.selectors.title && (await verifyListSelectors(html, baseUrl, merged)).ok)
-    return { selectors: merged, discovered: found.selectors, method: found.method };
-  return { selectors, method: "" };
-}
 
 // worker-src/sync.ts
 init_db();
@@ -21745,7 +21810,7 @@ app.onError((error, c) => {
   const text = message(error), status = /Unauthorized/.test(text) ? 401 : /not found/i.test(text) ? 404 : /Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text) ? 413 : /timeout|مهلت دریافت/i.test(text) ? 504 : /invalid|required|empty|خالی|نامعتبر/i.test(text) ? 400 : /HTTP|fetch|network|اتصال/i.test(text) ? 502 : 500;
   return c.json({ ok: false, error: text, requestId: c.get("requestId") }, status);
 });
-app.get("/health", (c) => c.json({ ok: true, app: "scraper4-cloudflare", runtime: "cloudflare-workers", databaseReady: Boolean(c.env.DB), databaseError: c.env.DB ? null : "D1 binding DB is missing", workerInWeb: Boolean(c.env.JOBS), authenticationRequired: false, version: c.env.WORKER_VERSION || "1.219.0+", time: (/* @__PURE__ */ new Date()).toISOString() }));
+app.get("/health", (c) => c.json({ ok: true, app: "scraper4-cloudflare", runtime: "cloudflare-workers", databaseReady: Boolean(c.env.DB), databaseError: c.env.DB ? null : "D1 binding DB is missing", workerInWeb: Boolean(c.env.JOBS), authenticationRequired: false, version: c.env.WORKER_VERSION || "1.220.0+", time: (/* @__PURE__ */ new Date()).toISOString() }));
 app.get("/", async (c) => {
   await ensureSchema(c.env.DB);
   return c.html(DASHBOARD, 200, { "cache-control": "no-store" });
@@ -21791,7 +21856,7 @@ app.get("/api/activity", async (c) => {
     getState("cron_lock", {}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION || "1.219.0+"),
+    Promise.resolve(c.env.WORKER_VERSION || "1.220.0+"),
     listActiveJobs(),
     listLiveActivities()
   ]);
@@ -21841,14 +21906,14 @@ app.get("/api/activity", async (c) => {
 app.get("/api/selftest", async (c) => c.json(await runSelftest()));
 app.get("/api/debug", async (c) => c.json(await runDiagnostics()));
 app.get("/api/parity", (c) => c.json({ ok: true, total: PHP_MENU_CAPABILITIES.length, capabilities: PHP_MENU_CAPABILITIES, dispatcherAudit: { reference: "scraper4.php v10.170", total: 178, get: 150, post: 28, mapped: 178, missing: 0, artifact: "parity-manifest.json" } }));
-app.get("/api/version", (c) => c.json({ ok: true, version: c.env.WORKER_VERSION || "1.219.0+", runtime: "cloudflare-workers", deployment: "wrangler versions deploy / wrangler rollback" }));
+app.get("/api/version", (c) => c.json({ ok: true, version: c.env.WORKER_VERSION || "1.220.0+", runtime: "cloudflare-workers", deployment: "wrangler versions deploy / wrangler rollback" }));
 app.get("/api/bootstrap/status", (c) => c.json({ ok: true, supported: false, reason: "Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys." }));
 var githubApiFetch = (token, version) => (url) => safeFetch(url, { apiMode: true, headers: githubApiHeaders(token, version) }, 2e5, 15e3);
 var githubApiPut = (token, version) => (url, body) => safeFetch(url, { apiMode: true, method: "PUT", headers: { ...githubApiHeaders(token, version), "content-type": "application/json" }, body: JSON.stringify(body) }, 2e5, 15e3);
 app.get("/api/deployer/branches", async (c) => {
   const raw2 = c.req.query("repo"), repo = raw2 === void 0 || raw2 === "" ? DEFAULT_REPO : normalizeRepo(raw2);
   if (!repo) return c.json({ ok: false, stage: "list", error: "INVALID", detail: "Repo must look like owner/name." }, 400);
-  return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN, await getState("settings", {}).catch(() => ({}))), c.env.WORKER_VERSION), c.env.WORKER_VERSION || "1.219.0+", repo));
+  return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN, await getState("settings", {}).catch(() => ({}))), c.env.WORKER_VERSION), c.env.WORKER_VERSION || "1.220.0+", repo));
 });
 app.get("/api/branch-files", async (c) => {
   const r = await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN, await getState("settings", {}).catch(() => ({})))), c.req.query("repo") ?? DEFAULT_REPO, c.req.query("branch"), c.req.query("path"));
@@ -22251,7 +22316,7 @@ app.post("/api/source-test", async (c) => {
 var BENCHMARK_ENGINES = ["jsonld", "next_data", "script_json", "heuristic", "structural", "metadata", "htmlrewriter", "playwright", "puppeteer", "crawlee_playwright", "network_api"];
 var MIN_BENCHMARK_PRODUCTS = 2;
 var WORKER_UNAVAILABLE_ENGINES = /* @__PURE__ */ new Set(["playwright", "puppeteer", "crawlee_playwright", "structural", "network_api"]);
-async function benchmarkProfileEngines(profile, onProgress) {
+async function benchmarkProfileEngines(profile, onProgress, withDetails = false) {
   const originalProfile = structuredClone(profile);
   const emit = (event) => {
     try {
@@ -22313,14 +22378,19 @@ async function benchmarkProfileEngines(profile, onProgress) {
       diagnosis = null;
     }
     diagnosis = benchmarkEvidence(engine, engineProducts, error, selectedProductParser(profile), diagnosis);
-    results.push({ engine, sample: diagnosis.sample, ...selectedProductParser(profile) ? { productParser: selectedProductParser(profile) } : {}, ok: products > 0 && !error, available: true, elapsedMs, pagesScanned, products, pagination: { ...paginationReport, products: void 0 }, productsPerMinute: Number((products / minutes).toFixed(2)), ...error ? { error } : {}, ...diagnosis ? { diagnosis } : {} });
+    let detail;
+    if (withDetails) {
+      emit({ name: engine, status: "running", summary: "\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062E\u0648\u062F\u06A9\u0627\u0631 \u062C\u0632\u0626\u06CC\u0627\u062A \u06CC\u06A9 \u0646\u0645\u0648\u0646\u0647 \u0627\u0632 \u0647\u0645\u06CC\u0646 \u0645\u0648\u062A\u0648\u0631\u2026" });
+      detail = await diagnosticDetails(engineProducts.find((p) => p.url) || engineProducts[0], profile, engine, extractDiagnosticSample);
+    }
+    results.push({ engine, sample: detail?.product || diagnosis.sample, ...detail ? { detail } : {}, ...selectedProductParser(profile) ? { productParser: selectedProductParser(profile) } : {}, ok: products > 0 && !error, available: true, elapsedMs, pagesScanned, products, pagination: { ...paginationReport, products: void 0 }, productsPerMinute: Number((products / minutes).toFixed(2)), ...error ? { error } : {}, ...diagnosis ? { diagnosis } : {} });
     emit({ name: engine, status: products > 0 && !error ? "success" : "error", summary: error || "\u067E\u0627\u06CC\u0627\u0646 \u062A\u0633\u062A\u061B " + products + " \u0645\u062D\u0635\u0648\u0644", result: results[results.length - 1] });
   }
   const usable = results.filter((r) => r.ok && r.available);
   const best = usable.sort((a, b) => b.products - a.products || a.elapsedMs - b.elapsedMs)[0] || null;
   const fastest = best && best.products >= MIN_BENCHMARK_PRODUCTS ? best : null;
   emit({ name: "benchmark-save", status: "running", summary: "\u0630\u062E\u06CC\u0631\u0647\u0654 \u0646\u062A\u06CC\u062C\u0647\u0654 \u0645\u0642\u0627\u06CC\u0633\u0647 \u0648 \u0645\u0648\u062A\u0648\u0631 \u0645\u0646\u062A\u062E\u0628\u2026" });
-  profile.extractionEngineBenchmarks = results;
+  profile.extractionEngineBenchmarks = withDetails ? results.map(({ detail, ...row }) => ({ ...row, sample: row.diagnosis?.sample || null, ...detail ? { detail: { ok: detail.ok, elapsedMs: detail.elapsedMs, error: detail.error } } : {} })) : results;
   if (fastest && !selectedProductParser(profile)) {
     profile.extractionEngine = fastest.engine;
     profile.extractionEngineMaster = void 0;
@@ -22336,7 +22406,7 @@ app.post("/api/profiles/:id/extraction-diagnostic", async (c) => {
   if (!profile) return c.json({ ok: false, error: "\u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F." }, 404);
   const b = await jsonBody(c);
   const run2 = async (onProgress) => {
-    const report = await diagnoseExtraction(profile, String(b.url || ""), onProgress);
+    const report = await diagnoseExtraction(profile, String(b.url || ""), onProgress, b.withDetails === true);
     const toSave = report.selectorsToSave || {}, keys = Object.keys(toSave).filter((key2) => String(toSave[key2] || "").trim());
     if (keys.length) {
       onProgress?.({ name: "selectors-auto-saved", status: "running", summary: "\u062F\u0631 \u062D\u0627\u0644 \u0630\u062E\u06CC\u0631\u0647\u0654 \u0633\u0644\u06A9\u062A\u0648\u0631\u0647\u0627\u06CC \u067E\u06CC\u062F\u0627\u200C\u0634\u062F\u0647 \u062F\u0631 \u067E\u0631\u0648\u0641\u0627\u06CC\u0644\u2026", count: keys.length });
@@ -22355,8 +22425,9 @@ app.post("/api/profiles/:id/extraction-diagnostic", async (c) => {
 app.post("/api/profiles/:id/benchmark-engines", async (c) => {
   const profile = await getProfile(c.req.param("id"));
   if (!profile) return c.json({ ok: false, error: "\u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F." }, 404);
-  if (c.req.query("live") === "1") return diagnosticStream((observe) => benchmarkProfileEngines(profile, observe));
-  return c.json(await benchmarkProfileEngines(profile));
+  const options = await c.req.json().catch(() => ({}));
+  if (c.req.query("live") === "1") return diagnosticStream((observe) => benchmarkProfileEngines(profile, observe, options.withDetails === true));
+  return c.json(await benchmarkProfileEngines(profile, void 0, options.withDetails === true));
 });
 app.post("/api/test-selector", async (c) => {
   const b = await jsonBody(c);

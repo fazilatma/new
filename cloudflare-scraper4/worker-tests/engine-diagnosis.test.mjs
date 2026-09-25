@@ -324,3 +324,12 @@ for(const [name,twin,parse] of [['Worker',scraper,'parseCards'],['Node',rscraper
   }
  });
 }
+
+for(const [runtime,twin] of [['worker',scraper],['render',rscraper]])test(runtime+': automatic detail selectors and full product use the exact supplied detail document without fetching again',async()=>{
+ const html=await fixture('patris-detail.html'),page={text:html,url:'https://shop.example/product/coat'};
+ const suggestions=await twin.suggestSelectors(page.url,'detail','cheerio',page);
+ assert.equal(suggestions.selectors.longDesc,'.product-description');assert.equal(suggestions.selectors.sku,'.sku');
+ const product={sourceKey:'coat',title:'Patris sample coat',price:1,priceText:'1',url:page.url,image:''};
+ const result=runtime==='worker'?await twin.scrapeDetails({...product},suggestions.selectors,false,4_000_000,page):await twin.scrapeDetails({...product},suggestions.selectors,false,page);
+ assert.match(result.longDesc,/Wash gently/);assert.equal(result.sku,'PAT-42');assert.equal(result.brand,'Patris');assert.equal(result.price,1250000);assert.ok(result.images.includes('https://shop.example/back.jpg'));assert.equal(product.price,1);
+});

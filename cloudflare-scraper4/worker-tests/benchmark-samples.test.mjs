@@ -30,5 +30,5 @@ test('sample renderer escapes stored HTML and refuses executable image/link sche
  const $=load(benchmarkSampleCard({engine:'<script>alert(1)</script>',sample:{...row,title:'<img src=x onerror=alert(1)>',url:'javascript:alert(1)',image:'data:text/html,bad'}}));assert.equal($('script').length,0);assert.equal($('img').length,0);assert.equal($('a').length,0);assert.equal($('h4').text(),'<img src=x onerror=alert(1)>');
 });
 test('benchmark modal and copy report are wired to samples and failure actions',()=>{
- const line=source.split('\n').find(l=>l.startsWith('async function benchmarkHomeEngines'));assert.match(line,/benchmarkSampleCard\(r\)/);assert.match(line,/<th>محصول نمونه<\/th>/);assert.match(line,/failure.command/);const report=source.split('\n').find(l=>l.startsWith('function benchmarkReportText'));assert.match(report,/sample:/);assert.match(report,/action:/);
+ const line=source.split('\n').find(l=>l.startsWith('async function benchmarkHomeEngines'));assert.match(line,/diagnosticSampleCard\(r,/);assert.match(line,/<th>محصول نمونه<\/th>/);assert.match(line,/failure.command/);const report=source.split('\n').find(l=>l.startsWith('function benchmarkReportText'));assert.match(report,/sample:/);assert.match(report,/action:/);
 });

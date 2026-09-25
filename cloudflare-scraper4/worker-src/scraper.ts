@@ -1,3 +1,4 @@
+import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {requireStaticSelectorEngine} from './selector-engine.js';
 import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from './product-parser.js';
 import { applyResultAdjustments } from './result-adjustments.js';
@@ -573,10 +574,10 @@ function applyJsonLdDetail(html:string,baseUrl:string,result:DetailResult,galler
 }
 function hasDetailSelectors(selectors:SelectorMap):boolean{return ([...DETAIL_KEYS,'longDesc','detailImage','gallery','variations'] as Array<keyof Selectors>).some(key=>String(selectors[key]||'').trim().length>0)}
 
-export async function scrapeDetails(product:Product,selectors:Selectors,indirect=false,maxBytes=4_000_000):Promise<Product>{
+export async function scrapeDetails(product:Product,selectors:Selectors,indirect=false,maxBytes=4_000_000,document?:{text:string;url:string}):Promise<Product>{
   if(!product.url||!hasDetailSelectors(selectors))return product;
-  const {text}=await sourceText(product.url,indirect,maxBytes);
-  const detail=await parseDetailPage(text,product.url,selectors);
+  const {text}=document||await sourceText(product.url,indirect,maxBytes);
+  const detail=await parseDetailPage(text,document?.url||product.url,selectors);
   const mainImage=detail.mainImage||product.image||'',images=[...new Set([mainImage,...detail.images].filter(Boolean))];
   const detailPrice=detail.price?numberFromText(detail.price):0;
   return {...product,price:detailPrice>0?detailPrice:product.price,priceText:detailPrice>0?(detail.price||product.priceText):product.priceText,shortDesc:detail.shortDesc||product.shortDesc,longDesc:detail.longDesc||product.longDesc,sku:detail.sku||product.sku,brand:detail.brand||product.brand,stock:detail.stock?numberFromText(detail.stock):product.stock,weight:detail.weight?numberFromText(detail.weight):product.weight,category:detail.category||product.category,tags:detail.tags||product.tags,images,image:mainImage||images[0]||product.image,variations:detail.variations.length?detail.variations:(product.variations||[]),variationGroups:detail.variationGroups.length?detail.variationGroups:(product.variationGroups||[]),variationPrices:Object.keys(detail.variationPrices).length?detail.variationPrices:(product.variationPrices||{})};
@@ -864,7 +865,7 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
   if(fetchHint&&!dropReasons.some(reason=>String(reason).includes('سلکتور نامعتبر')))hint=fetchHint;
   return{engine,candidates,extracted:list.length,complete,sample,dropReasons,hint,signals};
 }
-export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgress?:DiagnosticObserver){
+export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgress?:DiagnosticObserver,withDetails=false){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
   const progress=diagnosticProgress(onProgress);
   const add=(name:string,ok:boolean,summary:string,details:any={})=>{const stage={name,ok,summary,...details};stages.push(stage);progress.finish(stage)};
@@ -927,19 +928,20 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
   let detail:any=null;
   progress.begin('detail-extraction','در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate=products.find(product=>product.url);
-  if(candidate&&hasDetailSelectors(profile.selectors))try{const extracted=await scrapeDetails(candidate,profile.selectors,Boolean(profile.networkIndirect));detail={url:candidate.url,title:extracted.title,shortDesc:extracted.shortDesc,descriptionCharacters:String(extracted.longDesc||'').length,sku:extracted.sku,brand:extracted.brand,stock:extracted.stock,weight:extracted.weight,category:extracted.category,tags:extracted.tags,image:extracted.image,galleryCount:extracted.images.length,variations:extracted.variations?.slice(0,20)};add('detail-extraction',true,'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.',{sample:detail})}catch(error){add('detail-extraction',false,error instanceof Error?error.message:String(error),{url:candidate.url})}
+  if(withDetails){detail=await diagnosticDetails(candidate,profile,profile.extractionEngine||'auto',extractDiagnosticSample);add('detail-extraction',detail.ok,detail.ok?'جزئیات خودکار نمونه استخراج شد.':detail.error,{sample:detail.product,detail});}
+  else if(candidate&&hasDetailSelectors(profile.selectors))try{const extracted=await scrapeDetails(candidate,profile.selectors,Boolean(profile.networkIndirect));detail={url:candidate.url,title:extracted.title,shortDesc:extracted.shortDesc,descriptionCharacters:String(extracted.longDesc||'').length,sku:extracted.sku,brand:extracted.brand,stock:extracted.stock,weight:extracted.weight,category:extracted.category,tags:extracted.tags,image:extracted.image,galleryCount:extracted.images.length,variations:extracted.variations?.slice(0,20)};add('detail-extraction',true,'صفحهٔ جزئیات نمونه با pipeline واقعی پردازش شد.',{sample:detail})}catch(error){add('detail-extraction',false,error instanceof Error?error.message:String(error),{url:candidate.url})}
   else add('detail-extraction',true,candidate?'برای این پروفایل سلکتور جزئیات تنظیم نشده است.':'محصول دارای لینک برای تست جزئیات پیدا نشد.',{skipped:true});
   // Detail selectors are suggested from a real product page only when some
   // are missing; already-configured keys are never overwritten.
   const detailSample=candidate&&candidate.url?candidate.url:'';
-  if(!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{progress.begin('detail-discovery','در حال دریافت صفحهٔ محصول برای پیشنهاد سلکتورهای جزئیات…');const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value);progress.finish({name:'detail-discovery',ok:true,summary:'پیشنهاد سلکتورهای جزئیات بررسی شد.'})}catch(error){progress.finish({name:'detail-discovery',ok:false,summary:String(error)})}}
+  if(!withDetails&&!overriddenTestUrl&&detailSample){const missingDetail=(['shortDesc','price','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','variations'] as Array<keyof Selectors>).filter(key=>!String(profile.selectors[key]||'').trim());if(missingDetail.length)try{progress.begin('detail-discovery','در حال دریافت صفحهٔ محصول برای پیشنهاد سلکتورهای جزئیات…');const suggested=await suggestSelectors(detailSample,'detail');for(const [key,value] of Object.entries(suggested.selectors||{}))if(String(value||'').trim()&&(missingDetail as string[]).includes(key))selectorsToSave[key]=String(value);progress.finish({name:'detail-discovery',ok:true,summary:'پیشنهاد سلکتورهای جزئیات بررسی شد.'})}catch(error){progress.finish({name:'detail-discovery',ok:false,summary:String(error)})}}
   if(Object.keys(selectorsToSave).length)recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   const deepPage=Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i)||[])[2]||0);
   if(!products.length&&deepPage>1)recommendations.push(`آدرس صفحهٔ ${deepPage.toLocaleString('fa-IR')} است؛ اول همین عیب‌یاب را روی صفحهٔ اول (بدون پارامتر صفحه) اجرا کنید — صفحه‌های عمیق اغلب خالی‌اند یا ساختار دیگری دارند.`);
   if(!products.length&&!evidenceOk)recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
   else if(products.length){if(!products.some(x=>x.price>0))recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');if(!products.some(x=>x.url))recommendations.push('لینک محصول پیدا نشده است؛ سلکتور لینک باید به عنصر a یا ویژگی href/data-url برسد.');if(!products.some(x=>x.image))recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.')}
   if(!products.length&&evidenceOk)recommendations.push('سلکتورهای فعلی در کارت‌های HTML اولیه معتبرند؛ خطای مرحلهٔ استخراج، مرورگر و ارتباط غیرمستقیم را بررسی کنید. صفر محصول پس از خطای مرورگر دلیل خرابی سلکتور نیست و کامل‌شدن اسکرول را تأیید نمی‌کند.');
-  const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail,selectorsToSave};
+  const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail,sample:detail?.product||products[0]||null,selectorsToSave};
 }
 
 export function transformProduct(product: Product, profile: Profile): Product {
@@ -1002,9 +1004,9 @@ const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors
   gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img','.product-images img','[class*="gallery"] img']},
   variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
 };
-export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string){
+export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string,document?:{text:string;url:string}){
   requireStaticSelectorEngine(engine);
-  const page=await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+  const page=document||await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
   // List fields go through the same discovery the engines use (1.128.0 on
   // Render/Node, 1.129.0 on the Worker), so the dashboard button proposes
   // structural selectors for unknown shops too.
@@ -1405,3 +1407,15 @@ export async function ensureListSelectors(html:string,baseUrl:string,selectors:S
   return{selectors,method:''};
 }
 export function safeLongDescription(value:string):string{return value||`<p>${escapeHtml(value)}</p>`}
+
+/** Automatic sample detail extraction uses the selected loader's document once.
+ * Discovered selectors are ephemeral; never persist or mutate the list profile. */
+export async function extractDiagnosticSample(product:Product,profile:Profile,engine:string){
+ requireStaticSelectorEngine(engine);
+ const page=await sourceText(product.url,Boolean(profile.networkIndirect),4_000_000);
+ const suggested=await suggestSelectors(page.url,'detail',engine,page);
+ const selectors={...profile.selectors,...suggested.selectors} as Selectors;
+ const extracted=await scrapeDetails(product,selectors,Boolean(profile.networkIndirect),4_000_000,page);
+ const fields=['shortDesc','longDesc','sku','brand','stock','weight','category','tags','images','specs','variations'].filter(key=>{const v=(extracted as any)[key];return Array.isArray(v)?v.length>0:v!==undefined&&v!==null&&String(v)!==''});
+ return {product:extracted,fields,selectors:suggested.selectors,finalUrl:page.url,warning:fields.length?'':'صفحه خوانده شد، ولی فیلد جزئیات قابل استخراج پیدا نشد.'};
+}

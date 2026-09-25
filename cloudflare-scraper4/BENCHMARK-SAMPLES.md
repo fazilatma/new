@@ -36,3 +36,50 @@ by an administrator, and its missing Puppeteer Chrome download still needs a
 working gateway or compatible offline installation. The benchmark never runs
 apt, downloads a replacement browser, downgrades packages or silently substitutes
 HTTP results for a failed browser.
+
+## 1.220.0+ — opt-in automatic sample details
+
+Two independent, unchecked controls beside the test buttons enable automatic
+sample details for the benchmark or extraction diagnostic. They send a strict
+boolean `withDetails` in the POST body, not a persisted profile setting.
+
+The three-page benchmark still tests list pagination for every available engine.
+When opted in, each engine additionally processes **one of its own linked sample
+products**, sequentially. This is not a full-catalog detail crawl. Automatic DOM
+selector discovery and detail parsing reuse the same fetched document. Browser
+engines use their actual browser loader; HTTP engines share HTTP loading and DOM
+detail parsing. `network_api` details explicitly use Playwright DOM, not JSON CSS
+selectors. Unsupported engines remain unsupported, and no product is fabricated.
+
+Details have separate timing, errors and loader metadata; they do not change the
+list ranking. The popup shows the actual description, gallery, SKU, brand,
+stock, weight, category, tags, specifications and variations when available.
+Closing it returns to the intact report. Source HTML is not executed in the
+viewer. Detail errors keep the list sample available. The existing diagnostic
+behavior with configured detail selectors remains unchanged when the new option
+is off; the switch enables automatic discovery, not a global ban on old probes.
+
+Discovered detail selectors are transient. Full detail products are not written
+into the saved benchmark profile. Live samples have a 180,000-character aggregate
+string budget, at most 100,000 characters per string and 60 entries per array;
+truncation is explicitly reported. A failed detail request is not list failure.
+The extraction diagnostic separately marks its detail stage unsuccessful.
+
+For browser profiles requiring indirect networking, the new detail probe refuses
+to silently fetch directly: current DOM browser tools cannot guarantee that
+route. HTTP probes preserve the source network setting. This limitation appears
+as a detail error, without changing the saved network choice.
+
+### Manual browser instructions
+
+The browser-repair and installed-library sections now include independently
+copyable command cards with a selectable-text fallback. Commands cover Ubuntu
+`install-deps chromium`, lockfile-based Node dependency restoration, local
+Playwright/Puppeteer CLIs, native Termux Chromium and cache/version inspection.
+
+Run from the deployed project directory. Browser downloads must use the service
+user and its HOME/cache environment. Only the OS dependency step needs elevated
+privileges; stop the service before an explicit `npm ci` rebuild. Manual terminal
+commands do not inherit the gateway stored in the application database. Where
+that gateway is required, use the installer button; HTTP 500 still requires a
+working gateway. No commands run merely by viewing/copying these instructions.

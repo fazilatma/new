@@ -1,3 +1,5 @@
+import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
+import {extractDiagnosticSample} from './scraper.js';
 import {benchmarkEvidence,incompatibleBenchmark} from '../worker-src/benchmark-evidence.js';
 import {browserRepairReport} from '../scripts/browser-repair-report.mjs';
 import {gatewayDownloadEnvironment} from '../scripts/browser-download-gateway.mjs';
@@ -54,7 +56,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.219.0+'; } catch { return process.env.npm_package_version || '1.219.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.220.0+'; } catch { return process.env.npm_package_version || '1.220.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -574,7 +576,7 @@ app.post('/api/jobs/priority',async c=>{const b=await c.req.json().catch(()=>({}
 app.post('/api/runs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,kinds=Array.isArray(b.kinds)?b.kinds.map(String):[];if(!kinds.length)return c.json({ok:false,error:'هیچ اجرایی برای اولویت‌بندی ارسال نشد.'},400);const known=new Set(['ai-test','category-all','dedup','agent']),valid=kinds.filter((kind:string)=>known.has(kind));if(!valid.length)return c.json({ok:true,count:0,priorities:await getRunPriorities()});return c.json({ok:true,count:valid.length,priorities:await setRunPriorities(valid)})});
 app.post('/api/category-learning/import',async c=>c.json({ok:true,imported:await importCategoryLearning(await c.req.json())}));
 app.post('/api/suggest-selectors',async c=>{const b=await c.req.json().catch(()=>({}))as any,mode=['list','detail'].includes(b.mode)?b.mode:'all';return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode,String(b.engine||''))})});
-app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await c.req.json().catch(()=>({}))as any;const run=async(onProgress?:DiagnosticObserver)=>{const report:any=await diagnoseExtraction(profile,String(b.url||''),onProgress);const toSave=report.selectorsToSave||{},keys=Object.keys(toSave).filter(key=>String(toSave[key]||'').trim());if(keys.length){onProgress?.({name:'selectors-auto-saved',status:'running',summary:'در حال ذخیرهٔ سلکتورهای پیدا‌شده در پروفایل…',count:keys.length});const selectors={...profile.selectors}as any;for(const key of keys)selectors[key]=toSave[key];await saveProfile({...profile,selectors,updatedAt:new Date().toISOString()});report.selectorsSaved=Object.fromEntries(keys.map(key=>[key,toSave[key]]));report.stages.push({name:'selectors-auto-saved',ok:true,summary:'سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند.',selectors:report.selectorsSaved});onProgress?.({...report.stages[report.stages.length-1],status:'success'})}else onProgress?.({name:'selectors-auto-saved',status:'skipped',summary:'سلکتور تازه‌ای برای ذخیره وجود ندارد.'});return report};if(c.req.query('live')==='1')return diagnosticStream(run);return c.json(await run())});
+app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await c.req.json().catch(()=>({}))as any;const run=async(onProgress?:DiagnosticObserver)=>{const report:any=await diagnoseExtraction(profile,String(b.url||''),onProgress,b.withDetails===true);const toSave=report.selectorsToSave||{},keys=Object.keys(toSave).filter(key=>String(toSave[key]||'').trim());if(keys.length){onProgress?.({name:'selectors-auto-saved',status:'running',summary:'در حال ذخیرهٔ سلکتورهای پیدا‌شده در پروفایل…',count:keys.length});const selectors={...profile.selectors}as any;for(const key of keys)selectors[key]=toSave[key];await saveProfile({...profile,selectors,updatedAt:new Date().toISOString()});report.selectorsSaved=Object.fromEntries(keys.map(key=>[key,toSave[key]]));report.stages.push({name:'selectors-auto-saved',ok:true,summary:'سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند.',selectors:report.selectorsSaved});onProgress?.({...report.stages[report.stages.length-1],status:'success'})}else onProgress?.({name:'selectors-auto-saved',status:'skipped',summary:'سلکتور تازه‌ای برای ذخیره وجود ندارد.'});return report};if(c.req.query('live')==='1')return diagnosticStream(run);return c.json(await run())});
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES}));
 app.get('/api/connections', async c => c.json({ok:true,connections:await loadConnections(true)}));
 app.get('/api/quota', async c => c.json({ok:true,d1:null,unlimited:true,note:'این محیط از پایگاه‌دادهٔ محلی استفاده می‌کند و سقف روزانهٔ D1 روی آن اعمال نمی‌شود.'}));
@@ -765,7 +767,7 @@ const MIN_BENCHMARK_PRODUCTS=2;
 // same check pick() uses, instead of blocking the whole platform.
 const BROWSER_ENGINES=new Set<ExtractionEngine>(['playwright','puppeteer','crawlee_playwright','network_api']);
 const BENCHMARK_ENGINES:ExtractionEngine[]=['jsonld','next_data','script_json','heuristic','structural','metadata','cheerio','htmlrewriter','playwright','puppeteer','crawlee_playwright','network_api'];
-async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObserver){
+async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObserver,withDetails=false){
   const originalProfile=structuredClone(profile);
   const emit=(event:any)=>{try{onProgress?.(event)}catch{}};
   emit({name:'benchmark-network',status:'running',summary:'دریافت صفحهٔ مبنا برای تست سه‌صفحه‌ای…'});
@@ -794,7 +796,9 @@ async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObs
     let diagnosis:any=null;
     try{diagnosis=await diagnoseBenchmarkEngine(engine,diagHtml,diagUrl||pageUrl(probe,1),engineSelectors||profile.selectors,engineProducts,error)}catch{diagnosis=null}
     diagnosis=benchmarkEvidence(engine,engineProducts,error,selectedProductParser(profile),diagnosis);
-    results.push({engine,sample:diagnosis.sample,...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}),ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,pagination:{...paginationReport,products:undefined},productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
+    let detail:any;
+    if(withDetails){emit({name:engine,status:'running',summary:'استخراج خودکار جزئیات یک نمونه از همین موتور…'});detail=await diagnosticDetails(engineProducts.find(p=>p.url)||engineProducts[0],profile,engine,extractDiagnosticSample);}
+    results.push({engine,sample:detail?.product||diagnosis.sample,...(detail?{detail}:{}),...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}),ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,pagination:{...paginationReport,products:undefined},productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
     emit({name:engine,status:products>0&&!error?'success':'error',summary:error||('پایان تست؛ '+products+' محصول'),result:results[results.length-1]});
   }
   const usable=results.filter(r=>r.ok&&r.available);
@@ -807,14 +811,14 @@ async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObs
   // A single product from a 3-page scan is noise, not a working engine.
   const fastest=best&&bestCount>=MIN_BENCHMARK_PRODUCTS?best:null;
   emit({name:'benchmark-save',status:'running',summary:'ذخیرهٔ نتیجهٔ مقایسه و موتور منتخب…'});
-  (profile as any).extractionEngineBenchmarks=results;
+  (profile as any).extractionEngineBenchmarks=withDetails?results.map(({detail,...row})=>({...row,sample:row.diagnosis?.sample||null,...(detail?{detail:{ok:detail.ok,elapsedMs:detail.elapsedMs,error:detail.error}}:{})})):results;
   if(fastest&&!selectedProductParser(profile)){profile.extractionEngine=fastest.engine;profile.extractionEngineMaster=undefined;profile.extractionEngineMs=fastest.elapsedMs;profile.extractionEngineHost=new URL(profile.url).hostname;}
   const profileUpdated=selectedProductParser(profile)?false:await saveBenchmarkProfile(originalProfile,profile,benchmarkDiscovered);
   emit({name:'benchmark-save',status:selectedProductParser(profile)?'skipped':profileUpdated?'success':'error',summary:selectedProductParser(profile)?'پارسر مرحلهٔ دوم ثابت ماند؛ تست فقط خواندنی است و موتور یا سلکتورها ذخیره نشدند.':profileUpdated?'گزارش ذخیره شد؛ ویرایش‌های همزمان حفظ شدند.':'پروفایل همزمان تغییر کرد یا حذف شد؛ نتیجه روی تنظیمات جدید نوشته نشد.'});
   return{ok:Boolean(fastest),...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}),profileUpdated,profileId:profile.id,startedAt,pages,pagination:profile.pagination,fastest,results,discoveredSelectors:benchmarkDiscovered,recommendations:selectedProductParser(profile)?['پارسر مرحلهٔ دوم: '+selectedProductParser(profile)+'؛ مقایسهٔ دریافت صفحه بدون تغییر تنظیمات ذخیره‌شده انجام شد.']:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ${fastest.pagesScanned} صفحه/دسته).`]:(bestCount>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${bestCount}). موتور پیش‌فرض پروفایل تغییر نکرد تا یک نتیجهٔ نادرست جایگزین تنظیم درست شما نشود.`,'سلکتور ظرف محصول را بررسی کنید؛ اگر روی Cloudflare درست کار می‌کند، همان htmlrewriter را دستی انتخاب کنید.']:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
 
-app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);if(c.req.query('live')==='1')return diagnosticStream(observe=>benchmarkProfileEngines(profile,observe));return c.json(await benchmarkProfileEngines(profile))});
+app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const options=await c.req.json().catch(()=>({}))as any;if(c.req.query('live')==='1')return diagnosticStream(observe=>benchmarkProfileEngines(profile,observe,options.withDetails===true));return c.json(await benchmarkProfileEngines(profile,undefined,options.withDetails===true))});
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/extract/:id',async c=>runProfileApi(c,c.req.param('id')));

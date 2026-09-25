@@ -1,3 +1,4 @@
+import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {isBrowserSelectorEngine} from '../worker-src/selector-engine.js';
 import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from '../worker-src/product-parser.js';
 import {renderPythonPlaywright} from './playwright-python.js';
@@ -1567,9 +1568,9 @@ export function heuristicProducts(html: string, baseUrl: string): Product[] {
   // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
   for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' ')))); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
-export async function scrapeDetails(product: Product, selectors: Selectors, indirect = false): Promise<Product> {
+export async function scrapeDetails(product: Product, selectors: Selectors, indirect = false, document?:{text:string;url:string}): Promise<Product> {
   if (!product.url) return product;
-  const { text, url } = await safeText(product.url, 8_000_000, { indirect }); const $ = cheerio.load(text); const body = $.root();
+  const { text, url } = document || await safeText(product.url, 8_000_000, { indirect }); const $ = cheerio.load(text); const body = $.root();
   const css = (selector?: string) => selector ? (xpathToCss(selector) ?? selector) : '';
   const textField = (selector?: string) => selector ? normalize(body.find(css(selector)).first().text()) : '';
   const priceText = textField(selectors.price), detailPrice = numberFromText(priceText);
@@ -1676,8 +1677,8 @@ export async function selectorToolDocument(url:string,engine?:string):Promise<{t
     return document;
   });
 }
-export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string){
-  const page=await selectorToolDocument(url,engine),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string,document?:{text:string;url:string}){
+  const page=document||await selectorToolDocument(url,engine),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
   // List fields go through the same discovery the engines use (1.128.0), so the
   // dashboard button proposes structural selectors for unknown shops too.
   if(mode==='list'||mode==='all'){
@@ -2282,7 +2283,7 @@ export async function diagnoseBenchmarkEngine(
   return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
 };
 
-export async function diagnoseExtraction(profile: Profile, urlOverride = '', onProgress?: DiagnosticObserver) {
+export async function diagnoseExtraction(profile: Profile, urlOverride = '', onProgress?: DiagnosticObserver, withDetails=false) {
   const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
   const stages: any[] = [], recommendations: string[] = [];
   if(profile.pagination==='none'&&profile.networkIndirect&&['auto','playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto'))recommendations.push('حالت بدون صفحه‌بندی از مسیر قدیمی موتور استفاده می‌کند؛ در موتورهای مرورگر، عبور ترافیک مرورگر از Worker تضمین نشده است. گزینهٔ اسکرول تا انتها همچنان مسیر محافظت‌شدهٔ جداگانه دارد.');
@@ -2383,7 +2384,8 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const candidate = products.find(product => product.url);
   const detailKeys = ['shortDesc', 'longDesc', 'sku', 'category', 'tags', 'weight', 'stock', 'brand', 'detailImage', 'gallery', 'variations'];
   const wantsDetail = detailKeys.some(key => String((profile.selectors as any)?.[key] || '').trim().length > 0);
-  if (candidate && wantsDetail) {
+  if(withDetails){detail=await diagnosticDetails(candidate,profile,profile.extractionEngine||'auto',extractDiagnosticSample);add('detail-extraction',detail.ok,detail.ok?'جزئیات خودکار نمونه استخراج شد.':detail.error,{sample:detail.product,detail});}
+  else if (candidate && wantsDetail) {
     try {
       const extracted = await scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect));
       detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || '').length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images?.length || 0, variations: extracted.variations?.slice(0, 20) };
@@ -2393,7 +2395,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   // Detail selectors are suggested from a real product page only when some
   // are missing; already-configured keys are never overwritten.
   const detailSample = candidate && candidate.url ? candidate.url : '';
-  if (!overriddenTestUrl && detailSample) {
+  if (!withDetails && !overriddenTestUrl && detailSample) {
     const missingDetail = detailKeys.filter(key => !String((profile.selectors as any)?.[key] || '').trim().length);
     if (missingDetail.length) {
       try {
@@ -2417,5 +2419,17 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   }
   if(!products.length&&evidenceOk)recommendations.push('سلکتورهای فعلی در کارت‌های HTML اولیه معتبرند؛ خطای مرحلهٔ استخراج، مرورگر و ارتباط غیرمستقیم را بررسی کنید. صفر محصول پس از خطای مرورگر دلیل خرابی سلکتور نیست و کامل‌شدن اسکرول را تأیید نمی‌کند.');
   const failed = stages.filter(stage => !stage.ok);
-  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail, selectorsToSave };
+  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail, sample:detail?.product||products[0]||null, selectorsToSave };
+}
+
+/** Automatic sample detail extraction uses the selected loader's document once.
+ * Discovered selectors are ephemeral; never persist or mutate the list profile. */
+export async function extractDiagnosticSample(product:Product,profile:Profile,engine:string){
+ if(isBrowserSelectorEngine(engine)&&profile.networkIndirect)throw Error('استخراج جزئیات مرورگری با مسیر غیرمستقیم تضمین نشده است؛ برای جلوگیری از اتصال مستقیم پنهان اجرا نشد.');
+ const page=isBrowserSelectorEngine(engine)?await selectorToolDocument(product.url,engine):await safeText(product.url,4_000_000,{indirect:Boolean(profile.networkIndirect)});
+ const suggested=await suggestSelectors(page.url,'detail',engine,page);
+ const selectors={...profile.selectors,...suggested.selectors} as Selectors;
+ const extracted=await scrapeDetails(product,selectors,Boolean(profile.networkIndirect),page);
+ const fields=['shortDesc','longDesc','sku','brand','stock','weight','category','tags','images','specs','variations'].filter(key=>{const v=(extracted as any)[key];return Array.isArray(v)?v.length>0:v!==undefined&&v!==null&&String(v)!==''});
+ return {product:extracted,fields,selectors:suggested.selectors,finalUrl:page.url,warning:fields.length?'':'صفحه خوانده شد، ولی فیلد جزئیات قابل استخراج پیدا نشد.'};
 }
