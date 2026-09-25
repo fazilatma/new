@@ -1,3 +1,4 @@
+import {browserRepairReport} from '../scripts/browser-repair-report.mjs';
 import {gatewayDownloadEnvironment} from '../scripts/browser-download-gateway.mjs';
 import {resolveSourceNetwork} from '../worker-src/source-network.js';
 import {normalizeProductParser,selectedProductParser} from '../worker-src/product-parser.js';
@@ -52,7 +53,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.217.0+'; } catch { return process.env.npm_package_version || '1.217.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.218.0+'; } catch { return process.env.npm_package_version || '1.218.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -314,6 +315,12 @@ const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExec
  await assertPublicUrl(gateway.replace('{url}',encodeURIComponent('https://registry.npmjs.org/playwright')));
  return gatewayDownloadEnvironment(process.env,gateway);
 }});
+app.get('/api/runtime/browser-repair/report',async c=>{
+ c.header('Cache-Control','no-store');
+ let network:any;try{network=resolveSourceNetwork((await getState<any>('settings',{}))?.source,(await loadConnections()).ai.network)}catch{network={mode:'unavailable'}}
+ const report=await browserRepairReport({state:browserRepair.status(),network,version:runtimeVersion(),head:BOOT_HEAD,resolveExecutable:(driver:any)=>browserExecutable(driver)});
+ return c.json({ok:true,report});
+});
 app.on(['GET','POST'],'/api/runtime/browser-repair',async c=>{
   // Follow the owner's optional global API-auth policy; no separate token prerequisite.
   if(c.req.method==='GET')return c.json({ok:true,...browserRepair.status()});

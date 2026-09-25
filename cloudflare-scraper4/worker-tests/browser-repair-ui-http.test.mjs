@@ -39,6 +39,8 @@ test('real Node HTTP repair route honors optional auth and rejects arbitrary com
    const path=base+'/api/runtime/browser-repair';
    assert.equal((await fetch(path)).status,protectedApi?401:200);
    const headers={authorization:'Bearer '+token,'content-type':'application/json'};
+   assert.equal((await fetch(path+'/report')).status,protectedApi?401:200);
+   const reportResponse=await fetch(path+'/report',{headers});assert.equal(reportResponse.status,200);assert.equal(reportResponse.headers.get('cache-control'),'no-store');const report=await reportResponse.json();assert.match(report.report,/SCRAPER4 BROWSER REPAIR REPORT/);assert.ok(!report.report.includes('browser-repair-fixture-secret'));assert.match(report.report,/libraries/);
    const status=await fetch(path,{headers});assert.equal(status.status,200);
    {assert.equal((await status.json()).running,false);assert.equal((await fetch(path,{method:'POST',headers,body:'{}'})).status,403);assert.equal((await fetch(path,{method:'POST',headers:{...headers,'x-browser-repair':'1'},body:JSON.stringify({command:'touch /tmp/never-execute'})})).status,400);assert.equal((await (await fetch(path,{headers})).json()).running,false);}
   }finally{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');const kill=setTimeout(()=>child.kill('SIGKILL'),3000);await ended;clearTimeout(kill);}rmSync(dir,{recursive:true,force:true});}

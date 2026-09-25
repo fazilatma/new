@@ -61,3 +61,30 @@ Tests include a local TLS gateway with real Node HTTP/fetch and npm metadata
 plus integrity-checked package installation, filesystem reuse/idempotency,
 permission modes, symlink rejection, no-download reuse and UI intent. No live
 Cloudflare large-archive download or VPS deployment is claimed.
+
+## Copy a support report — 1.218.0+
+
+Use **Copy complete support report** in the same install/repair panel. It fetches
+fresh, read-only diagnostics from `/api/runtime/browser-repair/report`, appends
+the client browser/clipboard context, and copies the text. The report is also
+shown in a read-only text box so it can be reviewed or manually copied when
+clipboard permission is unavailable. It is not sent to a third party.
+
+Included: app version/commit, OS/kernel/architecture/glibc, Node/npm versions,
+UID/GID/root status, RAM/disk, project permissions, locked and installed browser
+library versions, executable selection and permissions, cache source/destination
+paths and revisions, current proxy/gateway configuration, installation policy,
+last-job options/route/timestamps/results, and the available log tail. Current
+settings are distinguished from recorded job conditions. Missing information is
+reported as unavailable rather than guessed. Network settings cannot be read
+from the database if that connection is unavailable.
+
+No full environment/configuration dump is included. Known secret values, URL
+credentials and query strings, authorization tokens and sensitive assignments
+are redacted. Gateway paths are omitted. Paths and hostnames remain useful for
+diagnosis: review them before sharing. The endpoint retains global API auth and
+uses `Cache-Control: no-store`.
+
+The log is capped at **24,000 characters**, with a truncation flag, and exists
+only in the current process. Restarting clears it. Reporting never runs an
+installer, browser, network probe, OS-library command or cache-copy operation.

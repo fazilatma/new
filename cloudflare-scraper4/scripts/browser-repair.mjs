@@ -55,11 +55,11 @@ export function smokeScript(engine,executable){
  return `let b;try{${launch}const page=await b.newPage();await page.setContent('<title>Browser launch OK</title>');if(await page.title()!=='Browser launch OK')throw Error('Page test failed');console.log('Browser launch OK',await b.version());}finally{if(b)await b.close();}`;
 }
 export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=process.getuid?.(),run=runBrowserCommand,exists=existsSync,resolveExecutable=driver=>env.BROWSER_EXECUTABLE_PATH||(driver==='playwright'?env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:env.PUPPETEER_EXECUTABLE_PATH)||env.CHROME_BIN,resolveCli=name=>localCli(cwd,name),plan=()=>libraryPlan(cwd),resolveNpm=()=>npmCli(env),resolveDownloadEnv=async()=>env,reuseCaches=reuseBrowserCaches}={}){
- const fresh=()=>({running:false,success:null,phase:'idle',log:'',results:{},startedAt:null,finishedAt:null});
+ const fresh=()=>({running:false,success:null,phase:'idle',log:'',logTruncated:false,results:{},startedAt:null,finishedAt:null});
  let state=fresh(),downloadEnv;
- const installEnv=async()=>{if(!downloadEnv){downloadEnv=await resolveDownloadEnv();log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
+ const installEnv=async()=>{if(!downloadEnv){downloadEnv=await resolveDownloadEnv();state.downloadRoute=downloadEnv.SCRAPER_BROWSER_GATEWAY?'cloudflare-gateway':'existing-environment';log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
  const snapshot=()=>({...state,results:JSON.parse(JSON.stringify(state.results))});
- const log=text=>{const safe=downloadEnv?.SCRAPER_BROWSER_GATEWAY?String(text).split(downloadEnv.SCRAPER_BROWSER_GATEWAY).join('[configured gateway]'):text;state.log=(state.log+redact(safe)+'\n').slice(-24000);};
+ const log=text=>{const safe=downloadEnv?.SCRAPER_BROWSER_GATEWAY?String(text).split(downloadEnv.SCRAPER_BROWSER_GATEWAY).join('[configured gateway]'):text;const next=state.log+redact(safe)+'\n';state.logTruncated=state.logTruncated||next.length>24000;state.log=next.slice(-24000);};
  async function verify(engine,executable){
   state.phase=engine+'-verifying';log('Testing '+engine+' with the current runtime browser configuration.');
   return run(['--input-type=module','-e',smokeScript(engine,executable)],{cwd,env,log,timeout:45000});
@@ -116,7 +116,7 @@ export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=proce
   if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['allowMirror','allowRoot','reuseExisting'].includes(k))||Object.values(options).some(v=>typeof v!=='boolean'))throw Error('Only boolean allowMirror/allowRoot/reuseExisting options are accepted.');
   if(state.running)return snapshot();
   if(uid===0&&options.allowRoot!==true)throw Error('This scraper runs as root. Explicit root-runtime acknowledgement is required. Running a web scraper as root is not recommended.');
-  downloadEnv=undefined;state={...fresh(),running:true,phase:'starting',startedAt:new Date().toISOString()};
+  downloadEnv=undefined;state={...fresh(),running:true,phase:'starting',options:{allowMirror:options.allowMirror===true,allowRoot:options.allowRoot===true,reuseExisting:options.reuseExisting===true},startedAt:new Date().toISOString()};
   void work(options);return snapshot();
  }
  return {start,status:()=>({...snapshot(),root:uid===0})};
