@@ -1,3 +1,4 @@
+import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from './product-parser.js';
 import { applyResultAdjustments } from './result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progress.js';
 import { getState } from './db.js';
@@ -631,10 +632,11 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true,scrollToEnd=false):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
+export async function scrapeListPage(url:string,selectors:Selectors,nextSelector='',indirect=false,engine:ExtractionEngine='auto',master?:ExtractionEngine,autoFirst=true,autoDiscover=true,scrollToEnd=false,productParser?:ProductParser):Promise<{products:Product[];nextUrl:string;url:string;usedEngine?:ExtractionEngine;elapsedMs?:number;selectorsUsed?:Selectors;discoveredSelectors?:Partial<Selectors>;discoveryMethod?:string;engineError?:string}>{
   if(scrollToEnd)throw Error('اسکرول تا انتها به مرورگر Node روی VPS/Termux/Render نیاز دارد؛ Worker فقط HTML اولیه را می‌خواند.');
   const page=await sourceText(url,indirect),next=new NextLinkHandler(page.url);
   if(nextSelector){const rewriter=new HTMLRewriter();for(const selector of selectorParts(nextSelector))safeOn(rewriter,selector,next);await rewriter.transform(new Response(page.text)).text()}
+  if(productParser){if(NODE_ONLY_ENGINES.has(engine))throw Error('Selected page loader requires Node');const started=Date.now();return {products:await parseProductDocument(page.text,page.url,selectors,productParser),nextUrl:next.url,url:page.url,usedEngine:engine,elapsedMs:Date.now()-started,selectorsUsed:selectors};}
   // 1.129.0 — PROACTIVE AUTO-DISCOVERY (Worker parity with 1.128.0 on
   // Render/Node). Profiles created through the API always carry the
   // WooCommerce DEFAULT_SELECTORS (empty list selectors are rejected), so
@@ -652,6 +654,11 @@ export async function scrapeListPage(url:string,selectors:Selectors,nextSelector
 }
 export async function scrapeList(url:string,selectors:Selectors,indirect=false,engine:ExtractionEngine='auto',autoDiscover=true):Promise<Product[]>{return (await scrapeListPage(url,selectors,'',indirect,engine,undefined,true,autoDiscover)).products}
 
+export async function parseProductDocument(html:string,base:string,selectors:Selectors,parser:ProductParser):Promise<Product[]>{
+ const embedded=async(mode:'next_data'|'script_json')=>{const out:Product[]=[];for(const value of embeddedProductData(html,mode))walkObjects(value,base,out);return finalizeFound(out,base);};
+ const cards=async()=>{let active=selectors;if(listSelectorsStatus(selectors)!=='custom'){const found=await discoverListSelectorsFromHtml(html,base);if(found.selectors.container)active={...selectors,...found.selectors};}return parseCards(html,base,active);};
+ return finalizeFound(await parseDownloadedProducts(parser,{lxml:cards,selectolax:cards,jsonld:()=>parseJsonLdProducts(html,base),next_data:()=>embedded('next_data'),script_json:async()=>[...await parseJsonLdProducts(html,base),...await embedded('script_json'),...await extractScriptJsonProducts(html,base)],metadata:()=>extractMetadataProduct(html,base),heuristic:()=>extractHeuristicProducts(html,base)}),base);
+}
 async function parseByEngine(html:string,baseUrl:string,selectors:Selectors,engine:ExtractionEngine,master?:ExtractionEngine,autoFirst=true):Promise<EngineResult>{
   if(engine!=='auto'&&NODE_ONLY_ENGINES.has(engine))throw new Error(`موتور ${engine} به اجراگر Node نیاز دارد (Termux، ویندوز، VPS یا Render). ${engine==='structural'?'Cloudflare Worker موتور DOM (cheerio) ندارد؛ از heuristic استفاده کنید.':'Cloudflare Worker نمی‌تواند مرورگر اجرا کند؛ از htmlrewriter استفاده کنید.'}`);
   const tryOne=async(name:ExtractionEngine):Promise<Product[]>=>{
@@ -879,13 +886,15 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
     let listSelectors=profile.selectors;
     progress.begin('selector-verification','در حال کشف و راستی‌آزمایی سلکتورهای فهرست…');
     let selectorCheckOk=true;
-    try{const ensured=await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{selectorCheckOk=false;/* best-effort; extraction below uses the profile selectors */}
+    try{const ensured=selectedProductParser(profile)?{selectors:profile.selectors,discovered:undefined}:await ensureListSelectors(page.text,page.url,profile.selectors);listSelectors=ensured.selectors;if(!overriddenTestUrl&&ensured.discovered)for(const [key,value] of Object.entries(ensured.discovered))if(String(value||'').trim())selectorsToSave[key]=String(value)}catch{selectorCheckOk=false;/* best-effort; extraction below uses the profile selectors */}
     progress.finish({name:'selector-verification',ok:selectorCheckOk,summary:selectorCheckOk?'بررسی اولیه پایان یافت؛ موتور با سلکتورهای موجود یا کشف‌شده اجرا می‌شود.':'بررسی خودکار سلکتورها کامل نشد؛ موتور با سلکتورهای موجود ادامه می‌دهد.'});
     if(profile.pagination==='scroll')throw Error('اسکرول تا انتها به اجراگر Node و مرورگر Chromium نیاز دارد؛ HTML اولیه فهرست کامل نیست.');
-    const engineResult=await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
+    const parser=selectedProductParser(profile);
+    if(parser&&NODE_ONLY_ENGINES.has(profile.extractionEngine))throw Error('Selected page loader requires Node');
+    const engineResult=parser?{products:await parseProductDocument(page.text,page.url,profile.selectors,parser),usedEngine:profile.extractionEngine,engineError:undefined}:await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
-    add('list-extraction',products.length>0,products.length?`${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`:'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',{count:products.length,usedEngine:engineResult.usedEngine,...(engineResult.engineError?{engineError:engineResult.engineError}:{}),complete,selectors:profile.selectors,samples:products.slice(0,5).map(x=>({title:x.title,price:x.price,priceText:x.priceText,url:x.url,image:x.image,sku:x.sku}))});
+    add('list-extraction',products.length>0,products.length?`${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`:'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',{count:products.length,usedEngine:engineResult.usedEngine,...(parser?{productParser:parser}:{}),...(engineResult.engineError?{engineError:engineResult.engineError}:{}),complete,selectors:profile.selectors,samples:products.slice(0,5).map(x=>({title:x.title,price:x.price,priceText:x.priceText,url:x.url,image:x.image,sku:x.sku}))});
   }catch(error){add('list-extraction',false,error instanceof Error?error.message:String(error),{selectors:profile.selectors})}
   // 1.129.0 — when nothing extracted, show what proactive auto-discovery sees
   // on the same page. Verified discoveries above are handed to the route for

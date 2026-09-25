@@ -1,3 +1,4 @@
+import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from '../worker-src/product-parser.js';
 import {renderPythonPlaywright} from './playwright-python.js';
 import { collectScrollProducts } from '../worker-src/scroll-collector.js';
 import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
@@ -416,6 +417,7 @@ export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;ela
   /** Absolute URL of the 'next page' link, when a next-selector is configured. */
   nextUrl?:string;
   browserDiagnostics?:any;
+  productParser?:ProductParser;
   /**
    * Selectors the selector engines actually ran with (1.128.0). Equals the
    * input selectors unless auto-discovery repaired them first.
@@ -474,18 +476,29 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>, initialDocument?:{text:string;url:string}): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>, initialDocument?:{text:string;url:string},productParser?:ProductParser): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
+  if(productParser&&engine==='network_api')throw Error('network_api reads API responses, not HTML; disable the second-stage parser or choose a browser HTML loader.');
   if(scrollToEnd){
     if(!browserEngineAvailable())throw Error('اسکرول تا انتها به Chromium نیاز دارد؛ npm run browsers:install را اجرا کنید.');
     const driver=engine==='puppeteer'?'puppeteer':'playwright';
     const {renderBrowserSnapshot}=await import('./visual-browser.js');
     let tracker:ReturnType<typeof trackScrollRequests>;
-    const snapshot=await renderBrowserSnapshot(url,driver,indirect,{initial:initialDocument,prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker)});
+    const snapshot=await renderBrowserSnapshot(url,driver,indirect,{initial:initialDocument,prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker,undefined,productParser)});
     const products=snapshot.collected as Product[];
-    return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union',browserDiagnostics:snapshot.browserDiagnostics};
+    return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union',browserDiagnostics:snapshot.browserDiagnostics,...(productParser?{productParser}:{})};
+  }
+  if(productParser){
+    let document:{text:string;url:string}|undefined;
+    const reader=async(html:string,base:string)=>{document={text:html,url:base};return parseProductDocument(html,base,selectors,productParser)};
+    let products:Product[];
+    if(engine==='playwright'||engine==='puppeteer')products=await withBrowserSlot(async()=>scrapeRenderedHtml(url,selectors,engine,stopped,reader));
+    else if(engine==='crawlee_playwright')products=await withBrowserSlot(async()=>scrapeListWithCrawleePlaywright(url,selectors,reader));
+    else {document=initialDocument||await safeText(url,8_000_000,{indirect});products=await reader(document.text,document.url);}
+    let nextUrl='';if(nextSelector&&document){const $=cheerio.load(document.text);for(const part of nextSelector.split(',').map(x=>x.trim()).filter(Boolean)){const href=$(xpathToCss(part)??part).first().attr('href');if(href){nextUrl=new URL(href,document.url).href;break;}}}
+    return {products:dedupe(products),usedEngine:engine,elapsedMs:Date.now()-started,nextUrl,selectorsUsed:selectors,productParser};
   }
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url,8_000_000,{indirect});
@@ -944,15 +957,15 @@ function trackScrollRequests(page:any){
  page.on('request',started);page.on('requestfinished',finished);page.on('requestfailed',failure);page.on('response',response);
  return {pending,failed:()=>failed,close(){page.off('request',started);page.off('requestfinished',finished);page.off('requestfailed',failure);page.off('response',response)}};
 }
-export async function benchmarkScroll(url:string,selectors:Selectors,engine:ExtractionEngine,indirect=false){
+export async function benchmarkScroll(url:string,selectors:Selectors,engine:ExtractionEngine,indirect=false,productParser?:ProductParser){
  if(engine!=='playwright'&&engine!=='puppeteer')throw Error('آزمون اسکرول فقط با موتور واقعی Playwright یا Puppeteer انجام می‌شود.');
  const {renderBrowserSnapshot}=await import('./visual-browser.js'),benchmark={batches:[] as any[]};let tracker:ReturnType<typeof trackScrollRequests>;
- const snapshot=await renderBrowserSnapshot(url,engine,indirect,{prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,undefined,tracker,benchmark)});
+ const snapshot=await renderBrowserSnapshot(url,engine,indirect,{prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,undefined,tracker,benchmark,productParser)});
  return {products:snapshot.collected||[],batches:benchmark.batches};
 }
-async function collectRenderedScroll(page:any,selectors:Selectors,stopped?:()=>Promise<boolean>,tracker=trackScrollRequests(page),benchmark?:{batches:any[]}):Promise<Product[]>{
+async function collectRenderedScroll(page:any,selectors:Selectors,stopped?:()=>Promise<boolean>,tracker=trackScrollRequests(page),benchmark?:{batches:any[]},productParser?:ProductParser):Promise<Product[]>{
  try{return await collectScrollProducts<Product>({
-  snapshot:async()=>{if(tracker.failed())throw Error('درخواست شبکه هنگام اسکرول ناموفق بود؛ کامل بودن فهرست تأیید نشد.');const html=await page.content(),url=page.url();return rescueRenderedProducts(html,url,parseProductsFromHtml(html,url,selectors)).products},
+  snapshot:async()=>{if(tracker.failed())throw Error('درخواست شبکه هنگام اسکرول ناموفق بود؛ کامل بودن فهرست تأیید نشد.');const html=await page.content(),url=page.url();return productParser?parseProductDocument(html,url,selectors,productParser):rescueRenderedProducts(html,url,parseProductsFromHtml(html,url,selectors)).products},
   observe:benchmark?(products,added)=>{if(added)benchmark.batches.push({page:benchmark.batches.length+1,url:page.url(),products:products.length,newProducts:added,status:'verified'})}:undefined,
   key:p=>p.sourceKey||p.url||p.sku||p.title,
   step:async()=>{const result=await page.evaluate((selector:string)=>{
@@ -968,12 +981,18 @@ async function collectRenderedScroll(page:any,selectors:Selectors,stopped?:()=>P
  },benchmark?{maxBatches:3,timeoutMs:30000,quietMs:4000,maxRounds:60}:{})}finally{tracker.close()}
 }
 
-async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>): Promise<Product[]> {
+export async function parseProductDocument(html:string,base:string,selectors:Selectors,parser:ProductParser):Promise<Product[]>{
+ const embedded=(mode:'next_data'|'script_json')=>{const out:Product[]=[];for(const value of embeddedProductData(html,mode))walkObjects(value,base,out);return out;};
+ const cards=()=>{let active=selectors;if(listSelectorsStatus(selectors)!=='custom'){const found=discoverListSelectorsFromHtml(html,base);if(found.selectors.container)active={...selectors,...found.selectors};}return parseProductsFromHtml(html,base,active);};
+ return dedupe(await parseDownloadedProducts(parser,{lxml:cards,selectolax:cards,jsonld:()=>jsonLdProducts(html,base),next_data:()=>embedded('next_data'),script_json:()=>[...jsonLdProducts(html,base),...embedded('script_json'),...scriptJsonProducts(html,base)],metadata:()=>metadataProduct(html,base),heuristic:()=>heuristicProducts(html,base)}));
+}
+async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>,reader?:(html:string,url:string)=>Promise<Product[]>): Promise<Product[]> {
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
     const {html,finalUrl,httpStatus}=await renderPythonPlaywright(url,executablePath,stopped);
     dumpRenderedHtml(html,finalUrl,'playwright');
     lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl,httpStatus});
+    if(reader)return reader(html,finalUrl);
     const rescued=rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
     lastBrowserLayer=rescued.layer;
     console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
@@ -1007,6 +1026,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     const finalUrl = page.url();
     const html = await page.content();
     dumpRenderedHtml(html, page.url(), 'puppeteer');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
+    if(reader)return reader(html,finalUrl);
     const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] puppeteer extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
@@ -1015,7 +1035,7 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
 }
 async function scrapeListWithPlaywright(url: string, selectors: Selectors, stopped?:()=>Promise<boolean>): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright', stopped); }
 async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer'); }
-async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors): Promise<Product[]> {
+async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors,reader?:(html:string,url:string)=>Promise<Product[]>): Promise<Product[]> {
   const { PlaywrightCrawler } = await import('crawlee');
   // The crawl covers exactly one page, so the products ride home in a closure
   // variable — the old per-run Dataset left a scraper4-<timestamp> storage
@@ -1032,6 +1052,7 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();
     dumpRenderedHtml(html, page.url(), 'crawlee');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:0});
+    if(reader){found=await reader(html,page.url());return;}
     const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
     lastBrowserLayer = rescued.layer;
     console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
@@ -2273,7 +2294,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
     progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll',undefined,page);
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll',undefined,page,selectedProductParser(profile));
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).
@@ -2293,7 +2314,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
-      { count: products.length, usedEngine, ...(result.browserDiagnostics?{browser:result.browserDiagnostics}:{}), ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+      { count: products.length, usedEngine, ...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}), ...(result.browserDiagnostics?{browser:result.browserDiagnostics}:{}), ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors, ...((error as any)?.browserDiagnostics?{browser:(error as any).browserDiagnostics}:{}), ...((error as any)?.scrollRequests?{scrollRequests:(error as any).scrollRequests}:{}) });
   }

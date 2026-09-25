@@ -1,3 +1,4 @@
+import {selectedProductParser} from './product-parser.js';
 import { reuseSourceList, sourceDetailFailed, mergeListOnly } from './source-list-ledger.js';
 import { createAiStageRunner } from './job-ai-stage.js';
 import { applyStoredResultSettings, claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
@@ -116,11 +117,11 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       checkpoint.listSelectorsFilled=true;
     }
     append(job,`صفحه ${checkpoint.page}: ${checkpoint.url}`);
-    let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll');
+    let page=await scrapeListPage(checkpoint.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll',selectedProductParser(profile));
     // 1.129.0 — persist engine-discovered selectors once: later pages of
     // this run (and every later run) then extract with the selector engine
     // instead of re-discovering.
-    if(page.discoveredSelectors&&!checkpoint.engineSelectorsSaved){
+    if(!selectedProductParser(profile)&&page.discoveredSelectors&&!checkpoint.engineSelectorsSaved){
       const entries=Object.entries(page.discoveredSelectors).filter(([,value])=>String(value||'').trim());
       if(entries.length){
         checkpoint.engineSelectorsSaved=true;
@@ -129,7 +130,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
         append(job,`سلکتورهای فهرست به‌صورت خودکار پیدا و ذخیره شد (${entries.map(([key])=>key).join('، ')}؛ روش: ${page.discoveryMethod==='structural'?'تحلیل ساختاری صفحه':page.discoveryMethod==='mixed'?'ترکیبی':'الگوهای آماده'})؛ استخراج با آن‌ها ادامه می‌یابد.`);
       }
     }
-    if(page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
+    if(!selectedProductParser(profile)&&page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
       profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;
       await saveProfile({...profile,updatedAt:new Date().toISOString()});
       append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
@@ -142,17 +143,17 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     // failing the run, rediscover the selectors exactly like the "auto suggest"
     // button and retry this page once. onlyMissing=false because selectors that
     // exist but no longer match are precisely the failure being recovered from.
-    if(!page.products.length&&!checkpoint.listRescued){
+    if(!selectedProductParser(profile)&&!page.products.length&&!checkpoint.listRescued){
       checkpoint.listRescued=true;
       append(job,'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…','warning');
       const filled=await applySelectorSuggestions(profile,page.url,'list',job,false);
       if(filled){
-        const retry=await scrapeListPage(page.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll');
+        const retry=await scrapeListPage(page.url,profile.selectors,profile.pagination==='next_selector'?profile.paginationValue:'',Boolean(profile.networkIndirect),profile.extractionEngine,profile.extractionEngineMaster,true,true,profile.pagination==='scroll',selectedProductParser(profile));
         if(retry.products.length){append(job,`پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);page=retry}
         else append(job,'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.','warning');
       }
     }
-    checkpoint.autoSelectorsAllowed=!!(page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine));
+    checkpoint.autoSelectorsAllowed=!!(!selectedProductParser(profile)&&page.usedEngine&&page.products.length&&!isManualListEngine(page.usedEngine));
     if(checkpoint.autoSelectorsAllowed&&!checkpoint.listSelectorsFilled){await applySelectorSuggestions(profile,page.url,'list',job,true);checkpoint.listSelectorsFilled=true}
     checkpoint.url=page.url;checkpoint.nextUrl=page.nextUrl;checkpoint.index=0;
     checkpoint.rawPricing=true;

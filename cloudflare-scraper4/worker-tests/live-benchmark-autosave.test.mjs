@@ -6,14 +6,14 @@ import {parseHTML} from 'linkedom';
 const read=f=>readFile(new URL('../'+f,import.meta.url),'utf8');
 async function compile(source,names,io={}){const js=(await transform(source.replace(/^import .*;\s*$/gm,'').replace(/\bexport /g,''),{loader:'ts'})).code;return new Function(...Object.keys(io),js+';return {'+names.join(',')+'};')(...Object.values(io))}
 const tick=()=>new Promise(r=>setImmediate(r));
-for(const runtime of ['render','worker'])test(runtime+': three-page benchmark emits real progress before the first page completes',async()=>{
+for(const runtime of ['render','worker'])for(const enabled of [false,true])test(runtime+' parser='+enabled+': three-page benchmark emits real progress before the first page completes',async()=>{
  const src=await read(runtime+'-src/'+(runtime==='render'?'server.ts':'app.ts')),a=src.indexOf('async function benchmarkProfileEngines('),b=src.indexOf('\napp.post(',a);
  let release,calls=0;const events=[],saved=[];
- const scrape=async()=>{const n=++calls;if(n===1)await new Promise(r=>release=r);return{products:[{sourceKey:'a'+n},{sourceKey:'b'+n}]}};
- const io={...await compile(await read('worker-src/benchmark-pagination.ts'),['benchmarkPagination']),BENCHMARK_ENGINES:['cheerio','missing'],MIN_BENCHMARK_PRODUCTS:2,BROWSER_ENGINES:new Set(['missing']),WORKER_UNAVAILABLE_ENGINES:new Set(['missing']),browserEngineAvailable:()=>false,benchmarkProbeUrl:p=>p.url,pageUrl:(p,n)=>p.url+'?page='+n,safeText:async()=>({text:'fixture',url:'https://shop.test'}),sourceText:async()=>({text:'fixture',url:'https://shop.test'}),scrapeListWithMeta:scrape,scrapeListPage:scrape,diagnoseBenchmarkEngine:async()=>({hint:'fixture'}),saveBenchmarkProfile:async(...args)=>{saved.push(args);return true},message:e=>e.message};
+ const scrape=async(...args)=>{if(enabled)assert.equal(args.at(-1),'jsonld');const n=++calls;if(n===1)await new Promise(r=>release=r);return{products:[{sourceKey:'a'+n},{sourceKey:'b'+n}]}};
+ const io={...await compile(await read('worker-src/product-parser.ts'),['selectedProductParser']),...await compile(await read('worker-src/benchmark-pagination.ts'),['benchmarkPagination']),BENCHMARK_ENGINES:['cheerio','missing'],MIN_BENCHMARK_PRODUCTS:2,BROWSER_ENGINES:new Set(['missing']),WORKER_UNAVAILABLE_ENGINES:new Set(['missing']),browserEngineAvailable:()=>false,benchmarkProbeUrl:p=>p.url,pageUrl:(p,n)=>p.url+'?page='+n,safeText:async()=>({text:'fixture',url:'https://shop.test'}),sourceText:async()=>({text:'fixture',url:'https://shop.test'}),scrapeListWithMeta:scrape,scrapeListPage:scrape,diagnoseBenchmarkEngine:async()=>({hint:'fixture'}),saveBenchmarkProfile:async(...args)=>{saved.push(args);return true},message:e=>e.message};
  const {benchmarkProfileEngines}=await compile(src.slice(a,b),['benchmarkProfileEngines'],io);
- const pending=benchmarkProfileEngines({id:'p',url:'https://shop.test',selectors:{},pagination:'query_page'},e=>events.push(e));await tick();assert.equal(calls,1);assert.ok(events.some(e=>e.page===1&&e.status==='running'));assert.equal(saved.length,0);
- release();const result=await pending;assert.equal(calls,3);assert.equal(result.fastest.products,6);assert.ok(events.some(e=>e.page===3&&e.pagesScanned===3));assert.ok(events.some(e=>e.name==='missing'&&e.status==='skipped'));assert.equal(saved.length,1);
+ const pending=benchmarkProfileEngines({id:'p',url:'https://shop.test',selectors:{},pagination:'query_page',productParserEnabled:enabled,productParser:'jsonld'},e=>events.push(e));await tick();assert.equal(calls,1);assert.ok(events.some(e=>e.page===1&&e.status==='running'));assert.equal(saved.length,0);
+ release();const result=await pending;assert.equal(calls,3);assert.equal(result.fastest.products,6);assert.ok(events.some(e=>e.page===3&&e.pagesScanned===3));assert.ok(events.some(e=>e.name==='missing'&&e.status==='skipped'));assert.equal(saved.length,enabled?0:1);if(enabled){assert.equal(result.profileUpdated,false);assert.equal(result.productParser,'jsonld');}
 });
 test('benchmark merge preserves a new price, explicitly changed engine and selector edits',async()=>{
  const {mergeBenchmarkProfile}=await compile(await read('worker-src/benchmark-profile.ts'),['mergeBenchmarkProfile']);
@@ -21,9 +21,9 @@ test('benchmark merge preserves a new price, explicitly changed engine and selec
  const merged=mergeBenchmarkProfile(current,original,result,{title:'probe',image:'probe'});assert.equal(merged.priceValue,20);assert.equal(merged.extractionEngine,'jsonld');assert.equal(merged.selectors.title,'user');assert.equal(merged.selectors.image,'probe');
 });
 async function autosaveHarness(api){
- const {window}=parseHTML('<html><body><span id="autoSaveState"></span><input id="profileId" value="a"><input id="priceValue" type="number" value="10"><input id="name" value="A"><input id="homeProfile" value="a"><input id="homeProfileName" value="Home A"><input id="homeUrl" value="https://a.test"><input id="filter" value=""></body></html>');
+ const {window}=parseHTML('<html><body><span id="autoSaveState"></span><input id="profileId" value="a"><input id="priceValue" type="number" value="10"><input id="name" value="A"><input id="homeProfile" value="a"><input id="homeProfileName" value="Home A"><input id="homeUrl" value="https://a.test"><input id="filter" value=""><input id="productParserEnabled" type="checkbox"><input id="productParser" value="jsonld"><input id="homeProductParserEnabled" type="checkbox"><input id="homeProductParser" value="next_data"></body></html>');
  const $=id=>window.document.getElementById(id),state={connected:true,profiles:[{id:'a',name:'A',url:'https://a.test',priceValue:0},{id:'b',name:'B',url:'https://b.test',priceValue:0}],settings:{},connections:{}},applied=[];
- const io={document:window.document,window,state,$,profileBody:()=>({id:$('profileId').value,name:$('name').value,url:'https://'+$('profileId').value+'.test',priceValue:Number($('priceValue').value)}),homeProfileBody:()=>({id:$('homeProfile').value,name:$('homeProfileName').value,url:$('homeUrl').value}),api,applySavedResults:async id=>applied.push(id),watchJob:()=>{},loadJobs:async()=>{},nestedSet:(obj,key,value)=>obj[key]=value};
+ const io={document:window.document,window,state,$,profileBody:()=>({id:$('profileId').value,name:$('name').value,url:'https://'+$('profileId').value+'.test',priceValue:Number($('priceValue').value),productParserEnabled:$('productParserEnabled').checked,productParser:$('productParser').value}),homeProfileBody:()=>({id:$('homeProfile').value,name:$('homeProfileName').value,url:$('homeUrl').value,productParserEnabled:$('homeProductParserEnabled').checked,productParser:$('homeProductParser').value}),api,applySavedResults:async id=>applied.push(id),watchJob:()=>{},loadJobs:async()=>{},nestedSet:(obj,key,value)=>obj[key]=value};
  const src=await read('worker-src/dashboard.ts'),a=src.indexOf('let autoSaveTimer='),b=src.indexOf('async function saveConnections(',a);
  const mod=await compile(src.slice(a,b),['initAutoSave','scheduleAutoSave','flushAutoSave','autoSaveDrafts'],io);mod.initAutoSave();return{...mod,$,state,applied,window};
 }
@@ -47,4 +47,12 @@ test('home fields save the home form, and filters do not become profile updates'
 });
 test('equivalent PostgreSQL jsonb objects do not become false Results conflicts',async()=>{
  const {sameResultData}=await compile(await read('worker-src/result-adjustments.ts'),['sameResultData']);assert.ok(sameResultData({title:'x',resultBase:{title:'x',price:10}},{resultBase:{price:10,title:'x'},title:'x'}));assert.equal(sameResultData({price:10},{price:20}),false);
+});
+
+for(const prefix of ['','home'])test(prefix+' parser fields autosave independently and preserve the disabled selection',async()=>{
+ const sent=[],h=await autosaveHarness(async(_p,o)=>{const body=JSON.parse(o.body);sent.push(body);return{profile:body}});
+ const enabled=prefix?'homeProductParserEnabled':'productParserEnabled',parser=prefix?'homeProductParser':'productParser';
+ h.$(enabled).checked=true;h.$(enabled).dispatchEvent(new h.window.Event('change',{bubbles:true}));await tick();await h.flushAutoSave();assert.equal(sent.at(-1)._autosavePatch.productParserEnabled,true);
+ h.$(parser).value='metadata';h.$(parser).dispatchEvent(new h.window.Event('change',{bubbles:true}));await tick();await h.flushAutoSave();assert.equal(sent.at(-1)._autosavePatch.productParser,'metadata');
+ h.$(enabled).checked=false;h.$(enabled).dispatchEvent(new h.window.Event('change',{bubbles:true}));await tick();await h.flushAutoSave();assert.equal(sent.at(-1)._autosavePatch.productParserEnabled,false);assert.equal(sent.at(-1).productParser,'metadata');
 });

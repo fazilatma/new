@@ -131,9 +131,9 @@ async function pipeline(runtime,options={}){
   const profile={...structuredClone(profileBase),...options.profile};
   const job={id:'j',profileId:'p',workflow:options.workflow,kind:options.syncOnly?'sync':'scrape',target:options.target||'none',status:'running',log:[],total:0,processed:0,added:0,updated:0,failed:0};
   const saved=[],states=new Map(),snapshots=[],syncs=[];
-  const list=async()=>({url:BASE,nextUrl:'',usedEngine:'cheerio',products:structuredClone(options.products||[product()])});
+  const list=async(...args)=>{if(options.expectedParser)assert.equal(args.at(-1),options.expectedParser);return {url:BASE,nextUrl:'',usedEngine:'cheerio',products:structuredClone(options.products||[product()])}};
   const {createAiStageRunner}=await compileFunctions(await read('worker-src/job-ai-stage.ts'),['createAiStageRunner']);
-  const io={...ai,...twins[runtime],...listHelpers,ledgerMissing:async()=>({planned:0,changed:0}),createAiStageRunner,applyStoredResultSettings:async()=>({changed:0,conflicts:0,next:null}),
+  const io={...await compileFunctions(await read('worker-src/product-parser.ts'),['selectedProductParser']),...ai,...twins[runtime],...listHelpers,ledgerMissing:async()=>({planned:0,changed:0}),createAiStageRunner,applyStoredResultSettings:async()=>({changed:0,conflicts:0,next:null}),
     scrapeListPage:list,scrapeListWithMeta:list,
     listSelectorsStatus:()=> 'custom',suggestSelectors:async()=>({selectors:options.rescue?{shortDesc:'.short',price:'.detail-price'}:{}}),
     claimJob:async()=>{job.status='running';return job},getJob:async()=>job,getProfile:async()=>profile,
@@ -247,3 +247,5 @@ for(const runtime of ['worker','render']){
   const p=product();assert.equal((await ai.assignProductBasalamCategory(p,{categories})).ok,true);assert.equal(p.basalamCategoryId,42);assert.ok(ai.events.some(e=>e.type==='category'));
  });
 }
+
+for(const runtime of ['render','worker'])for(const inline of [false,true])test(runtime+': '+(inline?'inline':'queued')+' passes the opted-in parser through the real pipeline',async()=>{await pipeline(runtime,{inline,expectedParser:'jsonld',profile:{productParserEnabled:true,productParser:'jsonld',extractionEngineMaster:'metadata'}});});

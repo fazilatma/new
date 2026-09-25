@@ -56,7 +56,8 @@ test('Puppeteer and Crawlee implementations are untouched by the Playwright adap
  const original=execFileSync('git',['show','b11727f:cloudflare-scraper4/render-src/scraper.ts'],{cwd:root,encoding:'utf8'});
  const pup=s=>s.slice(s.indexOf("  const puppeteer = await import('puppeteer');",s.indexOf('async function scrapeRenderedHtml(')),s.indexOf('async function scrapeListWithPlaywright('));
  const crawlee=s=>s.slice(s.indexOf('async function scrapeListWithCrawleePlaywright('),s.indexOf('function parseProductsFromHtml('));
- assert.equal(pup(current),pup(original));assert.equal(crawlee(current),crawlee(original));
+ const withoutOptionalReader=s=>s.replace(/,reader\?:\(html:string,url:string\)=>Promise<Product\[\]>/g,'').replace(/\n    if\(reader\)return reader\(html,finalUrl\);/g,'').replace(/\n    if\(reader\)\{found=await reader\(html,page.url\(\)\);return;\}/g,'');
+ assert.equal(withoutOptionalReader(pup(current)),pup(original));assert.equal(withoutOptionalReader(crawlee(current)),crawlee(original));
 });
 
 test('uses the current Playwright full Chromium when present, while explicit paths win',async()=>{

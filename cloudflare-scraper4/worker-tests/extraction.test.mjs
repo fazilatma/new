@@ -575,9 +575,9 @@ test('node: applySelectorSuggestions reports how many selectors it filled', () =
 
 test('worker: zero extracted products triggers the auto-suggest fallback', () => {
   const source = stripComments(workerProcessor);
-  assert.match(source, /if\(!page\.products\.length&&!checkpoint\.listRescued\)/,
+  assert.match(source, /if\(!selectedProductParser\(profile\)&&!page\.products\.length&&!checkpoint\.listRescued\)/,
     'the worker must rescue an empty page before throwing');
-  const branch = source.slice(source.indexOf('if(!page.products.length&&!checkpoint.listRescued)'));
+  const branch = source.slice(source.indexOf('if(!selectedProductParser(profile)&&!page.products.length&&!checkpoint.listRescued)'));
   assert.match(branch.slice(0, 900), /applySelectorSuggestions\(profile,page\.url,'list',job,false\)/);
   assert.match(branch.slice(0, 900), /scrapeListPage\(/, 'the worker must retry the page after repairing selectors');
 });

@@ -38,6 +38,8 @@ export type Profile = {
   enabled: boolean;
   pages: number;
   pagination: 'query_page' | 'query_custom' | 'path_page' | 'path_pattern' | 'full_pattern' | 'next_selector' | 'none' | 'scroll';
+  productParserEnabled?: boolean;
+  productParser?: import('../worker-src/product-parser.js').ProductParser;
   extractionEngine: ExtractionEngine;
   extractionEngineMaster?: ExtractionEngine;
   extractionEngineHost?: string;
