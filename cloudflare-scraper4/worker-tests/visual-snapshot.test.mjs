@@ -46,3 +46,7 @@ test('parent/child isolation and profile engine are wired on both runtimes',asyn
   const app=await readFile(join(root,'worker-src/app.ts'),'utf8');assert.match(app,/نمایش DOM با موتور مرورگری به نسخهٔ VPS\/Node نیاز دارد/);
 });
 test.after(async()=>{delete globalThis.__visualText;delete globalThis.__visualBrowser;await rm(temp,{recursive:true,force:true})});
+test('recovered visual snapshot reports reduced resource loading and escapes URL warnings',()=>{
+ const html=visual.sanitizeVisualSnapshot({text:fixture,url:'https://shop.test/list',browserDiagnostics:{crashRecovered:true,urlWarning:'Check is_available <script>alert(1)</script>'}},'playwright');
+ const $=load(html);assert.match($('#__s4bar').text(),/بازیابی پس از crash/);assert.match($('#__s4bar').text(),/Check is_available <script>/);assert.equal($('#__s4bar script').length,0);
+});

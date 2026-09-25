@@ -10,7 +10,34 @@ export function visualDriver(engine:string): 'playwright'|'puppeteer' {
  * Native browser networking is sent to a closed proxy so WebSockets/extra workers cannot
  * bypass URL guards. This is a public-page snapshot, not an authenticated browser session.
  */
-export async function renderBrowserSnapshot(url:string,engine:string,indirect=false,session?:{initial?:{text:string;url:string};prepare(page:any):void;collect(page:any):Promise<any>}) {
+type VisualSession={initial?:{text:string;url:string};prepare(page:any):void;collect(page:any):Promise<any>};
+function visualUrlWarning(raw:string){
+ try{const value=new URL(raw).searchParams.get('is_available')||'';if(/(?:sort|page)=/.test(value))return 'پارامترهای URL را بررسی کنید: sort یا page داخل مقدار is_available قرار گرفته است؛ جداکنندهٔ & احتمالاً حذف شده است. آدرس خودکار تغییر نکرد.'}catch{}
+ return '';
+}
+function visualPageCrashed(error:any){return !!error?.browserDiagnostics?.pageCrashed||/\b(?:page|tab|target)\s+(?:has\s+)?crashed\b/i.test(String(error?.message||error))}
+/** Only visual snapshots may retry a crashed tab. Never restart a scroll session,
+ * switch engines, bypass the guarded transport, or substitute static HTML. */
+export async function renderBrowserSnapshot(url:string,engine:string,indirect=false,session?:VisualSession){
+ if(session)return renderBrowserSnapshotAttempt(url,engine,indirect,session);
+ const urlWarning=visualUrlWarning(url);let previousDiagnostics:any;
+ for(let attempt=0;attempt<2;attempt++){
+  try{
+   const result=await renderBrowserSnapshotAttempt(url,engine,indirect,undefined,attempt===1);
+   return {...result,browserDiagnostics:{...result.browserDiagnostics,crashRecovered:attempt===1,crashAttempts:attempt+1,...(urlWarning?{urlWarning}:{}),...(previousDiagnostics?{previousAttempt:previousDiagnostics}:{})}};
+  }catch(error){
+   const failure=error instanceof Error?error:Error(String(error)),crashed=visualPageCrashed(error);
+   const diagnostics={...((error as any)?.browserDiagnostics||{}),pageCrashed:crashed};
+   if(attempt===0&&crashed){previousDiagnostics=diagnostics;continue}
+   if(crashed)failure.message+='\nتب مرورگر crash کرد؛ علت قطعی از این خطا مشخص نیست. RAM و swap و لاگ OOM سیستم را بررسی کنید و اجرای همزمان مرورگرها را کم کنید. یک تلاش با مرورگر تازه و منابع سبک‌تر نیز انجام شد؛ HTML اولیه جایگزین نشده است.';
+   else if(attempt===1)failure.message+='\nتلاش سبک پس از crash مرورگر نیز ناموفق بود؛ مسیر شبکه یا موتور تغییر نکرد.';
+   if(urlWarning)failure.message+='\n'+urlWarning;
+   throw Object.assign(failure,{browserDiagnostics:{...diagnostics,crashRecovered:false,crashAttempts:attempt+1,...(urlWarning?{urlWarning}:{}),...(previousDiagnostics?{previousAttempt:previousDiagnostics}:{})}});
+  }
+ }
+ throw Error('Visual snapshot did not complete');
+}
+async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=false,session?:VisualSession,lowResource=false) {
   const driver=visualDriver(engine);
   await assertPublicUrl(url);
   return withBrowserSlot(async()=>{
@@ -23,20 +50,21 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
         ? await (await import('playwright')).chromium.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000})
         : await (await import('puppeteer')).default.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000});
     }catch{throw Error('مرورگر انتخاب‌شده راه‌اندازی نشد. npm run browsers:install و BROWSER_EXECUTABLE_PATH را بررسی کنید؛ سرویس را با کاربر غیر root اجرا کنید.');}
-    let timeout:ReturnType<typeof setTimeout>|undefined,requests=0,bytes=0,blocked=0,expired=false,documentServed=false,navigationRecovered=false,navigationRetried=false,skipped=0,criticalResourceFailed=false;
+    let timeout:ReturnType<typeof setTimeout>|undefined,requests=0,bytes=0,blocked=0,expired=false,documentServed=false,navigationRecovered=false,navigationRetried=false,skipped=0,criticalResourceFailed=false,pageCrashed=false;
     const controllers=new Set<AbortController>(),failures:any[]=[];
     const canonical=(raw:string)=>{const u=new URL(raw);u.hash='';return u.href.replace(/%[a-f0-9]{2}/gi,x=>x.toUpperCase())};
     const bootstrap=(r:any)=>r.isNavigationRequest()&&r.method()==='GET'&&canonical(r.url())===canonical(initial.url);
     const safePath=(raw:string)=>{try{const u=new URL(raw);return u.origin+u.pathname}catch{return ''}};
     const failed=(r:any,e:any)=>{if(e?.expectedSkip)return;if(['script','document','xhr','fetch'].includes(r.resourceType?.()))criticalResourceFailed=true;if(failures.length<20)failures.push({url:safePath(r.url()),type:r.resourceType?.()||'unknown',reason:String(e?.message||e).replace(/https?:\/\/[^\s]+/g,safePath).slice(0,200)})};
-    const diagnostics=()=>({indirect,transport:'guarded-source',documentServed,navigationRecovered,navigationRetried,requests,skippedResources:skipped,blockedResources:blocked,criticalResourceFailed,failedResources:failures});
+    const diagnostics=()=>({indirect,transport:'guarded-source',lowResource,pageCrashed,documentServed,navigationRecovered,navigationRetried,requests,skippedResources:skipped,blockedResources:blocked,criticalResourceFailed,failedResources:failures});
     try{
       const page=driver==='playwright'?await browser.newPage({locale:'fa-IR',serviceWorkers:'block',acceptDownloads:false}):await browser.newPage();
       page.on('popup',(popup:any)=>{void popup.close()});
+      page.on(driver==='playwright'?'crash':'error',()=>{pageCrashed=true});
       session?.prepare(page);
       const resource=async(request:any)=>{
         if(expired||++requests>(session?2000:200))throw Error('Visual resource budget exceeded');
-        if(session&&['image','media','font'].includes(request.resourceType())){skipped++;throw Object.assign(Error('Unneeded scroll resource'),{expectedSkip:true})}
+        if((session||lowResource)&&['image','media','font'].includes(request.resourceType?.())){skipped++;throw Object.assign(Error('Unneeded visual/scroll resource'),{expectedSkip:true})}
         const target=request.url(),method=request.method();
         if(!['GET','HEAD','POST'].includes(method))throw Error('Read-only visual snapshot');
         await assertPublicUrl(target);
@@ -49,7 +77,7 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
         const response=await safeFetch(target,{method,headers,body:method==='POST'?request.postData():undefined,indirect,signal:controller.signal},6_000_000);
         if(!response.ok)failed(request,Error('HTTP '+response.status));
         const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
-        if(reader){let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>undefined)},10_000);try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;bytes+=chunk.value.length;if(size>6_000_000||bytes>(session?128_000_000:40_000_000)||expired)throw Error('Visual resource budget exceeded');chunks.push(chunk.value)}if(timedOut)throw Error('Visual resource timed out')}finally{clearTimeout(timer);void reader.cancel().catch(()=>undefined)}}
+        if(reader){let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>undefined)},10_000);try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;bytes+=chunk.value.length;if(size>6_000_000||bytes>(session?128_000_000:lowResource?20_000_000:40_000_000)||expired)throw Error('Visual resource budget exceeded');chunks.push(chunk.value)}if(timedOut)throw Error('Visual resource timed out')}finally{clearTimeout(timer);void reader.cancel().catch(()=>undefined)}}
         const out:Record<string,string>={};response.headers.forEach((value,name)=>{if(!['content-encoding','content-length','transfer-encoding','set-cookie'].includes(name))out[name]=value});
         return {status:response.status,headers:out,body:Buffer.concat(chunks)};
         }finally{clearTimeout(resourceTimer);controllers.delete(controller)}

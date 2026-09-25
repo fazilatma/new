@@ -86,3 +86,30 @@ test('legacy resilience: an aborted first navigation with no intercepted request
   assert.equal(e.browserDiagnostics.requests,0);assert.equal(e.browserDiagnostics.documentServed,false);assert.equal(e.browserDiagnostics.navigationRetried,true);return /ERR_ABORTED/.test(e.message);
  });assert.equal(attempts,2);assert.equal(collected,1);assert.equal(closed,2);
 });
+
+for(const engine of ['playwright','puppeteer'])test(engine+': crashed visual tab retries once in a fresh browser with guarded lightweight resources',async()=>{
+ let launches=0,closed=0,skipped=0;const urls=[],fetches=[];
+ globalThis.__visualFetch=async(url,init)=>{fetches.push(url);assert.equal(init.indirect,true);return new Response('resource')};
+ globalThis.__visualLaunch=async()=>{const attempt=++launches;assert.equal(closed,attempt-1,'close crashed browser before relaunch');let route,requestHandler;const page={on:(name,fn)=>{if(name==='request')requestHandler=fn},context:()=>({route:async(_,fn)=>route=fn}),setBypassServiceWorker:async()=>{},setRequestInterception:async()=>{},routeWebSocket:async()=>{},waitForLoadState:async()=>{},waitForNetworkIdle:async()=>{},url:()=> 'https://shop.test/list',content:async()=>fixture,goto:async url=>{
+  urls.push(url);if(attempt===1)throw Error('page.goto: Page crashed');
+  for(const [url,type] of [['https://shop.test/list','document'],['https://shop.test/app.js','script'],['https://shop.test/image.jpg','image'],['https://shop.test/movie.mp4','media'],['https://shop.test/font.woff','font']]){
+   const req={url:()=>url,method:()=> 'GET',isNavigationRequest:()=>type==='document',resourceType:()=>type,headers:()=>({}),respond:async()=>{},abort:async()=>{skipped++}};
+   if(route)await route({request:()=>req,fulfill:async()=>{},abort:async()=>{skipped++}});else await requestHandler(req);
+  }
+ }};return {newPage:async()=>page,close:async()=>{closed++}}};
+ try{const result=await driver.renderBrowserSnapshot('https://shop.test/list',engine,true);assert.equal(launches,2);assert.equal(closed,2);assert.equal(skipped,3);assert.deepEqual(urls,['https://shop.test/list','https://shop.test/list']);assert.deepEqual(fetches,['https://shop.test/app.js']);assert.equal(result.browserDiagnostics.crashRecovered,true);assert.equal(result.browserDiagnostics.lowResource,true);assert.equal(result.text,fixture)}finally{delete globalThis.__visualFetch}
+});
+test('repeated visual crash is bounded, actionable, preserves malformed URL and never returns initial HTML',async()=>{
+ let launches=0,closed=0;const url='https://snappshop.ir/category/kitchen-appliances?is_available=truesort=50aLgWpage=336';
+ globalThis.__visualLaunch=async()=>{launches++;return {newPage:async()=>({on:()=>{},context:()=>({route:async()=>{}}),goto:async target=>{assert.equal(target,url);throw Error('page.goto: Page crashed')}}),close:async()=>{closed++}}};
+ await assert.rejects(driver.renderBrowserSnapshot(url,'playwright'),e=>{assert.equal(e.browserDiagnostics.crashAttempts,2);assert.equal(e.browserDiagnostics.crashRecovered,false);assert.match(e.message,/RAM/);assert.match(e.message,/is_available/);return /Page crashed/.test(e.message)});assert.equal(launches,2);assert.equal(closed,2);
+});
+test('scroll crashes do not restart an extraction session',async()=>{
+ let launches=0,closed=0;globalThis.__visualLaunch=async()=>{launches++;return {newPage:async()=>({on:()=>{},context:()=>({route:async()=>{}}),goto:async()=>{throw Error('page.goto: Page crashed')}}),close:async()=>{closed++}}};
+ await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',false,{prepare:()=>{},collect:async()=>assert.fail('crashed page cannot collect')}),/Page crashed/);assert.equal(launches,1);assert.equal(closed,1);
+});
+test('retry launch failure retains original crash evidence without a third attempt',async()=>{
+ let launches=0,closed=0;
+ globalThis.__visualLaunch=async()=>{if(++launches===2)throw Error('launch failure');return {newPage:async()=>({on:()=>{},context:()=>({route:async()=>{}}),goto:async()=>{throw Error('Page crashed')}}),close:async()=>closed++}};
+ await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright'),e=>{assert.equal(e.browserDiagnostics.crashAttempts,2);assert.equal(e.browserDiagnostics.previousAttempt.pageCrashed,true);return /crash/.test(e.message)});assert.equal(launches,2);assert.equal(closed,1);
+});
