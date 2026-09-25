@@ -49,7 +49,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.214.0+'; } catch { return process.env.npm_package_version || '1.214.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.214.1+'; } catch { return process.env.npm_package_version || '1.214.1+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -296,6 +296,7 @@ app.get('/visual', async c => {
 app.use('/api/*', async (c, next) => {
   if (!databaseReady) return c.json({ ok: false, error: 'Database is not configured', detail: databaseError, setup: runtimeEnvironment.dbHint, environment: runtimeEnvironment.label }, 503);
   if (!config.adminToken) return next();
+  if (config.adminAuthDisabled) return next();
   const auth = c.req.header('authorization') || '';
   if (!safeEqual(auth.replace(/^Bearer\s+/i, ''), config.adminToken)) return c.json({ ok: false, error: 'Unauthorized' }, 401);
   await next();
@@ -304,8 +305,7 @@ app.use('/api/*', async (c, next) => {
 app.use('/api/*',activityMiddleware({setState,deleteState}));
 const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExecutable(driver)});
 app.on(['GET','POST'],'/api/runtime/browser-repair',async c=>{
-  // Installation is privileged relative to normal scraping: never permit anonymous use.
-  if(!config.adminToken)return c.json({ok:false,error:'Browser repair requires ADMIN_TOKEN authentication. Configure it for this runtime first.'},403);
+  // Follow the owner's optional global API-auth policy; no separate token prerequisite.
   if(c.req.method==='GET')return c.json({ok:true,...browserRepair.status()});
   if(c.req.header('x-browser-repair')!=='1')return c.json({ok:false,error:'Explicit browser repair request required'},403);
   try{

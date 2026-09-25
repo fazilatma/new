@@ -35,6 +35,8 @@ export const config = {
   host: process.env.SCRAPER_BIND_HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || '',
   adminToken: process.env.ADMIN_TOKEN || '',
+  // Explicit owner opt-out; keep adminToken intact because the vault uses it.
+  adminAuthDisabled: process.env.ADMIN_AUTH_DISABLED === 'true',
   runWorkerInWeb: process.env.RUN_WORKER_IN_WEB !== 'false',
   workerPollMs: Math.max(500, Number(process.env.WORKER_POLL_MS || 2000)),
   requestTimeoutMs: Math.max(5_000, Number(process.env.REQUEST_TIMEOUT_MS || 30_000)),
@@ -54,5 +56,5 @@ export const config = {
 export function assertConfig(): void {
   // v1.55+ parity with scraper4.php v10.170: local/Termux can run without PostgreSQL.
   // When DATABASE_URL is empty, render-src/db.ts opens a local SQLite database automatically.
-  if (!config.adminToken) console.warn('WARNING: ADMIN_TOKEN is empty; the dashboard and API are public.');
+  if (!config.adminToken || config.adminAuthDisabled) console.warn('WARNING: Admin authentication is disabled; the dashboard, API and browser installation controls are public.');
 }

@@ -26,20 +26,21 @@ test('dashboard reports authentication/network failure without false success',as
  await action(false);assert.match(el.textContent,/Unauthorized/);assert.equal(polls,0);
 });
 const sqlite=await import('node:sqlite').then(()=>true,()=>false);
-test('real Node HTTP repair route rejects unauthenticated installation and arbitrary commands',{skip:!sqlite,timeout:60000},async()=>{
- for(const token of ['browser-repair-fixture-secret','']){
+test('real Node HTTP repair route honors optional auth and rejects arbitrary commands',{skip:!sqlite,timeout:60000},async()=>{
+ for(const [token,disabled] of [['browser-repair-fixture-secret',false],['',false],['browser-repair-fixture-secret',true]]){
+  const protectedApi=Boolean(token)&&!disabled;
   const dir=mkdtempSync(join(tmpdir(),'browser-repair-http-'));
   const reservation=createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const port=reservation.address().port;await new Promise(r=>reservation.close(r));
-  const child=spawn(process.execPath,[fileURLToPath(new URL('../render-dist/server.js',import.meta.url))],{cwd:dir,env:{...process.env,ADMIN_TOKEN:token,PORT:String(port),SCRAPER_BIND_HOST:'127.0.0.1',DATABASE_URL:'sqlite:'+join(dir,'test.sqlite'),SCRAPER4_SQLITE_PATH:join(dir,'test.sqlite'),RUN_WORKER_IN_WEB:'false',LOCAL_SCRAPER_AUTO_UPDATE:'false'},stdio:['ignore','pipe','pipe']});
+  const child=spawn(process.execPath,[fileURLToPath(new URL('../render-dist/server.js',import.meta.url))],{cwd:dir,env:{...process.env,ADMIN_TOKEN:token,ADMIN_AUTH_DISABLED:String(disabled),PORT:String(port),SCRAPER_BIND_HOST:'127.0.0.1',DATABASE_URL:'sqlite:'+join(dir,'test.sqlite'),SCRAPER4_SQLITE_PATH:join(dir,'test.sqlite'),RUN_WORKER_IN_WEB:'false',LOCAL_SCRAPER_AUTO_UPDATE:'false'},stdio:['ignore','pipe','pipe']});
   let logs='';for(const stream of [child.stdout,child.stderr])stream.on('data',d=>logs=(logs+String(d)).slice(-4000));const ended=once(child,'exit');
   const base='http://127.0.0.1:'+port;
   try{
    let ready=false;for(let i=0;i<200;i++){if(child.exitCode!==null)throw Error(logs);try{const h=await fetch(base+'/health',{signal:AbortSignal.timeout(1000)});if((await h.json()).databaseReady){ready=true;break;}}catch{}await delay(100);}assert.equal(ready,true,logs);
    const path=base+'/api/runtime/browser-repair';
-   assert.equal((await fetch(path)).status,token?401:403);
+   assert.equal((await fetch(path)).status,protectedApi?401:200);
    const headers={authorization:'Bearer '+token,'content-type':'application/json'};
-   const status=await fetch(path,{headers});assert.equal(status.status,token?200:403);
-   if(token){assert.equal((await status.json()).running,false);assert.equal((await fetch(path,{method:'POST',headers,body:'{}'})).status,403);assert.equal((await fetch(path,{method:'POST',headers:{...headers,'x-browser-repair':'1'},body:JSON.stringify({command:'touch /tmp/never-execute'})})).status,400);assert.equal((await (await fetch(path,{headers})).json()).running,false);}
+   const status=await fetch(path,{headers});assert.equal(status.status,200);
+   {assert.equal((await status.json()).running,false);assert.equal((await fetch(path,{method:'POST',headers,body:'{}'})).status,403);assert.equal((await fetch(path,{method:'POST',headers:{...headers,'x-browser-repair':'1'},body:JSON.stringify({command:'touch /tmp/never-execute'})})).status,400);assert.equal((await (await fetch(path,{headers})).json()).running,false);}
   }finally{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');const kill=setTimeout(()=>child.kill('SIGKILL'),3000);await ended;clearTimeout(kill);}rmSync(dir,{recursive:true,force:true});}
  }
 });

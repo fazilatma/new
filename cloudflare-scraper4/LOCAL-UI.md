@@ -659,9 +659,9 @@ browser tab does not need to stay open, but the deployer must remain running.
 ## In-scraper browser repair (1.213.0+)
 
 In the scraper hamburger menu, open **Code version → Browser installation and repair**.
-The Node runtime endpoint requires the configured `ADMIN_TOKEN` and the dashboard's
-normal bearer authentication, even on installations where other APIs allow anonymous
-local use. Configure this in your deployment environment and sign in before repair.
+As of 1.214.1+, browser installation follows the same optional authentication policy
+as the other Node APIs. It no longer requires ADMIN_TOKEN to be configured. If a token
+is configured and authentication remains enabled, existing bearer checks still apply.
 The Cloudflare Worker cannot install local browser binaries.
 
 The button covers Playwright, Puppeteer and Crawlee. Missing libraries are restored
@@ -701,3 +701,25 @@ have a three-minute limit per browser source, package installation five minutes 
 registry, and launch tests a 45-second limit. Only a
 successful browser launch/page test reports success. After success rerun extraction
 diagnostics to investigate site access or selector problems separately.
+
+
+## Owner-controlled token-free Node access (1.214.1+)
+
+To disable authentication explicitly, set `ADMIN_AUTH_DISABLED=true` in the WebConsole
+project environment, save it, then restart the project. Leave the existing `ADMIN_TOKEN`
+value unchanged: it also encrypts the saved credential vault. The new switch disables
+API token checks without rotating or deleting that encryption key. No vault code,
+files, credentials or saved connections are migrated or modified by this change.
+
+If ADMIN_TOKEN was never set, no switch is necessary: APIs and browser installation
+already work without a token. Removing a previously used ADMIN_TOKEN is different:
+it changes the vault password selection and may prevent decryption. Preserve
+`data/vault.key` as well as your existing secret configuration.
+
+This is an explicit loss of authentication for **all Node scraper APIs**, not just
+installation. Anyone able to reach the scraper can use its controls, including
+package installation with the runtime account's privileges. The root and mirror
+acknowledgements are confirmations, not access controls. No firewall or proxy rules
+are changed. Deployer/WebConsole authentication is separate and remains unchanged.
+Unset ADMIN_AUTH_DISABLED (or set it to false) to restore existing token checks.
+Cloudflare Worker authentication is not changed by this Node-specific setting.
