@@ -6,9 +6,11 @@
  * Features:
  *  1. Universal Forward Proxy (?url=https://...) supporting all HTTP methods,
  *     CORS, Byte-Range streaming (Audio/Video), headers, and chunked transfer.
- *  2. Remote Linux Server Terminal Bridge (VPS / Codespaces / Termux) with
+ *  2. GitHub Edge Integration & Sync Suite (Connect to GitHub repositories,
+ *     inspect branches, commits, files, and auto-sync code to KV/D1).
+ *  3. Remote Linux Server Terminal Bridge (VPS / Codespaces / Termux) with
  *     full native support for SSH, SCP, SFTP, FTP, rsync, git, and systemctl.
- *  3. In-Browser Virtual POSIX & Network Shell with:
+ *  4. In-Browser Virtual POSIX & Network Shell with:
  *     - ssh: Remote SSH connectivity, banner inspection & command dispatcher
  *     - ftp & sftp: FTP server connection, banner probe & file transfers
  *     - ping / tcping: Real latency probe from Cloudflare global edge
@@ -17,14 +19,14 @@
  *     - git clone: GitHub repository cloner into virtual filesystem
  *     - curl & wget: Internet file fetcher & local virtual file saving
  *     - Full POSIX filesystem: ls, cd, pwd, cat, echo, mkdir, rm, nano/vi editor
- *  4. Cloudflare D1 SQL Console (Interactive database query editor & table viewer).
- *  5. Cloudflare KV Storage Explorer (Key-Value manager with search & TTL).
- *  6. Cloudflare Workers AI Assistant (Chat & inference with Llama 3 / Qwen / Mistral).
- *  7. Edge JavaScript Code Runner (V8 Isolate REPL with fetch & crypto).
- *  8. Outbound HTTP Request & API Testing Suite.
- *  9. Password / Secret Token Access Protection.
+ *  5. Cloudflare D1 SQL Console (Interactive database query editor & table viewer).
+ *  6. Cloudflare KV Storage Explorer (Key-Value manager with search & TTL).
+ *  7. Cloudflare Workers AI Assistant (Chat & inference with Llama 3 / Qwen / Mistral).
+ *  8. Edge JavaScript Code Runner (V8 Isolate REPL with fetch & crypto).
+ *  9. Outbound HTTP Request & API Testing Suite.
+ * 10. Password / Secret Token Access Protection.
  * 
- * Version: 2.5.0 (SSH / FTP / Network Suite Edition)
+ * Version: 2.8.0 (GitHub Connections Edition)
  * Repository: https://github.com/fazilatma/new
  * ==============================================================================
  */
@@ -232,7 +234,7 @@ async function handleApiRequest(request, url, env, ctx) {
     return jsonResponse({
       ok: true,
       service: 'WebConsole Pro (Cloudflare Workers Edition)',
-      version: '2.5.0',
+      version: '2.8.0',
       colo: cf.colo || 'Local',
       country: cf.country || 'Unknown',
       city: cf.city || 'Unknown',
@@ -247,12 +249,63 @@ async function handleApiRequest(request, url, env, ctx) {
         r2: Boolean(env.R2),
         ai: Boolean(env.AI),
         sockets: true,
+        github: Boolean(env.GITHUB_TOKEN || env.GH_TOKEN),
         vectorize: Boolean(env.VECTORIZE)
       }
     });
   }
 
-  // 2. Remote Linux Server Command Bridge
+  // 2. GitHub Connection & Sync APIs
+  if (path === '/api/github/branches') {
+    try {
+      const repo = url.searchParams.get('repo') || 'fazilatma/new';
+      const token = url.searchParams.get('token') || env.GITHUB_TOKEN || env.GH_TOKEN || '';
+      const headers = { 'User-Agent': 'WebConsole-Workers-GitHub/2.8', 'Accept': 'application/vnd.github+json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`https://api.github.com/repos/${repo}/branches`, { headers });
+      const data = await res.json();
+      return jsonResponse({ ok: res.ok, branches: Array.isArray(data) ? data : [], message: data.message });
+    } catch (e) {
+      return jsonResponse({ ok: false, error: e.message }, 500);
+    }
+  }
+
+  if (path === '/api/github/commits') {
+    try {
+      const repo = url.searchParams.get('repo') || 'fazilatma/new';
+      const branch = url.searchParams.get('branch') || 'main';
+      const token = url.searchParams.get('token') || env.GITHUB_TOKEN || env.GH_TOKEN || '';
+      const headers = { 'User-Agent': 'WebConsole-Workers-GitHub/2.8', 'Accept': 'application/vnd.github+json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`https://api.github.com/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=15`, { headers });
+      const data = await res.json();
+      return jsonResponse({ ok: res.ok, commits: Array.isArray(data) ? data : [], message: data.message });
+    } catch (e) {
+      return jsonResponse({ ok: false, error: e.message }, 500);
+    }
+  }
+
+  if (path === '/api/github/file') {
+    try {
+      const repo = url.searchParams.get('repo') || 'fazilatma/new';
+      const branch = url.searchParams.get('branch') || 'main';
+      const filePath = url.searchParams.get('path') || 'README.md';
+      const token = url.searchParams.get('token') || env.GITHUB_TOKEN || env.GH_TOKEN || '';
+      const headers = { 'User-Agent': 'WebConsole-Workers-GitHub/2.8' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const rawUrl = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}?t=${Date.now()}`;
+      const res = await fetch(rawUrl, { headers });
+      const text = await res.text();
+      return jsonResponse({ ok: res.ok, status: res.status, content: text, path: filePath, repo, branch });
+    } catch (e) {
+      return jsonResponse({ ok: false, error: e.message }, 500);
+    }
+  }
+
+  // 3. Remote Linux Server Command Bridge
   if (path === '/api/remote-exec' && request.method === 'POST') {
     try {
       const { serverUrl, token, command, cwd } = await request.json();
@@ -291,7 +344,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 3. Cloudflare Raw TCP Socket Tester (SSH / FTP / Telnet / Netcat Banner Grabber)
+  // 4. Cloudflare Raw TCP Socket Tester (SSH / FTP / Telnet / Netcat Banner Grabber)
   if (path === '/api/tcp-probe' && request.method === 'POST') {
     try {
       const { host, port = 22, timeoutMs = 4000, sendData = null } = await request.json();
@@ -314,7 +367,6 @@ async function handleApiRequest(request, url, env, ctx) {
           await writer.write(enc.encode(sendData + '\r\n'));
         }
 
-        // Read initial greeting / banner with timeout
         const timeoutPromise = new Promise(resolve => setTimeout(() => resolve({ done: true, value: null }), timeoutMs));
         const readPromise = reader.read();
 
@@ -350,7 +402,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 4. DNS over HTTPS (DoH) Resolver (dig / dns)
+  // 5. DNS over HTTPS (DoH) Resolver (dig / dns)
   if (path === '/api/dns-query') {
     try {
       const domain = url.searchParams.get('name') || '';
@@ -368,17 +420,17 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 5. GitHub Git Tree Fetcher for In-Browser Git Clone
+  // 6. GitHub Git Tree Fetcher for In-Browser Git Clone
   if (path === '/api/git-tree') {
     try {
-      const repo = url.searchParams.get('repo'); // e.g. "fazilatma/new"
+      const repo = url.searchParams.get('repo') || 'fazilatma/new';
       const branch = url.searchParams.get('branch') || 'main';
-      if (!repo) return jsonResponse({ ok: false, error: 'Repository (owner/repo) is required.' }, 400);
+      const token = url.searchParams.get('token') || env.GITHUB_TOKEN || env.GH_TOKEN || '';
+      const headers = { 'User-Agent': 'WebConsole-Edge-Git/2.8' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const apiUrl = `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`;
-      const res = await fetch(apiUrl, {
-        headers: { 'User-Agent': 'WebConsole-Edge-Git/2.5' }
-      });
+      const res = await fetch(apiUrl, { headers });
       const data = await res.json();
       return jsonResponse({ ok: true, tree: data.tree || [], message: data.message });
     } catch (e) {
@@ -386,7 +438,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 6. D1 Database Query Runner
+  // 7. D1 Database Query Runner
   if (path === '/api/d1/query' && request.method === 'POST') {
     if (!env.DB) return jsonResponse({ ok: false, error: 'D1 binding (env.DB) is not configured in wrangler.toml.' }, 400);
     try {
@@ -401,7 +453,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 7. KV Storage APIs
+  // 8. KV Storage APIs
   if (path === '/api/kv/keys') {
     if (!env.KV) return jsonResponse({ ok: false, error: 'KV binding (env.KV) is not configured.' }, 400);
     try {
@@ -454,7 +506,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 8. Workers AI Inference
+  // 9. Workers AI Inference
   if (path === '/api/ai/chat' && request.method === 'POST') {
     if (!env.AI) return jsonResponse({ ok: false, error: 'Cloudflare Workers AI (env.AI) is not bound in wrangler.toml.' }, 400);
     try {
@@ -468,7 +520,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 9. Edge JS Code Evaluator / REPL
+  // 10. Edge JS Code Evaluator / REPL
   if (path === '/api/eval' && request.method === 'POST') {
     try {
       const { code } = await request.json();
@@ -491,7 +543,7 @@ async function handleApiRequest(request, url, env, ctx) {
     }
   }
 
-  // 10. Outbound HTTP Request Tester
+  // 11. Outbound HTTP Request Tester
   if (path === '/api/http-test' && request.method === 'POST') {
     try {
       const { url: target, method = 'GET', headers = {}, body = null } = await request.json();
@@ -544,7 +596,7 @@ function renderDashboard(request, url, env) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>وب‌کنسول لبه کلودفلر | WebConsole Pro Edge v2.5</title>
+  <title>وب‌کنسول لبه کلودفلر | WebConsole Pro Edge v2.8</title>
   <style>
     :root {
       --bg: #0b0f19;
@@ -627,7 +679,7 @@ function renderDashboard(request, url, env) {
 
   <header>
     <div class="brand">
-      <span>☁️</span> WebConsole Pro <span style="font-size: 12px; background: rgba(56,189,248,0.2); padding: 2px 8px; border-radius: 6px;">Edge v2.5 Network Suite</span>
+      <span>☁️</span> WebConsole Pro <span style="font-size: 12px; background: rgba(56,189,248,0.2); padding: 2px 8px; border-radius: 6px;">Edge v2.8 GitHub Suite</span>
     </div>
     <div class="node-pill">
       <div class="dot"></div>
@@ -637,6 +689,7 @@ function renderDashboard(request, url, env) {
 
   <nav class="tabs-bar">
     <button class="tab-btn active" onclick="switchTab('tab-proxy')">🌐 پروکسی سرور (Universal Proxy)</button>
+    <button class="tab-btn" onclick="switchTab('tab-github')">🐙 اتصالات و دیپلوی گیت‌هاب (GitHub)</button>
     <button class="tab-btn" onclick="switchTab('tab-remote-term')">🖥️ ترمینال متصل به سرور لینوکس (SSH / Shell)</button>
     <button class="tab-btn" onclick="switchTab('tab-wasm-term')">🐧 لینوکس و ابزار شبکه لبه (SSH, FTP, DNS, Sockets)</button>
     <button class="tab-btn" onclick="switchTab('tab-d1')">🗄️ دیتابیس D1 SQL</button>
@@ -692,7 +745,60 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 2: REMOTE LINUX TERMINAL BRIDGE (SSH / FTP on VPS) -->
+    <!-- TAB 2: GITHUB INTEGRATION & AUTO-DEPLOY -->
+    <div id="tab-github" class="tab-content">
+      <div class="card">
+        <div class="card-title">🐙 کاوشگر و همگام‌سازی مستقیم با مخزن گیت‌هاب (GitHub Sync)</div>
+        <p style="font-size: 13.5px; color: var(--muted); margin-bottom: 14px;">
+          مشاهده شاخه‌ها، کامیت‌ها و همگام‌سازی لحظه‌ای فایل‌های مخزن <code style="color:#fff;">fazilatma/new</code> در حافظه لبه کلودفلر.
+        </p>
+
+        <div class="grid3" style="margin-bottom: 14px;">
+          <div>
+            <label class="lb">نام مخزن (Owner / Repository)</label>
+            <input type="text" id="gh-repo-inp" class="inp ltr" value="fazilatma/new">
+          </div>
+          <div>
+            <label class="lb">توکن گیت‌هاب (اختیاری برای مخازن خصوصی)</label>
+            <input type="password" id="gh-token-inp" class="inp ltr" placeholder="ghp_xxxxxxxxxxxx" value="">
+          </div>
+          <div>
+            <label class="lb">عملیات</label>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn" style="flex:1" onclick="loadGhBranches()">🔄 بررسی شاخه‌ها</button>
+              <button class="btn sec" style="flex:1" onclick="loadGhCommits()">📜 لیست کامیت‌ها</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px;">
+          <label class="lb" style="margin:0">انتخاب شاخه (Branch):</label>
+          <select id="gh-branch-sel" class="inp ltr" style="max-width: 280px;" onchange="loadGhCommits()">
+            <option value="main">main</option>
+            <option value="arena/01a0aa17-new">arena/01a0aa17-new</option>
+          </select>
+          <button class="btn sec" onclick="inspectGhTree()">📁 مشاهده ساختار درختی فایل‌ها (Tree)</button>
+        </div>
+
+        <div id="gh-output-box" class="tbl-wrap">روی دکمه «بررسی شاخه‌ها» یا «لیست کامیت‌ها» کلیک کنید...</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">⚙️ نحوه فعال‌سازی دیپلوی خودکار گیت‌هاب در پنل Cloudflare Workers (CI/CD)</div>
+        <p style="font-size: 14px; line-height: 1.8; color: var(--muted); margin-bottom: 12px;">
+          برای این‌که با هر کامیت (Git Push) در گیت‌هاب، ورکر شما در کلودفلر به صورت خودکار آپدیت شود:
+        </p>
+        <ol style="padding-right: 20px; line-height: 2; font-size: 13.5px; color: #cbd5e1;">
+          <li>وارد داشبورد کلودفلر <a href="https://dash.cloudflare.com" target="_blank" style="color:var(--primary)">dash.cloudflare.com</a> شوید.</li>
+          <li>به بخش <b>Workers & Pages</b> رفته و ورکر خود (یا Create Application) را انتخاب کنید.</li>
+          <li>به تب <b>Settings</b> و سپس <b>Builds & deployments</b> بروید.</li>
+          <li>روی <b>Connect to GitHub</b> کلیک کرده و مخزن <b>fazilatma/new</b> و شاخه <b>main</b> را انتخاب نمایید.</li>
+          <li>مسیر Root directory را خالی بگذارید و Build command را <code>npx wrangler deploy</code> قرار دهید.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- TAB 3: REMOTE LINUX TERMINAL BRIDGE (SSH / FTP on VPS) -->
     <div id="tab-remote-term" class="tab-content">
       <div class="card">
         <div class="card-title">🖥️ ترمینال متصل به سرور لینوکس (با پشتیبانی کامل از SSH, SCP, FTP, Git)</div>
@@ -741,7 +847,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 3: IN-BROWSER NETWORKING & POSIX SHELL (SSH, FTP, DNS, Sockets) -->
+    <!-- TAB 4: IN-BROWSER NETWORKING & POSIX SHELL (SSH, FTP, DNS, Sockets) -->
     <div id="tab-wasm-term" class="tab-content">
       <div class="card">
         <div class="card-title">🐧 ترمینال لینوکس و ابزارهای شبکه لبه (SSH, FTP, TCP Sockets, DNS, Curl, Git)</div>
@@ -776,7 +882,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 4: D1 SQL -->
+    <!-- TAB 5: D1 SQL -->
     <div id="tab-d1" class="tab-content">
       <div class="card">
         <div class="card-title">🗄️ کنسول کوئری Cloudflare D1 SQL</div>
@@ -792,7 +898,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 5: KV STORAGE -->
+    <!-- TAB 6: KV STORAGE -->
     <div id="tab-kv" class="tab-content">
       <div class="card">
         <div class="card-title">🔑 کاوشگر و مدیریت کلیدهای KV (<code style="color:#fff;">env.KV</code>)</div>
@@ -805,7 +911,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 6: WORKERS AI -->
+    <!-- TAB 7: WORKERS AI -->
     <div id="tab-ai" class="tab-content">
       <div class="card">
         <div class="card-title">🤖 هوش مصنوعی لبه (Cloudflare Workers AI)</div>
@@ -828,7 +934,7 @@ function renderDashboard(request, url, env) {
       </div>
     </div>
 
-    <!-- TAB 7: EDGE REPL -->
+    <!-- TAB 8: EDGE REPL -->
     <div id="tab-eval" class="tab-content">
       <div class="card">
         <div class="card-title">⚡ مفسر و اجرای کد جاوااسکریپت در ایزولیت ورکر (Edge REPL)</div>
@@ -844,7 +950,7 @@ return { edge_ip: data.ip, colo: request.cf?.colo || 'local', timestamp: new Dat
       </div>
     </div>
 
-    <!-- TAB 8: HTTP TESTER -->
+    <!-- TAB 9: HTTP TESTER -->
     <div id="tab-http" class="tab-content">
       <div class="card">
         <div class="card-title">📡 کلاینت ارسال درخواست شبکه (Outbound API Tester)</div>
@@ -874,7 +980,7 @@ return { edge_ip: data.ip, colo: request.cf?.colo || 'local', timestamp: new Dat
       </div>
     </div>
 
-    <!-- TAB 9: SETTINGS & GUIDE -->
+    <!-- TAB 10: SETTINGS & GUIDE -->
     <div id="tab-settings" class="tab-content">
       <div class="card">
         <div class="card-title">⚙️ نحوه استقرار و پیکربندی در Cloudflare Workers</div>
@@ -889,9 +995,10 @@ main = "webconsole.worker.js"
 compatibility_date = "2024-09-25"
 compatibility_flags = ["nodejs_compat"]
 
-# متغیر محیطی رمز عبور مدیریت (اختیاری):
+# متغیر محیطی رمز عبور مدیریت و گیت‌هاب (اختیاری):
 [vars]
 ADMIN_TOKEN = "your-secret-password"
+GITHUB_TOKEN = "ghp_xxxxxxxxxxxx"
 
 # اتصال دیتابیس D1 (اختیاری):
 [[d1_databases]]
@@ -913,7 +1020,6 @@ binding = "AI"</div>
   </div>
 
   <script>
-    // Tab Switching
     function switchTab(tabId) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -941,7 +1047,108 @@ binding = "AI"</div>
     fetchInfo();
 
     // --------------------------------------------------------------------------
-    // 1. Remote Linux Terminal Bridge (SSH / FTP on VPS)
+    // 1. GitHub Integration Logic
+    // --------------------------------------------------------------------------
+    async function loadGhBranches() {
+      const repo = document.getElementById('gh-repo-inp').value.trim();
+      const token = document.getElementById('gh-token-inp').value.trim();
+      const box = document.getElementById('gh-output-box');
+      box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت شاخه‌های مخزن ' + repo + '...</div>';
+      try {
+        const r = await fetch(`/api/github/branches?repo=${encodeURIComponent(repo)}&token=${encodeURIComponent(token)}`);
+        const d = await r.json();
+        if (d.ok && Array.isArray(d.branches)) {
+          const sel = document.getElementById('gh-branch-sel');
+          sel.innerHTML = '';
+          let html = '<table><thead><tr><th>نام شاخه (Branch)</th><th>آخرین کامیت SHA</th><th>عملیات</th></tr></thead><tbody>';
+          for (const b of d.branches) {
+            sel.innerHTML += '<option value="' + b.name + '">' + b.name + '</option>';
+            html += '<tr><td style="font-weight:700;color:var(--primary)">' + b.name + '</td><td><code>' + b.commit.sha.slice(0, 7) + '</code></td><td><button class="btn sec" style="padding:4px 8px;font-size:12px" onclick="selectGhBranch(\\'' + b.name + '\\')">انتخاب شاخه</button></td></tr>';
+          }
+          html += '</tbody></table>';
+          box.innerHTML = html;
+        } else {
+          box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا: ' + (d.message || d.error || 'عدم دسترسی به مخزن') + '</div>';
+        }
+      } catch (e) {
+        box.innerHTML = '<div style="padding:14px;color:var(--red)">خطای ارتباطی: ' + e.message + '</div>';
+      }
+    }
+
+    function selectGhBranch(bName) {
+      document.getElementById('gh-branch-sel').value = bName;
+      loadGhCommits();
+    }
+
+    async function loadGhCommits() {
+      const repo = document.getElementById('gh-repo-inp').value.trim();
+      const branch = document.getElementById('gh-branch-sel').value;
+      const token = document.getElementById('gh-token-inp').value.trim();
+      const box = document.getElementById('gh-output-box');
+      box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت تاریخچه کامیت‌های شاخه ' + branch + '...</div>';
+      try {
+        const r = await fetch(`/api/github/commits?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&token=${encodeURIComponent(token)}`);
+        const d = await r.json();
+        if (d.ok && Array.isArray(d.commits)) {
+          let html = '<table><thead><tr><th>پیام کامیت (Message)</th><th>نویسنده</th><th>تاریخ</th><th>SHA</th></tr></thead><tbody>';
+          for (const c of d.commits) {
+            html += '<tr><td style="font-weight:600;color:#fff">' + escapeHtml(c.commit.message.split('\n')[0]) + '</td><td>' + escapeHtml(c.commit.author.name) + '</td><td>' + new Date(c.commit.author.date).toLocaleString() + '</td><td><code>' + c.sha.slice(0, 7) + '</code></td></tr>';
+          }
+          html += '</tbody></table>';
+          box.innerHTML = html;
+        } else {
+          box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا: ' + (d.message || d.error) + '</div>';
+        }
+      } catch (e) {
+        box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا: ' + e.message + '</div>';
+      }
+    }
+
+    async function inspectGhTree() {
+      const repo = document.getElementById('gh-repo-inp').value.trim();
+      const branch = document.getElementById('gh-branch-sel').value;
+      const token = document.getElementById('gh-token-inp').value.trim();
+      const box = document.getElementById('gh-output-box');
+      box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت ساختار درختی فایل‌ها از شاخه ' + branch + '...</div>';
+      try {
+        const r = await fetch(`/api/git-tree?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&token=${encodeURIComponent(token)}`);
+        const d = await r.json();
+        if (d.ok && Array.isArray(d.tree)) {
+          let html = '<table><thead><tr><th>مسیر فایل (Path)</th><th>نوع</th><th>عملیات</th></tr></thead><tbody>';
+          for (const item of d.tree) {
+            html += '<tr><td>' + (item.type === 'tree' ? '📁 ' : '📄 ') + item.path + '</td><td>' + item.type + '</td><td>' + (item.type === 'blob' ? '<button class="btn sec" style="padding:4px 8px;font-size:12px" onclick="viewGhFile(\\'' + item.path + '\\')">مشاهده فایل</button>' : '-') + '</td></tr>';
+          }
+          html += '</tbody></table>';
+          box.innerHTML = html;
+        } else {
+          box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا: ' + (d.message || d.error) + '</div>';
+        }
+      } catch (e) {
+        box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا: ' + e.message + '</div>';
+      }
+    }
+
+    async function viewGhFile(fPath) {
+      const repo = document.getElementById('gh-repo-inp').value.trim();
+      const branch = document.getElementById('gh-branch-sel').value;
+      const token = document.getElementById('gh-token-inp').value.trim();
+      const box = document.getElementById('gh-output-box');
+      box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت فایل ' + fPath + '...</div>';
+      try {
+        const r = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&path=${encodeURIComponent(fPath)}&token=${encodeURIComponent(token)}`);
+        const d = await r.json();
+        if (d.ok) {
+          box.innerHTML = '<div style="margin-bottom:8px;font-weight:bold;color:var(--primary)">📄 ' + fPath + ' (' + branch + ')</div><div class="code-box">' + escapeHtml(d.content) + '</div>';
+        } else {
+          box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا در دریافت فایل: ' + d.error + '</div>';
+        }
+      } catch (e) {
+        box.innerHTML = '<div style="padding:14px;color:var(--red)">خطا: ' + e.message + '</div>';
+      }
+    }
+
+    // --------------------------------------------------------------------------
+    // 2. Remote Linux Terminal Bridge (SSH / FTP on VPS)
     // --------------------------------------------------------------------------
     let remoteHistory = [];
     let remoteHistIdx = -1;
@@ -1057,9 +1264,9 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 2. In-Browser POSIX & Edge Networking Shell (SSH, FTP, DNS, Sockets)
+    // 3. In-Browser POSIX & Edge Networking Shell
     // --------------------------------------------------------------------------
-    let wasmFs = JSON.parse(localStorage.getItem('wc_wasm_fs') || '{"/": ["home", "etc", "tmp"], "/home": ["user"], "/home/user": ["welcome.txt"], "/home/user/welcome.txt": "Welcome to WebConsole Edge Network Shell v2.5!\\nSupports: ssh, ftp, telnet, nc, dig, ping, curl, git, ls, cat, nano, echo."}');
+    let wasmFs = JSON.parse(localStorage.getItem('wc_wasm_fs') || '{"/": ["home", "etc", "tmp"], "/home": ["user"], "/home/user": ["welcome.txt"], "/home/user/welcome.txt": "Welcome to WebConsole Edge Network Shell v2.8!\\nSupports: ssh, ftp, telnet, nc, dig, ping, curl, git, ls, cat, nano, echo."}');
     let wasmCwd = '/home/user';
     let wasmHistory = [];
     let wasmHistIdx = -1;
@@ -1414,7 +1621,7 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 3. Universal Proxy Tester
+    // 4. Universal Proxy Tester
     // --------------------------------------------------------------------------
     async function runProxyTest() {
       const url = document.getElementById('prx-url').value.trim();
@@ -1434,7 +1641,7 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 4. D1 SQL Console
+    // 5. D1 SQL Console
     // --------------------------------------------------------------------------
     async function runD1Query() {
       const sql = document.getElementById('d1-sql').value.trim();
@@ -1475,7 +1682,7 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 5. KV Storage
+    // 6. KV Storage
     // --------------------------------------------------------------------------
     async function loadKvKeys() {
       const prefix = document.getElementById('kv-search-prefix').value.trim();
@@ -1535,7 +1742,7 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 6. Workers AI
+    // 7. Workers AI
     // --------------------------------------------------------------------------
     async function runAiInference() {
       const model = document.getElementById('ai-model').value;
@@ -1566,7 +1773,7 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 7. Edge JavaScript Code Evaluator
+    // 8. Edge JavaScript Code Evaluator
     // --------------------------------------------------------------------------
     async function runEvalCode() {
       const code = document.getElementById('eval-code').value;
@@ -1591,7 +1798,7 @@ binding = "AI"</div>
     }
 
     // --------------------------------------------------------------------------
-    // 8. Outbound HTTP Request Tester
+    // 9. Outbound HTTP Request Tester
     // --------------------------------------------------------------------------
     async function runHttpTest() {
       const url = document.getElementById('http-url').value.trim();
