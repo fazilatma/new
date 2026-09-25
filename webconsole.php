@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '1.9.1');
+define('WCP_VERSION', '2.9.0');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -5290,89 +5290,86 @@ INITS.proj={
     },25000);
   }
 };let projectList=[];
-async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="scraper4">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>`
-  <div class="card project-card" style="border-right: 4px solid ${p.service?.status==='running'?'var(--ok)':'var(--line2)'}">
-    <div class="proj-card-header">
+function getProjectWebUrl(p){
+  if(!p.port)return '';
+  const port=p.port;
+  const host=window.location.hostname;
+  const proto=window.location.protocol;
+  if(host.includes('.app.github.dev')){
+    const cs=host.replace(/-\d+\.app\.github\.dev$/,'').replace(/\.app\.github\.dev$/,'');
+    return `https://${cs}-${port}.app.github.dev/`;
+  }
+  return `${proto}//${host}:${port}/`;
+}
+
+async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
+  const isRunning=p.service?.status==='running';
+  const webUrl=getProjectWebUrl(p);
+  return `
+  <div class="card project-card compact-proj-card" style="padding:14px 16px;margin-bottom:14px;border-right: 5px solid ${isRunning?'var(--ok)':'var(--line2)'};background:var(--panel)">
+    <div class="proj-card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="font-size:18px">${p.type==='python'?'🐍':p.type==='php'?'🐘':p.type==='node'?'⚡':p.type==='static'?'📄':'📦'}</span>
-        <h3 style="margin:0;font-size:16px">${esc(p.name)}</h3>
-        <span class="tag ${p.service?.status==='running'?'ok':'warn'}">${p.service?.status==='running'?'🟢 در حال اجرا':'⚪ متوقف'}</span>
+        <span style="font-size:20px">${p.type==='python'?'🐍':p.type==='php'?'🐘':p.type==='node'?'⚡':p.type==='static'?'📄':'📦'}</span>
+        <h3 style="margin:0;font-size:16px;font-weight:700">${esc(p.name)}</h3>
+        <span class="tag ${isRunning?'ok':'warn'}" style="font-weight:700">${isRunning?`🟢 فعال روی پورت ${esc(p.port||'8888')}`:'⚪ متوقف'}</span>
         <span class="tag acc">${(p.type||'other').toUpperCase()}</span>
-        ${p.auto_update?`<span class="tag ok" title="بررسی خودکار هر ${(p.auto_update_interval||60)} ثانیه">🔄 آپدیت خودکار فعال (${Math.round((p.auto_update_interval||60)/60)}د)</span>`:`<span class="tag" style="opacity:0.65">⏸ آپدیت خودکار خاموش</span>`}
+        ${p.auto_update?`<span class="tag ok" title="بررسی خودکار هر ${(p.auto_update_interval||60)} ثانیه">🔄 آپدیت خودکار (${Math.round((p.auto_update_interval||60)/60)}د)</span>`:`<span class="tag" style="opacity:0.65">⏸ آپدیت خودکار خاموش</span>`}
       </div>
-      <div class="row" style="gap:4px">
-        <button class="btn sm" data-check-update="${p.id}" title="بررسی آنلاین کامیت جدید در گیت‌هاب">🔍 بررسی آپدیت</button>
-        <button class="btn sm ${p.auto_update?'ok':''}" data-toggle-update="${p.id}" title="تغییر وضعیت آپدیت خودکار">${p.auto_update?'🔄 وضعیت: فعال':'⚡ فعال‌سازی خودکار'}</button>
-        <button class="btn sm" data-check="${p.id}" title="آزمایش دسترسی‌ها و نیازمندی‌ها">بررسی نصب</button>
-        <button class="btn sm" data-edit="${p.id}">ویرایش</button>
-        <button class="btn sm" data-export="${p.id}">خروجی JSON</button>
-        <button class="btn sm" data-files="${p.id}">فایل‌ها</button>
-        <button class="btn danger sm" data-del="${p.id}">حذف</button>
+      ${webUrl?`
+        <div>
+          <a href="${webUrl}" target="_blank" rel="noopener noreferrer" class="btn sm ${isRunning?'ok':'pri'}" style="text-decoration:none;font-weight:bold;display:inline-flex;align-items:center;gap:6px" title="باز کردن صفحه وب در تب جدید">
+            🌐 باز کردن صفحه وب ↗
+          </a>
+        </div>
+      `:''}
+    </div>
+
+    <!-- Compact Details Grid -->
+    <div style="background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.7">
+      <div style="display:flex;flex-wrap:wrap;gap:12px 18px">
+        <div><span style="color:var(--muted)">🌿 ریپو:</span> <span class="ltr" style="font-family:monospace;font-weight:600">${esc(p.repo_url)}</span> <span class="tag sm ok">شاخه: ${esc(p.branch||'main')}</span>${p.subfolder?` <span class="tag sm">📁 ${esc(p.subfolder)}</span>`:''}</div>
+        <div><span style="color:var(--muted)">📂 مسیر:</span> <span class="ltr" style="font-family:monospace">${esc(p.deploy_path||'—')}</span>${p.deploy_path?` <button class="btn mini" style="padding:1px 6px;font-size:11px" onclick="copyText('${esc(p.deploy_path)}','مسیر کپی شد')">📋 کپی</button>`:''}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px 18px;margin-top:4px">
+        <div><span style="color:var(--muted)">⚙️ پورت:</span> <b>${esc(p.port||'—')}</b> | <span style="color:var(--muted)">فرمان:</span> <code class="ltr" style="background:rgba(0,0,0,0.2);padding:1px 5px;border-radius:4px">${esc(p.start_cmd||'—')}</code></div>
+        <div>
+          <span style="color:var(--muted)">🚀 وضعیت دیپلوی:</span>
+          ${p.last_deploy?`
+            <span class="proj-commit-pill">🔖 ${esc(p.last_deploy.commit||'نامشخص')}</span>
+            <span style="color:var(--muted);font-size:11.5px">(${fmtDate(p.last_deploy.time)})</span>
+          `:'<span style="color:var(--warn)">دیپلوی نشده</span>'}
+        </div>
       </div>
     </div>
 
-    <table class="proj-meta-tbl">
-      <tbody>
-        <tr>
-          <td class="k">🌐 مخزن و شاخه</td>
-          <td class="v">
-            <div class="row" style="gap:6px">
-              <span class="ltr" style="font-family:monospace;font-weight:600">${esc(p.repo_url)}</span>
-              <span class="tag sm ok">🌿 شاخه: ${esc(p.branch||'main')}</span>
-              ${p.subfolder?`<span class="tag sm">📁 پوشه: ${esc(p.subfolder)}</span>`:''}
-            </div>
-          </td>
-        </tr>
-        <tr>
-          <td class="k">📂 مسیر استقرار</td>
-          <td class="v">
-            <div class="proj-path-wrap">
-              <span>${esc(p.deploy_path||'—')}</span>
-              ${p.deploy_path?`<button class="btn mini" onclick="copyText('${esc(p.deploy_path)}','مسیر استقرار کپی شد')" title="کپی مسیر">📋 کپی مسیر</button>`:''}
-            </div>
-          </td>
-        </tr>
-        <tr>
-          <td class="k">🚀 نسخه و کامیت مستقر</td>
-          <td class="v">
-            ${p.last_deploy?`
-              <div class="row" style="gap:8px">
-                <span class="proj-commit-pill">🔖 کامیت: ${esc(p.last_deploy.commit||'نامشخص')}</span>
-                <span class="tag sm ok">✓ تاریخ دیپلوی: ${fmtDate(p.last_deploy.time)}</span>
-                <span class="tag sm ${p.last_deploy.status==='ok'?'ok':'warn'}">وضعیت: ${esc(p.last_deploy.status)}</span>
-              </div>
-            `:'<span class="hint">هنوز دیپلوی نشده است (روی «نصب / به‌روزرسانی» کلیک کنید)</span>'}
-          </td>
-        </tr>
-        <tr>
-          <td class="k">⚙️ پیکربندی و اجرا</td>
-          <td class="v">
-            <div class="row" style="gap:6px">
-              <span class="tag sm">پورت: ${esc(p.port||'—')}</span>
-              <span class="tag sm ${p.is_daemon?'acc':''}">حالت: ${p.is_daemon?'دائم (Daemon)':'استاندارد'}</span>
-              <span class="tag sm ${p.auto_start?'ok':''}">استارت خودکار: ${p.auto_start?'فعال':'غیرفعال'}</span>
-              ${p.preserve_configs!==false?'<span class="tag sm ok" title="فایل‌های کانفیگ، دیتابیس و .env در آپدیت‌ها حفظ می‌شوند">🛡️ حفظ تنظیمات: فعال</span>':'<span class="tag sm warn" title="در هر آپدیت تمام فایل‌ها به نسخه خام گیت‌هاب ریست می‌شوند">🧹 ریست گیت (Clean)</span>'}
-              ${p.start_cmd?`<span class="tag sm ltr" style="font-family:monospace">فرمان: ${esc(p.start_cmd)}</span>`:''}
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-
-    <div class="row" style="margin-top:6px">
-      <button class="btn pri sm" data-deploy="${p.id}">🚀 نصب / به‌روزرسانی دستی</button>
+    <!-- Unified Single Action Toolbar (All Buttons Together) -->
+    <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
+      ${webUrl?`
+        <a href="${webUrl}" target="_blank" rel="noopener noreferrer" class="btn sm ${isRunning?'ok':'pri'}" style="text-decoration:none;font-weight:bold" title="مشاهده صفحه وب پروژه">
+          🌐 مشاهده وب‌سایت
+        </a>
+      `:''}
       ${p.start_cmd?`
-        <button class="btn ok sm" data-start="${p.id}">▶ اجرا</button>
-        <button class="btn danger sm" data-stop="${p.id}">⏹ توقف</button>
-        <button class="btn sm" data-restart="${p.id}">🔄 راه‌اندازی مجدد</button>
+        ${!isRunning?`<button class="btn ok sm" data-start="${p.id}" title="راه‌اندازی سرویس در پس‌زمینه">▶ اجرا (Start)</button>`:''}
+        ${isRunning?`<button class="btn danger sm" data-stop="${p.id}" title="توقف سرویس">⏹ توقف (Stop)</button>`:''}
+        <button class="btn sm" data-restart="${p.id}" title="راه‌اندازی مجدد سرویس">🔄 ری‌استارت</button>
       `:''}
+      <button class="btn pri sm" data-deploy="${p.id}" title="دانلود آخرین کدها، نصب پکیج‌ها و اجرای بیلد">🚀 نصب و بیلد</button>
       ${p.service?`
-        <button class="btn sm" data-log="${esc(p.service.job)}">📜 لاگ زنده</button>
-        <button class="btn sm pri" data-copylog="${esc(p.service.job)}" title="کپی سریع لاگ سرویس">📋 کپی لاگ</button>
+        <button class="btn sm" data-log="${esc(p.service.job)}" title="مشاهده لاگ‌های خروجی کنسول">📜 لاگ زنده</button>
+        <button class="btn sm" data-copylog="${esc(p.service.job)}" title="کپی سریع کل لاگ">📋 کپی لاگ</button>
       `:''}
+      <button class="btn sm" data-check-update="${p.id}" title="بررسی آنلاین کامیت جدید در گیت‌هاب">🔍 چک آپدیت</button>
+      <button class="btn sm ${p.auto_update?'ok':''}" data-toggle-update="${p.id}" title="تغییر وضعیت آپدیت خودکار">${p.auto_update?'🔄 آپدیت: روشن':'⚡ آپدیت خودکار'}</button>
+      <button class="btn sm" data-edit="${p.id}" title="ویرایش تنظیمات، پورت و متغیرها">✍️ ویرایش</button>
+      <button class="btn sm" data-files="${p.id}" title="مشاهده و مدیریت فایل‌های این پروژه">📁 فایل‌ها</button>
+      <button class="btn sm" data-check="${p.id}" title="بررسی دسترسی‌ها و نیازمندی‌ها">🧪 تست</button>
+      <button class="btn sm" data-export="${p.id}" title="خروجی پیکربندی JSON">📄 JSON</button>
+      <button class="btn danger sm" data-del="${p.id}" title="حذف این پروژه">🗑️ حذف</button>
     </div>
   </div>
-`).join('');$('#project-storage').onclick=projectStorageDlg;
+  `;
+}).join('');$('#project-storage').onclick=projectStorageDlg;
   const cronBtn=$('#project-cron');
   if(cronBtn)cronBtn.onclick=async()=>{
     cronBtn.disabled=true;cronBtn.textContent='در حال فعال‌سازی...';
