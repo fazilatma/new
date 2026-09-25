@@ -128,8 +128,9 @@ except ImportError as exc:
     ) from exc
 
 # Every APP_VERSION bump must add a new top CHANGELOG row (گزارش تغییرات نسخه‌ها).
-APP_VERSION = "10.251"
+APP_VERSION = "10.252"
 CHANGELOG = [
+    {"version":"10.252","date":"2026-09-24","title":"درس‌گرفته از نسخهٔ نود جی‌اس: استخراج جزئیات موازی، پرش محصولات بدون تغییر در ارسال و پذیرش Retry-After","items":["استخراج جزئیات محصول حالا مثل نود (mapLimit) با پنجرهٔ موازی اجرا می‌شود (پیش‌فرض ۴ همزمان، با SCRAPER4_DETAIL_CONCURRENCY بین ۱ تا ۸)؛ موتورهای مرورگر مثل withBrowserSlot نود از یک جایگاه ترتیبی واحد اجرا می‌شوند، شمارنده‌ها و پنل زنده فقط در نخ هماهنگ‌کننده می‌مانند و درخواست‌های جزئیات دیگر فاصلهٔ مؤدبانه بین درخواست‌ها را نمی‌گیرند — همان رفتاری که استخراج موازی نود را سریع می‌کند","ارسال به غرفه‌ها سریع‌تر شد: محصولی که محتوای مقصدش (عنوان، قیمت، موجودی، توضیح، تصاویر، دسته) دقیقاً با آخرین ارسال یکسان باشد، هنگام همگام‌سازی کامل پروفایل بدون هیچ درخواست HTTP رد می‌شود و «بدون تغییر» ثبت می‌شود — مثل دفتر حساب نود؛ امضای محتوا به‌ازای هر غرفهٔ باسلام جدا نگه‌داری می‌شود و به‌روزرسانی اجباری همیشه همه را می‌فرستد","درخواست‌های HTTP مبدأ حالا مثل نود هدر Retry-After پاسخ 429 را می‌خوانند و به‌جای وقفهٔ ثابت تا سقف ۱۰ ثانیه طبق خواستهٔ سایت صبر می‌کنند؛ انبار کوکی تخت و نقشهٔ فاصلهٔ درخواست‌ها هم برای حالت موازی قفل‌محور شد","شمارندهٔ «بدون تغییر» جدید در کار ارسال به‌همراه رویداد زندهٔ هر محصول و فهرست کلیک‌شدنی آن در پنجرهٔ متریک‌ها؛ جزئیات پایان کار می‌گوید چند محصول بدون تغییر رد شد","باگ واقعی و سنگین پیدا و رفع شد: استخراج فیلدهای جزئیات هرگز تصاویر را برنمی‌گرداند، پس نمرهٔ کیفیت هرگز به آستانهٔ توقف نمی‌رسید و هر صفحهٔ جزئیات توسط هر ۴ موتور HTTP و سپس یک بار هم با کرومیوم رندر می‌شد — حالا تصاویر صفحهٔ جزئیات (سلکتور دستی یا تگ img) استخراج می‌شود، زنجیرهٔ موتور با اولین نتیجهٔ خوب متوقف می‌شود و مرورگر فقط وقتی واقعاً لازم باشد بالا می‌آید","تست جدید tools/test_node_lessons.py با سرور محلی واقعی: اثبات اجرای موازی استخراج جزئیات و درست بودن نتایج/ترتیب، پذیرش Retry-After، پرش بدون تغییر در ووکامرس و باسلام (تک و چند غرفه) بدون هیچ فراخوانی شبکه، ثبت امضا در دفتر و رفت‌وبرگشت کامل ارسال پروفایل"]},
     {"version":"10.251","date":"2026-09-24","title":"سرعت و پایداری دریافت محصولات از باسلام چند برابر شد (مسیر سریع keep-alive و صفحه‌بندی موازی)","items":["ریشهٔ کندی نسبت به نسخهٔ نود جی‌اس پیدا شد: هر درخواست خروجی اتصال TCP/TLS تازه می‌ساخت، هر صفحهٔ فهرست باسلام یک کلاینت SDK تازه با مهلت ۴۵ ثانیه می‌ساخت و در صورت خطا همان صفحه یک بار هم از مسیر REST خوانده می‌شد؛ حالا همهٔ درخواست‌های خروجی (باسلام، ووکامرس و بقیه) از یک استخر اتصال زندهٔ مشترک استفاده می‌کنند و کلاینت SDK ساخته‌شده در حافظه نگه داشته و دوباره استفاده می‌شود","خواندن فهرست محصولات غرفه حالا مستقیم از REST سریع با صفحه‌بندی موازی (پنجرهٔ ۳ صفحهٔ همزمان، قابل تنظیم با SCRAPER4_BASALAM_PAGE_WINDOW) انجام می‌شود؛ تعداد صفحات از خود پاسخ باسلام خوانده می‌شود و صفحات باقی‌مانده هم‌زمان دریافت می‌شوند — مغایرت‌گیری، تکراری‌یابی، دفتر حساب و مدیر مقصد همه از همین مسیر سریع استفاده می‌کنند و مسیر چند-غرفه‌ای هم به‌جای حلقهٔ صفحه‌به‌صفحه، به‌ازای هر غرفه یک دریافت موازی دارد","مقاومت ۱۰.۲۳۲ حفظ شد: صفحهٔ ۱ همچنان با خطای واضح بلند است (توکن/شناسهٔ غرفهٔ خراب بی‌صدا نادیده گرفته نمی‌شود)، هر صفحه تا ۳ تلاش با وقفهٔ نمایی کوتاه‌تر دارد، شکست یک صفحه فقط همان صفحه را حذف می‌کند و نتیجهٔ ناقص با برچسب complete برمی‌گردد؛ هر شکست صفحه پنجرهٔ موازی را هم نصف می‌کند تا فشار روی باسلام کم شود","در حالت «خودکار» خواندن‌ها دیگر اصلاً SDK را نمی‌سازند؛ یعنی بدون SDK نصب‌شده هم تکراری‌یابی و مغایرت‌گیری کار می‌کند و تلاش نصب pip در میانهٔ عملیات رخ نمی‌دهد؛ حالت «فقط SDK» همچنان از مسیر SDK-first استفاده می‌کند","تست جدید tools/test_basalam_fast_lane.py با سرور HTTP محلی واقعی: اثبات اتصال زنده (استفادهٔ مکرر از یک پورت)، اثبات دریافت موازی صفحات و رعایت سقف پنجره، تلاش مجدد روی 429، خطای واضح صفحهٔ ۱، حالت بدون metadata، نتیجهٔ ناقص، مسیر کامل destination_remote_rows و کش کلاینت SDK"]},
     {"version":"10.250","date":"2026-09-24","title":"ارسال موازی محصولات به مقاصد با تشخیص خودکار تعداد همزمانی و امکان تنظیم دستی","items":["عملیات ارسال کامل پروفایل حالا موازی است: چند محصول هم‌زمان به ووکامرس/باسلام می‌رود و به‌جای انتظار تک‌تک، زمان ارسال چند برابر کوتاه‌تر می‌شود؛ پنجرهٔ لغزان ارسال یعنی توقف دکمه بلافاصله کار را قطع می‌کند و صف طولانی پشت صحنه باقی نمی‌ماند","تعداد محصول موازی به سه روش تعیین می‌شود: خودکار (پیش‌فرض؛ ووکامرس ۴ همزمان، باسلام ۲ همزمان چون محدودیت نرخ سخت‌تری دارد)، دستی از تنظیمات پروفایل (۱ ترتیبی تا ۱۶)، یا متغیر محیطی SCRAPER4_DISPATCH_CONCURRENCY برای سیاست ثابت سرور","اگر مقصد محدودیت نرخ بدهد (429/Too Many Requests)، همزمانی در همان لحظه نصف می‌شود و پیام «کاهش همزمانی» در جزئیات کار ثبت می‌شود؛ شمارنده‌ها، رویدادهای زندهٔ هر محصول، ثبت شناسه‌های مقصد و مغایرت‌گیری خودکار پس از ارسال همگی دقیقاً مثل قبل کار می‌کنند","ایمنی داده‌ها حفظ شد: شمارش، ثبت رویداد زنده و نوشتن شناسه مقصد فقط در نخ هماهنگ‌کننده انجام می‌شود (فایل داده هرگز هم‌زمان نوشته نمی‌شود) و خود ارسال‌ها هم مثل قبل به‌ازای هر محصول به همهٔ غرفه‌های فعال باسلام فن‌اوت می‌شوند","تست جدید tools/test_dispatch_parallel.py: تشخیص همزمانی در سه حالت، اثبات واقعی اجرای موازی با سنجش هم‌زمانی ماکزیمم، صحت شمارنده‌ها و رویدادها در حالت موازی، کاهش خودکار همزمانی با خطای 429، مسیر ترتیبی با انتخاب ۱، توقف در میانهٔ ارسال موازی و رفت‌وبرگشت تنظیم پروفایل از API"]},
     {"version":"10.249","date":"2026-09-23","title":"تست جامع دسترسی به منبع، شمارنده‌های زندهٔ کلیک‌شو و مغایرت‌گیری خودکار پس از همگام‌سازی","items":["دکمهٔ «آزمایش دسترسی» حالا گزارش واقعی و جامع اتصال می‌دهد: اندازه‌گیری جداگانهٔ DNS (همهٔ IPها و زمان)، اتصال TCP (IP و پورت و زمان)، دست‌دادن TLS (نسخه، رمزنگار، صادرکننده و انقضای گواهی با روز باقی‌مانده)، زمان اولین بایت و دانلود، هدرهای کلیدی پاسخ، عنوان صفحه، نشانه‌های ضدبات و JSON-LD/NEXT_DATA، موتورهای نصب‌شده و مسیر دروازه (رله/مستقیم/پروکسی)","در حالت رله، سنجش DNS/TCP/TLS روی خود Worker انجام می‌شود (هدف واقعی از سرور شما دیده نمی‌شود) و مسیر جایگزین هم آزموده می‌شود: با رله فعال، یک اتصال مستقیم هم امتحان می‌شود و با اتصال مستقیم، اگر Worker تنظیم باشد رله هم — نتیجهٔ هر دو مسیر کنار هم نمایش داده می‌شود","پنجرهٔ نتیجهٔ تست دسترسی بازنویسی شد: به‌جای چند خط JSON، بخش‌بندی خوانا (مسیر اتصال، زمان‌بندی، گواهی TLS، پاسخ سرور، مسیر جایگزین) به‌همراه JSON خام در انتها","شمارنده‌های کار ارسال (انجام‌شده/جدید/آپدیت/خطا/ارسال موفق) حالا در حین اجرا کلیک‌شو هستند: هر محصول که ارسال می‌شود رویداد ساختاریافته‌اش (عنوان، قیمت، مقصد، خطا) روی همان کار ثبت می‌شود و با کلیک روی هر شمارنده، فهرست زندهٔ همان دسته باز می‌شود و تا پایان کار خودکار تازه می‌شود — دیگر لازم نیست تا پایان مرحلهٔ ارسال منتظر بمانید","تیک جدید «مغایرت‌گیری خودکار پس از همگام‌سازی» در رفتار پروفایل: بعد از پایان ارسال کامل همان پروفایل، کار مغایرت‌گیری برای هر مقصدی که ارسال شده به‌صورت خودکار در صف قرار می‌گیرد و در جزئیات کار هم اعلام می‌شود","تست جدید tools/test_source_test_live_counters.py: گزارش تست دسترسی با سرور محلی واقعی (DNS/TCP/هدر/عنوان/حالت رله و مسیر جایگزین)، رویدادهای زندهٔ ارسال و شمارنده‌ها از طریق کلاینت Flask، مغایرت‌گیری خودکار پس از ارسال و رفت‌وبرگشت فیلد تیک؛ jobEventRows حالا رویدادهای sync-created/sync-updated را در شمارنده‌های جدید/آپدیت هم می‌شناسد"]},
@@ -388,6 +389,11 @@ EXTRACT_JOB_KEEP = _env_int("SCRAPER_EXTRACT_JOB_KEEP", 500 if VPS_MODE else 12,
 LIVE_TASK_KEEP = _env_int("SCRAPER_LIVE_TASK_KEEP", 500 if VPS_MODE else 30, 8, 5000)
 DEST_QUEUE_KEEP = _env_int("SCRAPER_DEST_QUEUE_KEEP", 200 if VPS_MODE else 10, 4, 2000)
 REMOTE_CATALOG_PAGES = _env_int("SCRAPER_REMOTE_PAGES", 200 if VPS_MODE else 11, 1, 2000)
+# 10.252 — Node render-src/processor.ts mapLimit(DETAIL_CONCURRENCY): the
+# detail stage fetches product pages through a small parallel window.
+DETAIL_CONCURRENCY = _env_int("SCRAPER4_DETAIL_CONCURRENCY", 4, 1, 8)
+# Browser engines stay sequential (Node's withBrowserSlot): one Chromium lane.
+_DETAIL_BROWSER_LOCK = threading.Lock()
 REQUEST_TIMEOUT_CAP = _env_int("SCRAPER_TIMEOUT_CAP", 600 if VPS_MODE else 120, 30, 3600)
 FETCH_TIMEOUT_CAP = _env_int("SCRAPER_FETCH_TIMEOUT_CAP", 300 if VPS_MODE else 90, 15, 1800)
 # Node 1.183 (arena/01a0aa17-new) extracted every emalls page with plain
@@ -931,6 +937,9 @@ class Fetcher:
         # path), so the same ASP.NET_SessionId arriving from several engines
         # multiplied into duplicates and crashed curl_cffi's dict() bridge.
         self._cookies: dict[str, str] = {}
+        # 10.252: parallel detail workers share this fetcher — the flat
+        # cookie store and the per-host pace map get a lock.
+        self._state_lock = threading.Lock()
         self.session = requests.Session()
         # Nothing is ever kept in the session jar; cookies live in the flat
         # store and ride via the explicit Cookie header when allowed.
@@ -1004,12 +1013,15 @@ class Fetcher:
                 name, _, val = part.partition("=")
                 name = name.strip()
                 if name:
-                    self._cookies[name] = val.strip()
+                    with self._state_lock:
+                        self._cookies[name] = val.strip()
 
     def _cookie_header(self) -> str:
-        return "; ".join(f"{k}={v}" for k, v in self._cookies.items())
+        with self._state_lock:
+            pairs = list(self._cookies.items())
+        return "; ".join(f"{k}={v}" for k, v in pairs)
 
-    def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
+    def get(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests", polite: bool = True) -> FetchResult:
         """Fetch a page, honouring a stop request within ~1 second.
 
         A socket read cannot be interrupted from another thread, and shortening
@@ -1021,13 +1033,13 @@ class Fetcher:
         writing no state.
         """
         if not self.task_id:
-            return self._get_blocking(url, referer=referer, accept_json=accept_json, engine=engine)
+            return self._get_blocking(url, referer=referer, accept_json=accept_json, engine=engine, polite=polite)
         self.abort_if_cancelled()
         box: dict[str, Any] = {}
         def run() -> None:
             try:
                 box["ok"] = self._get_blocking(url, referer=referer,
-                                               accept_json=accept_json, engine=engine)
+                                               accept_json=accept_json, engine=engine, polite=polite)
             except BaseException as exc:  # noqa: BLE001 - re-raised in caller
                 box["err"] = exc
         worker = threading.Thread(target=run, name="fetch-" + engine, daemon=True)
@@ -1042,7 +1054,7 @@ class Fetcher:
             raise box["err"]
         return box["ok"]
 
-    def _get_blocking(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests") -> FetchResult:
+    def _get_blocking(self, url: str, *, referer: str = "", accept_json: bool = False, engine: str = "requests", polite: bool = True) -> FetchResult:
         self.abort_if_cancelled()
         url = public_http_url(url)
         target_url = url
@@ -1055,8 +1067,11 @@ class Fetcher:
             else:
                 request_url = relay
         host = urlparse(target_url).hostname or ""
+        # 10.252: polite=False drops the per-host pace gap — used by the
+        # parallel detail window (Node sends its mapLimit detail requests
+        # back-to-back with no artificial gap either).
         elapsed = time.monotonic() - self.last_by_host.get(host, 0)
-        if elapsed < self.gap:
+        if polite and elapsed < self.gap:
             self.sleep_cancellable(self.gap - elapsed)
         headers = {}
         if referer:
@@ -1068,7 +1083,8 @@ class Fetcher:
         if accept_json:
             headers["Accept"] = "application/json,text/plain,*/*"
         if engine in BROWSER_ENGINES:
-            self.last_by_host[host] = time.monotonic()
+            with self._state_lock:
+                self.last_by_host[host] = time.monotonic()
             if engine == "playwright":
                 return render_playwright(target_url, self.timeout, 4, self.task_id)
             if engine == "undetected":
@@ -1156,7 +1172,8 @@ class Fetcher:
                     if _c_header:headers={**headers,"Cookie":_c_header}
                     response=self.session.get(request_url,headers=headers,timeout=self.effective_timeout(),allow_redirects=True,verify=self.verify,stream=True);body=response.raw.read(MAX_HTML_BYTES+1,decode_content=True)
                 self._absorb_cookies(response)
-                self.last_by_host[host] = time.monotonic()
+                with self._state_lock:
+                    self.last_by_host[host] = time.monotonic()
                 if len(body) > MAX_HTML_BYTES:
                     raise FetchError("پاسخ HTML بزرگ‌تر از سقف مجاز است")
                 encoding=getattr(response,"encoding",None) or getattr(response,"apparent_encoding",None) or "utf-8"
@@ -1164,7 +1181,22 @@ class Fetcher:
                 blocked=any(x in sample for x in ("access denied","موقتا vpn خود را خاموش","temporarily blocked","captcha","درخواست شما مشکوک","دسترسی شما مسدود"))
                 if blocked:raise FetchError(f"{engine}: صفحه ضدبات/VPN به‌جای فهرست محصول برگشت؛ IP مسیر اتصال توسط سایت رد شده است (HTTP {response.status_code})")
                 if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                    self.sleep_cancellable(1.5 * (2 ** attempt))
+                    # 10.252 — Node network.ts retryAfterMs(): honour the
+                    # site's own Retry-After on 429 (seconds or HTTP date),
+                    # capped at 10s so one rude header cannot stall a run.
+                    _wait = 1.5 * (2 ** attempt)
+                    if response.status_code == 429:
+                        _ra = clean_text(response.headers.get("Retry-After"))
+                        if _ra.replace(".", "", 1).isdigit():
+                            _wait = max(0.5, min(10.0, float(_ra)))
+                        elif _ra:
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                _when = parsedate_to_datetime(_ra).timestamp()
+                                _wait = max(0.5, min(10.0, _when - time.time()))
+                            except Exception:
+                                pass
+                    self.sleep_cancellable(_wait)
                     continue
                 if not 200 <= response.status_code < 400:
                     raise FetchError(f"HTTP {response.status_code} برای {url}")
@@ -1994,6 +2026,22 @@ def parse_detail_fields(soup: BeautifulSoup, base: str, selectors: dict[str, str
             if field in {"short_desc","long_desc"}:
                 html_value=sanitize_rich_html("".join(str(x) for x in node.contents).strip())
                 if html_value:out[field+"_html"]=html_value
+    # 10.252 — REAL BUG FIX: this function never returned "images", so
+    # detail_quality() could never reach the q>=3 early-break and EVERY
+    # detail page was fetched by every HTTP engine and then ALSO rendered in
+    # Chromium (when installed) — the detail stage crawled. Extract images
+    # here (manual selector or plain <img>) so the quality gate works and the
+    # merge below receives the detail page's own gallery.
+    image_selector=clean_text(selectors.get("images"))
+    try:
+        image_nodes=soup.select(image_selector) if image_selector else soup.select("img")
+    except Exception:
+        image_nodes=[]
+    images=[]
+    for node in image_nodes[:60]:
+        src=clean_text(node.get("src") or node.get("data-src") or node.get("data-lazy-src") or (node.get("content") if node.name=="meta" else ""))
+        if src and _usable_image(src) and src not in images:images.append(src)
+    if images:out["images"]=images[:30]
 
     variation_selector=clean_text(selectors.get("variations"))
     variation_selectors=[x.strip() for x in re.split(r"[\n|]+",variation_selector) if x.strip()] if variation_selector else ["form.variations select","[class*='variation']","[class*='swatch']","[class*='color-options']","[class*='size-options']"]
@@ -4803,26 +4851,45 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
             old=old_products.get(product_key(product),{})
             for field in rich_fields:
                 if product.get(field) in (None,"",[],{}) and old.get(field) not in (None,"",[],{}):product[field]=old[field]
+        # 10.252 — Node render-src/processor.ts mapLimit(DETAIL_CONCURRENCY):
+        # the detail stage runs through a small parallel sliding window
+        # (default 4, SCRAPER4_DETAIL_CONCURRENCY 1..8). Products are distinct
+        # dicts, counters/logs/live-task updates stay in the coordinating
+        # thread, browser engines share ONE sequential slot (Node's
+        # withBrowserSlot) and parallel detail HTTP fetches skip the per-host
+        # politeness gap exactly like Node's back-to-back mapLimit requests.
         enriched=0;attempted=0;detail_failures=[];candidates=list(report.products.values())
-        for position,product in enumerate(candidates,1):
-            if attempted>=detail_limit:break
+        work_items=[]
+        for product in candidates:
+            if len(work_items)>=detail_limit:break
             if not product.get("link"):continue
-            if task_id and live_task_cancelled(task_id):raise ValueError("استخراج جزئیات با درخواست کاربر متوقف شد")
             detail_complete=product.get("detail_status")=="complete" and bool(product.get("images") and (product.get("short_desc") or product.get("long_desc")))
             if detail_scope=="missing" and detail_complete:continue
-            attempted+=1
+            work_items.append(product)
+        attempted_total=len(work_items)
+        _detail_polite=DETAIL_CONCURRENCY<=1
+        _requested_engine=clean_text(config.get("fetch_engine","auto")).lower() or "auto"
+
+        def _detail_render(engine:str,url:str):
+            with _DETAIL_BROWSER_LOCK:
+                return fetcher.get(url,referer=source,engine=engine)
+
+        def _detail_stealth(url:str,scrolls:int):
+            with _DETAIL_BROWSER_LOCK:
+                return run_cancellable(lambda: render_playwright(url,fetcher.timeout,scrolls,task_id), task_id, "playwright")
+
+        def _detail_one(product:dict[str,Any])->tuple[bool,str]:
             try:
-                if task_id:
-                    detail_percent=round(attempted/max(1,min(len(candidates),detail_limit))*96) if details_only else 88+round(attempted/max(1,min(len(candidates),detail_limit))*9)
-                    live_task_update(task_id,detail_percent,f"جزئیات محصول {attempted} از {min(len(candidates),detail_limit)}","running",clean_text(product.get("title"))[:160],done=position,total=min(len(candidates),detail_limit),extracted=len(report.products))
-                requested=clean_text(config.get("fetch_engine","auto")).lower() or "auto";host=(urlparse(product.get("link") or "").hostname or "").lower();spa=any(x in host for x in ("snappshop.ir","snapp.ir"));dmaster=clean_text(master or config.get("fetch_engine_master") or "");
+                host=(urlparse(product.get("link") or "").hostname or "").lower();spa=any(x in host for x in ("snappshop.ir","snapp.ir"));dmaster=clean_text(master or config.get("fetch_engine_master") or "")
                 if spa and not dmaster: dmaster="playwright"
-                dorder=engine_try_order(dmaster, requested if requested in KNOWN_ENGINES else "", mode)
+                dorder=engine_try_order(dmaster, _requested_engine if _requested_engine in KNOWN_ENGINES else "", mode)
                 detail_engines=[] if (dorder and dorder[0] in {"playwright","selenium"}) else [e for e in dorder if e not in {"playwright","selenium"}];detail=None;detail_rows=[];detail_soup=None;custom_detail={};detail_errors=[];best_q=-1
                 if mode!="browser":
                     for engine in detail_engines:
                         try:
-                            candidate_detail=fetcher.get(product["link"],referer=source,engine=engine);candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);_autofill_detail_selectors(candidate_soup,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
+                            if engine in BROWSER_ENGINES:candidate_detail=_detail_render(engine,product["link"])
+                            else:candidate_detail=fetcher.get(product["link"],referer=source,engine=engine,polite=_detail_polite)
+                            candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);_autofill_detail_selectors(candidate_soup,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
                             if q>best_q and candidate_fields:detail,detail_rows,detail_soup,custom_detail,best_q=candidate_detail,candidate_rows,candidate_soup,candidate_fields,q;report.modes.add("detail-"+engine)
                             if q>=3:break
                             if not candidate_fields:detail_errors.append(f"{engine}: DOM جزئیات خالی بود")
@@ -4834,7 +4901,7 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                 if (detail is None or best_q<3) and mode in ("auto","browser") \
                         and fetch_engine_installed("playwright"):
                     try:
-                        candidate_detail=run_cancellable(lambda: render_playwright(product["link"],fetcher.timeout,4 if spa else 3,task_id), task_id, "playwright");candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);_autofill_detail_selectors(candidate_soup,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
+                        candidate_detail=_detail_stealth(product["link"],4 if spa else 3);candidate_rows,candidate_soup,_=parse_html(candidate_detail.text,candidate_detail.url);_autofill_detail_selectors(candidate_soup,candidate_detail.url);candidate_fields=parse_detail_fields(candidate_soup,candidate_detail.url,detail_selectors);q=detail_quality(candidate_fields)
                         if q>best_q and candidate_fields:detail,detail_rows,detail_soup,custom_detail,best_q=candidate_detail,candidate_rows,candidate_soup,candidate_fields,q;report.modes.add("detail-playwright-stealth")
                         elif not candidate_fields:detail_errors.append("playwright: DOM جزئیات خالی بود")
                     except FetchError as exc:detail_errors.append(f"playwright: {exc}")
@@ -4861,9 +4928,38 @@ def scrape(config: dict[str, Any]) -> ScrapeReport:
                         if value not in ("",None,[],{}) and product.get(key) in ("",None,[],{}):product[key]=value
                 has_gallery=len(product.get("images") or [])>=2;has_desc=bool(clean_text(product.get("short_desc") or product.get("long_desc") or ""))
                 product["detail_extracted_at"]=int(time.time());product["detail_status"]="complete" if (has_gallery or has_desc) else "partial"
-                if has_gallery or has_desc:enriched+=1
+                return (has_gallery or has_desc),""
             except (FetchError,ValueError) as exc:
-                product["detail_status"]="failed";product["detail_error"]=str(exc)[:500];detail_failures.append(clean_text(product.get("title"))[:80]+": "+str(exc)[:180])
+                product["detail_status"]="failed";product["detail_error"]=str(exc)[:500]
+                return False,str(exc)[:180]
+
+        if attempted_total:
+            from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+            limit=max(1,min(DETAIL_CONCURRENCY,len(work_items)))
+            pool=ThreadPoolExecutor(max_workers=limit,thread_name_prefix="detail-live")
+            order=iter(list(enumerate(work_items,1)))
+            pending={};exhausted=False
+            try:
+                while pending or not exhausted:
+                    if task_id and live_task_cancelled(task_id):
+                        for fut in pending:fut.cancel()
+                        raise ValueError("استخراج جزئیات با درخواست کاربر متوقف شد")
+                    while not exhausted and len(pending)<limit:
+                        try:position,product=next(order)
+                        except StopIteration:exhausted=True;break
+                        pending[pool.submit(_detail_one,product)]=(position,product)
+                    done_futs,_rest=wait(list(pending),timeout=0.4,return_when=FIRST_COMPLETED)
+                    for fut in done_futs:
+                        position,product=pending.pop(fut)
+                        ok,err=fut.result()
+                        attempted+=1
+                        if task_id:
+                            detail_percent=round(attempted/attempted_total*96) if details_only else 88+round(attempted/attempted_total*9)
+                            live_task_update(task_id,detail_percent,f"جزئیات محصول {attempted} از {attempted_total}","running",clean_text(product.get("title"))[:160],done=position,total=attempted_total,extracted=len(report.products))
+                        if ok:enriched+=1
+                        else:detail_failures.append(clean_text(product.get("title"))[:80]+": "+err)
+            finally:
+                pool.shutdown(wait=False,cancel_futures=True)
         report.diagnostics["details"]={"requested":attempted,"completed":enriched,"failed":len(detail_failures),"errors":detail_failures[:20]}
         report.logs.append(f"جزئیات خودکار {enriched} محصول تکمیل شد"+(f"؛ {len(detail_failures)} خطا" if detail_failures else ""))
     rules=config.get("profile_rules") if isinstance(config.get("profile_rules"),dict) else {}
@@ -4960,6 +5056,25 @@ def destination_identity_id(profile_name: str, destination: str, product: dict[s
     return row.get("id") if isinstance(row,dict) else None
 
 
+def _destination_payload_signature(payload: Any) -> str:
+    """Stable signature of what we would send to a destination (10.252).
+
+    Node's destinationLedger.matches() skips unchanged products with zero
+    HTTP; the Python twin compares a sha1 of the exact outbound payload.
+    """
+    try:
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        raw = str(payload)
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()
+
+
+def destination_identity_entry(profile_name: str, destination: str, product: dict[str,Any]) -> dict[str,Any]:
+    """The full remote-map row for one product/destination (id, sigs, shop maps)."""
+    profile=load_data().get("profiles",{}).get(profile_name,{});maps=profile.get("remote_map",{}) if isinstance(profile,dict) else {};ledger=maps.get(destination,{}) if isinstance(maps,dict) else {};row=ledger.get(product_identity_key(product),{}) if isinstance(ledger,dict) else {}
+    return row if isinstance(row,dict) else {}
+
+
 def record_destination_identity(profile_name: str, destination: str, product: dict[str,Any], result: dict[str,Any]) -> None:
     remote_id=result.get("id") if isinstance(result,dict) else None
     if remote_id in (None,"",0,"0"):return
@@ -4967,7 +5082,23 @@ def record_destination_identity(profile_name: str, destination: str, product: di
         data=load_data();profile=data.get("profiles",{}).get(profile_name)
         if not isinstance(profile,dict):return
         ledger=profile.setdefault("remote_map",{}).setdefault(destination,{})
-        ledger[product_identity_key(product)]={"id":remote_id,"sku":clean_text(product.get("sku")),"title":clean_text(product.get("title") or product.get("name")),"updated_at":int(time.time())}
+        entry={"id":remote_id,"sku":clean_text(product.get("sku")),"title":clean_text(product.get("title") or product.get("name")),"updated_at":int(time.time())}
+        # 10.252: remember WHAT we sent so an unchanged product can be skipped
+        # with zero HTTP on the next sync (Node's ledger desired-hash).
+        if isinstance(result,dict):
+            if clean_text(result.get("sig")):entry["sig"]=clean_text(result.get("sig"))
+            if destination=="basalam" and isinstance(result.get("shops"),list):
+                shop_sigs=dict(entry.get("shop_sigs") or {});shop_ids=dict(entry.get("shop_ids") or {})
+                for row in result["shops"]:
+                    if not isinstance(row,dict) or not row.get("ok"):continue
+                    try:vid=int(row.get("vendor_id") or 0)
+                    except (TypeError,ValueError):continue
+                    if vid<=0:continue
+                    if row.get("id") not in (None,"",0,"0"):shop_ids[str(vid)]=row.get("id")
+                    if clean_text(row.get("sig")):shop_sigs[str(vid)]=clean_text(row.get("sig"))
+                if shop_ids:entry["shop_ids"]=shop_ids
+                if shop_sigs:entry["shop_sigs"]=shop_sigs
+        ledger[product_identity_key(product)]=entry
         save_data(data)
 
 
@@ -5013,6 +5144,12 @@ def woo_send_one(product: dict[str, Any], status: str, update_existing: bool) ->
         found = woo_request("GET", "products?per_page=1&sku=" + quote(sku)).json()
         if isinstance(found, list) and found: existing_id = int(found[0].get("id", 0))
     if existing_id and product.get("_preserve_destination_status"):payload.pop("status",None)
+    # 10.252 — Node ledger 'unchanged': when the exact payload we are about to
+    # send matches the signature stored at the last successful send, skip the
+    # HTTP call entirely. Force-update always sends.
+    sig=_destination_payload_signature(payload)
+    if existing_id and clean_text(product.get("_destination_sig"))==sig and not product.get("_force_destination_update"):
+        return {"action":"unchanged","id":existing_id,"sig":sig,"source":clean_text(product.get("title"))}
     if payload.get("categories"):
         category_name = clean_text(payload["categories"][0].get("name"))
         category_id = int(payload["categories"][0].get("id",0) or 0)
@@ -5046,7 +5183,7 @@ def woo_send_one(product: dict[str, Any], status: str, update_existing: bool) ->
             child = {"regular_price": woo_price(product.get("price")), "attributes": [{"name": name, "option": value} for name, value in combo]}
             woo_request("POST", f"products/{parent_id}/variations", child)
             variation_count += 1
-    return {"source": product.get("title"), "id": parent_id, "name": result.get("name"), "action": "updated" if existing_id else "created", "variations": variation_count}
+    return {"source": product.get("title"), "id": parent_id, "name": result.get("name"), "action": "updated" if existing_id else "created", "variations": variation_count, "sig": sig}
 
 
 def export_cell(value: Any) -> Any:
@@ -8480,12 +8617,24 @@ def basalam_send_one(product: dict[str, Any], shop: Optional[dict[str, Any]] = N
             cfg["token"] = shop["token"]
         item = bsl_apply_shop_price(item, shop)
     with basalam_use_cfg(cfg):
+        # 10.252 — per-shop 'unchanged' skip (Node ledger): sign the exact
+        # REST payload for THIS stall and compare with the last stored one.
+        _category=int(item.get("basalam_category_id") or cfg.get("category_id") or 0)
+        _sku=clean_text(item.get("sku"))
+        sig=_destination_payload_signature(basalam_rest_payload(item,cfg,_category,_sku)) if _category else ""
+        _vid=int(cfg.get("vendor_id") or 0)
+        _known_sigs=item.get("_bsl_shop_sigs") if isinstance(item.get("_bsl_shop_sigs"),dict) else {}
+        _known_ids=item.get("_bsl_shop_ids") if isinstance(item.get("_bsl_shop_ids"),dict) else {}
+        if sig and _vid and _known_sigs.get(str(_vid))==sig and _known_ids.get(str(_vid)) not in (None,"",0,"0") and not item.get("_force_destination_update"):
+            return {"source":item.get("title"),"id":_known_ids.get(str(_vid)),"action":"unchanged","sig":sig,"client":"skip","vendor_id":_vid,"shop_name":clean_text((shop or {}).get("shop_name") or cfg.get("shop_name") or ""),"is_default":bool((shop or {}).get("is_default",shop is None))}
         result, client = basalam_strategy(
             lambda: basalam_send_one_sdk(item), lambda: basalam_send_one_api(item),
             mutating=True, operation="ایجاد یا ویرایش محصول باسلام",
         )
     if isinstance(result, dict):
         result["client"] = client
+        if sig:
+            result["sig"] = sig
         result["vendor_id"] = int(cfg.get("vendor_id") or 0)
         result["shop_name"] = clean_text((shop or {}).get("shop_name") or cfg.get("shop_name") or "")
         result["is_default"] = bool((shop or {}).get("is_default", shop is None))
@@ -9204,7 +9353,7 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
     coordinating thread, so the data file is never written concurrently.
     """
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-    started=time.time();total=max(1,len(products)*len(destinations));done=sent=failed=0;counts={x:{"sent":0,"failed":0} for x in destinations}
+    started=time.time();total=max(1,len(products)*len(destinations));done=sent=failed=unchanged=0;counts={x:{"sent":0,"failed":0,"unchanged":0} for x in destinations}
     try:
         _profile_cfg=load_data().get("profiles",{}).get(profile_name) or {}
         live_task_update(task_id,1,"آماده‌سازی ارسال کامل پروفایل","running",f"پروفایل {profile_name} · {len(products)} محصول · مقصد: {'، '.join(destinations)}",profile=profile_name,total=total,done=0,sent=0,failed=0,destinations=counts,stage="sync")
@@ -9214,20 +9363,23 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
 
         def _record(destination:str,label:str,index:int,product:dict[str,Any],ok:bool,message:str,result:Any,title:str,error:str)->None:
             """Count + event + identity + progress — coordinating thread only."""
-            nonlocal done,sent,failed
-            if ok:
+            nonlocal done,sent,failed,unchanged
+            _action=result.get("action") if isinstance(result,dict) else ""
+            if ok and _action=="unchanged":
+                unchanged+=1;counts[destination]["unchanged"]+=1;_ev="sync-unchanged"
+            elif ok:
                 sent+=1;counts[destination]["sent"]+=1
                 if isinstance(result,dict):
                     try:record_destination_identity(profile_name,destination,product,result)
                     except Exception: pass
-                _ev="sync-updated" if (isinstance(result,dict) and result.get("action")=="updated") else "sync-created"
+                _ev="sync-updated" if _action=="updated" else "sync-created"
             else:
                 failed+=1;counts[destination]["failed"]+=1;_ev="failed"
             try:
                 live_task_event(task_id,_ev,{"title":title,"price":clean_text(product.get("price")),"link":clean_text(product.get("link")),"sourceKey":clean_text(product.get("source_key") or product.get("sourceKey")),"target":label,"action":(result.get("action") if isinstance(result,dict) else ""),"error":error},message)
             except Exception: pass
             done+=1;elapsed=max(.001,time.time()-started);rate=done/elapsed;remaining=int((total-done)/rate) if rate else 0
-            live_task_update(task_id,max(2,int(done/total*100)),f"{label}: محصول {index} از {len(products)}","running",message,profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=int(elapsed),eta_seconds=remaining,current_product=title)
+            live_task_update(task_id,max(2,int(done/total*100)),f"{label}: محصول {index} از {len(products)}","running",message,profile=profile_name,done=done,total=total,sent=sent,failed=failed,unchanged=unchanged,destinations=counts,elapsed_seconds=int(elapsed),eta_seconds=remaining,current_product=title)
 
         for destination in destinations:
             label="ووکامرس" if destination=="woocommerce" else "باسلام"
@@ -9242,6 +9394,15 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
                     destination_product=product_for_destination(product,profile_rules,_destination);known_id=destination_identity_id(profile_name,_destination,product)
                     if known_id:destination_product["_destination_id"]=known_id
                     if force_update:destination_product["_force_destination_update"]=True;destination_product["_preserve_destination_status"]=True
+                    elif known_id:
+                        # 10.252: hand the stored payload signatures to the
+                        # sender so an unchanged product is skipped with zero
+                        # HTTP (force-update never attaches them).
+                        _entry=destination_identity_entry(profile_name,_destination,product)
+                        if _destination=="woocommerce" and clean_text(_entry.get("sig")):destination_product["_destination_sig"]=clean_text(_entry.get("sig"))
+                        if _destination=="basalam":
+                            if isinstance(_entry.get("shop_sigs"),dict) and _entry["shop_sigs"]:destination_product["_bsl_shop_sigs"]=dict(_entry["shop_sigs"])
+                            if isinstance(_entry.get("shop_ids"),dict) and _entry["shop_ids"]:destination_product["_bsl_shop_ids"]=dict(_entry["shop_ids"])
                     if _destination=="woocommerce":result=woo_send_one(destination_product,woo_status,woo_update or force_update)
                     else:result=basalam_fanout_send(destination_product)
                     message=f"✓ {_label} · {index}/{len(products)} · {title}"
@@ -9288,7 +9449,7 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
                 finally:
                     pool.shutdown(wait=False,cancel_futures=True)
                 live_task_update(task_id,max(2,int(done/total*100)),f"پایان ارسال موازی به {label}","running",f"{counts[destination]['sent']} موفق و {counts[destination]['failed']} خطا"+(f" · همزمانی به‌علت محدودیت نرخ به {limit} کاهش یافت" if reduced else ""),profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,concurrency=limit)
-        status="completed";step="ارسال کامل پروفایل پایان یافت";detail=f"{sent} عملیات موفق و {failed} خطا در {int(time.time()-started)} ثانیه"
+        status="completed";step="ارسال کامل پروفایل پایان یافت";detail=f"{sent} عملیات موفق و {failed} خطا در {int(time.time()-started)} ثانیه"+(f" · {unchanged} محصول بدون تغییر بود و رد شد" if unchanged else "")
         # 10.249: optional automatic reconcile after the profile's sync —
         # the per-profile «مغایرت‌گیری خودکار پس از همگام‌سازی» toggle.
         try:
@@ -9298,7 +9459,7 @@ def profile_dispatch_worker(task_id: str, profile_name: str, products: list[dict
                 _queued=[start_destination_reconcile_task(profile_name,x) for x in destinations]
                 if _queued:detail+=" · مغایرت‌گیری خودکار برای "+" و ".join(_labels.get(x,x) for x in destinations)+" در صف قرار گرفت"
         except Exception: pass
-        live_task_update(task_id,100,step,status,detail,profile=profile_name,done=done,total=total,sent=sent,failed=failed,destinations=counts,elapsed_seconds=int(time.time()-started),eta_seconds=0)
+        live_task_update(task_id,100,step,status,detail,profile=profile_name,done=done,total=total,sent=sent,failed=failed,unchanged=unchanged,destinations=counts,elapsed_seconds=int(time.time()-started),eta_seconds=0)
     except Exception as exc:
         live_task_update(task_id,max(1,int(done/total*100)),"ارسال کامل پروفایل ناموفق بود","failed",str(exc),profile=profile_name,done=done,total=total,sent=sent,failed=failed,error=clean_text(exc)[:1500],destinations=counts)
 
@@ -9311,7 +9472,7 @@ def start_profile_dispatch(profile_name: str, body: dict[str,Any]) -> dict[str,A
     requested=body.get("destinations",["woocommerce","basalam"]);destinations=[x for x in ("woocommerce","basalam") if x in requested]
     if not destinations:raise ValueError("حداقل یک مقصد انتخاب کنید")
     task=live_task_create("profile_dispatch",f"ارسال کامل پروفایل «{profile_name}»",private=True)
-    task.update(profile=profile_name,total=len(products)*len(destinations),done=0,sent=0,failed=0,destinations={x:{"sent":0,"failed":0} for x in destinations});live_task_disk_write(task)
+    task.update(profile=profile_name,total=len(products)*len(destinations),done=0,sent=0,failed=0,unchanged=0,destinations={x:{"sent":0,"failed":0,"unchanged":0} for x in destinations});live_task_disk_write(task)
     threading.Thread(target=profile_dispatch_worker,args=(task["id"],profile_name,products,destinations,str(body.get("woo_status","draft")),bool(body.get("woo_update",True)),profile.get("profile_rules",{}) if isinstance(profile.get("profile_rules"),dict) else {}),name="profile-dispatch",daemon=True).start()
     return task
 
