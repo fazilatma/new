@@ -1,3 +1,4 @@
+import {benchmarkEvidence,incompatibleBenchmark} from '../worker-src/benchmark-evidence.js';
 import {browserRepairReport} from '../scripts/browser-repair-report.mjs';
 import {gatewayDownloadEnvironment} from '../scripts/browser-download-gateway.mjs';
 import {resolveSourceNetwork} from '../worker-src/source-network.js';
@@ -53,7 +54,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.218.1+'; } catch { return process.env.npm_package_version || '1.218.1+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.219.0+'; } catch { return process.env.npm_package_version || '1.219.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -776,6 +777,7 @@ async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObs
   try{const first=await safeText(pageUrl(probe,1),1_000_000,{indirect:Boolean(profile.networkIndirect)});diagHtml=first.text;diagUrl=first.url||pageUrl(probe,1)}catch{/* diagnosis degrades to product-only signals */}
   emit({name:'benchmark-network',status:diagHtml?'success':'error',summary:diagHtml?'صفحهٔ مبنا دریافت شد.':'دریافت صفحهٔ مبنا ناموفق بود؛ آزمون مستقل موتورها ادامه دارد.'});
   for(const engine of BENCHMARK_ENGINES){
+    const incompatible=incompatibleBenchmark(engine,selectedProductParser(profile));if(incompatible){results.push(incompatible);emit({name:engine,status:'skipped',summary:incompatible.diagnosis.hint,result:incompatible});continue;}
     emit({name:engine,status:'running',summary:'شروع تست موتور '+engine,pages:3});
     const start=Date.now();let products=0,pagesScanned=0,error='',seen=new Set<string>();const engineProducts:any[]=[];let engineSelectors:any=null;let paginationReport:any=null;
     if(!browserEngineAvailable()&&BROWSER_ENGINES.has(engine)){const unavailable='مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.';results.push({engine,ok:false,available:false,elapsedMs:0,pagesScanned:0,products:0,productsPerMinute:0,error:unavailable,diagnosis:{engine,candidates:0,extracted:0,complete:{title:0,price:0,link:0,image:0},sample:null,dropReasons:[unavailable],hint:'کرومیوم نصب کنید (pkg install chromium) یا BROWSER_EXECUTABLE_PATH را تنظیم کنید؛ تا آن زمان از htmlrewriter، cheerio یا heuristic استفاده کنید.',signals:{available:false}}});emit({name:engine,status:'skipped',summary:unavailable,result:results[results.length-1]});continue}
@@ -791,8 +793,8 @@ async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObs
     const elapsedMs=Date.now()-start,minutes=Math.max(1/60,elapsedMs/60000);
     let diagnosis:any=null;
     try{diagnosis=await diagnoseBenchmarkEngine(engine,diagHtml,diagUrl||pageUrl(probe,1),engineSelectors||profile.selectors,engineProducts,error)}catch{diagnosis=null}
-    if(selectedProductParser(profile))diagnosis={engine,productParser:selectedProductParser(profile),extracted:products,hint:'پارسر HTML ثابت: '+selectedProductParser(profile)+'؛ این ردیف دریافت‌کنندهٔ صفحه را مقایسه می‌کند، نه کتابخانهٔ Python.',...(error?{dropReasons:[error]}:{})};
-    results.push({engine,...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}),ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,pagination:{...paginationReport,products:undefined},productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
+    diagnosis=benchmarkEvidence(engine,engineProducts,error,selectedProductParser(profile),diagnosis);
+    results.push({engine,sample:diagnosis.sample,...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}),ok:products>0&&!error,available:true,elapsedMs,pagesScanned,products,pagination:{...paginationReport,products:undefined},productsPerMinute:Number((products/minutes).toFixed(2)),...(error?{error}:{}),...(diagnosis?{diagnosis}:{})});
     emit({name:engine,status:products>0&&!error?'success':'error',summary:error||('پایان تست؛ '+products+' محصول'),result:results[results.length-1]});
   }
   const usable=results.filter(r=>r.ok&&r.available);
@@ -811,6 +813,7 @@ async function benchmarkProfileEngines(profile:Profile,onProgress?:DiagnosticObs
   emit({name:'benchmark-save',status:selectedProductParser(profile)?'skipped':profileUpdated?'success':'error',summary:selectedProductParser(profile)?'پارسر مرحلهٔ دوم ثابت ماند؛ تست فقط خواندنی است و موتور یا سلکتورها ذخیره نشدند.':profileUpdated?'گزارش ذخیره شد؛ ویرایش‌های همزمان حفظ شدند.':'پروفایل همزمان تغییر کرد یا حذف شد؛ نتیجه روی تنظیمات جدید نوشته نشد.'});
   return{ok:Boolean(fastest),...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}),profileUpdated,profileId:profile.id,startedAt,pages,pagination:profile.pagination,fastest,results,discoveredSelectors:benchmarkDiscovered,recommendations:selectedProductParser(profile)?['پارسر مرحلهٔ دوم: '+selectedProductParser(profile)+'؛ مقایسهٔ دریافت صفحه بدون تغییر تنظیمات ذخیره‌شده انجام شد.']:fastest?[`بهترین موتور به‌عنوان پیش‌فرض پروفایل ذخیره شد: ${fastest.engine} (${fastest.products} محصول در ${fastest.pagesScanned} صفحه/دسته).`]:(bestCount>0?[`هیچ موتوری به اندازهٔ کافی محصول پیدا نکرد (بیشترین: ${bestCount}). موتور پیش‌فرض پروفایل تغییر نکرد تا یک نتیجهٔ نادرست جایگزین تنظیم درست شما نشود.`,'سلکتور ظرف محصول را بررسی کنید؛ اگر روی Cloudflare درست کار می‌کند، همان htmlrewriter را دستی انتخاب کنید.']:['هیچ موتوری در سه صفحهٔ اول محصولی استخراج نکرد. دسترسی شبکه، پاسخ ضدربات و سلکتورها را بررسی کنید.','موتور پیش‌فرض پروفایل بدون تغییر باقی ماند.'])};
 }
+
 app.post('/api/profiles/:id/benchmark-engines',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);if(c.req.query('live')==='1')return diagnosticStream(observe=>benchmarkProfileEngines(profile,observe));return c.json(await benchmarkProfileEngines(profile))});
 app.post('/api/profiles/:id/run',async c=>runProfileApi(c,c.req.param('id')));
 app.post('/api/profiles/:id/extract',async c=>runProfileApi(c,c.req.param('id')));
