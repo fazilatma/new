@@ -33,3 +33,12 @@ test('event history is bounded and snapshots cannot mutate the manager',async()=
 test('close failure is not reported as closed and can be retried',async()=>{
  const f=fixture();let failClose=true;f.browser.isConnected=()=>true;f.browser.close=async()=>{if(failClose)throw Error('close failed')};const m=createBrowserRuntime({uid:1000,launch:async()=>f.browser});m.start({engine:'playwright'});await m.settled();await m.close();assert.equal(m.status().phase,'failed');assert.equal(m.status().connected,true);assert.equal(m.status().lastFailure.stage,'close');failClose=false;await m.close();assert.equal(m.status().phase,'closed');assert.equal(m.status().connected,false);
 });
+test('Playwright crash event carries a Page, not an Error; preserve primary crash and navigation rejection',async()=>{
+ const f=fixture();f.page.self=f.page;
+ f.page.goto=async()=>{f.page.emit('crash',f.page);throw new Error('page.goto: Page crashed https://shop.test/?token=hidden')};
+ const m=createBrowserRuntime({uid:1000,launch:async()=>f.browser});m.start({engine:'playwright'});const state=await m.settled();
+ assert.equal(state.phase,'failed');assert.equal(state.lastFailure.stage,'page-crash');assert.match(state.lastFailure.error,/Page crashed/);assert.doesNotMatch(JSON.stringify(state),/\[object Object\]|token=hidden/);assert.equal(state.lastFailure.relatedErrors[0].stage,'navigation');assert.match(state.lastFailure.relatedErrors[0].error,/page.goto/);assert.equal(f.closes(),1);assert.equal(state.pageLoaded,false);
+});
+test('Puppeteer crash retains the actual Error and nested cause',async()=>{
+ const f=fixture(),m=createBrowserRuntime({uid:1000,launch:async()=>f.browser});m.start({engine:'puppeteer'});await m.settled();f.page.emit('error',new Error('Page crashed!',{cause:new Error('renderer terminated')}));await new Promise(r=>setImmediate(r));assert.equal(m.status().lastFailure.error,'Page crashed!\nCause: renderer terminated');assert.equal(f.closes(),1);
+});

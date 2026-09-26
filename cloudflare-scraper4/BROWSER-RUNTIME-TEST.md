@@ -78,3 +78,17 @@ Technical logs are collapsed by default, while copied report textareas remain
 visible on demand for manual selection. Layout stacks on smaller viewports, uses
 relative sizes, preserves keyboard-native disclosure controls and provides visible
 focus outlines. No browser is opened automatically by viewing this section.
+
+## 1.222.1+ — accurate crash-event payload handling
+
+Playwright's `page.on('crash')` callback receives a **Page**, not an Error. This
+payload is now replaced with a precise renderer-crash message rather than
+stringified as `[object Object]`. Puppeteer's actual Error and nested cause remain
+intact. If navigation or title verification rejects after the crash event, its
+redacted error is retained in `lastFailure.relatedErrors` and the event timeline,
+without replacing the primary crash. Related errors are bounded to five entries.
+
+A local-page crash after a browser-version/connected event establishes that launch
+succeeded but local rendering failed. It is independent of the source website;
+it does not establish an OOM kill or a missing browser binary. This patch fixes
+reporting and does not claim to repair the user's Chromium crash.

@@ -25,7 +25,13 @@ export function createBrowserRuntime({launch,uid=process.getuid?.(),redact=repor
     try{state.browserVersion=typeof b.version==='function'?await b.version():null;state.pid=b.process?.()?.pid||null}catch(e){log('metadata',errorText(e))}
     stage='new-page';page=await b.newPage();if(cancelled){await dispose();return}
     const current=page;
-    page.on?.(options.engine==='playwright'?'crash':'error',e=>{if(page===current&&!cancelled)void fail(e||Error('Page crashed'),'page-crash')});
+    // Playwright emits the Page itself; stringifying it produces [object Object].
+    // Puppeteer emits an Error whose message/cause should be retained.
+    page.on?.(options.engine==='playwright'?'crash':'error',e=>{
+     if(page!==current||cancelled)return;
+     const error=options.engine==='playwright'?Error('Page crashed: Playwright reported a renderer crash on the local test page. The event does not include an OS cause; memory exhaustion is not confirmed.'):(e instanceof Error||typeof e?.message==='string'?e:Error('Page crashed: Puppeteer reported a renderer failure without an error message.'));
+     void fail(error,'page-crash');
+    });
     page.on?.('close',()=>{if(page===current&&!cancelled)void fail(Error('Diagnostic page closed unexpectedly'),'page-close')});
     page.on?.('pageerror',e=>log('pageerror',errorText(e)));
     stage='navigation';
@@ -34,7 +40,16 @@ export function createBrowserRuntime({launch,uid=process.getuid?.(),redact=repor
     stage='page-check';if(await page.title()!=='Scraper4 browser runtime OK')throw Error('Local page title verification failed');
     if(cancelled||state.phase==='failed'){await dispose();return}
     state.pageLoaded=true;state.phase='open';state.openedAt=now();log('ready','Local navigation and title check passed. Browser remains open until Close browser is pressed.');
-   }catch(error){if(!cancelled&&state.phase!=='failed')await fail(error,stage)}
+   }catch(error){
+    if(!cancelled&&state.phase!=='failed')await fail(error,stage);
+    else if(!cancelled&&state.lastFailure){
+     // goto/title may reject after the crash event. Keep the original crash,
+     // and append this extra SDK evidence instead of silently discarding it.
+     const related={at:now(),stage,error:errorText(error)};
+     state.lastFailure.relatedErrors=[...(state.lastFailure.relatedErrors||[]),related].slice(-5);
+     log('related-error',stage+': '+related.error);
+    }
+   }
    finally{if(cancelled){await dispose();state.phase=browser?'failed':'closed';if(!browser)state.closedAt=now();state.pageLoaded=false}task=null}
   })();
   return snapshot();
