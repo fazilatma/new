@@ -1,3 +1,4 @@
+import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
 /** Playwright-only adaptation of render_playwright from fazilatma/new
  * arena/01a0c9ea-new @ fa0a3c3b486c0e3930c9e6a6283f0a1501e79511.
  * Does not import Python settings, installer, cache discovery, relay or parsers.
@@ -11,7 +12,7 @@ export function pythonPlaywrightPlan(url:string){
  const matches=(base:string)=>host===base||host.endsWith('.'+base);
  const snapp=matches('snappshop.ir'),digi=matches('digikala.com')||matches('digikala.ir'),spa=snapp||digi;
  return {
-  launch:{headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-blink-features=AutomationControlled'],timeout:30000},
+  launch:{...playwrightSandboxOptions(),headless:true,args:browserLaunchArguments({},['--disable-blink-features=AutomationControlled']),timeout:30000},
   context:{userAgent:config.userAgent,locale:'fa-IR',viewport:{width:1366,height:768},timezoneId:'Asia/Tehran',serviceWorkers:'block'},
   timeout:Math.min(snapp?20000:35000,Math.max(8000,config.requestTimeoutMs)),
   initialWait:spa?1800:500,scrolls:spa?8:4,scrollWait:spa?850:600,

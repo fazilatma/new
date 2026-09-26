@@ -92,3 +92,13 @@ A local-page crash after a browser-version/connected event establishes that laun
 succeeded but local rendering failed. It is independent of the source website;
 it does not establish an OOM kill or a missing browser binary. This patch fixes
 reporting and does not claim to repair the user's Chromium crash.
+
+## 1.224.0+ — application-wide portable defaults
+
+The older manual-only sandbox policy above is superseded by the central `auto`
+policy: root/Termux get an explicitly warned compatibility mode, non-root uses
+sandboxing, and explicit true/false overrides are respected. The runtime test,
+visual selector, extraction and repair probes share this policy. Linux browser
+temporary files default to `/tmp`, fixing the observed private web-console temp
+permission failure. See `BROWSER-DEFAULTS.md` for all defaults, platform behavior,
+security implications and installation prerequisites. Debug logging stays opt-in.

@@ -1,3 +1,4 @@
+import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
 import {waitForVisualContent} from './visual-readiness.js';
 import { browserExecutable, withBrowserSlot } from './scraper.js';
 import { assertPublicUrl, safeFetch, safeText } from './network.js';
@@ -43,12 +44,11 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
   await assertPublicUrl(url);
   return withBrowserSlot(async()=>{
     const initial=session?.initial||await safeText(url,6_000_000,{indirect});await assertPublicUrl(initial.url);
-    const args=['--disable-dev-shm-usage','--disable-gpu','--proxy-server=http://127.0.0.1:9','--proxy-bypass-list=<-loopback>','--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
-    if(process.env.VISUAL_BROWSER_NO_SANDBOX==='true')args.push('--no-sandbox','--disable-setuid-sandbox');
+    const args=browserLaunchArguments({},['--proxy-server=http://127.0.0.1:9','--proxy-bypass-list=<-loopback>','--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
     let browser:any;
     try{
       browser=driver==='playwright'
-        ? await (await import('playwright')).chromium.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000})
+        ? await (await import('playwright')).chromium.launch({...playwrightSandboxOptions(),headless:true,executablePath:browserExecutable(driver),args,timeout:20_000})
         : await (await import('puppeteer')).default.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000});
     }catch{throw Error('مرورگر انتخاب‌شده راه‌اندازی نشد. npm run browsers:install و BROWSER_EXECUTABLE_PATH را بررسی کنید؛ سرویس را با کاربر غیر root اجرا کنید.');}
     let timeout:ReturnType<typeof setTimeout>|undefined,requests=0,bytes=0,blocked=0,expired=false,documentServed=false,navigationRecovered=false,navigationRetried=false,skipped=0,criticalResourceFailed=false,pageCrashed=false;

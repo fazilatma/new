@@ -1,3 +1,4 @@
+import {applyBrowserDefaults,browserLaunchArguments,playwrightSandboxOptions} from './browser-defaults.mjs';
 import {reuseBrowserCaches} from './browser-cache-reuse.mjs';
 import {spawn} from 'node:child_process';
 import {existsSync,readFileSync,realpathSync} from 'node:fs';
@@ -49,22 +50,23 @@ export function npmCli(env){
  for(const path of candidates){try{if(path){const file=realpathSync(path);if(file.endsWith('.js'))return file;}}catch{}}
  throw Error('A readable npm CLI was not found; install project dependencies through the deployment manager.');
 }
-export function smokeScript(engine,executable){
- const opts=JSON.stringify({headless:true,timeout:30000,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],...(executable?{executablePath:executable}:{})});
+export function smokeScript(engine,executable,env=process.env){
+ const opts=JSON.stringify({headless:true,timeout:30000,args:browserLaunchArguments({env}),...(engine.includes('playwright')?playwrightSandboxOptions({env}):{}),...(executable?{executablePath:executable}:{})});
  const launch=engine==='playwright'?`const {chromium}=await import('playwright');b=await chromium.launch(${opts});`:engine==='puppeteer'?`const {default:p}=await import('puppeteer');b=await p.launch(${opts});`:`const c=await import('crawlee');b=await c.${engine==='crawlee-playwright'?'launchPlaywright':'launchPuppeteer'}({launchOptions:${opts}});`;
  return `let b;try{${launch}const page=await b.newPage();await page.setContent('<title>Browser launch OK</title>');if(await page.title()!=='Browser launch OK')throw Error('Page test failed');console.log('Browser launch OK',await b.version());}finally{if(b)await b.close();}`;
 }
 export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=process.getuid?.(),run=runBrowserCommand,exists=existsSync,resolveExecutable=driver=>env.BROWSER_EXECUTABLE_PATH||(driver==='playwright'?env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:env.PUPPETEER_EXECUTABLE_PATH)||env.CHROME_BIN,resolveCli=name=>localCli(cwd,name),plan=()=>libraryPlan(cwd),resolveNpm=()=>npmCli(env),resolveDownloadEnv=async()=>env,reuseCaches=reuseBrowserCaches}={}){
+ env={...env};applyBrowserDefaults(env,{uid});
  const fresh=()=>({running:false,success:null,phase:'idle',log:'',logTruncated:false,results:{},startedAt:null,finishedAt:null});
  let state=fresh(),downloadEnv;const verification=new Map();
- const installEnv=async()=>{if(!downloadEnv){downloadEnv=await resolveDownloadEnv();state.downloadRoute=downloadEnv.SCRAPER_BROWSER_GATEWAY?'cloudflare-gateway':'existing-environment';log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
+ const installEnv=async()=>{if(!downloadEnv){downloadEnv={...await resolveDownloadEnv()};applyBrowserDefaults(downloadEnv,{uid});state.downloadRoute=downloadEnv.SCRAPER_BROWSER_GATEWAY?'cloudflare-gateway':'existing-environment';log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
  const snapshot=()=>({...state,results:JSON.parse(JSON.stringify(state.results))});
  const log=text=>{const safe=downloadEnv?.SCRAPER_BROWSER_GATEWAY?String(text).split(downloadEnv.SCRAPER_BROWSER_GATEWAY).join('[configured gateway]'):text;const next=state.log+redact(safe)+'\n';state.logTruncated=state.logTruncated||next.length>24000;state.log=next.slice(-24000);};
  async function verify(engine,executable){
   state.phase=engine+'-verifying';log('Testing '+engine+' with the current runtime browser configuration.');
   const detail={missingLibraries:[]};verification.set(engine,detail);
   const capture=text=>{log(text);const line=String(text);for(const match of line.matchAll(/error while loading shared libraries:\s*([^\s:]+)|((?:lib)[\w.+-]+\.so(?:\.\d+)*)\s*=>\s*not found/g)){const name=match[1]||match[2];if(!detail.missingLibraries.includes(name))detail.missingLibraries.push(name);}if(detail.missingLibraries.length||/Host system is missing dependencies/.test(line))detail.errorCategory='missing-os-libraries';};
-  const ok=await run(['--input-type=module','-e',smokeScript(engine,executable)],{cwd,env,log:capture,timeout:45000});
+  const ok=await run(['--input-type=module','-e',smokeScript(engine,executable,env)],{cwd,env,log:capture,timeout:45000});
   if(!ok&&detail.errorCategory==='missing-os-libraries'){detail.action='In the project directory run: node node_modules/playwright/cli.js install-deps chromium (Ubuntu/Debian system packages; administrator approval required).';log('Missing operating-system libraries: '+(detail.missingLibraries.join(', ')||'see browser output')+'. '+detail.action);}
   return ok;
  }

@@ -51,12 +51,12 @@ test('site-specific waits use hostname matching rather than arbitrary URL substr
  assert.equal(profile.pythonPlaywrightPlan('https://www.snappshop.ir/').scrolls,8);
  assert.equal(profile.pythonPlaywrightPlan('https://digikala.com/').digi,true);
 });
-test('Puppeteer and Crawlee implementations are untouched by the Playwright adaptation',async()=>{
+test('Puppeteer and Crawlee extraction stay unchanged apart from optional readers and shared sandbox configuration',async()=>{
  const current=await readFile(join(root,'render-src/scraper.ts'),'utf8');
  const original=execFileSync('git',['show','b11727f:cloudflare-scraper4/render-src/scraper.ts'],{cwd:root,encoding:'utf8'});
  const pup=s=>s.slice(s.indexOf("  const puppeteer = await import('puppeteer');",s.indexOf('async function scrapeRenderedHtml(')),s.indexOf('async function scrapeListWithPlaywright('));
  const crawlee=s=>s.slice(s.indexOf('async function scrapeListWithCrawleePlaywright('),s.indexOf('function parseProductsFromHtml('));
- const withoutOptionalReader=s=>s.replace(/,reader\?:\(html:string,url:string\)=>Promise<Product\[\]>/g,'').replace(/\n    if\(reader\)return reader\(html,finalUrl\);/g,'').replace(/\n    if\(reader\)\{found=await reader\(html,page.url\(\)\);return;\}/g,'');
+ const withoutOptionalReader=s=>s.replace(/\.\.\.playwrightSandboxOptions\(\), /g,'').replace(/,reader\?:\(html:string,url:string\)=>Promise<Product\[\]>/g,'').replace(/\n    if\(reader\)return reader\(html,finalUrl\);/g,'').replace(/\n    if\(reader\)\{found=await reader\(html,page.url\(\)\);return;\}/g,'');
  assert.equal(withoutOptionalReader(pup(current)),pup(original));assert.equal(withoutOptionalReader(crawlee(current)),crawlee(original));
 });
 

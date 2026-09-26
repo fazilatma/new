@@ -1738,7 +1738,7 @@ test('browser engines run on Termux via the system Chromium, never desktop downl
   const scraper = await readProjectFile('render-src/scraper.ts');
   // Detection + flags (shared by all three engines).
   assert.match(scraper, /\/data\/data\/com\.termux\/files\/usr\/bin\/chromium/, 'the Termux Chromium path must be auto-detected');
-  assert.match(scraper, /'--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'/, 'rootless/Android-safe launch flags must be shared');
+  assert.match(scraper, /return browserLaunchArguments\(\)/, 'browser flags must follow the central platform/sandbox policy');
   // Playwright + Puppeteer already launch the detected executable...
   assert.ok(scraper.includes('async function scrapeRenderedHtml('), 'guard: the shared launcher was located');
   const rendered = scraper.slice(scraper.indexOf('async function scrapeRenderedHtml('), scraper.indexOf('async function scrapeListWithPlaywright('));
@@ -1747,7 +1747,7 @@ test('browser engines run on Termux via the system Chromium, never desktop downl
   // ignore the detected browser and look for bundled downloads only).
   assert.ok(scraper.includes('async function scrapeListWithCrawleePlaywright('), 'guard: the crawlee body was located');
   const crawlee = scraper.slice(scraper.indexOf('async function scrapeListWithCrawleePlaywright('), scraper.indexOf('function parseProductsFromHtml('));
-  assert.match(crawlee, /launchContext: \{ launchOptions: \{ headless: true, executablePath, args: browserLaunchArgs\(\) \} \}/, 'crawlee must launch the detected executable with the shared flags');
+  assert.match(crawlee, /launchContext: \{ launchOptions: \{ \.\.\.playwrightSandboxOptions\(\), headless: true, executablePath, args: browserLaunchArgs\(\) \} \}/, 'crawlee must launch the detected executable with the shared flags');
   // The installer must not download desktop browsers on Termux.
   const installer = await import('../scripts/browsers-install.mjs');
   assert.equal(installer.isTermux({ PREFIX: '/data/data/com.termux/files/usr' }), true, 'Termux must be detected from $PREFIX');

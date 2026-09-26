@@ -1,3 +1,4 @@
+import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
 import {createBrowserRuntime} from '../scripts/browser-runtime.mjs';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {extractDiagnosticSample} from './scraper.js';
@@ -57,7 +58,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.223.0+'; } catch { return process.env.npm_package_version || '1.223.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.224.0+'; } catch { return process.env.npm_package_version || '1.224.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -320,11 +321,10 @@ const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExec
  return gatewayDownloadEnvironment(process.env,gateway);
 }});
 const browserRuntime=createBrowserRuntime({launch:async(engine:string)=>{
- const args=['--disable-dev-shm-usage','--disable-gpu','--proxy-server=http://127.0.0.1:9','--proxy-bypass-list=<-loopback>','--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
- // Match the visual browser's sandbox policy; root acknowledgement is not a sandbox override.
- if(process.env.VISUAL_BROWSER_NO_SANDBOX==='true')args.push('--no-sandbox','--disable-setuid-sandbox');
+ const args=browserLaunchArguments({},['--proxy-server=http://127.0.0.1:9','--proxy-bypass-list=<-loopback>','--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
+ // Same centrally resolved sandbox policy as visual and extraction browsers.
  const options={headless:true,executablePath:browserExecutable(engine as any),args,timeout:20000};
- return engine==='playwright'?(await import('playwright')).chromium.launch(options):(await import('puppeteer')).default.launch(options);
+ return engine==='playwright'?(await import('playwright')).chromium.launch({...options,...playwrightSandboxOptions()}):(await import('puppeteer')).default.launch(options);
 }});
 app.get('/api/runtime/browser-session',c=>{c.header('Cache-Control','no-store');return c.json({ok:true,...browserRuntime.status()})});
 app.post('/api/runtime/browser-session',async c=>{

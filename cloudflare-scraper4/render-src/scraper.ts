@@ -1,3 +1,4 @@
+import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
 import {selectorDiagnosticAdvice,initialSelectorEvidenceApplies} from '../worker-src/selector-diagnostic-advice.js';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {isBrowserSelectorEngine} from '../worker-src/selector-engine.js';
@@ -672,7 +673,7 @@ export async function withBrowserSlot<T>(task: () => Promise<T>): Promise<T> {
   await previous;
   try { return await task(); } finally { release(); }
 }
-export function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
+export function browserLaunchArgs(): string[] { return browserLaunchArguments(); }
 /** A goto interrupted by the page's own redirect/reload rejects with net::ERR_ABORTED even though the follow-up page loads fine — survivable. */
 function isAbortedNavigation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -861,7 +862,7 @@ function isJsonish(contentType: string, text: string): boolean {
 }
 async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
+  const browser = await chromium.launch({ ...playwrightSandboxOptions(), headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
   try {
     const page = await browser.newPage({ locale: 'fa-IR' });
     const bodies: string[] = [];
@@ -1050,7 +1051,7 @@ async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors
   // .npmrc deliberately skips — and which could never execute on Android
   // (desktop-Linux glibc binaries vs Android's Bionic libc) anyway.
   const executablePath = browserExecutable('playwright');
-  const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
+  const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { ...playwrightSandboxOptions(), headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
     if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
     const html = await page.content();

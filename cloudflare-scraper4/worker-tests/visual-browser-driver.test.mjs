@@ -10,6 +10,7 @@ await build({entryPoints:[join(root,'render-src/visual-browser.ts')],outfile:joi
   b.onResolve({filter:/^(playwright|puppeteer|\.\/(scraper|network)\.js)$/},a=>({path:a.path,namespace:'mock'}));
   b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:a.path==='playwright'?'export const chromium={launch:options=>globalThis.__visualLaunch("playwright",options)};':a.path==='puppeteer'?'export default {launch:options=>globalThis.__visualLaunch("puppeteer",options)};':a.path.includes('scraper')?'export const withBrowserSlot=async task=>task();export const browserExecutable=()=>"/fixture/chromium";':`export const assertPublicUrl=async raw=>{const url=new URL(raw);if(!['http:','https:'].includes(url.protocol)||url.hostname==='127.0.0.1'||url.hostname==='localhost')throw Error('Private host');return url};export const safeText=async url=>({text:globalThis.__visualFixture,url});export const safeFetch=async(url,init)=>globalThis.__visualFetch?globalThis.__visualFetch(url,init):new Response('resource');`}));
 }}]});
+const originalSandbox=process.env.VISUAL_BROWSER_NO_SANDBOX;process.env.VISUAL_BROWSER_NO_SANDBOX='false';
 const driver=await import(pathToFileURL(join(temp,'driver.mjs')));
 globalThis.__visualFixture=fixture;
 for(const engine of ['playwright','puppeteer','crawlee_playwright','network_api']){
@@ -21,7 +22,7 @@ for(const engine of ['playwright','puppeteer','crawlee_playwright','network_api'
         if(route)await route({request:()=>req,fulfill:async()=>{fulfilled++},abort:async()=>{blocked++}});else await requestHandler(req);
       }
     }};
-    globalThis.__visualLaunch=async(kind,options)=>{launched=kind;assert.ok(options.args.includes('--proxy-server=http://127.0.0.1:9'));assert.ok(!options.args.includes('--no-sandbox'));return {newPage:async()=>page,close:async()=>{closed++}}};
+    globalThis.__visualLaunch=async(kind,options)=>{launched=kind;assert.ok(options.args.includes('--proxy-server=http://127.0.0.1:9'));assert.ok(!options.args.includes('--no-sandbox'));if(kind==='playwright')assert.equal(options.chromiumSandbox,true);return {newPage:async()=>page,close:async()=>{closed++}}};
     const result=await driver.renderBrowserSnapshot('https://shop.test/list',engine);
     assert.equal(launched,engine==='puppeteer'?'puppeteer':'playwright');assert.equal(fulfilled,1);assert.equal(blocked,1);assert.equal(closed,1);assert.equal(result.text,fixture);assert.equal(result.blockedResources,1);
   });
@@ -41,7 +42,7 @@ test('guarded scroll session prepares before navigation, keeps browser open duri
  assert.equal(collected,true);assert.equal(closed,1);assert.deepEqual(result.collected,[{id:'all-products'}]);
  await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright',false,{prepare:()=>{},collect:async()=>{throw Error('incomplete scroll')}}),/incomplete scroll/);assert.equal(closed,2);
 });
-test.after(async()=>{delete globalThis.__visualFixture;delete globalThis.__visualLaunch;await rm(temp,{recursive:true,force:true})});
+test.after(async()=>{if(originalSandbox===undefined)delete process.env.VISUAL_BROWSER_NO_SANDBOX;else process.env.VISUAL_BROWSER_NO_SANDBOX=originalSandbox;delete globalThis.__visualFixture;delete globalThis.__visualLaunch;await rm(temp,{recursive:true,force:true})});
 
 test('scroll recovers a DOMContentLoaded timeout only after its guarded document was served and DOM is ready',async()=>{
  let route,collected=false,closed=0;

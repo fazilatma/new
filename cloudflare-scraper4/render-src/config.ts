@@ -1,3 +1,7 @@
+import {applyBrowserDefaults} from '../scripts/browser-defaults.mjs';
+// Apply before any browser SDK creates profiles or child processes.
+const browserDefaults=applyBrowserDefaults();
+
 /**
  * The Node runtime is NOT only Render: the same build runs on Termux, Windows,
  * a VPS and Codespaces. Hardcoding "Render" into errors, hints and file names
@@ -31,6 +35,7 @@ function envToken(value: string | undefined): string {
 }
 
 export const config = {
+  browser: browserDefaults,
   port: Math.max(1, Number(process.env.PORT || 3000)),
   host: process.env.SCRAPER_BIND_HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || '',
@@ -54,6 +59,7 @@ export const config = {
 };
 
 export function assertConfig(): void {
+  for(const warning of config.browser.warnings)console.warn('BROWSER CONFIG: '+warning);
   // v1.55+ parity with scraper4.php v10.170: local/Termux can run without PostgreSQL.
   // When DATABASE_URL is empty, render-src/db.ts opens a local SQLite database automatically.
   if (!config.adminToken || config.adminAuthDisabled) console.warn('WARNING: Admin authentication is disabled; the dashboard, API and browser installation controls are public.');
