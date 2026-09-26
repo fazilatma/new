@@ -1,3 +1,5 @@
+import {browserInstallReport} from './browser-install-report.mjs';
+import {cacheRequirements,inspectBrowserCache,legacyBrowserCaches} from './browser-cache-compatibility.mjs';
 import {browserDefaultsReport} from './browser-defaults.mjs';
 import os from 'node:os';
 import {access,readFile,readdir,stat,statfs,lstat,realpath} from 'node:fs/promises';
@@ -39,6 +41,11 @@ export async function browserRepairReport({cwd=process.cwd(),env=process.env,sta
  let libc=null;try{libc=process.report?.getReport()?.header?.glibcVersionRuntime||null}catch{}
  let plan=[];try{plan=cacheReusePlan(env)}catch(e){warnings.push(e.message)}
  const caches=[];for(const item of plan){const source=await pathInfo(item.source),target=await pathInfo(item.target);let revisions=[];try{revisions=(await readdir(item.target)).filter(x=>x!=='.links').slice(0,40)}catch{}caches.push({driver:item.driver,source,target,disk:await diskInfo(item.target),revisions,revisionListingLimit:40})}
+ const requirements=cacheRequirements(cwd),legacy=legacyBrowserCaches(env);
+ for(const cache of caches){cache.compatibility=inspectBrowserCache(cache.target.path,requirements[cache.driver],cache.driver);cache.legacyCandidates=legacy[cache.driver].map(path=>inspectBrowserCache(path,requirements[cache.driver],cache.driver));if(!cache.compatibility.compatible)warnings.push(cache.driver+': selected cache does not contain all expected executable files. This is not proof of a sandbox or memory failure.');}
+ const backgroundInstall=await browserInstallReport(cwd);
+ if(!backgroundInstall.recorded)warnings.push('No background installation status recorded; the in-memory repair job is separate and idle does not prove installation completed.');
+ if(backgroundInstall.interrupted)warnings.push('Background installer is no longer running; its recorded running state is stale. Retry browser setup.');
  const executables={};for(const driver of ['playwright','puppeteer']){try{const path=resolveExecutable(driver);executables[driver]=path?await pathInfo(path):{selection:'library-managed cache (no explicit/system executable resolved)'}}catch(e){executables[driver]={error:e.message}}}
  const proxy={};for(const key of ['HTTPS_PROXY','HTTP_PROXY','ALL_PROXY','https_proxy','http_proxy','all_proxy'])if(env[key])proxy[key]=endpoint(env[key]);
  let browserDefaults;try{browserDefaults=browserDefaultsReport(env)}catch(error){browserDefaults={error:String(error.message||error)}}
@@ -48,7 +55,7 @@ export async function browserRepairReport({cwd=process.cwd(),env=process.env,sta
  const report={reportType:'Scraper4 browser install/repair diagnostic',generatedAt:new Date().toISOString(),application:{version:version||pkg.version||'unknown',head,cwd},
   runtime:{node:process.version,npm,requiredNode:pkg.engines?.node||null,nodeExecutable:process.execPath,platform:process.platform,architecture:process.arch,osRelease:os.release(),osName,glibc:libc,uid:process.getuid?.()??null,gid:process.getgid?.()??null,root:process.getuid?.()===0,home:os.homedir(),termux:process.platform==='android'||String(env.PREFIX||'').includes('com.termux'),cpuCount:os.cpus().length,uptimeSeconds:Math.round(process.uptime()),memory:{totalBytes:os.totalmem(),freeBytes:os.freemem(),processRssBytes:process.memoryUsage().rss}},
   disk:await diskInfo(cwd),projectPermissions:await pathInfo(cwd),libraries:await Promise.all(['playwright','playwright-core','puppeteer','puppeteer-core','crawlee','@puppeteer/browsers'].map(name=>packageInfo(cwd,name,lock))),
-  executables,caches,currentNetwork:{mode:network.mode||'unknown',gateway:endpoint(network.workerUrl||''),proxy:endpoint(network.proxyUrl||''),environmentProxies:proxy,noProxyConfigured:!!(env.NO_PROXY||env.no_proxy),downloadHostOverrides:overrides},
+  executables,caches,backgroundInstall,currentNetwork:{mode:network.mode||'unknown',gateway:endpoint(network.workerUrl||''),proxy:endpoint(network.proxyUrl||''),environmentProxies:proxy,noProxyConfigured:!!(env.NO_PROXY||env.no_proxy),downloadHostOverrides:overrides},
   accessPolicy:{adminTokenConfigured:!!String(env.ADMIN_TOKEN||'').trim(),adminAuthDisabled:env.ADMIN_AUTH_DISABLED==='true'},installerPolicy:{browserDownloadTimeoutMs:180000,libraryInstallTimeoutMs:300000,launchTestTimeoutMs:45000,downloadConnectionTimeoutMs:60000,lifecycleScripts:false,automaticSudo:false,directFallbackFromGateway:false},flags,browserDefaults,customNodeOptionsPresent:!!env.NODE_OPTIONS,job:state,warnings,
   scope:['Read-only report: no installation, launch, download, copy or network probe was performed.','Current configuration may differ from the last run; job.downloadRoute records the route selected for that run when available.','Log is an in-memory tail capped at 24000 characters; logTruncated reports truncation. Restarting the process clears this job history.','OS libraries, target-site access and large Cloudflare transfers are not retested.','Review paths and hostnames before sharing. Credentials, URL queries and sensitive environment values are excluded/redacted.']};
  return clean('SCRAPER4 BROWSER REPAIR REPORT\n'+JSON.stringify(report,null,2));

@@ -1,6 +1,6 @@
-# Shared browser installation and runtime paths — 1.226.0+
+# Shared browser installation and runtime paths — 1.227.0+
 
-Default browser binaries now live at:
+Fresh installations without a compatible existing cache use:
 
 - `<project>/data/browsers/ms-playwright`
 - `<project>/data/browsers/puppeteer`
@@ -30,10 +30,27 @@ These checks run as the installer user, not as an unrelated future service user.
 ## Existing installations and permissions
 
 Update, rebuild and restart. Then use `npm run browsers:install` to queue setup
-at these paths. Existing explicitly configured caches are not moved. Older
-implicit HOME caches are not deleted or automatically selected; the existing
-cache-reuse UI can copy them to the new runtime location without another download
-(set the source HOME when it differs from the default `/root`).
+at the selected paths. Existing explicitly configured caches are not moved.
+
+**Upgrade regression fixed in 1.227.0+:** version 1.226.0+ could select an empty
+project cache while the working browser remained in the previous HOME cache.
+An incomplete implicit project cache now falls back to an accessible legacy cache
+only if it contains the exact SDK-required executable files. Playwright requires
+both full Chromium and Chromium headless shell. A complete project cache wins.
+The previous HOME/XDG location and configured source HOME are checked; `/root`
+is also checked only for Linux root processes. No copying, downloading or permission
+changes happen during this read-only selection. Explicit paths (including `0`)
+are never redirected. A different revision or a directory alone is not sufficient.
+Unsupported metadata/layouts fail closed rather than choose a random revision.
+
+If a path was explicitly set to an empty project cache, use the existing cache-reuse
+UI to copy the old files (select the correct source HOME), or remove that explicit
+override and restart to enable automatic selection. No old cache is deleted.
+File compatibility is not a browser launch test or a guarantee of OS dependencies.
+
+The support report now includes expected/missing executable paths, compatible legacy
+candidates and persisted background-install status plus a redacted 24 KB log tail.
+The in-memory repair job being `idle` never means background installation succeeded.
 
 Run installation **as the same OS account as the application service**. A root
 installation followed by a restricted service user may still need an administrator

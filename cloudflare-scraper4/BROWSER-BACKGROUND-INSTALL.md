@@ -31,7 +31,8 @@ The app's non-browser functionality remains available if downloads fail.
 A process supervisor/container that kills the whole install process group may
 also kill a detached download; re-run the command inside the persistent runtime.
 Use the same OS user and explicit cache settings as the actual application service.
-Default caches now live under this project, independently of HOME; see BROWSER-PATHS.md.
+New installs default to project-local caches; upgrades preserve compatible old caches
+when the new cache is incomplete. See BROWSER-PATHS.md.
 
 ## Sources and dependencies
 

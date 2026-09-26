@@ -1,3 +1,4 @@
+import {compatibleCachePath} from './browser-cache-compatibility.mjs';
 import {dirname,resolve,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readFileSync,mkdirSync,accessSync,statSync,constants} from 'node:fs';
@@ -20,8 +21,8 @@ export function browserPaths(env=process.env,root=browserProjectRoot){
  }}catch(error){if(error.code!=='ENOENT')throw Error('Cannot read browser path configuration: '+error.code);}
  const source={...saved,...env},out={};
  for(const key of keys){const value=String(source[key]||'').trim();if(value)out[key]=key==='PLAYWRIGHT_BROWSERS_PATH'&&value==='0'?'0':isAbsolute(value)?value:resolve(root,value);}
- out.PLAYWRIGHT_BROWSERS_PATH??=join(root,'data/browsers/ms-playwright');
- out.PUPPETEER_CACHE_DIR??=join(root,'data/browsers/puppeteer');
+ out.PLAYWRIGHT_BROWSERS_PATH??=compatibleCachePath('playwright',join(root,'data/browsers/ms-playwright'),source,root);
+ out.PUPPETEER_CACHE_DIR??=compatibleCachePath('puppeteer',join(root,'data/browsers/puppeteer'),source,root);
  return out;
 }
 export function applyBrowserPaths(env=process.env,{root=browserProjectRoot,create=false}={}){
