@@ -16,7 +16,8 @@
 // reported again, loudly, by the engines themselves at runtime.
 import { spawnSync } from 'node:child_process';
 import {startBrowserInstall} from './browser-install-background.mjs';
-import {localCli,MIRROR,CHROME_MIRROR} from './browser-repair.mjs';
+import {localCli,MIRROR,CHROME_MIRROR,smokeScript} from './browser-repair.mjs';
+import {applyBrowserPaths} from './browser-paths.mjs';
 import {applyBrowserDefaults} from './browser-defaults.mjs';
 import {gatewayDownloadEnvironment} from './browser-download-gateway.mjs';
 import {dirname,resolve} from 'node:path';
@@ -61,6 +62,8 @@ function runStep([label, command, args], dryRun) {
  const cwd=resolve(dirname(fileURLToPath(import.meta.url)),'..');
  const driver=args[0],termux=command==='pkg';
  const base={...process.env};applyBrowserDefaults(base);
+ try{applyBrowserPaths(base,{create:!termux});}catch(error){console.error(error.message);return false;}
+ console.log('Browser paths: '+JSON.stringify({playwright:base.PLAYWRIGHT_BROWSERS_PATH,puppeteer:base.PUPPETEER_CACHE_DIR}));
  const attempts=termux?[base]:downloadAttempts(driver,base);
  for(let i=0;i<attempts.length;i++){
   console.log(i?'Trying third-party npmmirror; the pinned revision may be unavailable.':'Trying configured/official source.');
@@ -75,6 +78,22 @@ function runStep([label, command, args], dryRun) {
   }catch(error){console.log('[browsers:install] '+error.message);}
  }
  return false;
+}
+
+export function verifyInstalledBrowsers({env=process.env,run=spawnSync,cwd=resolve(dirname(fileURLToPath(import.meta.url)),'..')}={}){
+ const runtimeEnv={...env};applyBrowserDefaults(runtimeEnv,{root:cwd});
+ let ok=true;
+ for(const driver of ['playwright','puppeteer']){
+  const executable=runtimeEnv.BROWSER_EXECUTABLE_PATH||(driver==='playwright'?runtimeEnv.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:runtimeEnv.PUPPETEER_EXECUTABLE_PATH)||runtimeEnv.CHROME_BIN||(isTermux(runtimeEnv)?TERMUX_CHROMIUM:undefined);
+  const resolveCode=executable?JSON.stringify(executable):driver==='playwright'?"(await import('playwright')).chromium.executablePath()":"(await import('puppeteer')).default.executablePath()";
+  const inspect=`const executable=await ${resolveCode};console.log('Resolved ${driver} executable:',executable);const fs=await import('node:fs');fs.accessSync(executable,fs.constants.R_OK|fs.constants.X_OK);`;
+  for(const engine of [driver,'crawlee-'+driver]){
+   console.log('Verifying installed '+engine+' with the runtime cache and sandbox policy.');
+   const result=run(process.execPath,['--input-type=module','-e',inspect+smokeScript(engine,executable,runtimeEnv)],{cwd,env:runtimeEnv,stdio:'inherit',timeout:45000,killSignal:'SIGKILL'});
+   if(result.status!==0){ok=false;console.error(engine+': verification failed. Inspect the resolved executable, permissions and OS shared libraries; downloading elsewhere is not a fix.');}
+  }
+ }
+ return ok;
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -100,7 +119,8 @@ export function main(argv = process.argv.slice(2)) {
       okAll = false;
     }
   }
-  if (!okAll) console.log('[browsers:install] Finished with warnings (exit 0 by design; see guidance above).');
+  if(!dryRun&&okAll)okAll=verifyInstalledBrowsers();
+  if (!okAll) console.log('[browsers:install] Setup or runtime verification failed; inspect the log (--strict returns a failure exit code).');
   return argv.includes('--strict')&&!okAll?1:0;
 }
 

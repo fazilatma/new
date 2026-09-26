@@ -1,3 +1,4 @@
+import {applyBrowserPaths,browserPaths} from './browser-paths.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {accessSync,statSync,constants} from 'node:fs';
@@ -21,6 +22,7 @@ export function resolveBrowserDefaults({env=process.env,platform=process.platfor
  * so changing only the Chromium child's environment does NOT fix private TMPDIR. */
 export function applyBrowserDefaults(env=process.env,options={}){
  const settings=resolveBrowserDefaults({...options,env});
+ settings.paths=applyBrowserPaths(env,options);
  try{if(!statSync(settings.temporaryDirectory).isDirectory())throw Error('Not a directory');accessSync(settings.temporaryDirectory,constants.W_OK|constants.X_OK)}catch{settings.warnings.push('Browser temporary directory is not writable/searchable by this process: '+settings.temporaryDirectory+'. Create/fix a suitable directory and set BROWSER_TMPDIR; no permissions were changed.');}
  env.TMPDIR=settings.temporaryDirectory;env.TMP=settings.temporaryDirectory;env.TEMP=settings.temporaryDirectory;
  env.VISUAL_BROWSER_NO_SANDBOX=String(settings.noSandbox);
@@ -28,7 +30,7 @@ export function applyBrowserDefaults(env=process.env,options={}){
  if(env===process.env)applied=settings;
  return settings;
 }
-export function browserDefaultsReport(env=process.env){return env===process.env&&applied?structuredClone(applied):resolveBrowserDefaults({env})}
+export function browserDefaultsReport(env=process.env){return env===process.env&&applied?structuredClone(applied):{...resolveBrowserDefaults({env}),paths:browserPaths(env)}}
 
 /** Shared across extraction, visual snapshots, local tests and installer probes. */
 export function browserLaunchArguments(options={},extra=[]){

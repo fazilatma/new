@@ -23,7 +23,7 @@ for(const exit of [0,1])test(`detached install returns before completion, dedupl
   assert.equal(JSON.parse(readFileSync(job.status)).running,true);
   assert.equal(startBrowserInstall({cwd}).alreadyRunning,true);
   let state;for(let i=0;i<150;i++){await delay(100);state=JSON.parse(readFileSync(job.status));if(!state.running)break;}
-  assert.equal(state.running,false);assert.equal(state.phase,exit?'failed':'downloaded');assert.equal(state.exitCode,exit);
+  assert.equal(state.running,false);assert.equal(state.phase,exit?'failed':'ready');assert.equal(state.exitCode,exit);
   assert.match(readFileSync(join(cwd,'data/browser-install/install.log'),'utf8'),/fixture install/);
  }finally{rmSync(cwd,{recursive:true,force:true});}
 });

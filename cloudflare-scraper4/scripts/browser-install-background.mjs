@@ -35,7 +35,7 @@ if(process.argv[1]===fileURLToPath(import.meta.url)&&process.argv[2]==='--worker
  try{
   fd=openSync(resolve(folder,'install.log'),'w',0o600);
   result=spawnSync(process.execPath,[resolve(cwd,'scripts/browsers-install.mjs'),'--foreground','--strict'],{cwd,env:process.env,stdio:['ignore',fd,fd]});
-  save(status,{...state,running:false,phase:result.status===0?'downloaded':'failed',exitCode:result.status,finishedAt:Date.now()});
+  save(status,{...state,running:false,phase:result.status===0?'ready':'failed',exitCode:result.status,finishedAt:Date.now()});
  }catch(error){save(status,{...state,running:false,phase:'failed',error:String(error.message),finishedAt:Date.now()});}
  finally{if(fd!==undefined)closeSync(fd);rmSync(resolve(folder,'lock'),{recursive:true,force:true});}
 }

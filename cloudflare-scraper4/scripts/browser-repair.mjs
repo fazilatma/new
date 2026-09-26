@@ -59,7 +59,7 @@ export function createBrowserRepair({cwd=process.cwd(),env=process.env,uid=proce
  env={...env};applyBrowserDefaults(env,{uid});
  const fresh=()=>({running:false,success:null,phase:'idle',log:'',logTruncated:false,results:{},startedAt:null,finishedAt:null});
  let state=fresh(),downloadEnv;const verification=new Map();
- const installEnv=async()=>{if(!downloadEnv){downloadEnv={...await resolveDownloadEnv()};applyBrowserDefaults(downloadEnv,{uid});state.downloadRoute=downloadEnv.SCRAPER_BROWSER_GATEWAY?'cloudflare-gateway':'existing-environment';log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
+ const installEnv=async()=>{if(!downloadEnv){downloadEnv={...await resolveDownloadEnv()};applyBrowserDefaults(downloadEnv,{uid,create:true});state.downloadRoute=downloadEnv.SCRAPER_BROWSER_GATEWAY?'cloudflare-gateway':'existing-environment';log(downloadEnv.SCRAPER_BROWSER_GATEWAY?'Downloads routed through the configured Cloudflare gateway; no direct fallback.':'Downloads use the existing environment network settings.');}return downloadEnv;};
  const snapshot=()=>({...state,results:JSON.parse(JSON.stringify(state.results))});
  const log=text=>{const safe=downloadEnv?.SCRAPER_BROWSER_GATEWAY?String(text).split(downloadEnv.SCRAPER_BROWSER_GATEWAY).join('[configured gateway]'):text;const next=state.log+redact(safe)+'\n';state.logTruncated=state.logTruncated||next.length>24000;state.log=next.slice(-24000);};
  async function verify(engine,executable){

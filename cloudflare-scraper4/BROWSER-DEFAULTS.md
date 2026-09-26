@@ -80,3 +80,9 @@ network/cache settings unchanged.
 These defaults prevent the specific observed private-temp and root-launch errors.
 They do not guarantee error-free installation on every OS, remove memory limits,
 fix unavailable package downloads, or bypass website access controls.
+
+## Cache-path update in 1.226.0+
+
+Implicit HOME-based caches are superseded by shared project-local caches under
+`data/browsers`. Explicit overrides are still respected. See BROWSER-PATHS.md for
+migration, permission requirements, and post-install verification.

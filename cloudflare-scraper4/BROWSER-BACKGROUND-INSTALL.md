@@ -17,17 +17,21 @@ is used there. No desktop Linux browser is downloaded on Android.
 
 - `npm run browsers:install -- --status` prints persisted status.
 - `data/browser-install/install.log` contains the installation output.
-- `data/browser-install/status.json` records starting/installing/downloaded/failed.
+- `data/browser-install/status.json` records starting/installing/ready/failed.
 - Retry with `npm run browsers:install` after a failed or interrupted worker.
 - For CI or a blocking check: `npm run browsers:install -- --foreground --strict`.
 - `--dry-run` prints the platform plan without starting a background task.
 
-“Downloaded” means the install commands succeeded, **not** that launch or any
-particular website was verified. Use the existing runtime browser test afterwards.
+From 1.226.0+, “ready” requires executable access checks and local-page launch
+tests for Playwright, Puppeteer and both Crawlee drivers, using the same cache
+paths and sandbox policy as the runtime. This does **not** verify any external
+website or execution under a different OS user. Older “downloaded” records do
+not establish readiness; rerun setup to verify.
 The app's non-browser functionality remains available if downloads fail.
 A process supervisor/container that kills the whole install process group may
 also kill a detached download; re-run the command inside the persistent runtime.
-Use the same OS user, HOME and cache settings as the actual application service.
+Use the same OS user and explicit cache settings as the actual application service.
+Default caches now live under this project, independently of HOME; see BROWSER-PATHS.md.
 
 ## Sources and dependencies
 
