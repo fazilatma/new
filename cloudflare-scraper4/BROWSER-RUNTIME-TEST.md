@@ -61,3 +61,20 @@ Validation uses injected browser lifecycle fixtures and the real dashboard scrip
 retention, duplicate starts, both drivers, startup cancellation, late crashes,
 redaction, bounded history, close retry, request validation, polling and clipboard
 fallback. It is not evidence of successful launch on the user's VPS.
+
+## 1.222.0+ — organized browser workbench
+
+The existing browser section is reorganized into live testing, installation and
+cache preparation, manual instructions, and report guidance. The same IDs,
+actions, consent requirements, APIs and lifecycle behavior are retained.
+
+Runtime status now includes a phase badge, connection/page-verification/driver
+metrics, last-refresh time and the eight most recent lifecycle events. Historical
+errors are explicitly labeled and do not imply that a currently open browser has
+failed. Failed status requests replace live metrics with unknown/stale indications.
+Installer results distinguish successful, failed and skipped engine tests.
+
+Technical logs are collapsed by default, while copied report textareas remain
+visible on demand for manual selection. Layout stacks on smaller viewports, uses
+relative sizes, preserves keyboard-native disclosure controls and provides visible
+focus outlines. No browser is opened automatically by viewing this section.
