@@ -1,7 +1,7 @@
 import {selectorDiagnosticAdvice,initialSelectorEvidenceApplies} from '../worker-src/selector-diagnostic-advice.js';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {requireStaticSelectorEngine} from './selector-engine.js';
-import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from './product-parser.js';
+import {compareProductParsers,unavailableProductParsers,embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from './product-parser.js';
 import { applyResultAdjustments } from './result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progress.js';
 import { getState } from './db.js';
@@ -868,16 +868,17 @@ export async function diagnoseBenchmarkEngine(engine:ExtractionEngine,html:strin
 }
 export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgress?:DiagnosticObserver,withDetails=false){
   const started=Date.now(),url=String(urlOverride||profile.url||'').trim(),stages:any[]=[],recommendations:string[]=[];
+  let parserResults:any[]|undefined;
   const progress=diagnosticProgress(onProgress);
   const add=(name:string,ok:boolean,summary:string,details:any={})=>{const stage={name,ok,summary,...details};stages.push(stage);progress.finish(stage)};
-  if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,selectorsToSave:{},recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
+  if(!url){add('configuration',false,'آدرس مبدأ خالی است.');return{ok:false,profileId:profile.id,url,stages,...(selectedProductParser(profile)?{parserResults:unavailableProductParsers('Page HTML unavailable.')} :{}),selectorsToSave:{},recommendations:['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.']}}
   let page:{text:string;url:string;contentType:string;route?:string};
   try{
     progress.begin('network','در حال اتصال به مبدأ و دریافت HTML…',{url,indirect:Boolean(profile.networkIndirect)});
     page=await sourceText(url,Boolean(profile.networkIndirect));
     const bytes=new TextEncoder().encode(page.text).byteLength,title=cleanText(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g,' ')||'');
     add('network',true,`صفحه با ${bytes.toLocaleString('fa-IR')} بایت دریافت شد.`,{requestedUrl:url,finalUrl:page.url,contentType:page.contentType,bytes,title,route:page.route,indirect:Boolean(profile.networkIndirect)});
-  }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,selectorsToSave:{},recommendations}}
+  }catch(error){const text=error instanceof Error?error.message:String(error);add('network',false,text,{requestedUrl:url,indirect:Boolean(profile.networkIndirect)});recommendations.push(/ضدربات|چالش/.test(text)?'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی Worker را در مبدأ مجاز کنید یا Worker واسط معتبر تنظیم کنید.':'آدرس، دسترسی عمومی سایت و تنظیمات روش اتصال مبدأ را بررسی کنید.');return{ok:false,profileId:profile.id,url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,stages,...(selectedProductParser(profile)?{parserResults:unavailableProductParsers('Page HTML unavailable.')} :{}),selectorsToSave:{},recommendations}}
   let products:Product[]=[];
   // 1.135.0 — verified discoveries the route persists when the profile's
   // selectors were never configured (empty/partial/default). Fully custom
@@ -894,11 +895,13 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
     if(profile.pagination==='scroll')throw Error('اسکرول تا انتها به اجراگر Node و مرورگر Chromium نیاز دارد؛ HTML اولیه فهرست کامل نیست.');
     const parser=selectedProductParser(profile);
     if(parser&&NODE_ONLY_ENGINES.has(profile.extractionEngine))throw Error('Selected page loader requires Node');
+    if(parser)parserResults=await compareProductParsers(choice=>parseProductDocument(page.text,page.url,profile.selectors,choice));
     const engineResult=parser?{products:await parseProductDocument(page.text,page.url,profile.selectors,parser),usedEngine:profile.extractionEngine,engineError:undefined}:await parseByEngine(page.text,page.url,listSelectors,profile.extractionEngine||'auto',profile.extractionEngineMaster);
     products=engineResult.products;
     const complete={title:products.filter(x=>x.title).length,price:products.filter(x=>x.price>0).length,link:products.filter(x=>x.url).length,image:products.filter(x=>x.image).length,sku:products.filter(x=>x.sku).length};
     add('list-extraction',products.length>0,products.length?`${products.length.toLocaleString('fa-IR')} محصول با pipeline واقعی استخراج شد.`:'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',{count:products.length,usedEngine:engineResult.usedEngine,...(parser?{productParser:parser}:{}),...(engineResult.engineError?{engineError:engineResult.engineError}:{}),complete,selectors:profile.selectors,samples:products.slice(0,5).map(x=>({title:x.title,price:x.price,priceText:x.priceText,url:x.url,image:x.image,sku:x.sku}))});
   }catch(error){add('list-extraction',false,error instanceof Error?error.message:String(error),{selectors:profile.selectors})}
+  if(selectedProductParser(profile)){parserResults??=unavailableProductParsers('Selected loader did not provide usable HTML.');add('parser-comparison',true,'مقایسهٔ هشت پارسر بدون تغییر انتخاب ذخیره‌شده انجام شد.',{comparisonOnly:true,results:parserResults});}
   // 1.129.0 — when nothing extracted, show what proactive auto-discovery sees
   // on the same page. Verified discoveries above are handed to the route for
   // auto-save (1.135.0); this block still shows raw, unverified findings for
@@ -945,7 +948,7 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
   if(!products.length&&!evidenceOk)recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
   else if(products.length){if(!products.some(x=>x.price>0))recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');if(!products.some(x=>x.url))recommendations.push('لینک محصول پیدا نشده است؛ سلکتور لینک باید به عنصر a یا ویژگی href/data-url برسد.');if(!products.some(x=>x.image))recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.')}
   if(!products.length&&evidenceOk)recommendations.push('سلکتورهای فعلی در کارت‌های HTML اولیه معتبرند؛ خطای مرحلهٔ استخراج، مرورگر و ارتباط غیرمستقیم را بررسی کنید. صفر محصول پس از خطای مرورگر دلیل خرابی سلکتور نیست و کامل‌شدن اسکرول را تأیید نمی‌کند.');
-  const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,recommendations,detail,sample:detail?.product||products[0]||null,selectorsToSave};
+  const failed=stages.filter(stage=>!stage.ok);return{ok:products.length>0&&failed.length===0,profileId:profile.id,url,finalUrl:page.url,startedAt:new Date(Date.now()-(Date.now()-started)).toISOString(),durationMs:Date.now()-started,productCount:products.length,stages,...(parserResults?{parserResults}:{}),recommendations,detail,sample:detail?.product||products[0]||null,selectorsToSave};
 }
 
 export function transformProduct(product: Product, profile: Profile): Product {
@@ -1048,6 +1051,7 @@ export type SelectorConfigStatus='empty'|'partial'|'default'|'custom';
 export function listSelectorsStatus(selectors:Selectors|undefined|null):SelectorConfigStatus{
   const values=LIST_SELECTOR_KEYS.map(key=>String((selectors as any)?.[key]||'').trim());
   if(values.every(value=>!value))return 'empty';
+  if(LIST_SELECTOR_KEYS.some(key=>String((selectors as any)?.[key]||'').trim()&&String((selectors as any)?.[key]).trim()!==String((DEFAULT_SELECTORS as any)[key])))return 'custom';
   if(values.some(value=>!value))return 'partial';
   const isDefault=LIST_SELECTOR_KEYS.every(key=>String((selectors as any)?.[key]).trim()===String((DEFAULT_SELECTORS as any)[key]));
   return isDefault?'default':'custom';

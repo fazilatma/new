@@ -2,7 +2,7 @@ import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browse
 import {selectorDiagnosticAdvice,initialSelectorEvidenceApplies} from '../worker-src/selector-diagnostic-advice.js';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {isBrowserSelectorEngine} from '../worker-src/selector-engine.js';
-import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from '../worker-src/product-parser.js';
+import {compareProductParsers,unavailableProductParsers,embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from '../worker-src/product-parser.js';
 import {renderPythonPlaywright} from './playwright-python.js';
 import { collectScrollProducts } from '../worker-src/scroll-collector.js';
 import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
@@ -480,7 +480,7 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>, initialDocument?:{text:string;url:string},productParser?:ProductParser): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>, initialDocument?:{text:string;url:string},productParser?:ProductParser,onParserDocument?:(html:string,url:string)=>Promise<void>): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
@@ -491,12 +491,13 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     const {renderBrowserSnapshot}=await import('./visual-browser.js');
     let tracker:ReturnType<typeof trackScrollRequests>;
     const snapshot=await renderBrowserSnapshot(url,driver,indirect,{initial:initialDocument,prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker,undefined,productParser)});
+    await onParserDocument?.(snapshot.text,snapshot.url);
     const products=snapshot.collected as Product[];
     return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union',browserDiagnostics:snapshot.browserDiagnostics,...(productParser?{productParser}:{})};
   }
   if(productParser){
     let document:{text:string;url:string}|undefined;
-    const reader=async(html:string,base:string)=>{document={text:html,url:base};return parseProductDocument(html,base,selectors,productParser)};
+    const reader=async(html:string,base:string)=>{document={text:html,url:base};await onParserDocument?.(html,base);return parseProductDocument(html,base,selectors,productParser)};
     let products:Product[];
     if(engine==='playwright'||engine==='puppeteer')products=await withBrowserSlot(async()=>scrapeRenderedHtml(url,selectors,engine,stopped,reader));
     else if(engine==='crawlee_playwright')products=await withBrowserSlot(async()=>scrapeListWithCrawleePlaywright(url,selectors,reader));
@@ -1713,6 +1714,7 @@ export type SelectorConfigStatus = 'empty' | 'partial' | 'default' | 'custom';
 export function listSelectorsStatus(selectors: Selectors | undefined | null): SelectorConfigStatus {
   const values = LIST_SELECTOR_KEYS.map(key => String((selectors as any)?.[key] || '').trim());
   if (values.every(value => !value)) return 'empty';
+  if(LIST_SELECTOR_KEYS.some(key=>String((selectors as any)?.[key]||'').trim()&&String((selectors as any)?.[key]).trim()!==String((DEFAULT_SELECTORS as any)[key])))return 'custom';
   if (values.some(value => !value)) return 'partial';
   const isDefault = LIST_SELECTOR_KEYS.every(key => String((selectors as any)?.[key]).trim() === String((DEFAULT_SELECTORS as any)[key]));
   return isDefault ? 'default' : 'custom';
@@ -2289,11 +2291,12 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
   const stages: any[] = [], recommendations: string[] = [];
   if(profile.pagination==='none'&&profile.networkIndirect&&['auto','playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto'))recommendations.push('حالت بدون صفحه‌بندی از مسیر قدیمی موتور استفاده می‌کند؛ در موتورهای مرورگر، عبور ترافیک مرورگر از Worker تضمین نشده است. گزینهٔ اسکرول تا انتها همچنان مسیر محافظت‌شدهٔ جداگانه دارد.');
+  let parserResults:any[]|undefined;
   const progress = diagnosticProgress(onProgress);
   const add = (name: string, ok: boolean, summary: string, details: any = {}) => { const stage = { name, ok, summary, ...details }; stages.push(stage); progress.finish(stage); };
   if (!url) {
     add('configuration', false, 'آدرس مبدأ خالی است.');
-    return { ok: false, profileId: profile.id, url, stages, selectorsToSave: {}, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
+    return { ok: false, profileId: profile.id, url, stages, ...(selectedProductParser(profile)?{parserResults:unavailableProductParsers('Page HTML unavailable.')} :{}), selectorsToSave: {}, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
   }
   let page: { text: string; url: string };
   try {
@@ -2308,7 +2311,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
     recommendations.push(/ضدربات|چالش|challenge|403/i.test(text)
       ? 'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی این دستگاه را در مبدأ مجاز کنید یا از روش اتصال غیرمستقیم استفاده کنید.'
       : 'آدرس، دسترسی اینترنت دستگاه و تنظیمات روش اتصال مبدأ را بررسی کنید.');
-    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, selectorsToSave: {}, recommendations };
+    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, ...(selectedProductParser(profile)?{parserResults:unavailableProductParsers('Page HTML unavailable.')} :{}), selectorsToSave: {}, recommendations };
   }
   let products: Product[] = [], usedEngine: ExtractionEngine | '' = '';
   // 1.135.0 — verified discoveries the route persists when the profile's
@@ -2319,7 +2322,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
     progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll',undefined,page,selectedProductParser(profile));
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll',undefined,page,selectedProductParser(profile),selectedProductParser(profile)?async(html,base)=>{parserResults=await compareProductParsers(parser=>parseProductDocument(html,base,profile.selectors,parser),BROWSER_ENGINES.has(profile.extractionEngine)?'rendered-html':'downloaded-html');}:undefined);
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).
@@ -2343,6 +2346,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   } catch (error) {
     add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors, ...((error as any)?.browserDiagnostics?{browser:(error as any).browserDiagnostics}:{}), ...((error as any)?.scrollRequests?{scrollRequests:(error as any).scrollRequests}:{}) });
   }
+  if(selectedProductParser(profile)){parserResults??=unavailableProductParsers('Selected loader did not provide usable HTML.');add('parser-comparison',true,'مقایسهٔ هشت پارسر بدون تغییر انتخاب ذخیره‌شده انجام شد.',{comparisonOnly:true,results:parserResults});}
   // 1.128.0 — when nothing extracted, show what proactive auto-discovery sees
   // on the same page. Verified discoveries above are handed to the route for
   // auto-save (1.135.0); this block still shows raw, unverified findings for
@@ -2424,7 +2428,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '', onP
   }
   if(!products.length&&evidenceOk)recommendations.push('سلکتورهای فعلی در کارت‌های HTML اولیه معتبرند؛ خطای مرحلهٔ استخراج، مرورگر و ارتباط غیرمستقیم را بررسی کنید. صفر محصول پس از خطای مرورگر دلیل خرابی سلکتور نیست و کامل‌شدن اسکرول را تأیید نمی‌کند.');
   const failed = stages.filter(stage => !stage.ok);
-  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail, sample:detail?.product||products[0]||null, selectorsToSave };
+  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, ...(parserResults?{parserResults}:{}), recommendations, detail, sample:detail?.product||products[0]||null, selectorsToSave };
 }
 
 /** Automatic sample detail extraction uses the selected loader's document once.

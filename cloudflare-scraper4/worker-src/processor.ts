@@ -1,3 +1,4 @@
+import {saveLearnedProfile} from './db.js';
 import {selectedProductParser} from './product-parser.js';
 import { reuseSourceList, sourceDetailFailed, mergeListOnly } from './source-list-ledger.js';
 import { createAiStageRunner } from './job-ai-stage.js';
@@ -45,11 +46,11 @@ async function detailProbe(sample:Product,selectors:any,indirect:boolean):Promis
   }catch{return false}
 }
 async function applySelectorSuggestions(profile:Profile,url:string,mode:'list'|'detail',job?:Job,onlyMissing=true):Promise<number>{
-  try{
+  try{const original=structuredClone(profile);
     const suggested=(await runAiStage(job!,mode+'-selectors',{},async()=>({ok:true,value:await suggestSelectors(url,mode)}))).value||{selectors:{}},selectors=suggested.selectors||{},entries=Object.entries(selectors).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim()));
     if(!entries.length)return 0;
     profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];
-    await saveProfile({...profile,updatedAt:new Date().toISOString()});
+    await saveLearnedProfile(original,profile,Object.fromEntries(entries));
     if(job)append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`,'info');
     return entries.length;
   }catch(error){if(job)append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning');return 0}
@@ -124,15 +125,17 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     if(!selectedProductParser(profile)&&page.discoveredSelectors&&!checkpoint.engineSelectorsSaved){
       const entries=Object.entries(page.discoveredSelectors).filter(([,value])=>String(value||'').trim());
       if(entries.length){
+        const original=structuredClone(profile);
         checkpoint.engineSelectorsSaved=true;
         profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as Profile['selectors'];
-        await saveProfile({...profile,updatedAt:new Date().toISOString()});
+        await saveLearnedProfile(original,profile,Object.fromEntries(entries));
         append(job,`سلکتورهای فهرست به‌صورت خودکار پیدا و ذخیره شد (${entries.map(([key])=>key).join('، ')}؛ روش: ${page.discoveryMethod==='structural'?'تحلیل ساختاری صفحه':page.discoveryMethod==='mixed'?'ترکیبی':'الگوهای آماده'})؛ استخراج با آن‌ها ادامه می‌یابد.`);
       }
     }
     if(!selectedProductParser(profile)&&page.usedEngine&&page.products.length&&(profile.extractionEngine==='auto'||profile.extractionEngineMaster!==page.usedEngine)){
+      const original=structuredClone(profile);
       profile.extractionEngineMaster=page.usedEngine;profile.extractionEngineHost=new URL(page.url).hostname;profile.extractionEngineMs=page.elapsedMs||0;
-      await saveProfile({...profile,updatedAt:new Date().toISOString()});
+      await saveLearnedProfile(original,profile,{});
       append(job,`موتور مستر این پروفایل: ${page.usedEngine}${page.elapsedMs?` · ${page.elapsedMs}ms`:''}`);
     }
     // The requested engine threw and every fallback came up empty: say WHAT
@@ -143,7 +146,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     // failing the run, rediscover the selectors exactly like the "auto suggest"
     // button and retry this page once. onlyMissing=false because selectors that
     // exist but no longer match are precisely the failure being recovered from.
-    if(!selectedProductParser(profile)&&!page.products.length&&!checkpoint.listRescued){
+    if(!selectedProductParser(profile)&&listSelectorsStatus(profile.selectors)!=='custom'&&!page.products.length&&!checkpoint.listRescued){
       checkpoint.listRescued=true;
       append(job,'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…','warning');
       const filled=await applySelectorSuggestions(profile,page.url,'list',job,false);

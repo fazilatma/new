@@ -1,3 +1,4 @@
+import {mergeLearnedProfile} from '../worker-src/profile-learning.js';
 import { mergeBenchmarkProfile } from '../worker-src/benchmark-profile.js';
 import { applyResultAdjustments, sameResultData } from '../worker-src/result-adjustments.js';
 import { isoDateTime, normalizeDbValue, normalizePersianText, toRemoteId } from '../worker-src/utils.js';
@@ -580,6 +581,10 @@ export async function applyStoredResultSettings(profile:Profile,after='',previou
 
 export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
  for(let attempt=0;attempt<3;attempt++){const row=(await pool.query('SELECT data FROM profiles WHERE id=$1',[original.id])).rows[0];if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=(await pool.query('UPDATE profiles SET data=$1,updated_at=now() WHERE id=$2 AND data=$3',[JSON.stringify(merged),original.id,raw])).rowCount;if(changed)return true;}return false;
+}
+
+export async function saveLearnedProfile(original:Profile,result:Profile,discovered:Record<string,unknown>):Promise<boolean>{
+ for(let attempt=0;attempt<3;attempt++){const row=(await pool.query('SELECT data FROM profiles WHERE id=$1',[original.id])).rows[0];if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeLearnedProfile(JSON.parse(raw),original,result,discovered);const changed=(await pool.query('UPDATE profiles SET data=$1,updated_at=now() WHERE id=$2 AND data=$3',[JSON.stringify(merged),original.id,raw])).rowCount;if(changed)return true;}return false;
 }
 
 export async function listActiveJobs():Promise<Job[]>{return(await pool.query("SELECT id,profile_id,kind,target,status,phase,total,processed,added,updated,failed,stop_requested,error,created_at,started_at,finished_at,updated_at FROM jobs WHERE status IN ('queued','running') ORDER BY created_at")).rows.map(jobFromRow)}

@@ -139,7 +139,7 @@ async function pipeline(runtime,options={}){
     claimJob:async()=>{job.status='running';return job},getJob:async()=>job,getProfile:async()=>profile,
     getState:async(k,f)=>k==='ai_description_settings'?{enabled:options.enabled!==false}:structuredClone(states.get(k)??f),
     setState:async(k,v)=>{states.set(k,structuredClone(v));snapshots.push(structuredClone(v))},deleteState:async k=>states.delete(k),
-    updateJob:async(id,patch)=>Object.assign(job,patch),stopRequested:async()=>false,saveProfile:async()=>{},markProfileRun:async()=>{},
+    updateJob:async(id,patch)=>Object.assign(job,patch),stopRequested:async()=>false,saveProfile:async()=>{},saveLearnedProfile:async()=>true,markProfileRun:async()=>{},
     upsertProduct:async(id,p,opts)=>{assert.equal(opts?.source,true);twins[runtime].transformProduct(p,profile);saved.push(structuredClone(p));return'added'},getProduct:async(id,key)=>saved.findLast(p=>p.sourceKey===key)||options.previous||null,
     allProducts:async()=>structuredClone(saved.length?saved:options.products||[]),listProducts:async()=>({products:structuredClone(options.products||[]),total:(options.products||[]).length}),
     findMissingProducts:async()=>[],markMissingProducts:async()=>0,destinationCategories:async()=>({items:categories}),

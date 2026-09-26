@@ -1,3 +1,4 @@
+import {saveLearnedProfile} from './db.js';
 import {selectedProductParser} from '../worker-src/product-parser.js';
 import { reuseSourceList, sourceDetailFailed, mergeListOnly } from '../worker-src/source-list-ledger.js';
 import { createAiStageRunner } from '../worker-src/job-ai-stage.js';
@@ -27,7 +28,7 @@ function reportItem(product: Product, extra: Partial<NonNullable<Job['log'][numb
 async function save(job: Job): Promise<void> { const lastStage=[...job.log].reverse().find(row=>row.level==='stage');if(lastStage?.message!==job.phase)append(job,job.phase,'stage');const current=await getJob(job.id); if(current&&['stopped','failed','done'].includes(current.status)&&current.status!==job.status)return; if(current?.stopRequested&&job.status==='running'){job.status='stopped';job.phase='finished';job.finishedAt=new Date().toISOString();append(job,'عملیات با توقف اجباری کاربر بسته شد.','warning')} await updateJob(job.id, { status: job.status, phase: job.phase, total: job.total, processed: job.processed, added: job.added, updated: job.updated, failed: job.failed, error: job.error, log: job.log, finishedAt: job.finishedAt }); if(['done','failed','stopped'].includes(job.status))await deleteState('job_ai:'+job.id);}
 const MANUAL_LIST_ENGINES=new Set(['htmlrewriter','cheerio']);
 function isManualListEngine(engine?: string): boolean { return !!engine && MANUAL_LIST_ENGINES.has(engine); }
-async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job, onlyMissing = true): Promise<number> { try { const suggested=(await runAiStage(job!,mode+'-selectors',{},async()=>({ok:true,value:await suggestSelectors(url,mode)}))).value||{selectors:{}},entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim())); if(!entries.length)return 0; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveProfile({...profile,updatedAt:new Date().toISOString()}); append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`); return entries.length; } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); return 0; } }
+async function applySelectorSuggestions(profile: NonNullable<Awaited<ReturnType<typeof getProfile>>>, url: string, mode: 'list'|'detail', job: Job, onlyMissing = true): Promise<number> { try { const original=structuredClone(profile); const suggested=(await runAiStage(job!,mode+'-selectors',{},async()=>({ok:true,value:await suggestSelectors(url,mode)}))).value||{selectors:{}},entries=Object.entries(suggested.selectors||{}).filter(([key,value])=>String(value||'').trim()&&(!onlyMissing||!String((profile.selectors as any)?.[key]||'').trim())); if(!entries.length)return 0; profile.selectors={...profile.selectors,...Object.fromEntries(entries)} as any; await saveLearnedProfile(original,profile,Object.fromEntries(entries)); append(job,`${mode==='list'?'سلکتورهای ناقص فهرست':'سلکتورهای ناقص جزئیات'} با کشف خودکار تکمیل شد: ${entries.map(([key])=>key).join(', ')}`); return entries.length; } catch(error) { append(job,`شناسایی خودکار سلکتورهای ${mode==='list'?'فهرست':'جزئیات'} ناموفق بود: ${message(error)}`,'warning'); return 0; } }
 
 const DETAIL_KEYS = ['shortDesc','longDesc','sku','brand','category','stock','weight','gallery','detailImage','variations'] as const;
 /** True when the profile actually configures detail extraction. */
@@ -90,17 +91,19 @@ export async function processOneJob(): Promise<boolean> {
         if (!selectedProductParser(profile) && scraped.discoveredSelectors && !engineSelectorsSaved) {
           const entries = Object.entries(scraped.discoveredSelectors).filter(([, value]) => String(value || '').trim());
           if (entries.length) {
+            const original=structuredClone(profile);
             engineSelectorsSaved = true;
             profile.selectors = { ...profile.selectors, ...Object.fromEntries(entries) } as any;
-            await saveProfile({ ...profile, updatedAt: new Date().toISOString() });
+            await saveLearnedProfile(original,profile,Object.fromEntries(entries));
             append(job, `سلکتورهای فهرست به‌صورت خودکار پیدا و ذخیره شد (${entries.map(([key]) => key).join('، ')}؛ روش: ${scraped.discoveryMethod === 'structural' ? 'تحلیل ساختاری صفحه' : scraped.discoveryMethod === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ استخراج با آن‌ها ادامه می‌یابد.`);
           }
         }
         if (!selectedProductParser(profile) && scraped.usedEngine && list.length && (profile.extractionEngine === 'auto' || profile.extractionEngineMaster !== scraped.usedEngine)) {
+          const original=structuredClone(profile);
           profile.extractionEngineMaster = scraped.usedEngine;
           profile.extractionEngineHost = new URL(url).hostname;
           profile.extractionEngineMs = scraped.elapsedMs;
-          await saveProfile({...profile, updatedAt: new Date().toISOString()});
+          await saveLearnedProfile(original,profile,{});
           append(job, `موتور مستر این پروفایل: ${scraped.usedEngine}${scraped.elapsedMs ? ` · ${scraped.elapsedMs}ms` : ''}`);
         }
         if (!selectedProductParser(profile) && scraped.usedEngine && list.length && !isManualListEngine(scraped.usedEngine)) { autoSelectorsAllowed=true; await applySelectorSuggestions(profile,url,'list',job,true); }
@@ -115,7 +118,7 @@ export async function processOneJob(): Promise<boolean> {
           // discovery the "auto suggest" button uses and retry the page ONCE.
           // onlyMissing=false because selectors that exist but match nothing are
           // exactly the failure being recovered from.
-          if (!selectedProductParser(profile) && page === 1 && !listRescued) {
+          if (!selectedProductParser(profile) && listSelectorsStatus(profile.selectors)!=='custom' && page === 1 && !listRescued) {
             listRescued = true;
             append(job, 'هیچ محصولی استخراج نشد؛ پیشنهاد خودکار سلکتورها به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
             const filled = await applySelectorSuggestions(profile, url, 'list', job, false);
@@ -123,7 +126,7 @@ export async function processOneJob(): Promise<boolean> {
               const retry = await scrapeListWithMeta(url, profile.selectors, profile.extractionEngine, profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect), profile.pagination==='scroll',()=>stopRequested(job.id),undefined,selectedProductParser(profile));
               if (retry.products.length) {
                 append(job, `پیشنهاد خودکار جواب داد: ${retry.products.length} محصول پس از بازتنظیم سلکتورها پیدا شد.`);
-                if (retry.usedEngine) { profile.extractionEngineMaster = retry.usedEngine; await saveProfile({ ...profile, updatedAt: new Date().toISOString() }); }
+                if (retry.usedEngine) { const original=structuredClone(profile);profile.extractionEngineMaster = retry.usedEngine; await saveLearnedProfile(original,profile,{}); }
                 page--; continue; // re-run this page with the repaired selectors
               }
               append(job, 'پیشنهاد خودکار هم محصولی پیدا نکرد؛ سلکتورها را دستی بررسی کنید.', 'warning');

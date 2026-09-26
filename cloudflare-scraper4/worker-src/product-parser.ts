@@ -25,3 +25,11 @@ export function embeddedProductData(html:string,mode:'next_data'|'script_json'):
  }
  return out;
 }
+
+/** Read-only comparison. One failing parser cannot hide the other seven. */
+export async function compareProductParsers(read:(parser:ProductParser)=>Promise<any[]>,source='downloaded-html'){
+ const results:any[]=[];
+ for(const parser of PRODUCT_PARSERS){const started=Date.now();try{const rows=await read(parser);results.push({parser,engine:parser,ok:rows.length>0,status:rows.length?'success':'empty',count:rows.length,elapsedMs:Date.now()-started,source,selectorBased:['lxml','selectolax'].includes(parser),complete:{title:rows.filter(p=>p.title).length,price:rows.filter(p=>p.price>0).length,link:rows.filter(p=>p.url).length,image:rows.filter(p=>p.image).length},sample:rows[0]||null,samples:rows.slice(0,5)});}catch(error){results.push({parser,engine:parser,ok:false,status:'failed',count:0,elapsedMs:Date.now()-started,source,error:error instanceof Error?error.message:String(error),sample:null});}}
+ return results;
+}
+export function unavailableProductParsers(error:string){return PRODUCT_PARSERS.map(parser=>({parser,engine:parser,ok:false,status:'skipped',count:0,elapsedMs:0,source:'unavailable',error,sample:null}));}

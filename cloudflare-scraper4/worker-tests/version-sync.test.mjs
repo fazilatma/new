@@ -914,7 +914,7 @@ test('both extraction-diagnostic twins auto-save discoveries for unconfigured pr
     const end = source.indexOf('\napp.', at + 1);
     const handler = source.slice(at, end > 0 ? end : at + 2000);
     assert.match(handler, /selectorsToSave/, `${runtime}: the route must read what diagnose decided to save`);
-    assert.match(handler, /saveProfile/, `${runtime}: the route must persist discoveries to the profile`);
+    assert.match(handler, /saveLearnedProfile/, `${runtime}: discoveries must use edit-safe persistence`);
     assert.match(handler, /selectors-auto-saved/, `${runtime}: the report must show the auto-save stage`);
   }
 });

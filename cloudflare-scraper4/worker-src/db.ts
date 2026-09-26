@@ -1,3 +1,4 @@
+import {mergeLearnedProfile} from '../worker-src/profile-learning.js';
 import { mergeBenchmarkProfile } from './benchmark-profile.js';
 import { applyResultAdjustments, sameResultData } from './result-adjustments.js';
 import { getEnv, type D1Database, type D1PreparedStatement } from './env.js';
@@ -452,6 +453,10 @@ export async function applyStoredResultSettings(profile:Profile,after='',previou
 
 export async function saveBenchmarkProfile(original:Profile,result:Profile,discovered:Record<string,string>):Promise<boolean>{
  for(let attempt=0;attempt<3;attempt++){const row=await statement('SELECT data FROM profiles WHERE id=?',[original.id]).first<{data:string}>();if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeBenchmarkProfile(JSON.parse(raw),original,result,discovered);const changed=await run('UPDATE profiles SET data=?,updated_at=? WHERE id=? AND data=?',[JSON.stringify(merged),now(),original.id,raw]);if(changed)return true;}return false;
+}
+
+export async function saveLearnedProfile(original:Profile,result:Profile,discovered:Record<string,unknown>):Promise<boolean>{
+ for(let attempt=0;attempt<3;attempt++){const row=await statement('SELECT data FROM profiles WHERE id=?',[original.id]).first<{data:string}>();if(!row)return false;const raw=typeof row.data==='string'?row.data:JSON.stringify(row.data),merged=mergeLearnedProfile(JSON.parse(raw),original,result,discovered);const changed=await run('UPDATE profiles SET data=?,updated_at=? WHERE id=? AND data=?',[JSON.stringify(merged),now(),original.id,raw]);if(changed)return true;}return false;
 }
 
 export async function listActiveJobs():Promise<Job[]>{return(await rows("SELECT id,profile_id,kind,target,status,phase,total,processed,added,updated,failed,stop_requested,error,created_at,started_at,finished_at,updated_at FROM jobs WHERE status IN ('queued','running') ORDER BY created_at")).map(jobFromRow)}

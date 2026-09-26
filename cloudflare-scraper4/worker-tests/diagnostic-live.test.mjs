@@ -58,7 +58,7 @@ for(const runtime of ['worker','render']){
     let handler,release;const gate=new Promise(resolve=>release=resolve),saved=[];
     const profile={id:'fixture',selectors:{title:'.old'}};
     const diagnose=async(_p,_url,observe)=>{observe?.({name:'network',status:'running',summary:'waiting'});await gate;return {ok:true,stages:[],selectorsToSave:{price:'.price'}}};
-    new Function('app','getProfile','diagnoseExtraction','saveProfile','diagnosticStream','jsonBody',code)({post:(_path,h)=>handler=h},async()=>profile,diagnose,async p=>saved.push(p),diagnosticStream,async()=>({}));
+    new Function('app','getProfile','diagnoseExtraction','saveLearnedProfile','diagnosticStream','jsonBody',code)({post:(_path,h)=>handler=h},async()=>profile,diagnose,async(_original,p)=>{saved.push(p);Object.assign(profile,p);return true},diagnosticStream,async()=>({}));
     const context={req:{param:()=>profile.id,query:()=> '1',json:async()=>({})},json:r=>Response.json(r)};
     const response=await handler(context);
     assert.match(response.headers.get('content-type'),/ndjson/);
