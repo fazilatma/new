@@ -1,3 +1,4 @@
+import {createBrowserRuntime} from '../scripts/browser-runtime.mjs';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {extractDiagnosticSample} from './scraper.js';
 import {benchmarkEvidence,incompatibleBenchmark} from '../worker-src/benchmark-evidence.js';
@@ -56,7 +57,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.220.1+'; } catch { return process.env.npm_package_version || '1.220.1+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.221.0+'; } catch { return process.env.npm_package_version || '1.221.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -318,6 +319,28 @@ const browserRepair = createBrowserRepair({resolveExecutable:driver=>browserExec
  await assertPublicUrl(gateway.replace('{url}',encodeURIComponent('https://registry.npmjs.org/playwright')));
  return gatewayDownloadEnvironment(process.env,gateway);
 }});
+const browserRuntime=createBrowserRuntime({launch:async(engine:string)=>{
+ const args=['--disable-dev-shm-usage','--disable-gpu','--proxy-server=http://127.0.0.1:9','--proxy-bypass-list=<-loopback>','--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
+ // Match the visual browser's sandbox policy; root acknowledgement is not a sandbox override.
+ if(process.env.VISUAL_BROWSER_NO_SANDBOX==='true')args.push('--no-sandbox','--disable-setuid-sandbox');
+ const options={headless:true,executablePath:browserExecutable(engine as any),args,timeout:20000};
+ return engine==='playwright'?(await import('playwright')).chromium.launch(options):(await import('puppeteer')).default.launch(options);
+}});
+app.get('/api/runtime/browser-session',c=>{c.header('Cache-Control','no-store');return c.json({ok:true,...browserRuntime.status()})});
+app.post('/api/runtime/browser-session',async c=>{
+ c.header('Cache-Control','no-store');
+ if(c.req.header('x-browser-runtime')!=='1')return c.json({ok:false,error:'Explicit browser runtime action required'},403);
+ try{const text=await c.req.text();if(text.length>256)return c.json({ok:false,error:'Request too large'},413);const body=JSON.parse(text||'{}');
+ if(body.action==='close'&&Object.keys(body).length===1)return c.json({ok:true,...await browserRuntime.close()});
+ if(body.action!=='open')throw Error('Unknown browser action');const {action,...options}=body;return c.json({ok:true,...browserRuntime.start(options)},202);
+ }catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}
+});
+app.get('/api/runtime/browser-session/report',async c=>{
+ c.header('Cache-Control','no-store');
+ let network:any;try{network=resolveSourceNetwork((await getState<any>('settings',{}))?.source,(await loadConnections()).ai.network)}catch{network={mode:'unavailable'}}
+ const context=await browserRepairReport({state:browserRepair.status(),network,version:runtimeVersion(),head:BOOT_HEAD,resolveExecutable:(driver:any)=>browserExecutable(driver)});
+ return c.json({ok:true,report:'SCRAPER4 PERSISTENT BROWSER RUNTIME REPORT\n'+JSON.stringify(browserRuntime.status(),null,2)+'\n\n'+context});
+});
 app.get('/api/runtime/browser-repair/report',async c=>{
  c.header('Cache-Control','no-store');
  let network:any;try{network=resolveSourceNetwork((await getState<any>('settings',{}))?.source,(await loadConnections()).ai.network)}catch{network={mode:'unavailable'}}
@@ -880,7 +903,7 @@ if (localScraperAutoUpdate) {
 }
 const databaseRetry = setInterval(async () => { if (!databaseReady && config.databaseUrl && await initializeDatabase()) startBackground(); }, 30_000);
 databaseRetry.unref();
-const shutdown = async () => { jobDispatcher.stop(); requestWorkerStop(); clearInterval(databaseRetry); if (scheduler) clearInterval(scheduler); server.close(); await pool.end(); process.exit(0); };
+const shutdown = async () => { jobDispatcher.stop(); requestWorkerStop(); await browserRuntime.close(); clearInterval(databaseRetry); if (scheduler) clearInterval(scheduler); server.close(); await pool.end(); process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 
 function csvCell(value:unknown){return `"${String(value??'').replace(/"/g,'""')}"`}
