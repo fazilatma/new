@@ -1,4 +1,4 @@
-import {SNAPSHOT_INTERACTION_JS} from './visual-interactions.js';
+import {SNAPSHOT_INTERACTION_JS,SNAPSHOT_LAYOUT_JS,SNAPSHOT_LAYOUT_CSS} from './visual-interactions.js';
 import { getState, setState } from './db.js';
 import { assertPublicUrl } from './network.js';
 import { sourceText } from './scraper.js';
@@ -19,8 +19,9 @@ const STYLE=`<style>
 body{padding-top:104px!important}
 #__s4bar button.__s4on{background:#f59e0b;color:#111827;font-weight:bold}
 body.__s4paused #__s4bar{opacity:.92}
-body.__s4paused{cursor:auto}</style>`;
+body.__s4paused{cursor:auto}${SNAPSHOT_LAYOUT_CSS}</style>`;
 const PICKER_JS=String.raw`<script>(function(){
+${SNAPSHOT_LAYOUT_JS}
 ${SNAPSHOT_INTERACTION_JS}
 const context='__S4_CONTEXT__',bar=document.getElementById('__s4bar'),modeSelect=document.getElementById('__s4mode'),selectorText=document.getElementById('__s4selector'),countText=document.getElementById('__s4count'),previewText=document.getElementById('__s4preview'),fieldText=document.getElementById('__s4field'),progressText=document.getElementById('__s4progress'),selections={};let selected=null,hovered=null;
 const labels={container:'کانتینر محصول',title:'عنوان',price:'قیمت',link:'لینک',image:'تصویر فهرست',shortDesc:'توضیحات کوتاه',longDesc:'توضیحات بلند',sku:'SKU',category:'دسته‌بندی',tags:'برچسب‌ها',weight:'وزن',stock:'موجودی',brand:'برند',detailImage:'عکس اصلی محصول',variations:'تنوع‌ها',galleryBox:'باکس گالری',galleryOne:'عکس‌های گالری'};
@@ -56,7 +57,7 @@ pauseButton.onclick=()=>setPicking(!picking);
 document.addEventListener('click',event=>{const target=event.target;if(!(target instanceof Element)||target.closest('#__s4bar'))return;if(!picking){s4SnapshotClick(event);return;}event.preventDefault();event.stopPropagation();paint(target)},true);
 modeSelect.addEventListener('change',restoreMode);document.getElementById('__s4up').onclick=()=>move('up');document.getElementById('__s4down').onclick=()=>move('down');document.getElementById('__s4prev').onclick=()=>move('prev');document.getElementById('__s4next').onclick=()=>move('next');document.getElementById('__s4save').onclick=sendOne;
 const done=document.getElementById('__s4done');if(done)done.onclick=()=>parent.postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');
-document.addEventListener('keydown',event=>{if(!picking)return;if(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement||event.target instanceof HTMLSelectElement)return;if(event.key==='ArrowUp'){event.preventDefault();move('up')}else if(event.key==='ArrowDown'){event.preventDefault();move('down')}else if(event.key==='ArrowRight'){event.preventDefault();move('prev')}else if(event.key==='ArrowLeft'){event.preventDefault();move('next')}else if(event.key==='Enter'){event.preventDefault();done?done.click():sendOne()}},true);window.addEventListener('message',event=>{if(event.source!==parent||event.data?.channel!=='__S4_CHANNEL__')return;if(event.data.type==='scraper4-mode'&&fields.includes(event.data.mode)){modeSelect.value=event.data.mode;restoreMode()}});restoreMode();
+document.addEventListener('keydown',event=>{if(!picking||event.target?.closest?.('#__s4bar'))return;if(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement||event.target instanceof HTMLSelectElement)return;if(event.key==='ArrowUp'){event.preventDefault();move('up')}else if(event.key==='ArrowDown'){event.preventDefault();move('down')}else if(event.key==='ArrowRight'){event.preventDefault();move('prev')}else if(event.key==='ArrowLeft'){event.preventDefault();move('next')}else if(event.key==='Enter'){event.preventDefault();done?done.click():sendOne()}},true);window.addEventListener('message',event=>{if(event.source!==parent||event.data?.channel!=='__S4_CHANNEL__')return;if(event.data.type==='scraper4-mode'&&fields.includes(event.data.mode)){modeSelect.value=event.data.mode;restoreMode()}});restoreMode();
 })();</script>`;
 function pickerScript(context:VisualContext,channel:string){return PICKER_JS.replace('__S4_CONTEXT__',context).replaceAll('__S4_CHANNEL__',channel.replace(/[^a-z0-9-]/gi,''))}
 function escapeAttr(value:string):string{return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!))}

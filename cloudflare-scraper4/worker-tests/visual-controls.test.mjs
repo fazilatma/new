@@ -64,3 +64,17 @@ test('dashboard refresh validates sender/channel/origin, coalesces requests and 
  ui.visualMessage(message);await new Promise(setImmediate);assert.equal(requests.length,2,'stale channel cannot refresh again');
  release={};const pending=ui.openVisual('list');await new Promise(setImmediate);ui.closeVisual();release.resolve();await pending;assert.equal($('visualFrame').src,'about:blank','closing during ticket request must not reopen modal');
 });
+for(const runtime of ['render','worker'])test(runtime+': compact toolbar, flow toggle and height control preserve picking',async()=>{
+ const p=await picker(runtime),bar=p.$('__s4bar'),tools=p.$('__s4tools'),pin=p.$('__s4pin'),height=p.$('__s4height');
+ assert.equal(p.document.body.firstElementChild,bar,'flow toolbar must precede source content');
+ assert.equal(tools.hasAttribute('open'),false,'secondary controls start folded');
+ for(const id of ['__s4mode','__s4save','__s4pause','__s4pin'])assert.ok(p.$(id).closest('.__s4primary'),id+' stays outside the folded tools');
+ assert.ok(p.$('__s4refresh').closest('#__s4tools'));assert.ok(pin.checked);
+ bar.getBoundingClientRect=()=>({height:112});pin.checked=false;pin.dispatchEvent(new p.window.Event('change'));assert.ok(bar.classList.contains('__s4flow'));assert.equal(p.document.body.style.getPropertyValue('padding-top'),'0px');
+ pin.checked=true;pin.dispatchEvent(new p.window.Event('change'));assert.equal(bar.classList.contains('__s4flow'),false);assert.equal(p.document.body.style.getPropertyValue('padding-top'),'112px');
+ height.value='45';height.dispatchEvent(new p.window.Event('input'));assert.equal(bar.style.getPropertyValue('--s4-height'),'45vh');assert.equal(bar.style.getPropertyValue('--s4-height-dynamic'),'45dvh');assert.equal(p.$('__s4heightValue').textContent,'45%');
+ height.value='90';height.dispatchEvent(new p.window.Event('input'));assert.equal(bar.style.getPropertyValue('--s4-height'),'50vh','height is bounded');
+ const styles=[...p.document.querySelectorAll('style')].map(el=>el.textContent).join('');assert.match(styles,/max-height:var\(--s4-height,30vh\)!important/);assert.match(styles,/overflow:auto!important/);assert.match(styles,/\.__s4flow\{position:relative!important/);
+ const key=new p.window.Event('keydown',{bubbles:true,cancelable:true});key.key='Enter';tools.firstElementChild.dispatchEvent(key);assert.equal(key.defaultPrevented,false,'keyboard can open the tools disclosure');
+ p.click(p.document.querySelector('article'));p.click(p.$('__s4save'));assert.equal(p.messages[0].mode,'container');assert.equal(p.select.value,'title');
+});

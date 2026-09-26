@@ -61,3 +61,8 @@ test('snapshot exposes readiness limits and escaped JavaScript errors without cl
  const html=visual.sanitizeVisualSnapshot({text:fixture,url:'https://shop.test/list',browserDiagnostics:{visualReadiness:{context:'list',candidates:3,selectorMismatch:true},pendingCriticalResources:1,javascriptErrors:['<script>failure</script>']}},'playwright'),$=load(html);
  assert.match($('#__s4bar').text(),/تضمین کامل/);assert.match($('#__s4bar').text(),/سلکتور ذخیره‌شده تغییر نکرد/);assert.match($('#__s4bar').text(),/JavaScript/);assert.equal($('#__s4bar script').length,0);
 });
+test('long visual warnings are escaped inside a closed disclosure, not a wall of toolbar text',()=>{
+ const html=visual.sanitizeVisualSnapshot({text:fixture,url:'https://shop.test/list',browserDiagnostics:{crashRecovered:true,criticalResourceFailed:true,pendingCriticalResources:2,javascriptErrors:['<script>bad()</script>'.repeat(40)],urlWarning:'Long warning '.repeat(150)}},'playwright'),$=load(html);
+ assert.equal($('#__s4warnings').length,1);assert.equal($('#__s4warnings').attr('open'),undefined);assert.equal($('#__s4warnings > summary').length,1);assert.equal($('#__s4warnings > span').length,5);assert.match($('#__s4warnings > summary').text(),/5/);assert.equal($('#__s4warnings script').length,0);
+ const clean=load(visual.sanitizeVisualSnapshot({text:fixture,url:'https://shop.test/list'},'auto'));assert.equal(clean('#__s4warnings').length,0);
+});
