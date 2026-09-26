@@ -1,3 +1,4 @@
+import type {VisualReadinessOptions} from './visual-readiness.js';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { config } from './config.js';
@@ -7,11 +8,11 @@ import { renderBrowserSnapshot, VISUAL_BROWSER_ENGINES } from './visual-browser.
 const ephemeralSecret = randomBytes(32).toString('hex');
 const secret = () => config.adminToken || ephemeralSecret;
 
-type Ticket = { url: string; expires: number; engine?: string; indirect?: boolean; channel?: string };
-export type VisualOptions = { engine?: string; indirect?: boolean };
+type Ticket = VisualReadinessOptions & { url: string; expires: number; engine?: string; indirect?: boolean; channel?: string };
+export type VisualOptions = VisualReadinessOptions & { engine?: string; indirect?: boolean };
 
 export function createVisualTicket(url: string, options: VisualOptions = {}): string {
-  const payload: Ticket = { url, expires: Date.now() + 5 * 60_000, engine: String(options.engine||'auto'), indirect: Boolean(options.indirect), channel: randomBytes(24).toString('hex') };
+  const payload: Ticket = { context:options.context==='detail'?'detail':'list',container:String(options.container||'').slice(0,2000),url, expires: Date.now() + 5 * 60_000, engine: String(options.engine||'auto'), indirect: Boolean(options.indirect), channel: randomBytes(24).toString('hex') };
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = createHmac('sha256', secret()).update(encoded).digest('base64url');
   return `${encoded}.${signature}`;
@@ -29,12 +30,12 @@ export function readVisualTicket(ticket: string): Ticket {
 }
 
 export async function renderVisualSelector(ticket: string): Promise<string> {
-  const { url, engine='auto', indirect=false, channel='' } = readVisualTicket(ticket);
-  const page = VISUAL_BROWSER_ENGINES.has(engine) ? await renderBrowserSnapshot(url,engine,indirect) : await safeText(url, 6_000_000, {indirect});
+  const { url, engine='auto', indirect=false, channel='',context='list',container='' } = readVisualTicket(ticket);
+  const page = VISUAL_BROWSER_ENGINES.has(engine) ? await renderBrowserSnapshot(url,engine,indirect,undefined,{context,container}) : await safeText(url, 6_000_000, {indirect});
   return sanitizeVisualSnapshot(page,engine,channel);
 }
 
-export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]}},engine='auto',channel=''): string {
+export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{visualReadiness?:any;javascriptErrors?:string[];pendingCriticalResources?:number;crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]}},engine='auto',channel=''): string {
   const $ = cheerio.load(page.text, { scriptingEnabled: false });
   $('script,iframe,object,embed,form,noscript,base,meta').remove();
   $('[id]').each((_i,el)=>{if(String($(el).attr('id')).startsWith('__s4'))$(el).removeAttr('id')});
@@ -65,6 +66,11 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
   $('#__s4bar').prepend($('<span>').attr('id','__s4engine').text(VISUAL_BROWSER_ENGINES.has(engine)?'DOM رندرشده · '+engine+' · تصویر ثابت صفحه، نه مرورگر تعاملی':'HTML مستقیم · '+engine));
   if(page.browserDiagnostics?.crashRecovered)$('#__s4bar').append($('<span>').text('بازیابی پس از crash · بارگذاری سبک؛ تصویر، ویدیو و فونت در مرحلهٔ رندر دریافت نشدند.'));
   if(page.browserDiagnostics?.criticalResourceFailed)$('#__s4bar').append($('<span>').text('هشدار: بعضی منابع JavaScript یا API ناموفق بودند؛ این تصویر ممکن است ناقص باشد. '+(page.browserDiagnostics.failedResources||[]).slice(0,3).map(f=>f.type+' '+f.reason).join(' · ')));
+  if(page.browserDiagnostics?.visualReadiness?.context==='list')$('#__s4bar').append($('<span>').text('کاندیدای محصول در DOM: '+String(page.browserDiagnostics.visualReadiness.candidates||0)+'؛ این عدد تضمین کامل‌بودن فهرست نیست.'));
+  if(page.browserDiagnostics?.visualReadiness?.selectorError)$('#__s4bar').append($('<span>').text(page.browserDiagnostics.visualReadiness.selectorError));
+  if(page.browserDiagnostics?.pendingCriticalResources)$('#__s4bar').append($('<span>').text('هشدار: درخواست‌های JavaScript/API هنوز کامل نشده‌اند؛ تصویر ممکن است ناقص باشد.'));
+  if(page.browserDiagnostics?.visualReadiness?.selectorMismatch)$('#__s4bar').append($('<span>').text('سلکتور ظرف فعلی پیدا نشد؛ محتوای محصول با نشانه‌های عمومی دیده شد. سلکتور ذخیره‌شده تغییر نکرد.'));
+  if(page.browserDiagnostics?.javascriptErrors?.length)$('#__s4bar').append($('<span>').text('هشدار خطای JavaScript: '+page.browserDiagnostics.javascriptErrors.join(' · ')));
   if(page.browserDiagnostics?.urlWarning)$('#__s4bar').append($('<span>').text(page.browserDiagnostics.urlWarning));
   $('body').append(`<script>${pickerSource(channel)}</script>`);
   return $.html();

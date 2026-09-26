@@ -1,5 +1,6 @@
 import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
-import {waitForVisualContent} from './visual-readiness.js';
+import {config} from './config.js';
+import {waitForVisualContent,type VisualReadinessOptions} from './visual-readiness.js';
 import { browserExecutable, withBrowserSlot } from './scraper.js';
 import { assertPublicUrl, safeFetch, safeText } from './network.js';
 
@@ -20,12 +21,12 @@ function visualUrlWarning(raw:string){
 function visualPageCrashed(error:any){return !!error?.browserDiagnostics?.pageCrashed||/\b(?:page|tab|target)\s+(?:has\s+)?crashed\b/i.test(String(error?.message||error))}
 /** Only visual snapshots may retry a crashed tab. Never restart a scroll session,
  * switch engines, bypass the guarded transport, or substitute static HTML. */
-export async function renderBrowserSnapshot(url:string,engine:string,indirect=false,session?:VisualSession){
+export async function renderBrowserSnapshot(url:string,engine:string,indirect=false,session?:VisualSession,readiness:VisualReadinessOptions={}){
  if(session)return renderBrowserSnapshotAttempt(url,engine,indirect,session);
  const urlWarning=visualUrlWarning(url);let previousDiagnostics:any;
  for(let attempt=0;attempt<2;attempt++){
   try{
-   const result=await renderBrowserSnapshotAttempt(url,engine,indirect,undefined,attempt===1);
+   const result=await renderBrowserSnapshotAttempt(url,engine,indirect,undefined,attempt===1,readiness);
    return {...result,browserDiagnostics:{...result.browserDiagnostics,crashRecovered:attempt===1,crashAttempts:attempt+1,...(urlWarning?{urlWarning}:{}),...(previousDiagnostics?{previousAttempt:previousDiagnostics}:{})}};
   }catch(error){
    const failure=error instanceof Error?error:Error(String(error)),crashed=visualPageCrashed(error);
@@ -39,7 +40,7 @@ export async function renderBrowserSnapshot(url:string,engine:string,indirect=fa
  }
  throw Error('Visual snapshot did not complete');
 }
-async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=false,session?:VisualSession,lowResource=false) {
+async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=false,session?:VisualSession,lowResource=false,readiness:VisualReadinessOptions={}) {
   const driver=visualDriver(engine);
   await assertPublicUrl(url);
   return withBrowserSlot(async()=>{
@@ -52,16 +53,19 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
         : await (await import('puppeteer')).default.launch({headless:true,executablePath:browserExecutable(driver),args,timeout:20_000});
     }catch{throw Error('مرورگر انتخاب‌شده راه‌اندازی نشد. npm run browsers:install و BROWSER_EXECUTABLE_PATH را بررسی کنید؛ سرویس را با کاربر غیر root اجرا کنید.');}
     let timeout:ReturnType<typeof setTimeout>|undefined,requests=0,bytes=0,blocked=0,expired=false,documentServed=false,navigationRecovered=false,navigationRetried=false,skipped=0,criticalResourceFailed=false,pageCrashed=false;
-    const controllers=new Set<AbortController>(),failures:any[]=[];
+    let visualReadiness:any=null,pendingCriticalResources=0;
+    const controllers=new Set<AbortController>(),failures:any[]=[],javascriptErrors:string[]=[];
     const canonical=(raw:string)=>{const u=new URL(raw);u.hash='';return u.href.replace(/%[a-f0-9]{2}/gi,x=>x.toUpperCase())};
     const bootstrap=(r:any)=>r.isNavigationRequest()&&r.method()==='GET'&&canonical(r.url())===canonical(initial.url);
     const safePath=(raw:string)=>{try{const u=new URL(raw);return u.origin+u.pathname}catch{return ''}};
     const failed=(r:any,e:any)=>{if(e?.expectedSkip)return;if(['script','document','xhr','fetch'].includes(r.resourceType?.()))criticalResourceFailed=true;if(failures.length<20)failures.push({url:safePath(r.url()),type:r.resourceType?.()||'unknown',reason:String(e?.message||e).replace(/https?:\/\/[^\s]+/g,safePath).slice(0,200)})};
-    const diagnostics=()=>({indirect,transport:'guarded-source',lowResource,pageCrashed,documentServed,navigationRecovered,navigationRetried,requests,skippedResources:skipped,blockedResources:blocked,criticalResourceFailed,failedResources:failures});
+    const diagnostics=()=>({indirect,transport:'guarded-source',visualReadiness,javascriptErrors,pendingCriticalResources,lowResource,pageCrashed,documentServed,navigationRecovered,navigationRetried,requests,skippedResources:skipped,blockedResources:blocked,criticalResourceFailed,failedResources:failures});
     try{
-      const page=driver==='playwright'?await browser.newPage({locale:'fa-IR',serviceWorkers:'block',acceptDownloads:false}):await browser.newPage();
+      const page=driver==='playwright'?await browser.newPage({locale:'fa-IR',userAgent:config.userAgent,viewport:{width:1366,height:768},serviceWorkers:'block',acceptDownloads:false}):await browser.newPage();
+      if(driver==='puppeteer'){await page.setViewport?.({width:1366,height:768});await page.setUserAgent?.(config.userAgent);}
       page.on('popup',(popup:any)=>{void popup.close()});
       page.on(driver==='playwright'?'crash':'error',()=>{pageCrashed=true});
+      page.on('pageerror',(error:any)=>{if(javascriptErrors.length<6)javascriptErrors.push(String(error?.message||error).replace(/https?:\/\/[^\s]+/g,safePath).slice(0,300))});
       session?.prepare(page);
       const resource=async(request:any)=>{
         if(expired||++requests>(session?2000:200))throw Error('Visual resource budget exceeded');
@@ -73,7 +77,7 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
         const input=request.headers(),headers:Record<string,string>={};
         for(const name of ['accept','content-type','user-agent','accept-language','origin','referer'])if(input[name])headers[name]=input[name];
         // Never copy dashboard credentials, browser cookies or bearer tokens into another hop.
-        const controller=new AbortController();controllers.add(controller);const resourceTimer=setTimeout(()=>controller.abort(),12000);
+        const controller=new AbortController();controllers.add(controller);const resourceTimer=setTimeout(()=>controller.abort(),12000),critical=['script','xhr','fetch'].includes(request.resourceType?.());if(critical)pendingCriticalResources++;
         try{
         const response=await safeFetch(target,{method,headers,body:method==='POST'?request.postData():undefined,indirect,signal:controller.signal},6_000_000);
         if(!response.ok)failed(request,Error('HTTP '+response.status));
@@ -81,7 +85,7 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
         if(reader){let timedOut=false;const timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>undefined)},10_000);try{while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.length;bytes+=chunk.value.length;if(size>6_000_000||bytes>(session?128_000_000:lowResource?20_000_000:40_000_000)||expired)throw Error('Visual resource budget exceeded');chunks.push(chunk.value)}if(timedOut)throw Error('Visual resource timed out')}finally{clearTimeout(timer);void reader.cancel().catch(()=>undefined)}}
         const out:Record<string,string>={};response.headers.forEach((value,name)=>{if(!['content-encoding','content-length','transfer-encoding','set-cookie'].includes(name))out[name]=value});
         return {status:response.status,headers:out,body:Buffer.concat(chunks)};
-        }finally{clearTimeout(resourceTimer);controllers.delete(controller)}
+        }finally{clearTimeout(resourceTimer);controllers.delete(controller);if(critical)pendingCriticalResources--}
       };
       if(driver==='playwright'){
         await page.context().route('**/*',async(route:any)=>{try{await route.fulfill(await resource(route.request()));if(bootstrap(route.request()))documentServed=true}catch(error){failed(route.request(),error);blocked++;await route.abort().catch(()=>undefined)}});
@@ -113,7 +117,7 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
         }
         if(driver==='playwright')await page.waitForLoadState('networkidle',{timeout:5000}).catch(()=>undefined);
         else await page.waitForNetworkIdle({timeout:5000}).catch(()=>undefined);
-        if(!session)await waitForVisualContent(page,driver);
+        if(!session){try{visualReadiness=await waitForVisualContent(page,driver,readiness);}catch(error){visualReadiness=(error as any)?.visualReadiness||null;throw error;}}
         const collected=session?await session.collect(page):undefined;
         if(session&&criticalResourceFailed)throw Error('بارگذاری منابع مرورگر ناقص بود؛ کامل‌شدن اسکرول تأیید نشد. گزارش browserDiagnostics را بررسی کنید.');
         const finalUrl=page.url();await assertPublicUrl(finalUrl);
@@ -121,6 +125,6 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
         return {text,url:finalUrl,engine,driver,blockedResources:blocked,browserDiagnostics:diagnostics(),...(session?{collected}:{})};
       };
       return await Promise.race([run(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{expired=true;reject(Error('مهلت رندر انتخاب بصری تمام شد.'))},session?240_000:60_000)})]);
-    }catch(error){const failure=error instanceof Error?error:Error(String(error));failure.message=failure.message.replace(/\u001b\[[0-9;]*m/g,'');if(session&&!documentServed&&requests===0)failure.message+='\nمرورگر پیش از تحویل درخواست به رهگیر امن متوقف شد؛ سند بارگذاری نشده است. تلاش مجدد: '+String(navigationRetried)+'. اتصال مستقیم جایگزین نشده است.';if(!session&&failures.length)failure.message+='\nمنابع ناموفق (نشانی بدون query):\n'+failures.slice(0,6).map(f=>f.type+' · '+f.reason+' · '+f.url).join('\n');throw Object.assign(failure,{browserDiagnostics:diagnostics()})}finally{expired=true;for(const c of controllers)c.abort();clearTimeout(timeout);await browser.close().catch(()=>undefined)}
+    }catch(error){const failure=error instanceof Error?error:Error(String(error));failure.message=failure.message.replace(/\u001b\[[0-9;]*m/g,'');if(session&&!documentServed&&requests===0)failure.message+='\nمرورگر پیش از تحویل درخواست به رهگیر امن متوقف شد؛ سند بارگذاری نشده است. تلاش مجدد: '+String(navigationRetried)+'. اتصال مستقیم جایگزین نشده است.';if(!session&&failures.length)failure.message+='\nمنابع ناموفق (نشانی بدون query):\n'+failures.slice(0,6).map(f=>f.type+' · '+f.reason+' · '+f.url).join('\n');if(!session&&javascriptErrors.length)failure.message+='\nخطاهای JavaScript صفحه:\n'+javascriptErrors.join('\n');throw Object.assign(failure,{browserDiagnostics:diagnostics()})}finally{expired=true;for(const c of controllers)c.abort();clearTimeout(timeout);await browser.close().catch(()=>undefined)}
   });
 }

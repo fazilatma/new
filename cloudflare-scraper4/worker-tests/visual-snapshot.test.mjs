@@ -50,3 +50,14 @@ test('recovered visual snapshot reports reduced resource loading and escapes URL
  const html=visual.sanitizeVisualSnapshot({text:fixture,url:'https://shop.test/list',browserDiagnostics:{crashRecovered:true,urlWarning:'Check is_available <script>alert(1)</script>'}},'playwright');
  const $=load(html);assert.match($('#__s4bar').text(),/بازیابی پس از crash/);assert.match($('#__s4bar').text(),/Check is_available <script>/);assert.equal($('#__s4bar script').length,0);
 });
+
+test('signed visual ticket carries list/detail context and manual container to the renderer',async()=>{
+ const old=globalThis.__visualBrowser;let received;
+ globalThis.__visualBrowser=async(...args)=>{received=args;return {url:args[0],text:fixture}};
+ try{const ticket=visual.createVisualTicket('https://shop.test/list',{engine:'playwright',context:'list',container:'.my-cards'});await visual.renderVisualSelector(ticket);assert.deepEqual(received[4],{context:'list',container:'.my-cards'});
+ const detail=visual.createVisualTicket('https://shop.test/product/1',{engine:'playwright',context:'detail'});await visual.renderVisualSelector(detail);assert.equal(received[4].context,'detail');}finally{globalThis.__visualBrowser=old;}
+});
+test('snapshot exposes readiness limits and escaped JavaScript errors without claiming completeness',()=>{
+ const html=visual.sanitizeVisualSnapshot({text:fixture,url:'https://shop.test/list',browserDiagnostics:{visualReadiness:{context:'list',candidates:3,selectorMismatch:true},pendingCriticalResources:1,javascriptErrors:['<script>failure</script>']}},'playwright'),$=load(html);
+ assert.match($('#__s4bar').text(),/تضمین کامل/);assert.match($('#__s4bar').text(),/سلکتور ذخیره‌شده تغییر نکرد/);assert.match($('#__s4bar').text(),/JavaScript/);assert.equal($('#__s4bar script').length,0);
+});

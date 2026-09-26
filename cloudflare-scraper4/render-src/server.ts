@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.229.0+'; } catch { return process.env.npm_package_version || '1.229.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.230.0+'; } catch { return process.env.npm_package_version || '1.230.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -363,12 +363,14 @@ app.post('/api/web-push/subscribe',async c=>c.json(await subscribePush(await c.r
 app.post('/api/web-push/unsubscribe',async c=>{const b=await c.req.json() as any;return c.json(await unsubscribePush(String(b.id||'')))});
 app.post('/api/web-push/test',async c=>{const b=await c.req.json() as any;if(!/^[a-f0-9]{64}$/.test(String(b.id||'')))return c.json({ok:false,error:'Subscribe this browser first.'},400);return c.json(await deliverPush({title:'Scraper4',body:'اعلان آزمایشی از سرور دریافت شد.',tag:'scraper4-test'},b.id))});
 app.post('/api/visual-ticket', async c => {
-  const body = await c.req.json() as { url?: string; profileId?: string; engine?: string; indirect?: boolean };
+  const body = await c.req.json() as { url?: string; profileId?: string; engine?: string; indirect?: boolean;context?:string;container?:string };
   const url = new URL(String(body.url || ''));
   if (!['http:', 'https:'].includes(url.protocol)) return c.json({ ok: false, error: 'Invalid visual selector URL' }, 400);
   const profile=body.profileId?await getProfile(String(body.profileId)):null;
   const engine=String(body.engine||profile?.extractionEngine||'auto'),indirect=body.indirect??Boolean(profile?.networkIndirect);
-  const ticket=createVisualTicket(url.href,{engine,indirect});
+  if(body.container!==undefined&&(typeof body.container!=='string'||body.container.length>2000))return c.json({ok:false,error:'Invalid visual container selector'},400);
+  const context=body.context==='detail'?'detail':'list',container=body.container??String(profile?.selectors?.container||'');
+  const ticket=createVisualTicket(url.href,{engine,indirect,context,container});
   return c.json({ ok:true,ticket,channel:readVisualTicket(ticket).channel,engine,expiresIn:300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
