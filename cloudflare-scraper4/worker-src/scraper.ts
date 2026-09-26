@@ -1,3 +1,4 @@
+import {selectorDiagnosticAdvice,initialSelectorEvidenceApplies} from '../worker-src/selector-diagnostic-advice.js';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {requireStaticSelectorEngine} from './selector-engine.js';
 import {embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from './product-parser.js';
@@ -922,9 +923,12 @@ export async function diagnoseExtraction(profile:Profile,urlOverride='',onProgre
   const containerCount=scoped.containerCount;
   const evidenceOk=containerCount>0&&Number(scoped.title.count||0)>0;
   const scopedEvidence={container:{ok:containerCount>0,count:containerCount},...Object.fromEntries(['title','price','link','image'].map(key=>[key,{...(scoped as any)[key],ok:(scoped as any)[key].count>0}]))};
-  add('selector-evidence',evidenceOk,
-    evidenceOk?'سلکتورها داخل کارت‌های واقعی HTML اولیه معتبرند؛ نتیجهٔ مرورگر و اسکرول جداگانه بررسی می‌شود.':'سلکتور ظرف یا عنوان داخل کارت‌های HTML اولیه نتیجه نداد.',
-    {evidence:scopedEvidence,containerCount,cardsSampled:scoped.cardsSampled,documentEvidence:evidence,scope:'عنوان، قیمت، لینک و تصویر فقط داخل کارت‌ها بررسی شدند؛ شاهد کل صفحه نمونهٔ محدود است.'});
+  const evidenceApplicable=initialSelectorEvidenceApplies(profile.extractionEngine);
+  recommendations.push(...selectorDiagnosticAdvice(profile.selectors,products));
+  if(products.length&&products.every(p=>!p.price&&!p.url&&!p.image))add('product-completeness',false,'فقط عنوان استخراج شد؛ هیچ قیمت، لینک یا تصویری برای محصول‌ها به دست نیامد.');
+  add('selector-evidence',evidenceOk||!evidenceApplicable,
+    !evidenceApplicable?'این شاهد فقط HTML اولیه است؛ اعتبار سلکتورهای DOM مرورگر از آن تعیین نمی‌شود. برای اعتبارسنجی از آزمایش سلکتور با همان موتور استفاده کنید.':evidenceOk?'سلکتورها داخل کارت‌های واقعی HTML اولیه معتبرند؛ نتیجهٔ مرورگر و اسکرول جداگانه بررسی می‌شود.':'سلکتور ظرف یا عنوان داخل کارت‌های HTML اولیه نتیجه نداد.',
+    {skipped:!evidenceApplicable,evidenceSource:'initial-html',evidenceValid:evidenceOk,evidenceApplicable,evidence:scopedEvidence,containerCount,cardsSampled:scoped.cardsSampled,documentEvidence:evidence,scope:'عنوان، قیمت، لینک و تصویر فقط داخل کارت‌ها بررسی شدند؛ شاهد کل صفحه نمونهٔ محدود است.'});
   let detail:any=null;
   progress.begin('detail-extraction','در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate=products.find(product=>product.url);

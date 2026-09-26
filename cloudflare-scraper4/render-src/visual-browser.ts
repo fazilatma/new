@@ -1,3 +1,4 @@
+import {waitForVisualContent} from './visual-readiness.js';
 import { browserExecutable, withBrowserSlot } from './scraper.js';
 import { assertPublicUrl, safeFetch, safeText } from './network.js';
 
@@ -112,13 +113,14 @@ async function renderBrowserSnapshotAttempt(url:string,engine:string,indirect=fa
         }
         if(driver==='playwright')await page.waitForLoadState('networkidle',{timeout:5000}).catch(()=>undefined);
         else await page.waitForNetworkIdle({timeout:5000}).catch(()=>undefined);
+        if(!session)await waitForVisualContent(page,driver);
         const collected=session?await session.collect(page):undefined;
         if(session&&criticalResourceFailed)throw Error('بارگذاری منابع مرورگر ناقص بود؛ کامل‌شدن اسکرول تأیید نشد. گزارش browserDiagnostics را بررسی کنید.');
         const finalUrl=page.url();await assertPublicUrl(finalUrl);
         const text=await page.content();if(Buffer.byteLength(text)>6_000_000)throw Error('Rendered HTML exceeds visual limit');
         return {text,url:finalUrl,engine,driver,blockedResources:blocked,browserDiagnostics:diagnostics(),...(session?{collected}:{})};
       };
-      return await Promise.race([run(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{expired=true;reject(Error('مهلت رندر انتخاب بصری تمام شد.'))},session?240_000:45_000)})]);
-    }catch(error){const failure=error instanceof Error?error:Error(String(error));failure.message=failure.message.replace(/\u001b\[[0-9;]*m/g,'');if(session&&!documentServed&&requests===0)failure.message+='\nمرورگر پیش از تحویل درخواست به رهگیر امن متوقف شد؛ سند بارگذاری نشده است. تلاش مجدد: '+String(navigationRetried)+'. اتصال مستقیم جایگزین نشده است.';throw Object.assign(failure,{browserDiagnostics:diagnostics()})}finally{expired=true;for(const c of controllers)c.abort();clearTimeout(timeout);await browser.close().catch(()=>undefined)}
+      return await Promise.race([run(),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{expired=true;reject(Error('مهلت رندر انتخاب بصری تمام شد.'))},session?240_000:60_000)})]);
+    }catch(error){const failure=error instanceof Error?error:Error(String(error));failure.message=failure.message.replace(/\u001b\[[0-9;]*m/g,'');if(session&&!documentServed&&requests===0)failure.message+='\nمرورگر پیش از تحویل درخواست به رهگیر امن متوقف شد؛ سند بارگذاری نشده است. تلاش مجدد: '+String(navigationRetried)+'. اتصال مستقیم جایگزین نشده است.';if(!session&&failures.length)failure.message+='\nمنابع ناموفق (نشانی بدون query):\n'+failures.slice(0,6).map(f=>f.type+' · '+f.reason+' · '+f.url).join('\n');throw Object.assign(failure,{browserDiagnostics:diagnostics()})}finally{expired=true;for(const c of controllers)c.abort();clearTimeout(timeout);await browser.close().catch(()=>undefined)}
   });
 }

@@ -88,3 +88,6 @@ test('Emalls-like cards remain valid when scrolling browser fails; samples exclu
   assert.ok(!report.recommendations.some(s=>s.includes('قیمت صفر')||s.includes('لینک محصول پیدا نشده')||s.includes('تصویر پیدا نشده')));
  }finally{delete globalThis.__diagFixture}
 });
+test('initial HTML evidence is not a failed browser-DOM validation',()=>{
+ const evidence=deep.stages.find(s=>s.name==='selector-evidence');assert.equal(evidence.skipped,true);assert.equal(evidence.evidenceSource,'initial-html');assert.equal(evidence.evidenceApplicable,false);assert.equal(evidence.ok,true);assert.equal(deep.ok,false,'actual browser/list failure must still fail the diagnostic');
+});

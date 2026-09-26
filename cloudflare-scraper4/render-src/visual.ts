@@ -34,7 +34,7 @@ export async function renderVisualSelector(ticket: string): Promise<string> {
   return sanitizeVisualSnapshot(page,engine,channel);
 }
 
-export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{crashRecovered?:boolean;urlWarning?:string}},engine='auto',channel=''): string {
+export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]}},engine='auto',channel=''): string {
   const $ = cheerio.load(page.text, { scriptingEnabled: false });
   $('script,iframe,object,embed,form,noscript,base,meta').remove();
   $('[id]').each((_i,el)=>{if(String($(el).attr('id')).startsWith('__s4'))$(el).removeAttr('id')});
@@ -64,6 +64,7 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
   $('body').prepend(TOOLBAR);
   $('#__s4bar').prepend($('<span>').attr('id','__s4engine').text(VISUAL_BROWSER_ENGINES.has(engine)?'DOM رندرشده · '+engine+' · تصویر ثابت صفحه، نه مرورگر تعاملی':'HTML مستقیم · '+engine));
   if(page.browserDiagnostics?.crashRecovered)$('#__s4bar').append($('<span>').text('بازیابی پس از crash · بارگذاری سبک؛ تصویر، ویدیو و فونت در مرحلهٔ رندر دریافت نشدند.'));
+  if(page.browserDiagnostics?.criticalResourceFailed)$('#__s4bar').append($('<span>').text('هشدار: بعضی منابع JavaScript یا API ناموفق بودند؛ این تصویر ممکن است ناقص باشد. '+(page.browserDiagnostics.failedResources||[]).slice(0,3).map(f=>f.type+' '+f.reason).join(' · ')));
   if(page.browserDiagnostics?.urlWarning)$('#__s4bar').append($('<span>').text(page.browserDiagnostics.urlWarning));
   $('body').append(`<script>${pickerSource(channel)}</script>`);
   return $.html();

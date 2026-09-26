@@ -113,3 +113,11 @@ test('retry launch failure retains original crash evidence without a third attem
  globalThis.__visualLaunch=async()=>{if(++launches===2)throw Error('launch failure');return {newPage:async()=>({on:()=>{},context:()=>({route:async()=>{}}),goto:async()=>{throw Error('Page crashed')}}),close:async()=>closed++}};
  await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright'),e=>{assert.equal(e.browserDiagnostics.crashAttempts,2);assert.equal(e.browserDiagnostics.previousAttempt.pageCrashed,true);return /crash/.test(e.message)});assert.equal(launches,2);assert.equal(closed,1);
 });
+test('loading-only visual snapshot reports failed API resources without query secrets',async()=>{
+ let route,closed=0;
+ const page={on:()=>{},context:()=>({route:async(_,fn)=>route=fn}),url:()=> 'https://shop.test/list',content:async()=>'<body>Loading...</body>',waitForLoadState:async()=>{},evaluate:async()=>({ready:false,loadingOnly:true}),waitForFunction:async()=>{throw Error('timeout')},goto:async()=>{
+  const req={url:()=> 'https://shop.test/api/products?secret=hidden',method:()=> 'GET',isNavigationRequest:()=>false,resourceType:()=> 'fetch',headers:()=>({})};await route({request:()=>req,fulfill:async()=>{},abort:async()=>{}});
+ }};
+ globalThis.__visualLaunch=async()=>({newPage:async()=>page,close:async()=>closed++});globalThis.__visualFetch=async()=>new Response('Forbidden',{status:403});
+ try{await assert.rejects(driver.renderBrowserSnapshot('https://shop.test/list','playwright'),e=>{assert.match(e.message,/بارگذاری/);assert.match(e.message,/HTTP 403/);assert.match(e.message,/api\/products/);assert.doesNotMatch(e.message,/secret|hidden/);return true});assert.equal(closed,1)}finally{delete globalThis.__visualFetch}
+});
