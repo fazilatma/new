@@ -215,19 +215,26 @@ def smoke_test(browser, libdir):
     env = dict(os.environ)
     env['LD_LIBRARY_PATH'] = str(libdir)
     print('\n=== Launch check: {} --version ==='.format(browser), flush=True)
-    attempts = [
-        ([str(browser), '--version'], 'default'),
-        ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', '--disable-gpu', '--version'], 'no-sandbox'),
-        ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', '--disable-gpu',
-          '--no-zygote', '--single-process', '--version'], 'no-sandbox+no-zygote+single-process'),
-        ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', '--disable-gpu',
-          '--no-zygote', '--single-process',
-          '--disable-seccomp-filter-sandbox', '--disable-namespace-sandbox',
-          '--headless=new', '--version'], 'aggressive-shared-host'),
-    ]
+    is_firefox = 'firefox' in browser.name.lower() or 'firefox' in str(browser).lower()
+    if is_firefox:
+        attempts = [
+            ([str(browser), '--version'], 'default'),
+            ([str(browser), '--headless', '--version'], 'headless'),
+        ]
+    else:
+        attempts = [
+            ([str(browser), '--version'], 'default'),
+            ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage', '--disable-gpu', '--version'], 'no-sandbox'),
+            ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage', '--disable-gpu',
+              '--no-zygote', '--single-process', '--version'], 'no-sandbox+no-zygote+single-process'),
+            ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage', '--disable-gpu',
+              '--no-zygote', '--single-process',
+              '--disable-seccomp-filter-sandbox', '--disable-namespace-sandbox',
+              '--headless=new', '--version'], 'aggressive-shared-host'),
+        ]
     last_result = None
     for command, label in attempts:
         print('Attempt ({}): {}'.format(label, ' '.join(command)), flush=True)
@@ -263,6 +270,9 @@ def smoke_test(browser, libdir):
                       'Trying more aggressive shared-host flags...', flush=True)
             elif sig == 11:
                 print('SIGSEGV often means incompatible library or truncated binary.',
+                      flush=True)
+            elif sig == 9:
+                print('SIGKILL often means LVE OOM/memory limit or host kills sandbox attempt.',
                       flush=True)
         if result.returncode == 0:
             if label == 'default':
@@ -416,7 +426,7 @@ def main():
         cache = project / 'data/browsers'
         if cache.is_dir():
             browsers = sorted(p for p in cache.rglob('*')
-                              if p.name in ('chrome', 'chrome-headless-shell')
+                              if p.name in ('chrome', 'chrome-headless-shell', 'firefox', 'firefox-bin')
                               and p.is_file())
     launched = {}
     for browser in browsers:
