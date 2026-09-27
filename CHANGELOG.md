@@ -13,11 +13,45 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.11.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.12.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.11.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.11.0 | Follows the suite version |
+| `wcp` (CLI) | 2.12.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.12.0 | Follows the suite version |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.12.0] — 2026-09-27 · `hostconsole.php`
+
+### Fixed
+* **🚨 Node.js version was hard-pinned to v20.** `wcp_nvm_node_bin()` globbed
+  `~/.nvm/versions/node/v20*/bin` *first*, so every project kept running on Node 20 no matter which
+  newer version was installed with NVM — the reason `node:sqlite` failed with
+  *"No such built-in module: node:sqlite"* on a host that already had Node 22/24 available.
+  Resolution order is now: **project's pinned version → console-wide default → the account's
+  `nvm alias default` → newest installed version.**
+
+### Added
+* **Per-project Node.js version.** New `node_version` field and a selector in the project dialog
+  listing every version installed in the account's NVM, each tagged with whether it ships
+  `node:sqlite` unflagged. Empty = automatic. Included in exported/imported JSON profiles.
+* **One-click NVM install.** The ⬇️ button next to the selector runs `nvm install <version>` as a
+  background job in the hosting account's home — no root, no SSH. If NVM itself is missing it is
+  bootstrapped from the official `nvm-sh` install script (`WCP_NVM_RELEASE`) first. The dialog polls
+  the job and refreshes the list when it finishes.
+* **`node:sqlite` capability check in preflight**, using the real release boundary rather than a
+  naive floor: the module is unflagged in **22.13+** and **23.4+**, so `23.0–23.3` is a hole
+  (nodejs/node#55890). If the project's `package.json` mentions `node:sqlite` and the selected
+  runtime cannot provide it, the deploy preflight now **fails loudly** instead of dying at runtime;
+  otherwise it is reported as information and names an installed version that would work.
+* **New API actions**: `sys.node_versions` (installed versions, resolved selection, NVM state) and
+  `sys.nvm_install` (background install). New job type `nvm_install`.
+* **New helpers**: `wcp_nvm_versions()`, `wcp_node_has_sqlite()`, `wcp_nvm_default_alias()`,
+  `wcp_node_version_of()`; `wcp_nvm_node_bin()` / `wcp_node_path()` now take an optional version.
+
+### Changed
+* Preflight guidance no longer tells shared-hosting users to install Node 20; it recommends the
+  current LTS (24) and reports which installed version the project will actually use.
 
 ---
 

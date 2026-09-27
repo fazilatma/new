@@ -7,9 +7,10 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.11.0');
+define('WCP_VERSION', '2.12.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
+define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1007,24 +1008,78 @@ function wcp_account_home(): string {
     $home = trim((string)getenv('HOME'));
     return ($home !== '' && $home[0] === '/') ? rtrim($home, '/') : '';
 }
-function wcp_nvm_node_bin(): string {
+/** همهٔ نسخه‌های Node نصب‌شده در NVM حساب کاربری، از جدید به قدیم. */
+function wcp_nvm_versions(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    $home = wcp_account_home();
+    if ($home === '' || !is_dir($home . '/.nvm/versions/node')) return $cache;
+    foreach (glob($home . '/.nvm/versions/node/v*/bin') ?: [] as $dir) {
+        if (!is_dir($dir) || !is_executable($dir . '/node') || !is_executable($dir . '/npm')) continue;
+        $ver = ltrim(basename(dirname($dir)), 'vV');
+        if (!preg_match('/^\d+(\.\d+){0,2}/', $ver)) continue;
+        $parts = array_map('intval', explode('.', $ver));
+        $cache[] = ['version' => $ver, 'bin' => $dir,
+                    'major' => $parts[0] ?? 0, 'minor' => $parts[1] ?? 0, 'patch' => $parts[2] ?? 0,
+                    'node_sqlite' => wcp_node_has_sqlite($ver)];
+    }
+    usort($cache, function($a, $b) { return version_compare($b['version'], $a['version']); });
+    return $cache;
+}
+/** node:sqlite بدون فلگ: از 22.13 تا قبل از 23، و از 23.4 به بعد (nodejs/node#55890). */
+function wcp_node_has_sqlite(string $ver): bool {
+    $ver = ltrim(trim($ver), 'vV');
+    if ($ver === '') return false;
+    if (version_compare($ver, '23.0.0', '<')) return version_compare($ver, '22.13.0', '>=');
+    return version_compare($ver, '23.4.0', '>=');
+}
+/** نسخهٔ پیش‌فرض ثبت‌شده در NVM (alias/default) را به یک نسخهٔ واقعی نصب‌شده تبدیل می‌کند. */
+function wcp_nvm_default_alias(): string {
     $home = wcp_account_home();
     if ($home === '') return '';
-    $nvm = $home . '/.nvm';
-    if (!is_dir($nvm . '/versions/node')) return '';
-    $bins = glob($nvm . '/versions/node/v20*/bin') ?: [];
-    if (!$bins) $bins = glob($nvm . '/versions/node/v*/bin') ?: [];
-    $bins = array_values(array_filter($bins, function($dir) {
-        return is_dir($dir) && is_executable($dir . '/node') && is_executable($dir . '/npm');
-    }));
-    usort($bins, function($a, $b) { return version_compare(basename(dirname($b)), basename(dirname($a))); });
-    return $bins[0] ?? '';
+    $file = $home . '/.nvm/alias/default';
+    $want = is_file($file) ? trim((string)@file_get_contents($file)) : '';
+    if ($want === '') return '';
+    if (strpos($want, 'lts/') === 0 || $want === 'node' || $want === 'stable') {
+        $lts = $home . '/.nvm/alias/' . $want;
+        $want = is_file($lts) ? trim((string)@file_get_contents($lts)) : '';
+    }
+    return ltrim($want, 'vV');
 }
-function wcp_node_path(): string {
-    $bin = wcp_nvm_node_bin();
+/**
+ * مسیر bin نسخهٔ Node انتخاب‌شده.
+ * ترتیب: نسخهٔ خواسته‌شدهٔ پروژه → پیش‌فرض کلی کنسول → alias default در NVM → جدیدترین نسخهٔ نصب‌شده.
+ * (قبلاً v20 هاردکد بود و پروژه‌ها هرچه نصب می‌کردی روی Node 20 می‌ماندند.)
+ */
+function wcp_nvm_node_bin(string $want = ''): string {
+    $all = wcp_nvm_versions();
+    if (!$all) return '';
+    $pick = function(string $w) use ($all) {
+        $w = ltrim(trim($w), 'vV');
+        if ($w === '') return '';
+        foreach ($all as $v) {
+            if ($v['version'] === $w) return $v['bin'];
+            if (strpos($v['version'], $w . '.') === 0) return $v['bin'];  // «22» یعنی جدیدترین 22.x
+        }
+        return '';
+    };
+    foreach ([$want, (string)(cfg()['node_version'] ?? ''), wcp_nvm_default_alias()] as $candidate) {
+        $bin = $pick((string)$candidate);
+        if ($bin !== '') return $bin;
+    }
+    return $all[0]['bin'];
+}
+function wcp_node_path(string $want = ''): string {
+    $bin = wcp_nvm_node_bin($want);
     if ($bin !== '') return $bin . '/node';
     $path = trim(sh_ok('command -v node'));
     return $path !== '' ? $path : '';
+}
+function wcp_node_version_of(string $want = ''): string {
+    $bin = wcp_nvm_node_bin($want);
+    if ($bin !== '') { foreach (wcp_nvm_versions() as $v) if ($v['bin'] === $bin) return $v['version']; }
+    return ltrim(trim((string)sh_ok('node -v 2>/dev/null')), 'vV');
 }
 
 function proj_runtime_env(array $p): array {
@@ -1038,7 +1093,7 @@ function proj_runtime_env(array $p): array {
     // Shared-hosting Node.js support: prefer the account's NVM installation.
     $nvmHome = wcp_account_home();
     $nvmDir = $nvmHome !== '' ? $nvmHome . '/.nvm' : '';
-    $nodeBin = wcp_nvm_node_bin();
+    $nodeBin = wcp_nvm_node_bin((string)($p['node_version'] ?? ''));
     if ($nvmDir !== '' && is_dir($nvmDir)) $defaults['NVM_DIR'] = $nvmDir;
     if ($nodeBin !== '') {
         $defaults['NVM_BIN'] = $nodeBin;
@@ -2120,6 +2175,8 @@ function proj_service_job(array $p): ?array {
     $jobs=[];foreach(glob(JOBS_DIR.'/*.json')?:[]as$f){$j=json_decode((string)@file_get_contents($f),true);if(($j['type']??'')==='service'&&($j['params']['project_id']??'')===$p['id'])$jobs[]=$j;}usort($jobs,fn($a,$b)=>strcmp($b['created'],$a['created']));foreach($jobs as$j)if(job_status($j)['status']==='running')return $j;return $jobs[0]??null;
 }
 function public_project(array $p): array {$p['has_token_hint']=!empty($p['auth_token']);unset($p['auth_token']);
+    $p['node_version']=(string)($p['node_version']??'');
+    if(($p['type']??'')==='node'){$p['node_resolved']=wcp_node_version_of($p['node_version']);$p['node_sqlite']=$p['node_resolved']!==''&&wcp_node_has_sqlite($p['node_resolved']);}
     $p['domain_enabled']=!empty($p['domain_enabled']);$p['domain']=(string)($p['domain']??'');$p['domain_path']=(string)($p['domain_path']??'/');$p['domain_kind']=dom_kind($p);
     $p['domain_url']=dom_public_url($p);
     try{$p['domain_mode_effective']=dom_enabled($p)?dom_mode_for($p):'';}catch(Throwable $e){$p['domain_mode_effective']='';}
@@ -2710,6 +2767,19 @@ function handle_api() {
         $job = job_create('install_component', $title, ['component' => $comp]);
         job_start($job);
         jout(true, ['job' => $job['id'], 'title' => $title]);
+    case 'sys.node_versions':
+        $want=trim((string)($in['want']??''));
+        $sel=wcp_nvm_node_bin($want);
+        jout(true,['versions'=>wcp_nvm_versions(),'selected'=>wcp_node_version_of($want),'selected_bin'=>$sel,
+                   'default_alias'=>wcp_nvm_default_alias(),'console_default'=>(string)(cfg()['node_version']??''),
+                   'nvm_dir'=>(wcp_account_home()!==''?wcp_account_home().'/.nvm':''),'nvm_installed'=>(wcp_account_home()!==''&&is_file(wcp_account_home().'/.nvm/nvm.sh')),
+                   'system_node'=>ltrim(trim((string)sh_ok('node -v 2>/dev/null')),'vV')]);
+    case 'sys.nvm_install':
+        $ver=trim((string)($in['version']??'24'));
+        if(!preg_match('/^\d+(\.\d+){0,2}$/',$ver))jout(false,null,'نسخهٔ Node نامعتبر است؛ مثلاً 24 یا 22.13.0');
+        $job=job_create('nvm_install','نصب Node.js '.$ver.' با NVM',['version'=>$ver,'set_default'=>!empty($in['set_default'])]);
+        job_start($job);
+        jout(true,['job'=>$job['id'],'version'=>$ver]);
     case 'sysinfo': jout(true,sysinfo());
     case 'sys.emergency_rescue': jout(true,emergency_rescue());
     case 'sys.swap_info': jout(true, sysinfo()['swap']);
@@ -2842,6 +2912,8 @@ function handle_api() {
         $list=proj_all();$p=$in['project']??[];foreach(['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','port','id']as$k)$p[$k]=trim((string)($p[$k]??''));if($p['name']==='')jout(false,null,'Name is required');if($p['repo_url']!==''&&!preg_match('~^(https?://|git@|ssh://|file://|/)~',$p['repo_url']))jout(false,null,'Invalid repository URL');if($p['branch']==='')$p['branch']='main';if($p['branch'][0]==='-'||preg_match('~(^|/)\.\.(/|$)~',$p['subfolder']))jout(false,null,'Invalid branch/subfolder');
         $env=[];foreach(preg_split('/\r\n|\r|\n/',(string)($p['env_text']??''))as$l){$l=trim($l);if($l===''||$l[0]==='#'||strpos($l,'=')===false)continue;[$k,$v]=explode('=',$l,2);$k=trim($k);if(!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/',$k))jout(false,null,'Invalid environment key');$env[$k]=trim($v);}unset($p['env_text']);$p['env']=$env;
         if($api==='proj.quick_deploy')$p=proj_quick_settings($p);
+        $p['node_version']=trim((string)($p['node_version']??''));
+        if($p['node_version']!==''&&!preg_match('/^\d+(\.\d+){0,2}$/',$p['node_version']))jout(false,null,'نسخهٔ Node نامعتبر است؛ مثلاً 24 یا 22.13.0');
         $p=dom_sanitize_project_input($p);
         if(($p['auth_token']??'')==='__KEEP__'||($p['auth_token']??'')==='')unset($p['auth_token']);$p['keep_git']=!empty($p['keep_git']);$p['preserve_configs']=!isset($p['preserve_configs'])||!empty($p['preserve_configs']);$p['auto_start']=!empty($p['auto_start']);$p['is_daemon']=!empty($p['is_daemon']);$p['auto_update']=!empty($p['auto_update']);$p['auto_update_interval']=max(30,min(86400,(int)($p['auto_update_interval']??60)));$existing=$p['id']!==''?proj_find($list,$p['id']):null;if(!$existing)$p['id']=wcp_random(5);$p['deploy_path']=proj_resolve_deploy_path($p,$existing);if($p['deploy_path']==='/')jout(false,null,'Invalid deployment root');
         $found=false;if($p['id']!==''){foreach($list as&$x)if($x['id']===$p['id']){$p=array_merge($x,$p);$x=$p;$found=true;}unset($x);}if(!$found){$p['created']=date('c');$list[]=$p;}proj_save_all($list);
@@ -3160,20 +3232,38 @@ function proj_preflight(array $p): array {
     
     // Check runtime engine version for Node.js projects
     if (($p['type'] ?? '') === 'node') {
-        $nodePath = wcp_node_path();
+        $want = (string)($p['node_version'] ?? '');
+        $nodePath = wcp_node_path($want);
+        $installHint = 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm install 24; nvm alias default 24';
         if (!$nodePath) {
-            $add('Node.js runtime', false, 'Node.js is not available. On shared hosting, install Node 20 LTS with NVM: export NVM_DIR="$HOME/.nvm"; source "$NVM_DIR/nvm.sh"; nvm install 20; nvm alias default 20');
+            $add('Node.js runtime', false, 'Node.js is not available. On shared hosting install it with NVM (no root needed): ' . $installHint);
         } else {
-            $nodeVer = trim((string)sh_ok(esc($nodePath) . ' -v 2>/dev/null'));
-            $nodeMajor = 0;
-            if (preg_match('/v?(\d+)/i', $nodeVer, $nvm)) {
-                $nodeMajor = (int)$nvm[1];
-            }
-            if ($nodeMajor < 18) {
-                $add('Node.js version', false, "Detected {$nodeVer} (Outdated). Install/select Node 20 LTS with NVM: export NVM_DIR=\"$HOME/.nvm\"; source \"$NVM_DIR/nvm.sh\"; nvm install 20; nvm alias default 20");
+            $nodeVer = ltrim(trim((string)sh_ok(esc($nodePath) . ' -v 2>/dev/null')), 'vV');
+            $nodeMajor = (int)$nodeVer;
+            $source = strpos($nodePath, '/.nvm/') !== false ? ' (NVM)' : ' (system)';
+            if ($want !== '' && $nodeVer !== '' && strpos($nodeVer . '.', ltrim($want, 'vV') . '.') !== 0 && $nodeVer !== ltrim($want, 'vV')) {
+                $add('Node.js version', false, "This project asks for Node {$want} but only {$nodeVer} is installed. Install it: " . str_replace('24', $want, $installHint));
+            } elseif ($nodeMajor < 18) {
+                $add('Node.js version', false, "Detected v{$nodeVer} (outdated). Install a current LTS with NVM: " . $installHint);
             } else {
-                $source = strpos($nodePath, '/.nvm/') !== false ? ' (NVM)' : '';
-                $add('Node.js version', true, "Node.js {$nodeVer} is compatible (>= 18.x / 20.x LTS){$source}");
+                $add('Node.js version', true, "Node.js v{$nodeVer} is compatible (>= 18){$source}");
+            }
+            // node:sqlite بدون فلگ فقط از 22.13+ و 23.4+ در دسترس است.
+            $usesSqlite = false;
+            $dir = (string)($p['deploy_path'] ?? '');
+            foreach (['package.json', 'package-lock.json'] as $pf) {
+                $file = rtrim($dir, '/') . '/' . $pf;
+                if ($dir !== '' && is_file($file) && strpos((string)@file_get_contents($file), 'node:sqlite') !== false) { $usesSqlite = true; break; }
+            }
+            if ($nodeVer !== '' && !wcp_node_has_sqlite($nodeVer)) {
+                $best = '';
+                foreach (wcp_nvm_versions() as $v) if ($v['node_sqlite']) { $best = $v['version']; break; }
+                $msg = "node:sqlite is not usable on v{$nodeVer} (it is unflagged only in 22.13+ and 23.4+). "
+                     . ($best !== '' ? "Node {$best} is already installed — select it in the project dialog." : "Install Node 24: " . $installHint)
+                     . " Alternatively set DATABASE_URL to a PostgreSQL connection string.";
+                $add('node:sqlite support', !$usesSqlite, ($usesSqlite ? '' : 'ℹ️ ') . $msg);
+            } elseif ($nodeVer !== '') {
+                $add('node:sqlite support', true, "v{$nodeVer} ships node:sqlite without a flag.");
             }
         }
     } elseif (($p['type'] ?? '') === 'python') {
@@ -3679,6 +3769,40 @@ function cli_service(array $job): int {
         @unlink(JOBS_DIR . '/' . $job['id'] . '.child_pid');
     }
 }
+/** نصب یک نسخهٔ Node با NVM در هوم حساب کاربری — بدون sudo، مناسب هاست اشتراکی. */
+function cli_nvm_install(array $job): int {
+    $ver = (string)($job['params']['version'] ?? '24');
+    $setDefault = !empty($job['params']['set_default']);
+    $home = wcp_account_home();
+    if ($home === '') { cli_log('✗ Home directory of the hosting account could not be determined.'); return 1; }
+    $nvmDir = $home . '/.nvm';
+    cli_log('=================================================');
+    cli_log('Installing Node.js ' . $ver . ' with NVM');
+    cli_log('NVM_DIR: ' . $nvmDir);
+    cli_log('=================================================');
+    if (!is_file($nvmDir . '/nvm.sh')) {
+        cli_log('[NVM] Not found — installing nvm ' . WCP_NVM_RELEASE . ' first...');
+        cli_run('export HOME=' . esc($home) . '; export PROFILE=/dev/null; '
+            . 'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/' . WCP_NVM_RELEASE . '/install.sh | bash', $rc);
+        if (!is_file($nvmDir . '/nvm.sh')) { cli_log('✗ nvm installation failed. Install it over SSH and run this again.'); return 1; }
+    }
+    $script = 'export HOME=' . esc($home) . '; export NVM_DIR=' . esc($nvmDir) . '; . "$NVM_DIR/nvm.sh"; '
+        . 'nvm install ' . esc($ver) . ' --no-progress' . ($setDefault ? ' && nvm alias default ' . esc($ver) : '')
+        . ' && nvm which ' . esc($ver) . ' && "$(nvm which ' . esc($ver) . ')" -v';
+    cli_run('bash -lc ' . esc($script), $rc);
+    clearstatcache();
+    $found = '';
+    foreach (glob($nvmDir . '/versions/node/v' . $ver . '*/bin/node') ?: [] as $cand) $found = $cand;
+    if ($found === '') { cli_log('✗ Node ' . $ver . ' was not found after the install.'); return $rc ?: 1; }
+    $real = ltrim(trim((string)sh_ok(esc($found) . ' -v 2>/dev/null')), 'vV');
+    cli_log('✓ Node ' . $real . ' installed at ' . $found);
+    cli_log(wcp_node_has_sqlite($real)
+        ? '✓ node:sqlite is available without a flag on this version.'
+        : '⚠ node:sqlite still needs --experimental-sqlite here (unflagged in 22.13+ and 23.4+). Install 24 instead.');
+    cli_log('Select it per project in the project dialog, or set it as the console-wide default in Settings.');
+    act_log('nvm install node ' . $real);
+    return 0;
+}
 function cli_install_component(array $job): int {
     $comp = $job['params']['component'] ?? 'all';
     cli_log("=================================================");
@@ -3754,7 +3878,7 @@ function wcp_cli(array $argv) {
             wcp_put_contents(JOBS_DIR . '/' . $id . '.pid', getmypid() . "\n", false);
         }
         @set_time_limit(0);ini_set('memory_limit','512M');$code=1;cli_log('WebConsole job '.$id.' ('.$job['type'].')');
-        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;default:throw new RuntimeException('Unknown job type');}}
+        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;case 'nvm_install':$code=cli_nvm_install($job);break;default:throw new RuntimeException('Unknown job type');}}
         catch(Throwable $e){cli_log('ERROR: '.mask_url($e->getMessage()));$code=1;}
         $exit=JOBS_DIR.'/'.$id.'.exit';if(!is_file($exit))wcp_put_contents($exit,$code."\n",false);exit($code);
     }
@@ -6281,7 +6405,7 @@ function parseProjectJson(text){
  const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
  if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد، نه آرایه');
  if(Object.prototype.hasOwnProperty.call(d,'project')){if(Object.keys(d).length!==1||!record(d.project))throw Error('قالب project نامعتبر است');d=d.project}
- const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host','domain_kind'];
+ const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host','domain_kind','node_version'];
  const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon','auto_update','auto_update_interval','preserve_configs','domain_enabled','domain_ws','domain_https','domain_timeout']);
  for(const k of Object.keys(d))if(!allowed.has(k))throw Error('فیلد ناشناخته: '+k);
  if(typeof d.name!=='string'||!d.name.trim()||typeof d.repo_url!=='string'||!d.repo_url.trim())throw Error('نام و repo_url الزامی هستند');
@@ -6295,7 +6419,8 @@ function parseProjectJson(text){
  for(const k of ['auto_start','is_daemon','preserve_configs','domain_enabled','domain_ws','domain_https'])if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='boolean')throw Error('مقدار '+k+' باید true یا false باشد');out[k]=d[k]}
  if(Object.prototype.hasOwnProperty.call(d,'domain_timeout')){const tv=+d.domain_timeout;if(!Number.isFinite(tv)||tv<30||tv>900)throw Error('domain_timeout باید بین ۳۰ و ۹۰۰ ثانیه باشد');out.domain_timeout=tv}
  if(out.domain&&!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(out.domain))throw Error('دامنه نامعتبر است');
- if(out.domain_kind!==undefined&&!['subdomain','path'].includes(out.domain_kind))throw Error('domain_kind باید subdomain یا path باشد')
+ if(out.domain_kind!==undefined&&!['subdomain','path'].includes(out.domain_kind))throw Error('domain_kind باید subdomain یا path باشد');
+ if(out.node_version&&!/^\d+(\.\d+){0,2}$/.test(out.node_version))throw Error('node_version نامعتبر است؛ مثلاً 24')
  if(Object.prototype.hasOwnProperty.call(d,'env')){if(!record(d.env))throw Error('env باید یک شیء کلید/مقدار باشد');out.env=Object.create(null);for(const[k,v]of Object.entries(d.env)){if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||!['string','number','boolean'].includes(typeof v)||(typeof v==='number'&&!Number.isFinite(v))||/[\r\n\0]/.test(String(v)))throw Error('متغیر محیطی نامعتبر: '+k);out.env[k]=String(v)}}
  // A portable profile cannot change the identity of the dialog being edited.
  return out;
@@ -6306,6 +6431,7 @@ function applyProjectJson(sh,d){
  if(d.auth_token!==undefined)sh.querySelector('#jq-token').value=d.auth_token;
  if(d.auto_start!==undefined)sh.querySelector('#jq-auto').checked=d.auto_start;
  if(d.is_daemon!==undefined)sh.querySelector('#jq-daemon').checked=d.is_daemon;if(d.preserve_configs!==undefined)sh.querySelector('#jq-preserve').checked=d.preserve_configs;
+ if(d.node_version!==undefined){const el=sh.querySelector('#jq-nodever');if(el)el.value=d.node_version}
  for(const[k,id]of[['domain','dq-domain'],['domain_mode','dq-mode'],['domain_path','dq-path'],['domain_docroot','dq-docroot'],['bind_host','dq-bind'],['domain_timeout','dq-timeout'],['domain_kind','dq-kind']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.value=d[k]}
  for(const[k,id]of[['domain_enabled','dq-enabled'],['domain_ws','dq-ws'],['domain_https','dq-https']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.checked=d[k]}
  const dqBox=sh.querySelector('#dq-box'),dqEn=sh.querySelector('#dq-enabled');if(dqBox&&dqEn)dqBox.classList.toggle('hide',!dqEn.checked);
@@ -6317,7 +6443,7 @@ function compareProjectVersions(a,b){const x=parsedProjectVersion(a),y=parsedPro
 function branchVersion(row,path='*'){const apps=(row.apps||[]).filter(a=>path==='*'||a.subfolder===path);return apps.map(a=>a.version).filter(v=>parsedProjectVersion(v)).sort(compareProjectVersions)[0]||''}
 function sortedBranchRows(rows,path='*'){return [...rows].sort((a,b)=>compareProjectVersions(branchVersion(a,path),branchVersion(b,path))||a.name.localeCompare(b.name))}
 
-function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div>${domainFormHtml(p,'dq')}<button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
+function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div><div id="jq-nodever-wrap"><label class="lb">نسخه Node.js</label><div class="row" style="gap:6px"><select class="inp" id="jq-nodever" style="flex:1"><option value="">در حال خواندن…</option></select><button class="btn sm" id="jq-nodever-install" title="نصب نسخه جدید با NVM">⬇️ نصب</button></div><p class="hint" id="jq-nodever-note" style="font-size:11.5px;margin:4px 0 0"></p></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div>${domainFormHtml(p,'dq')}<button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
  const showTab=id=>{for(const tab of ['gh','man','json']){sh.querySelector('#'+tab+'-exp').classList.toggle('hide',tab!==id);sh.querySelector('#tab-'+tab).classList.toggle('pri',tab===id)}};
  const man=()=>showTab('man'),gh=()=>showTab('gh');sh.querySelector('#tab-man').onclick=man;sh.querySelector('#tab-gh').onclick=gh;sh.querySelector('#tab-json').onclick=()=>showTab('json');
  const jsonText=sh.querySelector('#jq-json-text'),jsonStatus=sh.querySelector('#jq-json-status');let jsonEpoch=0;
@@ -6325,6 +6451,40 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#jq-json-file').onchange=async e=>{const epoch=++jsonEpoch,file=e.target.files[0];if(!file)return;try{if(file.size>PROJECT_JSON_MAX_BYTES)throw Error('فایل بزرگ‌تر از ۲۵۶ کیلوبایت است');const text=await file.text();if(epoch!==jsonEpoch||sh.querySelector('#jq-json-text')!==jsonText)return;jsonText.value=text;jsonStatus.textContent='فایل خوانده شد؛ برای اعتبارسنجی و بازبینی دکمه اعمال را بزنید'}catch(error){if(epoch===jsonEpoch&&sh.querySelector('#jq-json-text')===jsonText)jsonStatus.textContent=error.message}};
  sh.querySelector('#jq-json-apply').onclick=()=>{try{const imported=parseProjectJson(jsonText.value);jsonEpoch++;applyProjectJson(sh,imported);man();toast('JSON در فرم اعمال شد؛ دستورات و مسیر را بررسی و سپس ذخیره کنید','ok')}catch(error){jsonStatus.textContent=error.message}};
  const fill=app=>{applyProjectJson(sh,app);sh.querySelector('#jq-type').value=app.type||'node';man()};
+ const nvSel=sh.querySelector('#jq-nodever'),nvNote=sh.querySelector('#jq-nodever-note');
+ const nodeVerSync=()=>sh.querySelector('#jq-nodever-wrap').classList.toggle('hide',sh.querySelector('#jq-type').value!=='node');
+ const loadNodeVers=async(keep)=>{
+   try{
+     const cur=keep!==undefined?keep:(p.node_version||'');
+     const d=await api('sys.node_versions',{want:cur});
+     nvSel.innerHTML='<option value="">خودکار (جدیدترین نسخه نصب‌شده)</option>'+
+       d.versions.map(v=>`<option value="${esc(v.version)}" ${cur===v.version?'selected':''}>v${esc(v.version)}${v.node_sqlite?' ✅ node:sqlite':''}</option>`).join('');
+     if(cur&&!d.versions.some(v=>v.version===cur))nvSel.insertAdjacentHTML('beforeend',`<option value="${esc(cur)}" selected>v${esc(cur)} — نصب نشده!</option>`);
+     nvSel.value=cur;
+     const sq=d.versions.filter(v=>v.node_sqlite);
+     nvNote.innerHTML=!d.versions.length
+       ?'⚠️ هیچ نسخه‌ای از Node در NVM پیدا نشد'+(d.system_node?` (Node سیستمی: v${esc(d.system_node)})`:'')+'. دکمهٔ «نصب» را بزنید.'
+       :(sq.length?`اجرا با <b class="ltr">v${esc(d.selected)}</b>. برای <code class="ltr">node:sqlite</code> نسخهٔ ۲۲.۱۳+ یا ۲۴ لازم است (با ✅ مشخص شده).`
+                  :`⚠️ اجرا با <b class="ltr">v${esc(d.selected)}</b> — هیچ نسخهٔ نصب‌شده‌ای <code class="ltr">node:sqlite</code> را بدون فلگ ندارد؛ Node 24 را نصب کنید.`);
+   }catch(e){nvNote.textContent=e.message}
+ };
+ nodeVerSync();loadNodeVers();
+ sh.querySelector('#jq-type').addEventListener('change',nodeVerSync);
+ sh.querySelector('#jq-nodever-install').onclick=async()=>{
+   const v=(prompt('کدام نسخه Node نصب شود؟ (پیشنهاد: 24 — شامل node:sqlite بدون فلگ)','24')||'').trim();
+   if(!v)return;
+   if(!/^\d+(\.\d+){0,2}$/.test(v)){toast('نسخه نامعتبر است','err');return}
+   try{
+     const r=await api('sys.nvm_install',{version:v,set_default:false});
+     toast('نصب Node '+v+' شروع شد؛ لاگ کامل در تب کارها','ok');
+     nvNote.textContent='⏳ در حال نصب Node '+v+'… (چند دقیقه طول می‌کشد)';
+     const poll=setInterval(async()=>{
+       try{const st=await api('jobs.status',{id:r.job});
+         if(st.status!=='running'){clearInterval(poll);await loadNodeVers(v);toast('نصب Node '+v+' تمام شد','ok')}
+       }catch(e){clearInterval(poll)}
+     },4000);
+   }catch(e){toast(e.message,'err')}
+ };
  const owner=()=>sh.querySelector('#gh-owner').value.trim()||'fazilatma',repo=()=>sh.querySelector('#gh-repo-sel').value,branch=()=>sh.querySelector('#gh-branch-sel').value;
  const table=sh.querySelector('#gh-branch-table'),progress=sh.querySelector('#gh-branch-progress'),pathSelect=sh.querySelector('#gh-version-path');
  let epoch=0,selection=0,rows=[],snapshot=null;
@@ -6344,7 +6504,7 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#jq-managed-path').onclick=async()=>{try{const d=await api('proj.managed_path',{id:p.id||'',name:sh.querySelector('#jq-name').value});sh.querySelector('#jq-deploy_path').value=d.path;toast('مسیر پیشنهادی در فرم قرار گرفت؛ پس از بازبینی ذخیره کنید','ok')}catch(e){toast(e.message,'err')}};
  sh.querySelector('#jq-autoupdate').onchange=e=>sh.querySelector('#jq-autoupdate-box').classList.toggle('hide',!e.target.checked);
  domainFormBind(sh,'dq');
- sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();Object.assign(q,domainFormRead(sh,'dq'));if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');const res=await api('proj.save',{project:q});__closeSheet();renderProj();if(res&&res.domain_error)toast('پروژه ذخیره شد اما نگاشت دامنه ناموفق بود: '+res.domain_error,'warn');else if(res&&res.domain)toast('ذخیره شد و دامنه روی '+res.domain.url+' منتشر شد','ok');else toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
+ sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,node_version:(sh.querySelector('#jq-nodever')||{}).value||'',auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();Object.assign(q,domainFormRead(sh,'dq'));if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');const res=await api('proj.save',{project:q});__closeSheet();renderProj();if(res&&res.domain_error)toast('پروژه ذخیره شد اما نگاشت دامنه ناموفق بود: '+res.domain_error,'warn');else if(res&&res.domain)toast('ذخیره شد و دامنه روی '+res.domain.url+' منتشر شد','ok');else toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
  if(fresh){gh();sh.querySelector('#gh-load').click()}
 }
 INITS.jobs={fn(){renderJobs();setInterval(()=>{if(curTab==='jobs'&&!document.hidden&&!__sheet)renderJobs()},5000)}};
@@ -6433,7 +6593,7 @@ function domainFormRead(root,pf){
 // ساخت payload کامل برای proj.save تا فیلدهای دیگر پروژه پاک نشوند
 function projectSavePayload(p,ov){
   const q=Object.assign({},p,ov||{});
-  return {id:q.id||'',name:q.name||'',type:q.type||'node',repo_url:q.repo_url||'',branch:q.branch||'main',
+  return {id:q.id||'',name:q.name||'',type:q.type||'node',node_version:q.node_version||'',repo_url:q.repo_url||'',branch:q.branch||'main',
     subfolder:q.subfolder||'',deploy_path:q.deploy_path||'',install_cmd:q.install_cmd||'',build_cmd:q.build_cmd||'',
     start_cmd:q.start_cmd||'',port:String(q.port||''),env_text:Object.entries(q.env||{}).map(([k,v])=>k+'='+v).join('\n'),
     auto_start:!!q.auto_start,is_daemon:!!q.is_daemon,auto_update:!!q.auto_update,

@@ -10,7 +10,7 @@
 #
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 2.11.0 | Repository: fazilatma/new
+# Version: 2.12.0 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail
@@ -279,7 +279,7 @@ echo -e "  ${CLR_GREEN}${CLR_BOLD}[1] ⚡ Start WebConsole Server (Default)${CLR
 echo -e "      • Starts persistent background server on Port 8888 & outputs live URLs (~1s)"
 echo -e ""
 echo -e "  ${CLR_CYAN}${CLR_BOLD}[2] 🔄 Quick Update WebConsole & wcp CLI${CLR_RESET}"
-echo -e "      • Downloads latest WebConsole Pro v2.11.0 and wcp CLI from GitHub (~3s)"
+echo -e "      • Downloads latest WebConsole Pro v2.12.0 and wcp CLI from GitHub (~3s)"
 echo -e ""
 echo -e "  ${CLR_YELLOW}${CLR_BOLD}[3] 📦 Full All-in-One Installation${CLR_RESET}"
 echo -e "      • Installs Web Server, Node 22 LTS, Python 3 Stack, Scraping Tools (~1-2m)"
@@ -433,7 +433,7 @@ SERVER_IP=$(detect_clean_ip)
 
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}================================================================================"
-echo "          🎉 WebConsole Pro v2.11.0 Ready & Operational!                         "
+echo "          🎉 WebConsole Pro v2.12.0 Ready & Operational!                         "
 echo "================================================================================${CLR_RESET}"
 echo ""
 

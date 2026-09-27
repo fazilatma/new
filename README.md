@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Suite Version: 2.11.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.12.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -213,7 +213,54 @@ preserved on apply and cleanly removed on delete (a `.wcp-bak` backup is kept).
 
 ---
 
-## 📱 6. Android Termux Battery & Kernel Optimization
+## 🟩 6. Node.js version per project (NVM)
+
+Shared hosts ship an old system Node, so `hostconsole.php` runs projects from the **account's own
+NVM** (`~/.nvm`) — no root required. Pick the version per project in the project dialog; the list
+shows every installed version and marks the ones that ship `node:sqlite` without a flag.
+
+Resolution order when a project does not pin a version:
+
+1. the console-wide default (`node_version` setting),
+2. the account's `nvm alias default`,
+3. the newest installed version.
+
+### Installing a version
+
+The ⬇️ button next to the selector runs the install as a background job. The equivalent shell
+commands over SSH:
+
+```bash
+# once, if nvm itself is missing
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash
+
+export NVM_DIR="$HOME/.nvm"
+. "$NVM_DIR/nvm.sh"
+
+nvm install 24          # current Active LTS
+nvm alias default 24    # make it the default for new shells
+node -v
+```
+
+### `node:sqlite` version floor
+
+`node:sqlite` was added in **22.5.0** but stayed behind `--experimental-sqlite` until
+**22.13.0** and **23.4.0** ([nodejs/node#55890](https://github.com/nodejs/node/pull/55890)), so
+`23.0–23.3` is a gap:
+
+| Node | `import 'node:sqlite'` |
+| :--- | :--- |
+| ≤ 22.12 | ❌ `No such built-in module` |
+| 22.13 – 22.x | ✅ |
+| 23.0 – 23.3 | ❌ |
+| ≥ 23.4 (incl. 24 LTS) | ✅ |
+
+The deploy preflight checks this and fails early when the project imports `node:sqlite` on a runtime
+that cannot provide it. The alternative is to set `DATABASE_URL` to a PostgreSQL connection string.
+
+---
+
+## 📱 7. Android Termux Battery & Kernel Optimization
 
 * **Zero Background Drain:** Run `wcp off` or `wcp shutdown` when finished to pause all background daemons.
 * **SELinux OPcache Fix:** Bypasses unrooted Android `/tmp` semaphore restrictions automatically.
@@ -229,9 +276,9 @@ can never be overwritten by `webconsole.php` again.
 
 | Component | Version |
 | :--- | :---: |
-| `hostconsole.php` (shared hosting) | **2.11.0** |
+| `hostconsole.php` (shared hosting) | **2.12.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
-| `wcp` CLI · `install.sh` · `update.sh` | 2.11.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.12.0 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).
