@@ -87,6 +87,12 @@ def describe_browser(path):
         print('Header: ELF, but not the expected ELF64 little-endian x86_64 format')
     else:
         print('Header: NOT ELF; first 16 bytes (hex): ' + header[:16].hex())
+    # Heuristic: Chrome binaries are typically >50 MB; a much smaller file
+    # often indicates an interrupted download, not a hosting restriction.
+    if info.st_size < 20 * 1024 * 1024:
+        print('Warning: file is unusually small (<20 MB); may be incomplete.', flush=True)
+    elif path.name == 'chrome' and info.st_size < 50 * 1024 * 1024:
+        print('Warning: chrome binary is unusually small (<50 MB); may be incomplete.', flush=True)
     tool = shutil.which('file')
     if tool:
         result = subprocess.run([tool, '-L', str(path)],
@@ -116,21 +122,61 @@ def smoke_test(browser, libdir):
     env = dict(os.environ)
     env['LD_LIBRARY_PATH'] = str(libdir)
     print('\n=== Launch check: {} --version ==='.format(browser), flush=True)
-    try:
-        result = subprocess.run([str(browser), '--version'], env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                universal_newlines=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        print('No result after 60 seconds; nothing was left running.', flush=True)
-        return False
-    print('Exit code: {}'.format(result.returncode), flush=True)
-    print(result.stdout.strip()[:2000], flush=True)
-    if result.returncode == 0:
-        print('The loader found every library this browser needs.', flush=True)
-        return True
-    print('Startup failed. Any line naming "error while loading shared libraries" '
-          'gives the next library to solve; other messages point to another cause.',
-          flush=True)
+    attempts = [
+        ([str(browser), '--version'], 'default'),
+        ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', '--disable-gpu', '--version'], 'no-sandbox'),
+    ]
+    last_result = None
+    for command, label in attempts:
+        print('Attempt ({}): {}'.format(label, ' '.join(command)), flush=True)
+        try:
+            result = subprocess.run(command, env=env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    universal_newlines=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            print('No result after 60 seconds; nothing was left running.', flush=True)
+            continue
+        print('Exit code: {}'.format(result.returncode), flush=True)
+        output = (result.stdout or '').strip()
+        if output:
+            print(output[:2000], flush=True)
+        else:
+            print('(no output)', flush=True)
+        if result.returncode < 0:
+            sig = -result.returncode
+            try:
+                import signal as _signal
+                try:
+                    name = _signal.Signals(sig).name
+                except Exception:
+                    name = {5: 'SIGTRAP', 11: 'SIGSEGV', 6: 'SIGABRT',
+                            4: 'SIGILL', 8: 'SIGFPE', 9: 'SIGKILL',
+                            15: 'SIGTERM'}.get(sig, 'signal {}'.format(sig))
+            except Exception:
+                name = 'signal {}'.format(sig)
+            print('Terminated by {} (signal {}).'.format(name, sig), flush=True)
+            if sig == 5:
+                print('SIGTRAP often means Chromium sandbox check failed; '
+                      'try --no-sandbox on this host.', flush=True)
+            elif sig == 11:
+                print('SIGSEGV often means incompatible library or truncated binary.',
+                      flush=True)
+        if result.returncode == 0:
+            if label == 'default':
+                print('The loader found every library this browser needs.', flush=True)
+            else:
+                print('Browser started with {} flags; default sandbox mode '
+                      'is blocked on this host.'.format(label), flush=True)
+            return True
+        last_result = result
+        if label == 'default':
+            print('Trying with --no-sandbox to distinguish sandbox vs library failure...',
+                  flush=True)
+    if last_result is not None:
+        print('Startup failed. Any line naming "error while loading shared libraries" '
+              'gives the next library to solve; other messages point to another cause.',
+              flush=True)
     return False
 
 

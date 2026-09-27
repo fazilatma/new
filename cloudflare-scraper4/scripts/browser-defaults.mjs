@@ -6,6 +6,22 @@ import {accessSync,statSync,constants} from 'node:fs';
 /** Portable browser defaults. Never put a deployment ID, cache path or secret here. */
 export const BROWSER_DEFAULTS=Object.freeze({linuxTemporaryDirectory:'/tmp',sandbox:'auto',debug:false});
 let applied=null;
+function findPrivateLibDir(env=process.env){
+ const candidates=[];
+ if(env.BROWSER_LD_LIBRARY_PATH){
+  for(const part of String(env.BROWSER_LD_LIBRARY_PATH).split(':')){
+   const trimmed=part.trim();
+   if(trimmed)candidates.push(trimmed);
+  }
+ }
+ if(env.HOME)candidates.push(path.posix.join(env.HOME,'browser-libs','lib'));
+ try{const hd=os.homedir();if(hd&&hd!==env.HOME)candidates.push(path.posix.join(hd,'browser-libs','lib'));}catch{}
+ candidates.push('/home/sabashop/browser-libs/lib');
+ for(const candidate of candidates){
+  try{if(statSync(candidate).isDirectory())return candidate;}catch{}
+ }
+ return null;
+}
 export function resolveBrowserDefaults({env=process.env,platform=process.platform,uid=process.getuid?.(),systemTemp=os.tmpdir()}={}){
  const termux=platform==='android'||String(env.PREFIX||'').includes('com.termux');
  const explicit=String(env.BROWSER_TMPDIR||'').trim();
@@ -25,6 +41,37 @@ export function applyBrowserDefaults(env=process.env,options={}){
  settings.paths=applyBrowserPaths(env,options);
  try{if(!statSync(settings.temporaryDirectory).isDirectory())throw Error('Not a directory');accessSync(settings.temporaryDirectory,constants.W_OK|constants.X_OK)}catch{settings.warnings.push('Browser temporary directory is not writable/searchable by this process: '+settings.temporaryDirectory+'. Create/fix a suitable directory and set BROWSER_TMPDIR; no permissions were changed.');}
  env.TMPDIR=settings.temporaryDirectory;env.TMP=settings.temporaryDirectory;env.TEMP=settings.temporaryDirectory;
+ // Private shared-host libraries (e.g. ~/browser-libs/lib) must be visible to
+ // the browser child processes; the helper sets LD_LIBRARY_PATH only for its
+ // own ldd checks, so the app has to wire it itself. Detect common locations
+ // and prepend them, without overwriting an explicit administrator setting.
+ let privateLib=null;
+ if(env.BROWSER_LD_LIBRARY_PATH){
+  const parts=String(env.BROWSER_LD_LIBRARY_PATH).split(':').map(s=>s.trim()).filter(Boolean);
+  for(const part of parts){try{if(statSync(part).isDirectory()){privateLib=part;break;}}catch{}}
+  if(!privateLib&&parts.length)privateLib=parts[0];
+  const existing=env.LD_LIBRARY_PATH?env.LD_LIBRARY_PATH.split(':').filter(Boolean):[];
+  const merged=[...parts,...existing.filter(e=>!parts.includes(e))];
+  env.LD_LIBRARY_PATH=merged.join(':');
+ }else{
+  privateLib=findPrivateLibDir(env);
+  if(privateLib){
+   const existing=env.LD_LIBRARY_PATH?env.LD_LIBRARY_PATH.split(':').filter(Boolean):[];
+   if(!existing.includes(privateLib))env.LD_LIBRARY_PATH=[privateLib,...existing].join(':');
+  }
+ }
+ if(privateLib){
+  settings.privateLibDir=privateLib;
+  // On the EL8 shared host the sandbox cannot run; when the private libs are
+  // present and the policy is still auto, enable no-sandbox automatically.
+  if(settings.sandboxPolicy==='auto'&&!settings.noSandbox){
+   const platform=options.platform||process.platform;
+   if(platform==='linux'||platform==='android'){
+    settings.noSandbox=true;
+    settings.warnings.push('Private browser libraries detected at '+privateLib+'; Chromium sandbox disabled for compatibility (set VISUAL_BROWSER_NO_SANDBOX=false to override).');
+   }
+  }
+ }
  env.VISUAL_BROWSER_NO_SANDBOX=String(settings.noSandbox);
  // DEBUG is deliberately not enabled; preserve an explicit administrator setting.
  if(env===process.env)applied=settings;

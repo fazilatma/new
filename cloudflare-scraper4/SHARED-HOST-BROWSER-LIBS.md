@@ -45,6 +45,8 @@ access, ELF header architecture, and `file -L` output if that command exists.
 It reports the ldd exit code and does not equate that message with proven
 corruption. Browser binaries are neither modified nor executed by this evidence
 step. A matching ELF header alone does not prove a complete/correct binary.
+Files unusually small (<20 MB, or chrome <50 MB) are flagged as possibly
+incomplete downloads.
 
 Warnings about missing execute permission on the extracted mode-0644 libraries
 are expected from some ldd versions; shared libraries need to be readable, not
@@ -54,8 +56,23 @@ marked as executables, to be loaded. No permission broadening is performed.
 
 `python3 repair.py --smoke-test` additionally starts each discovered browser
 binary once with `--version` and the private library path, then prints the exit
-code and output. That single run proves whether the loader can actually start the
-browser, which `ldd` alone cannot. Without the flag nothing is started. Exit code
-4 means a browser was started and failed; exit 0 with the flag means the loader
-resolved everything, but site rendering, hosting limits and the application's
-own library path are still unverified.
+code and output. It first tries the default flags, then retries with
+`--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu`
+to distinguish a sandbox block (SIGTRAP) from a missing library. A crash signal
+is decoded (SIGTRAP often means sandbox, SIGSEGV often means truncated binary
+or ABI mismatch). That single run proves whether the loader can actually start
+the browser, which `ldd` alone cannot. Without the flag nothing is started.
+Exit code 4 means a browser was started and failed; exit 0 with the flag means
+the loader resolved everything (with or without the sandbox fallback), but site
+rendering, hosting limits and the application's own library path are still
+unverified.
+
+### Application wiring
+
+The helper only sets `LD_LIBRARY_PATH` for its own `ldd` checks. The application
+itself now auto-detects `~/browser-libs/lib` (or `BROWSER_LD_LIBRARY_PATH`) and
+prepends it to `LD_LIBRARY_PATH` at startup, and disables the Chromium sandbox
+when that private directory is present and `VISUAL_BROWSER_NO_SANDBOX` is still
+`auto`. Explicit `VISUAL_BROWSER_NO_SANDBOX=false` or an explicit
+`BROWSER_LD_LIBRARY_PATH` is respected. This wiring is covered by the existing
+browser-defaults tests plus manual checks; no system-wide changes are made.
