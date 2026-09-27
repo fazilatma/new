@@ -24,6 +24,7 @@ WANTED = {
     'at-spi2-core': 'libatspi.so.0',
     'mesa-libgbm': 'libgbm.so.1',
     'alsa-lib': 'libasound.so.2',
+    'libwayland-server': 'libwayland-server.so.0',
 }
 
 
@@ -72,6 +73,28 @@ def atomic_write(destination, data):
             os.unlink(name)
 
 
+def describe_browser(path):
+    """Read-only evidence; a loader error alone does not prove file corruption."""
+    print('\n=== Browser file: {} ==='.format(path), flush=True)
+    info = path.stat()
+    with path.open('rb') as stream:
+        header = stream.read(64)
+    print('Size: {} bytes; mode: {:o}; executable by account: {}'.format(
+        info.st_size, info.st_mode & 0o777, os.access(str(path), os.X_OK)))
+    if elf_x64(header):
+        print('Header: ELF64, little-endian, x86_64 (header only; not integrity proof)')
+    elif header.startswith(b'\x7fELF'):
+        print('Header: ELF, but not the expected ELF64 little-endian x86_64 format')
+    else:
+        print('Header: NOT ELF; first 16 bytes (hex): ' + header[:16].hex())
+    tool = shutil.which('file')
+    if tool:
+        result = subprocess.run([tool, '-L', str(path)],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                universal_newlines=True, timeout=20)
+        print(result.stdout.strip(), flush=True)
+
+
 def check_dependencies(path, libdir):
     env = dict(os.environ)
     env['LD_LIBRARY_PATH'] = str(libdir)
@@ -79,8 +102,13 @@ def check_dependencies(path, libdir):
     result = subprocess.run(['ldd', str(path)], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             universal_newlines=True, timeout=45)
+    print('ldd exit code: {}'.format(result.returncode), flush=True)
     print(result.stdout, flush=True)
-    return (result.returncode == 0 and 'not found' not in result.stdout)
+    if 'not a dynamic executable' in result.stdout:
+        print('Loader inspection failed; this alone does not identify corruption, '
+              'architecture mismatch, or a hosting restriction.', flush=True)
+    return (result.returncode == 0 and 'not found' not in result.stdout
+            and 'not a dynamic executable' not in result.stdout)
 
 
 def main():
@@ -154,7 +182,7 @@ def main():
         if soname not in staged:
             raise RuntimeError('Expected x86_64 ELF library not found: ' + soname)
 
-    # Copy only the four allowlisted ELF libraries, not arbitrary archive paths.
+    # Copy only the five allowlisted ELF libraries, not arbitrary archive paths.
     for soname, data in staged.items():
         atomic_write(libs / soname, data)
         print('Extracted: ' + soname, flush=True)
@@ -178,6 +206,7 @@ def main():
                               if p.name in ('chrome', 'chrome-headless-shell')
                               and p.is_file())
     for browser in browsers:
+        describe_browser(browser)
         healthy = check_dependencies(browser, libs) and healthy
     if not browsers:
         print('Browser files not found. Re-run with --project /actual/project/path.')

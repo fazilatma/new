@@ -1,5 +1,6 @@
 """Offline tests for the standalone shared-host helper; no downloads or installs."""
-import ast
+import contextlib
+import io
 import importlib.util
 import tempfile
 import unittest
@@ -43,6 +44,31 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(original.read_bytes(), b'unchanged')
             self.assertEqual(output.read_bytes(), b'new library')
             self.assertFalse(output.is_symlink())
+
+    def test_wayland_dependency_is_allowlisted(self):
+        self.assertEqual(helper.WANTED['libwayland-server'], 'libwayland-server.so.0')
+        listing = '<a href="libwayland-server-1.21.0-1.el8.x86_64.rpm">x</a>'
+        self.assertEqual(helper.select_package(listing, 'libwayland-server'),
+                         'libwayland-server-1.21.0-1.el8.x86_64.rpm')
+
+    def test_browser_evidence_does_not_launch_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            browser = Path(folder) / 'chrome'
+            browser.write_bytes(b'<html>incomplete download</html>')
+            out = io.StringIO()
+            with patch.object(helper.shutil, 'which', return_value=None):
+                with patch.object(helper.subprocess, 'run') as run:
+                    with contextlib.redirect_stdout(out):
+                        helper.describe_browser(browser)
+                    run.assert_not_called()
+            self.assertIn('Header: NOT ELF', out.getvalue())
+            self.assertIn('Size: 32 bytes', out.getvalue())
+
+    def test_dynamic_loader_failure_is_not_success(self):
+        result = type('Result', (), {
+            'returncode': 0, 'stdout': 'not a dynamic executable'})()
+        with patch.object(helper.subprocess, 'run', return_value=result):
+            self.assertFalse(helper.check_dependencies(Path('/browser'), Path('/private/lib')))
 
     def test_download_rejects_other_sources(self):
         with self.assertRaises(RuntimeError):
