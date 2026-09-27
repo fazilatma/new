@@ -128,6 +128,48 @@ def check_dependencies(path, libdir):
             and 'not a dynamic executable' not in result.stdout)
 
 
+def check_host_limits():
+    print('\n=== Host limits ===', flush=True)
+    for p in ('/dev/shm', '/tmp'):
+        try:
+            st = os.stat(p)
+            writable = os.access(p, os.W_OK | os.X_OK)
+            print('{}: mode {:o}, writable+searchable: {}'.format(p, st.st_mode & 0o777, writable), flush=True)
+            test_file = os.path.join(p, '.browser-libs-write-test-{}'.format(os.getpid()))
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.unlink(test_file)
+                print('  write test: OK', flush=True)
+            except Exception as e:
+                print('  write test: FAILED {}'.format(e), flush=True)
+        except Exception as e:
+            print('{}: cannot stat: {}'.format(p, e), flush=True)
+    for tool in ('strace', 'google-chrome', 'chromium', 'chromium-browser', 'chrome'):
+        path = shutil.which(tool)
+        print('which {}: {}'.format(tool, path or 'not found'), flush=True)
+    try:
+        with open('/proc/self/status', 'r') as f:
+            content = f.read()
+        for key in ('Seccomp', 'NoNewPrivs', 'CapEff', 'Uid', 'Gid'):
+            m = re.search(r'^' + re.escape(key) + r':\s*(.+)$', content, re.MULTILINE)
+            if m:
+                print('{}: {}'.format(key, m.group(1).strip()), flush=True)
+    except Exception as e:
+        print('/proc/self/status: {}'.format(e), flush=True)
+    try:
+        with open('/proc/self/cgroup', 'r') as f:
+            data = f.read().strip().replace('\n', '; ')[:800]
+            print('/proc/self/cgroup: {}'.format(data), flush=True)
+    except Exception:
+        pass
+    try:
+        uname = platform.uname()
+        print('uname: {} {} {}'.format(uname.system, uname.release, uname.machine), flush=True)
+    except Exception:
+        pass
+
+
 def smoke_test(browser, libdir):
     """Opt-in: start the browser binary only to ask for its version string."""
     env = dict(os.environ)
@@ -137,6 +179,14 @@ def smoke_test(browser, libdir):
         ([str(browser), '--version'], 'default'),
         ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
           '--disable-dev-shm-usage', '--disable-gpu', '--version'], 'no-sandbox'),
+        ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', '--disable-gpu',
+          '--no-zygote', '--single-process', '--version'], 'no-sandbox+no-zygote+single-process'),
+        ([str(browser), '--no-sandbox', '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', '--disable-gpu',
+          '--no-zygote', '--single-process',
+          '--disable-seccomp-filter-sandbox', '--disable-namespace-sandbox',
+          '--headless=new', '--version'], 'aggressive-shared-host'),
     ]
     last_result = None
     for command, label in attempts:
@@ -151,7 +201,7 @@ def smoke_test(browser, libdir):
         print('Exit code: {}'.format(result.returncode), flush=True)
         output = (result.stdout or '').strip()
         if output:
-            print(output[:2000], flush=True)
+            print(output[:4000], flush=True)
         else:
             print('(no output)', flush=True)
         if result.returncode < 0:
@@ -168,8 +218,9 @@ def smoke_test(browser, libdir):
                 name = 'signal {}'.format(sig)
             print('Terminated by {} (signal {}).'.format(name, sig), flush=True)
             if sig == 5:
-                print('SIGTRAP often means Chromium sandbox check failed; '
-                      'try --no-sandbox on this host.', flush=True)
+                print('SIGTRAP often means Chromium sandbox/seccomp check failed; '
+                      'even --no-sandbox may still be blocked by CloudLinux LVE. '
+                      'Trying more aggressive shared-host flags...', flush=True)
             elif sig == 11:
                 print('SIGSEGV often means incompatible library or truncated binary.',
                       flush=True)
@@ -186,7 +237,8 @@ def smoke_test(browser, libdir):
                   flush=True)
     if last_result is not None:
         print('Startup failed. Any line naming "error while loading shared libraries" '
-              'gives the next library to solve; other messages point to another cause.',
+              'gives the next library to solve; other messages point to another cause. '
+              'On CloudLinux LVE, even --no-sandbox may still SIGTRAP; try system chromium if available.',
               flush=True)
     return False
 
@@ -301,6 +353,9 @@ def main():
     healthy = True
     for soname in WANTED.values():
         healthy = check_dependencies(libs / soname, libs) and healthy
+
+    if args.smoke_test:
+        check_host_limits()
 
     project = args.project
     if project is None and (Path.cwd() / 'data/browsers').is_dir():

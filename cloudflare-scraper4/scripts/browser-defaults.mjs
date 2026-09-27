@@ -82,7 +82,12 @@ export function browserDefaultsReport(env=process.env){return env===process.env&
 /** Shared across extraction, visual snapshots, local tests and installer probes. */
 export function browserLaunchArguments(options={},extra=[]){
  const {noSandbox}=resolveBrowserDefaults(options);
- return [...(noSandbox?['--no-sandbox','--disable-setuid-sandbox']:[]),'--disable-dev-shm-usage','--disable-gpu',...extra];
+ const env=options.env||process.env;
+ const privateLib=findPrivateLibDir(env);
+ // On shared host with private libs, even --no-sandbox may still SIGTRAP under CloudLinux LVE.
+ // Adding --no-zygote --single-process reduces sandbox/namespace requirements.
+ const sharedHostExtra=privateLib?['--no-zygote','--single-process']: [];
+ return [...(noSandbox?['--no-sandbox','--disable-setuid-sandbox']:[]),'--disable-dev-shm-usage','--disable-gpu',...sharedHostExtra,...extra];
 }
 export function playwrightSandboxOptions(options={}){
  // Playwright's own default disables the Chromium sandbox. Explicitly set it

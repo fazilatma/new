@@ -56,16 +56,23 @@ marked as executables, to be loaded. No permission broadening is performed.
 
 `python3 repair.py --smoke-test` additionally starts each discovered browser
 binary once with `--version` and the private library path, then prints the exit
-code and output. It first tries the default flags, then retries with
-`--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu`
+code and output. It tries four flag sets in order: default, `--no-sandbox`,
+`--no-sandbox --no-zygote --single-process`, and an aggressive shared-host set
+with `--disable-seccomp-filter-sandbox --disable-namespace-sandbox --headless=new`
 to distinguish a sandbox block (SIGTRAP) from a missing library. A crash signal
-is decoded (SIGTRAP often means sandbox, SIGSEGV often means truncated binary
-or ABI mismatch). That single run proves whether the loader can actually start
-the browser, which `ldd` alone cannot. Without the flag nothing is started.
-Exit code 4 means a browser was started and failed; exit 0 with the flag means
-the loader resolved everything (with or without the sandbox fallback), but site
-rendering, hosting limits and the application's own library path are still
-unverified.
+is decoded (SIGTRAP often means sandbox/seccomp blocked by CloudLinux LVE,
+SIGSEGV often means truncated binary or ABI mismatch). That run proves whether
+the loader can actually start the browser, which `ldd` alone cannot. Without the
+flag nothing is started. Exit code 4 means a browser was started and failed;
+exit 0 with the flag means the loader resolved everything (with or without the
+sandbox fallback), but site rendering, hosting limits and the application's own
+library path are still unverified.
+
+Host limits diagnostic: when `--smoke-test` is used, the helper also reports
+`/dev/shm` and `/tmp` writability, `which strace/chrome`, `Seccomp/NoNewPrivs`
+from `/proc/self/status`, and cgroup/uname. On CloudLinux LVE even
+`--no-sandbox` may still SIGTRAP; the aggressive flags try to reduce namespace
+requirements.
 
 ### Offline and retry behavior
 
@@ -81,8 +88,9 @@ unverified.
 
 The helper only sets `LD_LIBRARY_PATH` for its own `ldd` checks. The application
 itself now auto-detects `~/browser-libs/lib` (or `BROWSER_LD_LIBRARY_PATH`) and
-prepends it to `LD_LIBRARY_PATH` at startup, and disables the Chromium sandbox
-when that private directory is present and `VISUAL_BROWSER_NO_SANDBOX` is still
-`auto`. Explicit `VISUAL_BROWSER_NO_SANDBOX=false` or an explicit
+prepends it to `LD_LIBRARY_PATH` at startup, disables the Chromium sandbox when
+that private directory is present and `VISUAL_BROWSER_NO_SANDBOX` is still `auto`,
+and adds `--no-zygote --single-process` to reduce LVE namespace requirements.
+Explicit `VISUAL_BROWSER_NO_SANDBOX=false` or an explicit
 `BROWSER_LD_LIBRARY_PATH` is respected. This wiring is covered by the existing
 browser-defaults tests plus manual checks; no system-wide changes are made.
