@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Version: 1.9.2 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.10.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -180,6 +180,26 @@ preserved on apply and cleanly removed on delete (a `.wcp-bak` backup is kept).
 * **Zero Background Drain:** Run `wcp off` or `wcp shutdown` when finished to pause all background daemons.
 * **SELinux OPcache Fix:** Bypasses unrooted Android `/tmp` semaphore restrictions automatically.
 * **Portable Paths:** Seamlessly maps storage between `$PREFIX/tmp` and `$HOME/webconsole`.
+
+---
+
+## 🔢 Versioning
+
+The suite uses Semantic Versioning. Each console file carries its own `WCP_VERSION`, and
+`WCP_EDITION` tells the in-app updater which file to pull from GitHub — so `hostconsole.php`
+can never be overwritten by `webconsole.php` again.
+
+| Component | Version |
+| :--- | :---: |
+| `hostconsole.php` (shared hosting) | **2.10.0** |
+| `webconsole.php` (VPS) | 2.9.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.10.0 |
+| `webconsole.worker.js` (Cloudflare) | 2.8.0 |
+
+Full release notes: [CHANGELOG.md](CHANGELOG.md).
+
+> `2.10.0` is newer than `2.9.2` — the updater compares with PHP `version_compare()`, which reads
+> each dot-segment as a number (`10 > 9`).
 
 ---
 

@@ -7,7 +7,9 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.0');
+define('WCP_VERSION', '2.10.0');
+// نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
+define('WCP_EDITION', 'hostconsole');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -2095,6 +2097,14 @@ function create_swap(int $sizeMb = 2048): array {
     return resize_swap($sizeMb);
 }
 
+function wcp_console_source(): string {
+    $configured = trim((string)(cfg()['console_file'] ?? ''));
+    if ($configured !== '' && preg_match('/^[A-Za-z0-9._-]+\.php$/', $configured)) return $configured;
+    $base = basename(__FILE__);
+    // index.php معمولاً کپی فایل اصلی است و نام ادیشن را نمی‌رساند.
+    if ($base !== '' && $base !== 'index.php' && preg_match('/^[A-Za-z0-9._-]+\.php$/', $base)) return $base;
+    return WCP_EDITION . '.php';
+}
 function console_check_update(string $repo = 'fazilatma/new', string $branch = 'main', string $token = ''): array {
     $parts = explode('/', trim($repo, '/'));
     if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است (الگو: owner/repo)');
@@ -2110,8 +2120,9 @@ function console_check_update(string $repo = 'fazilatma/new', string $branch = '
     $commitDate = (string)($commitData['commit']['author']['date'] ?? '');
     $commitAuthor = (string)($commitData['commit']['author']['name'] ?? 'fazilatma');
     
-    // 2. Fetch remote webconsole.php content to detect version
-    $rawPhp = gh_raw_get($owner, $repoName, $branch, 'webconsole.php', $token);
+    // 2. Fetch the remote copy of THIS console file (hostconsole.php / webconsole.php) to detect version
+    $sourceFile = wcp_console_source();
+    $rawPhp = gh_raw_get($owner, $repoName, $branch, $sourceFile, $token);
     $remoteVersion = WCP_VERSION;
     if ($rawPhp && preg_match("/define\(['\"]WCP_VERSION['\"],\s*['\"]([^'\"]+)['\"]\)/", $rawPhp, $vm)) {
         $remoteVersion = $vm[1];
@@ -2120,6 +2131,8 @@ function console_check_update(string $repo = 'fazilatma/new', string $branch = '
     $hasUpdate = version_compare($remoteVersion, WCP_VERSION, '>') || ($rawPhp && md5_file(__FILE__) !== md5($rawPhp));
     return [
         'current_version' => WCP_VERSION,
+        'edition' => WCP_EDITION,
+        'source_file' => $sourceFile,
         'remote_version' => $remoteVersion,
         'has_update' => (bool)$hasUpdate,
         'repo' => $repo,
@@ -2139,9 +2152,10 @@ function console_self_update(string $repo = 'fazilatma/new', string $branch = 'm
     $branch = trim($branch) ?: 'main';
     $token = $token ?: (string)(cfg()['gh_token'] ?? '');
     
-    $rawPhp = gh_raw_get($owner, $repoName, $branch, 'webconsole.php', $token);
+    $sourceFile = wcp_console_source();
+    $rawPhp = gh_raw_get($owner, $repoName, $branch, $sourceFile, $token);
     if (!$rawPhp || strlen($rawPhp) < 10000 || strpos($rawPhp, '<?php') === false) {
-        $apiUrl = "https://api.github.com/repos/{$owner}/{$repoName}/contents/webconsole.php?ref=" . rawurlencode($branch);
+        $apiUrl = "https://api.github.com/repos/{$owner}/{$repoName}/contents/" . rawurlencode($sourceFile) . "?ref=" . rawurlencode($branch);
         $fileJson = gh_http_get($apiUrl, $token);
         if (!empty($fileJson['content']) && ($fileJson['encoding'] ?? '') === 'base64') {
             $rawPhp = base64_decode($fileJson['content']);
@@ -2149,7 +2163,7 @@ function console_self_update(string $repo = 'fazilatma/new', string $branch = 'm
     }
     
     if (!$rawPhp || strlen($rawPhp) < 10000 || strpos($rawPhp, '<?php') === false) {
-        throw new RuntimeException('دریافت فایل webconsole.php از گیت‌هاب با شکست مواجه شد. لطفاً توکن یا نام مخزن و شاخه را بررسی کنید.');
+        throw new RuntimeException('دریافت فایل ' . $sourceFile . ' از شاخهٔ ' . $branch . ' با شکست مواجه شد. توکن، نام مخزن و شاخه را بررسی کنید.');
     }
     
     $newVer = WCP_VERSION;
@@ -2168,6 +2182,10 @@ function console_self_update(string $repo = 'fazilatma/new', string $branch = 'm
         }
     }
     
+    if (defined('WCP_EDITION') && strpos($rawPhp, "WCP_EDITION', '" . WCP_EDITION . "'") === false && strpos($rawPhp, 'WCP_EDITION') !== false) {
+        @unlink($tmpFile);
+        throw new RuntimeException('فایل دریافتی از ادیشن دیگری است و جایگزین نشد. در تنظیمات، console_file را درست کنید.');
+    }
     $targetFile = __FILE__;
     $indexFile = dirname($targetFile) . '/index.php';
     
@@ -3645,6 +3663,7 @@ function page_head(){
     $boot = [
         'csrf' => $_SESSION['wcp_csrf'] ?? '',
         'v' => WCP_VERSION,
+        'edition' => WCP_EDITION,
         'theme' => $c['theme'],
         'layout' => $c['layout'],
         'density' => $c['density'],
@@ -6540,7 +6559,7 @@ async function projectStorageDlg(){
 function presetProject(kind){const base={name:'My project',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'npm ci --include=dev',build_cmd:'npm run build',start_cmd:'npm start',port:'3000',env:{NODE_ENV:'production'},auto_start:false,is_daemon:true,preserve_configs:true};if(kind==='static')return {...base,name:'Static site',type:'static',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},is_daemon:false};if(kind==='scraper4')return {...SCRAPER4_PRESET,env:{...SCRAPER4_PRESET.env}};return base;}
 
 function applyTheme(t){if(!['dark','light','forest','ocean','amber'].includes(t))t='dark';document.documentElement.setAttribute('data-theme',t);$('#themebtn').textContent=t==='light'?'☾':'☀'}
-$('#hosttag').textContent='@'+__BOOT.host;$('#workspace-version').textContent='v'+__BOOT.v;applyAppearance(__BOOT);$('#appearancebtn').onclick=appearanceDlg;$('#palettebtn').onclick=commandPalette;document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&!e.target.closest?.('.xterm')){e.preventDefault();if(!__sheet)commandPalette()}if(e.key==='Escape'&&__sheet)__closeSheet()});buildNav();switchTab('dash');
+$('#hosttag').textContent='@'+__BOOT.host;$('#workspace-version').textContent='v'+__BOOT.v+(__BOOT.edition?' · '+__BOOT.edition:'');applyAppearance(__BOOT);$('#appearancebtn').onclick=appearanceDlg;$('#palettebtn').onclick=commandPalette;document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&!e.target.closest?.('.xterm')){e.preventDefault();if(!__sheet)commandPalette()}if(e.key==='Escape'&&__sheet)__closeSheet()});buildNav();switchTab('dash');
 // Global background auto-update poller (every 20s)
 setInterval(async()=>{
   if(document.hidden)return;
