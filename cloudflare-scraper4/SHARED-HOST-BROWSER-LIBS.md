@@ -28,7 +28,7 @@ Paths are derived from the account database rather than shell HOME expansion.
 The project can be supplied with `--project`; otherwise the current project or
 one unambiguous matching WebConsole project is used. Nothing is deleted.
 
-Offline checks: `python3 scripts/test-shared-host-browser-libs.py` (eleven cases),
+Offline checks: `python3 scripts/test-shared-host-browser-libs.py` (fourteen cases),
 plus Python compilation and CLI help. No real shared-host repair is claimed.
 
 
@@ -66,6 +66,16 @@ Exit code 4 means a browser was started and failed; exit 0 with the flag means
 the loader resolved everything (with or without the sandbox fallback), but site
 rendering, hosting limits and the application's own library path are still
 unverified.
+
+### Offline and retry behavior
+
+- If all five private libraries already exist and look like x86_64 ELF, the helper
+  skips the repository index and RPM downloads (use `--force` to re-download).
+- `--offline` skips all downloads and only checks existing libraries and browsers.
+- Each HTTPS fetch prints its URL and retries up to 3 times with backoff, so a
+  transient stall at `Reading repository: BaseOS` is visible and recoverable.
+- When the host is slow or offline, run `python3 repair.py --offline --smoke-test`
+  to verify the already-extracted libs without touching the network.
 
 ### Application wiring
 

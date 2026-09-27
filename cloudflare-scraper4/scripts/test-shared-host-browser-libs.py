@@ -106,6 +106,46 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(run.call_args[1]['env']['LD_LIBRARY_PATH'], '/private/lib')
             self.assertEqual(run.call_args[0][0], ['ldd', '/browser'])
 
+    def test_libs_present_and_valid(self):
+        with tempfile.TemporaryDirectory() as folder:
+            libdir = Path(folder)
+            # Missing files → False
+            self.assertFalse(helper.libs_present_and_valid(libdir))
+            # Create valid ELF headers for all wanted libs
+            valid = bytearray(20)
+            valid[:6] = b'\x7fELF\x02\x01'
+            valid[18:20] = b'\x3e\x00'
+            for soname in helper.WANTED.values():
+                (libdir / soname).write_bytes(bytes(valid))
+            self.assertTrue(helper.libs_present_and_valid(libdir))
+            # Corrupt one file → False
+            (libdir / list(helper.WANTED.values())[0]).write_bytes(b'not elf')
+            self.assertFalse(helper.libs_present_and_valid(libdir))
+
+    def test_offline_and_force_flags_exist(self):
+        source = Path(__file__).with_name('shared-host-browser-libs.py').read_text()
+        self.assertIn("'--offline', action='store_true'", source)
+        self.assertIn("'--force', action='store_true'", source)
+
+    def test_download_retries_on_failure(self):
+        # Simulate two failures then success
+        calls = []
+        def fake_urlopen(url, timeout=120):
+            calls.append(url)
+            if len(calls) < 3:
+                raise RuntimeError('temporary network error')
+            class Resp:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def geturl(self): return url
+                def read(self, limit): return b'<html></html>'
+            return Resp()
+        with patch.object(helper.urllib.request, 'urlopen', side_effect=fake_urlopen):
+            with patch.object(helper.time, 'sleep', return_value=None):
+                data = helper.download(helper.BASE + 'BaseOS/x86_64/os/Packages/', 100, retries=3)
+        self.assertEqual(len(calls), 3)
+        self.assertIn(b'<html>', data)
+
 
 if __name__ == '__main__':
     unittest.main()

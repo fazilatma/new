@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -42,17 +43,27 @@ def select_package(listing, package):
     return sorted(matches, key=version_key)[-1]
 
 
-def download(url, limit):
+def download(url, limit, retries=3):
     if not url.startswith(BASE):
         raise RuntimeError('Unexpected repository URL')
-    with urllib.request.urlopen(url, timeout=120) as response:
-        final = urllib.parse.urlparse(response.geturl())
-        if final.scheme != 'https' or final.hostname != 'repo.almalinux.org':
-            raise RuntimeError('Unexpected repository redirect')
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise RuntimeError('Download exceeded size limit')
-    return data
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            print('Fetching: {} (attempt {}/{})'.format(url, attempt, retries), flush=True)
+            with urllib.request.urlopen(url, timeout=120) as response:
+                final = urllib.parse.urlparse(response.geturl())
+                if final.scheme != 'https' or final.hostname != 'repo.almalinux.org':
+                    raise RuntimeError('Unexpected repository redirect')
+                data = response.read(limit + 1)
+            if len(data) > limit:
+                raise RuntimeError('Download exceeded size limit')
+            return data
+        except Exception as exc:
+            last_error = exc
+            print('Download failed (attempt {}/{}): {}'.format(attempt, retries, exc), flush=True)
+            if attempt < retries:
+                time.sleep(attempt * 2)
+    raise RuntimeError('Failed to download {} after {} attempts: {}'.format(url, retries, last_error))
 
 
 def elf_x64(data):
@@ -180,6 +191,22 @@ def smoke_test(browser, libdir):
     return False
 
 
+def libs_present_and_valid(libdir):
+    """Return True if all wanted SONAMEs exist and look like x86_64 ELF."""
+    for soname in WANTED.values():
+        path = libdir / soname
+        if not path.is_file():
+            return False
+        try:
+            with path.open('rb') as stream:
+                header = stream.read(20)
+            if not elf_x64(header):
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', type=Path,
@@ -187,6 +214,10 @@ def main():
     parser.add_argument('--smoke-test', action='store_true',
                         help='Opt in to starting each browser binary with --version '
                              'only, to confirm the libraries actually load')
+    parser.add_argument('--offline', action='store_true',
+                        help='Do not download; only check existing private libraries and browsers')
+    parser.add_argument('--force', action='store_true',
+                        help='Force re-download even if private libraries already exist')
     args = parser.parse_args()
     if os.geteuid() == 0:
         raise RuntimeError('Run as the hosting account, not root')
@@ -218,46 +249,55 @@ def main():
     print('Private directory: {}'.format(root), flush=True)
     print('Official HTTPS downloads; RPM signatures are NOT verified.', flush=True)
     print('No system changes, package scripts or browser launches.', flush=True)
-    found = {}
-    for repo in ('BaseOS', 'AppStream'):
-        url = BASE + repo + '/x86_64/os/Packages/'
-        print('Reading repository: ' + repo, flush=True)
-        listing = download(url, 32 * 1024 * 1024).decode('utf-8')
-        for package in WANTED:
-            name = select_package(listing, package)
-            if name:
-                found[package] = (url + name, name)
-    missing = set(WANTED) - set(found)
-    if missing:
-        raise RuntimeError('Packages not found: ' + ', '.join(sorted(missing)))
 
-    staged = {}
-    for package, soname in WANTED.items():
-        url, name = found[package]
-        print('Downloading: ' + name, flush=True)
-        archive = packages / name
-        atomic_write(archive, download(url, 64 * 1024 * 1024))
-        with rpmfile.open(str(archive)) as rpm:
-            for member in rpm.getmembers():
-                filename = member.name.rsplit('/', 1)[-1]
-                if filename != soname and not filename.startswith(soname + '.'):
-                    continue
-                stream = rpm.extractfile(member)
-                if stream is None:
-                    continue
-                data = stream.read(32 * 1024 * 1024 + 1)
-                if len(data) > 32 * 1024 * 1024:
-                    raise RuntimeError('Library exceeded size limit')
-                if elf_x64(data):
-                    staged[soname] = data
-                    break
-        if soname not in staged:
-            raise RuntimeError('Expected x86_64 ELF library not found: ' + soname)
+    if args.offline:
+        print('Offline mode: skipping downloads, checking existing libraries only.', flush=True)
+        if not libs_present_and_valid(libs):
+            raise RuntimeError('Offline mode requested but private libraries are missing or invalid in {}'.format(libs))
+    elif not args.force and libs_present_and_valid(libs):
+        print('Existing private libraries found and appear valid; skipping download (use --force to re-download).', flush=True)
+    else:
+        found = {}
+        for repo in ('BaseOS', 'AppStream'):
+            url = BASE + repo + '/x86_64/os/Packages/'
+            print('Reading repository: ' + repo + ' -> ' + url, flush=True)
+            listing = download(url, 32 * 1024 * 1024).decode('utf-8')
+            for package in WANTED:
+                name = select_package(listing, package)
+                if name:
+                    found[package] = (url + name, name)
+        missing = set(WANTED) - set(found)
+        if missing:
+            raise RuntimeError('Packages not found: ' + ', '.join(sorted(missing)))
 
-    # Copy only the five allowlisted ELF libraries, not arbitrary archive paths.
-    for soname, data in staged.items():
-        atomic_write(libs / soname, data)
-        print('Extracted: ' + soname, flush=True)
+        staged = {}
+        for package, soname in WANTED.items():
+            url, name = found[package]
+            print('Downloading: ' + name, flush=True)
+            archive = packages / name
+            atomic_write(archive, download(url, 64 * 1024 * 1024))
+            with rpmfile.open(str(archive)) as rpm:
+                for member in rpm.getmembers():
+                    filename = member.name.rsplit('/', 1)[-1]
+                    if filename != soname and not filename.startswith(soname + '.'):
+                        continue
+                    stream = rpm.extractfile(member)
+                    if stream is None:
+                        continue
+                    data = stream.read(32 * 1024 * 1024 + 1)
+                    if len(data) > 32 * 1024 * 1024:
+                        raise RuntimeError('Library exceeded size limit')
+                    if elf_x64(data):
+                        staged[soname] = data
+                        break
+            if soname not in staged:
+                raise RuntimeError('Expected x86_64 ELF library not found: ' + soname)
+
+        # Copy only the five allowlisted ELF libraries, not arbitrary archive paths.
+        for soname, data in staged.items():
+            atomic_write(libs / soname, data)
+            print('Extracted: ' + soname, flush=True)
+
     healthy = True
     for soname in WANTED.values():
         healthy = check_dependencies(libs / soname, libs) and healthy
