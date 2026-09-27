@@ -111,10 +111,36 @@ def check_dependencies(path, libdir):
             and 'not a dynamic executable' not in result.stdout)
 
 
+def smoke_test(browser, libdir):
+    """Opt-in: start the browser binary only to ask for its version string."""
+    env = dict(os.environ)
+    env['LD_LIBRARY_PATH'] = str(libdir)
+    print('\n=== Launch check: {} --version ==='.format(browser), flush=True)
+    try:
+        result = subprocess.run([str(browser), '--version'], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                universal_newlines=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        print('No result after 60 seconds; nothing was left running.', flush=True)
+        return False
+    print('Exit code: {}'.format(result.returncode), flush=True)
+    print(result.stdout.strip()[:2000], flush=True)
+    if result.returncode == 0:
+        print('The loader found every library this browser needs.', flush=True)
+        return True
+    print('Startup failed. Any line naming "error while loading shared libraries" '
+          'gives the next library to solve; other messages point to another cause.',
+          flush=True)
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', type=Path,
                         help='Optional Scraper4 project directory for ldd checks')
+    parser.add_argument('--smoke-test', action='store_true',
+                        help='Opt in to starting each browser binary with --version '
+                             'only, to confirm the libraries actually load')
     args = parser.parse_args()
     if os.geteuid() == 0:
         raise RuntimeError('Run as the hosting account, not root')
@@ -205,18 +231,31 @@ def main():
             browsers = sorted(p for p in cache.rglob('*')
                               if p.name in ('chrome', 'chrome-headless-shell')
                               and p.is_file())
+    launched = {}
     for browser in browsers:
         describe_browser(browser)
         healthy = check_dependencies(browser, libs) and healthy
+        if args.smoke_test:
+            launched[browser] = smoke_test(browser, libs)
     if not browsers:
         print('Browser files not found. Re-run with --project /actual/project/path.')
     print('\nApplication settings have NOT changed.')
-    print('No browser was launched. Send this output before configuring the service.')
+    if args.smoke_test:
+        print('Each browser was started once with --version and exited.')
+    else:
+        print('No browser was launched. Send this output before configuring the service.')
     if not healthy:
         print('DEPENDENCIES STILL UNRESOLVED: additional libraries/versions may be needed.')
         return 2
     if not browsers:
         return 3
+    if args.smoke_test and not all(launched.values()):
+        print('AT LEAST ONE BROWSER COULD NOT START; see the launch-check output above.')
+        return 4
+    if args.smoke_test:
+        print('LDD AND LAUNCH CHECKS PASSED; site rendering and hosting limits remain '
+              'untested, and the application still needs the private library path.')
+        return 0
     print('LDD CHECKS PASSED; browser startup and hosting restrictions remain untested.')
     return 0
 

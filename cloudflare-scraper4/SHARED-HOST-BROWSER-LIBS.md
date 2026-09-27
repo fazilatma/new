@@ -28,7 +28,7 @@ Paths are derived from the account database rather than shell HOME expansion.
 The project can be supplied with `--project`; otherwise the current project or
 one unambiguous matching WebConsole project is used. Nothing is deleted.
 
-Offline checks: `python3 scripts/test-shared-host-browser-libs.py` (eight cases),
+Offline checks: `python3 scripts/test-shared-host-browser-libs.py` (eleven cases),
 plus Python compilation and CLI help. No real shared-host repair is claimed.
 
 
@@ -49,3 +49,13 @@ step. A matching ELF header alone does not prove a complete/correct binary.
 Warnings about missing execute permission on the extracted mode-0644 libraries
 are expected from some ldd versions; shared libraries need to be readable, not
 marked as executables, to be loaded. No permission broadening is performed.
+
+### Opt-in launch check
+
+`python3 repair.py --smoke-test` additionally starts each discovered browser
+binary once with `--version` and the private library path, then prints the exit
+code and output. That single run proves whether the loader can actually start the
+browser, which `ldd` alone cannot. Without the flag nothing is started. Exit code
+4 means a browser was started and failed; exit 0 with the flag means the loader
+resolved everything, but site rendering, hosting limits and the application's
+own library path are still unverified.

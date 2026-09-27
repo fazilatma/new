@@ -64,6 +64,31 @@ class HelperTests(unittest.TestCase):
             self.assertIn('Header: NOT ELF', out.getvalue())
             self.assertIn('Size: 32 bytes', out.getvalue())
 
+    def test_smoke_test_uses_private_env_and_reports_version(self):
+        result = type('Result', (), {
+            'returncode': 0, 'stdout': 'Chromium 152.0.7977.75\n'})()
+        with patch.object(helper.subprocess, 'run', return_value=result) as run:
+            self.assertTrue(helper.smoke_test(Path('/browser/chrome'), Path('/private/lib')))
+        command, kwargs = run.call_args
+        self.assertEqual(command[0], ['/browser/chrome', '--version'])
+        self.assertEqual(kwargs['env']['LD_LIBRARY_PATH'], '/private/lib')
+        self.assertNotIn('shell', command[0][0])
+
+    def test_smoke_test_failure_and_timeout_are_not_success(self):
+        failed = type('Result', (), {
+            'returncode': 127,
+            'stdout': 'error while loading shared libraries: libx.so.1'})()
+        with patch.object(helper.subprocess, 'run', return_value=failed):
+            self.assertFalse(helper.smoke_test(Path('/browser/chrome'), Path('/private/lib')))
+        with patch.object(helper.subprocess, 'run',
+                          side_effect=helper.subprocess.TimeoutExpired('chrome', 60)):
+            self.assertFalse(helper.smoke_test(Path('/browser/chrome'), Path('/private/lib')))
+
+    def test_smoke_test_is_opt_in(self):
+        source = Path(__file__).with_name('shared-host-browser-libs.py').read_text()
+        self.assertIn("'--smoke-test', action='store_true'", source)
+        self.assertIn('if args.smoke_test:', source)
+
     def test_dynamic_loader_failure_is_not_success(self):
         result = type('Result', (), {
             'returncode': 0, 'stdout': 'not a dynamic executable'})()
