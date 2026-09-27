@@ -32,7 +32,15 @@ export function diagnosticStream(run: (observe: DiagnosticObserver) => Promise<a
   });
   return new Response(body, { headers: {
     'content-type': 'application/x-ndjson; charset=utf-8',
-    'cache-control': 'no-store, no-transform',
-    'x-accel-buffering': 'no'
+    'cache-control': 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform',
+    'cdn-cache-control': 'no-store',
+    'cloudflare-cdn-cache-control': 'no-store',
+    'pragma': 'no-cache',
+    'expires': '0',
+    'cf-cache-status': 'BYPASS',
+    'content-encoding': 'identity',
+    'connection': 'keep-alive',
+    'x-accel-buffering': 'no',
+    'x-content-type-options': 'nosniff'
   } });
 }

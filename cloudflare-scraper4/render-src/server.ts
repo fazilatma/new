@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.237.0+'; } catch { return process.env.npm_package_version || '1.237.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.238.0+'; } catch { return process.env.npm_package_version || '1.238.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -256,7 +256,22 @@ const dashboardHeaders = secureHeaders({
   }
 });
 app.use('*', async (c, next) => c.req.path === '/visual' ? next() : dashboardHeaders(c, next));
-app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization','content-type','x-scraper-activity'], allowMethods: ['GET','POST','PUT','DELETE'] }));
+app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization','content-type','x-scraper-activity','cf-connecting-ip','cf-ray'], allowMethods: ['GET','POST','PUT','DELETE'] }));
+// Cloudflare reverse proxy (orange cloud) buffers and caches by default; for Playwright-heavy
+// endpoints it causes 524 timeout or WAF blocks on CSS selectors containing >[]: etc.
+// Set bypass headers for all API responses so visual picker (which works) and
+// selector test / extraction diagnostics share the same no-cache/no-buffer path.
+app.use('/api/*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  c.header('CDN-Cache-Control', 'no-store');
+  c.header('Cloudflare-CDN-Cache-Control', 'no-store');
+  c.header('Pragma', 'no-cache');
+  c.header('Expires', '0');
+  c.header('X-Accel-Buffering', 'no');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('CF-Cache-Status', 'BYPASS');
+});
 app.onError((error, c) => { console.error(error); return c.json({ ok: false, error: error.message }, 500); });
 app.get('/sw.js',c=>c.body(PUSH_SERVICE_WORKER,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','service-worker-allowed':'/'}));
 app.get('/manifest.webmanifest',c=>c.json(PUSH_MANIFEST,200,{'content-type':'application/manifest+json'}));
@@ -875,8 +890,37 @@ app.delete('/api/profiles/:id/products/:sourceKey',async c=>c.json({ok:await del
 app.delete('/api/profiles/:id/products',async c=>{if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm=DELETE is required'},400);return c.json({ok:true,deleted:await clearProducts(c.req.param('id'))})});
 app.get('/api/profiles/:id/export.csv',async c=>{const result=await listProducts(c.req.param('id'),100000,0,''),fields=['sourceKey','title','price','url','image','sku','brand','stock','weight','category','shortDesc','longDesc'],csv='\uFEFF'+fields.join(',')+'\n'+result.products.map(p=>fields.map(field=>csvCell((p as any)[field])).join(',')).join('\n');return c.body(csv,200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="${c.req.param('id').replace(/[^a-z0-9_.-]/gi,'_')}.csv"`})});
 app.post('/api/profiles/:id/import',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'Profile not found'},404);const body=await c.req.json().catch(()=>null) as any;if(!body||typeof body!=='object')return c.json({ok:false,error:'بدنهٔ درخواست باید JSON با فیلد rows یا csv باشد.'},400);const rows=Array.isArray(body.rows)?body.rows:typeof body.csv==='string'?parseCsv(body.csv):[];let imported=0,failed=0,skippedNoPrice=0;const errors:string[]=[];for(const [index,row] of rows.entries())try{const title=String(row.title||row.name||'').trim();if(!title)throw Error('title is empty');const key=String(row.sourceKey||row.key||crypto.randomUUID()),image=String(row.image||'');const importedPrice=numberFromText(String(row.price||0));if(!(importedPrice>0)){skippedNoPrice++;errors.push(`${title}: قیمت ندارد؛ نادیده گرفته شد.`);continue}await upsertProduct(profile.id,{sourceKey:key,title,price:numberFromText(String(row.price||0)),priceText:String(row.price||''),url:String(row.url||row.link||''),image,images:image?[image]:[],sku:String(row.sku||''),brand:String(row.brand||''),stock:row.stock==null?undefined:Number(row.stock),weight:row.weight==null?undefined:Number(row.weight),category:String(row.category||''),specs:Array.isArray(row.specs)?row.specs.filter((x:any)=>x&&x.name&&x.value).map((x:any)=>({name:String(x.name),value:String(x.value)})).slice(0,60):undefined,shortDesc:String(row.shortDesc||''),longDesc:String(row.longDesc||''),sourcePage:'import',scrapedAt:new Date().toISOString()},{source:true});imported++}catch(error){failed++;if(errors.length<50)errors.push(`row ${index+1}: ${error instanceof Error?error.message:String(error)}`)}return c.json({ok:failed===0,imported,failed,skippedNoPrice,errors})});
+function decodeSelectorParam(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  try {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+    const decoded = Buffer.from(padded, 'base64').toString('utf8');
+    if (decoded && /[a-zA-Z0-9#.\[\]>+~:_-]/.test(decoded) && /^[A-Za-z0-9+/=_-]+$/.test(s) && decoded.length <= 2000) {
+      if (s.length >= 8) return decoded;
+    }
+  } catch {}
+  return s;
+}
+app.get('/api/test-selector', async c => {
+  const q = c.req.query();
+  const url = String(q.url || '');
+  const selector = decodeSelectorParam(String(q.selector || q.sel || ''));
+  const type = String(q.type || 'text');
+  const engine = String(q.engine || '');
+  const max = Number(q.max) || 30;
+  const skipFirst = String(q.skipFirst) === 'true' || String(q.skip_first) === 'true';
+  if(type==='gallery') return c.json({ ok:true, ...await testGallery(url, selector, max, skipFirst, engine) });
+  if(type==='variations') return c.json({ ok:true, ...await testVariations(url, selector, engine) });
+  return c.json({ ok: true, ...await testSelector(url, selector, type, engine, { max, skipFirst }) });
+});
 app.post('/api/test-selector', async c => {
-  const body = await c.req.json() as any; return c.json({ ok: true, ...await testSelector(String(body.url || ''), String(body.selector || ''), String(body.type || 'text'),String(body.engine||''),{max:Number(body.max)||30,skipFirst:Boolean(body.skipFirst)}) });
+  const body = await c.req.json() as any;
+  const selector = decodeSelectorParam(String(body.selector || ''));
+  if(body.type==='gallery') return c.json({ ok:true, ...await testGallery(String(body.url||''), selector, Number(body.max)||30, Boolean(body.skipFirst), String(body.engine||'')) });
+  if(body.type==='variations') return c.json({ ok:true, ...await testVariations(String(body.url||''), selector, String(body.engine||'')) });
+  return c.json({ ok: true, ...await testSelector(String(body.url || ''), selector, String(body.type || 'text'),String(body.engine||''),{max:Number(body.max)||30,skipFirst:Boolean(body.skipFirst)}) });
 });
 app.post('/api/import-php', async c => {
   const body = await c.req.json() as any; const source = typeof body.profiles === 'string' ? JSON.parse(body.profiles) : body.profiles;
