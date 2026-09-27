@@ -992,111 +992,36 @@ export async function parseProductDocument(html:string,base:string,selectors:Sel
  return dedupe(await parseDownloadedProducts(parser,{lxml:cards,selectolax:cards,jsonld:()=>jsonLdProducts(html,base),next_data:()=>embedded('next_data'),script_json:()=>[...jsonLdProducts(html,base),...embedded('script_json'),...scriptJsonProducts(html,base)],metadata:()=>metadataProduct(html,base),heuristic:()=>heuristicProducts(html,base)}));
 }
 async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>,reader?:(html:string,url:string)=>Promise<Product[]>, indirect=false): Promise<Product[]> {
-  // When a proxy / Worker route is configured (global proxy or per-profile indirect),
-  // route the browser snapshot through the guarded transport (visual-browser) which
-  // uses safeFetch with ProxyAgent / Worker URL. Direct Playwright navigation would
-  // bypass the internal proxy and fail on VPS behind filtering.
-  const { sourceRoute } = await import('./network.js');
-  const needsProxy = indirect || sourceRoute(indirect) !== 'direct';
-  if (needsProxy) {
-    const { renderBrowserSnapshot } = await import('./visual-browser.js');
-    const snapshot = await renderBrowserSnapshot(url, driver, indirect);
-    const html = snapshot.text, finalUrl = snapshot.url;
-    dumpRenderedHtml(html, finalUrl, driver);
-    lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
-    if (reader) return reader(html, finalUrl);
-    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-    lastBrowserLayer = rescued.layer;
-    console.log(`[scraper4] ${driver} extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-    return rescued.products;
-  }
-  const executablePath = browserExecutable(driver);
-  if (driver === 'playwright') {
-    const {html,finalUrl,httpStatus}=await renderPythonPlaywright(url,executablePath,stopped);
-    dumpRenderedHtml(html,finalUrl,'playwright');
-    lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl,httpStatus});
-    if(reader)return reader(html,finalUrl);
-    const rescued=rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-    lastBrowserLayer=rescued.layer;
-    console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-    return rescued.products;
-  }
-  const puppeteer = await import('puppeteer');
-  const browser = await puppeteer.default.launch({ headless: true, executablePath, args: browserLaunchArgs() });
-  try {
-    const page = await browser.newPage();
-    // Same resilience as the Playwright branch above: domcontentloaded goto,
-    // survive ERR_ABORTED, best-effort idle window for rendering.
-    let navStatus = 0;
-    try {
-      const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      navStatus = navResponse?.status() ?? 0;
-    } catch (navigationError: unknown) {
-      if (!isAbortedNavigation(navigationError)) throw navigationError;
-      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-    }
-    if (isBlankPageUrl(page.url())) {
-      try {
-        const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-        navStatus = retryResponse?.status() ?? navStatus;
-      } catch (retryError: unknown) {
-        if (!isAbortedNavigation(retryError)) throw retryError;
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-      }
-    }
-    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
-    await page.waitForNetworkIdle({ timeout: 15_000 }).catch(() => undefined);
-    const finalUrl = page.url();
-    const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'puppeteer');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
-    if(reader)return reader(html,finalUrl);
-    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-    lastBrowserLayer = rescued.layer;
-    console.log(`[scraper4] puppeteer extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-    return rescued.products;
-  } finally { await browser.close(); }
+  // Always route browser extraction through guarded visual-browser snapshot:
+  // it uses safeFetch which respects global source-network Worker/proxy
+  // (e.g. https://proxy.fazilat-ma.workers.dev/?url={url}) and per-profile
+  // indirect. Direct Playwright navigation would bypass that internal proxy
+  // and fail on VPS behind filtering, which is exactly the reported bug:
+  // visual works (guarded) but selector test / extraction did not.
+  const { renderBrowserSnapshot } = await import('./visual-browser.js');
+  const snapshot = await renderBrowserSnapshot(url, driver, indirect);
+  const html = snapshot.text, finalUrl = snapshot.url;
+  dumpRenderedHtml(html, finalUrl, driver);
+  lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
+  if (reader) return reader(html, finalUrl);
+  const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+  lastBrowserLayer = rescued.layer;
+  console.log(`[scraper4] ${driver} extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+  return rescued.products;
 }
 async function scrapeListWithPlaywright(url: string, selectors: Selectors, stopped?:()=>Promise<boolean>, indirect=false): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright', stopped, undefined, indirect); }
 async function scrapeListWithPuppeteer(url: string, selectors: Selectors, indirect=false): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer', undefined, undefined, indirect); }
 async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors,reader?:(html:string,url:string)=>Promise<Product[]>, indirect=false): Promise<Product[]> {
-  const { sourceRoute } = await import('./network.js');
-  const needsProxy = indirect || sourceRoute(indirect) !== 'direct';
-  if (needsProxy) {
-    const { renderBrowserSnapshot } = await import('./visual-browser.js');
-    const snapshot = await renderBrowserSnapshot(url, 'playwright', indirect);
-    const html = snapshot.text, finalUrl = snapshot.url;
-    dumpRenderedHtml(html, finalUrl, 'crawlee');
-    lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
-    if (reader) return reader(html, finalUrl);
-    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-    lastBrowserLayer = rescued.layer;
-    console.log(`[scraper4] crawlee extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-    return rescued.products;
-  }
-  const { PlaywrightCrawler } = await import('crawlee');
-  // The crawl covers exactly one page, so the products ride home in a closure
-  // variable — the old per-run Dataset left a scraper4-<timestamp> storage
-  // directory behind on every benchmark/diagnostic page, forever.
-  let found: Product[] = [];
-  // Same browser resolution as the Playwright/Puppeteer engines: drive the
-  // detected system Chromium (Termux/VPS/desktop) with sandbox-free flags.
-  // Crawlee's default launch looks for Playwright's bundled browsers, which
-  // .npmrc deliberately skips — and which could never execute on Android
-  // (desktop-Linux glibc binaries vs Android's Bionic libc) anyway.
-  const executablePath = browserExecutable('playwright');
-  const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { ...playwrightSandboxOptions(), headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
-    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
-    await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
-    const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'crawlee');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:0});
-    if(reader){found=await reader(html,page.url());return;}
-    const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
-    lastBrowserLayer = rescued.layer;
-    console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
-    found = rescued.products;
-  }});
-  await crawler.run([url]);
-  return dedupe(found);
+  const { renderBrowserSnapshot } = await import('./visual-browser.js');
+  const snapshot = await renderBrowserSnapshot(url, 'playwright', indirect);
+  const html = snapshot.text, finalUrl = snapshot.url;
+  dumpRenderedHtml(html, finalUrl, 'crawlee');
+  lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
+  if (reader) return reader(html, finalUrl);
+  const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+  lastBrowserLayer = rescued.layer;
+  console.log(`[scraper4] crawlee extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+  return rescued.products;
 }
 function parseProductsFromHtml(html: string, baseUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(html); const products: Product[] = [];
@@ -1703,22 +1628,13 @@ const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors
 export async function selectorToolDocument(url:string,engine?:string, indirect=false):Promise<{text:string;url:string}>{
   if(!isBrowserSelectorEngine(engine))return safeText(url,4_000_000,{indirect});
   await assertPublicUrl(url);
-  // When proxy/indirect is active, use the guarded visual-browser snapshot which routes via safeFetch proxy
-  const { sourceRoute } = await import('./network.js');
-  const needsProxy = indirect || sourceRoute(indirect) !== 'direct';
-  if (needsProxy) {
-    const { renderBrowserSnapshot } = await import('./visual-browser.js');
-    const snapshot = await renderBrowserSnapshot(url, engine||'playwright', indirect);
-    return { text: snapshot.text, url: snapshot.url };
-  }
-  return withBrowserSlot(async()=>{
-    let document:{text:string;url:string}|undefined;
-    const reader=async(text:string,finalUrl:string):Promise<Product[]>=>{await assertPublicUrl(finalUrl);document={text,url:finalUrl};return []};
-    if(engine==='crawlee_playwright')await scrapeListWithCrawleePlaywright(url,DEFAULT_SELECTORS,reader, indirect);
-    else await scrapeRenderedHtml(url,DEFAULT_SELECTORS,engine==='puppeteer'?'puppeteer':'playwright',undefined,reader, indirect);
-    if(!document)throw Error('مرورگر HTML قابل آزمایشی برنگرداند؛ HTML اولیه جایگزین نشده است.');
-    return document;
-  });
+  // Always use guarded visual-browser snapshot for browser engines: it routes via
+  // safeFetch which respects both per-profile indirect and global source-network
+  // Worker/proxy (e.g. https://proxy.fazilat-ma.workers.dev/?url={url}) set in
+  // connections. Direct Playwright navigation would bypass that internal proxy.
+  const { renderBrowserSnapshot } = await import('./visual-browser.js');
+  const snapshot = await renderBrowserSnapshot(url, engine||'playwright', indirect);
+  return { text: snapshot.text, url: snapshot.url };
 }
 export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string,document?:{text:string;url:string}, indirect=false){
   const page=document||await selectorToolDocument(url,engine, indirect),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
