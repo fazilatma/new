@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.13.0');
+define('WCP_VERSION', '2.14.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -207,7 +207,7 @@ function act_log($m) { $who=PHP_SAPI==='cli'?'cli':($_SESSION['wcp_user']??'anon
 function wcp_random($n=8) { return bin2hex(random_bytes($n)); }
 function cfg(): array {
     if (!empty($GLOBALS['__CFG'])) return $GLOBALS['__CFG'];
-    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>'','base_domain'=>'','domain_mode'=>'auto','cf_tunnel'=>'wcp-tunnel','gw_enabled'=>true,'gw_token'=>'','gw_allow_private'=>false,'gw_forward_auth'=>false,'gw_allow_hosts'=>''];
+    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>'','base_domain'=>'','domain_mode'=>'auto','cf_tunnel'=>'wcp-tunnel','gw_enabled'=>true,'gw_token'=>'','gw_allow_private'=>false,'gw_forward_auth'=>false,'gw_allow_hosts'=>'','update_repo'=>'fazilatma/new','update_branch'=>'main','update_token'=>''];
     $j=json_decode((string)@file_get_contents(DATA_DIR.'/config.json'),true); if(is_array($j))$d=array_merge($d,$j); return $GLOBALS['__CFG']=$d;
 }
 function cfg_save(array $new) {
@@ -2920,8 +2920,14 @@ function handle_api() {
     case 'sys.swap_info': jout(true, sysinfo()['swap']);
     case 'sys.create_swap':
     case 'sys.resize_swap': jout(true, resize_swap((int)($in['size_mb'] ?? 2048)));
-    case 'console.check_update': jout(true, console_check_update((string)($in['repo'] ?? 'fazilatma/new'), (string)($in['branch'] ?? 'main'), (string)($in['token'] ?? '')));
-    case 'console.self_update': jout(true, console_self_update((string)($in['repo'] ?? 'fazilatma/new'), (string)($in['branch'] ?? 'main'), (string)($in['token'] ?? '')));
+    case 'console.check_update': case 'console.self_update': {
+        $c = cfg();
+        $repo   = trim((string)($in['repo'] ?? ''))   !== '' ? trim((string)$in['repo'])   : (string)($c['update_repo']   ?? 'fazilatma/new');
+        $branch = trim((string)($in['branch'] ?? '')) !== '' ? trim((string)$in['branch']) : (string)($c['update_branch'] ?? 'main');
+        $token  = trim((string)($in['token'] ?? ''));
+        if ($token === '' || $token === '__KEEP__') $token = (string)($c['update_token'] ?? '');
+        jout(true, $api === 'console.check_update' ? console_check_update($repo, $branch, $token) : console_self_update($repo, $branch, $token));
+    }
     case 'gh.list_contents': jout(true, gh_list_contents((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['token'] ?? '')));
     case 'gh.get_file': jout(true, gh_get_file_content((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['token'] ?? '')));
     case 'gh.put_file': jout(true, gh_put_file_content((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['content'] ?? ''), (string)($in['sha'] ?? ''), (string)($in['message'] ?? ''), (string)($in['token'] ?? '')));
@@ -3240,13 +3246,16 @@ function handle_api() {
         ]);
 
     case 'settings.get':
-        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>$c['web_root']??'','base_domain'=>$c['base_domain']??'','domain_mode'=>$c['domain_mode']??'auto','cf_tunnel'=>$c['cf_tunnel']??'wcp-tunnel','noexec'=>$GLOBALS['__NOEXEC'],'gw_enabled'=>!isset($c['gw_enabled'])||!empty($c['gw_enabled']),'gw_token'=>(string)($c['gw_token']??''),'gw_allow_private'=>!empty($c['gw_allow_private']),'gw_forward_auth'=>!empty($c['gw_forward_auth']),'gw_allow_hosts'=>(string)($c['gw_allow_hosts']??''),'gw_url'=>gw_public_url()]);
+        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>$c['web_root']??'','base_domain'=>$c['base_domain']??'','domain_mode'=>$c['domain_mode']??'auto','cf_tunnel'=>$c['cf_tunnel']??'wcp-tunnel','noexec'=>$GLOBALS['__NOEXEC'],'gw_enabled'=>!isset($c['gw_enabled'])||!empty($c['gw_enabled']),'gw_token'=>(string)($c['gw_token']??''),'gw_allow_private'=>!empty($c['gw_allow_private']),'gw_forward_auth'=>!empty($c['gw_forward_auth']),'gw_allow_hosts'=>(string)($c['gw_allow_hosts']??''),'gw_url'=>gw_public_url(),'update_repo'=>(string)($c['update_repo']??'fazilatma/new'),'update_branch'=>(string)($c['update_branch']??'main'),'update_token_set'=>trim((string)($c['update_token']??''))!=='' ]);
     case 'settings.save':
         $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}if(isset($in['base_domain'])){$bd=trim((string)$in['base_domain']);$new['base_domain']=$bd===''?'':dom_norm_domain($bd);}if(isset($in['web_root'])){$wr=dom_expand_home((string)$in['web_root']);$new['web_root']=$wr===''?'':rtrim(norm_path($wr),'/');}if(isset($in['domain_mode'])){if(!in_array($in['domain_mode'],DOM_MODES,true))jout(false,null,'حالت انتشار نامعتبر است');$new['domain_mode']=(string)$in['domain_mode'];}if(isset($in['cf_tunnel'])){$new['cf_tunnel']=preg_replace('/[^A-Za-z0-9_\-]/','',(string)$in['cf_tunnel']);}
         if(isset($in['gw_enabled']))$new['gw_enabled']=!empty($in['gw_enabled']);
         if(isset($in['gw_allow_private']))$new['gw_allow_private']=!empty($in['gw_allow_private']);
         if(isset($in['gw_forward_auth']))$new['gw_forward_auth']=!empty($in['gw_forward_auth']);
         if(isset($in['gw_allow_hosts']))$new['gw_allow_hosts']=trim((string)$in['gw_allow_hosts']);
+        if(isset($in['update_repo'])){$r=trim((string)$in['update_repo']);if($r!==''&&!preg_match('~^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$~',$r))jout(false,null,'قالب مخزن باید owner/repo باشد؛ مثلاً fazilatma/new');$new['update_repo']=$r===''?'fazilatma/new':$r;}
+        if(isset($in['update_branch'])){$b=trim((string)$in['update_branch']);if($b!==''&&!preg_match('~^[A-Za-z0-9._/-]{1,120}$~',$b))jout(false,null,'نام شاخه نامعتبر است');$new['update_branch']=$b===''?'main':$b;}
+        if(isset($in['update_token'])){$t=trim((string)$in['update_token']);if($t!=='__KEEP__')$new['update_token']=$t;}
         if(isset($in['gw_token'])){$t=trim((string)$in['gw_token']);if($t!==''&&!preg_match('/^[A-Za-z0-9_\-]{8,128}$/',$t))jout(false,null,'کلید دروازه باید ۸ تا ۱۲۸ کاراکتر از حروف، عدد، خط تیره یا زیرخط باشد');$new['gw_token']=$t;}
         cfg_save($new);jout(true);
     case 'proxy.test':
@@ -6921,7 +6930,28 @@ async function renderDom(){
 INITS.dom={fn:renderDom};
 
 INITS.set={fn:renderSet};
-async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" style="border-right:3px solid ${s.gw_enabled?'var(--warn)':'var(--line2)'}">
+let __setDirty=false,__setDirtyBound=false;
+function setMarkDirty(){
+  if(__setDirty)return;__setDirty=true;
+  const d=$('#set-dirty');if(d)d.innerHTML='<b style="color:var(--warn)">● تغییرات ذخیره‌نشده دارید</b>';
+  const b=$('#set-save-all');if(b)b.style.boxShadow='0 0 0 2px var(--warn)';
+}
+function setClearDirty(){
+  __setDirty=false;
+  const d=$('#set-dirty');if(d)d.textContent='همه تنظیمات این صفحه با یک دکمه ذخیره می‌شوند (به‌جز تغییر رمز).';
+  const b=$('#set-save-all');if(b)b.style.boxShadow='';
+}
+function setBindDirtyOnce(){
+  if(__setDirtyBound)return;__setDirtyBound=true;
+  const v=$('#v-set');if(!v)return;
+  const h=e=>{const id=e.target&&e.target.id;if(id==='pwold'||id==='pwnew')return;setMarkDirty()};
+  v.addEventListener('input',h);v.addEventListener('change',h);
+}
+async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" id="set-savebar" style="position:sticky;top:0;z-index:5;border-right:3px solid var(--acc);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+  <div><b>💾 ذخیره همه تنظیمات</b><p class="hint" id="set-dirty" style="margin:2px 0 0">همه تنظیمات این صفحه با یک دکمه ذخیره می‌شوند (به‌جز تغییر رمز).</p></div>
+  <div class="row" style="gap:6px"><button class="btn" id="set-reload">↺ بازخوانی</button><button class="btn pri" id="set-save-all">💾 ذخیره همه</button></div>
+</div>
+<div class="card" style="border-right:3px solid ${s.gw_enabled?'var(--warn)':'var(--line2)'}">
   <h3 style="margin:0">🛡️ دروازه پروکسی سراسری (<span class="ltr">?url=</span>)</h3>
   <p class="hint" style="margin:6px 0">این دروازه روی <b>همان فایلی که الان بازش کرده‌اید</b> کار می‌کند، نه روی ریشهٔ دامنه. آدرس دقیقش:</p>
   <div style="background:var(--panel);border:1px dashed var(--line2);border-radius:8px;padding:8px 10px;margin-bottom:8px">
@@ -6958,21 +6988,23 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
   <div class="grid2" style="gap:10px;margin-top:10px">
     <div>
       <label class="lb">مخزن گیت‌هاب (GitHub Repository)</label>
-      <input class="inp ltr" id="wcp_up_repo" value="${esc(s.gh_repo || 'fazilatma/new')}">
+      <input class="inp ltr" id="wcp_up_repo" value="${esc(s.update_repo || 'fazilatma/new')}">
     </div>
     <div>
       <label class="lb">شاخه (Branch)</label>
-      <input class="inp ltr" id="wcp_up_branch" value="${esc(s.gh_branch || 'main')}">
+      <input class="inp ltr" id="wcp_up_branch" value="${esc(s.update_branch || 'main')}">
     </div>
   </div>
 
   <label class="lb">توکن گیت‌هاب (Personal Access Token - اختیاری برای مخازن خصوصی)</label>
-  <input class="inp ltr" type="password" id="wcp_up_token" placeholder="${s.gh_token?'توکن ذخیره شده است (برای تغییر تایپ کنید)':''}">
+  <input class="inp ltr" type="password" id="wcp_up_token" placeholder="${s.update_token_set?'توکن ذخیره شده است (خالی بگذارید تا تغییر نکند)':'برای مخازن خصوصی لازم است'}">
 
   <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+    <button class="btn sm pri" id="wcp_up_save_btn">💾 ذخیره تنظیمات آپدیت</button>
     <button class="btn sm" id="wcp_check_up_btn">🔍 بررسی نسخه جدید (Check Updates)</button>
-    <button class="btn sm pri" id="wcp_self_up_btn">⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)</button>
+    <button class="btn sm" id="wcp_self_up_btn">⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)</button>
   </div>
+  <p class="hint" style="font-size:11.5px;margin:6px 0 0">پس از ذخیره، همین مخزن و شاخه برای بررسی نسخه، آپدیت خودکار و دکمه‌های بالا استفاده می‌شود و دیگر لازم نیست هر بار دوباره واردشان کنید.</p>
   <div id="wcp_up_status" style="margin-top:10px;display:none"></div>
 </div><div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>🛡️ پروکسی کلودفلر و رفع تحریم پکیج‌ها (Proxy & Anti-Sanction)</h3><p class="hint">تنظیم حالت عبور ترافیک، کلون مخازن گیت، دانلود پکیج‌ها (Pip / Npm / Composer / Git) و وب‌هوک‌ها از طریق Cloudflare Worker جهت دورزدن تحریم‌ها و فیلترینگ.</p><div style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -6981,7 +7013,7 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
   </div>
   <p class="hint" style="margin:2px 0;font-size:11.5px">دقیقاً با همان فرمت کلودفلر ورکرز؛ عبور تمامی متدهای HTTP، انواع ترافیک، ویدیو/صوت، استریم مالتی‌مدیا و دورزدن تحریم‌ها:</p>
   <div class="row" style="gap:6px;margin-top:6px">
-    <input class="inp ltr" id="wcp-proxy-live-url" value="${window.location.origin}/?url=https://example.com/page" readonly style="font-weight:bold;color:var(--acc)">
+    <input class="inp ltr" id="wcp-proxy-live-url" value="${esc(s.gw_url||'')}?url=https://example.com/page" readonly style="font-weight:bold;color:var(--acc)">
     <button class="btn sm pri" onclick="copyText($('#wcp-proxy-live-url').value, 'آدرس اندپوینت پروکسی کپی شد')">📋 کپی اندپوینت</button>
   </div>
 </div>
@@ -7031,6 +7063,56 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
       toast(e.message,'err');
     }
   };
+  // ── جمع‌آوری همه تنظیمات این صفحه در یک payload ──
+  const setVal=id=>{const el=$('#'+id);return el?el.value.trim():undefined};
+  const setChk=id=>{const el=$('#'+id);return el?el.checked:undefined};
+  function collectAllSettings(){
+    const p={};
+    const put=(k,v)=>{if(v!==undefined)p[k]=v};
+    put('fs_start',setVal('stfs'));
+    const ses=setVal('stses'); if(ses!==undefined&&ses!=='')p.session_minutes=+ses;
+    put('allowed_ips',setVal('stip'));
+    put('update_repo',setVal('wcp_up_repo'));
+    put('update_branch',setVal('wcp_up_branch'));
+    const ut=setVal('wcp_up_token'); if(ut)p.update_token=ut;      // خالی = بدون تغییر
+    const mode=document.querySelector('input[name="st_proxy_mode"]:checked');
+    if(mode)p.proxy_mode=mode.value;
+    put('proxy_cf_url',setVal('st_proxy_cf_url'));
+    put('gw_enabled',setChk('gw-enabled'));
+    put('gw_forward_auth',setChk('gw-forward-auth'));
+    put('gw_allow_private',setChk('gw-allow-private'));
+    put('gw_token',setVal('gw-token'));
+    put('gw_allow_hosts',setVal('gw-hosts'));
+    return p;
+  }
+  setClearDirty();setBindDirtyOnce();
+  $('#set-save-all').onclick=async()=>{
+    const btn=$('#set-save-all');btn.disabled=true;const old=btn.textContent;btn.textContent='در حال ذخیره…';
+    try{
+      await api('settings.save',collectAllSettings());
+      const t=$('#wcp_up_token');if(t)t.value='';
+      setClearDirty();
+      toast('همه تنظیمات ذخیره شد','ok');
+      const i=await api('gw.info').catch(()=>null);
+      if(i&&$('#gw-url'))$('#gw-url').textContent=i.example;
+    }catch(e){toast(e.message,'err')}finally{btn.disabled=false;btn.textContent=old}
+  };
+  $('#set-reload').onclick=async()=>{
+    if(__setDirty&&!await confirmDlg('تغییرات ذخیره‌نشده از بین می‌رود. ادامه می‌دهید؟'))return;
+    renderSet();
+  };
+  $('#wcp_up_save_btn').onclick=async()=>{
+    const btn=$('#wcp_up_save_btn');btn.disabled=true;
+    try{
+      const p={update_repo:$('#wcp_up_repo').value.trim(),update_branch:$('#wcp_up_branch').value.trim()};
+      const t=$('#wcp_up_token').value.trim(); if(t)p.update_token=t;
+      await api('settings.save',p);
+      $('#wcp_up_token').value='';
+      $('#wcp_up_token').placeholder=t?'توکن ذخیره شده است (خالی بگذارید تا تغییر نکند)':$('#wcp_up_token').placeholder;
+      setClearDirty();
+      toast('تنظیمات آپدیت ذخیره شد','ok');
+    }catch(e){toast(e.message,'err')}finally{btn.disabled=false}
+  };
   $('#gw-copy').onclick=()=>copyText($('#gw-url').textContent,'آدرس دروازه کپی شد');
   $('#gw-gen').onclick=()=>{const a=new Uint8Array(24);crypto.getRandomValues(a);$('#gw-token').value=Array.from(a,b=>('0'+b.toString(16)).slice(-2)).join('')};
   $('#gw-save').onclick=async()=>{try{
@@ -7039,14 +7121,14 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
       gw_allow_hosts:$('#gw-hosts').value.trim()});
     const i=await api('gw.info');
     $('#gw-url').textContent=i.example;
-    toast('تنظیمات دروازه ذخیره شد','ok');
+    setClearDirty();toast('تنظیمات دروازه ذخیره شد','ok');
   }catch(e){toast(e.message,'err')}};
   $('#gw-test').onclick=async()=>{const box=$('#gw-res');box.innerHTML='<span class="spin">⏳</span> در حال تست…';
     try{const d=await api('gw.test',{target:'https://api.github.com/zen'});
       box.innerHTML=d.error?`<span style="color:var(--err)">خطا: ${esc(d.error)}</span>`
         :`<span style="color:var(--ok)">✅ خروجی هاست سالم است — HTTP ${d.status} در ${d.ms}ms · ${esc(d.preview||'')}</span>`;
     }catch(e){box.innerHTML=`<span style="color:var(--err)">✗ ${esc(e.message)}</span>`}};
-  $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
+  $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});setClearDirty();toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});setClearDirty();toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
 const SCRAPER4_PRESET={"name":"Scraper4 + Deployer","type":"node","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0aa17-new","subfolder":"cloudflare-scraper4","deploy_path":"","port":"8790","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"}};
 const SKINS=[['dark','نیمه‌شب','#101828','#6366f1'],['light','کاغذ روشن','#eef2f9','#5146c7'],['ocean','اقیانوس','#0e253d','#70dbff'],['forest','جنگل','#102b24','#75e5ba'],['amber','کهربا','#302419','#ffd17a']];
 const LAYOUTS=[['classic','کلاسیک','منوی کناری و فضای آشنای کنسول'],['studio','استودیو','نوار ناوبری بالا و محتوای متمرکز'],['focus','تمرکز','نوار آیکون باریک و فضای کاری بزرگ']];

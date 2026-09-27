@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Suite Version: 2.13.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.14.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -297,9 +297,9 @@ can never be overwritten by `webconsole.php` again.
 
 | Component | Version |
 | :--- | :---: |
-| `hostconsole.php` (shared hosting) | **2.13.0** |
+| `hostconsole.php` (shared hosting) | **2.14.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
-| `wcp` CLI · `install.sh` · `update.sh` | 2.13.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.14.0 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).

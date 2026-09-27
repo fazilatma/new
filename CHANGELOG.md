@@ -13,11 +13,40 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.13.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.14.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.13.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.13.0 | Follows the suite version |
+| `wcp` (CLI) | 2.14.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.14.0 | Follows the suite version |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.14.0] — 2026-09-28 · `hostconsole.php`
+
+### Added
+* **Save button for the self-update section.** The repository, branch and GitHub token in
+  *Console Self-Update* were form-only: nothing persisted them, so every visit reset the fields to
+  `fazilatma/new` / `main` and the token had to be retyped for every check. They are now stored
+  (`update_repo`, `update_branch`, `update_token`) and reused automatically by
+  `console.check_update`, `console.self_update` and the auto-update poller when the request omits
+  them. The token is write-only: `settings.get` returns just `update_token_set`, and leaving the
+  field empty keeps the stored value instead of wiping it.
+* **One "💾 Save all settings" bar for the whole Settings tab**, sticky at the top, collecting every
+  card in a single `settings.save` call: start folder, session length, allowed IPs, self-update
+  repo/branch/token, Cloudflare proxy mode and worker URL, and all five proxy-gateway controls.
+  Password change stays separate on purpose — it needs the current password.
+* **Unsaved-changes indicator.** Editing any field marks the bar with *«● تغییرات ذخیره‌نشده دارید»*;
+  saving clears it, and ↺ Reload asks for confirmation before discarding edits. Password fields are
+  excluded from the tracking, and the listener is bound once instead of once per tab switch.
+
+### Fixed
+* The *Universal Proxy Endpoint* box in the Cloudflare card advertised
+  `window.location.origin + '/?url=…'` — the domain root, which on shared hosting is the website's
+  own index and silently ignores `?url=`. It now shows the gateway's real address on this install,
+  the same value as the gateway card.
+* Self-update settings deliberately use their own config keys. Reusing `gh_repo` / `gh_branch`
+  would have collided with the GitHub **backup** target, whose branch defaults to `backups`;
+  verified that saving an update branch leaves `gh_branch` untouched.
 
 ---
 
