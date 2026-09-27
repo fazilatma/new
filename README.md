@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Suite Version: 2.12.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.13.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -46,6 +46,12 @@ Upon running the launcher script, an interactive 3-option menu appears (auto-sel
 WebConsole Pro includes a built-in, high-performance forward proxy matching the Cloudflare Workers format. It proxies any URL, bypassing restrictions, injecting CORS headers, and streaming audio/video with byte-range slicing.
 
 ### 🌐 Format & Usage:
+
+The gateway lives on **the console file itself**, not on the domain root. On shared hosting that is
+whatever path you installed it at — e.g. `https://example.com/hostconsole.php?url=…`, not
+`https://example.com/?url=…` (that hits your website's own index). **Settings → 🛡️ Proxy gateway**
+prints the exact URL for your install; copy it from there.
+
 ```text
 https://YOUR_WEBCONSOLE_URL:8888/?url=https://example.com/page
 ```
@@ -63,7 +69,22 @@ https://YOUR_WEBCONSOLE_URL:8888/?url=https://example.com/page
 * **Streaming & Media:** MP4/WEBM video, MP3 audio, Live streaming chunks, PDF, and ZIP archives.
 * **Byte-Range Seeking (`206 Partial Content`):** Smooth video seek bar & resume broken downloads.
 * **Wildcard CORS:** `Access-Control-Allow-Origin: *` for seamless frontend & mobile app integration.
-* **Header Forwarding:** Preserves `Authorization`, `Cookies`, `User-Agent`, and custom headers.
+* **Header Forwarding:** Preserves `User-Agent` and custom headers (`Authorization` / `Cookie` only when you enable *Forward cookies and Authorization*).
+
+### 🔒 Safety controls (since 2.13.0)
+
+The gateway answers **before** the login screen, so treat its URL as a secret and lock it down:
+
+| Control | Default | What it does |
+| :--- | :--- | :--- |
+| Enabled | on | Turn the gateway off completely |
+| Access key | *(empty)* | Requires `&key=…` or an `X-WCP-Key` header; empty means anyone with the URL can use your host as an open proxy |
+| Allowed hosts | *(empty = all)* | Restrict proxying to named domains and their subdomains |
+| Forward cookies / Authorization | off | Credentials are stripped before the request leaves your host; the console's own `WCPSESS` cookie is **always** removed |
+| Allow internal addresses | off | Keep off. When off, targets resolving to loopback / private / link-local / reserved IPs are rejected, and every redirect hop is re-validated |
+
+Without the last control the gateway would expose every service bound to `127.0.0.1` — including the
+project ports used by domain publishing — and cloud metadata endpoints, to anyone on the internet.
 
 ---
 
@@ -276,9 +297,9 @@ can never be overwritten by `webconsole.php` again.
 
 | Component | Version |
 | :--- | :---: |
-| `hostconsole.php` (shared hosting) | **2.12.0** |
+| `hostconsole.php` (shared hosting) | **2.13.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
-| `wcp` CLI · `install.sh` · `update.sh` | 2.12.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.13.0 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).

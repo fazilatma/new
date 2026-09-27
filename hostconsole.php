@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.12.0');
+define('WCP_VERSION', '2.13.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -207,7 +207,7 @@ function act_log($m) { $who=PHP_SAPI==='cli'?'cli':($_SESSION['wcp_user']??'anon
 function wcp_random($n=8) { return bin2hex(random_bytes($n)); }
 function cfg(): array {
     if (!empty($GLOBALS['__CFG'])) return $GLOBALS['__CFG'];
-    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>'','base_domain'=>'','domain_mode'=>'auto','cf_tunnel'=>'wcp-tunnel'];
+    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>'','base_domain'=>'','domain_mode'=>'auto','cf_tunnel'=>'wcp-tunnel','gw_enabled'=>true,'gw_token'=>'','gw_allow_private'=>false,'gw_forward_auth'=>false,'gw_allow_hosts'=>''];
     $j=json_decode((string)@file_get_contents(DATA_DIR.'/config.json'),true); if(is_array($j))$d=array_merge($d,$j); return $GLOBALS['__CFG']=$d;
 }
 function cfg_save(array $new) {
@@ -2562,16 +2562,94 @@ function check_file_syntax(string $path, string $content): array {
 
 
 
+/* ───────── Universal Forward Proxy Gateway: تنظیمات و نگهبان SSRF ───────── */
+function gw_cfg(): array {
+    $c = cfg();
+    return [
+        'enabled'       => !isset($c['gw_enabled']) || !empty($c['gw_enabled']),
+        'token'         => trim((string)($c['gw_token'] ?? '')),
+        'allow_private' => !empty($c['gw_allow_private']),
+        'forward_auth'  => !empty($c['gw_forward_auth']),
+        'allow_hosts'   => array_values(array_filter(array_map('trim', preg_split('/[\s,]+/', (string)($c['gw_allow_hosts'] ?? '')) ?: []))),
+    ];
+}
+/** آدرس عمومی خودِ دروازه، بر اساس همین درخواست — تا کاربر حدس نزند کجاست. */
+function gw_public_url(): string {
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+          || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+          || ((int)($_SERVER['SERVER_PORT'] ?? 80) === 443);
+    $host = (string)($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost');
+    $path = (string)($_SERVER['SCRIPT_NAME'] ?? '/index.php');
+    return ($https ? 'https://' : 'http://') . $host . $path;
+}
+/** آیا این IP در محدوده‌های خصوصی/لوکال/رزروشده است؟ */
+function gw_ip_is_private(string $ip): bool {
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) return false;
+    return true;   // یعنی fail کرد، پس خصوصی/رزروشده است
+}
+/**
+ * اعتبارسنجی مقصد پروکسی. جلوی SSRF را می‌گیرد: localhost، شبکهٔ داخلی،
+ * و 169.254.169.254 (متادیتای ابری) — همان جاهایی که پروژه‌های bind‌شده روی 127.0.0.1 آنجا هستند.
+ */
+function gw_check_target(string $url, array $g, ?string &$err = null): bool {
+    $err = null;
+    $parts = @parse_url($url);
+    if (!$parts || empty($parts['host']) || empty($parts['scheme'])) { $err = 'آدرس مقصد نامعتبر است.'; return false; }
+    if (!in_array(strtolower($parts['scheme']), ['http', 'https'], true)) { $err = 'فقط http و https مجاز است.'; return false; }
+    $host = strtolower($parts['host']);
+    if ($g['allow_hosts']) {
+        $ok = false;
+        foreach ($g['allow_hosts'] as $pat) {
+            $pat = strtolower(ltrim($pat, '.'));
+            if ($host === $pat || (strlen($host) > strlen($pat) && substr($host, -strlen('.' . $pat)) === '.' . $pat)) { $ok = true; break; }
+        }
+        if (!$ok) { $err = 'دامنهٔ «' . $host . '» در فهرست مجاز دروازه نیست.'; return false; }
+    }
+    if ($g['allow_private']) return true;
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) { $ips[] = $host; }
+    else {
+        $ips = array_merge(gethostbynamel($host) ?: [], array_map(function($r){ return $r['ipv6'] ?? ''; }, @dns_get_record($host, DNS_AAAA) ?: []));
+        $ips = array_values(array_filter($ips));
+        if (!$ips) { $err = 'نام دامنهٔ «' . $host . '» قابل resolve نیست.'; return false; }
+    }
+    foreach ($ips as $ip) {
+        if (gw_ip_is_private($ip)) {
+            $err = 'مقصد به یک نشانی داخلی (' . $ip . ') اشاره می‌کند و برای جلوگیری از SSRF مسدود شد.';
+            return false;
+        }
+    }
+    return true;
+}
+/** Location نسبی را به آدرس مطلق تبدیل می‌کند. */
+function gw_absolute_url(string $base, string $rel): string {
+    if (preg_match('#^https?://#i', $rel)) return $rel;
+    $b = @parse_url($base);
+    if (!$b || empty($b['scheme']) || empty($b['host'])) return $rel;
+    $root = $b['scheme'] . '://' . $b['host'] . (isset($b['port']) ? ':' . $b['port'] : '');
+    if ($rel === '') return $base;
+    if ($rel[0] === '/') return $root . $rel;
+    $dir = isset($b['path']) ? preg_replace('#/[^/]*$#', '/', $b['path']) : '/';
+    return $root . $dir . $rel;
+}
+function gw_deny(int $code, string $msg): void {
+    while (ob_get_level() > 0) @ob_end_clean();
+    http_response_code($code);
+    header('Content-Type: text/plain; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo "WebConsole proxy gateway: " . $msg . "\n";
+    exit;
+}
 function handle_universal_proxy(string $targetUrl): void {
     while (ob_get_level() > 0) @ob_end_clean();
     $targetUrl = trim($targetUrl);
-    
+    $gw = gw_cfg();
+
     if (!preg_match('#^https?://#i', $targetUrl)) {
-        http_response_code(400);
-        header('Content-Type: text/plain; charset=utf-8');
-        echo "Error: Invalid target URL. Must begin with http:// or https://";
-        exit;
+        gw_deny(400, 'آدرس مقصد باید با http:// یا https:// شروع شود.');
     }
+    $gwErr = null;
+    if (!gw_check_target($targetUrl, $gw, $gwErr)) gw_deny(403, (string)$gwErr);
     
     $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
     
@@ -2607,9 +2685,15 @@ function handle_universal_proxy(string $targetUrl): void {
     $hasAccept = false;
     
     $excludedHeaders = ['host', 'connection', 'transfer-encoding', 'content-length', 'accept-encoding'];
+    // اعتبارنامه‌ها به‌صورت پیش‌فرض فوروارد نمی‌شوند؛ وگرنه کوکی نشست خودِ کنسول به سایت مقصد لو می‌رود.
+    if (!$gw['forward_auth']) { $excludedHeaders[] = 'cookie'; $excludedHeaders[] = 'authorization'; $excludedHeaders[] = 'proxy-authorization'; }
     foreach ($incomingHeaders as $hKey => $hVal) {
         $lowKey = strtolower($hKey);
         if (in_array($lowKey, $excludedHeaders, true)) continue;
+        if ($lowKey === 'cookie') {
+            $hVal = trim(implode('; ', array_filter(array_map('trim', explode(';', (string)$hVal)), function($c){ return stripos($c, session_name() . '=') !== 0; })));
+            if ($hVal === '') continue;
+        }
         if ($lowKey === 'user-agent') $hasUserAgent = true;
         if ($lowKey === 'accept') $hasAccept = true;
         $headersToSend[] = "{$hKey}: {$hVal}";
@@ -2632,8 +2716,8 @@ function handle_universal_proxy(string $targetUrl): void {
         $curlOpts = [
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_HTTPHEADER => $headersToSend,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_FOLLOWLOCATION => false,   // ریدایرکت‌ها دستی و با اعتبارسنجی مجدد دنبال می‌شوند (ضد SSRF)
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => 600,
             CURLOPT_CONNECTTIMEOUT => 30,
             CURLOPT_SSL_VERIFYPEER => false,
@@ -2685,11 +2769,39 @@ function handle_universal_proxy(string $targetUrl): void {
         };
         
         curl_setopt_array($ch, $curlOpts);
-        curl_exec($ch);
-        $errNo = curl_errno($ch);
-        $errMsg = curl_error($ch);
+        // هر ریدایرکت را قبل از دنبال‌کردن دوباره اعتبارسنجی می‌کنیم تا 302 به 127.0.0.1 بی‌اثر شود.
+        $hops = 0; $current = $targetUrl; $errNo = 0; $errMsg = '';
+        while (true) {
+            $redirectTo = '';
+            $statusSeen = 0;
+            curl_setopt($ch, CURLOPT_URL, $current);
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($c, $headerLine) use (&$redirectTo, &$statusSeen, $curlOpts) {
+                $len = strlen($headerLine); $trimmed = trim($headerLine);
+                if ($trimmed === '') return $len;
+                if (preg_match('#^HTTP/\S+\s+(\d+)\b#i', $trimmed, $m)) { $statusSeen = (int)$m[1]; return $len; }
+                $colon = strpos($trimmed, ':');
+                if ($colon === false) return $len;
+                $name = strtolower(trim(substr($trimmed, 0, $colon)));
+                $value = trim(substr($trimmed, $colon + 1));
+                if ($statusSeen >= 300 && $statusSeen < 400 && $name === 'location') { $redirectTo = $value; return $len; }
+                if ($statusSeen >= 300 && $statusSeen < 400) return $len;   // هدرهای پاسخ موقتِ ریدایرکت را پاس نمی‌دهیم
+                return ($curlOpts[CURLOPT_HEADERFUNCTION])($c, $headerLine);
+            });
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($c, $chunk) use (&$statusSeen, $curlOpts) {
+                if ($statusSeen >= 300 && $statusSeen < 400) return strlen($chunk);   // بدنهٔ ریدایرکت دور ریخته می‌شود
+                return ($curlOpts[CURLOPT_WRITEFUNCTION])($c, $chunk);
+            });
+            curl_exec($ch);
+            $errNo = curl_errno($ch); $errMsg = curl_error($ch);
+            if ($errNo !== 0 || $redirectTo === '') break;
+            if (++$hops > 10) { $errNo = -1; $errMsg = 'Too many redirects'; break; }
+            $next = gw_absolute_url($current, $redirectTo);
+            $hopErr = null;
+            if (!gw_check_target($next, $gw, $hopErr)) { curl_close($ch); gw_deny(403, 'ریدایرکت به مقصد غیرمجاز مسدود شد: ' . (string)$hopErr); }
+            $current = $next;
+        }
         curl_close($ch);
-        
+
         if ($errNo !== 0 && !headers_sent()) {
             http_response_code(502);
             header('Content-Type: text/plain; charset=utf-8');
@@ -2703,7 +2815,7 @@ function handle_universal_proxy(string $targetUrl): void {
                 'content' => $rawBody,
                 'timeout' => 600,
                 'ignore_errors' => true,
-                'follow_location' => 1
+                'follow_location' => 0
             ],
             'ssl' => [
                 'verify_peer' => false,
@@ -2780,6 +2892,29 @@ function handle_api() {
         $job=job_create('nvm_install','نصب Node.js '.$ver.' با NVM',['version'=>$ver,'set_default'=>!empty($in['set_default'])]);
         job_start($job);
         jout(true,['job'=>$job['id'],'version'=>$ver]);
+    case 'gw.info':
+        $g=gw_cfg();
+        jout(true,['enabled'=>$g['enabled'],'has_token'=>$g['token']!=='','allow_private'=>$g['allow_private'],
+                   'forward_auth'=>$g['forward_auth'],'allow_hosts'=>$g['allow_hosts'],
+                   'url'=>gw_public_url(),
+                   'example'=>gw_public_url().'?url='.rawurlencode('https://example.com').($g['token']!==''?'&key='.$g['token']:''),
+                   'curl'=>function_exists('curl_init'),'allow_url_fopen'=>(bool)ini_get('allow_url_fopen'),
+                   'script'=>(string)($_SERVER['SCRIPT_NAME']??''),'host'=>(string)($_SERVER['HTTP_HOST']??'')]);
+    case 'gw.test':
+        $g=gw_cfg();
+        $t=trim((string)($in['target']??'https://api.github.com/zen'));
+        if($t==='')$t='https://api.github.com/zen';
+        if(!$g['enabled'])jout(false,null,'دروازهٔ پروکسی غیرفعال است.');
+        $e=null; if(!gw_check_target($t,$g,$e))jout(false,null,(string)$e);
+        if(!function_exists('curl_init'))jout(false,null,'افزونهٔ cURL روی این هاست نصب نیست؛ دروازه از fallback کندتر استفاده می‌کند.');
+        $ch=curl_init($t);
+        curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_CONNECTTIMEOUT=>10,
+            CURLOPT_FOLLOWLOCATION=>false,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_SSL_VERIFYHOST=>0,
+            CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_HTTPHEADER=>['User-Agent: WebConsole-Pro/'.WCP_VERSION,'Accept: */*']]);
+        $t0=microtime(true);$body=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$ce=curl_error($ch);curl_close($ch);
+        jout(true,['target'=>$t,'status'=>$code,'ms'=>(int)round((microtime(true)-$t0)*1000),
+                   'error'=>$ce,'bytes'=>is_string($body)?strlen($body):0,
+                   'preview'=>is_string($body)?mb_substr(strip_tags($body),0,200):'']);
     case 'sysinfo': jout(true,sysinfo());
     case 'sys.emergency_rescue': jout(true,emergency_rescue());
     case 'sys.swap_info': jout(true, sysinfo()['swap']);
@@ -3105,9 +3240,15 @@ function handle_api() {
         ]);
 
     case 'settings.get':
-        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>$c['web_root']??'','base_domain'=>$c['base_domain']??'','domain_mode'=>$c['domain_mode']??'auto','cf_tunnel'=>$c['cf_tunnel']??'wcp-tunnel','noexec'=>$GLOBALS['__NOEXEC']]);
+        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>$c['web_root']??'','base_domain'=>$c['base_domain']??'','domain_mode'=>$c['domain_mode']??'auto','cf_tunnel'=>$c['cf_tunnel']??'wcp-tunnel','noexec'=>$GLOBALS['__NOEXEC'],'gw_enabled'=>!isset($c['gw_enabled'])||!empty($c['gw_enabled']),'gw_token'=>(string)($c['gw_token']??''),'gw_allow_private'=>!empty($c['gw_allow_private']),'gw_forward_auth'=>!empty($c['gw_forward_auth']),'gw_allow_hosts'=>(string)($c['gw_allow_hosts']??''),'gw_url'=>gw_public_url()]);
     case 'settings.save':
-        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}if(isset($in['base_domain'])){$bd=trim((string)$in['base_domain']);$new['base_domain']=$bd===''?'':dom_norm_domain($bd);}if(isset($in['web_root'])){$wr=dom_expand_home((string)$in['web_root']);$new['web_root']=$wr===''?'':rtrim(norm_path($wr),'/');}if(isset($in['domain_mode'])){if(!in_array($in['domain_mode'],DOM_MODES,true))jout(false,null,'حالت انتشار نامعتبر است');$new['domain_mode']=(string)$in['domain_mode'];}if(isset($in['cf_tunnel'])){$new['cf_tunnel']=preg_replace('/[^A-Za-z0-9_\-]/','',(string)$in['cf_tunnel']);}cfg_save($new);jout(true);
+        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}if(isset($in['base_domain'])){$bd=trim((string)$in['base_domain']);$new['base_domain']=$bd===''?'':dom_norm_domain($bd);}if(isset($in['web_root'])){$wr=dom_expand_home((string)$in['web_root']);$new['web_root']=$wr===''?'':rtrim(norm_path($wr),'/');}if(isset($in['domain_mode'])){if(!in_array($in['domain_mode'],DOM_MODES,true))jout(false,null,'حالت انتشار نامعتبر است');$new['domain_mode']=(string)$in['domain_mode'];}if(isset($in['cf_tunnel'])){$new['cf_tunnel']=preg_replace('/[^A-Za-z0-9_\-]/','',(string)$in['cf_tunnel']);}
+        if(isset($in['gw_enabled']))$new['gw_enabled']=!empty($in['gw_enabled']);
+        if(isset($in['gw_allow_private']))$new['gw_allow_private']=!empty($in['gw_allow_private']);
+        if(isset($in['gw_forward_auth']))$new['gw_forward_auth']=!empty($in['gw_forward_auth']);
+        if(isset($in['gw_allow_hosts']))$new['gw_allow_hosts']=trim((string)$in['gw_allow_hosts']);
+        if(isset($in['gw_token'])){$t=trim((string)$in['gw_token']);if($t!==''&&!preg_match('/^[A-Za-z0-9_\-]{8,128}$/',$t))jout(false,null,'کلید دروازه باید ۸ تا ۱۲۸ کاراکتر از حروف، عدد، خط تیره یا زیرخط باشد');$new['gw_token']=$t;}
+        cfg_save($new);jout(true);
     case 'proxy.test':
         $testUrl = trim((string)($in['target_url'] ?? 'https://api.github.com/zen'));
         if ($testUrl === '') $testUrl = 'https://api.github.com/zen';
@@ -6780,7 +6921,32 @@ async function renderDom(){
 INITS.dom={fn:renderDom};
 
 INITS.set={fn:renderSet};
-async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" style="border-right: 3px solid var(--acc)">
+async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" style="border-right:3px solid ${s.gw_enabled?'var(--warn)':'var(--line2)'}">
+  <h3 style="margin:0">🛡️ دروازه پروکسی سراسری (<span class="ltr">?url=</span>)</h3>
+  <p class="hint" style="margin:6px 0">این دروازه روی <b>همان فایلی که الان بازش کرده‌اید</b> کار می‌کند، نه روی ریشهٔ دامنه. آدرس دقیقش:</p>
+  <div style="background:var(--panel);border:1px dashed var(--line2);border-radius:8px;padding:8px 10px;margin-bottom:8px">
+    <code class="ltr" id="gw-url" style="word-break:break-all;color:var(--acc)">${esc(s.gw_url||'')}?url=https%3A%2F%2Fexample.com</code>
+    <button class="btn sm" id="gw-copy" style="margin-right:8px">📋 کپی</button>
+  </div>
+  <div class="row" style="gap:14px;flex-wrap:wrap">
+    <label class="lb" style="margin:0"><input class="chk" id="gw-enabled" type="checkbox" ${s.gw_enabled?'checked':''}> فعال باشد</label>
+    <label class="lb" style="margin:0"><input class="chk" id="gw-forward-auth" type="checkbox" ${s.gw_forward_auth?'checked':''}> فوروارد کوکی و Authorization</label>
+    <label class="lb" style="margin:0"><input class="chk" id="gw-allow-private" type="checkbox" ${s.gw_allow_private?'checked':''}> اجازه به آدرس‌های داخلی (خطرناک)</label>
+  </div>
+  <div class="grid2" style="margin-top:8px">
+    <div><label class="lb">کلید دسترسی (خالی = بدون کلید، یعنی باز برای همه)</label>
+      <div class="row" style="gap:6px"><input class="inp ltr" id="gw-token" placeholder="بدون کلید" value="${esc(s.gw_token||'')}" style="flex:1"><button class="btn sm" id="gw-gen">🎲 ساخت</button></div></div>
+    <div><label class="lb">فهرست دامنه‌های مجاز (خالی = همه، با کاما جدا کنید)</label>
+      <input class="inp ltr" id="gw-hosts" placeholder="example.com, api.github.com" value="${esc(s.gw_allow_hosts||'')}"></div>
+  </div>
+  <div class="row" style="margin-top:10px;gap:6px">
+    <button class="btn pri sm" id="gw-save">💾 ذخیره دروازه</button>
+    <button class="btn sm" id="gw-test">🧪 تست اتصال خروجی</button>
+  </div>
+  <p class="hint" id="gw-res" style="margin-top:8px"></p>
+  <p class="hint" style="font-size:11.5px;margin-top:4px">⚠️ بدون کلید دسترسی، هر کسی که این آدرس را بداند می‌تواند ترافیک دلخواهش را از هاست شما عبور دهد. آدرس‌های داخلی مثل <span class="ltr">127.0.0.1</span> و <span class="ltr">169.254.169.254</span> همیشه مسدودند مگر تیک بالا را بزنید.</p>
+</div>
+<div class="card" style="border-right: 3px solid var(--acc)">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <div>
       <h3 style="margin:0">🔄 به‌روزرسانی و سلف‌آپدیت وب‌کنسول (Console Self-Update)</h3>
@@ -6865,6 +7031,21 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
       toast(e.message,'err');
     }
   };
+  $('#gw-copy').onclick=()=>copyText($('#gw-url').textContent,'آدرس دروازه کپی شد');
+  $('#gw-gen').onclick=()=>{const a=new Uint8Array(24);crypto.getRandomValues(a);$('#gw-token').value=Array.from(a,b=>('0'+b.toString(16)).slice(-2)).join('')};
+  $('#gw-save').onclick=async()=>{try{
+    await api('settings.save',{gw_enabled:$('#gw-enabled').checked,gw_token:$('#gw-token').value.trim(),
+      gw_allow_private:$('#gw-allow-private').checked,gw_forward_auth:$('#gw-forward-auth').checked,
+      gw_allow_hosts:$('#gw-hosts').value.trim()});
+    const i=await api('gw.info');
+    $('#gw-url').textContent=i.example;
+    toast('تنظیمات دروازه ذخیره شد','ok');
+  }catch(e){toast(e.message,'err')}};
+  $('#gw-test').onclick=async()=>{const box=$('#gw-res');box.innerHTML='<span class="spin">⏳</span> در حال تست…';
+    try{const d=await api('gw.test',{target:'https://api.github.com/zen'});
+      box.innerHTML=d.error?`<span style="color:var(--err)">خطا: ${esc(d.error)}</span>`
+        :`<span style="color:var(--ok)">✅ خروجی هاست سالم است — HTTP ${d.status} در ${d.ms}ms · ${esc(d.preview||'')}</span>`;
+    }catch(e){box.innerHTML=`<span style="color:var(--err)">✗ ${esc(e.message)}</span>`}};
   $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
 const SCRAPER4_PRESET={"name":"Scraper4 + Deployer","type":"node","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0aa17-new","subfolder":"cloudflare-scraper4","deploy_path":"","port":"8790","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"}};
 const SKINS=[['dark','نیمه‌شب','#101828','#6366f1'],['light','کاغذ روشن','#eef2f9','#5146c7'],['ocean','اقیانوس','#0e253d','#70dbff'],['forest','جنگل','#102b24','#75e5ba'],['amber','کهربا','#302419','#ffd17a']];
@@ -6917,7 +7098,16 @@ setInterval(async()=>{
 try {
     // 🌐 Universal Forward Proxy Gateway (?url=https://example.com/page)
     $proxyTarget = $_GET['url'] ?? $_GET['proxy'] ?? ($_REQUEST['url'] ?? '');
-    if (!empty($proxyTarget) && is_string($proxyTarget) && preg_match('#^https?://#i', $proxyTarget)) {
+    if (!empty($proxyTarget) && is_string($proxyTarget)) {
+        $g = gw_cfg();
+        if (!$g['enabled']) gw_deny(403, 'دروازهٔ پروکسی غیرفعال است. آن را از تنظیمات کنسول روشن کنید.');
+        if ($g['token'] !== '') {
+            $key = (string)($_GET['key'] ?? $_SERVER['HTTP_X_WCP_KEY'] ?? '');
+            if ($key === '' || !hash_equals($g['token'], $key))
+                gw_deny(401, 'کلید دسترسی لازم است: &key=... را به آدرس اضافه کنید (یا هدر X-WCP-Key).');
+        }
+        if (!preg_match('#^https?://#i', $proxyTarget))
+            gw_deny(400, 'پارامتر url باید با http:// یا https:// شروع شود. نمونه: ?url=https%3A%2F%2Fexample.com');
         handle_universal_proxy($proxyTarget);
         exit;
     }

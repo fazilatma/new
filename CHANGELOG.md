@@ -13,11 +13,49 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.12.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.13.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.12.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.12.0 | Follows the suite version |
+| `wcp` (CLI) | 2.13.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.13.0 | Follows the suite version |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.13.0] — 2026-09-27 · `hostconsole.php` · 🔒 security release
+
+### Security
+* **🚨 Unauthenticated SSRF in the forward proxy gateway (`?url=`).** The gateway ran *before* the
+  login and IP checks and passed any URL straight to cURL with `FOLLOWLOCATION`, with no target
+  validation. Anyone who knew the console's URL could read internal services through the host —
+  including the very project ports the domain feature binds to `127.0.0.1`, plus cloud metadata at
+  `169.254.169.254`. Verified against a private app on `127.0.0.1:3000`: the pre-fix build returned
+  its body to an anonymous internet request; the fixed build returns `403`.
+  * Targets resolving to loopback, private, link-local or reserved ranges are now rejected, by IP
+    *and* by hostname (so `127.0.0.1.nip.io` style names are caught too).
+  * Redirects are no longer followed blindly: each hop is re-validated, so an external URL can no
+    longer `302` the proxy into the private network. Legitimate redirect chains still work.
+  * `CURLOPT_PROTOCOLS` is pinned to HTTP/HTTPS.
+  * Override with **Allow internal addresses** only if you really mean it.
+* **Credential leakage.** `Cookie` and `Authorization` were forwarded to arbitrary third-party
+  targets — including the console's own `WCPSESS` session cookie, i.e. a full admin session handed
+  to whatever site was proxied. They are now stripped by default (toggle: *Forward cookies and
+  Authorization*), and `WCPSESS` is **always** removed even when forwarding is enabled.
+* **Optional access key.** Set a token and the gateway requires `&key=…` (or an `X-WCP-Key`
+  header), compared with `hash_equals()`. Empty = open to anyone who knows the URL, which the
+  settings card now warns about explicitly.
+* **Optional host allowlist** — restrict the gateway to named domains and their subdomains.
+* The gateway can be **switched off entirely**.
+
+### Added
+* **🛡️ Proxy gateway card in Settings** showing the **exact working URL of the gateway on this
+  install** (built from the real script path), with copy button, the toggles above, a key
+  generator, and an outbound connectivity test.
+* **New API actions**: `gw.info` and `gw.test`.
+
+### Fixed
+* Silent failures replaced with explicit, human-readable responses: disabled gateway → `403`,
+  missing/invalid key → `401`, bad target → `400`, blocked target → `403` with the reason. The old
+  build answered a malformed `url` with a bare "Error:" string and nothing else.
 
 ---
 
