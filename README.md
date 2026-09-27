@@ -123,7 +123,59 @@ The `wcp` command is globally installed across Linux, Codespaces, and Termux:
 
 ---
 
-## 📱 5. Android Termux Battery & Kernel Optimization
+## 🌐 5. Domain / Subdomain Publishing — Run Projects Without Exposing a Port
+
+`hostconsole.php` can publish any Node.js / Python project on a **subdomain instead of a port**.
+On shared hosting only ports **80/443** pass the firewall, so `http://your-server:3000` is unreachable
+from the internet. The console now writes a **reverse proxy** so the same app is served at
+`https://app.example.com` while the app keeps listening on `127.0.0.1:3000`.
+
+### 🧭 New "دامنه‌ها / Domains" tab
+
+| Element | Description |
+| :--- | :--- |
+| Server probe | Detects web root, Apache/LiteSpeed/Nginx, `mod_proxy`, `mod_rewrite`, sudo, cURL |
+| Base settings | Base domain, `public_html` root, default publishing mode, Cloudflare tunnel name |
+| Per-project mapping | Domain, mode, mount path, document root, bind host, WebSocket, force-HTTPS, timeout |
+| Actions | Apply · Re-apply · Config preview · Access test (DNS + backend + public HTTP) · Remove |
+
+### ⚙️ Five publishing modes (auto-selected by capability)
+
+| Mode | Works on | WebSocket | Needs root |
+| :--- | :--- | :---: | :---: |
+| `htaccess` | Apache / LiteSpeed with `mod_proxy` | ✅ | ❌ |
+| `phpproxy` | **Any shared host** (generates a streaming PHP reverse-proxy shim) | ❌ | ❌ |
+| `apache` | Apache VirtualHost + `a2ensite` + reload | ✅ | ✅ |
+| `nginx` | Nginx server block + `nginx -t` + reload | ✅ | ✅ |
+| `cloudflared` | Cloudflare Tunnel ingress (no open ports, no static IP) | ✅ | ❌ |
+
+`manual` mode generates the config text only, for pasting into a hosting panel.
+
+### 🚀 Quick start (cPanel / DirectAdmin)
+
+1. Create the subdomain in your hosting panel and note its Document Root (e.g. `~/public_html/app`).
+2. Console → **پروژه‌ها** → project → **🌐 دامنه** → enable publishing, enter `app.example.com`, save.
+3. Start the project (▶). It binds to `127.0.0.1:<port>`; the proxy is applied automatically on every start and deploy.
+4. Issue a free Let's Encrypt certificate for the subdomain, then press **🧪 تست**.
+
+### 🔌 Bind-address fix
+
+Projects now receive `HOST` / `BIND_HOST` / `LISTEN_HOST` / `SERVER_HOST` / `APP_HOST` /
+`UVICORN_HOST` / `FLASK_RUN_HOST` environment variables automatically:
+
+* **`0.0.0.0`** when no domain is configured → the port really is reachable from outside (if the firewall allows it).
+* **`127.0.0.1`** when a domain is configured → the app stays private and is only reachable through the proxy.
+
+### 🧩 API endpoints
+
+`dom.detect` · `dom.list` · `dom.status` · `dom.preview` · `dom.apply` · `dom.remove` · `dom.test` · `dom.settings`
+
+Generated files are wrapped in `# >>> WCP-DOMAIN:<id> >>>` markers, so existing `.htaccess` rules are
+preserved on apply and cleanly removed on delete (a `.wcp-bak` backup is kept).
+
+---
+
+## 📱 6. Android Termux Battery & Kernel Optimization
 
 * **Zero Background Drain:** Run `wcp off` or `wcp shutdown` when finished to pause all background daemons.
 * **SELinux OPcache Fix:** Bypasses unrooted Android `/tmp` semaphore restrictions automatically.
