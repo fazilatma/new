@@ -72,7 +72,30 @@ Host limits diagnostic: when `--smoke-test` is used, the helper also reports
 `/dev/shm` and `/tmp` writability, `which strace/chrome`, `Seccomp/NoNewPrivs`
 from `/proc/self/status`, and cgroup/uname. On CloudLinux LVE even
 `--no-sandbox` may still SIGTRAP; the aggressive flags try to reduce namespace
-requirements.
+requirements. It also reports `/proc/sys/kernel/unprivileged_bpf_disabled`,
+`max_user_namespaces`, and attempts a `strace -f -e trace=clone,clone3,unshare,prctl`
+diagnostic when available.
+
+### Final outcome on reported LVE host (2026-09-27)
+
+On `/home/sabashop` UID 4122, kernel `4.18.0-553.58.1.lve.el8.x86_64`, cgroup `lve4122`,
+`Seccomp:0 NoNewPrivs:1 CapEff:0`:
+
+- 5 private libs valid, ldd exit 0 for both Playwright chromium-1243 chrome (293 MB)
+  and chromium_headless_shell-1243 (197 MB), with private libs resolved.
+- All 4 launch attempts still fail: `SIGTRAP -5` for default/no-sandbox/no-zygote,
+  `SIGKILL -9` for aggressive `--disable-seccomp-filter-sandbox --disable-namespace-sandbox --headless=new`
+  (LVE OOM/kill). Same for headless-shell.
+- `strace` exists but `PTRACE_TRACEME: Operation not permitted` and even `strace` itself
+  gets `SIGKILL -9` — LVE blocks ptrace.
+- No system chromium, no firefox in `data/browsers` (only chromium + ffmpeg + puppeteer),
+  `npx` not found on host.
+
+Conclusion: library fix succeeded, but Chromium cannot start on this LVE host even with
+`--no-sandbox --no-zygote --single-process`. Workarounds: use Firefox if installable
+(`python3 -m playwright install firefox` or `node ./node_modules/playwright/cli.js install firefox`),
+or move browser jobs to VPS where full sandbox control is possible. Non-JS extraction
+(cheerio) continues to work on shared-host.
 
 ### Offline and retry behavior
 
