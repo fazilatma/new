@@ -4,7 +4,7 @@ All notable changes to this repository.
 Format follows [Keep a Changelog](https://keepachangelog.com/) and the suite uses
 [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
 
-> **Note on `2.10.0`** — `2.10.0` is *newer* than `2.9.2`. The in-app updater compares versions with
+> **Note on `2.10.0` / `2.11.0`** — `2.10.0` is *newer* than `2.9.2`. The in-app updater compares versions with
 > PHP `version_compare()`, which parses each dot-segment numerically (`10 > 9`), so the ordering is correct.
 
 ## 🔢 Component versions
@@ -13,11 +13,57 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.10.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.11.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.10.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.10.0 | Follows the suite version |
+| `wcp` (CLI) | 2.11.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.11.0 | Follows the suite version |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.11.0] — 2026-09-27 · `hostconsole.php`
+
+### Added
+* **📁 Folder publishing (`example.com/app`) as a first-class choice.** Publishing a project no longer
+  requires a subdomain. The domain dialog now opens with a segmented control:
+
+  | Kind | Public URL | Manual DNS / panel work |
+  | :--- | :--- | :--- |
+  | 🔗 Subdomain | `https://app.example.com` | Create the subdomain in the panel (except Cloudflare Tunnel, which creates the DNS record itself) |
+  | 📁 Folder on the main domain | `https://example.com/app` | **None** — reuses the existing domain and SSL certificate |
+
+* **Live URL preview** in the domain form — the final address updates as you type the domain, the
+  folder name, or toggle HTTPS, so there is no guessing what will be published.
+* **Root `.htaccess` conflict detection and one-click fix.** When the site root runs WordPress,
+  Laravel, Joomla or anything else with a catch-all `RewriteRule … /index.php`, that rule would
+  swallow `/app` before the proxy ran. The console now detects it, warns in **dom.status**, and
+  **🔧 رفع تداخل** (or an automatic pass during apply) inserts a marker-wrapped exclusion
+  `RewriteRule ^app(/|$) - [L]` **above** the existing rules. A `.wcp-bak` backup is written and the
+  block is stripped again on removal — user rules are never touched.
+* **New API action `dom.fix_parent`**; `dom.status` and `dom.apply` now return `kind` and a `parent`
+  object (`applies`, `exists`, `writable`, `catch_all`, `protected`, `segment`, `snippet`).
+* **`X-Forwarded-Prefix`** is now sent in `htaccess`/`mod_proxy` mode as well (the PHP proxy shim
+  already sent it), so frameworks can generate correct absolute links under a sub-path.
+* **New project field `domain_kind`** (`subdomain` | `path`), included in exported/imported JSON
+  profiles and validated on import.
+
+### Changed
+* The **دامنه‌ها** tab opens with an explicit *"Is the subdomain created automatically?"* table —
+  the honest answer per mode (auto only for Cloudflare Tunnel and folder mode) instead of leaving
+  users to discover it after a failed apply.
+* Apply notes are now kind-aware: folder mode says no DNS or panel work is needed, subdomain mode
+  lists the panel + Let's Encrypt steps.
+* DNS warnings are suppressed for folder mode (the main domain already resolves), and the domains
+  table gained a **نوع** column.
+* Field labels adapt to the selected kind (*"ساب‌دامین کامل"* vs *"دامنهٔ اصلی سایت"*), and the folder
+  field is hidden in subdomain mode.
+
+### Fixed
+* Saving a project with domain publishing enabled but an empty domain silently turned publishing
+  off; it now returns a clear, kind-specific error.
+* `dom_remove` left the root-`.htaccess` exclusion block behind; it is now cleaned up too.
+* Backward compatibility: profiles saved before `2.11.0` with `domain_path != "/"` are detected as
+  folder mode automatically.
 
 ---
 

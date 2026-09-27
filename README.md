@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Suite Version: 2.10.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.11.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -123,12 +123,42 @@ The `wcp` command is globally installed across Linux, Codespaces, and Termux:
 
 ---
 
-## 🌐 5. Domain / Subdomain Publishing — Run Projects Without Exposing a Port
+## 🌐 5. Domain Publishing — Run Projects Without Exposing a Port
 
-`hostconsole.php` can publish any Node.js / Python project on a **subdomain instead of a port**.
+`hostconsole.php` can publish any Node.js / Python project on a **domain instead of a port**.
 On shared hosting only ports **80/443** pass the firewall, so `http://your-server:3000` is unreachable
-from the internet. The console now writes a **reverse proxy** so the same app is served at
-`https://app.example.com` while the app keeps listening on `127.0.0.1:3000`.
+from the internet. The console writes a **reverse proxy** so the same app is served over HTTPS while
+it keeps listening on `127.0.0.1:3000`.
+
+### 🔀 Two publishing kinds
+
+Pick one in the project's **🌐 دامنه** dialog — a segmented control with a live URL preview:
+
+| Kind | Result | Does the console create the subdomain / DNS record? |
+| :--- | :--- | :--- |
+| **🔗 Subdomain** | `https://app.example.com` | **No.** Create it in cPanel/DirectAdmin first (except `cloudflared`, which creates the DNS record itself via `tunnel route dns`). |
+| **📁 Folder on the main domain** | `https://example.com/app` | **Nothing to create.** Reuses the existing domain and its SSL certificate — zero DNS work. |
+
+> Folder mode is the fastest path on shared hosting: no panel access, no DNS propagation, no extra
+> certificate. The console mounts the app under a sub-path of `public_html` and strips the `/app`
+> prefix before forwarding, while sending `X-Forwarded-Prefix` so the app can build correct links.
+
+#### ⚠️ Conflict with WordPress / Laravel at the site root
+
+A catch-all `RewriteRule … /index.php` in the root `.htaccess` would swallow `/app` before the proxy
+sees it. The console detects this, shows a warning, and can insert an exclusion automatically:
+
+```apache
+# >>> WCP-DOMAIN:<id>-root >>>
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^app(/|$) - [L]
+</IfModule>
+# <<< WCP-DOMAIN:<id>-root <<<
+```
+
+It is written **above** the existing rules, your own rules are untouched, a `.wcp-bak` backup is kept,
+and the block is removed again when you delete the mapping.
 
 ### 🧭 New "دامنه‌ها / Domains" tab
 
@@ -136,7 +166,7 @@ from the internet. The console now writes a **reverse proxy** so the same app is
 | :--- | :--- |
 | Server probe | Detects web root, Apache/LiteSpeed/Nginx, `mod_proxy`, `mod_rewrite`, sudo, cURL |
 | Base settings | Base domain, `public_html` root, default publishing mode, Cloudflare tunnel name |
-| Per-project mapping | Domain, mode, mount path, document root, bind host, WebSocket, force-HTTPS, timeout |
+| Per-project mapping | Publishing kind (subdomain / folder), domain, mode, folder name, document root, bind host, WebSocket, force-HTTPS, timeout |
 | Actions | Apply · Re-apply · Config preview · Access test (DNS + backend + public HTTP) · Remove |
 
 ### ⚙️ Five publishing modes (auto-selected by capability)
@@ -151,10 +181,17 @@ from the internet. The console now writes a **reverse proxy** so the same app is
 
 `manual` mode generates the config text only, for pasting into a hosting panel.
 
-### 🚀 Quick start (cPanel / DirectAdmin)
+### 🚀 Quick start A — folder on an existing domain (no DNS work)
+
+1. Console → **دامنه‌ها** → set **Base domain** (e.g. `example.com`) and save.
+2. Project → **🌐 دامنه** → enable → choose **📁 پوشه روی دامنه** → folder `/app` → save.
+3. Start the project (▶). Open `https://example.com/app/` — done.
+4. If the root is WordPress/Laravel, press **🔧 رفع تداخل** when the console offers it.
+
+### 🚀 Quick start B — subdomain (cPanel / DirectAdmin)
 
 1. Create the subdomain in your hosting panel and note its Document Root (e.g. `~/public_html/app`).
-2. Console → **پروژه‌ها** → project → **🌐 دامنه** → enable publishing, enter `app.example.com`, save.
+2. Console → **پروژه‌ها** → project → **🌐 دامنه** → enable → **🔗 ساب‌دامین** → `app.example.com` → save.
 3. Start the project (▶). It binds to `127.0.0.1:<port>`; the proxy is applied automatically on every start and deploy.
 4. Issue a free Let's Encrypt certificate for the subdomain, then press **🧪 تست**.
 
@@ -168,7 +205,8 @@ Projects now receive `HOST` / `BIND_HOST` / `LISTEN_HOST` / `SERVER_HOST` / `APP
 
 ### 🧩 API endpoints
 
-`dom.detect` · `dom.list` · `dom.status` · `dom.preview` · `dom.apply` · `dom.remove` · `dom.test` · `dom.settings`
+`dom.detect` · `dom.list` · `dom.status` · `dom.preview` · `dom.apply` · `dom.remove` · `dom.test` ·
+`dom.settings` · `dom.fix_parent` (insert the root `.htaccess` exclusion for folder mode)
 
 Generated files are wrapped in `# >>> WCP-DOMAIN:<id> >>>` markers, so existing `.htaccess` rules are
 preserved on apply and cleanly removed on delete (a `.wcp-bak` backup is kept).
@@ -191,9 +229,9 @@ can never be overwritten by `webconsole.php` again.
 
 | Component | Version |
 | :--- | :---: |
-| `hostconsole.php` (shared hosting) | **2.10.0** |
+| `hostconsole.php` (shared hosting) | **2.11.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
-| `wcp` CLI · `install.sh` · `update.sh` | 2.10.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.11.0 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).

@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.10.0');
+define('WCP_VERSION', '2.11.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 function wcp_is_dir_writable(string $dir): bool {
@@ -1128,6 +1128,59 @@ function dom_backend_host(array $p): string {
     if (!preg_match('~^[a-zA-Z0-9.\-]{1,64}$~', $h)) $h = '127.0.0.1';
     return $h;
 }
+function dom_kind(array $p): string {
+    $k = trim((string)($p['domain_kind'] ?? ''));
+    if (in_array($k, ['subdomain', 'path'], true)) return $k;
+    return dom_mount_path($p) !== '/' ? 'path' : 'subdomain';
+}
+// نام اولین پوشه روی دامنه؛ مثلاً /app یا /shop/api -> app / shop
+function dom_path_segment(array $p): string {
+    $seg = trim(dom_mount_path($p), '/');
+    if ($seg === '') return '';
+    return explode('/', $seg)[0];
+}
+function dom_parent_htaccess(array $p): string {
+    return rtrim(dom_web_root(), '/') . '/.htaccess';
+}
+// در حالت پوشه، قوانین catch-all وردپرس/لاراول ریشه می‌توانند /app را قبل از ما بقاپند.
+function dom_path_exclusion_body(array $p): string {
+    $seg = dom_path_segment($p);
+    if ($seg === '') return '';
+    $id = (string)$p['id'] . '-root';
+    return dom_marker($id) . "\n"
+        . "# پوشهٔ " . $seg . " توسط وب‌کنسول پروکسی می‌شود؛ قوانین بازنویسی سایت اصلی نباید آن را بگیرند.\n"
+        . "<IfModule mod_rewrite.c>\n  RewriteEngine On\n  RewriteRule ^" . $seg . "(/|$) - [L]\n</IfModule>\n"
+        . dom_marker($id, true) . "\n";
+}
+function dom_parent_conflict(array $p): array {
+    $out = ['applies' => false, 'file' => '', 'exists' => false, 'writable' => false,
+            'catch_all' => false, 'protected' => false, 'segment' => '', 'snippet' => ''];
+    if (dom_kind($p) !== 'path') return $out;
+    $seg = dom_path_segment($p);
+    if ($seg === '') return $out;
+    $file = dom_parent_htaccess($p);
+    $out['applies'] = true; $out['file'] = $file; $out['segment'] = $seg;
+    $out['snippet'] = dom_path_exclusion_body($p);
+    $out['exists'] = is_file($file);
+    $out['writable'] = $out['exists'] ? is_writable($file) : wcp_is_dir_writable(dirname($file));
+    if (!$out['exists']) return $out;
+    $body = (string)@file_get_contents($file);
+    $out['protected'] = strpos($body, dom_marker((string)$p['id'] . '-root')) !== false;
+    // قوانین فراگیری که همه چیز را به index.php می‌فرستند (وردپرس، لاراول، جوملا…)
+    $out['catch_all'] = (bool)preg_match('~^\s*RewriteRule\s+\S+\s+(/?index\.php|/?public/)~mi', $body);
+    return $out;
+}
+function dom_fix_parent(array $p): array {
+    $c = dom_parent_conflict($p);
+    if (!$c['applies']) throw new RuntimeException('این پروژه در حالت «پوشه روی دامنه» نیست.');
+    if (!$c['writable']) throw new RuntimeException('فایل .htaccess ریشه قابل نوشتن نیست: ' . $c['file']);
+    $old = is_file($c['file']) ? (string)@file_get_contents($c['file']) : '';
+    if ($old !== '' && !is_file($c['file'] . '.wcp-bak')) @copy($c['file'], $c['file'] . '.wcp-bak');
+    $new = dom_merge_block($old, (string)$p['id'] . '-root', dom_path_exclusion_body($p));
+    if (!wcp_put_contents($c['file'], $new)) throw new RuntimeException('نوشتن .htaccess ریشه ناموفق بود');
+    act_log('domain parent-exclusion ' . $c['segment'] . ' project=' . $p['id']);
+    return ['file' => $c['file'], 'segment' => $c['segment'], 'protected' => true];
+}
 function dom_public_url(array $p): string {
     if (!dom_enabled($p)) return '';
     try { $d = dom_norm_domain((string)$p['domain']); } catch (Throwable $e) { return ''; }
@@ -1193,18 +1246,33 @@ function dom_apache_modules(): string {
 function dom_has_sudo(): bool { static $c = null; return $c !== null ? $c : ($c = trim(sh_ok('sudo -n true && echo yes')) === 'yes'); }
 function dom_first_dir(array $list): string { foreach ($list as $d) if (is_dir($d)) return $d; return ''; }
 function dom_sanitize_project_input(array $p): array {
-    foreach (['domain', 'domain_path', 'domain_mode', 'domain_docroot', 'bind_host'] as $k) $p[$k] = trim((string)($p[$k] ?? ''));
+    foreach (['domain', 'domain_path', 'domain_mode', 'domain_docroot', 'bind_host', 'domain_kind'] as $k) $p[$k] = trim((string)($p[$k] ?? ''));
     $p['domain_enabled'] = !empty($p['domain_enabled']);
+    if (!in_array($p['domain_kind'], ['subdomain', 'path'], true)) {
+        // سازگاری با پروفایل‌های قدیمی: مسیر غیر از / یعنی حالت پوشه.
+        $p['domain_kind'] = ($p['domain_path'] !== '' && $p['domain_path'] !== '/') ? 'path' : 'subdomain';
+    }
+    if ($p['domain_kind'] === 'path') {
+        if ($p['domain'] === '') $p['domain'] = trim((string)(cfg()['base_domain'] ?? ''));
+        $p['domain_path'] = dom_norm_path($p['domain_path'] !== '' ? $p['domain_path'] : '/');
+        if ($p['domain_enabled'] && $p['domain_path'] === '/') throw new RuntimeException('در حالت «پوشه روی دامنه»، نام پوشه الزامی است؛ مثلاً /app');
+    } else {
+        $p['domain_path'] = '/';
+    }
     if ($p['domain'] !== '') $p['domain'] = dom_norm_domain($p['domain']);
-    if ($p['domain'] === '') $p['domain_enabled'] = false;
-    $p['domain_path'] = dom_norm_path($p['domain_path'] !== '' ? $p['domain_path'] : '/');
+    if ($p['domain'] === '') {
+        if ($p['domain_enabled']) throw new RuntimeException($p['domain_kind'] === 'path'
+            ? 'دامنهٔ اصلی سایت را وارد کنید (یا در تب «دامنه» فیلد «دامنه اصلی» را تنظیم کنید).'
+            : 'ساب‌دامین کامل را وارد کنید؛ مثلاً app.example.com');
+        $p['domain_enabled'] = false;
+    }
     if ($p['domain_mode'] !== '' && !in_array($p['domain_mode'], DOM_MODES, true)) throw new RuntimeException('حالت انتشار دامنه نامعتبر است');
     if ($p['domain_docroot'] !== '') $p['domain_docroot'] = rtrim(norm_path(dom_expand_home($p['domain_docroot'])), '/');
     if ($p['bind_host'] !== '' && !preg_match('~^[a-zA-Z0-9.:\-]{1,64}$~', $p['bind_host'])) throw new RuntimeException('Bind Host نامعتبر است');
     $p['domain_ws'] = !empty($p['domain_ws']);
     $p['domain_https'] = !isset($p['domain_https']) || !empty($p['domain_https']);
     $p['domain_timeout'] = max(30, min(900, (int)($p['domain_timeout'] ?? 300)));
-    if ($p['domain_enabled'] && (string)($p['port'] ?? '') === '') throw new RuntimeException('برای انتشار روی ساب‌دامین، پورت داخلی پروژه الزامی است.');
+    if ($p['domain_enabled'] && (string)($p['port'] ?? '') === '') throw new RuntimeException('برای انتشار روی دامنه، پورت داخلی پروژه الزامی است.');
     return $p;
 }
 function dom_detect(): array {
@@ -1286,7 +1354,9 @@ function dom_htaccess_body(array $p): string {
     if ($ws) $b .= "  RewriteCond %{HTTP:Upgrade} =websocket [NC]\n  RewriteRule ^(.*)$ ws://$host:$port/\$1 [P,QSA,L]\n  RewriteCond %{HTTP:Upgrade} !=websocket [NC]\n";
     $b .= "  RewriteRule ^(.*)$ $t/\$1 [P,QSA,L]\n</IfModule>\n";
     $b .= "<IfModule mod_proxy.c>\n  ProxyPreserveHost On\n  ProxyTimeout 300\n</IfModule>\n";
-    $b .= "<IfModule mod_headers.c>\n  RequestHeader set X-Forwarded-Proto \"https\" env=HTTPS\n  RequestHeader set X-Forwarded-Port \"443\" env=HTTPS\n</IfModule>\n";
+    $b .= "<IfModule mod_headers.c>\n  RequestHeader set X-Forwarded-Proto \"https\" env=HTTPS\n  RequestHeader set X-Forwarded-Port \"443\" env=HTTPS\n";
+    if ($path !== '/') $b .= "  RequestHeader set X-Forwarded-Prefix \"$path\"\n";
+    $b .= "</IfModule>\n";
     $b .= dom_marker($id, true) . "\n";
     return $b;
 }
@@ -1602,19 +1672,36 @@ function dom_apply(array $p): array {
     $domain = dom_norm_domain((string)$p['domain']);
     $mode = dom_mode_for($p);
     $id = (string)$p['id'];
-    $report = ['mode' => $mode, 'domain' => $domain, 'url' => dom_public_url($p), 'files' => [], 'commands' => dom_commands($p, $mode), 'notes' => [], 'manual' => false, 'docroot' => ''];
+    $kind = dom_kind($p);
+    $report = ['mode' => $mode, 'kind' => $kind, 'domain' => $domain, 'url' => dom_public_url($p), 'files' => [], 'commands' => dom_commands($p, $mode), 'notes' => [], 'manual' => false, 'docroot' => '', 'parent' => null];
     if ($mode === 'htaccess' || $mode === 'phpproxy') {
         $docroot = dom_docroot($p);
         $report['docroot'] = $docroot;
-        if (!is_dir($docroot) && !@mkdir($docroot, 0755, true)) throw new RuntimeException('پوشه ریشه ساب‌دامین ساخته نشد: ' . $docroot);
+        if (!is_dir($docroot) && !@mkdir($docroot, 0755, true)) throw new RuntimeException('پوشهٔ مقصد ساخته نشد: ' . $docroot);
         if ($mode === 'htaccess') {
             dom_write($docroot . '/.htaccess', dom_htaccess_body($p), true, $id, $report);
         } else {
             dom_write($docroot . '/wcp-proxy.php', dom_phpproxy_body($p), false, $id, $report);
             dom_write($docroot . '/.htaccess', dom_phpproxy_htaccess($p), true, $id, $report);
         }
-        $report['notes'][] = 'در پنل هاست (cPanel/DirectAdmin) ساب‌دامین ' . $domain . ' را بسازید و Document Root آن را روی ' . $docroot . ' تنظیم کنید.';
-        $report['notes'][] = 'سپس از بخش SSL پنل، گواهی Let\'s Encrypt را برای این ساب‌دامین صادر کنید.';
+        if ($kind === 'path') {
+            $report['notes'][] = 'حالت پوشه: نیازی به ساخت ساب‌دامین یا رکورد DNS نیست. آدرس ' . $report['url'] . ' بلافاصله از همین دامنهٔ موجود کار می‌کند.';
+            $conflict = dom_parent_conflict($p);
+            $report['parent'] = $conflict;
+            if ($conflict['applies'] && !$conflict['protected']) {
+                if ($conflict['catch_all'] && $conflict['writable']) {
+                    try { dom_fix_parent($p); $report['parent']['protected'] = true; $report['files'][] = $conflict['file'];
+                          $report['notes'][] = 'قانون بازنویسی فراگیر در .htaccess ریشه پیدا شد؛ یک استثنا برای /' . $conflict['segment'] . ' به‌صورت خودکار اضافه شد.'; }
+                    catch (Throwable $e) { $report['manual'] = true; $report['notes'][] = 'افزودن استثنا به .htaccess ریشه ناموفق بود: ' . $e->getMessage(); }
+                } elseif ($conflict['catch_all']) {
+                    $report['manual'] = true;
+                    $report['notes'][] = '.htaccess ریشه قانون فراگیر دارد ولی قابل نوشتن نیست؛ خط «RewriteRule ^' . $conflict['segment'] . '(/|$) - [L]» را دستی بالای قوانین آن اضافه کنید.';
+                }
+            }
+        } else {
+            $report['notes'][] = 'در پنل هاست (cPanel/DirectAdmin) ساب‌دامین ' . $domain . ' را بسازید و Document Root آن را روی ' . $docroot . ' تنظیم کنید.';
+            $report['notes'][] = 'سپس از بخش SSL پنل، گواهی Let\'s Encrypt را برای این ساب‌دامین صادر کنید.';
+        }
     } elseif ($mode === 'nginx') {
         $target = dom_nginx_target($p);
         dom_write_root($target, dom_nginx_body($p), $report);
@@ -1659,6 +1746,15 @@ function dom_remove(array $p): array {
             $new = dom_strip_block((string)@file_get_contents($f), $id);
             if (trim($new) === '') { @unlink($f); $report['removed'][] = $f; }
             else { wcp_put_contents($f, $new); $report['removed'][] = $f . ' (بلوک حذف شد)'; }
+        }
+    }
+    $parent = dom_parent_htaccess($p);
+    if (is_file($parent)) {
+        $before = (string)@file_get_contents($parent);
+        $after = dom_strip_block($before, $id . '-root');
+        if ($after !== $before) {
+            if (trim($after) === '') { @unlink($parent); } else { wcp_put_contents($parent, $after); }
+            $report['removed'][] = $parent . ' (استثنای پوشه حذف شد)';
         }
     }
     $proxy = $docroot !== '' ? $docroot . '/wcp-proxy.php' : '';
@@ -1717,8 +1813,8 @@ function dom_probe_url(string $url, int $timeout = 10): array {
     return $res;
 }
 function dom_status(array $p, bool $probe = false): array {
-    $st = ['enabled' => dom_enabled($p), 'domain' => trim((string)($p['domain'] ?? '')), 'mode' => '', 'url' => '',
-           'docroot' => '', 'files' => [], 'installed' => false, 'backend' => null, 'public' => null, 'dns' => null, 'warnings' => []];
+    $st = ['enabled' => dom_enabled($p), 'domain' => trim((string)($p['domain'] ?? '')), 'kind' => dom_kind($p), 'mode' => '', 'url' => '',
+           'docroot' => '', 'files' => [], 'installed' => false, 'backend' => null, 'public' => null, 'dns' => null, 'parent' => null, 'warnings' => []];
     if (!$st['enabled']) return $st;
     try { $st['mode'] = dom_mode_for($p); $st['url'] = dom_public_url($p); } catch (Throwable $e) { $st['warnings'][] = $e->getMessage(); return $st; }
     try { $st['docroot'] = dom_docroot($p); } catch (Throwable $e) { $st['warnings'][] = $e->getMessage(); }
@@ -1731,12 +1827,19 @@ function dom_status(array $p, bool $probe = false): array {
     $ok = count($check) > 0;
     foreach ($check as $f) { $ex = is_file($f); $st['files'][] = ['path' => $f, 'exists' => $ex]; if (!$ex) $ok = false; }
     $st['installed'] = $ok;
+    if ($st['kind'] === 'path') {
+        $st['parent'] = dom_parent_conflict($p);
+        if (!empty($st['parent']['catch_all']) && empty($st['parent']['protected'])) {
+            $st['warnings'][] = '.htaccess ریشه قانون بازنویسی فراگیر دارد و ممکن است /' . $st['parent']['segment'] . ' را قبل از پروکسی بگیرد. دکمهٔ «رفع تداخل» را بزنید.';
+        }
+    }
     try { $st['backend'] = dom_probe_local(dom_backend_host($p), dom_backend_port($p)); } catch (Throwable $e) { $st['warnings'][] = $e->getMessage(); }
     if ($probe) {
         $st['public'] = dom_probe_url($st['url']);
         $ip = @gethostbyname($st['domain']);
+        if ($st['kind'] === 'path') { $st['dns'] = ['ip' => ($ip !== $st['domain'] ? $ip : ''), 'server_ip' => trim(sh_ok("hostname -I | awk '{print \$1}'")), 'note' => 'در حالت پوشه، DNS همان دامنهٔ اصلی است و تغییری لازم ندارد.']; }
         $st['dns'] = ['ip' => ($ip !== $st['domain'] ? $ip : ''), 'server_ip' => trim(sh_ok("hostname -I | awk '{print \$1}'"))];
-        if (empty($st['dns']['ip'])) $st['warnings'][] = 'رکورد DNS برای ' . $st['domain'] . ' پیدا نشد؛ ابتدا A/CNAME را در پنل دامنه تنظیم کنید.';
+        if (empty($st['dns']['ip']) && $st['kind'] !== 'path') $st['warnings'][] = 'رکورد DNS برای ' . $st['domain'] . ' پیدا نشد؛ ابتدا A/CNAME را در پنل دامنه تنظیم کنید.';
     }
     if (!empty($st['backend']) && empty($st['backend']['up'])) $st['warnings'][] = 'سرویس روی پورت داخلی بالا نیست؛ ابتدا پروژه را Start کنید.';
     return $st;
@@ -2017,7 +2120,7 @@ function proj_service_job(array $p): ?array {
     $jobs=[];foreach(glob(JOBS_DIR.'/*.json')?:[]as$f){$j=json_decode((string)@file_get_contents($f),true);if(($j['type']??'')==='service'&&($j['params']['project_id']??'')===$p['id'])$jobs[]=$j;}usort($jobs,fn($a,$b)=>strcmp($b['created'],$a['created']));foreach($jobs as$j)if(job_status($j)['status']==='running')return $j;return $jobs[0]??null;
 }
 function public_project(array $p): array {$p['has_token_hint']=!empty($p['auth_token']);unset($p['auth_token']);
-    $p['domain_enabled']=!empty($p['domain_enabled']);$p['domain']=(string)($p['domain']??'');$p['domain_path']=(string)($p['domain_path']??'/');
+    $p['domain_enabled']=!empty($p['domain_enabled']);$p['domain']=(string)($p['domain']??'');$p['domain_path']=(string)($p['domain_path']??'/');$p['domain_kind']=dom_kind($p);
     $p['domain_url']=dom_public_url($p);
     try{$p['domain_mode_effective']=dom_enabled($p)?dom_mode_for($p):'';}catch(Throwable $e){$p['domain_mode_effective']='';}
     return $p;}
@@ -2797,6 +2900,9 @@ function handle_api() {
         $rep=dom_remove($p);
         if(!empty($in['disable'])){$list=proj_all();foreach($list as &$x)if($x['id']===$p['id'])$x['domain_enabled']=false;unset($x);proj_save_all($list);}
         jout(true,$rep);
+    case 'dom.fix_parent':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        jout(true,dom_fix_parent($p));
     case 'dom.test':
         $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
         jout(true,dom_status($p,true));
@@ -6175,7 +6281,7 @@ function parseProjectJson(text){
  const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
  if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد، نه آرایه');
  if(Object.prototype.hasOwnProperty.call(d,'project')){if(Object.keys(d).length!==1||!record(d.project))throw Error('قالب project نامعتبر است');d=d.project}
- const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host'];
+ const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host','domain_kind'];
  const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon','auto_update','auto_update_interval','preserve_configs','domain_enabled','domain_ws','domain_https','domain_timeout']);
  for(const k of Object.keys(d))if(!allowed.has(k))throw Error('فیلد ناشناخته: '+k);
  if(typeof d.name!=='string'||!d.name.trim()||typeof d.repo_url!=='string'||!d.repo_url.trim())throw Error('نام و repo_url الزامی هستند');
@@ -6188,7 +6294,8 @@ function parseProjectJson(text){
  if(Object.prototype.hasOwnProperty.call(d,'port')){if(!['string','number'].includes(typeof d.port))throw Error('پورت نامعتبر است');const v=String(d.port);if(v!==''&&(!/^\d+$/.test(v)||+v<1||+v>65535))throw Error('پورت باید بین ۱ و ۶۵۵۳۵ باشد');out.port=v}
  for(const k of ['auto_start','is_daemon','preserve_configs','domain_enabled','domain_ws','domain_https'])if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='boolean')throw Error('مقدار '+k+' باید true یا false باشد');out[k]=d[k]}
  if(Object.prototype.hasOwnProperty.call(d,'domain_timeout')){const tv=+d.domain_timeout;if(!Number.isFinite(tv)||tv<30||tv>900)throw Error('domain_timeout باید بین ۳۰ و ۹۰۰ ثانیه باشد');out.domain_timeout=tv}
- if(out.domain&&!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(out.domain))throw Error('دامنه نامعتبر است')
+ if(out.domain&&!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(out.domain))throw Error('دامنه نامعتبر است');
+ if(out.domain_kind!==undefined&&!['subdomain','path'].includes(out.domain_kind))throw Error('domain_kind باید subdomain یا path باشد')
  if(Object.prototype.hasOwnProperty.call(d,'env')){if(!record(d.env))throw Error('env باید یک شیء کلید/مقدار باشد');out.env=Object.create(null);for(const[k,v]of Object.entries(d.env)){if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||!['string','number','boolean'].includes(typeof v)||(typeof v==='number'&&!Number.isFinite(v))||/[\r\n\0]/.test(String(v)))throw Error('متغیر محیطی نامعتبر: '+k);out.env[k]=String(v)}}
  // A portable profile cannot change the identity of the dialog being edited.
  return out;
@@ -6199,7 +6306,7 @@ function applyProjectJson(sh,d){
  if(d.auth_token!==undefined)sh.querySelector('#jq-token').value=d.auth_token;
  if(d.auto_start!==undefined)sh.querySelector('#jq-auto').checked=d.auto_start;
  if(d.is_daemon!==undefined)sh.querySelector('#jq-daemon').checked=d.is_daemon;if(d.preserve_configs!==undefined)sh.querySelector('#jq-preserve').checked=d.preserve_configs;
- for(const[k,id]of[['domain','dq-domain'],['domain_mode','dq-mode'],['domain_path','dq-path'],['domain_docroot','dq-docroot'],['bind_host','dq-bind'],['domain_timeout','dq-timeout']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.value=d[k]}
+ for(const[k,id]of[['domain','dq-domain'],['domain_mode','dq-mode'],['domain_path','dq-path'],['domain_docroot','dq-docroot'],['bind_host','dq-bind'],['domain_timeout','dq-timeout'],['domain_kind','dq-kind']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.value=d[k]}
  for(const[k,id]of[['domain_enabled','dq-enabled'],['domain_ws','dq-ws'],['domain_https','dq-https']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.checked=d[k]}
  const dqBox=sh.querySelector('#dq-box'),dqEn=sh.querySelector('#dq-enabled');if(dqBox&&dqEn)dqBox.classList.toggle('hide',!dqEn.checked);
  if(d.env!==undefined){const box=sh.querySelector('#jq-env');const lines=box.value.split(/\r?\n/).filter(line=>{const i=line.indexOf('=');return i<0||!Object.prototype.hasOwnProperty.call(d.env,line.slice(0,i).trim())});box.value=[...lines.filter(line=>line.trim()!==''),...Object.entries(d.env).map(([k,v])=>k+'='+v)].join('\n')}
@@ -6257,29 +6364,69 @@ function domainFormHtml(p,pf){
   <label class="lb" style="margin:0;cursor:pointer;font-weight:700"><input class="chk" id="${pf}-enabled" type="checkbox" ${p.domain_enabled?'checked':''}> 🌐 انتشار روی دامنه/ساب‌دامین به‌جای پورت (Reverse Proxy)</label>
   <p class="hint" style="margin:5px 0 8px;font-size:12px">روی هاست اشتراکی فقط پورت‌های ۸۰ و ۴۴۳ از بیرون باز هستند، به همین دلیل <b class="ltr">http://your-server:${esc(p.port||'3000')}</b> از اینترنت باز نمی‌شود. با فعال کردن این گزینه، کنسول یک پروکسی معکوس می‌سازد تا همان اپ روی <b class="ltr">https://app.example.com</b> سرو شود؛ پورت داخلی مخفی و امن می‌ماند.</p>
   <div id="${pf}-box" class="${p.domain_enabled?'':'hide'}">
+    <label class="lb" style="font-weight:700">نوع انتشار</label>
+    <div class="segtabs" style="margin-bottom:8px">
+      <button type="button" class="btn ${(p.domain_kind||'subdomain')!=='path'?'pri':''}" id="${pf}-kind-sub">🔗 ساب‌دامین<br><small class="ltr">app.example.com</small></button>
+      <button type="button" class="btn ${(p.domain_kind||'subdomain')==='path'?'pri':''}" id="${pf}-kind-path">📁 پوشه روی دامنه<br><small class="ltr">example.com/app</small></button>
+    </div>
+    <input type="hidden" id="${pf}-kind" value="${esc(p.domain_kind||'subdomain')}">
+    <p class="hint" id="${pf}-kindnote" style="margin:0 0 8px;font-size:12px"></p>
+    <div style="background:var(--panel);border:1px dashed var(--line2);border-radius:8px;padding:8px 10px;margin-bottom:10px">
+      <span class="hint">آدرس نهایی:</span> <b class="ltr" id="${pf}-preview" style="color:var(--acc)">—</b>
+    </div>
     <div class="grid2">
-      <div><label class="lb">دامنه یا ساب‌دامین</label><input class="inp ltr" id="${pf}-domain" placeholder="app.example.com" value="${esc(p.domain||'')}"></div>
+      <div><label class="lb" id="${pf}-domain-lb">دامنه یا ساب‌دامین</label><input class="inp ltr" id="${pf}-domain" placeholder="app.example.com" value="${esc(p.domain||'')}"></div>
       <div><label class="lb">روش انتشار</label><select class="inp" id="${pf}-mode"><option value="" ${!p.domain_mode?'selected':''}>پیش‌فرض کنسول (تشخیص خودکار)</option>${DOM_MODE_ORDER.map(m=>`<option value="${m}" ${p.domain_mode===m?'selected':''}>${esc(domModeLabel(m))}</option>`).join('')}</select></div>
-      <div><label class="lb">مسیر روی دامنه (Mount Path)</label><input class="inp ltr" id="${pf}-path" placeholder="/" value="${esc(p.domain_path||'/')}"></div>
-      <div><label class="lb">Document Root ساب‌دامین (خالی = خودکار)</label><input class="inp ltr" id="${pf}-docroot" placeholder="~/public_html/app" value="${esc(p.domain_docroot||'')}"></div>
+      <div id="${pf}-path-wrap"><label class="lb">نام پوشه روی دامنه</label><input class="inp ltr" id="${pf}-path" placeholder="/app" value="${esc(p.domain_path||'/')}"></div>
+      <div><label class="lb">Document Root (خالی = خودکار)</label><input class="inp ltr" id="${pf}-docroot" placeholder="~/public_html/app" value="${esc(p.domain_docroot||'')}"></div>
       <div><label class="lb">Bind Host اپ (خالی = خودکار)</label><input class="inp ltr" id="${pf}-bind" placeholder="127.0.0.1" value="${esc(p.bind_host||'')}"></div>
       <div><label class="lb">مهلت پاسخ پروکسی (ثانیه)</label><input class="inp ltr" id="${pf}-timeout" type="number" min="30" max="900" value="${esc(p.domain_timeout||300)}"></div>
     </div>
     <label class="lb" style="cursor:pointer"><input class="chk" id="${pf}-https" type="checkbox" ${p.domain_https!==false?'checked':''}> 🔒 ارجاع خودکار HTTP به HTTPS</label>
     <label class="lb" style="cursor:pointer"><input class="chk" id="${pf}-ws" type="checkbox" ${p.domain_ws?'checked':''}> 🔌 پشتیبانی وب‌سوکت (Socket.io / WS) — فقط در حالت‌های htaccess، Nginx، آپاچی و تونل</label>
-    <p class="hint" style="font-size:11.5px;margin-top:6px">نکته: «مسیر روی دامنه» را فقط وقتی پر کنید که می‌خواهید اپ زیر یک مسیر مثل <span class="ltr">/app</span> از دامنه اصلی سرو شود؛ در این حالت اصلاً نیازی به ساخت ساب‌دامین و رکورد DNS ندارید.</p>
+    <p class="hint" style="font-size:11.5px;margin-top:6px">اپ باید مسیرهای نسبی بدهد یا هدر <span class="ltr">X-Forwarded-Prefix</span> را در نظر بگیرد؛ کنسول این هدر را در حالت پوشه می‌فرستد.</p>
   </div></div>`;
 }
-function domainFormBind(root,pf){
+function domainFormBind(root,pf,baseDomain){
   pf=pf||'dq';
-  const cb=root.querySelector('#'+pf+'-enabled');
-  if(cb)cb.onchange=()=>root.querySelector('#'+pf+'-box').classList.toggle('hide',!cb.checked);
+  baseDomain=baseDomain||(domData&&domData.detect&&domData.detect.base_domain)||'';
+  const q=id=>root.querySelector('#'+pf+'-'+id);
+  const cb=q('enabled');
+  if(cb)cb.onchange=()=>q('box').classList.toggle('hide',!cb.checked);
+  const kindEl=q('kind');if(!kindEl)return;
+  const paint=()=>{
+    const path=kindEl.value==='path';
+    q('kind-sub').classList.toggle('pri',!path);
+    q('kind-path').classList.toggle('pri',path);
+    q('path-wrap').classList.toggle('hide',!path);
+    q('domain-lb').textContent=path?'دامنهٔ اصلی سایت':'ساب‌دامین کامل';
+    q('domain').placeholder=path?'sabashopping.ir':'app.sabashopping.ir';
+    q('kindnote').innerHTML=path
+      ? '✅ <b>هیچ ساب‌دامین و رکورد DNS لازم نیست.</b> از همان دامنه و همان گواهی SSL موجود استفاده می‌شود؛ فقط یک پوشه در ریشهٔ سایت ساخته می‌شود.'
+      : '⚠️ ساب‌دامین باید <b>قبلاً</b> در پنل هاست یا DNS ساخته شده باشد؛ کنسول آن را نمی‌سازد (به‌جز حالت تونل کلودفلر).';
+    const dom=(q('domain').value.trim()||(path?(baseDomain||'example.com'):'app.example.com')).replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+    let seg=q('path').value.trim().replace(/^\/+|\/+$/g,'');
+    const proto=q('https').checked?'https':'http';
+    q('preview').textContent=proto+'://'+dom+(path?'/'+(seg||'app'):'')+'/';
+  };
+  q('kind-sub').onclick=()=>{
+    kindEl.value='subdomain';
+    const d=q('domain').value.trim().toLowerCase();
+    if(baseDomain&&(d===''||d===baseDomain.toLowerCase())){const seg=(q('path').value.trim().replace(/^\/+|\/+$/g,'').split('/')[0])||'app';q('domain').value=seg+'.'+baseDomain}
+    paint()};
+  q('kind-path').onclick=()=>{kindEl.value='path';if(!q('path').value.trim()||q('path').value.trim()==='/')q('path').value='/app';if(!q('domain').value.trim()&&baseDomain)q('domain').value=baseDomain;paint()};
+  ['domain','path'].forEach(k=>{const el=q(k);if(el)el.oninput=paint});
+  const hs=q('https');if(hs)hs.onchange=paint;
+  paint();
 }
 function domainFormRead(root,pf){
   pf=pf||'dq';
   const val=id=>{const el=root.querySelector('#'+pf+'-'+id);return el?el.value.trim():''};
   const chk=id=>{const el=root.querySelector('#'+pf+'-'+id);return !!(el&&el.checked)};
-  return {domain_enabled:chk('enabled'),domain:val('domain'),domain_mode:val('mode'),domain_path:val('path')||'/',
+  const kindEl=root.querySelector('#'+pf+'-kind');
+  const kind=kindEl?kindEl.value:'subdomain';
+  return {domain_enabled:chk('enabled'),domain_kind:kind,domain:val('domain'),domain_mode:val('mode'),
+    domain_path:kind==='path'?(val('path')||'/app'):'/',
     domain_docroot:val('docroot'),bind_host:val('bind'),domain_https:chk('https'),domain_ws:chk('ws'),
     domain_timeout:+val('timeout')||300};
 }
@@ -6292,12 +6439,13 @@ function projectSavePayload(p,ov){
     auto_start:!!q.auto_start,is_daemon:!!q.is_daemon,auto_update:!!q.auto_update,
     auto_update_interval:+q.auto_update_interval||60,keep_git:!!q.keep_git,preserve_configs:q.preserve_configs!==false,
     domain_enabled:!!q.domain_enabled,domain:q.domain||'',domain_mode:q.domain_mode||'',domain_path:q.domain_path||'/',
+    domain_kind:q.domain_kind||'subdomain',
     domain_docroot:q.domain_docroot||'',domain_ws:!!q.domain_ws,domain_https:q.domain_https!==false,
     domain_timeout:+q.domain_timeout||300,bind_host:q.bind_host||''};
 }
 function domReportHtml(r){
   if(!r)return '';
-  let h=`<div class="card" style="margin:0;border-right:4px solid var(--ok)"><b>✅ نگاشت دامنه اعمال شد</b><div class="hint" style="margin-top:4px">حالت: <b>${esc(domModeLabel(r.mode))}</b>${r.url?` · آدرس: <a class="ltr" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`:''}</div>`;
+  let h=`<div class="card" style="margin:0;border-right:4px solid var(--ok)"><b>✅ نگاشت دامنه اعمال شد</b><div class="hint" style="margin-top:4px">${r.kind==='path'?'نوع: <b>📁 پوشه روی دامنه</b> · ':'نوع: <b>🔗 ساب‌دامین</b> · '}حالت: <b>${esc(domModeLabel(r.mode))}</b>${r.url?` · آدرس: <a class="ltr" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`:''}</div>`;
   if(r.docroot)h+=`<div class="hint">Document Root: <code class="ltr">${esc(r.docroot)}</code></div>`;
   if(r.files&&r.files.length)h+=`<div class="hint">فایل‌های نوشته‌شده:<br>${r.files.map(f=>`<code class="ltr">${esc(f)}</code>`).join('<br>')}</div>`;
   if(r.manual)h+=`<p class="hint" style="color:var(--warn)">⚠️ بخشی از تنظیمات نیاز به اقدام دستی دارد (به یادداشت‌ها نگاه کنید).</p>`;
@@ -6337,7 +6485,7 @@ async function domTestDlg(id){
 async function domainDlg(p){
   const sh=openSheet(sheetHead('🌐 دامنه و ساب‌دامین — '+esc(p.name))+
     `<p class="hint">پورت داخلی فعلی این پروژه: <b class="ltr">${esc(p.port||'—')}</b>${p.port?'':' — ابتدا از «ویرایش پروژه» یک پورت تعیین کنید.'}</p>`+
-    domainFormHtml(p,'dd')+
+    '<div id="dd-warn"></div>'+domainFormHtml(p,'dd')+
     `<div class="row" style="gap:6px;margin-top:12px;flex-wrap:wrap">
       <button class="btn pri" id="dd-save">💾 ذخیره و اعمال روی سرور</button>
       <button class="btn" id="dd-preview">📄 پیش‌نمایش کانفیگ</button>
@@ -6345,6 +6493,23 @@ async function domainDlg(p){
       <button class="btn danger" id="dd-remove">🗑️ حذف نگاشت دامنه</button>
     </div><div id="dd-result" style="margin-top:12px"></div>`);
   domainFormBind(sh,'dd');
+  const warnBox=sh.querySelector('#dd-warn');
+  const loadWarn=async()=>{
+    try{
+      const st=await api('dom.status',{id:p.id});
+      const c=st.parent;
+      if(c&&c.applies&&c.catch_all&&!c.protected){
+        warnBox.innerHTML=`<div class="card" style="margin:0 0 10px;border-right:4px solid var(--warn)"><b>⚠️ تداخل با قوانین سایت اصلی</b>
+          <p class="hint" style="margin:4px 0">فایل <code class="ltr">${esc(c.file)}</code> یک قانون بازنویسی فراگیر دارد (وردپرس/لاراول) و ممکن است <code class="ltr">/${esc(c.segment)}</code> را قبل از پروکسی بگیرد.</p>
+          <button class="btn sm pri" id="dd-fixparent">🔧 افزودن استثنا به .htaccess ریشه</button></div>`;
+        const b=sh.querySelector('#dd-fixparent');
+        if(b)b.onclick=async()=>{try{const r=await api('dom.fix_parent',{id:p.id});toast('استثنای /'+r.segment+' اضافه شد','ok');loadWarn()}catch(e){toast(e.message,'err')}};
+      }else if(c&&c.applies&&c.protected){
+        warnBox.innerHTML=`<div class="card" style="margin:0 0 10px;border-right:4px solid var(--ok)"><b>✅ استثنای <code class="ltr">/${esc(c.segment)}</code> در .htaccess ریشه فعال است</b></div>`;
+      }else warnBox.innerHTML='';
+    }catch(e){warnBox.innerHTML=''}
+  };
+  if(p.domain_enabled)loadWarn();
   sh.querySelector('#dd-preview').onclick=()=>domPreviewDlg(p.id,domainFormRead(sh,'dd'));
   sh.querySelector('#dd-test').onclick=()=>domTestDlg(p.id);
   sh.querySelector('#dd-save').onclick=async()=>{
@@ -6354,6 +6519,7 @@ async function domainDlg(p){
       const res=await api('proj.save',{project:projectSavePayload(p,ov)});
       if(res.domain_error)throw Error(res.domain_error);
       sh.querySelector('#dd-result').innerHTML=domReportHtml(res.domain);
+      loadWarn();
       toast('تنظیمات دامنه ذخیره و اعمال شد','ok');
       if(typeof renderProj==='function'&&curTab==='proj')renderProj();
       if(curTab==='dom')renderDom();
@@ -6376,8 +6542,8 @@ async function renderDom(){
     const t=d.detect;
     const badge=(ok,yesTxt,noTxt)=>ok?`<span class="tag ok">✅ ${esc(yesTxt)}</span>`:`<span class="tag warn">⚠️ ${esc(noTxt)}</span>`;
     let h=`<div class="card" style="border-right:3px solid var(--acc)">
-      <h3 style="margin:0">🌐 انتشار پروژه‌ها روی ساب‌دامین به‌جای پورت</h3>
-      <p class="hint" style="margin:6px 0">اگر <b class="ltr">http://server:3000</b> از بیرون باز نمی‌شود، دلیلش این است که روی اکثر هاست‌ها فقط پورت ۸۰/۴۴۳ از فایروال عبور می‌کند. این بخش یک پروکسی معکوس می‌سازد تا اپ Node/Python شما روی یک ساب‌دامین (مثلاً <b class="ltr">app.example.com</b>) و با HTTPS در دسترس باشد؛ بدون باز کردن هیچ پورتی.</p>
+      <h3 style="margin:0">🌐 انتشار پروژه‌ها روی دامنه به‌جای پورت</h3>
+      <p class="hint" style="margin:6px 0">اگر <b class="ltr">http://server:3000</b> از بیرون باز نمی‌شود، دلیلش این است که روی اکثر هاست‌ها فقط پورت ۸۰/۴۴۳ از فایروال عبور می‌کند. این بخش یک پروکسی معکوس می‌سازد تا اپ Node/Python شما روی یک ساب‌دامین (مثلاً <b class="ltr">app.example.com</b>) یا یک پوشه از دامنهٔ فعلی (مثلاً <b class="ltr">example.com/app</b>) و با HTTPS در دسترس باشد؛ بدون باز کردن هیچ پورتی.</p>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px">
         ${badge(t.web_root_writable,'ریشه وب قابل نوشتن','ریشه وب قابل نوشتن نیست')}
         ${badge(t.apache||t.nginx,(t.litespeed?'LiteSpeed':(t.apache?'Apache':'Nginx'))+' شناسایی شد','وب‌سرور شناسایی نشد')}
@@ -6389,6 +6555,16 @@ async function renderDom(){
       </div>
       <div class="hint" style="margin-top:8px">ریشه وب: <code class="ltr">${esc(t.web_root)}</code> · روش پیشنهادی: <b>${esc(domModeLabel(t.recommended))}</b></div>
       <button class="btn sm" id="dom-refresh" style="margin-top:8px">🔄 بررسی دوباره سرور</button>
+    </div>`;
+    h+=`<div class="card" style="border-right:3px solid var(--warn)">
+      <h3 style="margin:0 0 6px">❓ آیا ساب‌دامین خودکار ساخته می‌شود؟</h3>
+      <p class="hint" style="margin:0 0 8px"><b>خیر — به‌جز دو مورد.</b> کنسول فقط فایل‌های پروکسی و کانفیگ را می‌نویسد؛ ساخت رکورد DNS و ساب‌دامین کار پنل هاست است. اگر نمی‌خواهید درگیر DNS شوید، از حالت <b>📁 پوشه روی دامنه</b> استفاده کنید.</p>
+      <div class="tblwrap"><table class="tbl"><thead><tr><th>حالت انتشار</th><th>ساخت ساب‌دامین / DNS</th><th>کاری که باید خودتان بکنید</th></tr></thead><tbody>
+        <tr><td><b>📁 پوشه روی دامنه</b> <span class="ltr">(example.com/app)</span></td><td><span class="tag ok">✅ لازم نیست</span></td><td class="hint">هیچ‌چیز. از دامنه و SSL فعلی استفاده می‌شود. فقط اگر ریشهٔ سایت وردپرس/لاراول است، دکمهٔ «رفع تداخل» را بزنید.</td></tr>
+        <tr><td><b>☁️ تونل کلودفلر</b></td><td><span class="tag ok">✅ خودکار</span></td><td class="hint">فقط یک‌بار <code class="ltr">cloudflared tunnel login</code>؛ رکورد DNS را خود تونل می‌سازد.</td></tr>
+        <tr><td><b>🔗 .htaccess / پروکسی PHP</b></td><td><span class="tag warn">❌ دستی</span></td><td class="hint">در cPanel/DirectAdmin ساب‌دامین را بسازید و Document Root آن را روی مسیری که کنسول نشان می‌دهد بگذارید، سپس SSL بگیرید.</td></tr>
+        <tr><td><b>🅰️ Apache / Nginx vhost</b></td><td><span class="tag warn">❌ رکورد DNS دستی</span></td><td class="hint">کنسول فایل vhost را می‌نویسد، ولی رکورد A/CNAME را باید در پنل دامنه بسازید و سرویس را reload کنید.</td></tr>
+      </tbody></table></div>
     </div>`;
     h+=`<div class="card"><h3 style="margin:0 0 6px">⚙️ تنظیمات پایه دامنه</h3>
       <div class="grid2">
@@ -6404,13 +6580,14 @@ async function renderDom(){
       `</tbody></table></div></div>`;
     h+=`<div class="card"><h3 style="margin:0 0 8px">📦 پروژه‌ها و دامنه‌های آن‌ها</h3>`;
     if(!d.projects.length)h+='<p class="empty">هنوز پروژه‌ای تعریف نشده است. ابتدا از بخش «پروژه‌ها» یک پروژه بسازید.</p>';
-    else h+=`<div class="tblwrap"><table class="tbl"><thead><tr><th>پروژه</th><th>پورت داخلی</th><th>دامنه</th><th>روش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>`+
+    else h+=`<div class="tblwrap"><table class="tbl"><thead><tr><th>پروژه</th><th>پورت داخلی</th><th>آدرس عمومی</th><th>نوع</th><th>روش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>`+
       d.projects.map(p=>{
         const st=p.status||{};
         return `<tr>
           <td><b>${esc(p.name)}</b><div class="hint">${esc((p.type||'other').toUpperCase())}</div></td>
           <td><span class="ltr">${esc(p.port||'—')}</span></td>
           <td>${p.domain_enabled&&p.domain_url?`<a class="ltr" href="${esc(p.domain_url)}" target="_blank" rel="noopener">${esc(p.domain_url)}</a>`:'<span class="hint">تنظیم نشده</span>'}</td>
+          <td>${p.domain_enabled?(p.domain_kind==='path'?'<span class="tag">📁 پوشه</span>':'<span class="tag">🔗 ساب‌دامین</span>'):'—'}</td>
           <td>${p.domain_enabled?esc(domModeLabel(p.domain_mode_effective||p.domain_mode||'auto')):'—'}</td>
           <td>${p.domain_enabled?(st.installed?'<span class="tag ok">🟢 نصب‌شده</span>':'<span class="tag warn">⚪ اعمال نشده</span>'):'<span class="tag" style="opacity:.6">خاموش</span>'} ${p.service_running?'<span class="tag ok">سرویس فعال</span>':'<span class="tag warn">سرویس خاموش</span>'}</td>
           <td><div class="row" style="gap:4px;flex-wrap:wrap">
