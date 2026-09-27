@@ -499,8 +499,8 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
     let document:{text:string;url:string}|undefined;
     const reader=async(html:string,base:string)=>{document={text:html,url:base};await onParserDocument?.(html,base);return parseProductDocument(html,base,selectors,productParser)};
     let products:Product[];
-    if(engine==='playwright'||engine==='puppeteer')products=await withBrowserSlot(async()=>scrapeRenderedHtml(url,selectors,engine,stopped,reader));
-    else if(engine==='crawlee_playwright')products=await withBrowserSlot(async()=>scrapeListWithCrawleePlaywright(url,selectors,reader));
+    if(engine==='playwright'||engine==='puppeteer')products=await withBrowserSlot(async()=>scrapeRenderedHtml(url,selectors,engine,stopped,reader,indirect));
+    else if(engine==='crawlee_playwright')products=await withBrowserSlot(async()=>scrapeListWithCrawleePlaywright(url,selectors,reader,indirect));
     else {document=initialDocument||await safeText(url,8_000_000,{indirect});products=await reader(document.text,document.url);}
     let nextUrl='';if(nextSelector&&document){const $=cheerio.load(document.text);for(const part of nextSelector.split(',').map(x=>x.trim()).filter(Boolean)){const href=$(xpathToCss(part)??part).first().attr('href');if(href){nextUrl=new URL(href,document.url).href;break;}}}
     return {products:dedupe(products),usedEngine:engine,elapsedMs:Date.now()-started,nextUrl,selectorsUsed:selectors,productParser};
@@ -556,9 +556,9 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if (engine !== 'auto' && name === engine) throw new Error('مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.');
       return [] as Product[];
     }
-    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors, stopped));
-    if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors));
-    if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors));
+    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors, stopped, indirect));
+    if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors, indirect));
+    if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors, undefined, indirect));
     if (name === 'network_api') return withBrowserSlot(() => scrapeListWithNetworkApi(url));
     const { text, url: finalUrl } = await source();
     if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
@@ -991,7 +991,25 @@ export async function parseProductDocument(html:string,base:string,selectors:Sel
  const cards=()=>{let active=selectors;if(listSelectorsStatus(selectors)!=='custom'){const found=discoverListSelectorsFromHtml(html,base);if(found.selectors.container)active={...selectors,...found.selectors};}return parseProductsFromHtml(html,base,active);};
  return dedupe(await parseDownloadedProducts(parser,{lxml:cards,selectolax:cards,jsonld:()=>jsonLdProducts(html,base),next_data:()=>embedded('next_data'),script_json:()=>[...jsonLdProducts(html,base),...embedded('script_json'),...scriptJsonProducts(html,base)],metadata:()=>metadataProduct(html,base),heuristic:()=>heuristicProducts(html,base)}));
 }
-async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>,reader?:(html:string,url:string)=>Promise<Product[]>): Promise<Product[]> {
+async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>,reader?:(html:string,url:string)=>Promise<Product[]>, indirect=false): Promise<Product[]> {
+  // When a proxy / Worker route is configured (global proxy or per-profile indirect),
+  // route the browser snapshot through the guarded transport (visual-browser) which
+  // uses safeFetch with ProxyAgent / Worker URL. Direct Playwright navigation would
+  // bypass the internal proxy and fail on VPS behind filtering.
+  const { sourceRoute } = await import('./network.js');
+  const needsProxy = indirect || sourceRoute(indirect) !== 'direct';
+  if (needsProxy) {
+    const { renderBrowserSnapshot } = await import('./visual-browser.js');
+    const snapshot = await renderBrowserSnapshot(url, driver, indirect);
+    const html = snapshot.text, finalUrl = snapshot.url;
+    dumpRenderedHtml(html, finalUrl, driver);
+    lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
+    if (reader) return reader(html, finalUrl);
+    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+    lastBrowserLayer = rescued.layer;
+    console.log(`[scraper4] ${driver} extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+    return rescued.products;
+  }
   const executablePath = browserExecutable(driver);
   if (driver === 'playwright') {
     const {html,finalUrl,httpStatus}=await renderPythonPlaywright(url,executablePath,stopped);
@@ -1038,9 +1056,23 @@ async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'pl
     return rescued.products;
   } finally { await browser.close(); }
 }
-async function scrapeListWithPlaywright(url: string, selectors: Selectors, stopped?:()=>Promise<boolean>): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright', stopped); }
-async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer'); }
-async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors,reader?:(html:string,url:string)=>Promise<Product[]>): Promise<Product[]> {
+async function scrapeListWithPlaywright(url: string, selectors: Selectors, stopped?:()=>Promise<boolean>, indirect=false): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright', stopped, undefined, indirect); }
+async function scrapeListWithPuppeteer(url: string, selectors: Selectors, indirect=false): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer', undefined, undefined, indirect); }
+async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors,reader?:(html:string,url:string)=>Promise<Product[]>, indirect=false): Promise<Product[]> {
+  const { sourceRoute } = await import('./network.js');
+  const needsProxy = indirect || sourceRoute(indirect) !== 'direct';
+  if (needsProxy) {
+    const { renderBrowserSnapshot } = await import('./visual-browser.js');
+    const snapshot = await renderBrowserSnapshot(url, 'playwright', indirect);
+    const html = snapshot.text, finalUrl = snapshot.url;
+    dumpRenderedHtml(html, finalUrl, 'crawlee');
+    lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
+    if (reader) return reader(html, finalUrl);
+    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+    lastBrowserLayer = rescued.layer;
+    console.log(`[scraper4] crawlee extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+    return rescued.products;
+  }
   const { PlaywrightCrawler } = await import('crawlee');
   // The crawl covers exactly one page, so the products ride home in a closure
   // variable — the old per-run Dataset left a scraper4-<timestamp> storage
@@ -1668,20 +1700,28 @@ const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors
  * Capture through the existing drivers so navigation/context match extraction.
  * network_api uses Playwright for DOM selectors; API JSON has no CSS nodes.
  */
-export async function selectorToolDocument(url:string,engine?:string):Promise<{text:string;url:string}>{
-  if(!isBrowserSelectorEngine(engine))return safeText(url,4_000_000);
+export async function selectorToolDocument(url:string,engine?:string, indirect=false):Promise<{text:string;url:string}>{
+  if(!isBrowserSelectorEngine(engine))return safeText(url,4_000_000,{indirect});
   await assertPublicUrl(url);
+  // When proxy/indirect is active, use the guarded visual-browser snapshot which routes via safeFetch proxy
+  const { sourceRoute } = await import('./network.js');
+  const needsProxy = indirect || sourceRoute(indirect) !== 'direct';
+  if (needsProxy) {
+    const { renderBrowserSnapshot } = await import('./visual-browser.js');
+    const snapshot = await renderBrowserSnapshot(url, engine||'playwright', indirect);
+    return { text: snapshot.text, url: snapshot.url };
+  }
   return withBrowserSlot(async()=>{
     let document:{text:string;url:string}|undefined;
     const reader=async(text:string,finalUrl:string):Promise<Product[]>=>{await assertPublicUrl(finalUrl);document={text,url:finalUrl};return []};
-    if(engine==='crawlee_playwright')await scrapeListWithCrawleePlaywright(url,DEFAULT_SELECTORS,reader);
-    else await scrapeRenderedHtml(url,DEFAULT_SELECTORS,engine==='puppeteer'?'puppeteer':'playwright',undefined,reader);
+    if(engine==='crawlee_playwright')await scrapeListWithCrawleePlaywright(url,DEFAULT_SELECTORS,reader, indirect);
+    else await scrapeRenderedHtml(url,DEFAULT_SELECTORS,engine==='puppeteer'?'puppeteer':'playwright',undefined,reader, indirect);
     if(!document)throw Error('مرورگر HTML قابل آزمایشی برنگرداند؛ HTML اولیه جایگزین نشده است.');
     return document;
   });
 }
-export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string,document?:{text:string;url:string}){
-  const page=document||await selectorToolDocument(url,engine),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string,document?:{text:string;url:string}, indirect=false){
+  const page=document||await selectorToolDocument(url,engine, indirect),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
   // List fields go through the same discovery the engines use (1.128.0), so the
   // dashboard button proposes structural selectors for unknown shops too.
   if(mode==='list'||mode==='all'){
@@ -2030,8 +2070,9 @@ function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[
   const priceWinner = [...priceVotes.entries()].sort((a, b) => b[1].count - a[1].count || a[1].length - b[1].length)[0];
   return { title: titleWinner[0], price: priceWinner ? priceWinner[0] : '', cardIsLink: cardIsLink * 2 >= sampleNodes.length };
 }
-export async function testSelector(url: string, selector: string, type = 'text',engine?:string,gallery?:{max?:number;skipFirst?:boolean}): Promise<{ count: number; values: string[] }> {
-  const { text, url: final } = await selectorToolDocument(url,engine); const $ = cheerio.load(text); const values: string[] = [];
+export async function testSelector(url: string, selector: string, type = 'text',engine?:string,gallery?:{max?:number;skipFirst?:boolean;indirect?:boolean}): Promise<{ count: number; values: string[] }> {
+  const indirect = Boolean((gallery as any)?.indirect);
+  const { text, url: final } = await selectorToolDocument(url,engine, indirect); const $ = cheerio.load(text); const values: string[] = [];
   let nodes: cheerio.Cheerio<any>; try { nodes = $(xpathToCss(selector) ?? selector); } catch (error) { throw invalidSelectorError(selector, error); }
   if(type==='gallery'&&isBrowserSelectorEngine(engine)){
     const images:string[]=[];

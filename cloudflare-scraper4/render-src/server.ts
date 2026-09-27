@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.238.0+'; } catch { return process.env.npm_package_version || '1.238.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.239.0+'; } catch { return process.env.npm_package_version || '1.239.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -616,7 +616,6 @@ app.post('/api/jobs/priority',async c=>{const b=await c.req.json().catch(()=>({}
   if(!valid.length)return c.json({ok:true,count:0,priorities:await getJobPriorities()});return c.json({ok:true,count:valid.length,priorities:await setJobPriorities(valid)})});
 app.post('/api/runs/priority',async c=>{const b=await c.req.json().catch(()=>({}))as any,kinds=Array.isArray(b.kinds)?b.kinds.map(String):[];if(!kinds.length)return c.json({ok:false,error:'هیچ اجرایی برای اولویت‌بندی ارسال نشد.'},400);const known=new Set(['ai-test','category-all','dedup','agent']),valid=kinds.filter((kind:string)=>known.has(kind));if(!valid.length)return c.json({ok:true,count:0,priorities:await getRunPriorities()});return c.json({ok:true,count:valid.length,priorities:await setRunPriorities(valid)})});
 app.post('/api/category-learning/import',async c=>c.json({ok:true,imported:await importCategoryLearning(await c.req.json())}));
-app.post('/api/suggest-selectors',async c=>{const b=await c.req.json().catch(()=>({}))as any,mode=['list','detail'].includes(b.mode)?b.mode:'all';return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode,String(b.engine||''))})});
 app.post('/api/profiles/:id/extraction-diagnostic',async c=>{const profile=await getProfile(c.req.param('id'));if(!profile)return c.json({ok:false,error:'پروفایل پیدا نشد.'},404);const b=await c.req.json().catch(()=>({}))as any;const run=async(onProgress?:DiagnosticObserver)=>{const report:any=await diagnoseExtraction(profile,String(b.url||''),onProgress,b.withDetails===true);const toSave=report.selectorsToSave||{},keys=Object.keys(toSave).filter(key=>String(toSave[key]||'').trim());if(keys.length){onProgress?.({name:'selectors-auto-saved',status:'running',summary:'در حال ذخیرهٔ سلکتورهای پیدا‌شده در پروفایل…',count:keys.length});const selectors={...profile.selectors}as any;for(const key of keys)selectors[key]=toSave[key];await saveLearnedProfile(profile,{...profile,selectors},toSave);const stored=await getProfile(profile.id);report.selectorsSaved=Object.fromEntries(keys.filter(key=>(stored?.selectors as any)?.[key]===toSave[key]).map(key=>[key,toSave[key]]));report.stages.push({name:'selectors-auto-saved',ok:true,summary:Object.keys(report.selectorsSaved).length?'سلکتورهای مجاز بدون بازنویسی ویرایش دستی ذخیره شدند.':'پروفایل تغییر کرده است؛ سلکتورهای دستی حفظ شدند و چیزی بازنویسی نشد.',selectors:report.selectorsSaved});onProgress?.({...report.stages[report.stages.length-1],status:'success'})}else onProgress?.({name:'selectors-auto-saved',status:'skipped',summary:'سلکتور تازه‌ای برای ذخیره وجود ندارد.'});return report};if(c.req.query('live')==='1')return diagnosticStream(run);return c.json(await run())});
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES}));
 app.get('/api/connections', async c => c.json({ok:true,connections:await loadConnections(true)}));
@@ -911,17 +910,16 @@ app.get('/api/test-selector', async c => {
   const engine = String(q.engine || '');
   const max = Number(q.max) || 30;
   const skipFirst = String(q.skipFirst) === 'true' || String(q.skip_first) === 'true';
-  if(type==='gallery') return c.json({ ok:true, ...await testGallery(url, selector, max, skipFirst, engine) });
-  if(type==='variations') return c.json({ ok:true, ...await testVariations(url, selector, engine) });
-  return c.json({ ok: true, ...await testSelector(url, selector, type, engine, { max, skipFirst }) });
+  const indirect = String(q.indirect) === 'true' || String(q.networkIndirect) === 'true';
+  return c.json({ ok: true, ...await testSelector(url, selector, type, engine, { max, skipFirst, indirect }) });
 });
 app.post('/api/test-selector', async c => {
   const body = await c.req.json() as any;
   const selector = decodeSelectorParam(String(body.selector || ''));
-  if(body.type==='gallery') return c.json({ ok:true, ...await testGallery(String(body.url||''), selector, Number(body.max)||30, Boolean(body.skipFirst), String(body.engine||'')) });
-  if(body.type==='variations') return c.json({ ok:true, ...await testVariations(String(body.url||''), selector, String(body.engine||'')) });
-  return c.json({ ok: true, ...await testSelector(String(body.url || ''), selector, String(body.type || 'text'),String(body.engine||''),{max:Number(body.max)||30,skipFirst:Boolean(body.skipFirst)}) });
+  const indirect = Boolean(body.indirect || body.networkIndirect);
+  return c.json({ ok: true, ...await testSelector(String(body.url || ''), selector, String(body.type || 'text'),String(body.engine||''),{max:Number(body.max)||30,skipFirst:Boolean(body.skipFirst), indirect}) });
 });
+app.post('/api/suggest-selectors',async c=>{const b=await c.req.json().catch(()=>({}))as any,mode=['list','detail'].includes(b.mode)?b.mode:'all';const indirect=Boolean(b.indirect||b.networkIndirect);return c.json({ok:true,...await suggestSelectors(String(b.url||''),mode,String(b.engine||''), undefined, indirect)})});
 app.post('/api/import-php', async c => {
   const body = await c.req.json() as any; const source = typeof body.profiles === 'string' ? JSON.parse(body.profiles) : body.profiles;
   const imported: Profile[] = [];
