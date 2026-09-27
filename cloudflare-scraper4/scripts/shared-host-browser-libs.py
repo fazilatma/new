@@ -168,6 +168,46 @@ def check_host_limits():
         print('uname: {} {} {}'.format(uname.system, uname.release, uname.machine), flush=True)
     except Exception:
         pass
+    # Extra LVE/kernel clues
+    for proc_file in ('/proc/sys/kernel/unprivileged_userns_clone',
+                      '/proc/sys/kernel/unprivileged_bpf_disabled',
+                      '/proc/sys/user/max_user_namespaces'):
+        try:
+            if os.path.exists(proc_file):
+                with open(proc_file, 'r') as f:
+                    print('{}: {}'.format(proc_file, f.read().strip()[:200]), flush=True)
+        except Exception:
+            pass
+
+
+def strace_diagnostic(browser, libdir):
+    if not shutil.which('strace'):
+        return
+    print('\n=== strace diagnostic: {} ==='.format(browser), flush=True)
+    env = dict(os.environ)
+    env['LD_LIBRARY_PATH'] = str(libdir)
+    # Trace clone/unshare/prctl which are the usual sandbox blockers; limit output
+    cmd = ['strace', '-f', '-e', 'trace=clone,clone3,unshare,setns,prctl,setuid,setgid,capset',
+           '-tt', '-s', '200', str(browser),
+           '--no-sandbox', '--disable-setuid-sandbox',
+           '--disable-dev-shm-usage', '--disable-gpu',
+           '--no-zygote', '--single-process', '--version']
+    print('Running: {}'.format(' '.join(cmd)), flush=True)
+    try:
+        result = subprocess.run(cmd, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                universal_newlines=True, timeout=20)
+        out = (result.stdout or '')[-8000:]
+        print(out, flush=True)
+        print('strace exit: {}'.format(result.returncode), flush=True)
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or '') if hasattr(e, 'stdout') else ''
+        if isinstance(out, bytes):
+            out = out.decode('utf-8', errors='ignore')
+        print((out or '')[-8000:], flush=True)
+        print('strace timed out after 20s', flush=True)
+    except Exception as exc:
+        print('strace failed: {}'.format(exc), flush=True)
 
 
 def smoke_test(browser, libdir):
@@ -240,6 +280,12 @@ def smoke_test(browser, libdir):
               'gives the next library to solve; other messages point to another cause. '
               'On CloudLinux LVE, even --no-sandbox may still SIGTRAP; try system chromium if available.',
               flush=True)
+        # If we crashed with SIGTRAP and strace exists, show clone/unshare trace
+        if last_result.returncode < 0 and shutil.which('strace'):
+            try:
+                strace_diagnostic(browser, libdir)
+            except Exception:
+                pass
     return False
 
 
