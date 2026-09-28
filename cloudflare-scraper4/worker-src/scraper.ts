@@ -52,7 +52,7 @@ const FALLBACKS:Record<FieldName,string>={
   sku:'[data-sku], [itemprop="sku"], .sku'
 };
 const DETAIL_KEYS=['shortDesc','price','sku','category','tags','weight','stock','brand'] as const;
-const IMAGE_ATTRS=['data-zoom-image','data-large_image','data-large-image','data-full','data-src','data-lazy-src','data-original','src','content','href'];
+const IMAGE_ATTRS=['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src','content','href'];
 const LINK_ATTRS=['data-href','href','data-url','data-link','data-product-url','data-product-link','content'];
 function onclickUrl(element:HtmlElement):string{return element.getAttribute('onclick')?.match(/(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i)?.[1]||''}
 const TITLE_ATTRS=['data-title','title','aria-label','content'];
@@ -274,6 +274,11 @@ function imageUrl(value:string,baseUrl:string):string{
   const absolute=toAbsoluteUrl(raw.replace(/&amp;/gi,'&'),baseUrl);
   return /^(https?):/i.test(absolute)?absolute:'';
 }
+function styleImageUrl(style:string):string{
+  const m=String(style||'').match(/url\(\s*['"]?([^'"\)]+)['"]?\s*\)/i);
+  return m?m[1].trim():'';
+}
+
 function galleryKey(url:string):string{
   try{
     const parsed=new URL(url);
@@ -443,15 +448,25 @@ class ScalarHandler {
   }
   text(chunk:TextChunk):void{for(const capture of this.captures)capture.text+=chunk.text}
 }
-class DetailImageHandler {
-  constructor(private result:DetailResult,private baseUrl:string){}
-  element(element:HtmlElement):void{if(this.result.mainImage)return;const value=firstAttribute(element,IMAGE_ATTRS)||srcsetValue(element.getAttribute('data-srcset')||element.getAttribute('srcset')||'');this.result.mainImage=imageUrl(value,this.baseUrl)}
-}
-class GalleryHandler {
-  constructor(private images:string[],private baseUrl:string,private max=30){}
+class DetailImageHandler{
+  constructor(private readonly result:DetailResult,private readonly baseUrl:string){}
   element(element:HtmlElement):void{
-    const candidates=[...IMAGE_ATTRS.map(attr=>element.getAttribute(attr)||''),element.getAttribute('href')||'',element.getAttribute('content')||'',srcsetValue(element.getAttribute('data-srcset')||''),srcsetValue(element.getAttribute('srcset')||'')];
-    for(const candidate of candidates)addGalleryImage(this.images,candidate,this.baseUrl,this.max)
+    if(this.result.mainImage)return;
+    const styleUrl=styleImageUrl(element.getAttribute('style')||'');
+    const value=firstAttribute(element,IMAGE_ATTRS)||styleUrl||srcsetValue(element.getAttribute('data-srcset')||element.getAttribute('srcset')||'');
+    this.result.mainImage=imageUrl(value,this.baseUrl);
+  }
+}
+class GalleryHandler{
+  constructor(private readonly images:string[],private readonly baseUrl:string,private readonly max:number){}
+  element(element:HtmlElement):void{
+    const styleUrl=styleImageUrl(element.getAttribute('style')||'');
+    const candidates=[...IMAGE_ATTRS.map(attr=>element.getAttribute(attr)||''),styleUrl,element.getAttribute('href')||'',element.getAttribute('content')||'',srcsetValue(element.getAttribute('data-srcset')||''),srcsetValue(element.getAttribute('srcset')||'')];
+    for(const raw of candidates){
+      if(!raw)continue;
+      addGalleryImage(this.images,raw,this.baseUrl,this.max);
+      if(this.images.length>=this.max)break;
+    }
   }
 }
 class LongDescriptionHandler {
