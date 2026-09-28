@@ -1248,7 +1248,7 @@ function structuralProductFromCard($: any, card: any, base: string): StructuralR
   let image = '';
   const im = card.find('img').first();
   if (im.length) {
-    for (const attr of ['data-zoom-image', 'data-large_image', 'data-src', 'data-lazy-src', 'src']) {
+    for (const attr of ['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src']) {
       const v = im.attr(attr);
       if (v) { image = structuralAbsolute(v, base); break; }
     }
@@ -1567,14 +1567,15 @@ export async function scrapeDetails(product: Product, selectors: Selectors, indi
     const images = new Set(product.images);
     const addRaw = (raw:string)=>{const image=absolute(raw,url); if(image) images.add(image);};
     const extractFromNode = (node:any)=>{
-      const attrs=['data-zoom-image','data-large_image','data-large-image','data-full','data-src','data-lazy-src','data-original','src','href','content'];
+      const attrs=['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src','content','href'];
       for(const attr of attrs){const v=node.attr(attr); if(v) addRaw(v);}
       const srcset=node.attr('data-srcset')||node.attr('srcset'); if(srcset){for(const part of srcset.split(',')){const u=part.trim().split(/\s+/)[0]; if(u) addRaw(u);}}
+      const style=node.attr('style'); if(style){const m=style.match(/url\(\s*['"]?([^'"\)]+)['"]?\s*\)/i); if(m&&m[1]) addRaw(m[1]);}
     };
     body.find(css(selectors.gallery)).each((_i, el) => {
       const node = $(el);
       extractFromNode(node);
-      node.find('img,source,a,[data-src],[data-large_image],[data-zoom-image],[data-full],[data-thumb]').each((__i:number, inner:any)=>{
+      node.find('img,source,a,[data-src],[data-lazy],[data-lazy-src],[data-original],[data-large_image],[data-large-image],[data-zoom-image],[data-full],[data-thumb],[data-image],[data-zoom],[style]').each((__i:number, inner:any)=>{
         const n=$(inner);
         extractFromNode(n);
       });
