@@ -51,9 +51,43 @@ const reconPrice=(value:unknown):number|null=>{const n=Math.round(Number(value)|
 
 export type ReconTable=Awaited<ReturnType<typeof reconTable>>;
 export async function reconTable(target:Target,profileId=''){
+  const allProfilesRaw=await listProfiles();
   const local=await maintenanceRows(profileId),remote=await remoteProducts(target);
+  const settings=await getState<any>('settings',{});
+  const suffixFormats=settings?.dedup?.suffixFormats||'';
+  const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
+  let allLocalForCounts:any[];
+  if(profileId) allLocalForCounts=await maintenanceRows('') as any[];
+  else allLocalForCounts=local as any[];
+  const counts=new Map<string,number>();
+  for(const row of allLocalForCounts){
+    if(row.active===false||row.active===0)continue;
+    const pid=String(row.profile_id||'');
+    counts.set(pid,(counts.get(pid)||0)+1);
+  }
+  const zeroCountIds=new Set<string>();
+  for(const p of profilesInfo){ if((counts.get(p.id)||0)===0) zeroCountIds.add(p.id); }
+
+  const shouldIgnoreForFilter=(title:string):boolean=>{
+    if(!profileId) return false;
+    const owner=findProfileBySuffix(String(title||''),profilesInfo,suffixFormats);
+    if(owner) return owner.id!==profileId;
+    const filterProfile=profilesInfo.find(p=>p.id===profileId);
+    const filterSuffix=String(filterProfile?.titleSuffix||'').trim();
+    if(filterSuffix) return true;
+    return false;
+  };
+  const isZeroCountOwner=(title:string):boolean=>{
+    const owner=findProfileBySuffix(String(title||''),profilesInfo,suffixFormats);
+    if(owner && zeroCountIds.has(owner.id)) return true;
+    if(!owner){
+      const hasEmptyZero=profilesInfo.some(p=>!String(p.titleSuffix||'').trim() && zeroCountIds.has(p.id));
+      if(hasEmptyZero) return true;
+    }
+    return false;
+  };
+
   const rows:ReconRow[]=[];
-  // Index the source side by normalized title, by sku and by stored remote id.
   const byTitle=new Map<string,any[]>(),bySku=new Map<string,any>(),byRemoteId=new Map<number,any>();
   for(const row of local){
     const key=reconNormTitle(row.title);
@@ -66,13 +100,14 @@ export async function reconTable(target:Target,profileId=''){
   }
   const consumed=new Set<any>();
   for(const item of remote){
+    if(shouldIgnoreForFilter(String(item.name||item.title||''))) continue;
     const key=reconNormTitle(item.name||item.title||'');
-    // PHP order: title first, then the stored id (destination titles get edited).
     let source=(byTitle.get(key)||[]).find(row=>!consumed.has(row))||null,matchedBy:ReconRow['matchedBy']=source?'title':'none';
     if(!source&&item.sku&&bySku.has(item.sku)){const candidate=bySku.get(item.sku);if(!consumed.has(candidate)){source=candidate;matchedBy='sku'}}
     if(!source&&byRemoteId.has(item.id)){const candidate=byRemoteId.get(item.id);if(!consumed.has(candidate)){source=candidate;matchedBy='id'}}
     const remotePrice=reconPrice(item.price);
     if(!source){
+      if(isZeroCountOwner(String(item.name||item.title||''))) continue;
       rows.push({bucket:'extra',title:item.name||item.title||'',remoteTitle:item.name||item.title||'',remoteId:item.id||null,profileId:'',sourceKey:'',sourcePrice:null,remotePrice,delta:null,matchedBy:'none',shopId:String(item.shopId||''),shopName:String(item.shopName||''),status:String(item.status||''),why:'در هیچ پروفایل/مبدأ نیست'});
       continue;
     }
@@ -85,14 +120,14 @@ export async function reconTable(target:Target,profileId=''){
   }
   for(const row of local){
     if(consumed.has(row))continue;
-    if(!row.active)continue; // retired products are not "missing"
+    if(!row.active)continue;
     rows.push({bucket:'missing',title:row.title||'',remoteTitle:'',remoteId:null,profileId:String(row.profile_id||''),sourceKey:String(row.source_key||''),sourcePrice:reconPrice(row.price),remotePrice:null,delta:null,matchedBy:'none',shopId:'',shopName:'',status:'',why:'در مبدأ هست ولی در مقصد نیست'});
   }
   const count=(bucket:ReconRow['bucket'])=>rows.filter(row=>row.bucket===bucket).length;
   const summary={matched:count('matched'),priceDiff:count('priceDiff'),extra:count('extra'),missing:count('missing'),noPrice:count('noPrice')};
   const matchedByTitle=rows.filter(row=>row.matchedBy==='title').length,matchedBySku=rows.filter(row=>row.matchedBy==='sku').length,matchedById=rows.filter(row=>row.matchedBy==='id').length;
   const inSync=summary.priceDiff===0&&summary.extra===0&&summary.missing===0;
-  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
+  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,zeroCountProfiles:[...zeroCountIds],protectedBySuffix:true,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
   await setState(`recon_table_${target}`,report);
   return report;
 }
