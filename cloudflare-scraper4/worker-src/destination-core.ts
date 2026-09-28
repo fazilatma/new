@@ -107,7 +107,7 @@ export function applyPrice(op: string, value: string, current: number): number |
 }
 
 export function basalamStatuses(status: string) {
-  const map: Record<string, string[]> = { all: ['2976', '3790', '3567', '3568', '4184', '2977', '2978', '3248', '4221'], active: ['2976'], inactive: ['3790'], not_approved: ['3567'], pending: ['3568'], archived: ['4184'] };
+  const map: Record<string, string[]> = { all: ['2976', '3790', '3567', '3568', '4184', '2977', '2978', '3248', '4221'], active: ['2976'], inactive: ['3790'], not_approved: ['3567'], pending: ['3568'], archived: ['4184'], ledger: ['2976', '3567'], visible: ['2976', '3567'] };
   return map[status] || ([2976, 3790, 3567, 3568, 4184].includes(Number(status)) ? [String(status)] : map.all);
 }
 
