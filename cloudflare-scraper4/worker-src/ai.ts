@@ -274,7 +274,7 @@ function cloudflareModelIds(raw:string):string[]{
 }
 function canonicalAiModel(model:string){return String(model||'').trim().replace(/^~+/,'')}
 function aiRequestHeaders(provider:Provider,endpoint:string,method:'POST'|'GET'='POST'):Record<string,string>{
-  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.250.0+'};
+  const headers:Record<string,string>={authorization:`Bearer ${provider.apiKey}`,accept:'application/json','user-agent':'Scraper4/1.251.0+'};
   if(method==='POST')headers['content-type']='application/json';
   if(isOpenRouter(provider,endpoint)){headers['http-referer']='https://scraper4.workers.dev';headers.referer='https://scraper4.workers.dev';headers['x-title']='Scraper 4'}
   return headers;
@@ -356,16 +356,16 @@ function aiErrorMessage(body:any):string{
 }
 
 export type { AiCategoryOption } from './destination-core.js';
-async function categoryWithTask(task:AiTestTask,title:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number){
+async function categoryWithTask(task:AiTestTask,title:string,categories:AiCategoryOption[],network:Network,timeoutMs?:number,manual?: import('./destination-core.js').CategoryManualGuidance){
   if(!isChatCompatibleAiModel(task.p,task.model))throw new AiResponseError('این مدل endpoint اختصاصی دارد و برای گفت‌وگو یا دسته‌بندی کاندید نمی‌شود.',{ok:false,skipped:true,phase:'unsupported-task',provider:task.p.id,providerName:task.p.name,model:task.model,prompt:title,endpointType:aiModelEndpoint(task.p,task.model),chatCompatible:false,latencyMs:0,raw:{reason:'dedicated endpoint model'}});
-  const prepared=categoryPrompt(title,categories),detail=await aiCall(task.p,task.model,prepared.prompt,network,timeoutMs),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
+  const prepared=categoryPrompt(title,categories,manual),detail=await aiCall(task.p,task.model,prepared.prompt,network,timeoutMs),categoryId=parseCategoryId(detail.text,prepared.allowed),category=prepared.allowed.find(row=>Number(row.id)===categoryId);
   if(!category)throw new AiResponseError('مدل هیچ شناسهٔ معتبر از فهرست دسته‌بندی باسلام برنگرداند.',{...detail,ok:false,phase:'validation',categoryTitle:title,categoryId:0,allowedCategoryCount:prepared.allowed.length});
   return{...detail,categoryTitle:title,categoryId,categoryName:String(category.name),categoryPath:String(category.path||category.name),allowedCategoryCount:prepared.allowed.length};
 }
-export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[],timeoutMs?:number){
+export async function suggestCategoryWithModel(title:string,modelKey:string,categories:AiCategoryOption[],timeoutMs?:number,manual?: import('./destination-core.js').CategoryManualGuidance){
   const ai=(await loadConnections()).ai,providers=providersFromAi(ai),[providerId,...modelParts]=String(modelKey||'').split('::'),model=modelParts.join('::'),provider=providers.find(item=>item.id===providerId&&item.enabled!==false&&item.models.includes(model));
   if(!String(title||'').trim())throw new Error('عنوان محصول برای دسته‌بندی لازم است.');if(!provider||!model)throw new Error('مدل انتخاب‌شده در تنظیمات فعال هوش مصنوعی پیدا نشد.');
-  const task={p:provider,model,key:`${provider.id}::${model}`,keyIndex:0,keyLabel:''};try{return{...await categoryWithTask(task,String(title).trim(),categories,ai.network,timeoutMs),key:task.key}}catch(error){return aiTestFailure(error,task,String(title).trim())}
+  const task={p:provider,model,key:`${provider.id}::${model}`,keyIndex:0,keyLabel:''};try{return{...await categoryWithTask(task,String(title).trim(),categories,ai.network,timeoutMs,manual),key:task.key}}catch(error){return aiTestFailure(error,task,String(title).trim())}
 }
 
 /** One model per provider per invocation keeps each provider at 1 in-flight request (avoids rate limits) while finishing the list faster. */

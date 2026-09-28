@@ -225,40 +225,32 @@ function manualBasalamCats(profile:any):number[]{
   const out=[profile.basalamCategoryId,...(profile.basalamFallbackCategoryIds||[])].map(Number).filter((id:number,index:number,all:number[])=>id>0&&all.indexOf(id)===index);
   return out;
 }
+function buildManualGuidance(profile:any, manualIds:number[], categories:any[]): import('../worker-src/destination-core.js').CategoryManualGuidance | undefined {
+  if(!manualIds.length) return undefined;
+  const manualRows = categories.filter((c:any)=>manualIds.includes(Number(c.id)));
+  return {
+    profileName: String(profile?.name||''),
+    profileId: String(profile?.id||''),
+    suffix: String(profile?.titleSuffix||''),
+    manualIds,
+    manualRows,
+  };
+}
 async function categorizeProduct(run: CategoryRun, product: CategoryProduct, categories: any[], profiles:any[]): Promise<boolean> {
   const currentCategory = Number(product.categoryId) || 0;
   const tried = new Set(await getTriedBasalamCategories(product.shopId, product.id));
   if(currentCategory>0)tried.add(currentCategory);
   const matchedProfile=findProfileForCategoryProduct(product,profiles);
-  const manualIds=manualBasalamCats(matchedProfile);
-  if(manualIds.length){
-    const manualAvailable=manualIds.filter(id=>!tried.has(id));
-    if(manualAvailable.length){
-      const chosenId=manualAvailable[0];
-      const catRow=categories.find((c:any)=>Number(c.id)===chosenId);
-      const catName=catRow?String(catRow.name||catRow.title||catRow.path||''):`#${chosenId}`;
-      try{
-        const source=`دسته‌بندی دستی پروفایل «${matchedProfile?.name||matchedProfile?.id||''}» (پسوند «${String(matchedProfile?.titleSuffix||'').slice(0,60)}»)`;
-        await markBasalamCategoriesTried(product.shopId,product.id,[currentCategory,chosenId]);
-        await applyBasalamCategory(product.id, product.shopId, chosenId, product.title, catName, source);
-        run.changed++;
-        appendCategoryItem(run, { ...product, ok: true, categoryId: chosenId, categoryName: catName, source, confidence: 100 });
-        run.cursor++; run.processed++; run.attempts = 0;
-        const latest = await readRun();
-        if (latest?.stopRequested) { run.stopRequested = true; run.status = 'paused'; run.phase = 'paused'; }
-        return !run.stopRequested;
-      }catch(error){
-        await markBasalamCategoriesTried(product.shopId, product.id, [chosenId]);
-      }
-    }
-  }
+  const manualIdsAll=manualBasalamCats(matchedProfile);
+  const manualAvailable=manualIdsAll.filter(id=>!tried.has(id));
+  const manualGuidance=buildManualGuidance(matchedProfile, manualAvailable.length?manualAvailable:manualIdsAll, categories);
   const available=categories.filter((row:any)=>!tried.has(Number(row.id)));
   const modelKeys = run.modelKeys, threshold = Math.floor(modelKeys.length / 2) + 1, votes = new Map<number, { count: number; row: any }>(), triedHits: number[] = [];
   let responded = 0;
   for (const key of (available.length?modelKeys:[])) {
     responded++;
     let suggestion: any;
-    try { suggestion = await suggestCategoryWithModel(product.title, key, available); }
+    try { suggestion = await suggestCategoryWithModel(product.title, key, available, undefined, manualGuidance); }
     catch (error) { suggestion = { ok: false, key, error: error instanceof Error ? error.message : String(error) }; }
     if (!suggestion?.ok) continue;
     const id = Number(suggestion.categoryId);
@@ -272,7 +264,9 @@ async function categorizeProduct(run: CategoryRun, product: CategoryProduct, cat
   const winner = [...votes.values()].sort((a, b) => b.count - a.count)[0];
   if (winner) {
     try {
-      const source = `هوش مصنوعی سرورساید: ${winner.count} از ${responded} مدل`;
+      const hasManual=Boolean(manualGuidance?.manualIds?.length);
+      const manualInfo=hasManual? ` (راهنمای دستی پروفایل «${matchedProfile?.name||''}» پسوند «${String(matchedProfile?.titleSuffix||'').slice(0,60)}»: ${manualGuidance!.manualIds.join('، ')})`:'';
+      const source = `هوش مصنوعی سرورساید: ${winner.count} از ${responded} مدل${manualInfo}`;
       await markBasalamCategoriesTried(product.shopId,product.id,[currentCategory,Number(winner.row.categoryId)]);
       await applyBasalamCategory(product.id, product.shopId, Number(winner.row.categoryId), product.title, String(winner.row.categoryName || ''), source);
       run.changed++;

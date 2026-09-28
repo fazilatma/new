@@ -180,16 +180,44 @@ export function categoryRows(title: string, categories: AiCategoryOption[]) {
   return rows.map((row, index) => { const name = String(row.path || row.name), normalized = normalizeCategoryText(name), score = words.reduce((sum, word) => sum + (normalized.includes(word) ? word.length + 2 : 0), 0); return { row, index, name, score }; }).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 500);
 }
 
-export function categoryPrompt(title: string, categories: AiCategoryOption[]) {
+export type CategoryManualGuidance = {
+  profileName?: string;
+  profileId?: string;
+  suffix?: string;
+  manualIds: number[];
+  manualRows?: AiCategoryOption[];
+};
+export function categoryPrompt(title: string, categories: AiCategoryOption[], manual?: CategoryManualGuidance) {
   const ranked = categoryRows(title, categories), allowed: AiCategoryOption[] = [], lines: string[] = [];
   let length = 0;
+  const manualSet = new Set((manual?.manualIds || []).map(Number).filter(n => n > 0));
+  const manualRows = (manual?.manualRows || []).filter(r => manualSet.has(Number(r.id)));
+  const manualIdsInCategories = categories.filter(c => manualSet.has(Number(c.id)));
+  const prioritizedManual = manualRows.length ? manualRows : manualIdsInCategories;
+  for (const row of prioritizedManual) {
+    if (allowed.some(a => Number(a.id) === Number(row.id))) continue;
+    const name = String((row as any).path || row.name);
+    const line = `${row.id} | ${name}`;
+    if (length + line.length + 1 > 18_000) break;
+    lines.push(line); allowed.push(row); length += line.length + 1;
+  }
   for (const item of ranked) {
+    if (allowed.some(a => Number(a.id) === Number(item.row.id))) continue;
     const line = `${item.row.id} | ${item.name}`;
     if (length + line.length + 1 > 18_000) break;
     lines.push(line); allowed.push(item.row); length += line.length + 1;
   }
   if (!lines.length) throw new Error('فهرست معتبر دسته‌بندی باسلام در دسترس نیست.');
-  return { allowed, prompt: `برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}` };
+  let guidanceBlock = '';
+  if (manual && manualSet.size) {
+    const manualLines = prioritizedManual.map(r => `${r.id} | ${String((r as any).path || r.name)}`).join('، ');
+    const fallbackManual = manual.manualIds.map(id => String(id)).join('، ');
+    const listText = manualLines || fallbackManual;
+    const profileText = manual.profileName ? `پروفایل «${manual.profileName}»` : manual.profileId ? `پروفایل ${manual.profileId}` : 'پروفایل مرتبط';
+    const suffixText = manual.suffix ? ` (پسوند «${manual.suffix.slice(0, 80)}»)` : '';
+    guidanceBlock = `\n\n🔍 راهنمای دسته‌بندی دستی (برای دقت بیشتر، نه به عنوان جایگزین):\nاین محصول از ${profileText}${suffixText} آمده و صاحب فروشگاه برای این پروفایل دسته‌های دستی زیر را به عنوان الگوی صحیح پیشنهاد داده: ${listText}.\nاین دسته‌ها را به عنوان راهنمای قوی در نظر بگیر: اگر عنوان محصول با یکی از این دسته‌های دستی سازگار است، همان یا نزدیک‌ترین زیرشاخهٔ آن را از فهرست مجاز انتخاب کن. اگر هیچ‌کدام مناسب نیست، بهترین دستهٔ مرتبط را از فهرست مجاز انتخاب کن. در هر حال پاسخ باید از فهرست مجاز باشد و فقط یک شناسه برگردان.`;
+  }
+  return { allowed, prompt: `برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.${guidanceBlock}\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}` };
 }
 
 export function parseCategoryId(text: string, categories: AiCategoryOption[]) {
