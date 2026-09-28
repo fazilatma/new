@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.243.0+'; } catch { return process.env.npm_package_version || '1.243.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.244.0+'; } catch { return process.env.npm_package_version || '1.244.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -758,7 +758,29 @@ app.post('/api/test-connection/:target', async c => {
         vendorIdMatches:!expectedVendorId||!vendorId?null:String(expectedVendorId)===vendorId,
         tokenCheck:tokenVerdict.reason,tokenExpiresAt:tokenVerdict.expiresAt||null,tokenScopes:tokenVerdict.scopes||null,autofill}});
   }
-  if(target==='ai') { const ai=connections.ai;if(!ai.baseUrl||!ai.apiKey||!ai.model)return c.json({ok:false,error:'تنظیمات هوش مصنوعی کامل نیست'},400);const endpoint=ai.baseUrl+(ai.baseUrl.includes('/chat/completions')?'':'/chat/completions'),r=await safeFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${ai.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:ai.model,messages:[{role:'user',content:'Reply with exactly: SCRAPER4_OK'}],max_tokens:20})},2_000_000);return c.json({ok:r.ok,code:r.status,body:await r.json().catch(()=>null)}); }
+  if(target==='ai') {
+    const ai=connections.ai as any;
+    const hasLegacy=Boolean(ai.baseUrl&&ai.apiKey&&ai.model);
+    const hasProviders=Array.isArray(ai.providers)&&ai.providers.some((p:any)=>p&&p.enabled!==false&&((Array.isArray(p.models)&&p.models.length)||p.apiKey||p.baseUrl));
+    const hasCandidates=Array.isArray(ai.candidates)&&ai.candidates.length>0;
+    if(!hasLegacy&&!hasProviders&&!hasCandidates) return c.json({ok:false,error:'تنظیمات هوش مصنوعی کامل نیست. یک ارائه‌دهنده (Base URL + API Key + مدل) اضافه کنید یا از تب هوش مصنوعی تست مدل‌ها را انجام دهید.'},400);
+    // Prefer legacy single-provider for backward compatibility, else use first enabled provider
+    if(hasLegacy){
+      const endpoint=ai.baseUrl+(ai.baseUrl.includes('/chat/completions')?'':'/chat/completions'),r=await safeFetch(endpoint,{method:'POST',headers:{authorization:`Bearer ${ai.apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:ai.model,messages:[{role:'user',content:'Reply with exactly: SCRAPER4_OK'}],max_tokens:20})},2_000_000);return c.json({ok:r.ok,code:r.status,body:await r.json().catch(()=>null)});
+    }
+    // New multi-provider: test first available provider/model
+    try{
+      const providers=await aiProviders();
+      const provider=providers.find(p=>p.enabled!==false&&p.models?.length);
+      if(!provider) return c.json({ok:false,error:'هیچ ارائه‌دهنده فعالی با مدل پیدا نشد. در تب هوش مصنوعی ارائه‌دهنده را فعال کنید.'},400);
+      const model=provider.models[0];
+      const { providerWithKey }=await import('./ai.js');
+      const result=await aiCall(providerWithKey(provider,0),model,'Reply with exactly: SCRAPER4_OK');
+      return c.json({ok:result.ok,code:result.status||200,body:result,provider:provider.id,model});
+    } catch(e){
+      return c.json({ok:false,error:e instanceof Error?e.message:String(e)},400);
+    }
+  }
   return c.json({ok:false,error:'Unknown connection'},404);
 });
 app.get('/api/categories/:target',async c=>{const target=c.req.param('target'),connections=await loadConnections();if(target==='woo'){const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'اتصال ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,items:any[]=[];for(let page=1;page<=20;page++){const r=await safeFetch(`${x.url}/wp-json/wc/v3/products/categories?per_page=100&page=${page}`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},3_000_000),rows=await r.json() as any[];if(!r.ok)return c.json({ok:false,error:`Woo HTTP ${r.status}`},502);items.push(...rows);if(rows.length<100)break}return c.json({ok:true,items})}if(target==='basalam'){try{const result=await destinationCategories(c.req.query('refresh')==='1');return c.json({ok:true,...result,total:result.items.length})}catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},400)}}return c.json({ok:false,error:'Invalid target'},400)});
