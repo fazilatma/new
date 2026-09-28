@@ -280,6 +280,49 @@ async function processAiTest(run:AiTestRun):Promise<BackgroundOutcome>{
 function compactCategoryItem(row:any):CategoryRunItem{return{id:Number(row.id),shopId:String(row.shopId||''),title:String(row.title||''),ok:Boolean(row.ok),...(row.categoryId?{categoryId:Number(row.categoryId)}:{}),...(row.categoryName?{categoryName:String(row.categoryName)}:{}),...(row.source?{source:String(row.source)}:{}),...(row.confidence?{confidence:Number(row.confidence)}:{}),...(row.error?{error:String(row.error).slice(0,500)}:{})}}
 function appendCategoryItem(run:CategoryRun,item:CategoryRunItem){run.items.push(compactCategoryItem(item));if(run.items.length>300)run.items=run.items.slice(-300)}
 async function listCategoryProducts(run:CategoryRun):Promise<BackgroundOutcome>{
+  // Try ledger first (دفتر حساب آماده شده توسط مغایرت‌گیری) to avoid CPU cost
+  if(run.page===1&&run.products.length===0){
+    try{
+      const { destinationLedger } = await import('./ledger.js');
+      const { reconAccounts } = await import('./maintenance.js');
+      const { destinationScope } = await import('./ledger.js');
+      const accounts=await reconAccounts();
+      const basalamAccounts=accounts.filter(a=>a.target==='basalam');
+      let ledgerProducts:CategoryProduct[]=[];let ledgerUsable=true;let anyComplete=false;
+      for(const acc of basalamAccounts){
+        const scope=await destinationScope('basalam',acc.accountKey);
+        const meta=await destinationLedger.metadata(scope);
+        if(!meta||!meta.complete||!meta.count){ledgerUsable=false;break}
+        // If stale more than 1h, still usable but we note; if you want strict, check TTL
+        const entries=await destinationLedger.entries(scope);
+        if(!entries.length){ledgerUsable=false;break}
+        anyComplete=true;
+        for(const e of entries){
+          if(e.invalid||e.deleted)continue;
+          const remote=e.remote||{};
+          const raw=remote.raw||{};
+          const status=String(remote.status||raw.status||raw.status_id||raw.statusId||'');
+          if(status!=='3567'&&status!=='unapproved')continue;
+          const id=Number(remote.id||raw.id)||0;
+          if(id<=0)continue;
+          const title=String(remote.name||raw.name||raw.title||'').trim();
+          if(!title)continue;
+          ledgerProducts.push({id,shopId:String(acc.accountKey||acc.shopId||''),title,categoryId:Number(raw.category_id||raw.categoryId||0)||undefined});
+        }
+      }
+      if(ledgerUsable&&anyComplete){
+        // Deduplicate
+        const seen=new Set<string>();const uniq:CategoryProduct[]=[];
+        for(const p of ledgerProducts){const k=`${p.shopId}:${p.id}`;if(!seen.has(k)){seen.add(k);uniq.push(p)}}
+        if(uniq.length>0){
+          run.products=uniq;
+          run.total=uniq.length;run.totalPages=1;run.page=1;(run as any).inventoryComplete=true;(run as any).ledgerUsed=true;
+          await pruneBasalamCategoryNotebooks(run.products).catch(()=>{});
+          run.status='queued';run.phase='categorizing';await writeRun(run);return{outcome:'continue',delaySeconds:1};
+        }
+      }
+    }catch(err){console.log('[category-all] ledger fallback failed, using API:',err)}
+  }
   const data:any=await destinationCatalog('basalam',{page:run.page,perPage:100,status:'3567',shopId:'all'}),seen=new Set(run.products.map(row=>`${row.shopId}:${row.id}`));
   for(const raw of data.products||[]){const row={id:Number(raw.id),shopId:String(raw.shopId||''),title:String(raw.title||raw.name||'').trim(),categoryId:Number(raw.categoryId||raw.category_id||raw.raw?.category_id||0)||undefined},key=`${row.shopId}:${row.id}`;if(row.id>0&&row.title&&!seen.has(key)){seen.add(key);run.products.push(row)}}
   (run as any).inventoryComplete=(run as any).inventoryComplete!==false&&data.complete!==false;

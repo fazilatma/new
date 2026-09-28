@@ -139,6 +139,42 @@ async function drive(): Promise<void> {
 }
 
 async function listCategoryProducts(run: CategoryRun): Promise<void> {
+  if(run.page===1&&run.products.length===0){
+    try{
+      const { destinationLedger } = await import('./ledger.js');
+      const { reconAccounts } = await import('./maintenance.js');
+      const { destinationScope } = await import('./ledger.js');
+      const accounts=await reconAccounts();
+      const basalamAccounts=accounts.filter((a:any)=>a.target==='basalam');
+      let ledgerProducts:any[]=[];let usable=true;let anyComplete=false;
+      for(const acc of basalamAccounts){
+        const scope=await destinationScope('basalam',acc.accountKey);
+        const meta=await destinationLedger.metadata(scope);
+        if(!meta||!meta.complete||!meta.count){usable=false;break}
+        const entries=await destinationLedger.entries(scope);
+        if(!entries.length){usable=false;break}
+        anyComplete=true;
+        for(const e of entries){
+          if(e.invalid||e.deleted)continue;
+          const remote=e.remote||{};const raw=remote.raw||{};
+          const status=String(remote.status||raw.status||raw.status_id||'');
+          if(status!=='3567'&&status!=='unapproved')continue;
+          const id=Number(remote.id||raw.id)||0;if(id<=0)continue;
+          const title=String(remote.name||raw.name||raw.title||'').trim();if(!title)continue;
+          ledgerProducts.push({id,shopId:String(acc.accountKey||''),title,categoryId:Number(raw.category_id||raw.categoryId||0)||undefined});
+        }
+      }
+      if(usable&&anyComplete&&ledgerProducts.length>0){
+        const seen=new Set<string>();const uniq:any[]=[];
+        for(const p of ledgerProducts){const k=`${p.shopId}:${p.id}`;if(!seen.has(k)){seen.add(k);uniq.push(p)}}
+        if(uniq.length>0){
+          run.products=uniq;run.total=uniq.length;run.totalPages=1;run.page=1;(run as any).inventoryComplete=true;(run as any).ledgerUsed=true;
+          await pruneBasalamCategoryNotebooks(run.products).catch(()=>{});
+          run.phase='categorizing';return;
+        }
+      }
+    }catch(err){console.log('[category-run] ledger fallback',err)}
+  }
   const data: any = await destinationCatalog('basalam', { page: run.page, perPage: 100, status: '3567', shopId: 'all' });
   const seen = new Set(run.products.map(row => `${row.shopId}:${row.id}`));
   for (const raw of data.products || []) {

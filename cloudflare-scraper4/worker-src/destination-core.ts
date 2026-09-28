@@ -264,10 +264,11 @@ export function normalizeCategoryFixPinned(raw: any): string[] {
 /** Read the stored consensus-model list from settings (empty means automatic). */
 export function categoryFixPinnedModels(settings: any): string[] { return normalizeCategoryFixPinned(settings?.categoryFix?.consensusModels); }
 export interface CategoryFixSchedule { enabled: boolean; everyHours: number; mode: CategoryVoteMode }
-/** Normalize the periodic-fix schedule; defaults to disabled / 6h / consensus. */
+/** Normalize the periodic-fix schedule; defaults to disabled / 1h / consensus. Also respects general.categoryFixEveryHours as fallback. */
 export function normalizeCategoryFixSchedule(settings: any): CategoryFixSchedule {
-  const raw = settings?.categoryFix?.periodic ?? {}, hours = Number(raw?.everyHours);
-  return { enabled: raw?.enabled === true, everyHours: Number.isFinite(hours) ? Math.min(CATEGORY_FIX_MAX_EVERY_HOURS, Math.max(1, Math.trunc(hours))) : CATEGORY_FIX_DEFAULT_EVERY_HOURS, mode: normalizeCategoryMode(raw?.mode) };
+  const raw = settings?.categoryFix?.periodic ?? {}, hoursRaw = raw?.everyHours ?? settings?.general?.categoryFixEveryHours;
+  const hours = Number(hoursRaw);
+  return { enabled: raw?.enabled === true || (settings?.general?.categoryFixEveryHours!=null && raw?.enabled!==false && Boolean(settings?.general?.categoryFixEveryHours)), everyHours: Number.isFinite(hours) ? Math.min(CATEGORY_FIX_MAX_EVERY_HOURS, Math.max(1, Math.trunc(hours))) : CATEGORY_FIX_DEFAULT_EVERY_HOURS, mode: normalizeCategoryMode(raw?.mode) };
 }
 /** True when the periodic fix may start (never started, or the gap has passed). */
 export function categoryFixDue(schedule: CategoryFixSchedule, last: { at?: unknown } | null | undefined, now: number = Date.now()): boolean {

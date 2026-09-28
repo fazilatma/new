@@ -33,8 +33,12 @@ export async function reconAccounts():Promise<ReconAccount[]>{
 }
 const LEDGER_MAX_PAGES=500;
 const LEDGER_RETRY=3;
-const LEDGER_TTL_MS=3600000;
-const LEDGER_MAX_AGE_HOURS=1;
+const LEDGER_TTL_MS_DEFAULT=3600000;
+const LEDGER_MAX_AGE_HOURS_DEFAULT=1;
+function ledgerTtlFromSettings(settings:any){const raw=settings?.general?.ledgerEveryHours;const h=Number(raw);if(!Number.isFinite(h)||h<=0)return LEDGER_TTL_MS_DEFAULT;return Math.round(Math.min(168,Math.max(0.25,h))*3600000)}
+function ledgerMaxAgeHoursFromSettings(settings:any){return Math.max(0.25,ledgerTtlFromSettings(settings)/3600000)}
+const LEDGER_TTL_MS=LEDGER_TTL_MS_DEFAULT;
+const LEDGER_MAX_AGE_HOURS=LEDGER_MAX_AGE_HOURS_DEFAULT;
 type LedgerProgressEvent={type:string;account?:string;page?:number;totalPages?:number;fetched?:number;duplicate?:number;incomplete?:boolean;error?:string;attempt?:number;[k:string]:any};
 function sleep(ms:number){return new Promise<void>(r=>setTimeout(r,ms))}
 async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgressEvent)=>void):Promise<ReconRemote[]>{
@@ -45,7 +49,7 @@ async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgr
   for(let attempt=1;attempt<=LEDGER_RETRY;attempt++){
    try{
     onProgress?.({type:'ledger-page-start',account:account.name,page,totalPages,attempt});
-    result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'active',shopId:account.accountKey});
+    result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'all',shopId:account.accountKey});
     lastError=null;
     break;
    }catch(error){
@@ -82,18 +86,18 @@ async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgr
    if(Number.isFinite(result.total)&&Math.abs(all.length-Number(result.total))>Math.max(5,Math.floor(Number(result.total)*0.02))){
     onProgress?.({type:'ledger-total-mismatch',account:account.name,expected:result.total,actual:all.length});
    }
-   return all.filter(x=>customerVisible(account.target,x));
+   return all;
   }
  }
  onProgress?.({type:'ledger-max-pages',account:account.name,totalPages:LEDGER_MAX_PAGES,fetched:all.length});
- return all.filter(x=>customerVisible(account.target,x));
+ return all;
 }
-async function remoteForAccount(account:ReconAccount,force=false,onProgress?:(e:LedgerProgressEvent)=>void):Promise<ReconRemote[]>{
+async function remoteForAccount(account:ReconAccount,force=false,onProgress?:(e:LedgerProgressEvent)=>void,ttlMs?:number):Promise<ReconRemote[]>{
  const scope=await destinationScope(account.target,account.accountKey);
- await destinationLedger.refresh(scope,()=>scanLedgerAccount(account,onProgress),force);
+ await destinationLedger.refresh(scope,()=>scanLedgerAccount(account,onProgress),force,ttlMs);
  let entries=await destinationLedger.entries(scope);
  if(entries.some(x=>x.invalid)){
-  await destinationLedger.refresh(scope,()=>scanLedgerAccount(account,onProgress),true);
+  await destinationLedger.refresh(scope,()=>scanLedgerAccount(account,onProgress),true,ttlMs);
   entries=await destinationLedger.entries(scope);
   if(entries.some(x=>x.invalid)){
    onProgress?.({type:'ledger-invalid-remaining',account:account.name});
@@ -102,12 +106,13 @@ async function remoteForAccount(account:ReconAccount,force=false,onProgress?:(e:
  return entries.map(x=>x.remote).filter(x=>customerVisible(account.target,x));
 }
 export async function refreshDestinationLedger(force=false,onProgress?:(e:LedgerProgressEvent)=>void){
+ const settings=await getState<any>('settings',{}),ttlMs=ledgerTtlFromSettings(settings),maxAgeHours=ledgerMaxAgeHoursFromSettings(settings);
  const startedAt=new Date().toISOString(),accounts=await reconAccounts(),items:any[]=[];
  for(const account of accounts){
   try{
    const before=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
    onProgress?.({type:'refresh-account-start',account:account.name});
-   await remoteForAccount(account,force,(e)=>onProgress?.({...e,account:account.name}));
+   await remoteForAccount(account,force,(e)=>onProgress?.({...e,account:account.name}),ttlMs);
    const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
    items.push({...account,...meta,cached:before?.generation===meta?.generation,ok:true});
    onProgress?.({type:'refresh-account-done',account:account.name,cached:before?.generation===meta?.generation,total:meta?.count});
@@ -116,10 +121,10 @@ export async function refreshDestinationLedger(force=false,onProgress?:(e:Ledger
    onProgress?.({type:'refresh-account-error',account:account.name,error:error instanceof Error?error.message:String(error)});
   }
  }
- const durationMs=Math.max(0,Date.now()-Date.parse(startedAt)),report={ok:items.every(x=>x.ok),items,maxAgeHours:LEDGER_MAX_AGE_HOURS,startedAt,completedAt:new Date().toISOString(),durationMs,durationMinutes:durationMs/60000,scannedAccounts:items.filter(x=>x.ok&&!x.cached).length,cachedAccounts:items.filter(x=>x.cached).length};
+ const durationMs=Math.max(0,Date.now()-Date.parse(startedAt)),report={ok:items.every(x=>x.ok),items,maxAgeHours,startedAt,completedAt:new Date().toISOString(),durationMs,durationMinutes:durationMs/60000,scannedAccounts:items.filter(x=>x.ok&&!x.cached).length,cachedAccounts:items.filter(x=>x.cached).length};
  await setState('destination_ledger:last_refresh',report);if(report.ok&&accounts.length&&report.scannedAccounts===accounts.length)await setState('destination_ledger:last_full_refresh',report);return report;
 }
-export async function destinationLedgerStatus(){const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL_MS})}return {ok:true,items,maxAgeHours:LEDGER_MAX_AGE_HOURS,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
+export async function destinationLedgerStatus(){const settings=await getState<any>('settings',{}),ttlMs=ledgerTtlFromSettings(settings),maxAgeHours=ledgerMaxAgeHoursFromSettings(settings);const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=ttlMs})}return {ok:true,items,maxAgeHours,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
 
 
 /**

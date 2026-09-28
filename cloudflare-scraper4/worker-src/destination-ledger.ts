@@ -1,5 +1,13 @@
 /** Persistent destination snapshots and acknowledged-write receipts. No credentials are stored. */
-export const LEDGER_TTL=6*60*60*1000;
+export const LEDGER_TTL=1*60*60*1000;
+export const LEDGER_TTL_DEFAULT_HOURS=1;
+export function ledgerTtlMsFromSettings(settings:any):number{
+  const raw=settings?.general?.ledgerEveryHours;
+  const h=Number(raw);
+  if(!Number.isFinite(h)||h<=0)return LEDGER_TTL;
+  const clamped=Math.min(168,Math.max(0.25,h));
+  return Math.round(clamped*60*60*1000);
+}
 export type LedgerEntry={remote:any;at:string;desiredHash?:string;observedHash?:string;invalid?:boolean;deleted?:boolean;profileId?:string;sourceKey?:string};
 export type LedgerIO={getState<T>(key:string,fallback:T):Promise<T>;setState(key:string,value:unknown):Promise<void>;ledgerRows(scope:string,generation:string):Promise<LedgerEntry[]>;ledgerPut(scope:string,generation:string,entries:LedgerEntry[]):Promise<void>;ledgerGet(scope:string,generation:string,id:string):Promise<LedgerEntry|null>;ledgerPrune(scope:string,keep:string[]):Promise<void>};
 export function stable(value:any):string{return JSON.stringify(value===undefined?null:Array.isArray(value)?value.map(v=>JSON.parse(stable(v))):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,JSON.parse(stable(value[k]))])):value)}
@@ -28,8 +36,9 @@ export function createDestinationLedger(io:LedgerIO){
  const key=(scope:string)=>'ledger_meta:'+scope;
  async function metadata(scope:string){return io.getState<any>(key(scope),null)}
  async function entries(scope:string){const meta=await metadata(scope),base:LedgerEntry[]=meta?await io.ledgerRows(scope,meta.generation):[],live=await io.ledgerRows(scope,'live');if(meta&&base.length!==meta.count)throw Error('نسخهٔ دفتر حساب ناقص است؛ تازه‌سازی لازم است.');const map=new Map(base.map(x=>[String(x.remote.id),x]));for(const x of live)if(!meta||x.at>=meta.startedAt){if(x.deleted)map.delete(String(x.remote.id));else map.set(String(x.remote.id),x)}return [...map.values()]}
- async function refresh(scope:string,fetchAll:()=>Promise<any[]>,force=false){
-  const meta=await metadata(scope);if(!force&&meta?.inventoryPolicy==='customer-visible-v1'&&Date.now()-Date.parse(meta.startedAt)<LEDGER_TTL)return {cached:true,...meta};
+ async function refresh(scope:string,fetchAll:()=>Promise<any[]>,force=false,ttlMs?:number){
+  const ttl=Number.isFinite(ttlMs as number)&& (ttlMs as number)>0 ? (ttlMs as number) : LEDGER_TTL;
+  const meta=await metadata(scope);if(!force&&meta?.inventoryPolicy==='customer-visible-v1'&&Date.now()-Date.parse(meta.startedAt)<ttl)return {cached:true,...meta};
   if(inflight.has(scope))return inflight.get(scope);
   const task=(async()=>{const startedAt=new Date().toISOString(),generation=crypto.randomUUID();const all=await fetchAll(),unique=new Map<string,any>();for(const remote of all){if(!remote?.id)throw Error('شناسهٔ محصول مقصد در اسکن دفتر حساب نامعتبر است.');const id=String(remote.id);if(unique.has(id))throw Error('صفحهٔ تکراری مقصد؛ کامل بودن دفتر حساب تأیید نشد.');unique.set(id,cleanRemote(remote))}
    const rows=[...unique.values()].map(remote=>({remote,at:startedAt}));for(let i=0;i<rows.length;i+=20)await io.ledgerPut(scope,generation,rows.slice(i,i+20));
@@ -38,10 +47,10 @@ export function createDestinationLedger(io:LedgerIO){
    await io.ledgerPrune(scope,[generation,meta?.generation||'', 'live']).catch(()=>{});return {cached:false,...next};
   })();inflight.set(scope,task);try{return await task}finally{inflight.delete(scope)}
  }
- async function find(scope:string,id:unknown,sku=''){const meta=await metadata(scope);if(id){const live=await io.ledgerGet(scope,'live',String(id));const base=meta?await io.ledgerGet(scope,meta.generation,String(id)):null;if(live&&(!meta||live.at>=meta.startedAt))return live;if(base){if(live?.desiredHash&&!live.invalid&&!live.deleted&&live.observedHash===await digest(observed(base.remote)))return {...base,desiredHash:live.desiredHash,profileId:live.profileId,sourceKey:live.sourceKey};return {...base,profileId:live?.profileId,sourceKey:live?.sourceKey}}return null}
-  if(!sku||!meta||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL)return null;const matches=(await entries(scope)).filter(x=>x.remote.sku===sku&&!x.invalid&&!x.deleted);return matches.length===1?matches[0]:null;
+ async function find(scope:string,id:unknown,sku='',ttlMs?:number){const ttl=Number.isFinite(ttlMs as number)&& (ttlMs as number)>0 ? (ttlMs as number) : LEDGER_TTL; const meta=await metadata(scope);if(id){const live=await io.ledgerGet(scope,'live',String(id));const base=meta?await io.ledgerGet(scope,meta.generation,String(id)):null;if(live&&(!meta||live.at>=meta.startedAt))return live;if(base){if(live?.desiredHash&&!live.invalid&&!live.deleted&&live.observedHash===await digest(observed(base.remote)))return {...base,desiredHash:live.desiredHash,profileId:live.profileId,sourceKey:live.sourceKey};return {...base,profileId:live?.profileId,sourceKey:live?.sourceKey}}return null}
+  if(!sku||!meta||Date.now()-Date.parse(meta.startedAt)>=ttl)return null;const matches=(await entries(scope)).filter(x=>x.remote.sku===sku&&!x.invalid&&!x.deleted);return matches.length===1?matches[0]:null;
  }
- async function matches(entry:LedgerEntry|null,desired:unknown){return !!entry&&!entry.invalid&&!entry.deleted&&Date.now()-Date.parse(entry.at)<LEDGER_TTL&&(entry.desiredHash===await digest(desired)||!entry.desiredHash&&equivalentDesired(entry.remote,desired))}
+ async function matches(entry:LedgerEntry|null,desired:unknown,ttlMs?:number){const ttl=Number.isFinite(ttlMs as number)&& (ttlMs as number)>0 ? (ttlMs as number) : LEDGER_TTL; return !!entry&&!entry.invalid&&!entry.deleted&&Date.now()-Date.parse(entry.at)<ttl&&(entry.desiredHash===await digest(desired)||!entry.desiredHash&&equivalentDesired(entry.remote,desired))}
  async function invalidate(scope:string,id:unknown){if(id){const before=await find(scope,id);await io.ledgerPut(scope,'live',[{remote:before?.remote||{id:String(id)},profileId:before?.profileId,sourceKey:before?.sourceKey,at:new Date().toISOString(),invalid:true}])}}
  async function confirm(scope:string,remote:any,desired:unknown,profileId:string,sourceKey:string,observedAt?:string){if(!remote?.id)return;remote=cleanRemote(remote);await io.ledgerPut(scope,'live',[{remote,at:observedAt||new Date().toISOString(),desiredHash:await digest(desired),observedHash:await digest(observed(remote)),profileId,sourceKey}])}
  async function patch(scope:string,id:unknown,changes:any,deleted=false){const previous=await find(scope,id);await io.ledgerPut(scope,'live',[{profileId:previous?.profileId,sourceKey:previous?.sourceKey,remote:{...previous?.remote,...changes,id:String(id),raw:{...previous?.remote?.raw,...changes}},at:new Date().toISOString(),deleted,invalid:!previous?.remote?.name&&!deleted}])}
