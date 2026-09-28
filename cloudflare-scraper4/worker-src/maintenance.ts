@@ -2,9 +2,9 @@ import { customerVisible } from './ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { loadConnections } from './connections.js';
 import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
-import { byAccount, byProfile, planActions, planDuplicateDeletions, reconcileAccount, unreachableAccountRows, summarize } from './recon-core.js';
-import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow } from './recon-core.js';
-import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, suffixPatterns } from './dedup.js';
+import { byAccount, byProfile, findProfileBySuffix, planActions, planDuplicateDeletions, reconcileAccount, unreachableAccountRows, summarize } from './recon-core.js';
+import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow, ProfileSuffixInfo } from './recon-core.js';
+import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, stripCodeSuffix, suffixPatterns } from './dedup.js';
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
@@ -204,37 +204,77 @@ export async function refreshDestinationLedger(force=false,onProgress?:(e:Ledger
 export async function destinationLedgerStatus(){const settings=await getState<any>('settings',{}),ttlMs=ledgerTtlFromSettings(settings),maxAgeHours=ledgerMaxAgeHoursFromSettings(settings);const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=ttlMs})}return {ok:true,items,maxAgeHours,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
 
 export async function unifiedRecon(profileId=''){
+  const allProfilesRaw=await listProfiles();
   const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
-  for(const profile of await listProfiles())profileNames[profile.id]=profile.name||profile.id;
-  // Reconciliation is limited to products whose title carries a «(کد ایکس)»
-  // suffix, using the same formats the duplicate-remover already uses.
+  for(const profile of allProfilesRaw)profileNames[profile.id]=profile.name||profile.id;
   const settings=await getState<any>('settings',{});
   const suffixFormats=settings?.dedup?.suffixFormats||'';
   const patterns=suffixPatterns(parseSuffixFormats(suffixFormats));
+
+  // Build profile suffix info + zero-count protection
+  const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
+  // Count products per profile (active only) for zero-check
+  let allLocalForCounts:ReconLocal[];
+  if(profileId){
+    // Need counts for all profiles, not just filtered one
+    allLocalForCounts=await maintenanceRows('') as ReconLocal[];
+  }else{
+    allLocalForCounts=local as ReconLocal[];
+  }
+  const counts=new Map<string,number>();
+  for(const row of allLocalForCounts){
+    if(row.active===false||row.active===0)continue;
+    const pid=String(row.profile_id||'');
+    counts.set(pid,(counts.get(pid)||0)+1);
+  }
+  const zeroCountIds=new Set<string>();
+  for(const p of profilesInfo){
+    if((counts.get(p.id)||0)===0)zeroCountIds.add(p.id);
+  }
+
   const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
   const skippedNoCode=local.length-eligible.length;
   const accounts=await reconAccounts(),rows:UnifiedReconRow[]=[],failures:Array<{account:string;error:string}>=[];
   for(const account of accounts){
-    try{rows.push(...reconcileAccount(local,await remoteForAccount(account),account,profileNames,suffixFormats))}
-    // A destination that cannot be read still contributes one cell per product,
-    // so the comparison table keeps its shape instead of vanishing entirely.
+    try{
+      const remote=await remoteForAccount(account);
+      rows.push(...reconcileAccount(local,remote,account,profileNames,suffixFormats,{profiles:profilesInfo,zeroCountIds,profileFilter:profileId}));
+    }
     catch(error){const message=error instanceof Error?error.message:String(error);failures.push({account:account.name,error:message});rows.push(...unreachableAccountRows(local,account,profileNames,suffixFormats,message))}
   }
+  const protectedExtra=0; // counted inside reconcileAccount (skipped)
   const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
-    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows,suffixFormats).length,failures,rows};
+    zeroCountProfiles:[...zeroCountIds],
+    protectedBySuffix: true,
+    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds}).length,failures,rows};
   await setState('recon_unified',report);
   return report;
 }
 
 export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
+  const allProfilesRaw=await listProfiles();
   const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
-  for(const profile of await listProfiles())profileNames[profile.id]=profile.name||profile.id;
+  for(const profile of allProfilesRaw)profileNames[profile.id]=profile.name||profile.id;
   const settings=await getState<any>('settings',{}) as any;
   const suffixFormats=settings?.dedup?.suffixFormats||'';
   const patterns=suffixPatterns(parseSuffixFormats(suffixFormats));
+
+  const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
+  let allLocalForCounts:ReconLocal[];
+  if(profileId) allLocalForCounts=await maintenanceRows('') as ReconLocal[];
+  else allLocalForCounts=local as ReconLocal[];
+  const counts=new Map<string,number>();
+  for(const row of allLocalForCounts){
+    if(row.active===false||row.active===0)continue;
+    const pid=String(row.profile_id||'');
+    counts.set(pid,(counts.get(pid)||0)+1);
+  }
+  const zeroCountIds=new Set<string>();
+  for(const p of profilesInfo){ if((counts.get(p.id)||0)===0) zeroCountIds.add(p.id); }
+
   const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
   const skippedNoCode=local.length-eligible.length;
-  onProgress?.({type:'progress',stage:'local-loaded',local:local.length,eligible:eligible.length,skippedNoCode});
+  onProgress?.({type:'progress',stage:'local-loaded',local:local.length,eligible:eligible.length,skippedNoCode,zeroCountProfiles:[...zeroCountIds]});
   const accounts=await reconAccounts();
   onProgress?.({type:'progress',stage:'accounts-listed',count:accounts.length,accounts:accounts.map(a=>a.name)});
   const rows:UnifiedReconRow[]=[]; const failures:Array<{account:string;error:string}>=[];
@@ -248,7 +288,7 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
       });
       totalFetched+=remote.length;
       onProgress?.({type:'progress',stage:'account-fetched',account:account.name,remoteCount:remote.length,totalFetched});
-      const reconciled=reconcileAccount(local,remote,account,profileNames,suffixFormats);
+      const reconciled=reconcileAccount(local,remote,account,profileNames,suffixFormats,{profiles:profilesInfo,zeroCountIds,profileFilter:profileId});
       rows.push(...reconciled);
       onProgress?.({type:'progress',stage:'account-done',account:account.name,accountKey:account.accountKey,reconciled:reconciled.length,rowsSoFar:rows.length,remoteCount:remote.length});
       if(reconciled.length){
@@ -265,8 +305,10 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
   const report={
     ok:failures.length===0,at:new Date().toISOString(),profileId,
     local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
+    zeroCountProfiles:[...zeroCountIds],
+    protectedBySuffix:true,
     ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),
-    actions:planActions(rows,suffixFormats).length,failures,rows,
+    actions:planActions(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds}).length,failures,rows,
   };
   onProgress?.({type:'progress',stage:'report-ready',reportSummary:{matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra}});
   await setState('recon_unified',report);
@@ -275,6 +317,7 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
 
 export async function reconTableLive(target:Target,profileId='',onProgress?:(e:any)=>void){
   onProgress?.({type:'progress',stage:'local-loading',target});
+  const allProfilesRaw=await listProfiles();
   const local=await maintenanceRows(profileId);
   onProgress?.({type:'progress',stage:'local-loaded',count:local.length,target});
   let remote:any[]=[];
@@ -299,6 +342,42 @@ export async function reconTableLive(target:Target,profileId='',onProgress?:(e:a
     remote=await remoteProducts(target);
   }
   onProgress?.({type:'progress',stage:'remote-loaded',count:remote.length,target});
+
+  // Profile suffix protection for reconTableLive as well
+  const settings=await getState<any>('settings',{});
+  const suffixFormats=settings?.dedup?.suffixFormats||'';
+  const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
+  let allLocalForCounts:any[];
+  if(profileId) allLocalForCounts=await maintenanceRows('') as any[];
+  else allLocalForCounts=local as any[];
+  const counts=new Map<string,number>();
+  for(const row of allLocalForCounts){
+    if(row.active===false||row.active===0)continue;
+    const pid=String(row.profile_id||'');
+    counts.set(pid,(counts.get(pid)||0)+1);
+  }
+  const zeroCountIds=new Set<string>();
+  for(const p of profilesInfo){ if((counts.get(p.id)||0)===0) zeroCountIds.add(p.id); }
+
+  const shouldIgnoreForFilter=(title:string):boolean=>{
+    if(!profileId) return false;
+    const owner=findProfileBySuffix(String(title||''),profilesInfo,suffixFormats);
+    if(owner) return owner.id!==profileId;
+    const filterProfile=profilesInfo.find(p=>p.id===profileId);
+    const filterSuffix=String(filterProfile?.titleSuffix||'').trim();
+    if(filterSuffix) return true;
+    return false;
+  };
+  const isZeroCountOwner=(title:string):boolean=>{
+    const owner=findProfileBySuffix(String(title||''),profilesInfo,suffixFormats);
+    if(owner && zeroCountIds.has(owner.id)) return true;
+    if(!owner){
+      const hasEmptyZero=profilesInfo.some(p=>!String(p.titleSuffix||'').trim() && zeroCountIds.has(p.id));
+      if(hasEmptyZero) return true;
+    }
+    return false;
+  };
+
   const rows:ReconRow[]=[];
   const byTitle=new Map<string,any[]>(),bySku=new Map<string,any>(),byRemoteId=new Map<number,any>();
   for(const row of local){
@@ -313,12 +392,20 @@ export async function reconTableLive(target:Target,profileId='',onProgress?:(e:a
   const consumed=new Set<any>();
   let processed=0;
   for(const item of remote){
+    // Profile filter + zero-count protection before counting as extra
+    if(shouldIgnoreForFilter(String(item.name||item.title||''))) { processed++; continue; }
+    if(isZeroCountOwner(String(item.name||item.title||''))){
+      // If no local match, we will skip extra below; but still allow matching if source exists
+      // For now continue to matching logic, but skip extra push if no source
+    }
+
     const key=reconNormTitle(item.name||item.title||'');
     let source=(byTitle.get(key)||[]).find(row=>!consumed.has(row))||null,matchedBy:ReconRow['matchedBy']=source?'title':'none';
     if(!source&&item.sku&&bySku.has(item.sku)){const candidate=bySku.get(item.sku);if(!consumed.has(candidate)){source=candidate;matchedBy='sku'}}
     if(!source&&byRemoteId.has(item.id)){const candidate=byRemoteId.get(item.id);if(!consumed.has(candidate)){source=candidate;matchedBy='id'}}
     const remotePrice=reconPrice(item.price);
     if(!source){
+      if(isZeroCountOwner(String(item.name||item.title||''))) { processed++; continue; }
       rows.push({bucket:'extra',title:item.name||item.title||'',remoteTitle:item.name||item.title||'',remoteId:item.id||null,profileId:'',sourceKey:'',sourcePrice:null,remotePrice,delta:null,matchedBy:'none',shopId:String(item.shopId||''),shopName:String(item.shopName||''),status:String(item.status||''),why:'در هیچ پروفایل/مبدأ نیست'});
     }else{
       consumed.add(source);
@@ -342,7 +429,7 @@ export async function reconTableLive(target:Target,profileId='',onProgress?:(e:a
   const summary={matched:count('matched'),priceDiff:count('priceDiff'),extra:count('extra'),missing:count('missing'),noPrice:count('noPrice')};
   const matchedByTitle=rows.filter(r=>r.matchedBy==='title').length,matchedBySku=rows.filter(r=>r.matchedBy==='sku').length,matchedById=rows.filter(r=>r.matchedBy==='id').length;
   const inSync=summary.priceDiff===0&&summary.extra===0&&summary.missing===0;
-  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
+  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,zeroCountProfiles:[...zeroCountIds],protectedBySuffix:true,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
   await setState(`recon_table_${target}`,report);
   onProgress?.({type:'progress',stage:'report-ready',target,summary});
   return report;
@@ -351,7 +438,11 @@ export async function reconTableLive(target:Target,profileId='',onProgress?:(e:a
 export async function unifiedReconApply(profileId='',apply=false,limit=200){
   if(apply)await refreshDestinationLedger(true);
   const report=await unifiedRecon(profileId);
-  const actions=planActions(report.rows as UnifiedReconRow[],report.suffixFormats).filter(action=>action.kind!=='remove').slice(0,Math.max(1,Math.min(1000,limit)));
+  // unifiedRecon already filtered zero-count protection, but we also ensure planActions respects it
+  const allProfilesRaw=await listProfiles();
+  const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
+  const zeroCountIds=new Set<string>(Array.isArray((report as any).zeroCountProfiles)?(report as any).zeroCountProfiles:[]);
+  const actions=planActions(report.rows as UnifiedReconRow[],report.suffixFormats,{profiles:profilesInfo,zeroCountIds}).filter(action=>action.kind!=='remove').slice(0,Math.max(1,Math.min(1000,limit)));
   if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),
     matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
     noPrice:report.noPrice,unreachable:report.unreachable,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
