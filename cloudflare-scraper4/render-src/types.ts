@@ -97,7 +97,7 @@ export type Job = {
   id: string;
   profileId: string;
   kind: 'scrape' | 'sync';
-  workflow?: 'list-only' | 'full';
+  workflow?: 'list-only' | 'list-details' | 'full';
   target: 'none' | 'woo' | 'basalam' | 'both';
   status: 'queued' | 'running' | 'done' | 'failed' | 'stopped';
   phase: string;

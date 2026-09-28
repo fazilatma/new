@@ -216,7 +216,9 @@ function profileFromRow(row: any): Profile {
     createdAt: row.created_at || data.createdAt, updatedAt: row.updated_at || data.updatedAt };
 }
 function jobFromRow(row: any): Job {
-  return { workflow:json<any[]>(row.log,[]).some(x=>x.event==='workflow'&&x.message==='list-only')?'list-only':'full', id:String(row.id),profileId:String(row.profile_id),kind:row.kind,target:row.target,status:row.status,phase:String(row.phase),
+  const wfLog=json<any[]>(row.log,[]).find(x=>x.event==='workflow'&&typeof x.message==='string')?.message;
+  const workflow=(wfLog==='list-only'||wfLog==='list-details')?wfLog:'full' as Job['workflow'];
+  return { workflow, id:String(row.id),profileId:String(row.profile_id),kind:row.kind,target:row.target,status:row.status,phase:String(row.phase),
     total:Number(row.total||0),processed:Number(row.processed||0),added:Number(row.added||0),updated:Number(row.updated||0),failed:Number(row.failed||0),
     stopRequested:Boolean(row.stop_requested),error:row.error == null ? null : String(row.error),log:json(row.log,[]),createdAt:String(row.created_at),
     startedAt:row.started_at ? String(row.started_at) : null,finishedAt:row.finished_at ? String(row.finished_at) : null,updatedAt:String(row.updated_at) };
@@ -242,8 +244,8 @@ export async function deleteProfile(id: string): Promise<boolean> {
   ]); return true;
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'full'; useLedger?:boolean; syncWoo?:boolean; syncBasalam?:boolean; deleteWoo?:boolean; deleteBasalam?:boolean } = {}): Promise<Job> {
-  if(_options.workflow==='list-only'){kind='scrape';target='none'}
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'list-details'|'full'; useLedger?:boolean; syncWoo?:boolean; syncBasalam?:boolean; deleteWoo?:boolean; deleteBasalam?:boolean } = {}): Promise<Job> {
+  if(_options.workflow==='list-only'||_options.workflow==='list-details'){kind='scrape';target='none'}
   const settings = await getState<any>('settings', {}), dedup = settings?.general?.queueDedup !== false;
   const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
   if(_options.priceSync){const queued=await statement("SELECT * FROM jobs WHERE profile_id=? AND kind='sync' AND target=? AND status='queued' AND started_at IS NULL ORDER BY created_at LIMIT 1",[profileId,target]).first();if(queued)return jobFromRow(queued);}
@@ -253,7 +255,7 @@ export async function createJob(profileId: string, kind: Job['kind'], target: Jo
     else {if(_options.workflow&&(job.workflow!==_options.workflow||job.kind!==kind||job.target!==target))throw Error('کار فعال همین پروفایل برنامهٔ متفاوتی دارد؛ ابتدا آن را تمام یا متوقف کنید.');return job;}
   }
   const id=crypto.randomUUID(),timestamp=now();
-  try { await run('INSERT INTO jobs(id,profile_id,kind,target,created_at,updated_at,log) VALUES(?,?,?,?,?,?,?)',[id,profileId,kind,target,timestamp,timestamp,JSON.stringify(_options.workflow==='list-only'?[{at:timestamp,level:'info',event:'workflow',message:'list-only'}]:[])]); 
+  try { await run('INSERT INTO jobs(id,profile_id,kind,target,created_at,updated_at,log) VALUES(?,?,?,?,?,?,?)',[id,profileId,kind,target,timestamp,timestamp,JSON.stringify(_options.workflow==='list-only'||_options.workflow==='list-details'?[{at:timestamp,level:'info',event:'workflow',message:_options.workflow}]:[])]); 
     if(_options.useLedger||_options.deleteWoo||_options.deleteBasalam||_options.syncWoo!==undefined||_options.syncBasalam!==undefined){
       await setState('job_options:'+id,{useLedger:!!_options.useLedger,syncWoo:!!_options.syncWoo,syncBasalam:!!_options.syncBasalam,deleteWoo:!!_options.deleteWoo,deleteBasalam:!!_options.deleteBasalam,at:timestamp});
     }

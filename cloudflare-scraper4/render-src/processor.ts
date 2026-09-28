@@ -157,6 +157,7 @@ export async function processOneJob(): Promise<boolean> {
         if (profile.pages === 0 && page > 1 && found.size === before) { append(job, `صفحهٔ ${page} محصول تازه‌ای نداشت؛ صفحه‌بندی همین‌جا پایان یافت.`); break; }
       }
       if (job.status !== 'stopped') {
+        const isListDetails=job.workflow==='list-details';
         if(job.workflow==='list-only'){
           job.phase='list-save';job.processed=0;await save(job);
           for(const raw of found.values()){
@@ -166,6 +167,49 @@ export async function processOneJob(): Promise<boolean> {
             append(job,`${product.title}: فقط دادهٔ فهرست ذخیره شد.`,'info',result,reportItem(product));if(job.processed%5===0)await save(job);
           }
           append(job,'پایان استخراج فهرست؛ جزئیات، دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');
+        }else if(isListDetails){
+          // Backend extraction: only list + details, no categories, no AI, no retire, no sync
+          job.phase = 'details'; const previousProducts=new Map((await allProducts(profile.id)).map(p=>[p.sourceKey,p]));const products=[] as Product[];for(const raw of found.values())products.push(await reuseSourceList(raw,previousProducts.get(raw.sourceKey),profile));const workProducts=products.filter(p=>!(p as any)._reuseDetails);append(job,'مقایسهٔ فهرست اولیه با دفتر مبدأ','info','source-cache',{sourceKey:'',title:'کش فهرست',listCount:products.length,reusedCount:products.length-workProducts.length});
+          const sample=workProducts.find(p=>p.url); if(sample?.url&&autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true); await save(job);
+          if (sample?.url && hasDetailSelectors(profile.selectors)) {
+            const probe = await detailProbe(sample, profile.selectors, Boolean(profile.networkIndirect));
+            if (!probe && !detailRescued) {
+              detailRescued = true;
+              append(job, 'سلکتورهای جزئیات هیچ فیلدی را پر نکردند؛ پیشنهاد خودکار به‌عنوان آخرین راه اجرا می‌شود…', 'warning');
+              const filled = await applySelectorSuggestions(profile, sample.url, 'detail', job, false);
+              if (filled && await detailProbe(sample, profile.selectors, Boolean(profile.networkIndirect))) append(job, 'پیشنهاد خودکار جواب داد: سلکتورهای جزئیات بازتنظیم شدند.');
+              else if (filled) append(job, 'پیشنهاد خودکار هم فیلدی پیدا نکرد؛ سلکتورهای جزئیات را دستی بررسی کنید.', 'warning');
+            }
+          }
+          if (hasDetailSelectors(profile.selectors)) {
+            job.total = products.length; job.processed = 0; await save(job);
+            let done = 0;
+            await mapLimit(workProducts, Math.max(1, Number(process.env.DETAIL_CONCURRENCY || 4)), async product => {
+              if (await stopRequested(job.id)) return;
+              try {
+                await scrapeDetails(product, profile.selectors, Boolean(profile.networkIndirect));
+                append(job, `${product.title}: جزئیات خوانده شد.`, 'info', 'updated', reportItem(product, { price: Number(product.price) || undefined }));
+              } catch (error) {
+                sourceDetailFailed(product);job.failed++;
+                append(job, `${product.title}: جزئیات: ${message(error)}`, 'error', 'failed', reportItem(product, { error: message(error) }));
+              }
+              done++; job.processed = done;
+              if (done % 5 === 0 || done === products.length) await save(job);
+            });
+            append(job, `استخراج جزئیات ${workProducts.length} محصول انجام شد.`);
+          }
+          job.phase = 'save'; await save(job);
+          for (const product of products) {
+            if (!(Number(product.price) > 0)) {
+              job.skippedNoPrice = (job.skippedNoPrice || 0) + 1;
+              append(job, `${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`, 'warning', 'zero-price', reportItem(product, { newPrice: Number(product.price) || 0 }));
+              continue;
+            }
+            delete (product as any)._reuseDetails;const result = await upsertProduct(profile.id, product, {source:true}); result === 'added' ? job.added++ : job.updated++;
+          }
+          if (job.skippedNoPrice) append(job, `${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`, 'warning');
+          append(job,'پایان استخراج بک‌اند: فقط فهرست و جزئیات ذخیره شد؛ دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');
+          await setState('source_scan:'+profile.id,{jobId:job.id,complete:false,listOnly:true});
         }else{
         job.phase = 'details'; const previousProducts=new Map((await allProducts(profile.id)).map(p=>[p.sourceKey,p]));const products=[] as Product[];for(const raw of found.values())products.push(await reuseSourceList(raw,previousProducts.get(raw.sourceKey),profile));const workProducts=products.filter(p=>!(p as any)._reuseDetails);append(job,'مقایسهٔ فهرست اولیه با دفتر مبدأ','info','source-cache',{sourceKey:'',title:'کش فهرست',listCount:products.length,reusedCount:products.length-workProducts.length});append(job,`${products.length-workProducts.length} محصول در فهرست اولیه تغییری نداشت؛ جزئیات و هوش مصنوعی دوباره اجرا نمی‌شود.`);const sample=workProducts.find(p=>p.url); if(sample?.url&&autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true); await save(job);
         // LAST-RESORT FALLBACK for the detail stage: probe one real product

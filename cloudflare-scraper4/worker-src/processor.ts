@@ -183,6 +183,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
       append(job,`${product.title}: فقط دادهٔ فهرست ذخیره شد.`,'info',result,reportItem(product));
     }
   }else{
+  const isListDetails=job.workflow==='list-details';
   job.phase='details-save-sync';
   if(!checkpoint.detailSelectorsFilled){const sample=checkpoint.products.find(p=>p.url&&!(p as any)._reuseDetails);if(sample?.url&&checkpoint.autoSelectorsAllowed)await applySelectorSuggestions(profile,sample.url,'detail',job,true);checkpoint.detailSelectorsFilled=true;await setState(key,checkpoint)}
   // LAST-RESORT FALLBACK for the detail stage: if the configured detail
@@ -234,24 +235,29 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   for (const product of batch) {
     rawPriceByKey.set(product.sourceKey, product.price);
   }
-  await categorizeExtractedProducts(job, profile, batch.filter(p=>!(p as any)._reuseDetails));
+  if(!isListDetails){
+    await categorizeExtractedProducts(job, profile, batch.filter(p=>!(p as any)._reuseDetails));
+  }
   // AI enrichment FALLBACK: fill only what the page itself could not provide,
   // using the pinned master model. Runs after the scraper-first rescue above
   // and before save/sync, and can never fail the scrape.
-  const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
-  if(aiSettings?.enabled!==false&&profile?.aiDescriptions!==false){
-    const pending=batch.filter(product=>!(product as any)._reuseDetails&&product.price>0&&productNeedsEnrichment(product).any);
-    if(pending.length){
-      const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
-      let filled=0,failed=0,reported='';
-      await mapLimit(pending,1,async product=>{
-        if(await stopRequested(job.id))return;
-        try{const result=await runAiStage(job,'ai-descriptions',product,(copy,timeoutMs)=>generateProductDescription(copy,{skipCategory:true,timeoutMs}));if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
-        catch(error){failed++;if(!reported)reported=message(error)}
-      });
-      if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
-      if(failed)append(job,`تکمیل توضیحات برای ${failed} محصول انجام نشد${reported?': '+reported:''}`,'warning');
-      job.phase=previousPhase;await save(job);
+  // For list-details (backend with details) we skip AI and categories — only list+details.
+  if(!isListDetails){
+    const aiSettings=await getState<any>('ai_description_settings',{enabled:true});
+    if(aiSettings?.enabled!==false&&profile?.aiDescriptions!==false){
+      const pending=batch.filter(product=>!(product as any)._reuseDetails&&product.price>0&&productNeedsEnrichment(product).any);
+      if(pending.length){
+        const previousPhase=job.phase;job.phase='ai-descriptions';await save(job);
+        let filled=0,failed=0,reported='';
+        await mapLimit(pending,1,async product=>{
+          if(await stopRequested(job.id))return;
+          try{const result=await runAiStage(job,'ai-descriptions',product,(copy,timeoutMs)=>generateProductDescription(copy,{skipCategory:true,timeoutMs}));if(result.changed)filled++;else if(!result.ok){failed++;if(!reported&&result.error)reported=result.error}}
+          catch(error){failed++;if(!reported)reported=message(error)}
+        });
+        if(filled)append(job,`توضیحات ${filled} محصول با مدل مستر هوش مصنوعی تکمیل شد`);
+        if(failed)append(job,`تکمیل توضیحات برای ${failed} محصول انجام نشد${reported?': '+reported:''}`,'warning');
+        job.phase=previousPhase;await save(job);
+      }
     }
   }
   for(const product of batch){
@@ -271,7 +277,12 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     try{delete (product as any)._reuseDetails;const result=await upsertProduct(profile.id,product,{source:true});result==='added'?job.added++:job.updated++;append(job,`${product.title}: ${result==='added'?'محصول جدید ثبت شد':'اطلاعات محصول به‌روزرسانی شد'}`,'info',result,reportItem(product));saved=true}
     catch(error){const errorText=message(error);checkpoint.retireSafe=false;job.failed++;append(job,`${product.title}: ذخیره: ${errorText}`,'error','failed',reportItem(product,{error:errorText}))}
     if(saved&&previous&&previous.price>0&&product.price>0&&previous.price!==product.price){const delta=product.price-previous.price,percent=Number((delta/previous.price*100).toFixed(2));append(job,`${product.title}: قیمت ${delta>0?'افزایش':'کاهش'} یافت (${percent}٪).`,delta>0?'warning':'info',delta>0?'price-increased':'price-decreased',reportItem(product,{oldPrice:previous.price,newPrice:product.price,delta,percent}))}
-    if(saved){const stored=await getProduct(profile.id,product.sourceKey);if(stored)await syncProduct(job,profile,stored);checkpoint.seen.push(product.sourceKey)}
+    if(saved){
+      if(!isListDetails){
+        const stored=await getProduct(profile.id,product.sourceKey);if(stored)await syncProduct(job,profile,stored);
+      }
+      checkpoint.seen.push(product.sourceKey)
+    }
   }
   }
   checkpoint.seen=[...new Set(checkpoint.seen)];
@@ -285,6 +296,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
 async function getJobOptions(jobId:string):Promise<any>{try{return await getState<any>('job_options:'+jobId,null)}catch{return null}}
 async function finishScrape(job:Job,profile:Profile,checkpoint:ScrapeCheckpoint):Promise<void>{
   if(job.workflow==='list-only'){checkpoint.retireSafe=false;append(job,'پایان استخراج فهرست؛ جزئیات، دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');await setState('source_scan:'+profile.id,{jobId:job.id,complete:false,listOnly:true});return}
+  if(job.workflow==='list-details'){checkpoint.retireSafe=false;append(job,'پایان استخراج بک‌اند: فقط فهرست و جزئیات ذخیره شد؛ دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');await setState('source_scan:'+profile.id,{jobId:job.id,complete:false,listOnly:true});return}
   job.phase='retire';
   if(checkpoint.retireSafe&&checkpoint.seen.length){
     const missing=await findMissingProducts(profile.id,checkpoint.seen),retired=await markMissingProducts(profile.id,checkpoint.seen);
