@@ -276,7 +276,7 @@ export async function deleteProfile(id: string): Promise<boolean> {
   return Boolean(result.rowCount);
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'full' } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'full'; useLedger?:boolean; syncWoo?:boolean; syncBasalam?:boolean; deleteWoo?:boolean; deleteBasalam?:boolean } = {}): Promise<Job> {
   if(_options.workflow==='list-only'){kind='scrape';target='none'}
   const settings=await getState<any>('settings',{}),staleMin=Math.max(1,Number(settings?.general?.queueDedupStale)||120);
   const active=await pool.query("SELECT * FROM jobs WHERE profile_id=$1 AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]);
@@ -288,6 +288,9 @@ export async function createJob(profileId: string, kind: Job['kind'], target: Jo
   }
   const id = crypto.randomUUID();
   const { rows } = await pool.query(`INSERT INTO jobs(id,profile_id,kind,target,log) VALUES($1,$2,$3,$4,$5) RETURNING *`, [id, profileId, kind, target, JSON.stringify(_options.workflow==='list-only'?[{at:now(),level:'info',event:'workflow',message:'list-only'}]:[])]);
+  if(_options.useLedger||_options.deleteWoo||_options.deleteBasalam||_options.syncWoo!==undefined||_options.syncBasalam!==undefined){
+    await setState('job_options:'+id,{useLedger:!!_options.useLedger,syncWoo:!!_options.syncWoo,syncBasalam:!!_options.syncBasalam,deleteWoo:!!_options.deleteWoo,deleteBasalam:!!_options.deleteBasalam,at:now()});
+  }
   return jobFromRow(rows[0]);
 }
 

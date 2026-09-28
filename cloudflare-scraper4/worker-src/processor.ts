@@ -282,6 +282,7 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
   checkpoint.retireSafe=!!checkpoint.retireSafe&&(profile.pagination==='none'||profile.pagination==='next_selector'&&!checkpoint.nextUrl);
   await finishScrape(job,profile,checkpoint);return false;
 }
+async function getJobOptions(jobId:string):Promise<any>{try{return await getState<any>('job_options:'+jobId,null)}catch{return null}}
 async function finishScrape(job:Job,profile:Profile,checkpoint:ScrapeCheckpoint):Promise<void>{
   if(job.workflow==='list-only'){checkpoint.retireSafe=false;append(job,'پایان استخراج فهرست؛ جزئیات، دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');await setState('source_scan:'+profile.id,{jobId:job.id,complete:false,listOnly:true});return}
   job.phase='retire';
@@ -291,7 +292,13 @@ async function finishScrape(job:Job,profile:Profile,checkpoint:ScrapeCheckpoint)
     if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
   }else append(job,'اسکن کامل و قابل‌اعتماد نبود؛ برای ایمنی هیچ محصولی بازنشسته نشد.','warning');
   await setState('source_scan:'+profile.id,{jobId:job.id,complete:!!checkpoint.retireSafe&&!!checkpoint.seen.length&&!job.failed,at:new Date().toISOString(),count:checkpoint.seen.length});
-  if(checkpoint.retireSafe&&job.target!=='none'){const removal=await ledgerMissing(profile.id,true,job.target==='both'?'both':job.target);if(removal.planned)append(job,`دفتر حساب: ${removal.planned} مورد حذف‌شده از مبدأ؛ ${removal.changed} اقدام طبق سیاست بازنشستگی.`)}
+  const opts=await getJobOptions(job.id);
+  if(checkpoint.retireSafe){
+    let delTarget: 'woo'|'basalam'|'both'|null=null;
+    if(opts?.deleteWoo||opts?.deleteBasalam)delTarget=opts.deleteWoo&&opts.deleteBasalam?'both':opts.deleteWoo?'woo':'basalam';
+    else if(job.target!=='none')delTarget=job.target==='both'?'both':job.target as any;
+    if(delTarget){const removal=await ledgerMissing(profile.id,true,delTarget);if(removal.planned)append(job,`دفتر حساب: ${removal.planned} مورد حذف‌شده از مبدأ؛ ${removal.changed} اقدام طبق سیاست بازنشستگی (${delTarget}).`)}
+  }
   await markProfileRun(profile.id);
 }
 

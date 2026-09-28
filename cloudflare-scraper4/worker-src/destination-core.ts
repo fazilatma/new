@@ -242,7 +242,7 @@ export function selectCategoryModels(input: { mode?: any; master?: any; candidat
   return [...new Set([...wanted.filter(key => usable.includes(key)), ...usable])].slice(0, 5);
 }
 /** Default gap between automatic bulk Basalam category fixes (hours). */
-export const CATEGORY_FIX_DEFAULT_EVERY_HOURS = 6;
+export const CATEGORY_FIX_DEFAULT_EVERY_HOURS = 1;
 /** Longest gap a user may schedule between automatic bulk fixes (one week). */
 export const CATEGORY_FIX_MAX_EVERY_HOURS = 168;
 /** Cap on manually picked consensus models (shared with the green-model cap). */

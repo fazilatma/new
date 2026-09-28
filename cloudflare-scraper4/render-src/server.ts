@@ -50,7 +50,7 @@ import { sendNotification } from './notifications.js';
 import { PHP_MENU_CAPABILITIES, runSelftest } from './parity.js';
 import { controlDedupRun, getPublicDedupRun, recoverDedupRun, resetDedupRun, startDedupRun } from './dedup-run.js';
 import { controlCategoryRun, getPublicCategoryRun, recoverCategoryRun, resetCategoryRun, startCategoryRun } from './category-run.js';
-import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, retire, unifiedRecon, unifiedReconApply, destinationDuplicates } from './maintenance.js';
+import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, listDestinationProducts, photoFix, rebuildMap, recon, reconAccounts, reconTable, reconTableLive, retire, unifiedRecon, unifiedReconLive, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { browserExecutable, benchmarkScroll, benchmarkProbeUrl, browserEngineAvailable, diagnoseBenchmarkEngine, diagnoseExtraction, mapLimit, numberFromText, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors, testSelector } from './scraper.js';
 import { runDiagnostics } from './diagnostics.js';
 import { basalamSdkBridgePath, basalamSdkStatus, describeBasalamToken, syncBasalam, syncWoo } from './sync.js';
@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.245.0+'; } catch { return process.env.npm_package_version || '1.245.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.246.0+'; } catch { return process.env.npm_package_version || '1.246.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -679,14 +679,17 @@ app.post('/api/maintenance/recon/:target',async c=>{const target=c.req.param('ta
 app.get('/api/maintenance/recon-accounts',async c=>c.json({ok:true,accounts:await reconAccounts()}));
 app.post('/api/maintenance/ledger/products',async c=>{const b=await c.req.json().catch(()=>({})) as any;return c.json(await destinationLedgerProducts(String(b.target||'woo'),String(b.accountKey||'default'),Number(b.offset)||0))});
 app.get('/api/maintenance/ledger',async c=>c.json(await destinationLedgerStatus()));
-app.post('/api/maintenance/ledger/refresh',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>refreshDestinationLedger(b.force!==false))});
+app.post('/api/maintenance/ledger/refresh',async c=>{const b=await c.req.json().catch(()=>({})) as any;if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await refreshDestinationLedger(b.force!==false,(e:any)=>observe({name:e.type||e.stage||'ledger',status:'running',summary:e.account||e.type||'',...e}));return report});}return maintenanceResponse(c,()=>refreshDestinationLedger(b.force!==false))});
+app.post('/api/maintenance/ledger/refresh/live',async c=>{const b=await c.req.json().catch(()=>({})) as any;return diagnosticStream(async observe=>{const report=await refreshDestinationLedger(b.force!==false,(e:any)=>observe({name:e.type||e.stage||'ledger',status:'running',summary:e.account||e.type||'',...e}));return report});});
 app.post('/api/maintenance/ledger/missing',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY'))});
-app.post('/api/maintenance/recon-unified',async c=>{const b=await c.req.json().catch(()=>({}))as any;return maintenanceResponse(c,()=>unifiedRecon(String(b.profileId||'')))});
+app.post('/api/maintenance/recon-unified',async c=>{const b=await c.req.json().catch(()=>({}))as any;if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});}return maintenanceResponse(c,()=>unifiedRecon(String(b.profileId||'')))});
+app.post('/api/maintenance/recon-unified/live',async c=>{const b=await c.req.json().catch(()=>({}))as any;return diagnosticStream(async observe=>{const report=await unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});});
 app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await c.req.json().catch(()=>({}))as any;return maintenanceResponse(c,()=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
 // Request 36b: preview (no confirm) or delete duplicates in every destination,
 // keeping the most expensive copy by default.
 app.post('/api/maintenance/duplicates',async c=>{const b=await c.req.json().catch(()=>({}))as any;return maintenanceResponse(c,()=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
-app.post('/api/maintenance/recon-table/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));return c.json(await reconTable(target as 'woo'|'basalam',String(body.profileId||'')))});
+app.post('/api/maintenance/recon-table/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await reconTableLive(target as 'woo'|'basalam',String(body.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});}return c.json(await reconTable(target as 'woo'|'basalam',String(body.profileId||'')))});
+app.post('/api/maintenance/recon-table/:target/live',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));return diagnosticStream(async observe=>{const report=await reconTableLive(target as 'woo'|'basalam',String(body.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});});
 app.post('/api/maintenance/rebuild/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({})) as any;return c.json(await rebuildMap(target as any,String(body.profileId||'')))});
 app.post('/api/maintenance/retire/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any,apply=body.confirm==='APPLY';return c.json(await retire(target as any,String(body.profileId||''),String(body.action||'report'),apply))});
 app.post('/api/maintenance/bulk/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any;return c.json(await bulkEdit(target as any,body,body.confirm==='APPLY'))});
@@ -808,14 +811,14 @@ app.delete('/api/profiles/:id', async c => c.json({ ok: await deleteProfile(c.re
 app.post('/api/profiles/:id/scrape', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any; const target = validTarget(body.target || 'none');
-  const job=await createJob(profile.id, 'scrape', target,{workflow:body.workflow==='list-only'?'list-only':body.workflow==='full'?'full':undefined});
+  const job=await createJob(profile.id, 'scrape', target,{workflow:body.workflow==='list-only'?'list-only':body.workflow==='full'?'full':undefined,useLedger:!!body.useLedger,syncWoo:!!body.syncWoo,syncBasalam:!!body.syncBasalam,deleteWoo:!!body.deleteWoo,deleteBasalam:!!body.deleteBasalam});
   if(job.status==='queued')triggerLocalJobDrain();
   return c.json({ ok: true, job, processor:job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });
 app.post('/api/profiles/:id/sync', async c => {
   const profile = await getProfile(c.req.param('id')); if (!profile) return c.json({ ok: false, error: 'Profile not found' }, 404);
   const body = await c.req.json().catch(() => ({})) as any;
-  const job=await createJob(profile.id, 'sync', validTarget(body.target || 'both'));
+  const job=await createJob(profile.id, 'sync', validTarget(body.target || 'both'),{useLedger:!!body.useLedger,syncWoo:!!body.syncWoo,syncBasalam:!!body.syncBasalam,deleteWoo:!!body.deleteWoo,deleteBasalam:!!body.deleteBasalam});
   if(job.status==='queued')triggerLocalJobDrain();
   return c.json({ ok: true, job, processor:job.status==='queued'?'triggered':'existing-active', dedupProfile:true }, 202);
 });

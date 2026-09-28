@@ -242,7 +242,7 @@ export async function deleteProfile(id: string): Promise<boolean> {
   ]); return true;
 }
 
-export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'full' } = {}): Promise<Job> {
+export async function createJob(profileId: string, kind: Job['kind'], target: Job['target'], _options: { forceNew?: boolean; priceSync?:boolean; workflow?:'list-only'|'full'; useLedger?:boolean; syncWoo?:boolean; syncBasalam?:boolean; deleteWoo?:boolean; deleteBasalam?:boolean } = {}): Promise<Job> {
   if(_options.workflow==='list-only'){kind='scrape';target='none'}
   const settings = await getState<any>('settings', {}), dedup = settings?.general?.queueDedup !== false;
   const active = await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
@@ -253,7 +253,11 @@ export async function createJob(profileId: string, kind: Job['kind'], target: Jo
     else {if(_options.workflow&&(job.workflow!==_options.workflow||job.kind!==kind||job.target!==target))throw Error('کار فعال همین پروفایل برنامهٔ متفاوتی دارد؛ ابتدا آن را تمام یا متوقف کنید.');return job;}
   }
   const id=crypto.randomUUID(),timestamp=now();
-  try { await run('INSERT INTO jobs(id,profile_id,kind,target,created_at,updated_at,log) VALUES(?,?,?,?,?,?,?)',[id,profileId,kind,target,timestamp,timestamp,JSON.stringify(_options.workflow==='list-only'?[{at:timestamp,level:'info',event:'workflow',message:'list-only'}]:[])]); }
+  try { await run('INSERT INTO jobs(id,profile_id,kind,target,created_at,updated_at,log) VALUES(?,?,?,?,?,?,?)',[id,profileId,kind,target,timestamp,timestamp,JSON.stringify(_options.workflow==='list-only'?[{at:timestamp,level:'info',event:'workflow',message:'list-only'}]:[])]); 
+    if(_options.useLedger||_options.deleteWoo||_options.deleteBasalam||_options.syncWoo!==undefined||_options.syncBasalam!==undefined){
+      await setState('job_options:'+id,{useLedger:!!_options.useLedger,syncWoo:!!_options.syncWoo,syncBasalam:!!_options.syncBasalam,deleteWoo:!!_options.deleteWoo,deleteBasalam:!!_options.deleteBasalam,at:timestamp});
+    }
+  }
   catch (error) {
     const concurrent=await statement("SELECT * FROM jobs WHERE profile_id=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1",[profileId]).first();
     if (concurrent) {const job=jobFromRow(concurrent);if(_options.workflow&&(job.workflow!==_options.workflow||job.kind!==kind||job.target!==target))throw Error('کار همزمان برنامهٔ متفاوتی دارد؛ منتظر پایان آن بمانید.');return job;} throw error;

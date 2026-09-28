@@ -278,7 +278,11 @@ export async function processOneJob(): Promise<boolean> {
         if (job.skippedNoPrice) append(job, `${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`, 'warning');
         const retired=sourceComplete&&!job.failed&&!job.skippedNoPrice?await markMissingProducts(profile.id,products.map(p=>p.sourceKey)):0;if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
         await setState('source_scan:'+profile.id,{jobId:job.id,complete:sourceComplete&&!job.failed&&!job.skippedNoPrice,at:new Date().toISOString(),count:products.length});
-        if(sourceComplete&&job.target!=='none'){const removal=await ledgerMissing(profile.id,true,job.target==='both'?'both':job.target);if(removal.planned)append(job,`دفتر حساب: ${removal.planned} مورد حذف‌شده از مبدأ؛ ${removal.changed} اقدام طبق سیاست بازنشستگی.`)}
+        if(sourceComplete){
+          let delTarget: 'woo'|'basalam'|'both'|null=null;
+          try{const opts=await getState<any>('job_options:'+job.id,null);if(opts?.deleteWoo||opts?.deleteBasalam)delTarget=opts.deleteWoo&&opts.deleteBasalam?'both':opts.deleteWoo?'woo':'basalam';else if(job.target!=='none')delTarget=job.target==='both'?'both':job.target as any;}catch{}
+          if(delTarget){const removal=await ledgerMissing(profile.id,true,delTarget);if(removal.planned)append(job,`دفتر حساب: ${removal.planned} مورد حذف‌شده از مبدأ؛ ${removal.changed} اقدام طبق سیاست بازنشستگی (${delTarget}).`)}
+        }
         await markProfileRun(profile.id);
         if (job.target !== 'none') await runSync(job, profile, await allProducts(profile.id));
         }

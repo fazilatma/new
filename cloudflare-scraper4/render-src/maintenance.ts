@@ -31,30 +31,95 @@ export async function reconAccounts():Promise<ReconAccount[]>{
  for(const shop of shops){const id=String(shop.vendorId||'');if(!id||!shop.token||seen.has(id))continue;seen.add(id);accounts.push({target:'basalam',accountKey:id,name:'باسلام — '+(shop.name||id),pricePercent:Number(shop.pricePercent)||0,toRial:true})}
  return accounts;
 }
-async function scanLedgerAccount(account:ReconAccount):Promise<ReconRemote[]>{
+const LEDGER_MAX_PAGES=500;
+const LEDGER_RETRY=3;
+const LEDGER_TTL_MS=3600000;
+const LEDGER_MAX_AGE_HOURS=1;
+type LedgerProgressEvent={type:string;account?:string;page?:number;totalPages?:number;fetched?:number;duplicate?:number;incomplete?:boolean;error?:string;attempt?:number;[k:string]:any};
+function sleep(ms:number){return new Promise<void>(r=>setTimeout(r,ms))}
+async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgressEvent)=>void):Promise<ReconRemote[]>{
  const all:any[]=[],seen=new Set<string>();
- for(let page=1;page<=100;page++){
-  const result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'active',shopId:account.accountKey});
-  if(result.complete===false)throw Error('فهرست مقصد کامل تأیید نشد؛ دفتر حساب قبلی حفظ شد.');
-  for(const x of result.products){if(!x.id||seen.has(String(x.id)))throw Error('شناسهٔ نامعتبر یا صفحهٔ تکراری مقصد؛ دفتر قبلی حفظ شد.');seen.add(String(x.id));all.push({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status,shopId:account.accountKey,shopName:account.name,raw:x.raw});}
-  if(page>=result.totalPages){if(Number.isFinite(result.total)&&all.length!==result.total)throw Error('تعداد محصولات دفتر حساب با مجموع مقصد یکسان نیست؛ اسکن دوباره لازم است.');return all.filter(x=>customerVisible(account.target,x))}
+ let totalPages=1,duplicate=0,incomplete=false;
+ for(let page=1;page<=LEDGER_MAX_PAGES;page++){
+  let result:any,lastError:any;
+  for(let attempt=1;attempt<=LEDGER_RETRY;attempt++){
+   try{
+    onProgress?.({type:'ledger-page-start',account:account.name,page,totalPages,attempt});
+    result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'active',shopId:account.accountKey});
+    lastError=null;
+    break;
+   }catch(error){
+    lastError=error;
+    if(attempt<LEDGER_RETRY){
+     const delay=500*attempt+Math.random()*200;
+     onProgress?.({type:'ledger-page-retry',account:account.name,page,attempt,error:error instanceof Error?error.message:String(error)});
+     await sleep(delay);
+    }
+   }
+  }
+  if(!result){
+   throw lastError||Error(`فهرست مقصد برای ${account.name} صفحه ${page} پس از ${LEDGER_RETRY} تلاش ناموفق بود.`);
+  }
+  if(result.complete===false){
+   incomplete=true;
+   onProgress?.({type:'ledger-page-incomplete',account:account.name,page});
+  }
+  for(const x of result.products){
+   const idStr=String(x.id||'');
+   if(!idStr||idStr==='0'){
+    continue;
+   }
+   if(seen.has(idStr)){
+    duplicate++;
+    continue;
+   }
+   seen.add(idStr);
+   all.push({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status,shopId:account.accountKey,shopName:account.name,raw:x.raw});
+  }
+  totalPages=Math.max(1,Number(result.totalPages)||totalPages);
+  onProgress?.({type:'ledger-page-done',account:account.name,page,totalPages,fetched:all.length,duplicate,incomplete});
+  if(page>=totalPages){
+   if(Number.isFinite(result.total)&&Math.abs(all.length-Number(result.total))>Math.max(5,Math.floor(Number(result.total)*0.02))){
+    onProgress?.({type:'ledger-total-mismatch',account:account.name,expected:result.total,actual:all.length});
+   }
+   return all.filter(x=>customerVisible(account.target,x));
+  }
  }
- throw Error('سقف ۱۰۰ صفحهٔ دفتر حساب رسید؛ اسکن ناقص منتشر نشد.');
+ onProgress?.({type:'ledger-max-pages',account:account.name,totalPages:LEDGER_MAX_PAGES,fetched:all.length});
+ return all.filter(x=>customerVisible(account.target,x));
 }
-async function remoteForAccount(account:ReconAccount,force=false):Promise<ReconRemote[]>{
+async function remoteForAccount(account:ReconAccount,force=false,onProgress?:(e:LedgerProgressEvent)=>void):Promise<ReconRemote[]>{
  const scope=await destinationScope(account.target,account.accountKey);
- await destinationLedger.refresh(scope,()=>scanLedgerAccount(account),force);
- let entries=await destinationLedger.entries(scope);if(entries.some(x=>x.invalid)){await destinationLedger.refresh(scope,()=>scanLedgerAccount(account),true);entries=await destinationLedger.entries(scope);if(entries.some(x=>x.invalid))throw Error('وضعیت یک محصول مقصد هنوز نامطمئن است؛ دوباره تازه‌سازی کنید.')}return entries.map(x=>x.remote).filter(x=>customerVisible(account.target,x));
+ await destinationLedger.refresh(scope,()=>scanLedgerAccount(account,onProgress),force);
+ let entries=await destinationLedger.entries(scope);
+ if(entries.some(x=>x.invalid)){
+  await destinationLedger.refresh(scope,()=>scanLedgerAccount(account,onProgress),true);
+  entries=await destinationLedger.entries(scope);
+  if(entries.some(x=>x.invalid)){
+   onProgress?.({type:'ledger-invalid-remaining',account:account.name});
+  }
+ }
+ return entries.map(x=>x.remote).filter(x=>customerVisible(account.target,x));
 }
-export async function refreshDestinationLedger(force=false){
+export async function refreshDestinationLedger(force=false,onProgress?:(e:LedgerProgressEvent)=>void){
  const startedAt=new Date().toISOString(),accounts=await reconAccounts(),items:any[]=[];
- for(const account of accounts){try{const before=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
-  await remoteForAccount(account,force);const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,cached:before?.generation===meta?.generation,ok:true});
- }catch(error){items.push({...account,ok:false,error:error instanceof Error?error.message:String(error)})}}
- const durationMs=Math.max(0,Date.now()-Date.parse(startedAt)),report={ok:items.every(x=>x.ok),items,maxAgeHours:6,startedAt,completedAt:new Date().toISOString(),durationMs,durationMinutes:durationMs/60000,scannedAccounts:items.filter(x=>x.ok&&!x.cached).length,cachedAccounts:items.filter(x=>x.cached).length};
+ for(const account of accounts){
+  try{
+   const before=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
+   onProgress?.({type:'refresh-account-start',account:account.name});
+   await remoteForAccount(account,force,(e)=>onProgress?.({...e,account:account.name}));
+   const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
+   items.push({...account,...meta,cached:before?.generation===meta?.generation,ok:true});
+   onProgress?.({type:'refresh-account-done',account:account.name,cached:before?.generation===meta?.generation,total:meta?.count});
+  }catch(error){
+   items.push({...account,ok:false,error:error instanceof Error?error.message:String(error)});
+   onProgress?.({type:'refresh-account-error',account:account.name,error:error instanceof Error?error.message:String(error)});
+  }
+ }
+ const durationMs=Math.max(0,Date.now()-Date.parse(startedAt)),report={ok:items.every(x=>x.ok),items,maxAgeHours:LEDGER_MAX_AGE_HOURS,startedAt,completedAt:new Date().toISOString(),durationMs,durationMinutes:durationMs/60000,scannedAccounts:items.filter(x=>x.ok&&!x.cached).length,cachedAccounts:items.filter(x=>x.cached).length};
  await setState('destination_ledger:last_refresh',report);if(report.ok&&accounts.length&&report.scannedAccounts===accounts.length)await setState('destination_ledger:last_full_refresh',report);return report;
 }
-export async function destinationLedgerStatus(){const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=21600000})}return {ok:true,items,maxAgeHours:6,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
+export async function destinationLedgerStatus(){const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL_MS})}return {ok:true,items,maxAgeHours:LEDGER_MAX_AGE_HOURS,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
 
 
 /**
@@ -89,6 +154,55 @@ export async function unifiedRecon(profileId = '') {
     actions: planActions(rows, suffixFormats).length, failures, rows,
   };
   await setState('recon_unified', report);
+  return report;
+}
+
+export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
+  const local = await maintenanceRows(profileId) as ReconLocal[];
+  const profileNames: Record<string,string>={};
+  for(const profile of await listProfiles()) profileNames[profile.id]=profile.name||profile.id;
+  const settings=await getState<any>('settings',{}) as any;
+  const suffixFormats=settings?.dedup?.suffixFormats||'';
+  const patterns=suffixPatterns(parseSuffixFormats(suffixFormats));
+  const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
+  const skippedNoCode=local.length-eligible.length;
+  onProgress?.({type:'progress',stage:'local-loaded',local:local.length,eligible:eligible.length,skippedNoCode});
+  const accounts=await reconAccounts();
+  onProgress?.({type:'progress',stage:'accounts-listed',count:accounts.length,accounts:accounts.map(a=>a.name)});
+  const rows: UnifiedReconRow[]=[]; const failures: Array<{account:string;error:string}>=[];
+  let totalFetched=0;
+  for(let idx=0;idx<accounts.length;idx++){
+    const account=accounts[idx];
+    onProgress?.({type:'progress',stage:'account-start',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length});
+    try{
+      const remote=await remoteForAccount(account,false,(e)=>{
+        onProgress?.({type:'progress',stage:'ledger-fetch',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length,...e});
+      });
+      totalFetched+=remote.length;
+      onProgress?.({type:'progress',stage:'account-fetched',account:account.name,remoteCount:remote.length,totalFetched});
+      const reconciled=reconcileAccount(local,remote,account,profileNames,suffixFormats);
+      rows.push(...reconciled);
+      onProgress?.({type:'progress',stage:'account-done',account:account.name,accountKey:account.accountKey,reconciled:reconciled.length,rowsSoFar:rows.length,remoteCount:remote.length});
+      // Stream partial rows for live table filling
+      if(reconciled.length){
+        onProgress?.({type:'partial',stage:'rows-partial',account:account.name,rows:reconciled.slice(0,200),rowsCount:reconciled.length,totalRows:rows.length});
+      }
+    }catch(error){
+      const message=msg(error);
+      failures.push({account:account.name,error:message});
+      const fallback=unreachableAccountRows(local,account,profileNames,suffixFormats,message);
+      rows.push(...fallback);
+      onProgress?.({type:'progress',stage:'account-error',account:account.name,error:message,rowsSoFar:rows.length});
+    }
+  }
+  const report={
+    ok:failures.length===0,at:new Date().toISOString(),profileId,
+    local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
+    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),
+    actions:planActions(rows,suffixFormats).length,failures,rows,
+  };
+  onProgress?.({type:'progress',stage:'report-ready',reportSummary:{matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra}});
+  await setState('recon_unified',report);
   return report;
 }
 
@@ -230,6 +344,82 @@ export async function reconTable(target: 'woo' | 'basalam', profileId = '') {
   await setState(`recon_table_${target}`, report);
   return report;
 }
+
+export async function reconTableLive(target:'woo'|'basalam',profileId='',onProgress?:(e:any)=>void){
+  onProgress?.({type:'progress',stage:'local-loading',target});
+  const local=await maintenanceRows(profileId);
+  onProgress?.({type:'progress',stage:'local-loaded',count:local.length,target});
+  // Use robust ledger fetch if target accounts exist, otherwise fallback to direct products
+  let remote:any[]=[];
+  try{
+    const accounts=await reconAccounts();
+    const matchedAccounts=accounts.filter(a=>a.target===target);
+    if(matchedAccounts.length){
+      onProgress?.({type:'progress',stage:'accounts',count:matchedAccounts.length,target});
+      for(let i=0;i<matchedAccounts.length;i++){
+        const acc=matchedAccounts[i];
+        onProgress?.({type:'progress',stage:'account-start',account:acc.name,target,index:i,total:matchedAccounts.length});
+        const part=await remoteForAccount(acc,false,(e)=>onProgress?.({type:'progress',stage:'ledger-fetch',account:acc.name,target,...e}));
+        remote.push(...part);
+        onProgress?.({type:'progress',stage:'account-done',account:acc.name,target,fetched:remote.length});
+      }
+    }else{
+      onProgress?.({type:'progress',stage:'remote-direct',target});
+      remote=await remoteProducts(target);
+    }
+  }catch{
+    onProgress?.({type:'progress',stage:'remote-fallback',target});
+    remote=await remoteProducts(target);
+  }
+  onProgress?.({type:'progress',stage:'remote-loaded',count:remote.length,target});
+  const rows:any[]=[];
+  const byTitle=new Map<string,any[]>(),bySku=new Map<string,any>(),byRemoteId=new Map<number,any>();
+  for(const row of local){
+    const key=reconNormTitle(row.title);
+    if(key){const list=byTitle.get(key)||[];list.push(row);byTitle.set(key,list)}
+    const sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);
+    if(sku&&!bySku.has(sku))bySku.set(sku,row);
+    let fromMapId=0;for(const m of (row.maps||[])){if(String(m.target||'')===target&&Number(m.remote_id)>0){fromMapId=Number(m.remote_id);break}}
+    const mapped=fromMapId||(target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0));
+    if(mapped>0&&!byRemoteId.has(mapped))byRemoteId.set(mapped,row);
+  }
+  const consumed=new Set<any>();
+  let processed=0;
+  for(const item of remote){
+    const key=reconNormTitle(item.name||(item as any).title||'');
+    let source=(byTitle.get(key)||[]).find(row=>!consumed.has(row))||null,matchedBy=source?'title':'none';
+    if(!source&&item.sku&&bySku.has(item.sku)){const candidate=bySku.get(item.sku);if(!consumed.has(candidate)){source=candidate;matchedBy='sku'}}
+    if(!source&&byRemoteId.has(item.id)){const candidate=byRemoteId.get(item.id);if(!consumed.has(candidate)){source=candidate;matchedBy='id'}}
+    const remotePrice=reconPrice(item.price);
+    if(!source){
+      rows.push({bucket:'extra',title:item.name||(item as any).title||'',remoteTitle:item.name||(item as any).title||'',remoteId:item.id||null,profileId:'',sourceKey:'',sourcePrice:null,remotePrice,delta:null,matchedBy:'none',shopId:String((item as any).shopId||''),shopName:String((item as any).shopName||''),status:String(item.status||''),why:'در هیچ پروفایل/مبدأ نیست'});
+    }else{
+      consumed.add(source);
+      const sourcePrice=reconPrice(source.price);
+      const base={title:source.title||'',remoteTitle:item.name||(item as any).title||'',remoteId:item.id||null,profileId:String(source.profile_id||''),sourceKey:String(source.source_key||''),sourcePrice,remotePrice,matchedBy,shopId:String((item as any).shopId||''),shopName:String((item as any).shopName||''),status:String(item.status||'')};
+      if(sourcePrice===null)rows.push({...base,bucket:'noPrice',delta:null,why:'قیمت مبدأ ثبت نشده — مقایسه نشد'});
+      else if(remotePrice!==sourcePrice)rows.push({...base,bucket:'priceDiff',delta:(remotePrice||0)-sourcePrice,why:'قیمت مقصد با مبدأ یکی نیست'});
+      else rows.push({...base,bucket:'matched',delta:0,why:''});
+    }
+    processed++;
+    if(processed%50===0){
+      onProgress?.({type:'partial',stage:'rows-partial',target,processed,total:remote.length,rows:rows.slice(-50),rowsCount:rows.length});
+    }
+  }
+  for(const row of local){
+    if(consumed.has(row))continue;
+    if(!row.active)continue;
+    rows.push({bucket:'missing',title:row.title||'',remoteTitle:'',remoteId:null,profileId:String(row.profile_id||''),sourceKey:String(row.source_key||''),sourcePrice:reconPrice(row.price),remotePrice:null,delta:null,matchedBy:'none',shopId:'',shopName:'',status:'',why:'در مبدأ هست ولی در مقصد نیست'});
+  }
+  const count=(bucket:string)=>rows.filter(r=>r.bucket===bucket).length;
+  const summary={matched:count('matched'),priceDiff:count('priceDiff'),extra:count('extra'),missing:count('missing'),noPrice:count('noPrice')};
+  const matchedByTitle=rows.filter(r=>r.matchedBy==='title').length,matchedBySku=rows.filter(r=>r.matchedBy==='sku').length,matchedById=rows.filter(r=>r.matchedBy==='id').length;
+  const inSync=summary.priceDiff===0&&summary.extra===0&&summary.missing===0;
+  const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
+  await setState(`recon_table_${target}`,report);
+  onProgress?.({type:'progress',stage:'report-ready',target,summary});
+  return report;
+}
 export async function recon(target:'woo'|'basalam',profileId=''){const local=await maintenanceRows(profileId),remote=await remoteProducts(target),byId=new Map(remote.map(x=>[x.id,x])),bySku=new Map(remote.filter(x=>x.sku).map(x=>[x.sku,x])),byName=new Map(remote.map(x=>[norm(x.name),x])),used=new Set<number>(),items:any[]=[];for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''})}const result={target,at:new Date().toISOString(),local:local.length,remote:remote.length,matched:items.filter(x=>x.remoteId).length,missingRemote:items.filter(x=>!x.remoteId&&x.active).length,retired:items.filter(x=>!x.active).length,extraRemote:remote.filter(x=>!used.has(x.id)).map(x=>({id:x.id,title:x.name,status:x.status})),items};await setState(`recon_${target}`,result);return result}
 export async function rebuildMap(target:'woo'|'basalam',profileId=''){const report=await recon(target,profileId);let mapped=0;for(const item of report.items)if(item.remoteId){await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);mapped++}return{ok:true,target,mapped,unmatched:report.items.length-mapped}}
 export async function retire(target:'woo'|'basalam',profileId:string,action:string,apply=false){const rows=(await maintenanceRows(profileId)).filter(x=>!x.active),preview=rows.map(x=>({profileId:x.profile_id,sourceKey:x.source_key,title:x.title,remoteId:target==='woo'?x.remote_woo_id:x.remote_basalam_id,missingSince:x.missing_since,action}));if(!apply||action==='report')return{ok:true,dryRun:true,count:preview.length,items:preview};let changed=0,failed:any[]=[];for(const item of preview){if(!item.remoteId)continue;try{if(target==='woo')await wooUpdate(item.remoteId,action==='trash'?{status:'trash'}:{status:action==='draft'?'draft':'private'});else await basalamUpdate(item.remoteId,{status:action==='trash'?'archived':action});changed++}catch(error){failed.push({title:item.title,error:msg(error)})}}return{ok:failed.length===0,dryRun:false,changed,failed}}
@@ -253,8 +443,31 @@ export async function rawdestinationDelete(target:'woo'|'basalam',id:number,forc
   return{ok:true,id,deleted:false,archived:true,status:4184,shopId:shopId||'default',message:'باسلام حذف دائمی ندارد؛ محصول با وضعیت ۴۱۸۴ بایگانی شد.'};
 }
 async function remoteProducts(target:'woo'|'basalam'):Promise<Remote[]>{return listDestinationProducts(target)}
-async function wooProducts(){const c=(await loadConnections()).woo;if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');const auth=`Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`,out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.url}/wp-json/wc/v3/products?per_page=100&page=${page}&status=any`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},10_000_000),data=await r.json() as any[];if(!r.ok)throw Error(`Woo HTTP ${r.status}`);for(const x of data)out.push({id:Number(x.id),name:String(x.name||''),sku:String(x.sku||''),images:x.images||[],status:String(x.status||''),price:Number(x.price||0),raw:x});if(data.length<100)break}return out}
-async function basalamProducts(){const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const out:Remote[]=[];for(let page=1;page<=100;page++){const r=await safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products?per_page=100&page=${page}`,{headers:{authorization:`Bearer ${c.token}`,accept:'application/json'}},10_000_000),body=await r.json() as any;if(!r.ok)throw Error(`Basalam HTTP ${r.status}`);const data=body.data||body.products||body.results||body.items||[];for(const x of data)out.push({id:Number(x.id),name:String(x.name||x.title||''),sku:String(x.sku||''),images:x.photos||x.images||(x.photo?[x.photo]:[]),status:String(x.status||''),price:Math.round(Number(x.price||0)/10),raw:x});if(data.length<100)break}return out}
+async function wooProducts(){
+  const c=(await loadConnections()).woo;if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');
+  const auth=`Basic ${Buffer.from(`${c.key}:${c.secret}`).toString('base64')}`,out:Remote[]=[];
+  for(let page=1;page<=LEDGER_MAX_PAGES;page++){
+    const r=await fetchWithRetry(()=>safeFetch(`${c.url}/wp-json/wc/v3/products?per_page=100&page=${page}&status=any`,{headers:{authorization:auth,accept:'application/json'},apiMode:true,directRoute:true},10_000_000),`wooProducts p${page}`);
+    const data=await r.json() as any[];
+    if(!r.ok)throw Error(`Woo HTTP ${r.status}`);
+    for(const x of data)out.push({id:Number(x.id),name:String(x.name||''),sku:String(x.sku||''),images:x.images||[],status:String(x.status||''),price:Number(x.price||0),raw:x});
+    if(data.length<100)break;
+  }
+  return out;
+}
+async function basalamProducts(){
+  const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');
+  const out:Remote[]=[];
+  for(let page=1;page<=LEDGER_MAX_PAGES;page++){
+    const r=await fetchWithRetry(()=>safeFetch(`${c.api}/vendors/${encodeURIComponent(c.vendorId)}/products?per_page=100&page=${page}`,{headers:{authorization:`Bearer ${c.token}`,accept:'application/json'}},10_000_000),`basalamProducts p${page}`);
+    const body=await r.json() as any;
+    if(!r.ok)throw Error(`Basalam HTTP ${r.status}`);
+    const data=body.data||body.products||body.results||body.items||[];
+    for(const x of data)out.push({id:Number(x.id),name:String(x.name||x.title||''),sku:String(x.sku||''),images:x.photos||x.images||(x.photo?[x.photo]:[]),status:String(x.status||''),price:Math.round(Number(x.price||0)/10),raw:x});
+    if(data.length<100)break;
+  }
+  return out;
+}
 async function rawwooUpdate(id:number|string,payload:any){const c=(await loadConnections()).woo,auth=basicAuth(c.key,c.secret),result=await fetchJson(`${wooBase(c)}/${id}`,{method:'PUT',headers:{authorization:auth,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},true);return result.body}
 async function rawbasalamUpdate(id:number|string,payload:any,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');if(!shops.length)throw Error('غرفهٔ باسلام پیدا نشد.');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{return(await basalamFetch(shop,endpoint,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})).body}catch(error){last=error;if(!(error instanceof DestinationHttpError&&error.status===404))throw error}}throw last instanceof Error?last:Error(`ویرایش محصول باسلام #${id} ناموفق بود.`)}
 const msg=(e:unknown)=>e instanceof Error?e.message:String(e);
@@ -269,11 +482,29 @@ async function fetchJson(url:string,init:RequestInit={},woo:boolean|'basalam'=fa
 async function basalamShops():Promise<Shop[]>{const c=(await loadConnections()).basalam;if(!c.token||!c.vendorId)throw Error('اتصال باسلام کامل نیست');const rows:Shop[]=[{name:'غرفه پیش‌فرض',token:c.token,vendorId:String(c.vendorId),pricePercent:0,primary:true},...(c.shops||[]).filter(shop=>shop.token&&shop.vendorId).map(shop=>({name:shop.name,token:shop.token,vendorId:String(shop.vendorId),pricePercent:shop.pricePercent||0,primary:false}))],seen=new Set<string>();return rows.filter(row=>row.vendorId&&!seen.has(row.vendorId)&&(seen.add(row.vendorId),true))}
 function wooBase(c:{url:string;key:string;secret:string}){if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');return c.url.replace(/\/$/,'')+'/wp-json/wc/v3/products'}
 async function basalamFetch(shop:Shop,url:string,init:RequestInit={}){return fetchJson(url,{...init,headers:{authorization:`Bearer ${shop.token}`,accept:'application/json',...init.headers}},'basalam')}
+async function fetchWithRetry<T>(fn:()=>Promise<T>,label:string,retries=3):Promise<T>{
+  let last:any;
+  for(let attempt=1;attempt<=retries;attempt++){
+    try{return await fn()}catch(error){
+      last=error;
+      const status=(error as any)?.status||0;
+      const retryable=status===0||status===429||status>=500;
+      if(attempt<retries&&retryable){
+        await sleep(400*attempt+Math.random()*300);
+        continue;
+      }
+      if(attempt===retries)throw error;
+      if(!retryable)throw error;
+    }
+  }
+  throw last;
+}
 async function wooCatalog(query:{page:number;perPage:number;q:string;status:string}){
   const c=(await loadConnections()).woo;if(!c.url||!c.key||!c.secret)throw Error('اتصال ووکامرس کامل نیست');const auth=basicAuth(c.key,c.secret);
   if(/^\d+$/.test(query.q)){try{const product=await wooGet(Number(query.q));return{products:[product],total:1,totalPages:1,foundBy:'id'}}catch{/* continue with server search */}}
   const url=new URL(wooBase(c));url.searchParams.set('page',String(query.page));url.searchParams.set('per_page',String(query.perPage));url.searchParams.set('status',wooListStatus(query.status));if(query.q)url.searchParams.set('search',query.q);
-  const result=await fetchJson(url.toString(),{headers:{authorization:auth,accept:'application/json'}},true),rows=Array.isArray(result.body)?result.body:[];
+  const result=await fetchWithRetry(()=>fetchJson(url.toString(),{headers:{authorization:auth,accept:'application/json'}},true),`woo-catalog p${query.page}`);
+  const rows=Array.isArray(result.body)?result.body:[];
   return{products:rows.map(row=>normalizeRemote('woo',row,'default','فروشگاه ووکامرس')),total:Number(result.response.headers.get('x-wp-total')||rows.length),totalPages:Math.max(1,Number(result.response.headers.get('x-wp-totalpages')||1)),complete:Array.isArray(result.body)&&(!!result.response.headers.get('x-wp-totalpages')||rows.length<query.perPage),foundBy:query.q?'search':'list'};
 }
 async function wooStatusCounts(){const statuses=['all','publish','draft','pending','private','trash'],entries=await Promise.all(statuses.map(async status=>{try{const result=await wooCatalog({page:1,perPage:10,q:'',status});return[status,result.total] as const}catch{return[status,0] as const}}));return Object.fromEntries(entries)}
@@ -281,8 +512,31 @@ async function wooGet(id:number){const c=(await loadConnections()).woo,auth=basi
 async function basalamCatalog(query:{page:number;perPage:number;q:string;status:string;shopId:string}){
   const shops=selectShops(await basalamShops(),query.shopId);if(!shops.length)throw Error('غرفهٔ باسلام پیدا نشد.');
   if(/^\d+$/.test(query.q)){for(const shop of shops)try{const product=await basalamGet(Number(query.q),shop.vendorId);return{products:[product],total:1,totalPages:1,foundBy:'id'}}catch{/* next shop */}}
-  const products:RichRemote[]=[];let total=0,totalPages=1,successful=0,inventorySafe=true;for(const shop of shops){const url=new URL(`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products`);url.searchParams.set('page',String(query.page));url.searchParams.set('per_page',String(query.perPage));for(const value of basalamStatuses(query.status))url.searchParams.append('statuses',value);if(query.q)url.searchParams.set('title',query.q);try{const result=await basalamFetch(shop,url.toString()),rows=rowsFrom(result.body);const bodyRows=result.body?.data??result.body?.products??result.body?.results??result.body?.items??result.body;const pages=Number(result.body?.total_page??result.body?.meta?.last_page),count=Number(result.body?.total_count??result.body?.meta?.total);if(!Array.isArray(bodyRows)||(rows.length>=query.perPage&&!pages&&!Number.isFinite(count)))inventorySafe=false;if(Number.isFinite(count))totalPages=Math.max(totalPages,Math.ceil(count/query.perPage));products.push(...rows.map(row=>normalizeRemote('basalam',row,shop.vendorId,shop.name)));total+=Number(result.body?.total_count??result.body?.meta?.total??rows.length);totalPages=Math.max(totalPages,Number(result.body?.total_page??result.body?.meta?.last_page??1));successful++}catch(error){if(shops.length===1)throw error}}
-  if(!successful)throw Error('دریافت فهرست محصولات از هیچ غرفه‌ای موفق نبود.');return{products,total,totalPages,complete:successful===shops.length&&inventorySafe,foundBy:query.q?'title':'list'};
+  const products:RichRemote[]=[];let total=0,totalPages=1,successful=0,inventorySafe=true;
+  for(const shop of shops){
+    const url=new URL(`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products`);
+    url.searchParams.set('page',String(query.page));url.searchParams.set('per_page',String(query.perPage));
+    for(const value of basalamStatuses(query.status))url.searchParams.append('statuses',value);
+    if(query.q)url.searchParams.set('title',query.q);
+    try{
+      const result=await fetchWithRetry(()=>basalamFetch(shop,url.toString()),`basalam-catalog ${shop.vendorId} p${query.page}`);
+      const rows=rowsFrom(result.body);
+      const bodyRows=result.body?.data??result.body?.products??result.body?.results??result.body?.items??result.body;
+      const pages=Number(result.body?.total_page??result.body?.meta?.last_page),count=Number(result.body?.total_count??result.body?.meta?.total);
+      if(!Array.isArray(bodyRows)||(rows.length>=query.perPage&&!pages&&!Number.isFinite(count)))inventorySafe=false;
+      if(Number.isFinite(count))totalPages=Math.max(totalPages,Math.ceil(count/query.perPage));
+      products.push(...rows.map(row=>normalizeRemote('basalam',row,shop.vendorId,shop.name)));
+      total+=Number(result.body?.total_count??result.body?.meta?.total??rows.length);
+      totalPages=Math.max(totalPages,Number(result.body?.total_page??result.body?.meta?.last_page??1));
+      successful++;
+    }catch(error){
+      if(shops.length===1)throw error;
+      // For multi-shop, log and continue; don't fail whole batch if one shop transiently fails
+      console.warn(`basalamCatalog shop ${shop.vendorId} page ${query.page} failed:`,error instanceof Error?error.message:String(error));
+    }
+  }
+  if(!successful)throw Error('دریافت فهرست محصولات از هیچ غرفه‌ای موفق نبود.');
+  return{products,total,totalPages,complete:successful===shops.length&&inventorySafe,foundBy:query.q?'title':'list'};
 }
 async function basalamStatusCounts(shopId:string){const statuses=['all','2976','3790','3567','3568','4184'],entries=await Promise.all(statuses.map(async status=>{try{const result=await basalamCatalog({page:1,perPage:10,q:'',status,shopId});return[status,result.total] as const}catch{return[status,0] as const}}));return Object.fromEntries(entries)}
 async function basalamGet(id:number,shopId=''){const shops=selectShops(await basalamShops(),shopId||'all');let last:unknown;for(const shop of shops){for(const endpoint of [`${(await loadConnections()).basalam.api}/products/${id}`,`${(await loadConnections()).basalam.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`])try{const result=await basalamFetch(shop,endpoint),raw=unwrapProduct(result.body);if(Number(raw?.id||0)>0)return normalizeRemote('basalam',raw,shop.vendorId,shop.name)}catch(error){last=error}}throw last instanceof Error?last:Error(`محصول باسلام #${id} پیدا نشد.`)}
@@ -370,7 +624,7 @@ export async function ledgerMissing(profileId='',apply=false,target='both'){
  const manifests=new Map<string,any>();for(const row of local)if(!manifests.has(row.profile_id))manifests.set(row.profile_id,await getState<any>('source_scan:'+row.profile_id,null));
  for(const account of (await reconAccounts()).filter(a=>target==='both'||a.target===target)){
   const scope=await destinationScope(account.target,account.accountKey);const meta=await destinationLedger.metadata(scope);
-  if(!meta||!Number.isFinite(Date.parse(meta.startedAt))||Date.now()-Date.parse(meta.startedAt)>=21600000){failed.push({account:account.name,error:'دفتر حساب باید تازه‌سازی شود؛ حذف انجام نشد.'});continue}
+  if(!meta||!Number.isFinite(Date.parse(meta.startedAt))||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL_MS){failed.push({account:account.name,error:'دفتر حساب باید تازه‌سازی شود؛ حذف انجام نشد.'});continue}
   for(const row of local){if(profileId&&row.profile_id!==profileId||(row.active!==false&&row.active!==0)||!manifests.get(row.profile_id)?.complete)continue;
    const mapped=row.maps?.find((m:any)=>m.target===account.target&&String(m.account_key)===account.accountKey)?.remote_id||(account.target==='woo'?row.remote_woo_id:null);if(!mapped)continue;
    const entry=await destinationLedger.find(scope,mapped);if(!entry||entry.deleted||entry.invalid||entry.profileId!==row.profile_id||entry.sourceKey!==row.source_key)continue;
