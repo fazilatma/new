@@ -131,7 +131,7 @@ async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgr
   for(let attempt=1;attempt<=LEDGER_RETRY;attempt++){
    try{
     onProgress?.({type:'ledger-page-start',account:account.name,page,totalPages,attempt});
-    result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'ledger',shopId:account.accountKey});
+    result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'active',shopId:account.accountKey});
     lastError=null;
     break;
    }catch(error){
