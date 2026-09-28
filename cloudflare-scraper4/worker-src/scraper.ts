@@ -274,8 +274,25 @@ function imageUrl(value:string,baseUrl:string):string{
   const absolute=toAbsoluteUrl(raw.replace(/&amp;/gi,'&'),baseUrl);
   return /^(https?):/i.test(absolute)?absolute:'';
 }
-function galleryKey(url:string):string{return url.replace(/-\d{2,4}x\d{2,4}(?=\.[a-z]{3,5}(?:[?#]|$))/i,'').replace(/[?#].*$/,'')}
-function addGalleryImage(images:string[],raw:string,baseUrl:string,max=30):void{const url=imageUrl(raw,baseUrl);if(url&&images.length<Math.max(1,Math.min(30,max))&&!images.some(existing=>galleryKey(existing)===galleryKey(url)))images.push(url)}
+function galleryKey(url:string):string{
+  try{
+    const parsed=new URL(url);
+    parsed.pathname=parsed.pathname.replace(/-\d{2,4}x\d{2,4}(?=\.[a-z]{3,5}$)/i,'');
+    return (parsed.origin+parsed.pathname).toLowerCase();
+  }catch{
+    return url.replace(/-\d{2,4}x\d{2,4}(?=\.[a-z]{3,5}(?:[?#]|$))/i,'').split(/[?#]/)[0].toLowerCase();
+  }
+}
+function addGalleryImage(images:string[],raw:string,baseUrl:string,max=30):void{
+  const url=imageUrl(raw,baseUrl);
+  if(!url)return;
+  const limit=Math.max(1,Math.min(30,max));
+  if(images.length>=limit)return;
+  const key=galleryKey(url);
+  if(images.some(existing=>galleryKey(existing)===key))return;
+  if(images.includes(url))return;
+  images.push(url);
+}
 function linkScore(value:string):number{
   if(!value||/^(javascript:|mailto:|tel:|#)/i.test(value))return -1000;
   let score=0;
@@ -530,9 +547,12 @@ export async function parseDetailPage(html:string,baseUrl:string,selectors:Selec
   for(const selector of selectorParts(selectors.detailImage)){safeOn(rewriter,selector,detailImage);for(const suffix of ['img','source','a[href]','[data-src]','[data-large_image]','[data-zoom-image]'])safeOn(rewriter,`${selector} ${suffix}`,detailImage)}
   const galleryMax=Math.max(1,Math.min(30,Math.trunc(Number(selectors.galleryMax)||30)));
   const galleryImages:string[]=[],gallery=new GalleryHandler(galleryImages,baseUrl,galleryMax);
+  const gallerySuffixes=['img','source','a','meta','[data-src]','[data-lazy-src]','[data-original]','[data-zoom-image]','[data-large_image]','[data-large-image]','[data-full]','[data-thumb]','[data-image]','[data-gallery]','picture','[data-zoom]'];
   for(const selector of multilineSelectorParts(selectors.gallery)){
     safeOn(rewriter,selector,gallery);
-    for(const suffix of ['img','source','a','meta','[data-src]','[data-zoom-image]'])safeOn(rewriter,`${selector} ${suffix}`,gallery);
+    for(const suffix of gallerySuffixes)safeOn(rewriter,`${selector} ${suffix}`,gallery);
+    for(const suffix of gallerySuffixes)safeOn(rewriter,`${selector} ${suffix} img`,gallery);
+    safeOn(rewriter,`${selector} *`,gallery);
   }
   const includeGallery=multilineSelectorParts(selectors.gallery).length>0;
   const variationContext=new VariationContext();
