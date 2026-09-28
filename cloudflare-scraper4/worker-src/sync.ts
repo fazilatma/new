@@ -283,7 +283,8 @@ export async function syncBasalam(product:Product,profile:Profile):Promise<Basal
   const c=(await loadConnections()).basalam;
   if(!(c.token&&c.vendorId)&&!c.shops.some(s=>s.token&&s.vendorId))throw new Error('تنظیمات باسلام کامل نیست');
   const learned=c.autoCategory?await findLearnedCategory(product.title):null;
-  const categories=[product.basalamCategoryId,profile.basalamCategoryId,learned?.categoryId,c.categoryId,...(profile.basalamFallbackCategoryIds||[]),...c.fallbackCategoryIds].map(Number).filter((id,index,all)=>id>0&&all.indexOf(id)===index);
+  const manualCats=[profile.basalamCategoryId,...(profile.basalamFallbackCategoryIds||[])].map(Number).filter((id:number,index:number,all:number[])=>id>0&&all.indexOf(id)===index);
+  const categories=manualCats.length?manualCats:[product.basalamCategoryId,learned?.categoryId,c.categoryId,...c.fallbackCategoryIds].map(Number).filter((id:number,index:number,all:number[])=>id>0&&all.indexOf(id)===index);
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
   const accounts=[...(c.token&&c.vendorId?[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0}]:[]),...c.shops.filter(s=>s.token&&s.vendorId)],results:BasalamSyncResult[]=[];
   for(const account of accounts){

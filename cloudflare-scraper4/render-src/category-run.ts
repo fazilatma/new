@@ -22,11 +22,11 @@ import { isChatCompatibleAiModel } from '../worker-src/ai-catalog.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixPinnedModels, normalizeCategoryFixPinned, normalizeCategoryMode, selectCategoryModels } from '../worker-src/destination-core.js';
 import { aiProviders, suggestCategoryWithModel } from './ai.js';
 import { loadConnections } from './connections.js';
-import { getState, getTriedBasalamCategories, pruneBasalamCategoryNotebooks, markBasalamCategoriesTried, setState } from './db.js';
+import { getState, getTriedBasalamCategories, listProfiles, pruneBasalamCategoryNotebooks, markBasalamCategoriesTried, setState } from './db.js';
 import { applyBasalamCategory, destinationCatalog, destinationCategories } from './maintenance.js';
 
 export type CategoryRunStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed';
-type CategoryProduct = { id: number; shopId: string; title: string; categoryId?: number };
+type CategoryProduct = { id: number; shopId: string; title: string; categoryId?: number; profileId?: string; sourceKey?: string };
 export type CategoryRunItem = { id: number; shopId: string; title: string; ok: boolean; categoryId?: number; categoryName?: string; source?: string; confidence?: number; error?: string };
 export type CategoryRun = { inventoryComplete?: boolean;
   id: string; kind: 'category-all'; status: CategoryRunStatus; phase: string; stopRequested: boolean;
@@ -161,7 +161,7 @@ async function listCategoryProducts(run: CategoryRun): Promise<void> {
           if(status!=='3567'&&status!=='unapproved')continue;
           const id=Number(remote.id||raw.id)||0;if(id<=0)continue;
           const title=String(remote.name||raw.name||raw.title||'').trim();if(!title)continue;
-          ledgerProducts.push({id,shopId:String(acc.accountKey||''),title,categoryId:Number(raw.category_id||raw.categoryId||0)||undefined});
+          ledgerProducts.push({id,shopId:String(acc.accountKey||''),title,categoryId:Number(raw.category_id||raw.categoryId||0)||undefined,profileId:String(e.profileId||'')||undefined,sourceKey:String(e.sourceKey||'')||undefined});
         }
       }
       if(usable&&anyComplete&&ledgerProducts.length>0){
@@ -206,14 +206,53 @@ function appendCategoryItem(run: CategoryRun, item: CategoryRunItem): void {
   if (run.items.length > 300) run.items = run.items.slice(-300);
 }
 
-async function categorizeProduct(run: CategoryRun, product: CategoryProduct, categories: any[]): Promise<boolean> {
-  // Returns false when the user asked to stop.
+function findProfileForCategoryProduct(product:any,profiles:any[]):any|null{
+  if((product as any).profileId){
+    const byId=profiles.find((p:any)=>String(p.id)===String((product as any).profileId));
+    if(byId)return byId;
+  }
+  const title=String(product.title||'');
+  let best:any=null;let bestLen=0;
+  for(const p of profiles){
+    const suf=String(p.titleSuffix||'').trim();
+    if(!suf)continue;
+    if(title.endsWith(suf)&&suf.length>bestLen){best=p;bestLen=suf.length}
+  }
+  return best;
+}
+function manualBasalamCats(profile:any):number[]{
+  if(!profile)return[];
+  const out=[profile.basalamCategoryId,...(profile.basalamFallbackCategoryIds||[])].map(Number).filter((id:number,index:number,all:number[])=>id>0&&all.indexOf(id)===index);
+  return out;
+}
+async function categorizeProduct(run: CategoryRun, product: CategoryProduct, categories: any[], profiles:any[]): Promise<boolean> {
   const currentCategory = Number(product.categoryId) || 0;
   const tried = new Set(await getTriedBasalamCategories(product.shopId, product.id));
   if(currentCategory>0)tried.add(currentCategory);
-  const available=categories.filter(row=>!tried.has(Number(row.id)));
-  // Sequential voting with early stop: models answer one by one; as soon as a category
-  // reaches the majority threshold we stop asking the remaining models.
+  const matchedProfile=findProfileForCategoryProduct(product,profiles);
+  const manualIds=manualBasalamCats(matchedProfile);
+  if(manualIds.length){
+    const manualAvailable=manualIds.filter(id=>!tried.has(id));
+    if(manualAvailable.length){
+      const chosenId=manualAvailable[0];
+      const catRow=categories.find((c:any)=>Number(c.id)===chosenId);
+      const catName=catRow?String(catRow.name||catRow.title||catRow.path||''):`#${chosenId}`;
+      try{
+        const source=`دسته‌بندی دستی پروفایل «${matchedProfile?.name||matchedProfile?.id||''}» (پسوند «${String(matchedProfile?.titleSuffix||'').slice(0,60)}»)`;
+        await markBasalamCategoriesTried(product.shopId,product.id,[currentCategory,chosenId]);
+        await applyBasalamCategory(product.id, product.shopId, chosenId, product.title, catName, source);
+        run.changed++;
+        appendCategoryItem(run, { ...product, ok: true, categoryId: chosenId, categoryName: catName, source, confidence: 100 });
+        run.cursor++; run.processed++; run.attempts = 0;
+        const latest = await readRun();
+        if (latest?.stopRequested) { run.stopRequested = true; run.status = 'paused'; run.phase = 'paused'; }
+        return !run.stopRequested;
+      }catch(error){
+        await markBasalamCategoriesTried(product.shopId, product.id, [chosenId]);
+      }
+    }
+  }
+  const available=categories.filter((row:any)=>!tried.has(Number(row.id)));
   const modelKeys = run.modelKeys, threshold = Math.floor(modelKeys.length / 2) + 1, votes = new Map<number, { count: number; row: any }>(), triedHits: number[] = [];
   let responded = 0;
   for (const key of (available.length?modelKeys:[])) {
@@ -225,7 +264,7 @@ async function categorizeProduct(run: CategoryRun, product: CategoryProduct, cat
     const id = Number(suggestion.categoryId);
     if (!(Number.isInteger(id) && id > 0)) continue;
     if (tried.has(id)) { triedHits.push(id); continue; }
-    if(!available.some(row=>Number(row.id)===id))continue;
+    if(!available.some((row:any)=>Number(row.id)===id))continue;
     const vote = votes.get(id) || { count: 0, row: suggestion };
     vote.count++; votes.set(id, vote);
     if (vote.count >= threshold) break;
@@ -244,7 +283,6 @@ async function categorizeProduct(run: CategoryRun, product: CategoryProduct, cat
       appendCategoryItem(run, { ...product, ok: false, error: (error instanceof Error ? error.message : String(error)) + ' (دستهٔ پیشنهادی برای این محصول ثبت شد تا دوباره امتحان نشود.)' });
     }
   } else if (triedHits.length || !available.length) {
-    // Every suggestion the models made for this product was already tried before.
     run.failed++;
     appendCategoryItem(run, { ...product, ok: false, error: 'همهٔ دسته‌بندی‌های پیشنهادی مدل‌ها قبلاً برای این محصول امتحان شده‌اند و نتیجهٔ قطعی نداشتند؛ در اجرای بعدی از آنها صرف‌نظر می‌شود.' });
   } else {
@@ -260,9 +298,10 @@ async function categorizeProduct(run: CategoryRun, product: CategoryProduct, cat
 async function categorizeBatch(run: CategoryRun): Promise<void> {
   if (run.cursor >= run.products.length) { run.status = 'done'; run.phase = 'finished'; run.finishedAt = now(); return; }
   const categories = (await destinationCategories()).items;
+  let profiles:any[]=[];try{profiles=await listProfiles()}catch{}
   const end = Math.min(run.products.length, run.cursor + CATEGORY_BATCH);
   for (let i = run.cursor; i < end; i++) {
-    const keepGoing = await categorizeProduct(run, run.products[i], categories);
+    const keepGoing = await categorizeProduct(run, run.products[i], categories, profiles);
     if (!keepGoing) break;
   }
   if (run.status === 'paused') return;
