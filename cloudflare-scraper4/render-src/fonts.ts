@@ -9,11 +9,62 @@ type FontName=keyof typeof FONT_FILES;
 function font(name:string){return FONT_FILES[name.toLowerCase() as FontName]}
 export function fontStylesheet(name:string):Response{
   const item=font(name);if(!item)return new Response('Font not found',{status:404});
-  const css=Object.keys(item.weights).map(weight=>`@font-face{font-family:"${item.family}";src:url("/assets/fonts/${name.toLowerCase()}-${weight}.woff2") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`).join('\n');
-  return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','x-content-type-options':'nosniff'}});
+  const lower=name.toLowerCase();
+  const css=Object.keys(item.weights).map(weight=>{
+    const hash=(item.weights as Record<string,string>)[weight];
+    const direct=`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`;
+    const local=`/assets/fonts/${lower}-${weight}.woff2`;
+    // Direct CDN first (browser fetches without server proxy), then local proxy fallback for hosts that block CDN
+    return `@font-face{font-family:"${item.family}";src:url("${direct}") format("woff2"),url("${local}") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`;
+  }).join('\n');
+  return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+}
+async function fetchWithTimeout(url:string,init:RequestInit={},timeoutMs=8000):Promise<Response>{
+  const controller=new AbortController();
+  const id=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    return await fetch(url,{...init,signal:controller.signal});
+  } finally { clearTimeout(id); }
 }
 export async function fontFile(name:string,weight:string):Promise<Response>{
   const item=font(name),hash=item&&(item.weights as Record<string,string>)[weight];if(!item||!hash)return new Response('Font file not found',{status:404});
-  const upstream=await fetch(`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,{headers:{accept:'font/woff2'}});if(!upstream.ok)return new Response('Font upstream unavailable',{status:502});
-  return new Response(upstream.body,{status:200,headers:{'content-type':'font/woff2','cache-control':'public, max-age=31536000, immutable','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+  const lower=name.toLowerCase();
+  // Try local disk cache first (Node only)
+  try{
+    const { readFile }=await import('node:fs/promises');
+    const { join }=await import('node:path');
+    const cacheDir=process.env.FONT_CACHE_DIR||join(process.cwd(),'data','fonts');
+    const cachePath=join(cacheDir,`${lower}-${weight}.woff2`);
+    const buf=await readFile(cachePath);
+    if(buf?.length) return new Response(buf,{status:200,headers:{'content-type':'font/woff2','cache-control':'public, max-age=31536000, immutable','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+  } catch {}
+  const urls=[
+    `https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,
+    // jsDelivr mirrors for Vazir as fallback when fontcdn.ir is unreachable from host
+    ...(lower==='vazir'?[
+      `https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/Vazir-${weight==='400'?'Regular':weight==='700'?'Bold':weight}.woff2`,
+      `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/woff2/Vazirmatn-${weight}.woff2`
+    ]:[]),
+  ];
+  let lastError:Response|null=null;
+  for(const url of urls){
+    try{
+      const upstream=await fetchWithTimeout(url,{headers:{accept:'font/woff2','user-agent':'Scraper4/'+(process.env.npm_package_version||'1.0')}},8000);
+      if(!upstream.ok){ lastError=new Response(`Font upstream ${upstream.status} for ${url}`,{status:502}); continue; }
+      const buf=await upstream.arrayBuffer();
+      if(!buf?.byteLength){ lastError=new Response('Font upstream empty',{status:502}); continue; }
+      // Cache to disk for next time
+      try{
+        const { mkdir, writeFile }=await import('node:fs/promises');
+        const { join }=await import('node:path');
+        const cacheDir=process.env.FONT_CACHE_DIR||join(process.cwd(),'data','fonts');
+        await mkdir(cacheDir,{recursive:true});
+        await writeFile(join(cacheDir,`${lower}-${weight}.woff2`), Buffer.from(buf));
+      } catch {}
+      return new Response(buf,{status:200,headers:{'content-type':'font/woff2','cache-control':'public, max-age=31536000, immutable','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+    } catch (e){
+      lastError=new Response('Font fetch failed: '+(e instanceof Error?e.message:String(e)),{status:502});
+    }
+  }
+  return lastError||new Response('Font upstream unavailable',{status:502});
 }
