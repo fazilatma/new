@@ -98,6 +98,14 @@ def build_system_prompt(
             except Exception as e:
                 prompt += f"  Files: (unable to list: {e})\n"
 
+    prompt += (
+        "\n### 🛠️ WORKSPACE FILE CREATION & EDITING RULES:\n"
+        "- When the user asks you to write, create, generate, modify, refactor, or test code or files, "
+        "you MUST ALWAYS call the `write_file` tool (`write_file(path=..., content=...)`) so the code is saved directly into the active workspace directory.\n"
+        "- DO NOT just output markdown code blocks without saving the file using `write_file`.\n"
+        "- Always ensure the generated code is completely implemented, production-ready, and saved to the correct relative path in the workspace.\n"
+    )
+
     return prompt
 
 async def call_provider_api(
@@ -195,6 +203,29 @@ async def call_provider_api(
             PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=True)
             raise e
 
+def auto_detect_and_save_code_files(content: str, pending_approvals: List[Dict[str, Any]]):
+    from .agent_tools import agent_write_file
+    pattern = r'```(?:[a-zA-Z0-9_\-\.]*(?::|\s+file=|\s+path=|\s+filename=)?([a-zA-Z0-9_\-\./]+)?)?\n([\s\S]*?)```'
+    for m in re.finditer(pattern, content):
+        lang_file = m.group(1)
+        code = m.group(2)
+        filename = lang_file
+        if not filename:
+            first_line = code.strip().split('\n')[0].strip() if code.strip() else ""
+            f_match = re.search(r'(?:#|//|/\*|<!--)\s*(?:filename|filepath|file|path):\s*([a-zA-Z0-9_\-\./]+)', first_line, re.IGNORECASE)
+            if f_match:
+                filename = f_match.group(1).rstrip('*/--> \t')
+        
+        if filename:
+            clean_fn = filename.strip().lstrip("/")
+            if clean_fn and not clean_fn.startswith("..") and ("." in clean_fn):
+                try:
+                    res = agent_write_file(clean_fn, code)
+                    if isinstance(res, dict) and res.get("requiresApproval"):
+                        pending_approvals.append(res)
+                except Exception:
+                    pass
+
 async def complete_chat(
     store: ProviderStore,
     provider_id: str,
@@ -205,6 +236,14 @@ async def complete_chat(
     conversation_id: Optional[str] = None,
     references: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
+    if conversation_id:
+        from .workspaces import get_or_create_session_workspace, set_active_workspace
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
+
     # Ensure system prompt is present
     sys_prompt = build_system_prompt(conversation_id=conversation_id, referenced_items=references, messages=messages)
     chat_msgs = []
@@ -282,6 +321,7 @@ async def complete_chat(
 
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
+                    auto_detect_and_save_code_files(msg.get("content", ""), pending_approvals)
                     return {
                         "message": msg,
                         "steps": step_idx + 1,
