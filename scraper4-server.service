@@ -1,0 +1,43 @@
+# ============================================================================
+#  نمونهٔ یونیت systemd برای اجرای دائمیِ scraper4 با همان سوپروایزرِ server.sh
+#
+#  نصب:
+#    sudo cp scraper4-server.service /etc/systemd/system/
+#    sudo nano /etc/systemd/system/scraper4-server.service   # مسیرها/کاربر را اصلاح کنید
+#    sudo systemctl daemon-reload
+#    sudo systemctl enable --now scraper4-server
+#
+#  با این یونیت، خودِ systemd هم بیرونِ سوپروایزرِ ما Restart دارد (دو لایهٔ
+#  تاب‌آوری): سقوطِ PHP را server.sh جبران می‌کند و سقوطِ خودِ اسکریپت را systemd.
+# ============================================================================
+[Unit]
+Description=scraper4 web app — supervised PHP server
+After=network.target
+
+[Service]
+Type=simple
+# کاربری که مالک فایل‌هاست را بگذارید (روی هاست/سرورتان):
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/scraper4
+
+# متغیرهای پیکربندی (همان‌های server.conf.sample):
+Environment=SCRAPER_HOST=0.0.0.0
+Environment=SCRAPER_PORT=8000
+Environment=SCRAPER_WORKERS=4
+Environment=SCRAPER_MEMORY=512M
+Environment=SCRAPER_CRON_TICK=60
+
+ExecStart=/bin/bash /opt/scraper4/server.sh run
+ExecStop=/bin/bash /opt/scraper4/server.sh stop
+
+# لایهٔ دوم تاب‌آوری: اگر خودِ سوپروایزر هم رفت، systemd برمی‌گرداندش
+Restart=always
+RestartSec=3
+# سقفِ زمانی نداریم؛ کارهای اپ آگاهانه طولانی‌اند
+TimeoutStartSec=30
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

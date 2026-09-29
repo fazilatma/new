@@ -1,0 +1,44 @@
+# ============================================================================
+#  نمونهٔ پیکربندیِ server.sh — این فایل را با نام server.conf کپی کنید
+#      cp server.conf.sample server.conf
+#
+#  نکته: هر مقدار فقط وقتی اعمال می‌شود که متغیرِ محیطیِ هم‌نام از قبل ست
+#  نشده باشد؛ یعنی همیشه می‌توانید موقتاً با env روی آن پوشش بگذارید:
+#      SCRAPER_PORT=9000 ./server.sh run
+# ============================================================================
+
+# آدرس و درگاهِ گوش‌دادنِ وب‌سرور
+#   0.0.0.0   = روی همهٔ کارت‌های شبکه (سرور واقعی/داکر)
+#   127.0.0.1 = فقط همین ماشین (وقتی پشت Nginx/Apache پروکسی است)
+SCRAPER_HOST="${SCRAPER_HOST:-0.0.0.0}"
+SCRAPER_PORT="${SCRAPER_PORT:-8000}"
+
+# فایل‌های اپ و روتر
+SCRAPER_APP="${SCRAPER_APP:-scraper4.php}"
+SCRAPER_ROUTER="${SCRAPER_ROUTER:-server.php}"
+
+# باینریِ PHP (در هاست‌هایی با چند نسخه، مسیرِ کامل بدهید)
+#   SCRAPER_PHP=/usr/local/php82/bin/php
+SCRAPER_PHP="${SCRAPER_PHP:-php}"
+
+# تعداد کارگرهای سرورِ داخلی (PHP ≥ 7.4) — برای استریم‌های زندهٔ SSE مهم است؛
+# اگر هر درخواست طولانی یک کارگر را نگه دارد، با ۱ کارگر بقیهٔ رابط قفل می‌شود.
+# روی ویندوز پشتیبانی نمی‌شود و خودکار ۱ می‌شود.
+SCRAPER_WORKERS="${SCRAPER_WORKERS:-4}"
+
+# سقف حافظهٔ هر پردازهٔ PHP
+SCRAPER_MEMORY="${SCRAPER_MEMORY:-512M}"
+
+# بازراه‌اندازیِ خودکار پس از سقوط (ثانیه): مکثِ اول و سقفِ مکثِ تصاعدی.
+# بازراه‌اندازی نامحدود است — تا وقتی stop نکنید، همیشه برمی‌گردد.
+SCRAPER_RESTART_DELAY="${SCRAPER_RESTART_DELAY:-1}"
+SCRAPER_RESTART_DELAY_MAX="${SCRAPER_RESTART_DELAY_MAX:-30}"
+
+# تیکِ کران: هر چند ثانیه «php scraper4.php cron_run» اجرا شود تا کارهای
+# پس‌زمینه (استخراج دوره‌ای، پمپِ صف‌ ارسال، نگهبانِ ادامه) حتی بدون بازدید
+# هم همیشه در جریان بمانند. 0 = خاموش.
+SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"
+
+# فایل‌های لاگ
+SCRAPER_LOG="${SCRAPER_LOG:-./logs/server.log}"
+SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-./logs/cron-tick.log}"
