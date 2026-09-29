@@ -51,7 +51,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.268.0+',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.269.0+',time:new Date().toISOString()}));
 app.get('/',async c=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})});
 app.get('/dashboard.js',c=>c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
 app.get('/assets/fonts/:file',async c=>{const file=c.req.param('file'),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);return woff?fontFile(woff[1],woff[2]):c.notFound()});
@@ -60,19 +60,49 @@ app.get('/app-icon-192.png',c=>c.body(pushIconPng('192'),200,{'content-type':'im
 app.get('/app-icon-512.png',c=>c.body(pushIconPng('512'),200,{'content-type':'image/png'}));
 app.get('/app-icon.svg',c=>c.body(PUSH_ICON,200,{'content-type':'image/svg+xml'}));
 app.get('/visual',async c=>renderVisualSelector(c.req.query('ticket')||'',c.req.query('context')==='detail'?'detail':'list',c.req.query('full')==='1'));
-app.get('/api/rp',async c=>{
+app.all('/api/rp',async c=>{
   const raw=c.req.query('url')||'';
   if(!raw) return c.json({ok:false,error:'Missing url'},400);
+  const indirect=c.req.query('indirect')==='1';
+  const method=c.req.method||'GET';
   try{
-    const {assertPublicUrl}=await import('./network.js');
+    const {assertPublicUrl, safeFetch}=await import('./network.js');
     const url=assertPublicUrl(raw);
-    const indirect=c.req.query('indirect')==='1';
-    const {safeFetch}=await import('./network.js');
-    const response=await safeFetch(url.href,{headers:{'accept':'*/*'}},25_000_000,30_000);
-    if(!response.ok) return c.text('Upstream '+response.status, response.status as any);
+    // Forward minimal headers, keep accept
+    const reqHeaders=new Headers();
+    const accept=c.req.header('accept')||'*/*';
+    reqHeaders.set('accept',accept);
+    const lang=c.req.header('accept-language');
+    if(lang) reqHeaders.set('accept-language',lang);
+    const range=c.req.header('range');
+    if(range) reqHeaders.set('range',range);
+    // For indirect, try via configured Worker gateway (same as sourceText indirect)
+    if(indirect){
+      try{
+        const {resolveSourceNetwork}=await import('./source-network.js');
+        const {getState}=await import('./db.js');
+        const {loadConnections}=await import('./connections.js');
+        const settings=await getState<any>('settings',{}).catch(()=>({}));
+        const connections=await loadConnections().catch(()=>({} as any));
+        const network=resolveSourceNetwork(settings?.source, (connections as any)?.ai?.network, url.href);
+        const workerUrl=network.workerUrl|| (connections as any)?.woo?.network?.workerUrl || '';
+        if(workerUrl){
+          const {sourceWorkerUrl, fetchSourceGateway}=await import('./source-network.js');
+          const gateway=sourceWorkerUrl(workerUrl, url.href);
+          const init:RequestInit={method, headers:{...Object.fromEntries(reqHeaders.entries()), 'x-target-url':url.href, 'x-scraper-target-url':url.href}, body: (method!=='GET'&&method!=='HEAD')?await c.req.arrayBuffer():undefined } as any;
+          const gwResp=await fetchSourceGateway(url.href, gateway, init, (opts)=>safeFetch(gateway, {...opts, headers:new Headers({...Object.fromEntries(new Headers(opts.headers as any).entries()), 'x-target-url':url.href})}, 25_000_000, 30_000));
+          const ct=gwResp.headers.get('content-type')||'application/octet-stream';
+          const data=await gwResp.arrayBuffer();
+          return new Response(data,{status:gwResp.status, headers:{'content-type':ct,'cache-control':'public, max-age=3600','access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'GET,POST,PUT,DELETE,OPTIONS','x-content-type-options':'nosniff'}});
+        }
+      }catch{}
+    }
+    // Direct path
+    const init:RequestInit={method, headers:reqHeaders, body: (method!=='GET'&&method!=='HEAD')?await c.req.arrayBuffer():undefined } as any;
+    const response=await safeFetch(url.href, init, 25_000_000, 30_000);
     const contentType=response.headers.get('content-type')||'application/octet-stream';
     const data=await response.arrayBuffer();
-    return new Response(data,{headers:{'content-type':contentType,'cache-control':'public, max-age=3600','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+    return new Response(data,{status:response.status, headers:{'content-type':contentType,'cache-control':'public, max-age=3600','access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'GET,POST,PUT,DELETE,OPTIONS','x-content-type-options':'nosniff'}});
   }catch(e){
     return c.json({ok:false,error:(e as any)?.message||String(e)},502);
   }
@@ -106,7 +136,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.268.0+'),listActiveJobs(),listLiveActivities()
+    Promise.resolve(c.env.WORKER_VERSION||'1.269.0+'),listActiveJobs(),listLiveActivities()
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=allActive.sort((a,b)=>{
@@ -141,11 +171,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.268.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.269.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.268.0+',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.269.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});
