@@ -281,6 +281,36 @@ that cannot provide it. The alternative is to set `DATABASE_URL` to a PostgreSQL
 
 ---
 
+## 🐍 7a. Python projects: how the console picks an interpreter
+
+Since **2.16.0** none of the steps below have to be done by hand. When a project
+is of type `python` (or its start command begins with `python`), on every service
+start the console:
+
+1. resolves a version — the project's **نسخه پایتون** field → console default →
+   newest runtime uv has already downloaded;
+2. creates `.venv` in the project directory with `uv venv --seed` if it is missing;
+3. installs `requirements.txt` into it — searched in the project root and one
+   level down, since nested project templates keep it there;
+4. rewrites the start command to run `.venv/bin/python`;
+5. clears `PYTHONPATH`, so the host's Python 3.6 `dist-packages` cannot shadow
+   the virtualenv.
+
+Step 3 repeats on every start and costs about 1 ms once the environment is
+satisfied, so a missing package is picked up by a restart rather than needing a
+redeploy.
+
+If uv is not installed yet, use the **⬇️ نصب** button beside the version picker
+in the project dialog, or run `py-upgrade.sh` once over SSH.
+
+> **Why this is not optional on CentOS 7 / CloudLinux.** The system `python3` is
+> 3.6. It cannot parse `from __future__ import annotations`, its `site-packages`
+> is not writable, there is no `sudo`, and `pip3` is not on `PATH`. Before 2.16.0
+> the dependency auto-installer tried `sudo pip install --break-system-packages`
+> and could only ever exit 127.
+
+---
+
 ## 🐍 7. Python on shared hosting (`py-upgrade.sh`)
 
 On shared hosting you have no root, so `apt install python3.14` is out, and `pyenv` compiles from
