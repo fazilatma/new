@@ -17,7 +17,7 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
 | `wcp` (CLI) | 2.15.0 | Follows the suite version |
 | `install.sh` / `update.sh` | 2.15.0 | Follows the suite version |
-| `py-upgrade.sh` | 1.0.1 | Standalone Python installer, versioned separately |
+| `py-upgrade.sh` | 1.0.2 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
 
 ---
@@ -54,6 +54,14 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
   The script now resolves the real home from `getent passwd`, then `/etc/passwd`, then `/home/$(id -un)`,
   then bash's own `~` expansion (which reads passwd directly), exports it, and explains what
   happened. Verified against `HOME` unset, `HOME=""`, `HOME=/no/such/dir` and a scrubbed `env -i`.
+
+### Fixed (1.0.2)
+* **Persist the `HOME` repair.** 1.0.1 detected a broken `HOME` and printed the line to add to
+  `.bashrc`, but on the host that hit this the SSH session was dropping characters and newlines on
+  paste, so typing that line back was itself unreliable — `export HOME=/home/user` + `clear` arrived
+  as `export HOME=/home/userclear`. The script now appends the export to `.bashrc` (and
+  `.bash_profile` when present) itself, idempotently, announcing what it wrote and how to undo it.
+  It only does this when it actually had to repair `HOME`; a healthy environment is left untouched.
 
 ### Notes
 * `uv venv` is invoked with `--seed`; without it the venv has no `pip` and the printed

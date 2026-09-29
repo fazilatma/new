@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-PYUP_VERSION="1.0.1"
+PYUP_VERSION="1.0.2"
 RAW_BASE="https://raw.githubusercontent.com/fazilatma/new/hostconsole-nvm-node20"
 
 # ── رنگ فقط وقتی خروجی ترمینال است ────────────────────────────────────────────
@@ -92,7 +92,28 @@ if [ -z "${HOME:-}" ] || [ ! -d "${HOME:-/nonexistent}" ]; then
     export HOME="$_h"
     warn "متغیر HOME قابل استفاده نبود (مقدارش: $_was) — خودم پیدایش کردم: $HOME"
     warn "به همین دلیل بود که «export PATH=\"\$HOME/.local/bin:...\"» قبلاً به /.local/bin تبدیل می‌شد."
-    warn "برای همیشه:  echo 'export HOME=$_h' >> ~/.bashrc"
+
+    # ماندگارش می‌کنیم. روی چنین هاستی HOME خرابْ pip و npm و git و خود کنسول را
+    # هم خراب می‌کند، و تایپ‌کردن دستی این خط روی ترمینالی که کاراکتر می‌اندازد
+    # خودش یک منبع خطاست. idempotent است و اگر قبلاً باشد دوباره اضافه نمی‌شود.
+    _line="export HOME=$_h"
+    _done=""
+    for _rc in "$_h/.bashrc" "$_h/.bash_profile"; do
+        [ -e "$_rc" ] || [ "$_rc" = "$_h/.bashrc" ] || continue
+        if [ -f "$_rc" ] && grep -qxF "$_line" "$_rc" 2>/dev/null; then
+            _done="${_done} $_rc(از قبل)"
+            continue
+        fi
+        if printf '\n# added by py-upgrade.sh — HOME was unset on this host\n%s\n' "$_line" >> "$_rc" 2>/dev/null; then
+            _done="${_done} $_rc"
+        fi
+    done
+    if [ -n "$_done" ]; then
+        warn "برای دفعات بعد اضافه شد به:$_done"
+        warn "(اگر نخواستی، آن خط را از همان فایل پاک کن)"
+    else
+        warn "نتوانستم ماندگارش کنم. دستی بزن:  echo '$_line' >> $_h/.bashrc"
+    fi
 fi
 export HOME
 LB="$HOME/.local/bin"

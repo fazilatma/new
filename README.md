@@ -331,12 +331,9 @@ support in §6 — is not implemented yet.
 Some shared hosts (jailshell / CageFS) give you a shell where `HOME` is empty or not exported.
 Then `export PATH="$HOME/.local/bin:$PATH"` silently becomes `/.local/bin`, PATH gets clobbered and
 `uv` turns into "command not found". Since 1.0.1 the script detects this, recovers the real home
-from `getent passwd` (falling back to `/etc/passwd`, `/home/$(id -un)` and bash's `~`), and tells
-you to make it permanent:
-
-```bash
-echo 'export HOME=/home/YOURUSER' >> ~/.bashrc
-```
+from `getent passwd` (falling back to `/etc/passwd`, `/home/$(id -un)` and bash's `~`). Since 1.0.2
+it also makes the fix permanent for you, appending the export to `.bashrc` and `.bash_profile`
+idempotently — it only does that when it actually had to repair `HOME`, and it prints what it wrote.
 
 To make `uv` permanent in interactive shells:
 
@@ -365,7 +362,7 @@ can never be overwritten by `webconsole.php` again.
 | `hostconsole.php` (shared hosting) | **2.15.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
 | `wcp` CLI · `install.sh` · `update.sh` | 2.15.0 |
-| `py-upgrade.sh` | 1.0.1 |
+| `py-upgrade.sh` | 1.0.2 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).
