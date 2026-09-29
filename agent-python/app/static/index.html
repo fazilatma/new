@@ -492,6 +492,142 @@
     }
     .composer-footer { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); }
 
+    /* File Attachments in Composer & Messages */
+    .attachments-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 6px 0;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .attachment-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      color: var(--text-main);
+      max-width: 240px;
+    }
+    .attachment-chip img.thumb {
+      width: 24px;
+      height: 24px;
+      object-fit: cover;
+      border-radius: 4px;
+    }
+    .attachment-chip .chip-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .attachment-chip .chip-remove {
+      cursor: pointer;
+      color: var(--text-dim);
+      font-weight: bold;
+      margin-left: 4px;
+    }
+    .attachment-chip .chip-remove:hover { color: var(--accent-red); }
+
+    .msg-bubble.is-error {
+      border: 1px solid rgba(239, 68, 68, 0.45) !important;
+      background: rgba(239, 68, 68, 0.08) !important;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .msg-bubble.is-error:hover {
+      background: rgba(239, 68, 68, 0.15) !important;
+      border-color: rgba(239, 68, 68, 0.8) !important;
+    }
+    .error-diag-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 8px;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .error-diag-badge:hover {
+      background: rgba(239, 68, 68, 0.35);
+      color: #ffffff;
+    }
+
+    /* Model Test Table */
+    .model-test-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      text-align: left;
+    }
+    .model-test-table th {
+      background: var(--bg-highlight);
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-strong);
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .model-test-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      vertical-align: middle;
+    }
+    .model-test-table tr:hover td {
+      background: var(--bg-elevated);
+    }
+    .latency-pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .latency-fast { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .latency-med { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+    .latency-slow { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+    .status-pass {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: var(--accent-green-bg);
+      color: var(--accent-green);
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .status-fail {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: var(--accent-red-bg);
+      color: var(--accent-red);
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .status-testing {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: var(--accent-amber-bg);
+      color: var(--accent-amber);
+      font-weight: 600;
+      font-size: 11px;
+    }
+
     /* Change Sets & Approvals View */
     .changeset-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
     .changeset-card {
@@ -953,16 +1089,16 @@
           <div class="chat-messages" id="chatMessages">
             <div class="msg-wrapper assistant">
               <div class="msg-bubble">
-                Hello! I am your Arena AI Coding Agent v0.8.0. Your model choices and settings are automatically preserved across refreshes. All changes to project settings, instructions, rules, and secrets auto-save in the background.
+                Hello! I am your Arena AI Coding Agent v0.9.0. Your model choices and settings are automatically preserved across refreshes. Multi-modal file and image attachments, live test diagnostics, tool execution, diff reviews, and rollback history are fully supported.
               </div>
               <div class="msg-meta">
-                <span>Agent · v0.8.0</span>
+                <span>Agent · v0.9.0</span>
                 <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>
               </div>
             </div>
           </div>
 
-          <!-- Prompt Presets Bar (v0.8.0) -->
+          <!-- Prompt Presets Bar (v0.9.0) -->
           <div class="prompt-presets-bar">
             <button type="button" class="preset-chip" onclick="applyPromptPreset('refactor')">🛠️ Refactor Code</button>
             <button type="button" class="preset-chip" onclick="applyPromptPreset('test')">🧪 Write Tests</button>
@@ -970,17 +1106,25 @@
             <button type="button" class="preset-chip" onclick="applyPromptPreset('security')">🛡️ Security Audit</button>
             <button type="button" class="preset-chip" onclick="applyPromptPreset('optimize')">⚡ Optimize Speed</button>
             <button type="button" class="preset-chip" onclick="applyPromptPreset('explain')">📝 Explain Code</button>
-            <button type="button" class="preset-chip" onclick="attachActiveEditorFile()">📎 Attach File</button>
+            <button type="button" class="preset-chip" onclick="attachActiveEditorFile()">📄 Insert Active File</button>
+            <button type="button" class="preset-chip" style="color:var(--primary);font-weight:600;" onclick="$('#chatFileInput').click()">📎 Upload File / Image</button>
           </div>
 
+          <!-- Hidden Multi-File Upload Input -->
+          <input type="file" id="chatFileInput" multiple onchange="handleChatFileUpload(event)" style="display:none;" accept="image/*,.txt,.py,.js,.ts,.html,.css,.json,.md,.pdf,.csv,.yml,.yaml,.sh,.rs,.go,.cpp,.c,.h,.env,.toml,.xml,.sql">
+
           <form class="chat-composer" id="chatForm">
+            <!-- Uploaded Attachments Preview Area -->
+            <div id="chatAttachmentsPreview" class="attachments-preview" style="display:none;"></div>
+
             <div class="composer-row">
-              <textarea class="composer-textarea" id="chatInput" placeholder="Ask the agent to inspect, modify, or test your project... (Shift+Enter for new line)" onkeydown="onComposerKeyDown(event)"></textarea>
+              <button type="button" class="btn btn-ghost" style="height:48px;padding:0 12px;font-size:16px;" onclick="$('#chatFileInput').click()" title="Attach file or image">📎</button>
+              <textarea class="composer-textarea" id="chatInput" placeholder="Ask the agent to inspect, modify, or test your project... (Shift+Enter for new line, Drag & Drop or Paste files)" onkeydown="onComposerKeyDown(event)"></textarea>
               <button type="submit" class="btn btn-primary" style="height:48px;padding:0 20px" id="sendBtn">Send</button>
               <button type="button" class="btn btn-danger" style="height:48px;display:none" id="stopBtn" onclick="stopStreaming()">Stop</button>
             </div>
             <div class="composer-footer">
-              <span>Supports auto-saved configurations, tool calling, diff previews, and rollbacks</span>
+              <span>Supports multi-modal file uploads, tool calling, diff previews, and auto-saved settings</span>
               <button type="button" class="btn btn-ghost btn-sm" onclick="clearChat()">Clear Chat</button>
             </div>
           </form>
@@ -996,7 +1140,13 @@
           <span style="color:var(--text-muted);font-size:12px;">Manage model endpoints, protocols, multi-key rotation, circuit breakers, and import/export configurations.</span>
         </div>
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-ghost" onclick="testAllModels()">🧪 Test All Models</button>
+          <button class="btn btn-ghost" onclick="openModelTestModal(true)">🧪 Test All Models</button>
+          <button class="btn btn-ghost" onclick="openModelTestModal(false)">📊 Results Table</button>
+          <button class="btn btn-ghost" onclick="openImportProvidersModal()">📥 Import JSON</button>
+          <button class="btn btn-ghost" onclick="exportProvidersJson()">📤 Export JSON</button>
+          <button class="btn btn-primary" onclick="openProviderModal()">+ Add Provider</button>
+        </div>
+      </div>
           <button class="btn btn-ghost" onclick="openImportProvidersModal()">📥 Import JSON</button>
           <button class="btn btn-ghost" onclick="exportProvidersJson()">📤 Export JSON</button>
           <button class="btn btn-primary" onclick="openProviderModal()">+ Add Provider</button>
@@ -1725,6 +1875,111 @@
   </div>
 </div>
 
+<!-- MODAL: MODEL TEST RESULTS TABLE (v0.9.0) -->
+<div class="modal-backdrop" id="modelTestModal">
+  <div class="modal-dialog" style="max-width:960px;width:95%;">
+    <div class="modal-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">🧪</span>
+        <div>
+          <strong style="font-size:15px;">Model Health & Latency Test Results</strong>
+          <div style="font-size:11px;color:var(--text-dim);">Live latency metrics, status codes, and error diagnostics across all configured providers</div>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="closeModal('modelTestModal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px;gap:12px;">
+      <!-- Summary Bar & Controls -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;background:var(--bg-elevated);padding:12px;border-radius:8px;border:1px solid var(--border-subtle);">
+        <div style="display:flex;gap:14px;align-items:center;">
+          <span style="font-size:12px;">Total: <b id="testSummaryTotal">0</b></span>
+          <span style="font-size:12px;color:var(--accent-green);">Passed: <b id="testSummaryPassed">0</b></span>
+          <span style="font-size:12px;color:var(--accent-red);">Failed: <b id="testSummaryFailed">0</b></span>
+          <span style="font-size:12px;color:var(--primary);">Avg Latency: <b id="testSummaryLatency">0ms</b></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="testProviderFilter" class="input-control" style="width:160px;height:32px;font-size:12px;" onchange="renderTestResultsTable()">
+            <option value="">All Providers</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="runAllTestsBtn" onclick="runAllModelTests()">🔄 Run All Tests</button>
+        </div>
+      </div>
+
+      <!-- Test Results Table -->
+      <div style="max-height:420px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:6px;">
+        <table class="model-test-table">
+          <thead>
+            <tr>
+              <th style="width:140px;">Provider</th>
+              <th style="width:200px;">Model</th>
+              <th style="width:100px;">Status</th>
+              <th style="width:90px;">Latency</th>
+              <th>Diagnostics / Response</th>
+              <th style="width:80px;text-align:right;">Action</th>
+            </tr>
+          </thead>
+          <tbody id="modelTestTableBody">
+            <tr>
+              <td colspan="6" style="text-align:center;color:var(--text-dim);padding:24px;">Click "Run All Tests" or select a model to begin testing.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+      <button class="btn btn-ghost btn-sm" onclick="copyTestResultsReport()">📋 Copy Test Report</button>
+      <button class="btn btn-ghost" onclick="closeModal('modelTestModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: CHAT ERROR DIAGNOSTICS (v0.9.0) -->
+<div class="modal-backdrop" id="chatErrorModal">
+  <div class="modal-dialog" style="max-width:680px;width:95%;">
+    <div class="modal-header" style="border-bottom:1px solid rgba(239, 68, 68, 0.3);">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;color:var(--accent-red);">⚠️</span>
+        <div>
+          <strong style="font-size:15px;color:var(--accent-red);">Model Diagnostic & Error Log</strong>
+          <div style="font-size:11px;color:var(--text-dim);">Detailed trace and remediation instructions for this failure</div>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="closeModal('chatErrorModal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px;gap:14px;">
+      <div class="grid-2" style="margin-bottom:0;">
+        <div style="background:var(--bg-elevated);padding:10px;border-radius:6px;border:1px solid var(--border-subtle);">
+          <div style="font-size:11px;color:var(--text-dim);">Provider</div>
+          <div style="font-weight:600;font-size:13px;" id="chatErrProvider">—</div>
+        </div>
+        <div style="background:var(--bg-elevated);padding:10px;border-radius:6px;border:1px solid var(--border-subtle);">
+          <div style="font-size:11px;color:var(--text-dim);">Model</div>
+          <div style="font-weight:600;font-size:13px;" id="chatErrModel">—</div>
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);font-weight:600;">Error Message & Stacktrace</label>
+        <pre id="chatErrTrace" style="max-height:180px;overflow:auto;background:var(--code-bg);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:10px;border-radius:6px;font-family:monospace;font-size:12px;white-space:pre-wrap;margin-top:4px;"></pre>
+      </div>
+
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);font-weight:600;">Suggested Remediation Steps</label>
+        <div id="chatErrRemediation" style="background:var(--bg-elevated);padding:10px 14px;border-radius:6px;border:1px solid var(--border-subtle);font-size:12px;line-height:1.6;margin-top:4px;color:var(--text-main);"></div>
+      </div>
+
+      <div style="font-size:11px;color:var(--text-dim);" id="chatErrTimestamp"></div>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="copyChatErrorLog()">📋 Copy Error Log</button>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('providers');closeModal('chatErrorModal');">⚙️ Configure Providers</button>
+      </div>
+      <button class="btn btn-ghost" onclick="closeModal('chatErrorModal')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: COMMAND PALETTE (Ctrl+K) -->
 <div class="modal-backdrop" id="cmdPaletteModal">
   <div class="cmd-palette">
@@ -1882,6 +2137,7 @@ async function initApp() {
   await loadConversationsList();
   await checkPendingApprovals();
   renderChatProviders();
+  setupComposerDragAndDrop();
 }
 
 // -------------------------------------------------------------
@@ -2114,25 +2370,189 @@ function exportProvidersJson() {
   window.location.href = '/api/providers/export';
 }
 
-async function testAllModels() {
-  const box = $('#testResultsBox');
-  const out = $('#testResultsOut');
-  box.style.display = 'block';
-  out.textContent = 'Testing all configured model endpoints (measuring latency and status)...\n';
+// -------------------------------------------------------------
+// MODEL HEALTH & LATENCY TESTING (v0.9.0)
+// -------------------------------------------------------------
+let lastModelTestResults = [];
+
+function openModelTestModal(autoRun = false) {
+  // Populate filter dropdown
+  const filter = $('#testProviderFilter');
+  if (filter) {
+    filter.innerHTML = '<option value="">All Providers</option>' +
+      STATE.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  }
+
+  openModal('modelTestModal');
+
+  if (autoRun || lastModelTestResults.length === 0) {
+    runAllModelTests();
+  } else {
+    renderTestResultsTable();
+  }
+}
+
+async function runAllModelTests() {
+  const btn = $('#runAllTestsBtn');
+  const tbody = $('#modelTestTableBody');
+  const selectedPid = $('#testProviderFilter') ? $('#testProviderFilter').value : '';
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Testing Models...';
+  }
+
+  if (tbody) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="6" style="text-align:center;padding:24px;color:var(--text-dim);">
+          <span style="font-size:16px;">🔄</span> Testing model endpoints and measuring live latency...
+        </td>
+      </tr>
+    `;
+  }
 
   try {
     const res = await api('/api/providers/test-all', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}'
+      body: JSON.stringify({ provider: selectedPid || undefined })
     });
-
-    out.textContent = res.results.map(r => 
-      `${r.ok ? '✓ PASS' : '✗ FAIL'} [${r.provider}/${r.model}] — ${r.latencyMs}ms (${r.protocol}) ${r.error ? 'Error: ' + r.error : 'Output: ' + (r.message || 'OK')}`
-    ).join('\n');
+    lastModelTestResults = res.results || [];
+    renderTestResultsTable();
   } catch (err) {
-    out.textContent = 'Test failed: ' + err.message;
+    if (tbody) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="6" style="text-align:center;padding:20px;color:var(--accent-red);">
+            Test request failed: ${esc(err.message)}
+          </td>
+        </tr>
+      `;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🔄 Run All Tests';
+    }
   }
+}
+
+function renderTestResultsTable() {
+  const filterPid = $('#testProviderFilter') ? $('#testProviderFilter').value : '';
+  const filtered = filterPid ? lastModelTestResults.filter(r => r.provider === filterPid) : lastModelTestResults;
+
+  const total = filtered.length;
+  const passed = filtered.filter(r => r.ok).length;
+  const failed = total - passed;
+  const latencies = filtered.filter(r => r.ok && r.latencyMs > 0).map(r => r.latencyMs);
+  const avgLat = latencies.length > 0 ? Math.round(latencies.reduce((a,b)=>a+b, 0) / latencies.length) : 0;
+
+  if ($('#testSummaryTotal')) $('#testSummaryTotal').textContent = total;
+  if ($('#testSummaryPassed')) $('#testSummaryPassed').textContent = passed;
+  if ($('#testSummaryFailed')) $('#testSummaryFailed').textContent = failed;
+  if ($('#testSummaryLatency')) $('#testSummaryLatency').textContent = `${avgLat}ms`;
+
+  const tbody = $('#modelTestTableBody');
+  if (!tbody) return;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="6" style="text-align:center;padding:24px;color:var(--text-dim);">
+          No models tested yet. Click "Run All Tests" above.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(r => {
+    let latClass = 'latency-fast';
+    if (r.latencyMs > 1200) latClass = 'latency-slow';
+    else if (r.latencyMs > 400) latClass = 'latency-med';
+
+    const diagText = r.ok ? (r.message || 'OK (200)') : (r.error || 'Unknown failure');
+    const diagColor = r.ok ? 'var(--text-muted)' : 'var(--accent-red)';
+    const modelSafeId = String(r.model).replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    return `
+      <tr id="test-row-${esc(r.provider)}-${esc(modelSafeId)}">
+        <td>
+          <div style="font-weight:600;">${esc(r.providerName || r.provider)}</div>
+          <div style="font-size:10.5px;color:var(--text-dim);">${esc(r.protocol || 'openai-compatible')}</div>
+        </td>
+        <td>
+          <div style="font-weight:600;font-family:monospace;font-size:11.5px;">${esc(r.model)}</div>
+          ${r.modelName && r.modelName !== r.model ? `<div style="font-size:10.5px;color:var(--text-dim);">${esc(r.modelName)}</div>` : ''}
+        </td>
+        <td>
+          ${r.ok 
+            ? '<span class="status-pass">✓ PASS</span>' 
+            : '<span class="status-fail">✗ FAIL</span>'}
+        </td>
+        <td>
+          <span class="latency-pill ${latClass}">${r.latencyMs}ms</span>
+        </td>
+        <td style="color:${diagColor};max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(diagText)}">
+          ${esc(diagText)}
+        </td>
+        <td style="text-align:right;">
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;" onclick="testSingleModelLive('${esc(r.provider)}', '${esc(r.model)}', this)">⚡ Test</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function testSingleModelLive(pid, mid, btn) {
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+
+  try {
+    const res = await api(`/api/providers/${pid}/models/${encodeURIComponent(mid)}/test`, {
+      method: 'POST'
+    });
+    const idx = lastModelTestResults.findIndex(r => r.provider === pid && r.model === mid);
+    if (idx !== -1) {
+      lastModelTestResults[idx] = res;
+    } else {
+      lastModelTestResults.push(res);
+    }
+    renderTestResultsTable();
+  } catch (err) {
+    alert(`Single test error for ${pid}/${mid}: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+function copyTestResultsReport() {
+  if (lastModelTestResults.length === 0) {
+    alert('No test results to copy.');
+    return;
+  }
+  const passed = lastModelTestResults.filter(r => r.ok).length;
+  const report = `# Model Endpoint & Latency Test Report\nGenerated: ${new Date().toISOString()}\nTotal Tested: ${lastModelTestResults.length} | Passed: ${passed} | Failed: ${lastModelTestResults.length - passed}\n\n` +
+    lastModelTestResults.map(r => `- [${r.ok ? 'PASS' : 'FAIL'}] Provider: ${r.provider} (${r.protocol}) | Model: ${r.model} | Latency: ${r.latencyMs}ms | ${r.ok ? 'Response: ' + (r.message||'OK') : 'Error: ' + (r.error||'')}`).join('\n');
+
+  navigator.clipboard.writeText(report).then(() => {
+    alert('Test report copied to clipboard!');
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = report;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert('Test report copied to clipboard!');
+  });
+}
+
+async function testAllModels() {
+  openModelTestModal(true);
 }
 
 // -------------------------------------------------------------
@@ -2267,8 +2687,11 @@ async function deleteProject(projId) {
 }
 
 // -------------------------------------------------------------
-// CHAT & CONVERSATIONS & PROMPT PRESETS
+// CHAT & CONVERSATIONS & MULTI-MODAL ATTACHMENTS (v0.9.0)
 // -------------------------------------------------------------
+let chatAttachments = [];
+let currentErrorDetails = null;
+
 const PROMPT_PRESETS = {
   refactor: "Please review and refactor the following code to enhance readability, clean modularity, and error handling without breaking existing behavior:\n",
   test: "Please write comprehensive unit and integration tests covering positive paths, edge cases, and error handling for:\n",
@@ -2292,6 +2715,139 @@ function attachActiveEditorFile() {
   input.focus();
 }
 
+// Multi-Modal File & Image Upload Handlers
+async function handleChatFileUpload(e) {
+  const files = e.target.files;
+  if (!files || files.length === 0) return;
+  await processFilesForUpload(Array.from(files));
+  e.target.value = '';
+}
+
+async function processFilesForUpload(fileList) {
+  for (const file of fileList) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/api/chat/upload', {
+        method: 'POST',
+        body: fd
+      });
+      if (res.ok) {
+        const data = await res.json();
+        chatAttachments.push(data);
+      } else {
+        alert(`Failed to upload ${file.name}`);
+      }
+    } catch (err) {
+      alert(`Upload error for ${file.name}: ${err.message}`);
+    }
+  }
+  renderChatAttachmentsPreview();
+}
+
+function removeChatAttachment(idx) {
+  chatAttachments.splice(idx, 1);
+  renderChatAttachmentsPreview();
+}
+
+function renderChatAttachmentsPreview() {
+  const box = $('#chatAttachmentsPreview');
+  if (!box) return;
+  if (chatAttachments.length === 0) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'flex';
+  box.innerHTML = chatAttachments.map((att, idx) => {
+    if (att.isImage && att.imageBase64) {
+      return `
+        <div class="attachment-chip">
+          <img src="data:${att.contentType};base64,${att.imageBase64}" class="thumb">
+          <span class="chip-name" title="${esc(att.filename)}">${esc(att.filename)}</span>
+          <span class="chip-remove" onclick="removeChatAttachment(${idx})">✕</span>
+        </div>
+      `;
+    }
+    return `
+      <div class="attachment-chip">
+        <span>📄</span>
+        <span class="chip-name" title="${esc(att.filename)}">${esc(att.filename)}</span>
+        <span style="font-size:10px;color:var(--text-dim);">(${Math.round(att.sizeBytes/1024)}KB)</span>
+        <span class="chip-remove" onclick="removeChatAttachment(${idx})">✕</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function setupComposerDragAndDrop() {
+  const composer = $('#chatForm');
+  const textarea = $('#chatInput');
+  if (!composer || !textarea) return;
+
+  composer.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    composer.style.borderColor = 'var(--primary)';
+  });
+  composer.addEventListener('dragleave', () => {
+    composer.style.borderColor = 'var(--border-subtle)';
+  });
+  composer.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    composer.style.borderColor = 'var(--border-subtle)';
+    if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+      await processFilesForUpload(Array.from(e.dataTransfer.files));
+    }
+  });
+
+  textarea.addEventListener('paste', async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const filesToUpload = [];
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) filesToUpload.push(file);
+      }
+    }
+    if (filesToUpload.length > 0) {
+      e.preventDefault();
+      await processFilesForUpload(filesToUpload);
+    }
+  });
+}
+
+function renderMarkdown(md) {
+  if (!md) return '';
+  let html = esc(md);
+
+  // Fenced code blocks ```lang ... ```
+  html = html.replace(/```([a-zA-Z0-9_\-\+]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    return `<pre style="background:var(--code-bg);padding:10px 14px;border-radius:6px;border:1px solid var(--border-subtle);overflow:auto;margin:8px 0;font-family:monospace;font-size:12px;"><code>${code}</code></pre>`;
+  });
+
+  // Inline code `code`
+  html = html.replace(/`([^`\n]+)`/g, '<code style="background:var(--code-bg);padding:2px 5px;border-radius:4px;font-family:monospace;font-size:12px;border:1px solid var(--border-subtle);">$1</code>');
+
+  // Bold **text**
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+  // Italics *text*
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+  // Markdown bullet lists
+  html = html.replace(/(?:^|\n)-\s+([^\n]+)/g, '\n<li style="margin-left:18px;">$1</li>');
+
+  // Markdown links [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--primary);text-decoration:underline;">$1</a>');
+
+  // Convert double newlines
+  html = html.replace(/\n\n/g, '<div style="height:8px;"></div>');
+  html = html.replace(/\n(?![<])/g, '<br/>');
+
+  return html;
+}
+
 function copyMessageText(btn) {
   const wrap = btn.closest('.msg-wrapper');
   const bubble = wrap.querySelector('.msg-bubble');
@@ -2301,6 +2857,88 @@ function copyMessageText(btn) {
     btn.textContent = '✓ Copied';
     setTimeout(() => btn.textContent = original, 1500);
   }
+}
+
+// Chat Diagnostic Error Modal Handlers
+function openChatErrorModal(errorData) {
+  if (!errorData) return;
+  currentErrorDetails = errorData;
+  if ($('#chatErrProvider')) $('#chatErrProvider').textContent = `${errorData.providerName || errorData.provider || 'Unknown'} (${errorData.protocol || 'API'})`;
+  if ($('#chatErrModel')) $('#chatErrModel').textContent = errorData.model || 'Default Model';
+  if ($('#chatErrTrace')) $('#chatErrTrace').textContent = errorData.error || 'No detailed trace provided.';
+  if ($('#chatErrRemediation')) $('#chatErrRemediation').innerHTML = renderMarkdown(errorData.remediation || '1. Verify API Key in Providers & Models or Security & Settings.\n2. Ensure model ID is supported.\n3. Check endpoint connectivity.');
+  if ($('#chatErrTimestamp')) $('#chatErrTimestamp').textContent = `Failure recorded at: ${errorData.timestamp || new Date().toISOString()}`;
+  openModal('chatErrorModal');
+}
+
+function copyChatErrorLog() {
+  if (!currentErrorDetails) return;
+  const logText = JSON.stringify(currentErrorDetails, null, 2);
+  navigator.clipboard.writeText(logText).then(() => {
+    alert('Diagnostic error log copied to clipboard!');
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = logText;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert('Diagnostic error log copied to clipboard!');
+  });
+}
+
+function appendMessage(role, content, attachments = [], isError = false, errorData = null) {
+  const container = $('#chatMessages');
+  if (!container) return null;
+  const wrapper = document.createElement('div');
+  wrapper.className = `msg-wrapper ${role}`;
+
+  let attachHtml = '';
+  if (attachments && attachments.length > 0) {
+    attachHtml = '<div class="msg-attachments" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">' +
+      attachments.map(att => {
+        if (att.isImage && att.imageBase64) {
+          return `<div class="attachment-chip"><img src="data:${att.contentType};base64,${att.imageBase64}" class="thumb" style="width:36px;height:36px;border-radius:4px;object-fit:cover;"><span>${esc(att.filename)}</span></div>`;
+        }
+        return `<div class="attachment-chip"><span>📄 ${esc(att.filename)}</span> <span style="font-size:10px;color:var(--text-dim);">(${Math.round(att.sizeBytes/1024)} KB)</span></div>`;
+      }).join('') +
+      '</div>';
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = `msg-bubble ${isError ? 'is-error' : ''}`;
+  if (content) {
+    bubble.innerHTML = renderMarkdown(content);
+  }
+
+  if (isError && errorData) {
+    bubble.title = 'Click to inspect diagnostic error details';
+    bubble.onclick = () => openChatErrorModal(errorData);
+    const badge = document.createElement('div');
+    badge.className = 'error-diag-badge';
+    badge.innerHTML = '🔍 Click to view diagnostic log & resolution';
+    badge.onclick = (e) => {
+      e.stopPropagation();
+      openChatErrorModal(errorData);
+    };
+    bubble.appendChild(badge);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  const roleName = role === 'user' ? 'You' : `Agent (${$('#chatModel')?.value || 'v0.9.0'})`;
+  meta.innerHTML = `<span>${esc(roleName)}</span> ${role === 'assistant' ? '<button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>' : ''}`;
+
+  if (attachHtml) {
+    const attachWrapper = document.createElement('div');
+    attachWrapper.innerHTML = attachHtml;
+    wrapper.appendChild(attachWrapper);
+  }
+  wrapper.appendChild(bubble);
+  wrapper.appendChild(meta);
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+  return wrapper;
 }
 
 async function loadConversationsList() {
@@ -2369,14 +3007,15 @@ async function deleteConversation(convId, e) {
 
 function renderChatMessages() {
   const container = $('#chatMessages');
+  if (!container) return;
   if (chatHistory.length === 0) {
     container.innerHTML = `
       <div class="msg-wrapper assistant">
         <div class="msg-bubble">
-          Hello! I am your Arena AI Coding Agent v0.8.0. Your model choices and settings are automatically preserved across refreshes. All changes to project settings, instructions, rules, and secrets auto-save in the background.
+          Hello! I am your Arena AI Coding Agent v0.9.0. Your model choices and settings are automatically preserved across refreshes. Multi-modal file and image attachments, live test diagnostics, tool execution, diff reviews, and rollback history are fully supported.
         </div>
         <div class="msg-meta">
-          <span>Agent · v0.8.0</span>
+          <span>Agent · v0.9.0</span>
           <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>
         </div>
       </div>
@@ -2385,7 +3024,7 @@ function renderChatMessages() {
   }
   container.innerHTML = chatHistory.map(m => `
     <div class="msg-wrapper ${m.role}">
-      <div class="msg-bubble">${esc(m.content)}</div>
+      <div class="msg-bubble">${renderMarkdown(m.content)}</div>
       <div class="msg-meta">
         <span>${m.role === 'user' ? 'You' : 'Agent'}</span>
         ${m.role === 'assistant' ? '<button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>' : ''}
@@ -2397,6 +3036,7 @@ function renderChatMessages() {
 
 function renderChatProviders() {
   const pSel = $('#chatProvider');
+  if (!pSel) return;
   const savedProvider = localStorage.getItem('arena_selected_provider') || STATE.activeProject?.default_provider || STATE.providers[0]?.id;
 
   pSel.innerHTML = STATE.providers.map(p => `
@@ -2409,14 +3049,15 @@ function renderChatProviders() {
 }
 
 function onChatProviderChange(save = true) {
-  const pid = $('#chatProvider').value;
-  if (save) {
+  const pid = $('#chatProvider')?.value;
+  if (save && pid) {
     localStorage.setItem('arena_selected_provider', pid);
     flashAutoSave();
   }
 
   const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
   const mSel = $('#chatModel');
+  if (!mSel) return;
   const savedModel = localStorage.getItem('arena_selected_model') || STATE.activeProject?.default_model || p?.models[0]?.id;
 
   mSel.innerHTML = (p?.models || []).map(m => `
@@ -2429,14 +3070,15 @@ function onChatProviderChange(save = true) {
 }
 
 function onChatModelChange(save = true) {
-  const mid = $('#chatModel').value;
+  const mid = $('#chatModel')?.value;
   if (save && mid) {
     localStorage.setItem('arena_selected_model', mid);
     flashAutoSave();
   }
-  const pid = $('#chatProvider').value;
+  const pid = $('#chatProvider')?.value;
   const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
-  $('#activeProviderBadge').textContent = `⚡ ${p?.name || 'Agent'} / ${mid}`;
+  const badge = $('#activeProviderBadge');
+  if (badge) badge.textContent = `⚡ ${p?.name || 'Agent'} / ${mid || 'Model'}`;
 }
 
 function onChatStepsChange() {
@@ -2476,17 +3118,33 @@ async function onComposerKeyDown(e) {
 $('#chatForm').onsubmit = async (e) => {
   e.preventDefault();
   const text = $('#chatInput').value.trim();
-  if (!text) return;
+  if (!text && chatAttachments.length === 0) return;
   $('#chatInput').value = '';
 
-  appendMessage('user', text);
-  chatHistory.push({ role: 'user', content: text });
+  const currentAttachments = [...chatAttachments];
+  chatAttachments = [];
+  renderChatAttachmentsPreview();
+
+  // Prepare full prompt content
+  let promptContent = text;
+  if (currentAttachments.length > 0) {
+    const attachmentsContext = currentAttachments.map(att => {
+      if (att.isImage) {
+        return `[Attached Image: ${att.filename} (${att.contentType})]`;
+      }
+      return `[Attached File: ${att.filename}]\n\`\`\`\n${att.textSnippet || ''}\n\`\`\``;
+    }).join('\n\n');
+    promptContent = text ? `${text}\n\n--- Attached Files ---\n${attachmentsContext}` : attachmentsContext;
+  }
+
+  appendMessage('user', text || '(Attached files)', currentAttachments);
+  chatHistory.push({ role: 'user', content: promptContent });
 
   if (STATE.activeConversationId) {
     api(`/api/conversations/${STATE.activeConversationId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', content: text })
+      body: JSON.stringify({ role: 'user', content: promptContent })
     }).catch(() => {});
   }
 
@@ -2498,11 +3156,13 @@ $('#chatForm').onsubmit = async (e) => {
   $('#sendBtn').style.display = 'none';
   $('#stopBtn').style.display = 'inline-flex';
 
-  const assistantMsgEl = appendMessage('assistant', '');
+  const assistantMsgEl = appendMessage('assistant', 'Agent is analyzing project and tools...');
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
-  bubble.textContent = 'Agent is analyzing project and tools...';
 
   abortController = new AbortController();
+  let accumulated = '';
+  let errorData = null;
+  let isError = false;
 
   try {
     const res = await fetch('/api/chat/stream', {
@@ -2518,32 +3178,74 @@ $('#chatForm').onsubmit = async (e) => {
       signal: abortController.signal
     });
 
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
     bubble.textContent = '';
-    let accumulated = '';
 
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep last incomplete line
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data: ')) {
           try {
-            const data = JSON.parse(line.slice(6));
+            const data = JSON.parse(trimmed.slice(6));
             if (data.text) {
               accumulated += data.text;
-              bubble.textContent = accumulated;
+              bubble.innerHTML = renderMarkdown(accumulated);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
             }
             if (data.approvals && data.approvals.length > 0) {
               renderInlineApprovalCard(assistantMsgEl, data.approvals[0]);
               checkPendingApprovals();
             }
+            if (data.errorDetails) {
+              isError = true;
+              errorData = data.errorDetails;
+            }
+            if (data.error) {
+              isError = true;
+              errorData = data.errorDetails || {
+                provider: pid,
+                model: mid,
+                error: data.error,
+                timestamp: new Date().toISOString(),
+                remediation: 'Check provider API key and connectivity.'
+              };
+            }
           } catch (_) {}
         }
       }
+    }
+
+    if (!accumulated && isError) {
+      accumulated = `⚠️ **Error occurred**: ${errorData?.error || 'Provider communication failed'}`;
+      bubble.innerHTML = renderMarkdown(accumulated);
+    }
+
+    if (isError && errorData) {
+      bubble.classList.add('is-error');
+      bubble.title = 'Click to view diagnostic log';
+      bubble.onclick = () => openChatErrorModal(errorData);
+      const badge = document.createElement('div');
+      badge.className = 'error-diag-badge';
+      badge.innerHTML = '🔍 Click to view diagnostic log & resolution';
+      badge.onclick = (e) => {
+        e.stopPropagation();
+        openChatErrorModal(errorData);
+      };
+      bubble.appendChild(badge);
     }
 
     chatHistory.push({ role: 'assistant', content: accumulated });
@@ -2557,6 +3259,32 @@ $('#chatForm').onsubmit = async (e) => {
     }
 
   } catch (err) {
+    if (err.name !== 'AbortError') {
+      const errDiag = {
+        provider: pid,
+        model: mid,
+        error: err.message,
+        timestamp: new Date().toISOString(),
+        remediation: '1. Check network connectivity and API keys.\n2. Ensure dev server is running.\n3. Verify model endpoint status in Providers & Models.'
+      };
+      bubble.innerHTML = renderMarkdown(`⚠️ **Request Failed**: ${err.message}`);
+      bubble.classList.add('is-error');
+      bubble.onclick = () => openChatErrorModal(errDiag);
+      const badge = document.createElement('div');
+      badge.className = 'error-diag-badge';
+      badge.innerHTML = '🔍 Click to view diagnostic log & resolution';
+      badge.onclick = (e) => {
+        e.stopPropagation();
+        openChatErrorModal(errDiag);
+      };
+      bubble.appendChild(badge);
+    }
+  } finally {
+    $('#sendBtn').style.display = 'inline-flex';
+    $('#stopBtn').style.display = 'none';
+    abortController = null;
+  }
+};
     if (err.name !== 'AbortError') {
       bubble.textContent = 'Error: ' + err.message;
     }

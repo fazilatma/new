@@ -26,11 +26,14 @@ JOB_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 WORKSPACES_ROOT = DATA_DIR / "workspaces"
 WORKSPACES_ROOT.mkdir(parents=True, exist_ok=True)
 
+UPLOADS_DIR = DATA_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 ENV_FILE = DATA_DIR / "environment.json"
 MASTER_KEY_FILE = DATA_DIR / "master.key"
 
 # Version
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 
 # Secret Encryption (Fernet / AES)
 def get_or_create_master_key() -> bytes:

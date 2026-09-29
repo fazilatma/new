@@ -161,6 +161,7 @@ async def complete_chat(
         # Check if another enabled provider has a key
         fallback_with_key = next((p for p in store.data.values() if p.enabled and p.id != provider_id and (store.get_api_key(p) or p.protocol == "ollama")), None)
         if not fallback_with_key:
+            err_msg = f"Provider '{primary_p.name}' ({primary_p.id}) does not have an API key configured."
             return {
                 "message": {
                     "role": "assistant",
@@ -169,6 +170,16 @@ async def complete_chat(
                 "steps": 0,
                 "provider": primary_p.id,
                 "model": model.id,
+                "errorDetails": {
+                    "provider": primary_p.id,
+                    "providerName": primary_p.name,
+                    "model": model.id,
+                    "protocol": primary_p.protocol,
+                    "url": primary_p.url,
+                    "error": err_msg,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                    "remediation": f"Go to 'Providers & Models' or 'Security & Settings' and enter your API key for {primary_p.name}."
+                },
                 "pendingApprovals": []
             }
 
@@ -248,6 +259,24 @@ async def complete_chat(
             last_error = e
             continue
 
-    if last_error:
-        raise last_error
-    raise ValueError("No reachable provider with valid API key found.")
+    err_str = str(last_error) if last_error else f"No reachable provider with valid API key found for '{primary_p.name}'."
+    return {
+        "message": {
+            "role": "assistant",
+            "content": f"⚠️ **Model Provider Notice**: Failed to communicate with `{primary_p.name}` (`{model.id}`).\n\n**Error Details**: `{err_str}`\n\n*(Click this message to view full error diagnostics and copy logs)*"
+        },
+        "steps": 0,
+        "provider": primary_p.id,
+        "model": model.id,
+        "errorDetails": {
+            "provider": primary_p.id,
+            "providerName": primary_p.name,
+            "model": model.id,
+            "protocol": primary_p.protocol,
+            "url": primary_p.url,
+            "error": err_str,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "remediation": f"1. Check if your API key for '{primary_p.name}' is valid in Providers & Models.\n2. Ensure endpoint URL '{primary_p.url}' is reachable.\n3. Check circuit breaker status and reset if tripped."
+        },
+        "pendingApprovals": pending_approvals
+    }

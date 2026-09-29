@@ -3,13 +3,14 @@ import asyncio
 import os
 import json
 import time
+import base64
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION
+from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR
 from .database import get_db, init_db
 from .models import Provider, ModelSpec
 from .providers import PROVIDER_STORE
@@ -551,14 +552,15 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
     max_steps = int(payload.get("maxSteps", 8))
 
     async def event_generator():
-        yield 'event: status\ndata: {"status": "started", "provider": "' + provider_id + '"}\n\n'
+        yield 'event: status\ndata: ' + json.dumps({"status": "started", "provider": provider_id, "model": model_id}) + '\n\n'
         try:
             res = await complete_chat(PROVIDER_STORE, provider_id, model_id, messages, max_steps=max_steps, user_id=user.get("username", "user"))
             msg = res.get("message", {})
             content = msg.get("content", "")
+            err_details = res.get("errorDetails")
 
             # Stream text in chunks
-            chunk_size = 30
+            chunk_size = 25
             for i in range(0, len(content), chunk_size):
                 chunk = content[i:i + chunk_size]
                 yield 'event: token\ndata: ' + json.dumps({"text": chunk}, ensure_ascii=False) + '\n\n'
@@ -569,11 +571,59 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
             if approvals:
                 yield 'event: approvals\ndata: ' + json.dumps({"approvals": approvals}, ensure_ascii=False) + '\n\n'
 
-            yield 'event: done\ndata: ' + json.dumps({"steps": res.get("steps", 1), "provider": res.get("provider"), "model": res.get("model")}, ensure_ascii=False) + '\n\n'
+            # Send error details if any
+            if err_details:
+                yield 'event: error_details\ndata: ' + json.dumps({"errorDetails": err_details}, ensure_ascii=False) + '\n\n'
+
+            yield 'event: done\ndata: ' + json.dumps({
+                "steps": res.get("steps", 1),
+                "provider": res.get("provider"),
+                "model": res.get("model"),
+                "hasError": bool(err_details)
+            }, ensure_ascii=False) + '\n\n'
         except Exception as e:
-            yield 'event: error\ndata: ' + json.dumps({"error": str(e)}, ensure_ascii=False) + '\n\n'
+            err_meta = {
+                "provider": provider_id,
+                "model": model_id,
+                "error": str(e),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "remediation": "Check provider settings, API key, and network connectivity."
+            }
+            yield 'event: error\ndata: ' + json.dumps({"error": str(e), "errorDetails": err_meta}, ensure_ascii=False) + '\n\n'
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.post("/api/chat/upload")
+async def chat_upload_file(file: UploadFile = File(...), user: Dict[str, Any] = Depends(require_developer)):
+    filename = file.filename or f"upload_{int(time.time()*1000)}"
+    safe_fn = "".join(c for c in filename if c.isalnum() or c in (".", "-", "_")).strip()
+    dest_path = UPLOADS_DIR / f"{int(time.time()*1000)}_{safe_fn}"
+    content = await file.read()
+    dest_path.write_bytes(content)
+
+    content_type = file.content_type or "application/octet-stream"
+    is_image = content_type.startswith("image/")
+    b64_data = None
+    text_snippet = None
+
+    if is_image:
+        b64_data = base64.b64encode(content).decode("utf-8")
+    else:
+        try:
+            text_snippet = content.decode("utf-8", errors="replace")[:4000]
+        except Exception:
+            text_snippet = f"[Binary file: {filename}, size: {len(content)} bytes]"
+
+    return {
+        "ok": True,
+        "filename": filename,
+        "savedPath": str(dest_path),
+        "contentType": content_type,
+        "isImage": is_image,
+        "sizeBytes": len(content),
+        "imageBase64": b64_data,
+        "textSnippet": text_snippet
+    }
 
 # Conversations API (Phase 10)
 @app.get("/api/conversations")
@@ -715,10 +765,22 @@ async def test_all_models(payload: Dict[str, Any] = {}, user: Dict[str, Any] = D
         if selected_pid and pid != selected_pid:
             continue
         api_key = PROVIDER_STORE.get_api_key(p)
-        if not api_key and p.protocol != "ollama":
-            continue
 
         for m in p.models:
+            if not api_key and p.protocol != "ollama":
+                results.append({
+                    "provider": pid,
+                    "providerName": p.name,
+                    "model": m.id,
+                    "modelName": m.name,
+                    "ok": False,
+                    "latencyMs": 0,
+                    "protocol": p.protocol,
+                    "error": f"API key not configured for provider '{p.name}'",
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                })
+                continue
+
             started = time.perf_counter()
             try:
                 out = await call_provider_api(p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key)
@@ -726,24 +788,83 @@ async def test_all_models(payload: Dict[str, Any] = {}, user: Dict[str, Any] = D
                 msg_text = out["choices"][0]["message"].get("content", "")[:100]
                 results.append({
                     "provider": pid,
+                    "providerName": p.name,
                     "model": m.id,
+                    "modelName": m.name,
                     "ok": True,
                     "latencyMs": latency,
                     "protocol": p.protocol,
-                    "message": msg_text
+                    "message": msg_text,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
                 })
             except Exception as e:
                 latency = round((time.perf_counter() - started) * 1000)
                 results.append({
                     "provider": pid,
+                    "providerName": p.name,
                     "model": m.id,
+                    "modelName": m.name,
                     "ok": False,
                     "latencyMs": latency,
                     "protocol": p.protocol,
-                    "error": str(e)
+                    "error": str(e),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
                 })
 
     return {"results": results}
+
+@app.post("/api/providers/{pid}/models/{mid:path}/test")
+async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(require_developer)):
+    p = PROVIDER_STORE.data.get(pid)
+    if not p:
+        raise HTTPException(404, f"Provider '{pid}' not found")
+    model = next((m for m in p.models if m.id == mid), None)
+    if not model:
+        model = ModelSpec(id=mid, name=mid, toolCalling=True)
+
+    api_key = PROVIDER_STORE.get_api_key(p)
+    if not api_key and p.protocol != "ollama":
+        return {
+            "provider": pid,
+            "providerName": p.name,
+            "model": mid,
+            "modelName": model.name,
+            "ok": False,
+            "latencyMs": 0,
+            "protocol": p.protocol,
+            "error": f"API key not configured for provider '{p.name}'",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
+
+    started = time.perf_counter()
+    try:
+        out = await call_provider_api(p, model, [{"role": "user", "content": "Reply with 'OK' only."}], api_key)
+        latency = round((time.perf_counter() - started) * 1000)
+        msg_text = out["choices"][0]["message"].get("content", "")[:100]
+        return {
+            "provider": pid,
+            "providerName": p.name,
+            "model": mid,
+            "modelName": model.name,
+            "ok": True,
+            "latencyMs": latency,
+            "protocol": p.protocol,
+            "message": msg_text,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
+    except Exception as e:
+        latency = round((time.perf_counter() - started) * 1000)
+        return {
+            "provider": pid,
+            "providerName": p.name,
+            "model": mid,
+            "modelName": model.name,
+            "ok": False,
+            "latencyMs": latency,
+            "protocol": p.protocol,
+            "error": str(e),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
 
 @app.post("/api/providers/{pid}/reset-circuit")
 def reset_provider_circuit(pid: str, user: Dict[str, Any] = Depends(require_developer)):

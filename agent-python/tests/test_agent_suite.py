@@ -5,6 +5,7 @@ import json
 import shutil
 import tempfile
 import pathlib
+from pathlib import Path
 import time
 from fastapi.testclient import TestClient
 
@@ -47,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.8.0"
+    assert APP_VERSION == "0.9.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -396,5 +397,95 @@ def test_api_routes_integration():
 
     del_c_r = client.delete(f"/api/conversations/{cid}")
     assert del_c_r.status_code == 200
+
+def test_chat_file_and_image_upload():
+    # 1. Test text file upload
+    text_content = b"def calculate_total(a, b):\n    return a + b\n"
+    res = client.post(
+        "/api/chat/upload",
+        files={"file": ("test_code.py", text_content, "text/x-python")}
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["filename"] == "test_code.py"
+    assert data["isImage"] is False
+    assert "calculate_total" in data["textSnippet"]
+    assert Path(data["savedPath"]).exists()
+
+    # 2. Test image upload (1x1 transparent png)
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4"
+        b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    img_res = client.post(
+        "/api/chat/upload",
+        files={"file": ("screenshot.png", tiny_png, "image/png")}
+    )
+    assert img_res.status_code == 200
+    img_data = img_res.json()
+    assert img_data["ok"] is True
+    assert img_data["isImage"] is True
+    assert img_data["imageBase64"] is not None
+    assert Path(img_data["savedPath"]).exists()
+
+def test_model_endpoint_testing_and_diagnostics():
+    # 1. Test test-all models endpoint
+    res = client.post("/api/providers/test-all", json={})
+    assert res.status_code == 200
+    data = res.json()
+    assert "results" in data
+    assert isinstance(data["results"], list)
+    assert len(data["results"]) > 0
+
+    # Every item should have provider, model, latencyMs, ok, timestamp
+    first = data["results"][0]
+    assert "provider" in first
+    assert "model" in first
+    assert "latencyMs" in first
+    assert "ok" in first
+    assert "timestamp" in first
+
+    # 2. Test single model test endpoint
+    single_res = client.post(f"/api/providers/{first['provider']}/models/{first['model']}/test")
+    assert single_res.status_code == 200
+    single_data = single_res.json()
+    assert single_data["provider"] == first["provider"]
+    assert single_data["model"] == first["model"]
+    assert "ok" in single_data
+    assert "latencyMs" in single_data
+
+def test_chat_streaming_and_error_diagnostics():
+    # Test chat streaming endpoint
+    res = client.post(
+        "/api/chat/stream",
+        json={
+            "provider": "openrouter",
+            "model": "anthropic/claude-3.5-sonnet",
+            "messages": [{"role": "user", "content": "Hello agent!"}],
+            "maxSteps": 4
+        }
+    )
+    assert res.status_code == 200
+    assert "text/event-stream" in res.headers["content-type"]
+    text = res.text
+    assert "event: status" in text
+    assert "event: token" in text or "event: done" in text or "event: error" in text
+
+    # Test non-streaming chat endpoint
+    chat_res = client.post(
+        "/api/chat",
+        json={
+            "provider": "openrouter",
+            "model": "anthropic/claude-3.5-sonnet",
+            "messages": [{"role": "user", "content": "Inspect project structure"}],
+            "maxSteps": 4
+        }
+    )
+    assert chat_res.status_code == 200
+    chat_data = chat_res.json()
+    assert "message" in chat_data
+    assert "content" in chat_data["message"]
+
 
 
