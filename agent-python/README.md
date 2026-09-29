@@ -41,3 +41,11 @@ Current release: `0.3.0`.
 - API version endpoint: `/api/version`
 - FastAPI OpenAPI version is set from the same application version.
 - Every release should update `VERSION`, `APP_VERSION`, the changelog, and create a Git tag such as `v0.3.0`.
+
+## Git workflow API
+
+- `GET /api/git/status`
+- `GET /api/git/diff`
+- `POST /api/git/commit` with `{ "message": "...", "approved": true }`
+
+Commit operations require explicit approval.

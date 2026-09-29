@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response, FileResponse
 from .models import Provider, ModelSpec
 from .providers import ProviderStore
-from .agent_tools import list_files, read_file, write_file, run_command
+from .agent_tools import list_files, read_file, write_file, run_command, git_status, git_diff, git_commit
 from .chat import complete
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
@@ -44,6 +44,21 @@ def workspace_read(path: str):
 def workspace_write(payload: dict):
     try: return write_file(str(payload['path']), str(payload.get('content','')))
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.get('/api/git/status')
+def git_status_api():
+    return git_status()
+
+@app.get('/api/git/diff')
+def git_diff_api():
+    return git_diff()
+
+@app.post('/api/git/commit')
+def git_commit_api(payload: dict):
+    message=str(payload.get('message','')).strip()
+    if not message: raise HTTPException(400, 'Commit message is required')
+    if not payload.get('approved'): raise HTTPException(428, 'Explicit approval is required')
+    return git_commit(message)
 
 @app.post('/api/terminal/exec')
 def terminal_exec(payload: dict):

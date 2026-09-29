@@ -21,3 +21,13 @@ def run_command(command,cwd='.',timeout=60):
     # Commands run only inside the configured workspace; callers should add approval for destructive work.
     p=safe_path(cwd); started=time.time(); r=subprocess.run(command,shell=True,cwd=p,text=True,capture_output=True,timeout=min(int(timeout),300),env=os.environ)
     return {'command':command,'exitCode':r.returncode,'stdout':r.stdout[-20000:],'stderr':r.stderr[-20000:],'durationMs':int((time.time()-started)*1000)}
+
+def git_status():
+    return run_command('git status --short --branch')
+
+def git_diff():
+    return run_command('git diff --stat && git diff')
+
+def git_commit(message):
+    safe=message.replace("'", "'\\''")
+    return run_command("git add -A && git commit -m '%s'" % safe)
