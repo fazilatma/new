@@ -15,7 +15,10 @@ async def complete(store:ProviderStore, provider_id:str, model_id:str, messages:
     if not m: raise ValueError('Model not found')
     key=p.apiKey or (os.getenv(p.apiKeyEnv) if p.apiKeyEnv else '')
     if not key: raise ValueError('No API key configured for this provider')
-    url=p.url.rstrip('/')+'/chat/completions'
+    base=p.url.rstrip('/')
+    url=base if base.endswith('/chat/completions') else base+'/chat/completions'
+    proxy=os.getenv('AGENT_PROXY_URL','')
+    if proxy: url=proxy.replace('{url}',url)
     headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}
     async with httpx.AsyncClient(timeout=120) as client:
       for _ in range(max_steps):

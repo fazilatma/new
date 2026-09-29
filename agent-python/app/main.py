@@ -156,6 +156,22 @@ async def chat(payload: dict):
     except Exception as e:
         raise HTTPException(400, str(e))
 
+@app.post('/api/providers/test-all')
+async def test_all(payload: dict = {}):
+    import time
+    from .chat import complete
+    selected=payload.get('provider')
+    results=[]
+    for pid,p in store.data.items():
+        if selected and pid!=selected: continue
+        for m in p.models:
+            started=time.perf_counter()
+            try:
+                out=await complete(store,pid,m.id,[{'role':'user','content':'Reply with OK only.'}],1)
+                results.append({'provider':pid,'model':m.id,'ok':True,'latencyMs':round((time.perf_counter()-started)*1000),'message':out['message'].get('content','')[:120]})
+            except Exception as e: results.append({'provider':pid,'model':m.id,'ok':False,'latencyMs':round((time.perf_counter()-started)*1000),'error':str(e)})
+    return {'results':results}
+
 @app.get('/api/providers')
 def providers(): return store.all()
 @app.put('/api/providers/{pid}')
