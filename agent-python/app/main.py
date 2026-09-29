@@ -9,11 +9,28 @@ from .connectors import github, browse
 from .config import read as read_config, write as write_config
 from .workflow import preview
 from .runtime import submit, jobs
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi import Request
+from .auth import middleware as auth_middleware, configured, valid
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 APP_VERSION='0.3.0'
 app=FastAPI(title='Arena-like Coding Agent', version=APP_VERSION)
+app.middleware('http')(auth_middleware)
+
+@app.get('/api/auth/status')
+def auth_status():
+    return {'enabled':configured()}
+
+@app.post('/api/auth/login')
+def auth_login(payload:dict):
+    if not configured(): return {'enabled':False}
+    if not valid(str(payload.get('token',''))): raise HTTPException(401,'Invalid token')
+    r=JSONResponse({'ok':True}); r.set_cookie('arena_session',str(payload['token']),httponly=True,samesite='lax',secure=False); return r
+
+@app.post('/api/auth/logout')
+def auth_logout():
+    r=JSONResponse({'ok':True}); r.delete_cookie('arena_session'); return r
 
 @app.get('/api/version')
 def version():
