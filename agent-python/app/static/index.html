@@ -1339,6 +1339,141 @@
       margin-top: 2px;
     }
 
+    /* Arena Agent Step-by-Step Agentic Workflow & Collapsible Step Drawers (v0.15.0) */
+    .agent-workplan-card {
+      margin: 12px 0;
+      background: linear-gradient(180deg, rgba(37, 99, 235, 0.08) 0%, var(--bg-elevated) 100%);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 8px;
+      padding: 12px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .agent-workplan-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--accent-blue);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .agent-step-drawer {
+      margin: 10px 0;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: all 0.2s ease;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .agent-step-drawer[open] {
+      border-color: rgba(59, 130, 246, 0.4);
+      background: var(--bg-elevated);
+    }
+    .agent-step-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 14px;
+      cursor: pointer;
+      user-select: none;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid transparent;
+      font-weight: 600;
+      font-size: 12.5px;
+      transition: background 0.15s ease;
+    }
+    .agent-step-drawer[open] .agent-step-summary {
+      border-bottom-color: var(--border-subtle);
+      background: var(--bg-highlight);
+    }
+    .agent-step-summary:hover {
+      background: var(--bg-highlight);
+    }
+    .agent-step-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .agent-step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .agent-step-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .agent-step-badge.running {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .agent-step-badge.done, .agent-step-badge.success {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .agent-step-badge.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .agent-step-badge.healed {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .agent-step-body {
+      padding: 12px 14px;
+      font-size: 12.5px;
+      line-height: 1.6;
+      background: var(--bg-surface);
+    }
+    .agent-step-toggle-icon {
+      font-size: 11px;
+      color: var(--text-dim);
+      transition: transform 0.2s ease;
+      margin-left: 4px;
+    }
+    .agent-step-drawer[open] .agent-step-toggle-icon {
+      transform: rotate(90deg);
+    }
+    .agent-summary-report {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(16, 185, 129, 0.08) 0%, var(--bg-elevated) 100%);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+    .agent-summary-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--accent-green);
+      font-size: 13.5px;
+      margin-bottom: 8px;
+    }
+
     /* Cross-Chat & Cross-Project References (v0.10.0) */
     .chat-references-bar {
       display: flex;
@@ -4744,6 +4879,46 @@ function renderMarkdown(md) {
     `;
   });
 
+  // Support Arena Agent Collapsible Step Drawers (<details> and <summary>)
+  html = html.replace(/&lt;details([^&]*?)&gt;([\s\S]*?)&lt;\/details&gt;/gi, (m, attrs, inner) => {
+    const isOpen = attrs.includes('open') ? 'open' : '';
+    let summaryHtml = '';
+    let bodyHtml = inner;
+    const summaryMatch = inner.match(/&lt;summary([^&]*?)&gt;([\s\S]*?)&lt;\/summary&gt;/i);
+    if (summaryMatch) {
+      const summaryContent = summaryMatch[2].trim();
+      summaryHtml = `
+        <summary class="agent-step-summary">
+          <div class="agent-step-title-wrap">
+            <span class="agent-step-num">⚙️</span>
+            <span>${summaryContent}</span>
+          </div>
+          <span class="agent-step-toggle-icon">▶</span>
+        </summary>
+      `;
+      bodyHtml = inner.replace(summaryMatch[0], '');
+    } else {
+      summaryHtml = `
+        <summary class="agent-step-summary">
+          <div class="agent-step-title-wrap">
+            <span class="agent-step-num">⚙️</span>
+            <span>مشاهده جزئیات مرحله (Step Details)</span>
+          </div>
+          <span class="agent-step-toggle-icon">▶</span>
+        </summary>
+      `;
+    }
+    return `
+      <details class="agent-step-drawer" ${isOpen}>
+        ${summaryHtml}
+        <div class="agent-step-body">${bodyHtml}</div>
+      </details>
+    `;
+  });
+
+  // Unescape safe badge tags: &lt;span class=&quot;agent-step-badge ...&quot;&gt;...&lt;/span&gt;
+  html = html.replace(/&lt;span class=(?:&quot;|")agent-step-badge\s+([a-zA-Z0-9_\-]+)(?:&quot;|")&gt;([\s\S]*?)&lt;\/span&gt;/gi, '<span class="agent-step-badge $1">$2</span>');
+
   // Fenced code blocks ```lang ... ```
   html = html.replace(/```([a-zA-Z0-9_\-\.\+]*)\n([\s\S]*?)```/g, (match, lang, code) => {
     const langDisplay = lang ? lang.trim() : 'code';
@@ -4763,6 +4938,16 @@ function renderMarkdown(md) {
 
   // Inline code `code`
   html = html.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>');
+
+  // Headings
+  html = html.replace(/^### (📋.*?)(?:\n|$)/gm, '<div class="agent-workplan-head">$1</div>');
+  html = html.replace(/^### (🏁.*?)(?:\n|$)/gm, '<div class="agent-summary-head">$1</div>');
+  html = html.replace(/^### ([^\n]+)/gm, '<h4 style="margin:12px 0 6px;font-size:13.5px;font-weight:700;color:var(--text-main);">$1</h4>');
+  html = html.replace(/^## ([^\n]+)/gm, '<h3 style="margin:14px 0 8px;font-size:14.5px;font-weight:700;color:var(--text-main);">$1</h3>');
+  html = html.replace(/^# ([^\n]+)/gm, '<h2 style="margin:16px 0 10px;font-size:16px;font-weight:700;color:var(--text-main);">$1</h2>');
+
+  // Blockquotes
+  html = html.replace(/^>\s+(.+)$/gm, '<blockquote style="border-right:3px solid var(--primary);padding:4px 12px;margin:6px 0;background:var(--bg-highlight);border-radius:4px;">$1</blockquote>');
 
   // Bold **text**
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -4817,6 +5002,7 @@ async function saveCodeBlockToWorkspace(btn) {
     else if (langTag === 'python' || langTag === 'py') suggested = 'main.py';
     else if (langTag === 'javascript' || langTag === 'js') suggested = 'index.js';
     else if (langTag === 'typescript' || langTag === 'ts') suggested = 'index.ts';
+    else if (langTag === 'php') suggested = 'index.php';
     else if (langTag === 'html') suggested = 'index.html';
     else if (langTag === 'css') suggested = 'style.css';
     else if (langTag === 'json') suggested = 'data.json';
@@ -6079,6 +6265,7 @@ function getFileIcon(filename) {
   switch (ext) {
     case 'py': case 'pyw': return '🐍';
     case 'html': case 'htm': return '🌐';
+    case 'php': return '🐘';
     case 'js': case 'mjs': return '⚡';
     case 'ts': case 'tsx': return '📘';
     case 'css': case 'scss': case 'less': return '🎨';
@@ -6534,7 +6721,7 @@ function renderSessionFolderExplorer() {
   container.innerHTML = files.map(f => {
     const icon = getFileIcon(f.path);
     const ext = f.path.split('.').pop().toLowerCase();
-    const isRunnable = ['py', 'pyw', 'sh', 'bash', 'js', 'mjs', 'ts', 'html'].includes(ext);
+    const isRunnable = ['py', 'pyw', 'sh', 'bash', 'js', 'mjs', 'ts', 'php', 'html'].includes(ext);
     const sizeStr = formatFileSize(f.size || 0);
     const filename = f.path.split('/').pop() || f.path;
 
@@ -6580,7 +6767,7 @@ async function openWorkspaceFileModal(filePath) {
   if ($('#fileModalSizeBadge')) $('#fileModalSizeBadge').textContent = 'Loading...';
   if ($('#fileModalFooterStatus')) $('#fileModalFooterStatus').textContent = `فایل ${filename} بارگذاری شد`;
 
-  const isRunnable = ['py', 'pyw', 'sh', 'bash', 'js', 'mjs', 'ts', 'html'].includes(ext);
+  const isRunnable = ['py', 'pyw', 'sh', 'bash', 'js', 'mjs', 'ts', 'php', 'html'].includes(ext);
   const isPreviewable = ['html', 'htm', 'md', 'markdown', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'csv', 'pdf', 'audio', 'video'].includes(ext);
 
   if ($('#fileModalRunBtn')) $('#fileModalRunBtn').style.display = isRunnable ? 'inline-flex' : 'none';
@@ -7180,6 +7367,7 @@ function getExecutionCmdForFile(path) {
   if (ext === 'sh' || ext === 'bash') return `bash ${filename}`;
   if (ext === 'js' || ext === 'mjs') return `node ${filename}`;
   if (ext === 'ts') return `npx tsx ${filename}`;
+  if (ext === 'php') return `php ${filename}`;
   return `./${filename}`;
 }
 

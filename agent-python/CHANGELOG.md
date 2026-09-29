@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.15.0 - PHP Scripting & Execution Support, Arena Agent Structured Agentic Coding Workflow & Collapsible Step Drawers
+
+- **PHP Language & Execution Engine Support**:
+  - Full support for writing, editing, auto-detecting, previewing, and executing PHP scripts (`.php`, `clean_lang == "php"`, `<?php ... ?>`).
+  - PHP execution integrated in `/api/workspace/execute`, workspace file runner, and self-healing execution loop (`php '{filename}'`).
+  - Added dedicated PHP file icon (`🐘`), syntax highlight mapping, and one-click "Save to Workspace" preset in chat code blocks.
+  - Full-screen Live Execution modal support with PHP CLI runtime output inspector.
+- **Arena Agent 4-Stage Structured Coding Workflow**:
+  - **1. Goal & Intent Announcement (اعلام هدف و رویکرد)**: The agent begins by explicitly declaring its objective and planned strategy.
+  - **2. Step-by-Step Work Plan (برنامه کاری مرحله‌ای)**: Explicit numbered execution roadmap (`### 📋 برنامه کاری (Work Plan)`) presented in a prominent highlighted workplan card.
+  - **3. Collapsible Step Execution Drawers (کشوهای تاشوی مرحله‌ای)**:
+    - Multi-step execution details, intermediate results, tools executed, and error tracebacks are encapsulated inside clean collapsible accordion drawers (`<details class="agent-step-drawer" open>`).
+    - Interactive summary bar (`<summary class="agent-step-summary">`) with numbered step badges, title, expandable/collapsible toggle chevron, and live status badges (`✅ تکمیل شد (Done)`, `⏳ در حال انجام (Running)`, `⚠️ اصلاح خودکار (Healed)`).
+    - Allows users to collapse or expand individual steps at will to keep the conversation clean, readable, and structured exactly like Arena Agent.
+  - **4. Accomplishments & Deliverables Summary (خلاصه کارهای انجام‌شده)**:
+    - Clean concluding report (`### 🏁 خلاصه کارهای انجام‌شده (Accomplishments)`) summarizing all files created, tests run, and verified results.
+- **Test Suite Expansion**: Added automated pytest verification for PHP file auto-detection and execution command routing, as well as Arena Agent workflow system prompt requirements (34/34 tests passing).
+
 ## 0.14.0 - Autonomous Code Execution & Self-Healing Loop, Full-Screen Execution & Live Render View
 
 - **Autonomous Code Execution Engine**: After the agent generates or updates code files in the workspace (Python, Bash/Shell, Node.js, TypeScript, or HTML), the platform automatically executes the code inside the active workspace environment.

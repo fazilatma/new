@@ -486,6 +486,8 @@ async def workspace_execute_file(payload: Dict[str, Any], user: Dict[str, Any] =
             cmd = f"node '{p.name}' {arg_str}".strip()
         elif suffix == ".ts":
             cmd = f"npx --yes tsx '{p.name}' {arg_str}".strip()
+        elif suffix in (".php",):
+            cmd = f"php '{p.name}' {arg_str}".strip()
         elif suffix in (".html", ".htm"):
             raw_url = f"/api/workspace/raw?path={path}"
             if conversation_id:

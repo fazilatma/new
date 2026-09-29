@@ -48,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.14.0"
+    assert APP_VERSION == "0.15.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1125,6 +1125,48 @@ async def test_stream_complete_chat_execution_events(monkeypatch):
     assert healed_evt["path"] == "stream_heal.py"
     assert healed_evt["exitCode"] == 0
     assert "Stream Self-Healing OK" in healed_evt["stdout"]
+
+
+def test_php_code_file_auto_detection_and_execution():
+    """Test auto-detection and workspace execution command generation for PHP files."""
+    from app.chat import auto_detect_and_save_code_files, execute_file_in_workspace
+    from app.workspaces import safe_path
+
+    php_markdown = """
+Here is the backend API script in PHP:
+```php:index.php
+<?php
+echo "PHP Backend Initialized: OK\n";
+```
+"""
+    saved = auto_detect_and_save_code_files(php_markdown)
+    assert len(saved) >= 1
+    php_item = next(f for f in saved if f["path"] == "index.php")
+    assert php_item["isExecutable"] is True
+    assert php_item["type"] == "php"
+    assert "PHP Backend Initialized" in php_item["content"]
+
+    # Verify execution runner routing
+    res = client.post("/api/workspace/execute", json={
+        "path": "index.php"
+    })
+    assert res.status_code == 200
+    exec_data = res.json()
+    assert exec_data["ok"] is True
+    assert "php" in exec_data["command"]
+
+
+def test_arena_agentic_workflow_system_prompt_structure():
+    """Test that build_system_prompt mandates Arena Agent 4-stage workflow and PHP support."""
+    from app.chat import build_system_prompt
+
+    prompt = build_system_prompt()
+    assert "ARENA AGENT WORKFLOW" in prompt
+    assert "Goal & Intent" in prompt or "اعلام هدف" in prompt
+    assert "Work Plan" in prompt or "برنامه کاری" in prompt
+    assert "agent-step-drawer" in prompt
+    assert "Accomplishments" in prompt or "خلاصه کارها" in prompt
+    assert "PHP" in prompt
 
 
 

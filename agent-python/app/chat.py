@@ -101,7 +101,16 @@ def build_system_prompt(
                 prompt += f"  Files: (unable to list: {e})\n"
 
     prompt += (
-        "\n### 🛠️ WORKSPACE FILE CREATION & EDITING RULES:\n"
+        "\n### 🤖 ARENA AGENT WORKFLOW & AGENTIC CODING STANDARD:\n"
+        "You must structure all your multi-step coding, debugging, and implementation responses according to the Arena Agent standard:\n"
+        "1. **اعلام هدف و نیت (Goal & Intent)**: Start immediately with a clear statement of your goal and the approach you will take.\n"
+        "2. **برنامه کاری مرحله‌ای (Step-by-Step Work Plan)**: Provide an explicit numbered work plan under `### 📋 برنامه کاری (Work Plan)`.\n"
+        "3. **اجرای گام‌ها در کشوهای تاشو (Collapsible Step Drawers)**: Wrap each step's execution details, tools called, generated code, and error tracebacks inside `<details class=\"agent-step-drawer\" open>` with a `<summary class=\"agent-step-summary\">` line displaying the step number, title, and badge (e.g. `<span class=\"agent-step-badge done\">تکمیل شد ✓</span>` or `<span class=\"agent-step-badge healed\">اصلاح شد ✓</span>`).\n"
+        "4. **خلاصه کارهای انجام‌شده (Accomplishments Summary)**: End with a clean bulleted report under `### 🏁 خلاصه کارهای انجام‌شده (Accomplishments)` listing all created files, executed tests, and verified results.\n\n"
+        "### 🐘 PHP LANGUAGE & RUNTIME SUPPORT:\n"
+        "- Full support is enabled for PHP (`.php`) scripting and web templates.\n"
+        "- When writing PHP code, produce clean modern PHP (`<?php ... ?>`), output files as `.php` (e.g. `index.php`, `calc.php`), and execute using the workspace runner (`php filename.php`).\n\n"
+        "### 🛠️ WORKSPACE FILE CREATION & EDITING RULES:\n"
         "- When the user asks you to write, create, generate, modify, refactor, or test code or files, "
         "you MUST ALWAYS call the `write_file` tool (`write_file(path=..., content=...)`) so the code is saved directly into the active workspace directory.\n"
         "- DO NOT just output markdown code blocks without saving the file using `write_file`.\n"
@@ -308,6 +317,8 @@ def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[Li
                 filename = "schema.sql"
             elif clean_lang in ("bash", "sh", "zsh"):
                 filename = "run.sh"
+            elif clean_lang in ("php",) or "<?php" in code:
+                filename = "index.php" if "index.php" not in used_names else f"script_{len(used_names)+1}.php"
 
         if filename:
             clean_fn = filename.strip().lstrip("/").replace("\\", "/")
@@ -317,7 +328,7 @@ def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[Li
                     ws = get_active_workspace()
                     save_file_version_snapshot(ws["id"], clean_fn, code, created_by="agent-auto-save")
                     used_names.add(clean_fn)
-                    is_exec = clean_fn.lower().endswith((".py", ".pyw", ".sh", ".bash", ".js", ".mjs", ".ts"))
+                    is_exec = clean_fn.lower().endswith((".py", ".pyw", ".sh", ".bash", ".js", ".mjs", ".ts", ".php"))
                     is_html = clean_fn.lower().endswith((".html", ".htm"))
                     saved_files.append({
                         "path": clean_fn,
@@ -348,6 +359,8 @@ def execute_file_in_workspace(path: str) -> Dict[str, Any]:
             cmd = f"node '{p.name}'"
         elif suffix == ".ts":
             cmd = f"npx --yes tsx '{p.name}'"
+        elif suffix in (".php",):
+            cmd = f"php '{p.name}'"
         elif suffix in (".html", ".htm"):
             return {
                 "ok": True,
