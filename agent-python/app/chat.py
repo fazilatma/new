@@ -146,11 +146,31 @@ async def complete_chat(
     # Provider Resolution & Fallback list
     primary_p = store.data.get(provider_id)
     if not primary_p:
-        raise ValueError(f"Provider '{provider_id}' not found.")
+        raise ValueError(f"Provider '{provider_id}' is not configured in the Provider Catalog.")
 
     model = next((m for m in primary_p.models if m.id == model_id), None)
     if not model:
-        raise ValueError(f"Model '{model_id}' not found under provider '{provider_id}'.")
+        if primary_p.models:
+            model = primary_p.models[0]
+        else:
+            model = ModelSpec(id=model_id or "default-model", name=model_id or "Default Model", toolCalling=True)
+
+    # Check key for primary provider
+    primary_key = store.get_api_key(primary_p)
+    if not primary_key and primary_p.protocol != "ollama":
+        # Check if another enabled provider has a key
+        fallback_with_key = next((p for p in store.data.values() if p.enabled and p.id != provider_id and (store.get_api_key(p) or p.protocol == "ollama")), None)
+        if not fallback_with_key:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": f"⚠️ **API Key Required**: Provider `{primary_p.name}` (`{primary_p.id}`) does not have an API key configured.\n\nPlease open the **Providers & Models** or **Security & Settings** tab to enter your API key (or environment variable `{primary_p.apiKeyEnv or 'OPENROUTER_API_KEY'}`), or switch to **Ollama** if running locally."
+                },
+                "steps": 0,
+                "provider": primary_p.id,
+                "model": model.id,
+                "pendingApprovals": []
+            }
 
     # Find candidate providers for fallback
     candidates = [primary_p] + [p for p in store.data.values() if p.enabled and p.id != provider_id and not CIRCUIT_BREAKER.is_tripped(p.id)]

@@ -180,7 +180,20 @@ class ProviderStore:
 
     def import_json(self, text: str, replace: bool = False):
         incoming = json.loads(text)
-        parsed = {k: Provider.model_validate(v) for k, v in incoming.items()}
+        parsed = {}
+        if isinstance(incoming, list):
+            for item in incoming:
+                p = Provider.model_validate(item)
+                parsed[p.id] = p
+        elif isinstance(incoming, dict):
+            for k, v in incoming.items():
+                if isinstance(v, dict) and "id" not in v:
+                    v["id"] = k
+                p = Provider.model_validate(v)
+                parsed[p.id] = p
+        else:
+            raise ValueError("Import JSON must be an array of providers or an object mapping.")
+
         if replace:
             self.data = parsed
         else:

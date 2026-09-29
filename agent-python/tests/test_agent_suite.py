@@ -1,6 +1,7 @@
 """Comprehensive automated test suite for Arena AI Coding Agent."""
 import pytest
 import os
+import json
 import shutil
 import tempfile
 import pathlib
@@ -295,8 +296,40 @@ def test_api_routes_integration():
     prov_r = client.get("/api/providers")
     assert prov_r.status_code == 200
 
+    # Provider text import & export testing
+    import_json_data = json.dumps([
+        {
+            "id": "test_imported_provider",
+            "name": "Test Imported Provider",
+            "url": "https://api.testprovider.com/v1",
+            "protocol": "openai",
+            "enabled": True,
+            "models": [
+                {"id": "test-model-1", "name": "Test Model 1", "toolCalling": True}
+            ]
+        }
+    ])
+    imp_r = client.post("/api/providers/import-text", json={"json": import_json_data, "replace": False})
+    assert imp_r.status_code == 200
+    assert imp_r.json()["ok"] is True
+
+    # Test reset circuit
+    reset_r = client.post("/api/providers/test_imported_provider/reset-circuit")
+    assert reset_r.status_code == 200
+    assert reset_r.json()["ok"] is True
+
+    # Test export
+    exp_r = client.get("/api/providers/export")
+    assert exp_r.status_code == 200
+    assert "test_imported_provider" in exp_r.text
+
+    # Clean up test provider
+    del_r = client.delete("/api/providers/test_imported_provider")
+    assert del_r.status_code == 200
+
     jr = client.get("/api/jobs")
     assert jr.status_code == 200
 
     lr = client.get("/api/observability/logs")
     assert lr.status_code == 200
+

@@ -7,7 +7,11 @@
     "protocol": "ollama",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "OLLAMA_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "qwen2.5-coder:14b",
@@ -17,7 +21,10 @@
         "free": true,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       },
       {
         "id": "llama3.2",
@@ -27,18 +34,27 @@
         "free": true,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "openrouter": {
     "id": "openrouter",
     "name": "OpenRouter",
     "vendor": "openrouter",
     "url": "https://openrouter.ai/api/v1",
+    "protocol": "openai-compatible",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "OPENROUTER_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "openai/gpt-oss-120b",
@@ -48,7 +64,10 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       },
       {
         "id": "qwen/qwen3-coder",
@@ -58,7 +77,10 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       },
       {
         "id": "deepseek/deepseek-chat",
@@ -68,18 +90,27 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "groq": {
     "id": "groq",
     "name": "Groq",
     "vendor": "groq",
     "url": "https://api.groq.com/openai/v1",
+    "protocol": "openai-compatible",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "GROQ_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "openai/gpt-oss-120b",
@@ -89,7 +120,10 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       },
       {
         "id": "llama-3.3-70b-versatile",
@@ -99,18 +133,27 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "together": {
     "id": "together",
     "name": "Together AI",
     "vendor": "together",
     "url": "https://api.together.xyz/v1",
+    "protocol": "openai-compatible",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "TOGETHER_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
@@ -120,18 +163,27 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "mistral": {
     "id": "mistral",
     "name": "Mistral AI",
     "vendor": "mistral",
     "url": "https://api.mistral.ai/v1",
+    "protocol": "openai-compatible",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "MISTRAL_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "mistral-large-latest",
@@ -141,7 +193,10 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       },
       {
         "id": "codestral-latest",
@@ -151,18 +206,27 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "gemini": {
     "id": "gemini",
     "name": "Google Gemini",
     "vendor": "google",
     "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "protocol": "openai-compatible",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "GEMINI_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "gemini-2.5-flash",
@@ -172,9 +236,13 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "anthropic": {
     "id": "anthropic",
@@ -184,17 +252,27 @@
     "protocol": "anthropic",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "models": []
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [],
+    "extra": {}
   },
   "deepseek": {
     "id": "deepseek",
     "name": "DeepSeek",
     "vendor": "deepseek",
     "url": "https://api.deepseek.com",
+    "protocol": "openai-compatible",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
     "models": [
       {
         "id": "deepseek-chat",
@@ -204,7 +282,10 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       },
       {
         "id": "deepseek-reasoner",
@@ -214,9 +295,13 @@
         "free": false,
         "maxInputTokens": 131072,
         "maxOutputTokens": 8192,
-        "enabled": true
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
       }
-    ]
+    ],
+    "extra": {}
   },
   "cloudflare": {
     "id": "cloudflare",
@@ -226,7 +311,12 @@
     "protocol": "cloudflare-workers-ai",
     "enabled": false,
     "apiKey": "",
+    "apiKeys": [],
     "apiKeyEnv": "CLOUDFLARE_API_TOKEN",
-    "models": []
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [],
+    "extra": {}
   }
 }

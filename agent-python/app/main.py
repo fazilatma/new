@@ -645,10 +645,26 @@ async def test_all_models(payload: Dict[str, Any] = {}, user: Dict[str, Any] = D
 
     return {"results": results}
 
+@app.post("/api/providers/{pid}/reset-circuit")
+def reset_provider_circuit(pid: str, user: Dict[str, Any] = Depends(require_developer)):
+    from .providers import CIRCUIT_BREAKER
+    CIRCUIT_BREAKER.record_success(pid)
+    return {"ok": True, "message": f"Circuit breaker for provider {pid} reset."}
+
 @app.get("/api/providers/export")
 def export_providers(user: Dict[str, Any] = Depends(require_admin)):
     content = PROVIDER_STORE.export_json()
     return Response(content=content, media_type="application/json", headers={"Content-Disposition": "attachment; filename=providers.json"})
+
+@app.post("/api/providers/import-text")
+def import_providers_text(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    raw = payload.get("json", "")
+    replace = bool(payload.get("replace", False))
+    try:
+        PROVIDER_STORE.import_json(raw, replace=replace)
+        return {"ok": True, "count": len(PROVIDER_STORE.data)}
+    except Exception as e:
+        raise HTTPException(400, f"Import failed: {str(e)}")
 
 @app.post("/api/providers/import")
 async def import_providers(file: UploadFile = File(...), replace: bool = False, user: Dict[str, Any] = Depends(require_admin)):
