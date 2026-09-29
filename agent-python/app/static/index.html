@@ -5647,10 +5647,15 @@ function onApprovalToggle() {
 
 let chatHistory = [];
 let abortController = null;
+let activeRetryTimer = null;
 let mentionMatches = [];
 let selectedMentionIdx = 0;
 
 function stopStreaming() {
+  if (activeRetryTimer) {
+    clearInterval(activeRetryTimer);
+    activeRetryTimer = null;
+  }
   if (abortController) {
     abortController.abort();
     abortController = null;
@@ -5983,7 +5988,7 @@ $('#chatForm').onsubmit = async (e) => {
   await streamAgentResponse();
 };
 
-async function streamAgentResponse() {
+async function streamAgentResponse(retryAttempt = 0) {
   if (chatHistory.length === 0) return;
 
   const pid = $('#chatProvider')?.value || 'openrouter';
@@ -6024,7 +6029,7 @@ async function streamAgentResponse() {
     }).catch(() => {});
   }
 
-  const assistantMsgEl = appendMessage('assistant', 'در حال اتصال به مدل و تحلیل پروژه...');
+  const assistantMsgEl = appendMessage('assistant', retryAttempt > 0 ? `در حال تلاش مجدد و ادامه از چک‌پوینت (تلاش ${retryAttempt + 1})...` : 'در حال اتصال به مدل و تحلیل پروژه...');
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
 
   abortController = new AbortController();
@@ -6036,12 +6041,16 @@ async function streamAgentResponse() {
   let renderPreviews = [];
 
   try {
+    const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream'
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream'
-      },
+      headers,
       body: JSON.stringify({
         provider: pid,
         model: mid,
@@ -6223,6 +6232,49 @@ async function streamAgentResponse() {
 
   } catch (err) {
     if (err.name !== 'AbortError') {
+      const errStr = (err.message || '').toLowerCase();
+      const isNetworkOrFetchError = (
+        errStr.includes('failed to fetch') ||
+        errStr.includes('networkerror') ||
+        errStr.includes('network error') ||
+        errStr.includes('load failed') ||
+        errStr.includes('the operation was aborted') ||
+        errStr.includes('connection') ||
+        errStr.includes('timeout')
+      );
+
+      if (isNetworkOrFetchError && retryAttempt < 10) {
+        const delaySec = Math.min(Math.pow(2, retryAttempt), 30);
+        let remaining = delaySec;
+
+        const updateCountdownUI = () => {
+          bubble.innerHTML = renderMarkdown(
+            `⏳ **قطع ارتباط موقت با سرور (Failed to fetch)**\n\n` +
+            `> 💾 *در حال تلاش مجدد و ادامه خودکار از آخرین چک‌پوینت (تلاش ${retryAttempt + 1} از ۱۰) در ${remaining} ثانیه...*`
+          );
+          const container = $('#chatMessages');
+          if (container) container.scrollTop = container.scrollHeight;
+        };
+
+        updateCountdownUI();
+        activeRetryTimer = setInterval(() => {
+          remaining--;
+          if (remaining > 0) {
+            updateCountdownUI();
+          } else {
+            if (activeRetryTimer) {
+              clearInterval(activeRetryTimer);
+              activeRetryTimer = null;
+            }
+            if (assistantMsgEl && assistantMsgEl.parentNode) {
+              assistantMsgEl.parentNode.removeChild(assistantMsgEl);
+            }
+            streamAgentResponse(retryAttempt + 1);
+          }
+        }, 1000);
+        return;
+      }
+
       const errDiag = {
         provider: pid,
         model: mid,
@@ -6230,7 +6282,9 @@ async function streamAgentResponse() {
         timestamp: new Date().toISOString(),
         remediation: '1. کلید API و تنظیمات ارائه‌دهنده را در تب Providers & Models بررسی کنید.\n2. از اتصال اینترنت یا پروکسی فعال مطمئن شوید.\n3. در صورت نیاز، مدل دیگری را انتخاب نمایید.'
       };
-      const errMsg = `⚠️ **خطا در ارسال یا دریافت پاسخ (Request Failed)**:\n\`${err.message}\`\n\n> 💡 **راهنمای سریع**: لطفاً تنظیمات مدل و ارائه‌دهنده را در بخش **ارائه‌دهندگان و مدل‌ها** بررسی کنید یا بر روی دکمه تلاش مجدد کلیک نمایید.`;
+      const errMsg = `⚠️ **خطا در ارسال یا دریافت پاسخ (Request Failed)**:\n\`${err.message}\`\n\n` +
+        `> 💾 **وضعیت چک‌پوینت**: آخرین وضعیت در چک‌پوینت پایگاه‌داده ذخیره است. برای از سرگیری بدون نیاز به شروع مجدد، بر روی دکمه زیر کلیک کنید:\n\n` +
+        `<button type="button" class="btn btn-primary btn-sm" onclick="streamAgentResponse(0)">🔄 تلاش مجدد و ادامه از آخرین چک‌پوینت</button>`;
       
       chatHistory.push({
         role: 'assistant',
@@ -6250,13 +6304,15 @@ async function streamAgentResponse() {
       renderChatMessages();
     }
   } finally {
-    $('#sendBtn').style.display = 'inline-flex';
-    $('#stopBtn').style.display = 'none';
-    abortController = null;
-    if (STATE.activeConversationId) {
-      loadConversationReferences(STATE.activeConversationId).catch(() => {});
+    if (!activeRetryTimer) {
+      $('#sendBtn').style.display = 'inline-flex';
+      $('#stopBtn').style.display = 'none';
+      abortController = null;
+      if (STATE.activeConversationId) {
+        loadConversationReferences(STATE.activeConversationId).catch(() => {});
+      }
+      refreshFileTree().catch(() => {});
     }
-    refreshFileTree().catch(() => {});
   }
 }
 
