@@ -8,6 +8,8 @@ from .chat import complete
 from .connectors import github, browse
 from .config import read as read_config, write as write_config
 from .workflow import preview
+from .runtime import submit, jobs
+from fastapi.responses import StreamingResponse
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 APP_VERSION='0.3.0'
@@ -106,6 +108,28 @@ async def github_pr(payload: dict):
 async def browser_fetch(payload:dict):
     try: return await browse(str(payload['url']))
     except Exception as e: raise HTTPException(400,str(e))
+
+@app.get('/api/jobs/{job_id}')
+def job_status(job_id: str):
+    if job_id not in jobs: raise HTTPException(404,'Job not found')
+    return jobs[job_id]
+
+@app.post('/api/chat/stream')
+async def chat_stream(payload: dict):
+    async def events():
+        yield 'event: status\ndata: {\"status\":\"started\"}\n\n'
+        try:
+            result=await complete(store,str(payload['provider']),str(payload['model']),payload.get('messages') or [{'role':'user','content':str(payload.get('message',''))}],int(payload.get('maxSteps',8)))
+            text=result.get('message',{}).get('content','')
+            for part in [text[i:i+120] for i in range(0,len(text),120)]:
+                yield 'event: token\ndata: '+json.dumps({'text':part},ensure_ascii=False)+'\n\n'
+            yield 'event: done\ndata: '+json.dumps({'steps':result.get('steps',0)})+'\n\n'
+        except Exception as e: yield 'event: error\ndata: '+json.dumps({'error':str(e)})+'\n\n'
+    return StreamingResponse(events(),media_type='text/event-stream')
+
+@app.post('/api/jobs/chat')
+async def chat_job(payload: dict):
+    return submit(complete(store,str(payload['provider']),str(payload['model']),payload.get('messages') or [{'role':'user','content':str(payload.get('message',''))}],int(payload.get('maxSteps',8))))
 
 @app.post('/api/chat')
 async def chat(payload: dict):
