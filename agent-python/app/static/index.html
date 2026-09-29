@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Arena AI Coding Agent v0.8.0</title>
+  <title>Arena AI Coding Agent v0.9.0</title>
   <style>
     :root[data-theme="dark"] {
       --bg-base: #0a0f1d;
@@ -2145,7 +2145,8 @@ async function initApp() {
 // -------------------------------------------------------------
 async function refreshProviders() {
   try {
-    STATE.providers = await api('/api/providers');
+    const data = await api('/api/providers');
+    STATE.providers = Array.isArray(data) ? data : (data.providers || []);
   } catch (_) {
     STATE.providers = [];
   }
@@ -2154,12 +2155,13 @@ async function refreshProviders() {
 async function loadProvidersList() {
   await refreshProviders();
   const grid = $('#providerCardsGrid');
-  if (!STATE.providers || STATE.providers.length === 0) {
+  const providersList = Array.isArray(STATE.providers) ? STATE.providers : [];
+  if (providersList.length === 0) {
     grid.innerHTML = '<div class="stat-card" style="text-align:center;color:var(--text-dim)">No providers configured. Click "+ Add Provider" above.</div>';
     return;
   }
 
-  grid.innerHTML = STATE.providers.map(p => `
+  grid.innerHTML = providersList.map(p => `
     <div class="changeset-card">
       <div class="changeset-header">
         <div style="display:flex;align-items:center;gap:12px;">
@@ -3037,9 +3039,10 @@ function renderChatMessages() {
 function renderChatProviders() {
   const pSel = $('#chatProvider');
   if (!pSel) return;
-  const savedProvider = localStorage.getItem('arena_selected_provider') || STATE.activeProject?.default_provider || STATE.providers[0]?.id;
+  const providersList = Array.isArray(STATE.providers) ? STATE.providers : [];
+  const savedProvider = localStorage.getItem('arena_selected_provider') || STATE.activeProject?.default_provider || providersList[0]?.id;
 
-  pSel.innerHTML = STATE.providers.map(p => `
+  pSel.innerHTML = providersList.map(p => `
     <option value="${esc(p.id)}" ${p.id === savedProvider ? 'selected' : ''}>
       ${esc(p.name)} ${p.hasApiKey ? '✓' : ''}
     </option>
@@ -3055,10 +3058,11 @@ function onChatProviderChange(save = true) {
     flashAutoSave();
   }
 
-  const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
+  const providersList = Array.isArray(STATE.providers) ? STATE.providers : [];
+  const p = providersList.find(x => x.id === pid) || providersList[0];
   const mSel = $('#chatModel');
   if (!mSel) return;
-  const savedModel = localStorage.getItem('arena_selected_model') || STATE.activeProject?.default_model || p?.models[0]?.id;
+  const savedModel = localStorage.getItem('arena_selected_model') || STATE.activeProject?.default_model || p?.models?.[0]?.id;
 
   mSel.innerHTML = (p?.models || []).map(m => `
     <option value="${esc(m.id)}" ${m.id === savedModel ? 'selected' : ''}>
@@ -3278,15 +3282,6 @@ $('#chatForm').onsubmit = async (e) => {
         openChatErrorModal(errDiag);
       };
       bubble.appendChild(badge);
-    }
-  } finally {
-    $('#sendBtn').style.display = 'inline-flex';
-    $('#stopBtn').style.display = 'none';
-    abortController = null;
-  }
-};
-    if (err.name !== 'AbortError') {
-      bubble.textContent = 'Error: ' + err.message;
     }
   } finally {
     $('#sendBtn').style.display = 'inline-flex';
