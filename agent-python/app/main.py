@@ -4,6 +4,9 @@ import os
 import json
 import time
 import base64
+import mimetypes
+import csv
+import io
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
@@ -17,7 +20,8 @@ from .providers import PROVIDER_STORE
 from .workspaces import (
     get_active_workspace, set_active_workspace, list_workspace_files,
     safe_path, create_workspace_from_template, get_workspace_metrics,
-    create_workspace_item, delete_workspace_item, rename_workspace_item, export_workspace_zip_bytes
+    create_workspace_item, delete_workspace_item, rename_workspace_item, export_workspace_zip_bytes,
+    get_or_create_session_workspace, reset_session_workspace, get_workspace_root
 )
 from .projects import (
     get_active_project, set_active_project, list_projects,
@@ -142,6 +146,19 @@ def workspaces_list(user: Dict[str, Any] = Depends(require_viewer)):
         active = get_active_workspace()
         return {"workspaces": [dict(r) for r in rows], "active": active}
 
+@app.get("/api/workspace/session/{session_id}")
+@app.post("/api/workspace/session/{session_id}/activate")
+def activate_session_workspace(session_id: str, payload: Dict[str, Any] = {}, user: Dict[str, Any] = Depends(require_viewer)):
+    title = str(payload.get("title", ""))
+    ws = get_or_create_session_workspace(session_id, title)
+    files = list_workspace_files(".")
+    return {"workspace": ws, "files": files}
+
+@app.post("/api/workspace/session/{session_id}/reset")
+def reset_session_ws(session_id: str, user: Dict[str, Any] = Depends(require_developer)):
+    ws = reset_session_workspace(session_id)
+    return {"ok": True, "workspace": ws, "files": []}
+
 @app.post("/api/workspaces")
 def create_workspace(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
     name = str(payload.get("name", "New Project"))
@@ -175,6 +192,162 @@ def workspace_read(path: str, user: Dict[str, Any] = Depends(require_viewer)):
             raise HTTPException(404, "File not found")
         content = p.read_text(encoding="utf-8", errors="replace")
         return {"path": path, "content": content, "size": p.stat().st_size}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/workspace/raw")
+def workspace_raw_file(path: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        p = safe_path(path)
+        if not p.exists() or p.is_dir():
+            raise HTTPException(404, "File not found")
+        mime, _ = mimetypes.guess_type(str(p))
+        if not mime:
+            mime = "application/octet-stream"
+        return FileResponse(p, media_type=mime)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/workspace/file-preview")
+def workspace_file_preview(path: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        p = safe_path(path)
+        if not p.exists():
+            raise HTTPException(404, "File not found")
+        if p.is_dir():
+            return {
+                "path": path,
+                "filename": p.name,
+                "isDir": True,
+                "type": "dir",
+                "items": list_workspace_files(path)
+            }
+
+        suffix = p.suffix.lower()
+        mime, _ = mimetypes.guess_type(str(p))
+        mime = mime or "application/octet-stream"
+
+        preview_type = "code"
+        content_text = None
+        csv_data = None
+        base64_data = None
+        is_executable = suffix in (".py", ".sh", ".bash", ".js", ".ts", ".html", ".pyw")
+
+        if suffix in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"):
+            preview_type = "image"
+            try:
+                base64_data = base64.b64encode(p.read_bytes()).decode("utf-8")
+            except Exception:
+                pass
+        elif suffix == ".pdf":
+            preview_type = "pdf"
+        elif suffix in (".mp3", ".wav", ".ogg", ".aac", ".flac"):
+            preview_type = "audio"
+        elif suffix in (".mp4", ".webm", ".ogv"):
+            preview_type = "video"
+        elif suffix in (".html", ".htm"):
+            preview_type = "html"
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        elif suffix in (".md", ".markdown"):
+            preview_type = "markdown"
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        elif suffix in (".csv", ".tsv"):
+            preview_type = "csv"
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+                delimiter = "\t" if suffix == ".tsv" else ","
+                reader = csv.reader(io.StringIO(content_text), delimiter=delimiter)
+                rows = list(reader)
+                headers = rows[0] if rows else []
+                data_rows = rows[1:101] if len(rows) > 1 else []
+                csv_data = {"headers": headers, "rows": data_rows, "totalRows": len(rows)}
+            except Exception:
+                pass
+        else:
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                preview_type = "binary"
+
+        return {
+            "path": path,
+            "filename": p.name,
+            "size": p.stat().st_size,
+            "type": preview_type,
+            "mimeType": mime,
+            "isExecutable": is_executable,
+            "content": content_text,
+            "base64": base64_data,
+            "csvData": csv_data,
+            "rawUrl": f"/api/workspace/raw?path={path}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/workspace/execute")
+async def workspace_execute_file(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    path = str(payload.get("path", "")).strip()
+    args = payload.get("args") or []
+    if not path:
+        raise HTTPException(400, "File path is required")
+    try:
+        p = safe_path(path)
+        if not p.exists():
+            raise HTTPException(404, "File not found")
+
+        suffix = p.suffix.lower()
+        cmd = ""
+        arg_str = " ".join(f"'{a}'" for a in args) if args else ""
+        ws_root = get_workspace_root()
+
+        try:
+            rel_cwd = str(p.parent.relative_to(ws_root))
+            if not rel_cwd:
+                rel_cwd = "."
+        except Exception:
+            rel_cwd = "."
+        rel_file_path = str(p.relative_to(ws_root))
+
+        if suffix in (".py", ".pyw"):
+            cmd = f"python3 '{p.name}' {arg_str}".strip()
+        elif suffix in (".sh", ".bash"):
+            cmd = f"bash '{p.name}' {arg_str}".strip()
+        elif suffix in (".js", ".mjs"):
+            cmd = f"node '{p.name}' {arg_str}".strip()
+        elif suffix == ".ts":
+            cmd = f"npx --yes tsx '{p.name}' {arg_str}".strip()
+        elif suffix in (".html", ".htm"):
+            return {
+                "ok": True,
+                "type": "html",
+                "previewUrl": f"/api/workspace/raw?path={path}",
+                "message": "HTML file ready for live preview."
+            }
+        else:
+            cmd = f"cat '{p.name}' {arg_str}".strip()
+
+        res = execute_sandboxed_command(cmd, cwd=rel_cwd, confirmed_dangerous=True)
+        return {
+            "ok": True,
+            "command": cmd,
+            "path": path,
+            "exitCode": res.get("exitCode", 0),
+            "stdout": res.get("stdout", ""),
+            "stderr": res.get("stderr", ""),
+            "durationMs": res.get("durationMs", 0)
+        }
     except HTTPException:
         raise
     except Exception as e:

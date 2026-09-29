@@ -54,6 +54,37 @@ def set_active_workspace(workspace_id: str) -> Dict[str, Any]:
         CURRENT_WORKSPACE_ID = workspace_id
         return dict(row)
 
+def get_or_create_session_workspace(session_id: str, title: str = "") -> Dict[str, Any]:
+    global CURRENT_WORKSPACE_ID
+    clean_sid = "".join(c for c in session_id if c.isalnum() or c in ("-", "_")).strip()
+    if not clean_sid:
+        clean_sid = f"conv_{int(time.time())}"
+    ws_id = f"session_{clean_sid}"
+    ws_name = f"Session Workspace ({title or clean_sid[:8]})"
+    ws_dir = (WORKSPACES_ROOT / ws_id).resolve()
+    ws_dir.mkdir(parents=True, exist_ok=True)
+
+    with get_db() as conn:
+        row = conn.execute("SELECT id, name, path, instructions, agent_rules, is_default FROM workspaces WHERE id = ?", (ws_id,)).fetchone()
+        if not row:
+            conn.execute("""
+            INSERT INTO workspaces (id, name, path, instructions, agent_rules, is_default)
+            VALUES (?, ?, ?, '', '', 0)
+            """, (ws_id, ws_name, str(ws_dir)))
+            row = conn.execute("SELECT id, name, path, instructions, agent_rules, is_default FROM workspaces WHERE id = ?", (ws_id,)).fetchone()
+        
+        CURRENT_WORKSPACE_ID = ws_id
+        return dict(row)
+
+def reset_session_workspace(session_id: str) -> Dict[str, Any]:
+    clean_sid = "".join(c for c in session_id if c.isalnum() or c in ("-", "_")).strip()
+    ws_id = f"session_{clean_sid}"
+    ws_dir = (WORKSPACES_ROOT / ws_id).resolve()
+    if ws_dir.exists():
+        shutil.rmtree(ws_dir)
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    return get_or_create_session_workspace(session_id)
+
 def get_workspace_root() -> pathlib.Path:
     ws = get_active_workspace()
     p = pathlib.Path(ws["path"]).resolve()

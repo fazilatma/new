@@ -736,6 +736,111 @@
       tab-size: 4;
     }
 
+    /* Workspace Multi-Format Preview & Live Execution */
+    .ws-preview-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+      background: var(--bg-surface);
+    }
+    .ws-preview-frame {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #ffffff;
+    }
+    .ws-image-viewer {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: auto;
+      background: var(--code-bg);
+      gap: 12px;
+    }
+    .ws-image-viewer img {
+      max-width: 90%;
+      max-height: 75vh;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border-subtle);
+    }
+    .ws-csv-table-wrap {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+      background: var(--bg-surface);
+    }
+    .ws-csv-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    .ws-csv-table th {
+      background: var(--bg-highlight);
+      padding: 8px 12px;
+      border: 1px solid var(--border-strong);
+      text-align: left;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+    .ws-csv-table td {
+      padding: 6px 12px;
+      border: 1px solid var(--border-subtle);
+      white-space: nowrap;
+    }
+    .ws-csv-table tr:hover td {
+      background: var(--bg-elevated);
+    }
+    .ws-console-drawer {
+      height: 200px;
+      background: var(--code-bg);
+      border-top: 1px solid var(--border-strong);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: height 0.2s ease;
+    }
+    .ws-console-head {
+      padding: 6px 14px;
+      background: var(--bg-highlight);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      font-family: monospace;
+    }
+    .ws-console-output {
+      flex: 1;
+      padding: 10px 14px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      color: var(--text-main);
+    }
+    .ws-empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--text-dim);
+      padding: 30px;
+      text-align: center;
+    }
+
     /* Provider Model Grid Cards */
     .provider-models-grid {
       display: grid;
@@ -999,7 +1104,7 @@
         <span class="badge-count" id="pendingApprovalsBadge" style="display:none">0</span>
       </button>
       <button class="nav-btn" data-view="editor" onclick="navigate('editor')">
-        <span class="icon">📝</span><span class="nav-text">Code Editor</span>
+        <span class="icon">📁</span><span class="nav-text">Workspace</span>
       </button>
       <button class="nav-btn" data-view="terminal" onclick="navigate('terminal')">
         <span class="icon">💻</span><span class="nav-text">Terminal</span>
@@ -1053,7 +1158,7 @@
         <span class="autosave-pill" id="globalAutoSave">✓ Auto-saved</span>
       </div>
       <div class="top-right">
-        <button class="btn btn-ghost btn-sm" onclick="navigate('settings')" title="Security & Settings">⚙️ Settings</button>
+        <button class="btn btn-primary btn-sm" onclick="navigate('editor')" title="Open Session Workspace & File Viewer">📁 Workspace</button>
         <button class="btn btn-ghost btn-sm" onclick="openCommandPalette()" title="Command Palette (Ctrl+K)">⌘K</button>
         <button class="btn btn-ghost btn-sm" onclick="toggleTheme()" title="Toggle Theme" id="themeBtn">🌙</button>
         <button class="btn btn-ghost btn-sm" onclick="refreshCurrentView()" title="Refresh View">↻</button>
@@ -1241,12 +1346,16 @@
       </div>
     </section>
 
-    <!-- VIEW: CODE EDITOR (Phase 3) -->
+    <!-- VIEW: CODE EDITOR & SESSION WORKSPACE (Phase 3 & User Request) -->
     <section class="view-panel" id="view-editor">
       <div class="editor-layout">
+        <!-- File Tree Sidebar -->
         <div class="editor-file-tree">
           <div class="tree-header">
-            <span>Project Explorer</span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span>📁 Workspace</span>
+              <span class="tool-status-tag pending" id="wsScopeTag" style="font-size:9.5px;padding:1px 5px;">Session</span>
+            </div>
             <div style="display:flex;gap:4px;">
               <button class="btn btn-ghost btn-sm" onclick="openCreateFileModal(false)" title="New File">+📄</button>
               <button class="btn btn-ghost btn-sm" onclick="openCreateFileModal(true)" title="New Folder">+📁</button>
@@ -1258,13 +1367,34 @@
             <input id="treeSearchInput" class="input-control" placeholder="Search files..." style="padding:3px 8px;font-size:11.5px;width:100%;" oninput="filterFileTree(this.value)">
           </div>
           <div class="tree-items" id="editorTree"></div>
+          <div style="padding:8px 10px;border-top:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-dim);background:var(--bg-elevated);">
+            <span id="wsFileCountBadge">0 files</span>
+            <button class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10.5px;" onclick="toggleWorkspaceScope()" id="wsScopeToggleBtn" title="Switch between Session and Project Workspace">Switch Scope</button>
+          </div>
         </div>
+
+        <!-- Main Workspace Area (Multi-Format Viewer + Code Editor + Runner) -->
         <div class="editor-main">
+          <!-- Editor Tabs Bar -->
           <div class="editor-tabs" id="editorTabs">
             <div class="editor-tab active" id="activeTabName">README.md</div>
           </div>
+
+          <!-- Editor Actions Toolbar -->
           <div class="editor-toolbar">
-            <input id="editorPath" class="input-control" style="width:240px;" placeholder="File path...">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span id="activeFileTypeIcon" style="font-size:15px;">📄</span>
+              <input id="editorPath" class="input-control" style="width:200px;height:28px;font-size:12px;" placeholder="File path...">
+            </div>
+
+            <!-- Run Button (Prominent for code files) -->
+            <button class="btn btn-success btn-sm" id="wsRunFileBtn" onclick="runActiveWorkspaceFile()" title="Run / Execute active file (Ctrl+Enter)">▶️ Run</button>
+
+            <!-- Mode Switchers (Code vs Live Preview) -->
+            <button class="btn btn-primary btn-sm" id="wsPreviewTabBtn" onclick="switchViewerMode('preview')" title="View Live Interactive Render / Preview" style="display:none;">👁️ Live Preview</button>
+            <button class="btn btn-ghost btn-sm" id="wsCodeTabBtn" onclick="switchViewerMode('code')" title="View / Edit Raw Source Code">📝 Code</button>
+
+            <!-- Standard Actions -->
             <button class="btn btn-primary btn-sm" onclick="saveEditorFile()" title="Save (Ctrl+S)">💾 Save</button>
             <button class="btn btn-ghost btn-sm" onclick="previewEditorDiff()" title="Preview Diff">👁️ Diff</button>
             <button class="btn btn-amber btn-sm" onclick="stageEditorChangeset()" title="Stage ChangeSet">📦 Stage</button>
@@ -1274,9 +1404,46 @@
             <button class="btn btn-ghost btn-sm" onclick="viewFileVersions()" title="Version History">🕒 History</button>
             <span id="editorInfo" style="margin-left:auto;font-size:11px;color:var(--text-dim);">UTF-8 · LF</span>
           </div>
-          <div class="code-area-wrap">
+
+          <!-- View Container: Code Editor Mode -->
+          <div class="code-area-wrap" id="wsCodeView">
             <div class="line-numbers" id="lineNumbers">1</div>
             <textarea class="code-editor-textarea" id="editorTextarea" spellcheck="false" oninput="onEditorInput()"></textarea>
+          </div>
+
+          <!-- View Container: Multi-Format Live Preview Mode -->
+          <div class="ws-preview-container" id="wsPreviewView" style="display:none;">
+            <div id="wsPreviewContent" style="flex:1;display:flex;flex-direction:column;overflow:hidden;"></div>
+          </div>
+
+          <!-- View Container: Empty Workspace State -->
+          <div class="ws-empty-state" id="wsEmptyState" style="display:none;">
+            <div style="font-size:36px;">✨</div>
+            <strong style="color:var(--text-main);font-size:15px;">Session Workspace is Empty</strong>
+            <p style="max-width:380px;font-size:12px;line-height:1.6;">
+              When the AI agent creates or writes files in your chat session, they will automatically appear, execute, and preview right here.
+            </p>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <button class="btn btn-primary btn-sm" onclick="openCreateFileModal(false)">+ Create New File</button>
+              <button class="btn btn-ghost btn-sm" onclick="navigate('chat')">💬 Back to Chat</button>
+            </div>
+          </div>
+
+          <!-- Bottom Execution Console Output Drawer -->
+          <div class="ws-console-drawer" id="wsConsoleDrawer" style="display:none;">
+            <div class="ws-console-head">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span id="wsConsoleStatus">Console Output</span>
+                <span id="wsConsoleBadge" class="tool-status-tag success" style="display:none;">Exit 0</span>
+                <span id="wsConsoleTime" style="font-size:10px;color:var(--text-dim);"></span>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyConsoleOutput()">📋 Copy</button>
+                <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="clearConsoleOutput()">Clear</button>
+                <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="closeConsoleDrawer()">✕</button>
+              </div>
+            </div>
+            <pre class="ws-console-output" id="wsConsoleOut"></pre>
           </div>
         </div>
       </div>
@@ -2981,12 +3148,29 @@ async function selectConversation(convId) {
   STATE.activeConversationId = convId;
   renderConversationsSidebar();
   try {
+    // Automatically activate dedicated session workspace for this conversation
+    const convObj = STATE.conversations.find(c => c.id === convId);
+    await api(`/api/workspace/session/${convId}/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: convObj?.title || '' })
+    });
+
+    if (STATE.workspaceScope !== 'project') {
+      STATE.workspaceScope = 'session';
+      if ($('#wsScopeTag')) {
+        $('#wsScopeTag').textContent = 'Session';
+        $('#wsScopeTag').className = 'tool-status-tag pending';
+      }
+    }
+
     const data = await api(`/api/conversations/${convId}/messages`);
     chatHistory = (data.messages || []).map(m => ({
       role: m.role,
       content: m.content
     }));
     renderChatMessages();
+    await refreshFileTree();
   } catch (_) {}
 }
 
@@ -3440,41 +3624,106 @@ async function checkPendingApprovals() {
 }
 
 // -------------------------------------------------------------
-// CODE EDITOR & FILE TREE
+// WORKSPACE, MULTI-FORMAT PREVIEW & CODE RUNNER (v0.9.0)
 // -------------------------------------------------------------
+STATE.workspaceScope = 'session';
+STATE.currentPreviewData = null;
+STATE.viewerMode = 'code';
+
+function getFileIcon(filename) {
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  switch (ext) {
+    case 'py': case 'pyw': return '🐍';
+    case 'html': case 'htm': return '🌐';
+    case 'js': case 'mjs': return '⚡';
+    case 'ts': case 'tsx': return '📘';
+    case 'css': case 'scss': case 'less': return '🎨';
+    case 'json': return '📋';
+    case 'md': case 'markdown': return '📝';
+    case 'png': case 'jpg': case 'jpeg': case 'gif': case 'svg': case 'webp': case 'bmp': case 'ico': return '🖼️';
+    case 'csv': case 'tsv': return '📊';
+    case 'pdf': return '📑';
+    case 'mp3': case 'wav': case 'ogg': case 'flac': case 'aac': return '🎵';
+    case 'mp4': case 'webm': case 'ogv': return '🎬';
+    case 'sh': case 'bash': case 'zsh': return '💻';
+    case 'sql': return '🗄️';
+    case 'yml': case 'yaml': case 'toml': case 'ini': case 'env': return '⚙️';
+    default: return '📄';
+  }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes/1024)} KB`;
+  return `${(bytes/(1024*1024)).toFixed(1)} MB`;
+}
+
 async function refreshFileTree() {
   const tree = $('#editorTree');
   try {
-    STATE.workspaceFiles = await api('/api/workspace/files');
+    const files = await api('/api/workspace/files');
+    STATE.workspaceFiles = Array.isArray(files) ? files : [];
+    
+    // Update count badge
+    const badge = $('#wsFileCountBadge');
+    if (badge) badge.textContent = `${STATE.workspaceFiles.length} file${STATE.workspaceFiles.length === 1 ? '' : 's'}`;
+
+    // Handle empty state
+    const emptyState = $('#wsEmptyState');
+    const codeView = $('#wsCodeView');
+    const prevView = $('#wsPreviewView');
+
+    if (STATE.workspaceFiles.length === 0) {
+      if (emptyState) emptyState.style.display = 'flex';
+      if (codeView) codeView.style.display = 'none';
+      if (prevView) prevView.style.display = 'none';
+      if (tree) tree.innerHTML = '<div style="padding:16px 12px;font-size:11.5px;color:var(--text-dim);text-align:center;">✨ Workspace is empty.</div>';
+      return;
+    } else {
+      if (emptyState) emptyState.style.display = 'none';
+    }
+
     filterFileTree($('#treeSearchInput')?.value || '');
+
+    // Open active tab or first file
+    if (!STATE.activeTab || !STATE.workspaceFiles.some(f => f.path === STATE.activeTab)) {
+      const firstFile = STATE.workspaceFiles.find(f => f.type === 'file') || STATE.workspaceFiles[0];
+      if (firstFile) {
+        openEditorFile(firstFile.path);
+      }
+    }
   } catch (err) {
-    tree.innerHTML = `<span style="color:var(--accent-red)">${esc(err.message)}</span>`;
+    if (tree) tree.innerHTML = `<span style="color:var(--accent-red);padding:8px;">${esc(err.message)}</span>`;
   }
 }
 
 function filterFileTree(q) {
   const tree = $('#editorTree');
+  if (!tree) return;
   const query = (q || '').toLowerCase();
   const files = STATE.workspaceFiles.filter(f => f.path.toLowerCase().includes(query));
   
   if (files.length === 0) {
-    tree.innerHTML = '<span style="font-size:11px;color:var(--text-dim);padding:8px;">No matching files.</span>';
+    tree.innerHTML = '<span style="font-size:11px;color:var(--text-dim);padding:8px;display:block;">No matching files.</span>';
     return;
   }
 
   tree.innerHTML = files.map(f => `
     <div class="tree-node ${f.path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(f.path)}')">
-      <span>${f.type === 'dir' ? '📁' : '📄'}</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.path)}</span>
+      <span>${f.type === 'dir' ? '📁' : getFileIcon(f.path)}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${esc(f.path)}</span>
+      ${f.type === 'file' ? `<span style="font-size:10px;color:var(--text-dim);">${formatFileSize(f.size)}</span>` : ''}
     </div>
   `).join('');
 }
 
 function renderEditorTabs() {
   const tabsWrap = $('#editorTabs');
+  if (!tabsWrap) return;
   tabsWrap.innerHTML = STATE.openTabs.map(path => `
     <div class="editor-tab ${path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(path)}')">
-      <span>${esc(path)}</span>
+      <span>${getFileIcon(path)} ${esc(path)}</span>
       ${STATE.dirtyTabs[path] ? '<span class="tab-dirty" title="Unsaved changes"></span>' : ''}
       <span class="tab-close" onclick="closeTab('${esc(path)}', event)">✕</span>
     </div>
@@ -3482,21 +3731,241 @@ function renderEditorTabs() {
 }
 
 async function openEditorFile(path) {
+  if (!path) return;
   if (!STATE.openTabs.includes(path)) {
     STATE.openTabs.push(path);
   }
   STATE.activeTab = path;
-  $('#editorPath').value = path;
+  if ($('#editorPath')) $('#editorPath').value = path;
+  if ($('#activeTabName')) $('#activeTabName').textContent = path;
+  if ($('#activeFileTypeIcon')) $('#activeFileTypeIcon').textContent = getFileIcon(path);
   renderEditorTabs();
 
   try {
-    const data = await api(`/api/workspace/file?path=${encodeURIComponent(path)}`);
-    $('#editorTextarea').value = data.content;
-    updateLineNumbers();
-    $('#editorInfo').textContent = `${(data.size || 0).toLocaleString()} bytes · UTF-8`;
+    const data = await api(`/api/workspace/file-preview?path=${encodeURIComponent(path)}`);
+    STATE.currentPreviewData = data;
+
+    const runBtn = $('#wsRunFileBtn');
+    const previewBtn = $('#wsPreviewTabBtn');
+    const codeBtn = $('#wsCodeTabBtn');
+    const previewContent = $('#wsPreviewContent');
+    const emptyState = $('#wsEmptyState');
+
+    if (emptyState) emptyState.style.display = 'none';
+
+    // Configure Run Button
+    if (runBtn) {
+      if (data.isExecutable) {
+        runBtn.style.display = 'inline-flex';
+        runBtn.textContent = '▶️ Run';
+      } else {
+        runBtn.style.display = 'none';
+      }
+    }
+
+    // Configure Live Preview Tab Button
+    const supportsPreview = ['html', 'markdown', 'image', 'csv', 'pdf', 'audio', 'video'].includes(data.type);
+    if (previewBtn) previewBtn.style.display = supportsPreview ? 'inline-flex' : 'none';
+
+    // Populate code editor textarea if content is available
+    if (data.content !== null && data.content !== undefined) {
+      $('#editorTextarea').value = data.content;
+      updateLineNumbers();
+    }
+
+    // Render Preview Mode Content
+    if (previewContent) {
+      if (data.type === 'html') {
+        previewContent.innerHTML = `<iframe class="ws-preview-frame" src="${esc(data.rawUrl)}"></iframe>`;
+      } else if (data.type === 'markdown') {
+        previewContent.innerHTML = `<div style="padding:24px;overflow:auto;line-height:1.7;font-size:13.5px;" class="markdown-body">${renderMarkdown(data.content)}</div>`;
+      } else if (data.type === 'image') {
+        previewContent.innerHTML = `
+          <div class="ws-image-viewer">
+            <img src="${esc(data.rawUrl)}" alt="${esc(data.filename)}">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <span style="font-size:12px;color:var(--text-muted);">${esc(data.filename)} (${formatFileSize(data.size)})</span>
+              <a href="${esc(data.rawUrl)}" download="${esc(data.filename)}" class="btn btn-ghost btn-sm">📥 Download Image</a>
+            </div>
+          </div>
+        `;
+      } else if (data.type === 'csv' && data.csvData) {
+        const headers = data.csvData.headers || [];
+        const rows = data.csvData.rows || [];
+        previewContent.innerHTML = `
+          <div class="ws-csv-table-wrap">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <span style="font-size:12px;color:var(--text-dim);">Showing ${rows.length} of ${data.csvData.totalRows} rows</span>
+            </div>
+            <table class="ws-csv-table">
+              <thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+              <tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table>
+          </div>
+        `;
+      } else if (data.type === 'pdf') {
+        previewContent.innerHTML = `<embed src="${esc(data.rawUrl)}" type="application/pdf" style="width:100%;height:100%;border:0;">`;
+      } else if (data.type === 'audio') {
+        previewContent.innerHTML = `
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:30px;">
+            <div style="font-size:40px;">🎵</div>
+            <strong>${esc(data.filename)}</strong>
+            <audio controls src="${esc(data.rawUrl)}" style="width:min(400px, 90%);"></audio>
+          </div>
+        `;
+      } else if (data.type === 'video') {
+        previewContent.innerHTML = `
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;background:var(--code-bg);">
+            <video controls src="${esc(data.rawUrl)}" style="max-width:90%;max-height:75vh;border-radius:8px;"></video>
+            <span style="font-size:12px;color:var(--text-muted);">${esc(data.filename)}</span>
+          </div>
+        `;
+      }
+    }
+
+    // Default view mode selection
+    if (['image', 'pdf', 'audio', 'video', 'csv'].includes(data.type)) {
+      switchViewerMode('preview');
+    } else {
+      switchViewerMode('code');
+    }
+
+    if ($('#editorInfo')) {
+      $('#editorInfo').textContent = `${(data.size || 0).toLocaleString()} bytes · ${data.mimeType || 'UTF-8'}`;
+    }
+
   } catch (err) {
     alert('Failed to read file: ' + err.message);
   }
+}
+
+function switchViewerMode(mode) {
+  STATE.viewerMode = mode;
+  const codeView = $('#wsCodeView');
+  const previewView = $('#wsPreviewView');
+  const previewBtn = $('#wsPreviewTabBtn');
+  const codeBtn = $('#wsCodeTabBtn');
+
+  if (mode === 'preview') {
+    if (codeView) codeView.style.display = 'none';
+    if (previewView) previewView.style.display = 'flex';
+    if (previewBtn) previewBtn.className = 'btn btn-primary btn-sm';
+    if (codeBtn) codeBtn.className = 'btn btn-ghost btn-sm';
+  } else {
+    if (codeView) codeView.style.display = 'flex';
+    if (previewView) previewView.style.display = 'none';
+    if (codeBtn) codeBtn.className = 'btn btn-primary btn-sm';
+    if (previewBtn) previewBtn.className = 'btn btn-ghost btn-sm';
+  }
+}
+
+async function runActiveWorkspaceFile() {
+  const path = $('#editorPath')?.value.trim() || STATE.activeTab;
+  if (!path) return alert('No file selected to run.');
+
+  const drawer = $('#wsConsoleDrawer');
+  const output = $('#wsConsoleOut');
+  const status = $('#wsConsoleStatus');
+  const badge = $('#wsConsoleBadge');
+  const timeEl = $('#wsConsoleTime');
+
+  if (drawer) drawer.style.display = 'flex';
+  if (status) status.textContent = `Running ${path}...`;
+  if (badge) badge.style.display = 'none';
+  if (output) output.textContent = `▶ Executing: ${path}\n\n`;
+
+  try {
+    const res = await api('/api/workspace/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+
+    if (res.type === 'html') {
+      switchViewerMode('preview');
+      if (status) status.textContent = `Live preview loaded for ${path}`;
+      if (badge) {
+        badge.style.display = 'inline-block';
+        badge.className = 'tool-status-tag success';
+        badge.textContent = 'Preview Ready';
+      }
+      return;
+    }
+
+    if (status) status.textContent = `Completed: ${res.command || path}`;
+    if (badge) {
+      badge.style.display = 'inline-block';
+      badge.className = res.exitCode === 0 ? 'tool-status-tag success' : 'tool-status-tag error';
+      badge.textContent = `Exit ${res.exitCode}`;
+    }
+    if (timeEl) timeEl.textContent = `${res.durationMs || 0}ms`;
+
+    let fullOut = '';
+    if (res.stdout) fullOut += res.stdout;
+    if (res.stderr) fullOut += (fullOut ? '\n[STDERR]\n' : '[STDERR]\n') + res.stderr;
+    if (!fullOut) fullOut = '(Process completed with no output)';
+
+    if (output) output.textContent = `▶ ${res.command || path}\n` + fullOut;
+
+  } catch (err) {
+    if (status) status.textContent = 'Execution Failed';
+    if (badge) {
+      badge.style.display = 'inline-block';
+      badge.className = 'tool-status-tag error';
+      badge.textContent = 'Error';
+    }
+    if (output) output.textContent = `Execution Error: ${err.message}`;
+  }
+}
+
+function copyConsoleOutput() {
+  const text = $('#wsConsoleOut')?.textContent || '';
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    alert('Console output copied to clipboard!');
+  });
+}
+
+function clearConsoleOutput() {
+  if ($('#wsConsoleOut')) $('#wsConsoleOut').textContent = '';
+}
+
+function closeConsoleDrawer() {
+  if ($('#wsConsoleDrawer')) $('#wsConsoleDrawer').style.display = 'none';
+}
+
+async function toggleWorkspaceScope() {
+  const currentScope = STATE.workspaceScope || 'session';
+  const newScope = currentScope === 'session' ? 'project' : 'session';
+  STATE.workspaceScope = newScope;
+
+  const tag = $('#wsScopeTag');
+  const btn = $('#wsScopeToggleBtn');
+
+  if (newScope === 'project') {
+    if (tag) {
+      tag.textContent = 'Project Root';
+      tag.className = 'tool-status-tag success';
+    }
+    if (btn) btn.textContent = 'Switch to Session';
+    await api('/api/workspaces/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'default' })
+    });
+  } else {
+    if (tag) {
+      tag.textContent = 'Session';
+      tag.className = 'tool-status-tag pending';
+    }
+    if (btn) btn.textContent = 'Switch to Project';
+    const convId = STATE.activeConversationId || `session_${Math.floor(Date.now()/1000)}`;
+    await api(`/api/workspace/session/${convId}/activate`, { method: 'POST' });
+  }
+
+  STATE.openTabs = [];
+  STATE.activeTab = '';
+  await refreshFileTree();
 }
 
 function closeTab(path, e) {

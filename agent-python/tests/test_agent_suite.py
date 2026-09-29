@@ -487,5 +487,70 @@ def test_chat_streaming_and_error_diagnostics():
     assert "message" in chat_data
     assert "content" in chat_data["message"]
 
+def test_session_workspace_and_universal_preview_and_execution():
+    session_id = f"test_session_{int(time.time())}"
+    
+    # 1. Activate session workspace
+    act_res = client.post(f"/api/workspace/session/{session_id}/activate", json={"title": "Test Chat"})
+    assert act_res.status_code == 200
+    act_data = act_res.json()
+    assert "workspace" in act_data
+    assert f"session_{session_id}" == act_data["workspace"]["id"]
+    
+    # Workspace initially empty
+    assert len(act_data["files"]) == 0
+
+    # 2. Create python code file in session workspace
+    py_code = 'print("Hello from session runner")\n'
+    create_res = client.post("/api/workspace/create", json={"path": "main.py", "content": py_code})
+    assert create_res.status_code == 200
+
+    # 3. Create HTML file
+    html_code = '<!doctype html><html><body><h1>Interactive Preview</h1></body></html>'
+    create_html = client.post("/api/workspace/create", json={"path": "index.html", "content": html_code})
+    assert create_html.status_code == 200
+
+    # 4. Create CSV file
+    csv_code = 'Name,Age,Role\nAlice,30,Engineer\nBob,25,Designer\n'
+    create_csv = client.post("/api/workspace/create", json={"path": "data.csv", "content": csv_code})
+    assert create_csv.status_code == 200
+
+    # 5. Test File Preview Metadata API
+    prev_py = client.get("/api/workspace/file-preview?path=main.py")
+    assert prev_py.status_code == 200
+    assert prev_py.json()["isExecutable"] is True
+    assert prev_py.json()["type"] == "code"
+
+    prev_html = client.get("/api/workspace/file-preview?path=index.html")
+    assert prev_html.status_code == 200
+    assert prev_html.json()["type"] == "html"
+    assert "/api/workspace/raw?path=index.html" in prev_html.json()["rawUrl"]
+
+    prev_csv = client.get("/api/workspace/file-preview?path=data.csv")
+    assert prev_csv.status_code == 200
+    assert prev_csv.json()["type"] == "csv"
+    assert prev_csv.json()["csvData"]["headers"] == ["Name", "Age", "Role"]
+    assert len(prev_csv.json()["csvData"]["rows"]) == 2
+
+    # 6. Test File Execution API
+    exec_res = client.post("/api/workspace/execute", json={"path": "main.py"})
+    assert exec_res.status_code == 200
+    exec_data = exec_res.json()
+    assert exec_data["ok"] is True
+    assert exec_data["exitCode"] == 0
+    assert "Hello from session runner" in exec_data["stdout"]
+
+    # 7. Test Raw File Serve
+    raw_res = client.get("/api/workspace/raw?path=index.html")
+    assert raw_res.status_code == 200
+    assert "text/html" in raw_res.headers["content-type"]
+    assert "Interactive Preview" in raw_res.text
+
+    # 8. Reset session workspace
+    reset_res = client.post(f"/api/workspace/session/{session_id}/reset")
+    assert reset_res.status_code == 200
+    assert len(reset_res.json()["files"]) == 0
+
+
 
 
