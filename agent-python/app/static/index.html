@@ -4068,11 +4068,17 @@ function renderChatMessages() {
       `;
     } else {
       const modelName = $('#chatModel')?.value || 'Agent';
+      const fallbackBadge = m.fallbackDetails ? `
+        <span class="tool-status-tag pending" style="font-size:10.5px;padding:1px 6px;margin-left:6px;" title="مدل اصلی پاسخ نداد؛ پاسخ از مدل پشتیبان تست‌شده (${esc(m.fallbackDetails.activeProvider || '')} / ${esc(m.fallbackDetails.activeModel || '')}) ارسال شد.">
+          🔄 مدل پشتیبان: ${esc(m.fallbackDetails.activeModel || m.fallbackDetails.activeProvider)}
+        </span>
+      ` : '';
       return `
         <div class="msg-wrapper assistant" id="msg-wrapper-${idx}">
           <div class="msg-bubble">${renderMarkdown(m.content)}</div>
           <div class="msg-meta">
-            <span>Agent (${esc(modelName)})</span>
+            <span>Agent (${esc(m.fallbackDetails ? m.fallbackDetails.activeModel : modelName)})</span>
+            ${fallbackBadge}
             <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)" title="Copy message text">📋 Copy</button>
             <button type="button" class="copy-msg-btn" onclick="retryAgentMessage(${idx})" title="Regenerate this response">🔄 Retry</button>
           </div>
@@ -4523,6 +4529,7 @@ async function streamAgentResponse() {
   let accumulated = '';
   let errorData = null;
   let isError = false;
+  let fallbackDetails = null;
 
   try {
     const res = await fetch('/api/chat/stream', {
@@ -4568,6 +4575,9 @@ async function streamAgentResponse() {
               const container = $('#chatMessages');
               container.scrollTop = container.scrollHeight;
             }
+            if (data.fallbackDetails) {
+              fallbackDetails = data.fallbackDetails;
+            }
             if (data.approvals && data.approvals.length > 0) {
               renderInlineApprovalCard(assistantMsgEl, data.approvals[0]);
               checkPendingApprovals();
@@ -4610,7 +4620,12 @@ async function streamAgentResponse() {
       bubble.appendChild(badge);
     }
 
-    chatHistory.push({ role: 'assistant', content: accumulated });
+    chatHistory.push({
+      role: 'assistant',
+      content: accumulated,
+      isFallback: Boolean(fallbackDetails),
+      fallbackDetails: fallbackDetails
+    });
     localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
 
     if (STATE.activeConversationId) {

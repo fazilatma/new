@@ -302,21 +302,38 @@ async def complete_chat(
                 "pendingApprovals": []
             }
 
-    # Find candidate providers for fallback
-    candidates = [primary_p] + [p for p in store.data.values() if p.enabled and p.id != provider_id and not CIRCUIT_BREAKER.is_tripped(p.id)]
+    # Build prioritized candidate list:
+    # 1. Primary candidate
+    candidates: List[Tuple[Provider, ModelSpec, bool]] = [(primary_p, model, False)]
+    seen = {(primary_p.id, model.id)}
+
+    # 2. Verified fallback candidates (Models that successfully passed health/latency tests)
+    verified_fallbacks = store.get_verified_fallback_candidates(exclude_provider_id=primary_p.id, exclude_model_id=model.id)
+    for vp, vm in verified_fallbacks:
+        if (vp.id, vm.id) not in seen:
+            candidates.append((vp, vm, True))
+            seen.add((vp.id, vm.id))
+
+    # 3. Secondary candidates (Other enabled providers with valid API keys)
+    for p in sorted(store.data.values(), key=lambda x: x.priority, reverse=True):
+        if not p.enabled or p.id == primary_p.id or CIRCUIT_BREAKER.is_tripped(p.id):
+            continue
+        api_key = store.get_api_key(p)
+        if not api_key and p.protocol != "ollama":
+            continue
+        for m in (p.models or []):
+            if (p.id, m.id) not in seen:
+                candidates.append((p, m, True))
+                seen.add((p.id, m.id))
 
     primary_error: Optional[str] = None
     fallback_errors: List[Dict[str, Any]] = []
     step_history = []
     pending_approvals = []
 
-    for p in candidates:
+    for p, target_model, is_fallback in candidates:
         api_key = store.get_api_key(p)
         if not api_key and p.protocol != "ollama":
-            continue
-
-        target_model = model if p.id == primary_p.id else (p.models[0] if p.models else None)
-        if not target_model:
             continue
 
         try:
@@ -329,11 +346,21 @@ async def complete_chat(
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
                     auto_detect_and_save_code_files(msg.get("content", ""), pending_approvals)
+                    CIRCUIT_BREAKER.record_success(p.id)
+                    store.record_metric(p.id, target_model.id, 0, is_error=False)
                     return {
                         "message": msg,
                         "steps": step_idx + 1,
                         "provider": p.id,
                         "model": target_model.id,
+                        "isFallback": is_fallback,
+                        "fallbackDetails": {
+                            "used": is_fallback,
+                            "originalProvider": primary_p.name,
+                            "originalModel": model.id,
+                            "activeProvider": p.name,
+                            "activeModel": target_model.id
+                        } if is_fallback else None,
                         "pendingApprovals": pending_approvals
                     }
 
@@ -368,16 +395,21 @@ async def complete_chat(
                         "content": json.dumps(res, ensure_ascii=False)
                     })
 
+            CIRCUIT_BREAKER.record_success(p.id)
+            store.record_metric(p.id, target_model.id, 0, is_error=False)
             return {
                 "message": {"role": "assistant", "content": "Reached maximum tool execution steps."},
                 "steps": max_steps,
                 "provider": p.id,
                 "model": target_model.id,
+                "isFallback": is_fallback,
                 "pendingApprovals": pending_approvals
             }
 
         except Exception as e:
             err_text = str(e)
+            CIRCUIT_BREAKER.record_failure(p.id)
+            store.record_metric(p.id, target_model.id, 0, is_error=True)
             if p.id == primary_p.id:
                 primary_error = f"{err_text} (Endpoint: {p.url})"
             else:

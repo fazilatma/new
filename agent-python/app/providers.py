@@ -169,6 +169,49 @@ class ProviderStore:
                 1 if CIRCUIT_BREAKER.is_tripped(provider_id) else 0
             ))
 
+    def get_verified_fallback_candidates(self, exclude_provider_id: Optional[str] = None, exclude_model_id: Optional[str] = None) -> List[Tuple[Provider, ModelSpec]]:
+        """Return a list of (Provider, ModelSpec) that passed diagnostic health checks, ordered by lowest latency and reliability."""
+        verified_candidates: List[Tuple[Provider, ModelSpec]] = []
+        seen = set()
+
+        try:
+            with get_db() as conn:
+                rows = conn.execute("""
+                    SELECT provider_id, model_id, last_latency_ms
+                    FROM provider_metrics
+                    WHERE last_status = 'ok'
+                    ORDER BY last_latency_ms ASC, updated_at DESC
+                """).fetchall()
+
+                for row in rows:
+                    pid = row["provider_id"]
+                    mid = row["model_id"]
+                    if pid == exclude_provider_id and mid == exclude_model_id:
+                        continue
+                    if (pid, mid) in seen:
+                        continue
+
+                    provider = self.data.get(pid)
+                    if not provider or not provider.enabled or CIRCUIT_BREAKER.is_tripped(pid):
+                        continue
+
+                    # Verify key exists if not ollama
+                    api_key = self.get_api_key(provider)
+                    if not api_key and provider.protocol != "ollama":
+                        continue
+
+                    # Find ModelSpec
+                    model = next((m for m in (provider.models or []) if m.id == mid), None)
+                    if not model:
+                        model = ModelSpec(id=mid, name=mid, toolCalling=True)
+
+                    verified_candidates.append((provider, model))
+                    seen.add((pid, mid))
+        except Exception:
+            pass
+
+        return verified_candidates
+
     def export_json(self) -> str:
         dump = {}
         for k, v in self.data.items():

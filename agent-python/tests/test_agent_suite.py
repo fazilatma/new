@@ -715,6 +715,47 @@ def test_proxy_configuration_and_routing():
     assert "latency_ms" in data
     assert "ok" in data
 
+def test_verified_model_fallback_mechanism():
+    from app.providers import PROVIDER_STORE
+    from app.models import Provider, ModelSpec
+
+    # 1. Register two providers (one primary, one backup)
+    test_p1 = Provider(
+        id="test-primary",
+        name="Test Primary",
+        url="https://mock-primary.ai/v1",
+        protocol="openai-compatible",
+        enabled=True,
+        apiKey="sk-mock-1",
+        models=[ModelSpec(id="model-prime", name="Model Prime", toolCalling=True)]
+    )
+    test_p2 = Provider(
+        id="test-backup",
+        name="Test Backup",
+        url="https://mock-backup.ai/v1",
+        protocol="openai-compatible",
+        enabled=True,
+        apiKey="sk-mock-2",
+        models=[ModelSpec(id="model-verified", name="Model Verified", toolCalling=True)]
+    )
+    PROVIDER_STORE.upsert(test_p1)
+    PROVIDER_STORE.upsert(test_p2)
+
+    # 2. Simulate model diagnostic test: Primary fails, Backup succeeds with 120ms latency
+    PROVIDER_STORE.record_metric("test-primary", "model-prime", latency_ms=0, is_error=True)
+    PROVIDER_STORE.record_metric("test-backup", "model-verified", latency_ms=120.0, is_error=False)
+
+    # 3. Retrieve verified fallback candidates
+    candidates = PROVIDER_STORE.get_verified_fallback_candidates(exclude_provider_id="test-primary", exclude_model_id="model-prime")
+    assert len(candidates) > 0
+    candidate_pids = [c[0].id for c in candidates]
+    assert "test-backup" in candidate_pids
+
+    # Find the backup candidate
+    backup_cand = next(c for c in candidates if c[0].id == "test-backup")
+    assert backup_cand[1].id == "model-verified"
+
+
 
 
 

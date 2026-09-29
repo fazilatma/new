@@ -890,6 +890,8 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
                 "steps": res.get("steps", 1),
                 "provider": res.get("provider"),
                 "model": res.get("model"),
+                "isFallback": res.get("isFallback", False),
+                "fallbackDetails": res.get("fallbackDetails"),
                 "hasError": bool(err_details)
             }, ensure_ascii=False) + '\n\n'
         except Exception as e:
@@ -1139,6 +1141,7 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
         async with sem:
             try:
                 if not api_key and p.protocol != "ollama":
+                    PROVIDER_STORE.record_metric(p.id, m.id, 0, is_error=True)
                     return {
                         "provider": p.id,
                         "providerName": p.name,
@@ -1159,6 +1162,7 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
                     )
                     latency = round((time.perf_counter() - started) * 1000)
                     msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
+                    PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=False)
                     return {
                         "provider": p.id,
                         "providerName": p.name,
@@ -1177,6 +1181,7 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
                         err_str = f"Connection refused/unreachable: {p.url}"
                     elif "Timeout" in err_str:
                         err_str = f"Connection timeout to {p.url}"
+                    PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=True)
                     return {
                         "provider": p.id,
                         "providerName": p.name,
@@ -1189,6 +1194,7 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
                     }
             except Exception as outer_e:
+                PROVIDER_STORE.record_metric(getattr(p, "id", "unknown"), getattr(m, "id", "unknown"), 0, is_error=True)
                 return {
                     "provider": getattr(p, "id", "unknown"),
                     "providerName": getattr(p, "name", "Unknown"),
@@ -1253,6 +1259,7 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
         api_key = ""
 
     if not api_key and p.protocol != "ollama":
+        PROVIDER_STORE.record_metric(pid, mid, 0, is_error=True)
         return {
             "provider": pid,
             "providerName": p.name,
@@ -1273,6 +1280,7 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
         )
         latency = round((time.perf_counter() - started) * 1000)
         msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
+        PROVIDER_STORE.record_metric(pid, mid, latency, is_error=False)
         return {
             "provider": pid,
             "providerName": p.name,
@@ -1291,6 +1299,7 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
             err_str = f"Connection refused/unreachable: {p.url}"
         elif "Timeout" in err_str:
             err_str = f"Connection timeout after 5s to {p.url}"
+        PROVIDER_STORE.record_metric(pid, mid, latency, is_error=True)
         return {
             "provider": pid,
             "providerName": p.name,
