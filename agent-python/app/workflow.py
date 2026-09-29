@@ -17,3 +17,6 @@ def rollback(path, backup_path):
  p=safe_path(path); b=Path(backup_path).resolve()
  if BACKUP not in b.parents: raise ValueError('Invalid backup')
  shutil.copy2(b,p); return {'path':path,'rolledBack':True}
+def backups(path):
+ import os
+ p=safe_path(path); return sorted([str(x) for x in BACKUP.glob('*_'+p.name)], reverse=True)
