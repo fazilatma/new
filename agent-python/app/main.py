@@ -10,6 +10,7 @@ from .connectors import github, browse
 from .config import read as read_config, write as write_config
 from .workflow import preview, backup, rollback, backups
 from .runtime import submit, get as get_job, list_jobs
+from .projects import all_projects, create, delete
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi import Request
 from .auth import middleware as auth_middleware, configured, valid
@@ -48,6 +49,17 @@ def chat_ui():
 @app.get('/')
 def root():
     return FileResponse(Path(__file__).parent / 'static' / 'index.html')
+
+@app.get('/api/projects')
+def projects_list(): return {'projects':all_projects()}
+
+@app.post('/api/projects')
+def project_create(payload:dict):
+    if not payload.get('id') or not payload.get('name'): raise HTTPException(400,'id and name are required')
+    return create(payload)
+
+@app.delete('/api/projects/{pid}')
+def project_delete(pid:str): return delete(pid)
 
 @app.get('/health')
 def health():

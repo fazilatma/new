@@ -21,3 +21,7 @@
 
 - Added FastAPI service.
 - Added provider catalog schema.
+
+## 0.7.0
+- Added project definitions API for defaults, descriptions, workspace paths, instructions, and metadata.
+- Added configurable external browser access settings.
