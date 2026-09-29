@@ -3796,9 +3796,31 @@ function onEditUserMsgKeyDown(e, idx) {
 }
 
 async function retryAgentMessage(idx) {
-  // Truncate assistant message and any subsequent messages
-  // (Leaves the conversation up to the preceding user message)
-  chatHistory = chatHistory.slice(0, idx);
+  // If a valid index is provided
+  if (typeof idx === 'number' && idx >= 0 && idx < chatHistory.length) {
+    if (chatHistory[idx].role === 'assistant') {
+      // Slicing up to idx removes this assistant response and any subsequent messages,
+      // preserving the preceding user prompt at idx - 1.
+      chatHistory = chatHistory.slice(0, idx);
+    } else {
+      // If idx points to a user message, keep that user message (idx + 1)
+      // and regenerate the response for it.
+      chatHistory = chatHistory.slice(0, idx + 1);
+    }
+  } else {
+    // If no idx provided or invalid index, pop the last message if it's assistant
+    if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'assistant') {
+      chatHistory.pop();
+    }
+  }
+
+  // Ensure there is at least one user prompt to retry
+  const hasUser = chatHistory.some(m => m.role === 'user');
+  if (!hasUser) {
+    renderChatMessages();
+    return;
+  }
+
   localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
   renderChatMessages();
 
@@ -4610,17 +4632,18 @@ async function streamAgentResponse() {
         timestamp: new Date().toISOString(),
         remediation: '1. Check network connectivity and API keys.\n2. Ensure dev server is running.\n3. Verify model endpoint status in Providers & Models.'
       };
-      bubble.innerHTML = renderMarkdown(`⚠️ **Request Failed**: ${err.message}`);
-      bubble.classList.add('is-error');
-      bubble.onclick = () => openChatErrorModal(errDiag);
-      const badge = document.createElement('div');
-      badge.className = 'error-diag-badge';
-      badge.innerHTML = '🔍 Click to view diagnostic log & resolution';
-      badge.onclick = (e) => {
-        e.stopPropagation();
-        openChatErrorModal(errDiag);
-      };
-      bubble.appendChild(badge);
+      const errMsg = `⚠️ **Request Failed**: ${err.message}`;
+      chatHistory.push({ role: 'assistant', content: errMsg });
+      localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
+
+      if (STATE.activeConversationId) {
+        api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: chatHistory })
+        }).catch(() => {});
+      }
+      renderChatMessages();
     }
   } finally {
     $('#sendBtn').style.display = 'inline-flex';

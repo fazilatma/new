@@ -305,7 +305,8 @@ async def complete_chat(
     # Find candidate providers for fallback
     candidates = [primary_p] + [p for p in store.data.values() if p.enabled and p.id != provider_id and not CIRCUIT_BREAKER.is_tripped(p.id)]
 
-    last_error = None
+    primary_error: Optional[str] = None
+    fallback_errors: List[Dict[str, Any]] = []
     step_history = []
     pending_approvals = []
 
@@ -376,14 +377,43 @@ async def complete_chat(
             }
 
         except Exception as e:
-            last_error = e
+            err_text = str(e)
+            if p.id == primary_p.id:
+                primary_error = f"{err_text} (Endpoint: {p.url})"
+            else:
+                fallback_errors.append({
+                    "provider": p.id,
+                    "providerName": p.name,
+                    "model": target_model.id,
+                    "url": p.url,
+                    "error": err_text
+                })
             continue
 
-    err_str = str(last_error) if last_error else f"No reachable provider with valid API key found for '{primary_p.name}'."
+    # Build clean diagnostic description
+    if primary_error:
+        main_err_desc = f"`{primary_error}`"
+    else:
+        main_err_desc = f"`No API key or reachable endpoint configured for {primary_p.name} ({primary_p.url})`"
+
+    fallback_section = ""
+    if fallback_errors:
+        fallback_lines = "\n".join(
+            f"- **Fallback Provider `{f['providerName']}`** (`{f['model']}` @ `{f['url']}`): `{f['error']}`"
+            for f in fallback_errors
+        )
+        fallback_section = f"\n\n**Automatic Fallback Attempts**:\n{fallback_lines}"
+
+    combined_content = (
+        f"⚠️ **Model Provider Notice**: Failed to communicate with primary model `{primary_p.name}` (`{model.id}`).\n\n"
+        f"**Primary Error Details**: {main_err_desc}{fallback_section}\n\n"
+        f"*(Click this message to view full error diagnostics and copy logs)*"
+    )
+
     return {
         "message": {
             "role": "assistant",
-            "content": f"⚠️ **Model Provider Notice**: Failed to communicate with `{primary_p.name}` (`{model.id}`).\n\n**Error Details**: `{err_str}`\n\n*(Click this message to view full error diagnostics and copy logs)*"
+            "content": combined_content
         },
         "steps": 0,
         "provider": primary_p.id,
@@ -394,7 +424,8 @@ async def complete_chat(
             "model": model.id,
             "protocol": primary_p.protocol,
             "url": primary_p.url,
-            "error": err_str,
+            "error": primary_error or "Provider communication failed",
+            "fallbackErrors": fallback_errors,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
             "remediation": f"1. Check if your API key for '{primary_p.name}' is valid in Providers & Models.\n2. Ensure endpoint URL '{primary_p.url}' is reachable.\n3. Check circuit breaker status and reset if tripped."
         },
