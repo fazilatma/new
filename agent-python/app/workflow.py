@@ -1,3 +1,4 @@
+from pathlib import Path
 import difflib
 from .agent_tools import safe_path
 
