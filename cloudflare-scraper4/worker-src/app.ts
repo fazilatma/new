@@ -59,7 +59,24 @@ app.get('/manifest.webmanifest',c=>c.json(PUSH_MANIFEST,200,{'content-type':'app
 app.get('/app-icon-192.png',c=>c.body(pushIconPng('192'),200,{'content-type':'image/png'}));
 app.get('/app-icon-512.png',c=>c.body(pushIconPng('512'),200,{'content-type':'image/png'}));
 app.get('/app-icon.svg',c=>c.body(PUSH_ICON,200,{'content-type':'image/svg+xml'}));
-app.get('/visual',async c=>renderVisualSelector(c.req.query('ticket')||'',c.req.query('context')==='detail'?'detail':'list'));
+app.get('/visual',async c=>renderVisualSelector(c.req.query('ticket')||'',c.req.query('context')==='detail'?'detail':'list',c.req.query('full')==='1'));
+app.get('/api/rp',async c=>{
+  const raw=c.req.query('url')||'';
+  if(!raw) return c.json({ok:false,error:'Missing url'},400);
+  try{
+    const {assertPublicUrl}=await import('./network.js');
+    const url=assertPublicUrl(raw);
+    const indirect=c.req.query('indirect')==='1';
+    const {safeFetch}=await import('./network.js');
+    const response=await safeFetch(url.href,{headers:{'accept':'*/*'}},25_000_000,30_000);
+    if(!response.ok) return c.text('Upstream '+response.status, response.status as any);
+    const contentType=response.headers.get('content-type')||'application/octet-stream';
+    const data=await response.arrayBuffer();
+    return new Response(data,{headers:{'content-type':contentType,'cache-control':'public, max-age=3600','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+  }catch(e){
+    return c.json({ok:false,error:(e as any)?.message||String(e)},502);
+  }
+});
 app.use('/api/*',async(c,next)=>{if(c.req.path==='/api/runtime/libraries'||c.req.path==='/api/libraries')return next();if(!c.env.DB)return c.json({ok:false,error:'D1 binding DB is not configured'},503);await ensureSchema(c.env.DB);await next()});
 
 app.use('/api/*',activityMiddleware({setState,deleteState}));
