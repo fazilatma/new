@@ -200,6 +200,16 @@ def init_db():
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS conversation_references (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            target_type TEXT NOT NULL, -- 'chat' or 'project'
+            target_id TEXT NOT NULL,
+            title TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS provider_metrics (
             provider_id TEXT NOT NULL,
             model_id TEXT NOT NULL,
@@ -220,6 +230,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_job_steps_job ON job_steps(job_id);
         CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id);
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_conv_refs ON conversation_references(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_projects_default ON projects(is_default);
         """)
 

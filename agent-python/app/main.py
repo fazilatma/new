@@ -21,7 +21,9 @@ from .workspaces import (
     get_active_workspace, set_active_workspace, list_workspace_files,
     safe_path, create_workspace_from_template, get_workspace_metrics,
     create_workspace_item, delete_workspace_item, rename_workspace_item, export_workspace_zip_bytes,
-    get_or_create_session_workspace, reset_session_workspace, get_workspace_root
+    get_or_create_session_workspace, reset_session_workspace, get_workspace_root,
+    resolve_reference_root, safe_reference_path, list_reference_files, read_reference_file, copy_reference_file,
+    add_conversation_reference, remove_conversation_reference, get_conversation_references
 )
 from .projects import (
     get_active_project, set_active_project, list_projects,
@@ -293,6 +295,129 @@ def workspace_file_preview(path: str, user: Dict[str, Any] = Depends(require_vie
         }
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/workspace/reference-files")
+def workspace_reference_files(target_type: str, target_id: str, path: str = ".", user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        files = list_reference_files(target_type, target_id, path)
+        return {"target_type": target_type, "target_id": target_id, "files": files}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/workspace/reference-raw")
+def workspace_reference_raw(target_type: str, target_id: str, path: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        p = safe_reference_path(target_type, target_id, path)
+        if not p.exists() or p.is_dir():
+            raise HTTPException(404, "File not found in reference workspace")
+        mime, _ = mimetypes.guess_type(str(p))
+        return FileResponse(p, media_type=mime or "application/octet-stream")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/workspace/reference-preview")
+def workspace_reference_preview(target_type: str, target_id: str, path: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        p = safe_reference_path(target_type, target_id, path)
+        if not p.exists():
+            raise HTTPException(404, "File not found in reference workspace")
+        if p.is_dir():
+            return {
+                "path": path,
+                "filename": p.name,
+                "isDir": True,
+                "type": "dir",
+                "items": list_reference_files(target_type, target_id, path)
+            }
+
+        suffix = p.suffix.lower()
+        mime, _ = mimetypes.guess_type(str(p))
+        mime = mime or "application/octet-stream"
+
+        preview_type = "code"
+        content_text = None
+        csv_data = None
+        base64_data = None
+        is_executable = suffix in (".py", ".sh", ".bash", ".js", ".ts", ".html", ".pyw")
+
+        if suffix in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"):
+            preview_type = "image"
+            try:
+                base64_data = base64.b64encode(p.read_bytes()).decode("utf-8")
+            except Exception:
+                pass
+        elif suffix == ".pdf":
+            preview_type = "pdf"
+        elif suffix in (".mp3", ".wav", ".ogg", ".aac", ".flac"):
+            preview_type = "audio"
+        elif suffix in (".mp4", ".webm", ".ogv"):
+            preview_type = "video"
+        elif suffix in (".html", ".htm"):
+            preview_type = "html"
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        elif suffix in (".md", ".markdown"):
+            preview_type = "markdown"
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        elif suffix in (".csv", ".tsv"):
+            preview_type = "csv"
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+                delimiter = "\t" if suffix == ".tsv" else ","
+                reader = csv.reader(io.StringIO(content_text), delimiter=delimiter)
+                rows = list(reader)
+                headers = rows[0] if rows else []
+                data_rows = rows[1:101] if len(rows) > 1 else []
+                csv_data = {"headers": headers, "rows": data_rows, "totalRows": len(rows)}
+            except Exception:
+                pass
+        else:
+            try:
+                content_text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                preview_type = "binary"
+
+        raw_url = f"/api/workspace/reference-raw?target_type={target_type}&target_id={target_id}&path={path}"
+        return {
+            "path": path,
+            "filename": p.name,
+            "size": p.stat().st_size,
+            "type": preview_type,
+            "mimeType": mime,
+            "isExecutable": is_executable,
+            "content": content_text,
+            "base64": base64_data,
+            "csvData": csv_data,
+            "rawUrl": raw_url,
+            "targetType": target_type,
+            "targetId": target_id,
+            "isReferenced": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/workspace/import-reference-file")
+def workspace_import_reference_file(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    target_type = str(payload.get("target_type", "chat"))
+    target_id = str(payload.get("target_id", "")).strip()
+    source_path = str(payload.get("source_path", "")).strip()
+    dest_path = payload.get("dest_path")
+    if not target_id or not source_path:
+        raise HTTPException(400, "target_id and source_path are required")
+    try:
+        res = copy_reference_file(target_type, target_id, source_path, dest_path)
+        return res
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -712,8 +837,14 @@ async def chat_endpoint(payload: Dict[str, Any], user: Dict[str, Any] = Depends(
     provider_id = str(payload.get("provider", "openrouter"))
     model_id = str(payload.get("model", ""))
     max_steps = int(payload.get("maxSteps", 8))
+    conversation_id = payload.get("conversationId") or payload.get("conversation_id")
+    references = payload.get("references")
     try:
-        return await complete_chat(PROVIDER_STORE, provider_id, model_id, messages, max_steps=max_steps, user_id=user.get("username", "user"))
+        return await complete_chat(
+            PROVIDER_STORE, provider_id, model_id, messages,
+            max_steps=max_steps, user_id=user.get("username", "user"),
+            conversation_id=conversation_id, references=references
+        )
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -723,11 +854,17 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
     provider_id = str(payload.get("provider", "openrouter"))
     model_id = str(payload.get("model", ""))
     max_steps = int(payload.get("maxSteps", 8))
+    conversation_id = payload.get("conversationId") or payload.get("conversation_id")
+    references = payload.get("references")
 
     async def event_generator():
         yield 'event: status\ndata: ' + json.dumps({"status": "started", "provider": provider_id, "model": model_id}) + '\n\n'
         try:
-            res = await complete_chat(PROVIDER_STORE, provider_id, model_id, messages, max_steps=max_steps, user_id=user.get("username", "user"))
+            res = await complete_chat(
+                PROVIDER_STORE, provider_id, model_id, messages,
+                max_steps=max_steps, user_id=user.get("username", "user"),
+                conversation_id=conversation_id, references=references
+            )
             msg = res.get("message", {})
             content = msg.get("content", "")
             err_details = res.get("errorDetails")
@@ -845,6 +982,53 @@ def delete_conversation(conv_id: str, user: Dict[str, Any] = Depends(require_dev
     with get_db() as conn:
         conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
     return {"ok": True}
+
+# Conversation References API
+@app.get("/api/conversations/{conv_id}/references")
+def get_conversation_references_endpoint(conv_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        refs = get_conversation_references(conv_id)
+        with get_db() as conn:
+            all_convs = conn.execute("SELECT id, title, created_at FROM conversations WHERE id != ? ORDER BY updated_at DESC", (conv_id,)).fetchall()
+            all_projs = conn.execute("SELECT id, name, description FROM projects ORDER BY name ASC").fetchall()
+        return {
+            "references": refs,
+            "available_chats": [dict(c) for c in all_convs],
+            "available_projects": [dict(p) for p in all_projs]
+        }
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/conversations/{conv_id}/references")
+def add_conversation_reference_endpoint(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    target_type = str(payload.get("target_type", "chat")).strip()
+    target_id = str(payload.get("target_id", "")).strip()
+    title = str(payload.get("title", "")).strip()
+    if not target_id:
+        raise HTTPException(400, "target_id is required")
+    try:
+        ref = add_conversation_reference(conv_id, target_type, target_id, title)
+        return ref
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.delete("/api/conversations/{conv_id}/references/{target_type}/{target_id}")
+def remove_conversation_reference_endpoint(conv_id: str, target_type: str, target_id: str, user: Dict[str, Any] = Depends(require_developer)):
+    try:
+        return remove_conversation_reference(conv_id, target_type, target_id)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/references/search")
+def search_references(q: Optional[str] = "", user: Dict[str, Any] = Depends(require_viewer)):
+    term = f"%{(q or '').strip()}%"
+    with get_db() as conn:
+        convs = conn.execute("SELECT id, title FROM conversations WHERE title LIKE ? OR id LIKE ? LIMIT 10", (term, term)).fetchall()
+        projs = conn.execute("SELECT id, name, description FROM projects WHERE name LIKE ? OR id LIKE ? LIMIT 10", (term, term)).fetchall()
+    return {
+        "chats": [{"id": c["id"], "title": c["title"], "type": "chat"} for c in convs],
+        "projects": [{"id": p["id"], "name": p["name"], "type": "project"} for p in projs]
+    }
 
 # Jobs & Worker API (Phase 2)
 @app.get("/api/jobs")

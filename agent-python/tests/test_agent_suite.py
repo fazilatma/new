@@ -48,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.9.0"
+    assert APP_VERSION == "0.10.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -550,6 +550,110 @@ def test_session_workspace_and_universal_preview_and_execution():
     reset_res = client.post(f"/api/workspace/session/{session_id}/reset")
     assert reset_res.status_code == 200
     assert len(reset_res.json()["files"]) == 0
+
+def test_cross_chat_and_project_references_and_file_access():
+    ts = int(time.time() * 1000)
+    conv_a_id = f"conv_a_{ts}"
+    conv_b_id = f"conv_b_{ts}"
+
+    # 1. Create two conversations in database
+    client.post("/api/conversations", json={"title": "Data Analytics Alpha"})
+    # Activate Session A workspace and create files
+    act_a = client.post(f"/api/workspace/session/{conv_a_id}/activate", json={"title": "Chat Alpha"})
+    assert act_a.status_code == 200
+
+    code_a = 'def calculate_metrics(): return {"score": 98.5}\n'
+    client.post("/api/workspace/create", json={"path": "metrics.py", "content": code_a})
+    csv_a = 'id,value\n1,100\n2,200\n'
+    client.post("/api/workspace/create", json={"path": "stats.csv", "content": csv_a})
+
+    # 2. Activate Session B workspace (starts empty)
+    act_b = client.post(f"/api/workspace/session/{conv_b_id}/activate", json={"title": "Chat Beta"})
+    assert act_b.status_code == 200
+    assert len(act_b.json()["files"]) == 0
+
+    # 3. Link Chat A and Project to Chat B as references
+    ref_res = client.post(f"/api/conversations/{conv_b_id}/references", json={
+        "target_type": "chat",
+        "target_id": conv_a_id,
+        "title": "Chat Alpha Reference"
+    })
+    assert ref_res.status_code == 200
+    assert ref_res.json()["target_id"] == conv_a_id
+
+    ref_proj = client.post(f"/api/conversations/{conv_b_id}/references", json={
+        "target_type": "project",
+        "target_id": "proj-default",
+        "title": "Default Project Ref"
+    })
+    assert ref_proj.status_code == 200
+
+    # 4. Fetch references for Chat B
+    get_refs = client.get(f"/api/conversations/{conv_b_id}/references")
+    assert get_refs.status_code == 200
+    refs_data = get_refs.json()
+    assert len(refs_data["references"]) >= 2
+    alpha_ref = next((r for r in refs_data["references"] if r["target_id"] == conv_a_id), None)
+    assert alpha_ref is not None
+    assert alpha_ref["file_count"] >= 2
+    file_paths = [f["path"] for f in alpha_ref["files"]]
+    assert "metrics.py" in file_paths
+    assert "stats.csv" in file_paths
+
+    # 5. Test Reference File Listing API
+    ref_files = client.get(f"/api/workspace/reference-files?target_type=chat&target_id={conv_a_id}")
+    assert ref_files.status_code == 200
+    assert len(ref_files.json()["files"]) >= 2
+
+    # 6. Test Reference File Preview API
+    prev_ref = client.get(f"/api/workspace/reference-preview?target_type=chat&target_id={conv_a_id}&path=metrics.py")
+    assert prev_ref.status_code == 200
+    assert prev_ref.json()["type"] == "code"
+    assert "calculate_metrics" in prev_ref.json()["content"]
+    assert prev_ref.json()["isReferenced"] is True
+
+    prev_csv = client.get(f"/api/workspace/reference-preview?target_type=chat&target_id={conv_a_id}&path=stats.csv")
+    assert prev_csv.status_code == 200
+    assert prev_csv.json()["type"] == "csv"
+    assert prev_csv.json()["csvData"]["headers"] == ["id", "value"]
+
+    # 7. Test Importing/Copying file from Chat A to Chat B workspace
+    import_res = client.post("/api/workspace/import-reference-file", json={
+        "target_type": "chat",
+        "target_id": conv_a_id,
+        "source_path": "metrics.py",
+        "dest_path": "imported_metrics.py"
+    })
+    assert import_res.status_code == 200
+    assert import_res.json()["ok"] is True
+
+    # Verify Chat B workspace now has imported_metrics.py
+    prev_imported = client.get("/api/workspace/file-preview?path=imported_metrics.py")
+    assert prev_imported.status_code == 200
+    assert "calculate_metrics" in prev_imported.json()["content"]
+
+    # 8. Test Agent Tools with references
+    from app.agent_tools import agent_read_file, agent_list_files, agent_copy_referenced_file
+    # Reading via prefix @chat:conv_id/file
+    text = agent_read_file(f"@chat:{conv_a_id}/metrics.py")
+    assert "calculate_metrics" in text
+
+    # Copy via agent tool
+    agent_copy_res = agent_copy_referenced_file("chat", conv_a_id, "stats.csv", "agent_stats.csv")
+    assert agent_copy_res["ok"] is True
+
+    # 9. Test system prompt enrichment with references
+    from app.chat import build_system_prompt
+    sys_prompt = build_system_prompt(conversation_id=conv_b_id)
+    assert "Referenced Chats & Projects" in sys_prompt
+    assert conv_a_id in sys_prompt
+
+    # 10. Test deleting reference
+    del_res = client.delete(f"/api/conversations/{conv_b_id}/references/chat/{conv_a_id}")
+    assert del_res.status_code == 200
+    get_refs_after = client.get(f"/api/conversations/{conv_b_id}/references")
+    assert not any(r["target_id"] == conv_a_id for r in get_refs_after.json()["references"])
+
 
 
 

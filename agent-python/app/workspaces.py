@@ -278,3 +278,195 @@ def export_workspace_zip_bytes() -> bytes:
     buf.seek(0)
     return buf.getvalue()
 
+# --- Cross-Chat & Cross-Project Reference Resolution & Operations ---
+
+def resolve_reference_root(target_type: str, target_id: str) -> pathlib.Path:
+    """Resolve the root filesystem directory for a referenced chat or project safely."""
+    target_type = (target_type or "").strip().lower()
+    target_id = (target_id or "").strip()
+
+    if target_type in ("chat", "session", "conversation"):
+        clean_sid = target_id.replace("session_", "")
+        # Find directory in WORKSPACES_ROOT
+        target_dir = (WORKSPACES_ROOT / f"session_{clean_sid}").resolve()
+        if not target_dir.exists():
+            # Check by conversation id or title in DB
+            with get_db() as conn:
+                row = conn.execute("SELECT id FROM conversations WHERE id = ? OR title = ?", (target_id, target_id)).fetchone()
+                if row:
+                    clean_sid = row["id"].replace("session_", "")
+                    target_dir = (WORKSPACES_ROOT / f"session_{clean_sid}").resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir
+
+    elif target_type in ("project", "proj"):
+        if target_id in ("default", "proj-default", ""):
+            return get_default_workspace()
+        with get_db() as conn:
+            row = conn.execute("SELECT id, name, path FROM projects WHERE id = ? OR name = ?", (target_id, target_id)).fetchone()
+            if row and row["path"]:
+                p = pathlib.Path(row["path"]).resolve()
+                if p.exists():
+                    return p
+            # Check if project exists by directory name in WORKSPACES_ROOT
+            alt_dir = (WORKSPACES_ROOT / target_id).resolve()
+            if alt_dir.exists():
+                return alt_dir
+            # Fallback to default
+            return get_default_workspace()
+    else:
+        # Fallback to chat session if target_id starts with session_ or conv-
+        if target_id.startswith("session_") or target_id.startswith("conv-"):
+            clean_sid = target_id.replace("session_", "")
+            target_dir = (WORKSPACES_ROOT / f"session_{clean_sid}").resolve()
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir
+        return get_default_workspace()
+
+def safe_reference_path(target_type: str, target_id: str, raw_path: str = ".") -> pathlib.Path:
+    """Confines the path strictly inside the referenced target directory, blocking traversal."""
+    root = resolve_reference_root(target_type, target_id)
+    clean = (raw_path or ".").strip()
+    if clean.startswith("/"):
+        clean = clean.lstrip("/")
+    resolved = (root / clean).resolve()
+
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"Path traversal detected: '{raw_path}' is outside referenced workspace '{root}'")
+    return resolved
+
+def list_reference_files(target_type: str, target_id: str, subpath: str = ".") -> List[Dict[str, Any]]:
+    """List files inside a referenced chat session or project workspace."""
+    root = resolve_reference_root(target_type, target_id)
+    target = safe_reference_path(target_type, target_id, subpath)
+    if not target.exists():
+        return []
+
+    items = []
+    ignored = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache", ".DS_Store"}
+    for p in sorted(target.rglob("*")):
+        if any(ign in p.parts for ign in ignored):
+            continue
+        rel = p.relative_to(root)
+        items.append({
+            "path": str(rel),
+            "name": p.name,
+            "type": "dir" if p.is_dir() else "file",
+            "size": p.stat().st_size if p.is_file() else 0,
+            "extension": p.suffix.lower() if p.is_file() else "",
+            "modified": p.stat().st_mtime
+        })
+    return items
+
+def read_reference_file(target_type: str, target_id: str, file_path: str) -> str:
+    """Read contents of a file inside a referenced chat session or project workspace."""
+    p = safe_reference_path(target_type, target_id, file_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Referenced file not found: {file_path} in {target_type}:{target_id}")
+    if p.is_dir():
+        raise IsADirectoryError(f"Target is a directory: {file_path}")
+    return p.read_text(encoding="utf-8", errors="replace")
+
+def copy_reference_file(target_type: str, target_id: str, source_path: str, dest_path: Optional[str] = None) -> Dict[str, Any]:
+    """Copy a file or directory from a referenced chat/project into the active session workspace."""
+    src = safe_reference_path(target_type, target_id, source_path)
+    if not src.exists():
+        raise FileNotFoundError(f"Source file not found in reference {target_type}:{target_id}: {source_path}")
+
+    dest_rel = dest_path if dest_path else src.name
+    dest = safe_path(dest_rel)
+
+    if src.is_dir():
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest)
+        return {
+            "ok": True,
+            "copied": True,
+            "type": "directory",
+            "source": source_path,
+            "dest": dest_rel,
+            "targetType": target_type,
+            "targetId": target_id
+        }
+    else:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        size = dest.stat().st_size
+        return {
+            "ok": True,
+            "copied": True,
+            "type": "file",
+            "source": source_path,
+            "dest": dest_rel,
+            "bytes": size,
+            "targetType": target_type,
+            "targetId": target_id
+        }
+
+def add_conversation_reference(conv_id: str, target_type: str, target_id: str, title: str = "") -> Dict[str, Any]:
+    """Link a chat session or project as a reference to a conversation."""
+    ref_id = f"ref_{int(time.time()*1000)}"
+    target_type = (target_type or "").strip().lower()
+    target_id = (target_id or "").strip()
+
+    # Determine title if not provided
+    if not title:
+        with get_db() as conn:
+            if target_type == "chat":
+                clean_sid = target_id.replace("session_", "")
+                r = conn.execute("SELECT title FROM conversations WHERE id = ?", (clean_sid,)).fetchone()
+                title = r["title"] if r else f"Chat {target_id}"
+            elif target_type == "project":
+                r = conn.execute("SELECT name FROM projects WHERE id = ? OR name = ?", (target_id, target_id)).fetchone()
+                title = r["name"] if r else f"Project {target_id}"
+            else:
+                title = f"{target_type}:{target_id}"
+
+    with get_db() as conn:
+        # Ensure conversation exists to satisfy foreign key
+        conn.execute("INSERT OR IGNORE INTO conversations (id, title) VALUES (?, ?)", (conv_id, f"Chat {conv_id}"))
+
+        # Check if already linked
+        existing = conn.execute(
+            "SELECT id FROM conversation_references WHERE conversation_id = ? AND target_type = ? AND target_id = ?",
+            (conv_id, target_type, target_id)
+        ).fetchone()
+        if existing:
+            return {"id": existing["id"], "conversation_id": conv_id, "target_type": target_type, "target_id": target_id, "title": title, "already_linked": True}
+
+        conn.execute(
+            "INSERT INTO conversation_references (id, conversation_id, target_type, target_id, title) VALUES (?, ?, ?, ?, ?)",
+            (ref_id, conv_id, target_type, target_id, title)
+        )
+    return {"id": ref_id, "conversation_id": conv_id, "target_type": target_type, "target_id": target_id, "title": title}
+
+def remove_conversation_reference(conv_id: str, target_type: str, target_id: str) -> Dict[str, Any]:
+    """Unlink a reference from a conversation."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM conversation_references WHERE conversation_id = ? AND target_type = ? AND target_id = ?",
+            (conv_id, target_type, target_id)
+        )
+    return {"ok": True, "removed": f"{target_type}:{target_id}"}
+
+def get_conversation_references(conv_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all linked references for a conversation, including file summaries."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, conversation_id, target_type, target_id, title, created_at FROM conversation_references WHERE conversation_id = ? ORDER BY created_at ASC",
+            (conv_id,)
+        ).fetchall()
+        refs = [dict(r) for r in rows]
+
+    for ref in refs:
+        try:
+            files = list_reference_files(ref["target_type"], ref["target_id"])
+            ref["file_count"] = len([f for f in files if f["type"] == "file"])
+            ref["files"] = files
+        except Exception:
+            ref["file_count"] = 0
+            ref["files"] = []
+    return refs
+
+

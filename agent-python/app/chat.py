@@ -1,5 +1,6 @@
 """Chat completions engine, multi-protocol adapter, tool calling loop, and automatic provider fallback."""
 import os
+import re
 import json
 import time
 import httpx
@@ -8,10 +9,17 @@ from typing import Dict, Any, List, Optional, AsyncGenerator
 from .models import Provider, ModelSpec
 from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER
 from .agent_tools import AGENT_TOOL_DEFINITIONS, execute_agent_tool
-from .workspaces import get_active_workspace
+from .workspaces import (
+    get_active_workspace, get_conversation_references, list_reference_files,
+    add_conversation_reference
+)
 from .projects import get_active_project
 
-def build_system_prompt() -> str:
+def build_system_prompt(
+    conversation_id: Optional[str] = None,
+    referenced_items: Optional[List[Dict[str, Any]]] = None,
+    messages: Optional[List[Dict[str, Any]]] = None
+) -> str:
     proj = get_active_project()
     ws = get_active_workspace()
 
@@ -34,6 +42,61 @@ def build_system_prompt() -> str:
     if proj.get("agent_rules") or ws.get("agent_rules"):
         rules = proj.get("agent_rules") or ws.get("agent_rules")
         prompt += f"\nAgent Rules & Constraints:\n{rules}\n"
+
+    # Gather conversation references
+    refs = list(referenced_items or [])
+    if conversation_id and not refs:
+        try:
+            refs = get_conversation_references(conversation_id)
+        except Exception:
+            refs = []
+
+    # Also extract any dynamic @chat:... or @project:... mentions from user messages
+    if messages:
+        for m in messages:
+            content = str(m.get("content", ""))
+            # Pattern for @chat:<id> or @project:<id>
+            chat_mentions = re.findall(r"@chat:([a-zA-Z0-9_\-]+)", content)
+            for cid in chat_mentions:
+                if not any(r.get("target_id") == cid for r in refs):
+                    refs.append({"target_type": "chat", "target_id": cid, "title": f"Chat {cid}"})
+                    if conversation_id:
+                        try:
+                            add_conversation_reference(conversation_id, "chat", cid)
+                        except Exception:
+                            pass
+
+            proj_mentions = re.findall(r"@project:([a-zA-Z0-9_\-]+)", content)
+            for pid in proj_mentions:
+                if not any(r.get("target_id") == pid for r in refs):
+                    refs.append({"target_type": "project", "target_id": pid, "title": f"Project {pid}"})
+                    if conversation_id:
+                        try:
+                            add_conversation_reference(conversation_id, "project", pid)
+                        except Exception:
+                            pass
+
+    if refs:
+        prompt += "\n\n### 🔗 Referenced Chats & Projects (Cross-Session File Access):\n"
+        prompt += (
+            "This chat references the following other chats and projects. You have FULL permission and ability to inspect, "
+            "read, and copy files from them into the active workspace using the `read_referenced_file`, `list_referenced_files`, "
+            "and `copy_referenced_file` tools (or by prefixing paths with `@chat:<id>/path` or `@project:<id>/path`):\n"
+        )
+        for r in refs:
+            t_type = r.get("target_type", "chat")
+            t_id = r.get("target_id", "")
+            title = r.get("title") or t_id
+            prompt += f"- [{t_type.upper()}] Reference '{title}' (ID: `{t_id}`):\n"
+            try:
+                files = list_reference_files(t_type, t_id)
+                if files:
+                    file_names = [f["path"] for f in files if f["type"] == "file"][:15]
+                    prompt += f"  Files ({len(file_names)}): {', '.join(file_names)}\n"
+                else:
+                    prompt += "  Files: (empty or newly created)\n"
+            except Exception as e:
+                prompt += f"  Files: (unable to list: {e})\n"
 
     return prompt
 
@@ -134,14 +197,21 @@ async def complete_chat(
     model_id: str,
     messages: List[Dict[str, Any]],
     max_steps: int = 8,
-    user_id: str = "user"
+    user_id: str = "user",
+    conversation_id: Optional[str] = None,
+    references: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     # Ensure system prompt is present
-    sys_prompt = build_system_prompt()
+    sys_prompt = build_system_prompt(conversation_id=conversation_id, referenced_items=references, messages=messages)
     chat_msgs = []
     if not any(m.get("role") == "system" for m in messages):
         chat_msgs.append({"role": "system", "content": sys_prompt})
-    chat_msgs.extend(messages)
+    else:
+        # Append reference instructions to existing system message
+        for m in messages:
+            if m.get("role") == "system":
+                m["content"] = sys_prompt
+    chat_msgs.extend([m for m in messages if m.get("role") != "system"])
 
     # Provider Resolution & Fallback list
     primary_p = store.data.get(provider_id)
