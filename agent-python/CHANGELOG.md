@@ -2,6 +2,7 @@
 
 ## 0.12.0 - Universal Proxy Gateway & Forward Proxy Routing, Sidebar Folding & Model Exporter
 
+- **Moved Active References Bar to Settings**: Removed the references section from the main chat viewport to maximize message viewing real estate, and relocated the full Cross-Chat & Cross-Project References management card into the Settings view.
 - **Universal Proxy Traffic Routing for Model Responses**: Fixed proxy routing to support both standard forward proxies (`http://...`, `https://...`, `socks5://...`, `socks5h://...`) via HTTP client tunneling (`httpx.AsyncClient(proxy=...)`) and URL-rewriting gateways (like Cloudflare Workers `?url={url}` or `/proxy?target=`). Includes adaptive direct retry fallback on connectivity errors.
 - **Unified Per-Provider and Global Proxy Settings**: Per-provider proxy overrides and global proxy settings now use the same unified proxy parser (`parse_proxy_setting`).
 - **Browser Automation Proxy Routing**: Multi-tier HTTPX web fetching in browser automation now respects proxy configuration for unrestricted global web access.

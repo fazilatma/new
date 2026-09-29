@@ -1618,23 +1618,6 @@
             </div>
           </div>
 
-          <!-- Chat References Bar (v0.10.0) -->
-          <div class="chat-references-bar" id="chatReferencesBar">
-            <div class="chat-references-header" onclick="toggleChatReferencesBar()">
-              <span style="display:flex;align-items:center;gap:6px;">
-                <span id="chatRefToggleArrow">▼</span>
-                <span>🔗 ارجاعات و رفرنس‌های فعال (References)</span>
-                <span id="chatRefBadgeCount" style="font-size:10px;background:var(--bg-highlight);padding:1px 6px;border-radius:10px;">0</span>
-              </span>
-              <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10.5px;" onclick="event.stopPropagation(); openReferencePickerModal();" title="Link other chat sessions or projects to this chat">+ Link Reference</button>
-            </div>
-            <div class="chat-references-content" id="chatReferencesContent">
-              <div id="chatRefPills" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
-                <span style="font-size:11px;color:var(--text-dim);font-style:italic;">None linked</span>
-              </div>
-            </div>
-          </div>
-
           <!-- Prompt Presets Bar (v0.10.0) -->
           <div class="prompt-presets-bar">
             <button type="button" class="preset-chip" onclick="applyPromptPreset('refactor')">🛠️ Refactor Code</button>
@@ -2138,6 +2121,34 @@
               <button class="btn btn-ghost btn-sm" onclick="testAllModels()">🧪 تست همه مدل‌ها با پروکسی</button>
             </div>
             <div id="proxyTestFeedback" style="font-size:11.5px;margin-top:6px;min-height:18px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cross-Chat & Cross-Project References Configuration Card (Moved from Chat to Settings) -->
+      <div class="stat-card" style="margin-bottom:16px;border:1px solid var(--border-color);background:var(--bg-elevated);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:20px;">🔗</span>
+            <div>
+              <div style="font-weight:600;font-size:14px;">مدیریت ارجاعات و رفرنس‌های بین گفتگوها و پروژه‌ها (Cross-Chat & Project References)</div>
+              <div style="font-size:11px;color:var(--text-dim);">پیوند دادن فایل‌ها و فضاهای کاری سایر چت‌ها (@chat:..) و پروژه‌ها (@project:..) برای اشتراک کانتکست و فایل‌ها بدون اشغال فضای صفحه چت</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button type="button" class="btn btn-primary btn-sm" onclick="openReferencePickerModal()">+ افزودن ارجاع (+ Link Reference)</button>
+          </div>
+        </div>
+
+        <div style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:12px;font-weight:600;color:var(--text-main);">
+              رفرنس‌های فعال گفتگوی جاری: <span id="settingsActiveConvTitle" style="color:var(--accent);font-weight:normal;"></span>
+            </span>
+            <span id="chatRefBadgeCount" style="font-size:11px;background:var(--bg-highlight);padding:2px 8px;border-radius:10px;">0 رفرنس</span>
+          </div>
+          <div id="chatRefPills" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:36px;">
+            <span style="font-size:11.5px;color:var(--text-dim);font-style:italic;">هیچ ارجاعی به این گفتگو پیوند داده نشده است (می‌توانید با دکمه «+ افزودن ارجاع» بالا یا نوشتن @ در متن چت ارجاع دهید).</span>
           </div>
         </div>
       </div>
@@ -4407,15 +4418,20 @@ async function loadConversationReferences(convId) {
 function renderChatReferences() {
   const container = $('#chatRefPills');
   const badge = $('#chatRefBadgeCount');
+  const titleEl = $('#settingsActiveConvTitle');
   const refs = STATE.activeReferences || [];
-  if (badge) badge.textContent = refs.length;
+  if (badge) badge.textContent = `${refs.length} رفرنس`;
+  if (titleEl) {
+    const activeConv = (STATE.conversations || []).find(c => c.id === STATE.activeConversationId);
+    titleEl.textContent = activeConv ? activeConv.title : (STATE.activeConversationId || 'گفتگوی فعال');
+  }
   if (!container) return;
   if (refs.length === 0) {
-    container.innerHTML = '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">None linked (type @ to reference)</span>';
+    container.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);font-style:italic;">هیچ ارجاعی به این گفتگو پیوند داده نشده است (می‌توانید با دکمه «+ افزودن ارجاع» بالا یا نوشتن @ در متن چت ارجاع دهید).</span>';
     return;
   }
   container.innerHTML = refs.map(r => `
-    <span class="ref-pill ${r.target_type === 'chat' ? 'chat-ref' : 'project-ref'}" title="Referenced ${r.target_type}: ${esc(r.target_id)} (${r.file_count || 0} files)">
+    <span class="ref-pill ${r.target_type === 'chat' ? 'chat-ref' : 'project-ref'}" style="padding:4px 10px;font-size:12px;" title="Referenced ${r.target_type}: ${esc(r.target_id)} (${r.file_count || 0} files)">
       <span>${r.target_type === 'chat' ? '💬' : '📁'}</span>
       <span>${esc(r.title || r.target_id)}</span>
       <span style="opacity:0.7;font-size:10px;">(${r.file_count || 0}f)</span>
