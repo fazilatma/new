@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.16.0');
+define('WCP_VERSION', '2.17.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -3292,7 +3292,8 @@ function handle_api() {
         if (!$p) jout(false, null, 'Project not found');
         $act = $in['action'] ?? 'start';
         if (in_array($act, ['stop', 'restart'], true)) cli_stop_service($p['id']);
-        if ($act === 'stop') jout(true);
+        if ($act === 'stop') { proj_set_desired($p['id'], false); jout(true); }
+        proj_set_desired($p['id'], true);
         if (empty($p['start_cmd'])) jout(false, null, 'Start command is empty');
         if ($act === 'restart') usleep(300000);
         $svc = proj_service_job($p);
@@ -3601,7 +3602,80 @@ function proj_install_cron(): array {
     file_put_contents($tmp, $newCron);
     $out = sh("crontab " . esc($tmp) . " 2>&1", $rc);
     @unlink($tmp);
-    return ['installed' => $rc === 0, 'line' => $cronLine, 'msg' => $rc === 0 ? 'دیده‌بان کران‌جاب لینوکس (هر ۱ دقیقه) با موفقیت فعال شد.' : 'خطا در نصب کران‌جاب: ' . $out];
+    return ['installed' => $rc === 0, 'line' => $cronLine, 'msg' => $rc === 0 ? 'دیده‌بان کران‌جاب لینوکس (هر ۱ دقیقه) فعال شد: هم آپدیت خودکار گیت و هم زنده‌نگه‌داشتن سرویس‌ها.' . 'ل شد.' : 'خطا در نصب کران‌جاب: ' . $out];
+}
+
+/**
+ * Record whether the operator *wants* a service up. The watchdog only revives
+ * services with svc_desired=true, so a deliberate stop stays stopped.
+ */
+function proj_set_desired(string $projectId, bool $desired) {
+    $list = proj_all();
+    foreach ($list as &$p) {
+        if (($p['id'] ?? '') !== $projectId) continue;
+        $p['svc_desired'] = $desired;
+        if ($desired) { unset($p['svc_revive_count']); $p['svc_desired_at'] = time(); }
+        unset($p['svc_last_revive']);
+        proj_save_all($list);
+        return;
+    }
+}
+
+/**
+ * Cron-level keepalive.
+ *
+ * The in-process supervisor started by job_start() can only restart a service
+ * that exited on its own. On shared hosting the account's whole process tree
+ * is periodically culled — CloudLinux LVE limits, CSF/lfd process tracking,
+ * or the host's own reaper — and that takes the supervisor with it. Nothing
+ * inside the account survives to notice.
+ *
+ * Cron does survive: it is started fresh by the system crond every minute.
+ * So liveness is enforced from there instead.
+ */
+function proj_watchdog_services(): array {
+    $running = [];
+    foreach (glob(JOBS_DIR . '/*.json') ?: [] as $jf) {
+        $j = json_decode((string)@file_get_contents($jf), true);
+        if (!$j || ($j['type'] ?? '') !== 'service') continue;
+        $st = job_status($j);
+        if (($st['status'] ?? '') === 'running') $running[$j['params']['project_id'] ?? ''] = true;
+    }
+    $revived = []; $checked = 0; $now = time();
+    $list = proj_all(); $dirty = false;
+    foreach ($list as &$p) {
+        if (empty($p['svc_desired'])) continue;          // never started, or deliberately stopped
+        if (empty($p['is_daemon'])) continue;            // operator opted out of auto-restore
+        if (empty($p['start_cmd'])) continue;
+        $checked++;
+        if (!empty($running[$p['id']])) {
+            // Healthy. Clear the failure counter *and* the timestamp, so the
+            // next cull is acted on at the very next tick rather than being
+            // throttled by the window left over from an earlier revive.
+            if (!empty($p['svc_revive_count']) || !empty($p['svc_last_revive'])) {
+                $p['svc_revive_count'] = 0; $p['svc_last_revive'] = 0; $dirty = true;
+            }
+            continue;
+        }
+        // Back off on a service that will not stay up, so cron does not
+        // respawn a crash-looping process every 60s forever.
+        $fails = (int)($p['svc_revive_count'] ?? 0);
+        $wait  = min(3600, 60 * (1 << min($fails, 6)));   // 60s .. 1h
+        if ($now - (int)($p['svc_last_revive'] ?? 0) < $wait) continue;
+        $p['svc_last_revive'] = $now;
+        $p['svc_revive_count'] = $fails + 1;
+        $dirty = true;
+        try {
+            $job = job_create('service', 'دیده‌بان: ' . ($p['name'] ?? $p['id']), ['project_id' => $p['id'], 'watchdog' => true]);
+            job_start($job);
+            $revived[] = ['project_id' => $p['id'], 'project_name' => $p['name'] ?? '', 'job_id' => $job['id'], 'attempt' => $fails + 1];
+        } catch (Throwable $e) {
+            // A failed revive must not abort the rest of the cron run.
+        }
+    }
+    unset($p);
+    if ($dirty) { try { proj_save_all($list); } catch (Throwable $e) {} }
+    return ['revived' => $revived, 'count' => count($revived), 'watched' => $checked];
 }
 
 function proj_poll_auto_updates(): array {
@@ -3698,6 +3772,7 @@ function cli_start_service(array $p) {
     }
     $job = job_create('service', 'سرویس: ' . $p['name'], ['project_id' => $p['id']]);
     job_start($job);
+    proj_set_desired($p['id'], true);   // deploy-started services are watched too
     cli_log('Service job ' . $job['id'] . ' started');
     return $job;
 }
@@ -4241,6 +4316,13 @@ function wcp_cli(array $argv) {
         @set_time_limit(300);
         $res = proj_poll_auto_updates();
         echo "[auto-update] Checked projects. Triggered " . $res['count'] . " deployments.\n";
+        // Same cron tick doubles as the keepalive, so existing installs get it
+        // without touching their crontab.
+        $wd = proj_watchdog_services();
+        echo "[watchdog] Watching " . $wd['watched'] . " service(s). Revived " . $wd['count'] . ".\n";
+        foreach ($wd['revived'] as $r) {
+            echo "[watchdog] Restarted '" . $r['project_name'] . "' (attempt " . $r['attempt'] . ", job " . $r['job_id'] . ").\n";
+        }
         exit(0);
     }
     if(isset($argv[1])&&strpos($argv[1],'--bgjob=')===0){

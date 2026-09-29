@@ -13,12 +13,47 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.16.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.17.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.16.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.16.0 | Follows the suite version |
+| `wcp` (CLI) | 2.17.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.17.0 | Follows the suite version |
 | `py-upgrade.sh` | 1.0.2 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.17.0] — 2026-09-29 · 🛡️ Cron-level service watchdog
+
+The supervisor started by `job_start()` can restart a service that exits on its
+own, but it cannot survive the account's process tree being culled — CloudLinux
+LVE enforcement, CSF/lfd process tracking, or the host's own reaper take the
+supervisor down along with the service, and nothing inside the account is left
+to notice. This is the reason long-running processes "disappear after a while"
+on shared hosting.
+
+Cron is not affected: `crond` starts a fresh process every minute from outside
+the account's session. Liveness is now enforced from there.
+
+### Added
+* **`proj_watchdog_services()`**, run from the existing `--auto-update` cron tick,
+  so installs that already ran *فعال‌سازی دیده‌بان* get it without editing crontab.
+  A service is revived when it is wanted, marked `is_daemon`, has a start command,
+  and has no running service job.
+* **Desired-state tracking** (`svc_desired`). Set when a service is started from
+  the panel or by a deploy, cleared on an explicit Stop — so a service the
+  operator deliberately stopped is never resurrected.
+* **Exponential backoff** on a service that will not stay up: 1, 2, 4, 8, 16, 32,
+  then 60 minutes. A service that comes back healthy has both its failure counter
+  and its throttle timestamp cleared, so an unrelated later cull is acted on at
+  the very next tick instead of inheriting an old penalty window.
+* Cron output now reports what it watched and what it revived, so the job log
+  shows whether the host is culling processes and how often.
+
+### Notes
+* Detection, not prevention. The watchdog cannot stop a host from killing a
+  process; it bounds the outage to roughly one minute. If a service is being
+  culled every few minutes the right fix is to reduce its memory footprint or
+  move it off shared hosting — the job log will now make that pattern obvious.
 
 ---
 
