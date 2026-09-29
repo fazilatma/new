@@ -7,7 +7,12 @@ from .agent_tools import list_files, read_file, write_file, run_command
 from .chat import complete
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
-app=FastAPI(title='Arena-like Coding Agent')
+APP_VERSION='0.3.0'
+app=FastAPI(title='Arena-like Coding Agent', version=APP_VERSION)
+
+@app.get('/api/version')
+def version():
+    return {'name':'Arena Python Agent','version':APP_VERSION,'apiVersion':'v1','status':'ok'}
 
 @app.get('/ui')
 def ui():

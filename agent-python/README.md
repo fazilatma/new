@@ -32,3 +32,12 @@ The foundation now includes workspace and terminal endpoints:
 - `POST /api/terminal/exec` with `{ "command": "pytest", "cwd": ".", "timeout": 60 }`
 
 All paths are confined to `AGENT_WORKSPACE` (the current project directory by default). For production, run terminal jobs inside a Docker container and put these endpoints behind authentication.
+
+## Versioning
+
+Current release: `0.3.0`.
+
+- Version file: `VERSION`
+- API version endpoint: `/api/version`
+- FastAPI OpenAPI version is set from the same application version.
+- Every release should update `VERSION`, `APP_VERSION`, the changelog, and create a Git tag such as `v0.3.0`.
