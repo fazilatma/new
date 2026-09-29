@@ -31,3 +31,14 @@ def git_diff():
 def git_commit(message):
     safe=message.replace("'", "'\\''")
     return run_command("git add -A && git commit -m '%s'" % safe)
+
+def search_files(query, path='.'):
+    root=safe_path(path); q=query.lower(); out=[]
+    for p in root.rglob('*'):
+        if p.is_file() and '.git' not in p.parts and p.stat().st_size < 1000000:
+            try:
+                for n,line in enumerate(p.read_text(encoding='utf-8').splitlines(),1):
+                    if q in line.lower(): out.append({'path':str(p.relative_to(root)),'line':n,'text':line[:240]})
+                    if len(out)>=200:return out
+            except (UnicodeDecodeError,PermissionError): pass
+    return out

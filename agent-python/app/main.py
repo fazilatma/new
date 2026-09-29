@@ -3,8 +3,9 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response, FileResponse
 from .models import Provider, ModelSpec
 from .providers import ProviderStore
-from .agent_tools import list_files, read_file, write_file, run_command, git_status, git_diff, git_commit
+from .agent_tools import list_files, read_file, write_file, run_command, search_files, git_status, git_diff, git_commit
 from .chat import complete
+from .agent_tools import search_files
 from .connectors import github, browse
 from .config import read as read_config, write as write_config
 from .workflow import preview, backup, rollback, backups
@@ -56,6 +57,12 @@ def health():
 def workspace_files(path: str = '.'):
     try: return list_files(path)
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.get('/api/workspace/search')
+def workspace_search(q: str, path: str = '.'):
+    if not q.strip(): return {'results':[]}
+    try: return {'results':search_files(q,path)}
+    except Exception as e: raise HTTPException(400,str(e))
 
 @app.get('/api/workspace/file')
 def workspace_read(path: str):
