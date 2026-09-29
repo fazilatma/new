@@ -487,10 +487,16 @@ async def workspace_execute_file(payload: Dict[str, Any], user: Dict[str, Any] =
         elif suffix == ".ts":
             cmd = f"npx --yes tsx '{p.name}' {arg_str}".strip()
         elif suffix in (".html", ".htm"):
+            raw_url = f"/api/workspace/raw?path={path}"
+            if conversation_id:
+                raw_url += f"&conversation_id={conversation_id}"
             return {
                 "ok": True,
                 "type": "html",
-                "previewUrl": f"/api/workspace/raw?path={path}",
+                "previewUrl": raw_url,
+                "exitCode": 0,
+                "stdout": f"Live HTML render preview initialized for {p.name}.",
+                "stderr": "",
                 "message": "HTML file ready for live preview."
             }
         else:

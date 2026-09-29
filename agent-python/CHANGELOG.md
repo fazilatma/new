@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.0 - Autonomous Code Execution & Self-Healing Loop, Full-Screen Execution & Live Render View
+
+- **Autonomous Code Execution Engine**: After the agent generates or updates code files in the workspace (Python, Bash/Shell, Node.js, TypeScript, or HTML), the platform automatically executes the code inside the active workspace environment.
+- **Self-Healing Error Correction Loop**: Automatically inspects exit codes, standard output, and standard error tracebacks. If an error or exception occurs (Exit Code != 0), the full error traceback is immediately fed back into the LLM context with a diagnostic prompt. The agent analyzes the failure, fixes all identified bugs, saves the updated file, and re-executes in an autonomous repair loop (up to 3 iterations) until the code runs cleanly with Exit Code 0 and produces valid output.
+- **Real-Time Streaming Self-Healing Feedback**: Yields live SSE events (`execution_running`, `execution_fixing`, `execution_healed`, `render_preview_ready`, and `execution_result`) so users observe the autonomous execution, traceback analysis, and self-healing progress in real time directly within the chat message stream.
+- **Dedicated Full-Screen Execution & Live Render Modal (`#fullScreenRenderModal`)**:
+  - Full-screen distraction-free interactive viewer for both script execution and live web rendering.
+  - **Responsive Device Viewport Switcher**: Instantly simulate live web apps on **Desktop (100%)**, **Laptop (1024px)**, **Tablet (768px)**, and **Mobile (375px)** inside an isolated sandboxed iframe.
+  - **High-Contrast Dark Terminal Console**: Displays command executed, duration in milliseconds, exit code badge (`Exit 0 (Success)` / `Exit 1 (Failed)`), syntax-colored stdout, and highlighted stderr/tracebacks.
+  - **Side-by-Side Code Split View & Live Editor**: Toggleable source code inspector with live line counter, allowing inline code edits and 1-click **"💾 ذخیره و اجرا (Save & Re-run)"** or `Ctrl+Enter` shortcut execution.
+  - Quick action controls: `▶️ اجرای مجدد (Run / Rerun)`, `🔄 بازخوانی (Reload Preview)`, `📋 کپی (Copy Output)`, `📥 دانلود (Download)`, and `✕ بستن (ESC)`.
+- **Integrated Full-Screen Entry Points**: Added one-click `⛶ تمام‌صفحه` launch buttons across Chat execution feedback cards, the Session Folder Explorer view, Workspace file cards, and the Advanced File Inspection modal.
+- **Test Suite Expansion**: Added automated pytest verification for code file metadata extraction, script execution with traceback capture, HTML live preview generation, autonomous self-healing execution loops, and streaming SSE repair events (32/32 tests passing).
+
 ## 0.13.0 - True Real-Time LLM Token Streaming, Network Resilience & Simplified Project Creation
 
 - **True Upstream Real-Time LLM Token Streaming**: Implemented native token streaming (`stream_call_provider_api` and `stream_complete_chat`) connecting directly to upstream provider SSE streams (OpenAI-compatible, OpenRouter, Anthropic, Ollama, Groq, Mistral). Tokens and reasoning traces (`<think>...</think>`) stream to the browser in real time without buffering delays, eliminating long HTTP blocking and socket timeouts.

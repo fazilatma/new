@@ -48,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.12.0"
+    assert APP_VERSION == "0.14.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -949,6 +949,182 @@ def test_chat_stream_sse_realtime_events():
     assert "text/event-stream" in res.headers["content-type"]
     assert "no-cache" in res.headers.get("cache-control", "")
     assert "no" in res.headers.get("x-accel-buffering", "")
+
+
+def test_auto_detect_and_save_code_files_metadata():
+    """Test auto_detect_and_save_code_files parses code blocks and returns accurate file metadata."""
+    from app.chat import auto_detect_and_save_code_files
+
+    text = """
+Here is the python script to run:
+```python:main_test.py
+print("Autonomous Code Execution Initialized")
+```
+
+And here is the landing page HTML:
+```html:index_test.html
+<!DOCTYPE html>
+<html><body><h1>Live Preview</h1></body></html>
+```
+"""
+    saved = auto_detect_and_save_code_files(text)
+    assert len(saved) == 2
+    py_file = next(f for f in saved if f["path"] == "main_test.py")
+    assert py_file["isExecutable"] is True
+    assert py_file["type"] == "python"
+
+    html_file = next(f for f in saved if f["path"] == "index_test.html")
+    assert html_file["isHtml"] is True
+    assert html_file["type"] == "html"
+
+
+def test_execute_file_in_workspace():
+    """Test execute_file_in_workspace runs scripts and captures stdout, stderr, and exit codes."""
+    from app.chat import execute_file_in_workspace
+    from app.workspaces import safe_path
+
+    # 1. Python script
+    py_path = safe_path("test_calc.py")
+    py_path.write_text("print(40 + 2)\n", encoding="utf-8")
+    res_py = execute_file_in_workspace("test_calc.py")
+    assert res_py["success"] is True
+    assert res_py["exitCode"] == 0
+    assert "42" in res_py["stdout"]
+
+    # 2. Python script with error
+    py_err_path = safe_path("test_broken.py")
+    py_err_path.write_text("import non_existent_module_xyz\n", encoding="utf-8")
+    res_err = execute_file_in_workspace("test_broken.py")
+    assert res_err["success"] is False
+    assert res_err["exitCode"] != 0
+    assert "non_existent_module_xyz" in res_err["stderr"]
+
+    # 3. HTML Live Preview file
+    html_path = safe_path("test_view.html")
+    html_path.write_text("<h1>Hello World</h1>", encoding="utf-8")
+    res_html = execute_file_in_workspace("test_view.html")
+    assert res_html["success"] is True
+    assert res_html["fileType"] == "html"
+    assert "/api/workspace/raw" in res_html["previewUrl"]
+
+
+def test_workspace_execute_api_endpoint():
+    """Test POST /api/workspace/execute for Python script, Bash, and HTML."""
+    # Write Python file
+    client.put("/api/workspace/file", json={
+        "path": "test_api_script.py",
+        "content": "import sys\nsys.stdout.write('API Execution Test OK')\n"
+    })
+
+    res = client.post("/api/workspace/execute", json={
+        "path": "test_api_script.py"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["exitCode"] == 0
+    assert "API Execution Test OK" in data["stdout"]
+
+    # Write HTML file
+    client.put("/api/workspace/file", json={
+        "path": "test_api_view.html",
+        "content": "<!DOCTYPE html><html><body>Test</body></html>"
+    })
+    res_html = client.post("/api/workspace/execute", json={
+        "path": "test_api_view.html"
+    })
+    assert res_html.status_code == 200
+    data_html = res_html.json()
+    assert data_html["ok"] is True
+    assert data_html["type"] == "html"
+    assert "test_api_view.html" in data_html["previewUrl"]
+
+
+def test_autonomous_self_healing_chat_loop(monkeypatch):
+    """Test that complete_chat automatically detects errors in generated code and self-heals."""
+    call_count = 0
+
+    async def mock_call_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First attempt: faulty script
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Here is the calculation script:\n```python:auto_heal.py\n# faulty script\nimport non_existing_lib\nprint('Done')\n```\n"
+                    }
+                }]
+            }
+        else:
+            # Second attempt (self-healed): corrected script
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "I fixed the issue by removing the broken import:\n```python:auto_heal.py\n# corrected script\nprint('Self-Healing Success: 100%')\n```\n"
+                    }
+                }]
+            }
+
+    monkeypatch.setattr("app.chat.call_provider_api", mock_call_provider)
+    monkeypatch.setattr("app.providers.ProviderStore.get_api_key", lambda self, p: "sk-mock-key")
+
+    res = client.post("/api/chat", json={
+        "provider": "openrouter",
+        "model": "google/gemini-2.5-flash",
+        "messages": [{"role": "user", "content": "Write a python script to calculate metrics"}]
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert "saved_files" in body
+    assert "execution_results" in body
+    exec_res = next(r for r in body["execution_results"] if r["path"] == "auto_heal.py")
+    assert exec_res["success"] is True
+    assert exec_res["exitCode"] == 0
+    assert "Self-Healing Success: 100%" in exec_res["stdout"]
+
+
+@pytest.mark.anyio
+async def test_stream_complete_chat_execution_events(monkeypatch):
+    """Test stream_complete_chat emits execution_fixing and execution_healed SSE events."""
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    call_count = 0
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield {"type": "token", "text": "Creating broken script:\n```python:stream_heal.py\nimport non_existent_pkg\n```\n"}
+            yield {"type": "full_message", "message": {"role": "assistant", "content": "Creating broken script:\n```python:stream_heal.py\nimport non_existent_pkg\n```\n"}}
+        else:
+            yield {"type": "token", "text": "Fixed script:\n```python:stream_heal.py\nprint('Stream Self-Healing OK')\n```\n"}
+            yield {"type": "full_message", "message": {"role": "assistant", "content": "Fixed script:\n```python:stream_heal.py\nprint('Stream Self-Healing OK')\n```\n"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+    store = ProviderStore()
+    monkeypatch.setattr(store, "get_api_key", lambda p: "sk-mock-key")
+
+    events = []
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Generate and heal code"}],
+        max_steps=5
+    ):
+        events.append(evt)
+
+    event_types = [e.get("type") for e in events]
+    assert "execution_fixing" in event_types
+    assert "execution_healed" in event_types
+    healed_evt = next(e for e in events if e.get("type") == "execution_healed")
+    assert healed_evt["path"] == "stream_heal.py"
+    assert healed_evt["exitCode"] == 0
+    assert "Stream Self-Healing OK" in healed_evt["stdout"]
 
 
 

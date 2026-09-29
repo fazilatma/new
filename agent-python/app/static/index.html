@@ -1058,6 +1058,287 @@
       box-shadow: 0 4px 14px rgba(0,0,0,0.22);
     }
 
+    /* Full-Screen Execution & Live Render View (v0.14.0) */
+    .fs-render-modal {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #0d1117;
+      z-index: 99999;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 0 50px rgba(0,0,0,0.8);
+      font-family: inherit;
+    }
+    .fs-render-modal.active {
+      display: flex;
+    }
+    .fs-toolbar {
+      height: 52px;
+      min-height: 52px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      gap: 12px;
+      user-select: none;
+      z-index: 10;
+    }
+    .fs-toolbar-left, .fs-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .fs-toolbar-center {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .fs-device-group {
+      display: flex;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 2px;
+      gap: 2px;
+    }
+    .fs-device-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s ease;
+    }
+    .fs-device-btn:hover {
+      color: var(--text-main);
+      background: var(--bg-highlight);
+    }
+    .fs-device-btn.active {
+      background: var(--primary);
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .fs-main-stage {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+      background: #090d13;
+    }
+    .fs-render-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+      background: #090d13;
+      transition: all 0.25s ease;
+    }
+    .fs-device-viewport-wrapper {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      background: #090d13;
+      overflow: auto;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .fs-device-viewport {
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+      border-radius: 0;
+      box-shadow: none;
+      transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), height 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-radius 0.2s ease, box-shadow 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+    .fs-device-viewport.laptop {
+      width: 1024px;
+      height: 94%;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .fs-device-viewport.tablet {
+      width: 768px;
+      height: 94%;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      border: 2px solid rgba(255,255,255,0.2);
+    }
+    .fs-device-viewport.mobile {
+      width: 375px;
+      height: 92%;
+      border-radius: 24px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      border: 3px solid rgba(255,255,255,0.25);
+    }
+    .fs-iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #ffffff;
+    }
+    .fs-terminal-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow: hidden;
+    }
+    .fs-terminal-header {
+      padding: 8px 16px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+    .fs-terminal-body {
+      flex: 1;
+      padding: 16px 20px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #e6edf3;
+      margin: 0;
+    }
+    .fs-code-split-drawer {
+      width: 480px;
+      min-width: 300px;
+      max-width: 60%;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.2s ease, transform 0.2s ease;
+    }
+    .fs-code-split-drawer.collapsed {
+      display: none;
+    }
+    .fs-code-header {
+      padding: 8px 14px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+    .fs-code-editor-area {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+      background: var(--code-bg);
+    }
+    .fs-code-textarea {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      resize: none;
+      border: 0;
+      padding: 12px 16px;
+      background: transparent;
+      color: var(--text-main);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12.5px;
+      line-height: 20px;
+      outline: none;
+      tab-size: 4;
+      white-space: pre;
+    }
+    .fs-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .fs-status-pill.success {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .fs-status-pill.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .fs-status-pill.running {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .fs-status-pill.healing {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    /* Autonomous Execution Feedback UI in Chat */
+    .exec-live-card {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      font-size: 12.5px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .exec-live-card.success {
+      border-left: 4px solid var(--accent-green);
+    }
+    .exec-live-card.error {
+      border-left: 4px solid var(--accent-red);
+    }
+    .exec-live-card.healing {
+      border-left: 4px solid var(--accent-amber);
+    }
+    .exec-live-card.running {
+      border-left: 4px solid var(--accent-blue);
+    }
+    .exec-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .exec-card-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 2px;
+    }
+
     /* Cross-Chat & Cross-Project References (v0.10.0) */
     .chat-references-bar {
       display: flex;
@@ -1897,6 +2178,7 @@
 
               <div style="display:flex;align-items:center;gap:8px;">
                 <input id="wsFolderSearchInput" class="input-control" placeholder="جستجو در فایل‌های این پوشه..." style="padding:4px 10px;font-size:12px;width:210px;" oninput="renderSessionFolderExplorer()">
+                <button type="button" class="btn btn-primary btn-sm" onclick="openCurrentActiveOrFirstFileInFullScreen()" title="پیش‌نمایش زنده و اجرای تمام‌صفحه">⛶ تمام‌صفحه</button>
               </div>
             </div>
 
@@ -1924,7 +2206,8 @@
               <!-- Import to active session button for referenced files -->
               <button class="btn btn-amber btn-sm" id="wsImportRefBtn" onclick="importActiveReferencedFile()" title="Copy/Import this referenced file into current session workspace" style="display:none;">📥 Import to Session</button>
 
-              <!-- Run Button (Prominent for code files) -->
+              <!-- Full Screen & Run Buttons -->
+              <button class="btn btn-primary btn-sm" onclick="openFullScreenRenderModal({ path: $('#editorPath')?.value.trim() || STATE.activeTab || 'main.py', autoRun: true })" title="پیش‌نمایش و اجرای تمام‌صفحه">⛶ تمام‌صفحه</button>
               <button class="btn btn-success btn-sm" id="wsRunFileBtn" onclick="runActiveWorkspaceFile()" title="Run / Execute active file (Ctrl+Enter)">▶️ Run</button>
 
               <!-- Mode Switchers (Code vs Live Preview) -->
@@ -2865,9 +3148,10 @@
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 16px;background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <button type="button" class="btn btn-success btn-sm" id="fileModalRunBtn" onclick="executeFileInModal()" title="اجرای فایل و نمایش خروجی (Run File)">▶️ اجرا (Run)</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="openCurrentModalInFullScreen()" title="مشاهده پیش‌نمایش یا خروجی در حالت تمام‌صفحه">⛶ تمام‌صفحه</button>
         <button type="button" class="btn btn-primary btn-sm" id="fileModalSaveBtn" onclick="saveModalFile()" title="ذخیره تغییرات (Save)">💾 ذخیره</button>
         <button type="button" class="btn btn-ghost btn-sm" id="fileModalPreviewBtn" onclick="switchModalViewMode('preview')" title="پیش‌نمایش تعاملی">👁️ پیش‌نمایش</button>
-        <button type="button" class="btn btn-primary btn-sm" id="fileModalCodeBtn" onclick="switchModalViewMode('code')" title="ویرایش کد">📝 کد منبع</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="fileModalCodeBtn" onclick="switchModalViewMode('code')" title="ویرایش کد">📝 کد منبع</button>
         <button type="button" class="btn btn-ghost btn-sm" onclick="copyModalFileContent()" title="کپی محتوا">📋 کپی</button>
         <button type="button" class="btn btn-ghost btn-sm" onclick="downloadModalFile()" title="دانلود فایل">📥 دانلود</button>
         <button type="button" class="btn btn-ghost btn-sm" onclick="explainModalFileInChat()" title="توضیح در چت">✨ ارجاع در چت</button>
@@ -2911,6 +3195,108 @@
     <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:var(--bg-elevated);border-top:1px solid var(--border-subtle);">
       <span style="font-size:11.5px;color:var(--text-dim);" id="fileModalFooterStatus">آماده برای اجرا و ویرایش</span>
       <button type="button" class="btn btn-ghost" onclick="closeModal('workspaceFileModal')">بستن (Close)</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: FULL-SCREEN EXECUTION & LIVE RENDER VIEW (v0.14.0) -->
+<div class="fs-render-modal" id="fullScreenRenderModal">
+  <!-- Top Navigation & Control Bar -->
+  <div class="fs-toolbar">
+    <div class="fs-toolbar-left">
+      <span id="fsFileIcon" style="font-size:22px;line-height:1;">⚡</span>
+      <div style="overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <strong id="fsFileName" style="font-size:14px;color:var(--text-main);white-space:nowrap;">main.py</strong>
+          <span id="fsStatusBadge" class="fs-status-pill success">Ready</span>
+        </div>
+        <div style="font-size:10.5px;color:var(--text-dim);font-family:monospace;white-space:nowrap;" id="fsFilePath">/workspace/main.py</div>
+      </div>
+    </div>
+
+    <!-- Center: Responsive Device Switcher (for HTML/Web Render) -->
+    <div class="fs-toolbar-center" id="fsDeviceSwitcherGroup">
+      <div class="fs-device-group">
+        <button type="button" class="fs-device-btn active" id="fsDevDesktop" onclick="setFsViewport('desktop')" title="نمایش دسکتاپ (100% عرض)">
+          <span>🖥️</span> دسکتاپ (100%)
+        </button>
+        <button type="button" class="fs-device-btn" id="fsDevLaptop" onclick="setFsViewport('laptop')" title="نمایش لپ‌تاپ (1024px)">
+          <span>💻</span> لپ‌تاپ (1024px)
+        </button>
+        <button type="button" class="fs-device-btn" id="fsDevTablet" onclick="setFsViewport('tablet')" title="نمایش تبلت (768px)">
+          <span>📱</span> تبلت (768px)
+        </button>
+        <button type="button" class="fs-device-btn" id="fsDevMobile" onclick="setFsViewport('mobile')" title="نمایش موبایل (375px)">
+          <span>📱</span> موبایل (375px)
+        </button>
+      </div>
+    </div>
+
+    <!-- Right: Action Controls -->
+    <div class="fs-toolbar-right">
+      <button type="button" class="btn btn-success btn-sm" id="fsRunBtn" onclick="executeFsCurrentFile()" title="اجرای مجدد کد (Ctrl+Enter)">
+        ▶️ اجرای مجدد (Run)
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" id="fsReloadBtn" onclick="refreshFsPreview()" title="بازخوانی پیش‌نمایش">
+        🔄 بازخوانی
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" id="fsCodeToggleBtn" onclick="toggleFsCodeSplit()" title="نمایش / پنهان کردن ویرایشگر کد در کنار خروجی">
+        📝 مشاهده کد
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="copyFsOutput()" title="کپی خروجی ترمینال / محتوا">
+        📋 کپی
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="downloadFsCurrentFile()" title="دانلود فایل">
+        📥 دانلود
+      </button>
+      <button type="button" class="btn btn-danger btn-sm" onclick="closeFullScreenRenderModal()" title="بستن حالت تمام‌صفحه (Esc)">
+        ✕ بستن (ESC)
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Canvas Stage: Output / Live Render on Left, Code Inspector on Right -->
+  <div class="fs-main-stage">
+    <!-- Center Output Stage -->
+    <div class="fs-render-area" id="fsRenderArea">
+      <!-- 1. HTML / Live Web Sandbox View -->
+      <div class="fs-device-viewport-wrapper" id="fsDeviceWrapper" style="display:none;">
+        <div class="fs-device-viewport desktop" id="fsDeviceViewport">
+          <iframe class="fs-iframe" id="fsPreviewFrame" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"></iframe>
+        </div>
+      </div>
+
+      <!-- 2. Terminal / CLI Execution Console Output View -->
+      <div class="fs-terminal-container" id="fsTerminalContainer" style="display:flex;">
+        <div class="fs-terminal-header">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span>💻 خروجی کنسول و ترمینال (Terminal Output)</span>
+            <code id="fsCommandBadge" style="background:#21262d;padding:2px 6px;border-radius:4px;color:#58a6ff;font-size:11px;">python3 main.py</code>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:#8b949e;">
+            <span id="fsExecDuration">0ms</span>
+            <button type="button" class="btn-ghost btn-sm" style="color:#c9d1d9;padding:2px 6px;font-size:11px;" onclick="clearFsTerminal()">پاک‌کردن</button>
+          </div>
+        </div>
+        <pre class="fs-terminal-body" id="fsTerminalBody">آماده برای اجرا...</pre>
+      </div>
+    </div>
+
+    <!-- Right Split Drawer: Code Editor & Inspector -->
+    <div class="fs-code-split-drawer collapsed" id="fsCodeDrawer">
+      <div class="fs-code-header">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span>📝 ویرایشگر کد همزمان</span>
+          <span style="font-size:10px;color:var(--text-dim);" id="fsCodeLineCount">0 خط</span>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button type="button" class="btn btn-primary btn-sm" style="padding:2px 8px;font-size:11px;" onclick="saveAndRunFsCode()" title="ذخیره و اجرای مجدد">💾 ذخیره و اجرا</button>
+          <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="toggleFsCodeSplit()">✕</button>
+        </div>
+      </div>
+      <div class="fs-code-editor-area">
+        <textarea class="fs-code-textarea" id="fsCodeEditor" spellcheck="false" placeholder="کد منبع فایل..."></textarea>
+      </div>
     </div>
   </div>
 </div>
@@ -4818,9 +5204,46 @@ function renderChatMessages() {
           🔄 مدل پشتیبان: ${esc(m.fallbackDetails.activeModel || m.fallbackDetails.activeProvider)}
         </span>
       ` : '';
+
+      let actionCardsHtml = '';
+      if (m.renderPreviews && m.renderPreviews.length > 0) {
+        actionCardsHtml += m.renderPreviews.map(p => `
+          <div class="exec-live-card success" style="margin-top:10px;">
+            <div class="exec-card-head">
+              <span>🌐 <strong>پیش‌نمایش زنده صفحه وب:</strong> <code>${esc(p.path)}</code></span>
+              <span class="fs-status-pill success">Live Render Ready</span>
+            </div>
+            <div class="exec-card-actions">
+              <button type="button" class="btn btn-primary btn-sm" onclick="openFullScreenRenderModal({ path: '${esc(p.path)}', isHtml: true })">⛶ مشاهده پیش‌نمایش در تمام‌صفحه</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="openWorkspaceFileModal('${esc(p.path)}')">🔍 مشاهده فایل</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      if (m.execResults && m.execResults.length > 0) {
+        actionCardsHtml += m.execResults.map(r => `
+          <div class="exec-live-card ${r.success ? 'success' : 'error'}" style="margin-top:10px;">
+            <div class="exec-card-head">
+              <span>${r.success ? '✅' : '⚠️'} <strong>اجرای خودکار:</strong> <code>${esc(r.path)}</code></span>
+              <span class="fs-status-pill ${r.success ? 'success' : 'error'}">Exit ${r.exitCode} (${r.success ? 'موفق' : 'خطا'})</span>
+            </div>
+            ${r.stdout ? `<pre style="max-height:80px;overflow:auto;background:var(--code-bg);padding:6px 10px;border-radius:4px;font-family:monospace;font-size:11px;margin:2px 0;">${esc(r.stdout.slice(0, 300))}${r.stdout.length > 300 ? '...' : ''}</pre>` : ''}
+            <div class="exec-card-actions">
+              <button type="button" class="btn btn-primary btn-sm" onclick="openFullScreenRenderModal({ path: '${esc(r.path)}', autoRun: true })">⛶ مشاهده تمام‌صفحه خروجی و اجرا</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="quickRunFile('${esc(r.path)}')">▶ اجرای مجدد</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="openWorkspaceFileModal('${esc(r.path)}')">🔍 مشاهده کد</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
       return `
         <div class="msg-wrapper assistant" id="msg-wrapper-${idx}">
-          <div class="msg-bubble">${renderMarkdown(m.content)}</div>
+          <div class="msg-bubble">
+            ${renderMarkdown(m.content)}
+            ${actionCardsHtml}
+          </div>
           <div class="msg-meta">
             <span>Agent (${esc(m.fallbackDetails ? m.fallbackDetails.activeModel : modelName)})</span>
             ${fallbackBadge}
@@ -5276,6 +5699,8 @@ async function streamAgentResponse() {
   let errorData = null;
   let isError = false;
   let fallbackDetails = null;
+  let execResults = [];
+  let renderPreviews = [];
 
   try {
     const res = await fetch('/api/chat/stream', {
@@ -5346,6 +5771,33 @@ async function streamAgentResponse() {
               const container = $('#chatMessages');
               container.scrollTop = container.scrollHeight;
             }
+            if (data.type === 'execution_running') {
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> ⚙️ *در حال اجرای خودکار فایل \`${data.path}\` (تلاش ${data.attempt})...*`;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.type === 'execution_fixing') {
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> 🔧 *خطای اجرا در \`${data.path}\` (Exit ${data.exitCode}). در حال ارسال خطا به مدل و اصلاح خودکار فایل (تلاش ${data.attempt} از ${data.maxAttempts})...*`;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.type === 'execution_healed') {
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> ✨ *کد با موفقیت اصلاح و بدون خطا اجرا شد (Exit 0).*`;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.type === 'execution_result') {
+              execResults.push(data);
+            }
+            if (data.type === 'render_preview_ready') {
+              renderPreviews.push(data);
+            }
             if (data.fallbackDetails || data.type === 'fallback_activated') {
               fallbackDetails = data.fallbackDetails;
             }
@@ -5397,7 +5849,9 @@ async function streamAgentResponse() {
       role: 'assistant',
       content: finalContent || accumulated,
       isFallback: Boolean(fallbackDetails),
-      fallbackDetails: fallbackDetails
+      fallbackDetails: fallbackDetails,
+      execResults: execResults,
+      renderPreviews: renderPreviews
     });
     localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
 
@@ -5457,26 +5911,6 @@ function retryLastMessage() {
   }
   renderChatMessages();
   streamAgentResponse();
-}
-
-      if (STATE.activeConversationId) {
-        api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: chatHistory })
-        }).catch(() => {});
-      }
-      renderChatMessages();
-    }
-  } finally {
-    $('#sendBtn').style.display = 'inline-flex';
-    $('#stopBtn').style.display = 'none';
-    abortController = null;
-    if (STATE.activeConversationId) {
-      loadConversationReferences(STATE.activeConversationId).catch(() => {});
-    }
-    refreshFileTree().catch(() => {});
-  }
 }
 
 function renderInlineApprovalCard(container, approvalData) {
@@ -6120,6 +6554,7 @@ function renderSessionFolderExplorer() {
         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:10px; border-top:1px solid var(--border-subtle);" onclick="event.stopPropagation()">
           <span style="font-size:10px; color:var(--text-dim); text-transform:uppercase; font-weight:600;">${esc(ext)}</span>
           <div style="display:flex; gap:4px; align-items:center;">
+            ${isRunnable ? `<button type="button" class="btn btn-primary btn-sm" style="padding:2px 8px; font-size:11px;" onclick="openFullScreenRenderModal({ path: '${esc(f.path)}', autoRun: true })" title="پیش‌نمایش و اجرای تمام‌صفحه">⛶ تمام‌صفحه</button>` : ''}
             ${isRunnable ? `<button type="button" class="btn btn-success btn-sm" style="padding:2px 8px; font-size:11px;" onclick="quickRunFile('${esc(f.path)}', this)" title="اجرای مستقیم اسکریپت">▶ اجرا</button>` : ''}
             <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:11px;" onclick="openWorkspaceFileModal('${esc(f.path)}')" title="مشاهده محتوا، ویرایش و اجرا">🔍 باز کردن</button>
             <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px; font-size:11px;" onclick="downloadSingleFile('${esc(f.path)}')" title="دانلود فایل">📥</button>
@@ -6482,6 +6917,346 @@ function copyModalConsoleOutput() {
 function clearModalConsoleOutput() {
   if ($('#fileModalConsoleOut')) $('#fileModalConsoleOut').textContent = '';
 }
+
+/* =========================================================================
+   FULL-SCREEN EXECUTION & LIVE RENDER VIEW CONTROLLER (v0.14.0)
+   ========================================================================= */
+
+let fsCurrentState = {
+  path: '',
+  content: '',
+  type: '',
+  viewport: 'desktop',
+  isSplitCode: false,
+  isExecuting: false
+};
+
+function openCurrentActiveOrFirstFileInFullScreen() {
+  let path = STATE.activeModalFile || STATE.activeTab;
+  if (!path && STATE.workspaceFiles && STATE.workspaceFiles.length > 0) {
+    const firstRunnableOrHtml = STATE.workspaceFiles.find(f => {
+      const ext = f.path.split('.').pop().toLowerCase();
+      return ['html', 'htm', 'py', 'js', 'sh', 'ts'].includes(ext);
+    });
+    path = firstRunnableOrHtml ? firstRunnableOrHtml.path : STATE.workspaceFiles[0].path;
+  }
+  if (!path) {
+    return alert('فایلی در این ورک‌اسپیس برای اجرا یا پیش‌نمایش یافت نشد.');
+  }
+  openFullScreenRenderModal({ path, autoRun: true });
+}
+
+async function openFullScreenRenderModal(options = {}) {
+  const modal = $('#fullScreenRenderModal');
+  if (!modal) return;
+
+  const path = typeof options === 'string' ? options : (options.path || STATE.activeModalFile || STATE.activeTab || 'main.py');
+  const filename = path.split('/').pop() || path;
+  const ext = filename.split('.').pop().toLowerCase();
+  const isHtml = options.isHtml || ['html', 'htm'].includes(ext);
+
+  fsCurrentState.path = path;
+  fsCurrentState.type = isHtml ? 'html' : 'code';
+
+  // Update Header UI
+  if ($('#fsFileName')) $('#fsFileName').textContent = filename;
+  if ($('#fsFilePath')) $('#fsFilePath').textContent = path;
+  if ($('#fsFileIcon')) $('#fsFileIcon').textContent = getFileIcon(path);
+
+  const statusBadge = $('#fsStatusBadge');
+  if (statusBadge) {
+    statusBadge.className = 'fs-status-pill success';
+    statusBadge.textContent = isHtml ? 'Live HTML Render' : 'Ready';
+  }
+
+  // Toggle Viewers
+  const deviceWrapper = $('#fsDeviceWrapper');
+  const terminalContainer = $('#fsTerminalContainer');
+  const deviceSwitcher = $('#fsDeviceSwitcherGroup');
+  const reloadBtn = $('#fsReloadBtn');
+  const runBtn = $('#fsRunBtn');
+
+  if (isHtml) {
+    if (deviceWrapper) deviceWrapper.style.display = 'flex';
+    if (terminalContainer) terminalContainer.style.display = 'none';
+    if (deviceSwitcher) deviceSwitcher.style.display = 'flex';
+    if (reloadBtn) reloadBtn.style.display = 'inline-flex';
+    if (runBtn) runBtn.textContent = '🔄 بروزرسانی رندر';
+
+    const rawUrl = `/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`;
+    const iframe = $('#fsPreviewFrame');
+    if (iframe) iframe.src = rawUrl;
+    setFsViewport(fsCurrentState.viewport || 'desktop');
+  } else {
+    if (deviceWrapper) deviceWrapper.style.display = 'none';
+    if (terminalContainer) terminalContainer.style.display = 'flex';
+    if (deviceSwitcher) deviceSwitcher.style.display = 'none';
+    if (reloadBtn) reloadBtn.style.display = 'none';
+    if (runBtn) runBtn.textContent = '▶️ اجرای مجدد (Run)';
+
+    if ($('#fsCommandBadge')) $('#fsCommandBadge').textContent = getExecutionCmdForFile(path);
+    if (options.stdout || options.stderr) {
+      renderFsTerminalOutput(options.stdout || '', options.stderr || '', options.exitCode ?? 0, options.durationMs || 0);
+    } else {
+      if ($('#fsTerminalBody')) $('#fsTerminalBody').textContent = 'آماده برای اجرا. بر روی "اجرای مجدد" یا دکمه ▶ کلیک کنید.';
+    }
+  }
+
+  // Load Source Code in background or split drawer
+  try {
+    const previewData = await api(`/api/workspace/file-preview?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`);
+    if (previewData && previewData.content !== undefined) {
+      fsCurrentState.content = previewData.content;
+      if ($('#fsCodeEditor')) {
+        $('#fsCodeEditor').value = previewData.content;
+        const lineCount = (previewData.content.split('\n') || []).length;
+        if ($('#fsCodeLineCount')) $('#fsCodeLineCount').textContent = `${lineCount} خط`;
+      }
+    }
+  } catch (_) {
+    if (options.content && $('#fsCodeEditor')) {
+      $('#fsCodeEditor').value = options.content;
+    }
+  }
+
+  // If autoRun requested for scripts
+  if (options.autoRun && !isHtml) {
+    executeFsCurrentFile();
+  }
+
+  modal.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeFullScreenRenderModal() {
+  const modal = $('#fullScreenRenderModal');
+  if (modal) modal.classList.remove('active');
+  document.body.style.overflow = '';
+  const iframe = $('#fsPreviewFrame');
+  if (iframe) iframe.src = 'about:blank';
+}
+
+function openCurrentModalInFullScreen() {
+  const path = STATE.activeModalFile;
+  if (!path) return;
+  const content = $('#fileModalTextarea')?.value || '';
+  const ext = path.split('.').pop().toLowerCase();
+  const isHtml = ['html', 'htm'].includes(ext);
+  closeModal('workspaceFileModal');
+  openFullScreenRenderModal({
+    path,
+    content,
+    isHtml,
+    autoRun: !isHtml
+  });
+}
+
+function setFsViewport(device) {
+  fsCurrentState.viewport = device;
+  const vp = $('#fsDeviceViewport');
+  if (!vp) return;
+  vp.className = `fs-device-viewport ${device}`;
+
+  ['Desktop', 'Laptop', 'Tablet', 'Mobile'].forEach(d => {
+    const btn = $(`#fsDev${d}`);
+    if (btn) {
+      if (d.toLowerCase() === device) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    }
+  });
+}
+
+function toggleFsCodeSplit() {
+  const drawer = $('#fsCodeDrawer');
+  const btn = $('#fsCodeToggleBtn');
+  if (!drawer) return;
+  const isCollapsed = drawer.classList.contains('collapsed');
+  if (isCollapsed) {
+    drawer.classList.remove('collapsed');
+    fsCurrentState.isSplitCode = true;
+    if (btn) btn.classList.add('btn-primary');
+  } else {
+    drawer.classList.add('collapsed');
+    fsCurrentState.isSplitCode = false;
+    if (btn) btn.classList.remove('btn-primary');
+  }
+}
+
+async function executeFsCurrentFile() {
+  const path = fsCurrentState.path;
+  if (!path) return;
+
+  const ext = path.split('.').pop().toLowerCase();
+  const isHtml = ['html', 'htm'].includes(ext);
+
+  if (isHtml) {
+    refreshFsPreview();
+    return;
+  }
+
+  const statusBadge = $('#fsStatusBadge');
+  const termBody = $('#fsTerminalBody');
+  const runBtn = $('#fsRunBtn');
+  const durEl = $('#fsExecDuration');
+
+  if (statusBadge) {
+    statusBadge.className = 'fs-status-pill running';
+    statusBadge.textContent = 'Executing...';
+  }
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.textContent = '⏳ در حال اجرا...';
+  }
+  if (termBody) {
+    termBody.textContent = `▶ اجرای دستور: ${getExecutionCmdForFile(path)}\n[در حال پردازش...]`;
+  }
+
+  const startTime = Date.now();
+
+  try {
+    const res = await api('/api/workspace/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, conversation_id: STATE.activeConversationId })
+    });
+
+    const elapsed = Date.now() - startTime;
+    if (durEl) durEl.textContent = `${res.durationMs || elapsed}ms`;
+
+    if (res.type === 'html') {
+      refreshFsPreview();
+      return;
+    }
+
+    if ($('#fsCommandBadge')) $('#fsCommandBadge').textContent = res.command || getExecutionCmdForFile(path);
+    renderFsTerminalOutput(res.stdout || '', res.stderr || '', res.exitCode ?? 0, res.durationMs || elapsed);
+
+    if (statusBadge) {
+      if (res.exitCode === 0) {
+        statusBadge.className = 'fs-status-pill success';
+        statusBadge.textContent = 'Exit 0 (Success)';
+      } else {
+        statusBadge.className = 'fs-status-pill error';
+        statusBadge.textContent = `Exit ${res.exitCode} (Failed)`;
+      }
+    }
+  } catch (err) {
+    if (termBody) termBody.textContent = `▶ خطا در اجرا:\n${err.message}`;
+    if (statusBadge) {
+      statusBadge.className = 'fs-status-pill error';
+      statusBadge.textContent = 'Execution Error';
+    }
+  } finally {
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.textContent = '▶️ اجرای مجدد (Run)';
+    }
+  }
+}
+
+function renderFsTerminalOutput(stdout, stderr, exitCode, durationMs) {
+  const termBody = $('#fsTerminalBody');
+  if (!termBody) return;
+
+  let out = '';
+  if (stdout) out += stdout;
+  if (stderr) {
+    if (out && !out.endsWith('\n')) out += '\n';
+    out += `\n--- [STDERR / TRACEBACK] ---\n${stderr}`;
+  }
+  if (!out) out = '(کد اجرا شد و بدون چاپ خروجی استاندارد به پایان رسید)';
+
+  out += `\n\n═══════════════════════════════════════════════════\n✓ فرآیند با کد خروج ${exitCode} در زمان ${durationMs} میلی‌ثانیه به پایان رسید.`;
+  termBody.textContent = out;
+}
+
+function getExecutionCmdForFile(path) {
+  const filename = path.split('/').pop() || path;
+  const ext = filename.split('.').pop().toLowerCase();
+  if (ext === 'py' || ext === 'pyw') return `python3 ${filename}`;
+  if (ext === 'sh' || ext === 'bash') return `bash ${filename}`;
+  if (ext === 'js' || ext === 'mjs') return `node ${filename}`;
+  if (ext === 'ts') return `npx tsx ${filename}`;
+  return `./${filename}`;
+}
+
+async function saveAndRunFsCode() {
+  const path = fsCurrentState.path;
+  if (!path) return;
+  const content = $('#fsCodeEditor')?.value || '';
+
+  try {
+    await api('/api/workspace/file', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path,
+        content,
+        conversation_id: STATE.activeConversationId,
+        requireApproval: false
+      })
+    });
+    flashAutoSave();
+    fsCurrentState.content = content;
+    const lineCount = content.split('\n').length;
+    if ($('#fsCodeLineCount')) $('#fsCodeLineCount').textContent = `${lineCount} خط (ذخیره شد ✓)`;
+    await executeFsCurrentFile();
+    await refreshFileTree();
+  } catch (err) {
+    alert(`خطا در ذخیره فایل: ${err.message}`);
+  }
+}
+
+function refreshFsPreview() {
+  const path = fsCurrentState.path;
+  if (!path) return;
+  const iframe = $('#fsPreviewFrame');
+  if (iframe) {
+    iframe.src = `/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`;
+  }
+}
+
+function copyFsOutput() {
+  const isHtml = fsCurrentState.type === 'html';
+  let text = '';
+  if (isHtml) {
+    text = fsCurrentState.content || $('#fsCodeEditor')?.value || '';
+  } else {
+    text = $('#fsTerminalBody')?.textContent || '';
+  }
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    alert('خروجی در کلیپ‌بورد کپی شد.');
+  });
+}
+
+function downloadFsCurrentFile() {
+  if (fsCurrentState.path) downloadSingleFile(fsCurrentState.path);
+}
+
+function clearFsTerminal() {
+  if ($('#fsTerminalBody')) $('#fsTerminalBody').textContent = '';
+}
+
+window.addEventListener('keydown', (e) => {
+  const fsModal = $('#fullScreenRenderModal');
+  if (fsModal && fsModal.classList.contains('active')) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeFullScreenRenderModal();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (fsCurrentState.isSplitCode) {
+        saveAndRunFsCode();
+      } else {
+        executeFsCurrentFile();
+      }
+    }
+  }
+});
 
 async function runActiveWorkspaceFile() {
   const path = $('#editorPath')?.value.trim() || STATE.activeTab;

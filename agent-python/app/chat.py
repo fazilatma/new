@@ -242,11 +242,12 @@ async def call_provider_api(
         PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=True)
         raise proxy_or_direct_err
 
-def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[List[Dict[str, Any]]] = None):
+def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     from .workspaces import create_workspace_item, get_active_workspace
     from .changesets import save_file_version_snapshot
+    saved_files: List[Dict[str, Any]] = []
     if not content or "```" not in content:
-        return
+        return saved_files
 
     used_names = set()
     blocks = re.split(r'```', content)
@@ -261,6 +262,7 @@ def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[Li
 
         filename = None
         lang = first_line.lower()
+        clean_lang = re.split(r'[\s:;=]', lang)[0].strip().lower() if lang else "code"
 
         # 1. Check for filename directly attached to language tag (e.g. `html:index.html` or `python filename=main.py`)
         tag_match = re.search(r'(?:^|[\s:])(?:file=|filename=|path=|:)?\s*([a-zA-Z0-9_\-\./]+\.[a-zA-Z0-9]+)', first_line, re.IGNORECASE)
@@ -285,7 +287,6 @@ def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[Li
 
         # 4. Fallback based on code content and language tag
         if not filename:
-            clean_lang = re.split(r'[\s:]', lang)[0].strip()
             if "<!doctype html" in code.lower() or "<html" in code.lower():
                 filename = "index.html"
             elif clean_lang in ("html", "htm"):
@@ -316,8 +317,69 @@ def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[Li
                     ws = get_active_workspace()
                     save_file_version_snapshot(ws["id"], clean_fn, code, created_by="agent-auto-save")
                     used_names.add(clean_fn)
+                    is_exec = clean_fn.lower().endswith((".py", ".pyw", ".sh", ".bash", ".js", ".mjs", ".ts"))
+                    is_html = clean_fn.lower().endswith((".html", ".htm"))
+                    saved_files.append({
+                        "path": clean_fn,
+                        "type": clean_lang or "code",
+                        "content": code,
+                        "isExecutable": is_exec,
+                        "isHtml": is_html
+                    })
                 except Exception:
                     pass
+
+    return saved_files
+
+def execute_file_in_workspace(path: str) -> Dict[str, Any]:
+    from .terminal_sandbox import execute_sandboxed_command
+    from .workspaces import safe_path
+    try:
+        p = safe_path(path)
+        if not p.exists() or p.is_dir():
+            return {"ok": False, "success": False, "error": f"File not found: {path}", "exitCode": 1, "path": path}
+
+        suffix = p.suffix.lower()
+        if suffix in (".py", ".pyw"):
+            cmd = f"python3 '{p.name}'"
+        elif suffix in (".sh", ".bash"):
+            cmd = f"bash '{p.name}'"
+        elif suffix in (".js", ".mjs"):
+            cmd = f"node '{p.name}'"
+        elif suffix == ".ts":
+            cmd = f"npx --yes tsx '{p.name}'"
+        elif suffix in (".html", ".htm"):
+            return {
+                "ok": True,
+                "success": True,
+                "type": "html",
+                "fileType": "html",
+                "path": path,
+                "previewUrl": f"/api/workspace/raw?path={path}",
+                "exitCode": 0,
+                "stdout": "Live HTML preview ready.",
+                "stderr": "",
+                "message": "HTML ready for live preview."
+            }
+        else:
+            return {"ok": True, "success": True, "type": "text", "fileType": suffix.lstrip('.'), "path": path, "message": "File created."}
+
+        res = execute_sandboxed_command(cmd, cwd=str(p.parent), confirmed_dangerous=True)
+        is_ok = res.get("exitCode", 0) == 0
+        return {
+            "ok": is_ok,
+            "success": is_ok,
+            "command": cmd,
+            "path": path,
+            "type": "script",
+            "fileType": suffix.lstrip('.'),
+            "exitCode": res.get("exitCode", 0),
+            "stdout": res.get("stdout", ""),
+            "stderr": res.get("stderr", ""),
+            "durationMs": res.get("durationMs", 0)
+        }
+    except Exception as e:
+        return {"ok": False, "success": False, "error": str(e), "exitCode": 1, "path": path}
 
 async def stream_call_provider_api(
     provider: Provider,
@@ -644,7 +706,91 @@ async def stream_complete_chat(
                 tool_calls = last_msg.get("tool_calls") or []
 
                 if not tool_calls:
-                    auto_detect_and_save_code_files(last_msg.get("content", ""), pending_approvals)
+                    saved_files = auto_detect_and_save_code_files(last_msg.get("content", ""), pending_approvals)
+                    execution_reports = []
+
+                    # Autonomous Self-Healing Execution Loop
+                    for sf in saved_files:
+                        if sf.get("isExecutable"):
+                            exec_res = execute_file_in_workspace(sf["path"])
+                            if exec_res.get("exitCode", 1) == 0:
+                                yield {
+                                    "type": "execution_result",
+                                    "path": sf["path"],
+                                    "status": "success",
+                                    "exitCode": 0,
+                                    "command": exec_res.get("command", ""),
+                                    "stdout": exec_res.get("stdout", ""),
+                                    "stderr": exec_res.get("stderr", ""),
+                                    "durationMs": exec_res.get("durationMs", 0)
+                                }
+                                execution_reports.append(exec_res)
+                            else:
+                                yield {
+                                    "type": "execution_fixing",
+                                    "path": sf["path"],
+                                    "status": "fixing",
+                                    "exitCode": exec_res.get("exitCode", 1),
+                                    "command": exec_res.get("command", ""),
+                                    "stdout": exec_res.get("stdout", ""),
+                                    "stderr": exec_res.get("stderr", ""),
+                                    "attempt": 1
+                                }
+
+                                current_err = exec_res.get("stderr") or exec_res.get("stdout") or "Execution failed with non-zero exit code"
+                                for heal_attempt in range(1, 4):
+                                    heal_prompt = (
+                                        f"\n\n[AUTONOMOUS TEST EXECUTION FAILURE - Attempt {heal_attempt}/3]\n"
+                                        f"File `{sf['path']}` was executed and failed with Exit Code {exec_res.get('exitCode', 1)}.\n"
+                                        f"Error Traceback:\n```\n{current_err}\n```\n\n"
+                                        f"Please diagnose this error, fix all issues in `{sf['path']}`, and output the full corrected code in a code block."
+                                    )
+                                    chat_msgs.append({"role": "user", "content": heal_prompt})
+
+                                    yield {"type": "token", "text": f"\n\n⚙️ *در حال رفع خودکار خطای اجرای `{sf['path']}` (تلاش {heal_attempt})...*\n\n"}
+
+                                    heal_msg = None
+                                    async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key):
+                                        if chunk["type"] == "token":
+                                            yield {"type": "token", "text": chunk["text"]}
+                                        elif chunk["type"] == "reasoning":
+                                            yield {"type": "reasoning", "reasoning": chunk["reasoning"]}
+                                        elif chunk["type"] == "full_message":
+                                            heal_msg = chunk["message"]
+
+                                    if not heal_msg:
+                                        break
+
+                                    chat_msgs.append(heal_msg)
+                                    auto_detect_and_save_code_files(heal_msg.get("content", ""), pending_approvals)
+
+                                    re_exec = execute_file_in_workspace(sf["path"])
+                                    if re_exec.get("exitCode", 1) == 0:
+                                        yield {
+                                            "type": "execution_healed",
+                                            "path": sf["path"],
+                                            "status": "healed",
+                                            "exitCode": 0,
+                                            "command": re_exec.get("command", ""),
+                                            "stdout": re_exec.get("stdout", ""),
+                                            "stderr": re_exec.get("stderr", ""),
+                                            "durationMs": re_exec.get("durationMs", 0),
+                                            "attempts": heal_attempt + 1
+                                        }
+                                        execution_reports.append(re_exec)
+                                        break
+                                    else:
+                                        current_err = re_exec.get("stderr") or re_exec.get("stdout")
+                                        exec_res = re_exec
+
+                        elif sf.get("isHtml"):
+                            yield {
+                                "type": "render_preview_ready",
+                                "path": sf["path"],
+                                "previewUrl": f"/api/workspace/raw?path={sf['path']}&conversation_id={conversation_id or ''}",
+                                "previewType": "html"
+                            }
+
                     CIRCUIT_BREAKER.record_success(p.id)
                     store.record_metric(p.id, target_model.id, 0, is_error=False)
 
@@ -657,6 +803,7 @@ async def stream_complete_chat(
                         "provider": p.id,
                         "model": target_model.id,
                         "reasoning": last_msg.get("reasoning_content", ""),
+                        "executionReports": execution_reports,
                         "isFallback": is_fallback,
                         "fallbackDetails": {
                             "used": is_fallback,
@@ -848,7 +995,37 @@ async def complete_chat(
 
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
-                    auto_detect_and_save_code_files(msg.get("content", ""), pending_approvals)
+                    saved_files = auto_detect_and_save_code_files(msg.get("content", ""), pending_approvals)
+                    execution_reports = []
+                    for sf in saved_files:
+                        if sf.get("isExecutable"):
+                            exec_res = execute_file_in_workspace(sf["path"])
+                            execution_reports.append(exec_res)
+                            if exec_res.get("exitCode", 1) != 0:
+                                current_err = exec_res.get("stderr") or exec_res.get("stdout") or "Execution failed"
+                                for heal_attempt in range(1, 4):
+                                    heal_prompt = (
+                                        f"\n\n[AUTONOMOUS TEST EXECUTION FAILURE - Attempt {heal_attempt}/3]\n"
+                                        f"File `{sf['path']}` was executed and failed with Exit Code {exec_res.get('exitCode', 1)}.\n"
+                                        f"Error Traceback:\n```\n{current_err}\n```\n\n"
+                                        f"Please diagnose this error, fix all issues in `{sf['path']}`, and output the full corrected code in a code block."
+                                    )
+                                    chat_msgs.append({"role": "user", "content": heal_prompt})
+                                    try:
+                                        heal_resp = await call_provider_api(p, target_model, chat_msgs, api_key)
+                                        heal_msg = heal_resp["choices"][0]["message"]
+                                        chat_msgs.append(heal_msg)
+                                        auto_detect_and_save_code_files(heal_msg.get("content", ""), pending_approvals)
+                                        re_exec = execute_file_in_workspace(sf["path"])
+                                        execution_reports = [r for r in execution_reports if r.get("path") != sf["path"]] + [re_exec]
+                                        if re_exec.get("exitCode", 1) == 0:
+                                            msg = heal_msg
+                                            break
+                                        current_err = re_exec.get("stderr") or re_exec.get("stdout")
+                                        exec_res = re_exec
+                                    except Exception:
+                                        break
+
                     CIRCUIT_BREAKER.record_success(p.id)
                     store.record_metric(p.id, target_model.id, 0, is_error=False)
                     return {
@@ -856,6 +1033,9 @@ async def complete_chat(
                         "steps": step_idx + 1,
                         "provider": p.id,
                         "model": target_model.id,
+                        "saved_files": saved_files,
+                        "executionReports": execution_reports,
+                        "execution_results": execution_reports,
                         "isFallback": is_fallback,
                         "fallbackDetails": {
                             "used": is_fallback,
