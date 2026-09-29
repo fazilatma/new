@@ -17,6 +17,11 @@ from .workspaces import (
     get_active_workspace, set_active_workspace, list_workspace_files,
     safe_path, create_workspace_from_template, get_workspace_metrics
 )
+from .projects import (
+    get_active_project, set_active_project, list_projects,
+    get_project, create_project, update_project, delete_project,
+    ProjectCreateRequest, ProjectUpdateRequest
+)
 from .changesets import (
     create_changeset, get_changeset, list_changesets, approve_changeset,
     reject_changeset, rollback_changeset, approve_changeset_file, reject_changeset_file,
@@ -93,6 +98,38 @@ def version():
 @app.get("/health")
 def health():
     return {"status": "ok", "version": APP_VERSION}
+
+# Projects & Definitions API
+@app.get("/api/projects")
+def projects_list_endpoint(user: Dict[str, Any] = Depends(require_viewer)):
+    return {"projects": list_projects(), "active": get_active_project()}
+
+@app.get("/api/projects/{proj_id}")
+def project_details_endpoint(proj_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    proj = get_project(proj_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    return proj
+
+@app.post("/api/projects")
+def project_create_endpoint(payload: ProjectCreateRequest, user: Dict[str, Any] = Depends(require_developer)):
+    return create_project(payload)
+
+@app.put("/api/projects/{proj_id}")
+def project_update_endpoint(proj_id: str, payload: ProjectUpdateRequest, user: Dict[str, Any] = Depends(require_developer)):
+    return update_project(proj_id, payload)
+
+@app.delete("/api/projects/{proj_id}")
+def project_delete_endpoint(proj_id: str, user: Dict[str, Any] = Depends(require_admin)):
+    active = get_active_project()
+    if active.get("id") == proj_id:
+        raise HTTPException(400, "Cannot delete the currently active project. Switch to another project first.")
+    ok = delete_project(proj_id)
+    return {"ok": ok}
+
+@app.post("/api/projects/{proj_id}/activate")
+def project_activate_endpoint(proj_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    return set_active_project(proj_id)
 
 # Workspaces API
 @app.get("/api/workspaces")

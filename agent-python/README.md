@@ -1,22 +1,40 @@
-# Arena AI Coding Agent (Python / FastAPI)
+# Arena AI Coding Agent (Python / FastAPI) — v0.6.0
 
-A full-featured, production-ready AI Coding Agent system with an interactive modern UI, Server-Sent Events (SSE) live streaming, multi-file ChangeSet diff approval workflow, persistent background job worker, Git/GitHub workspaces, Playwright browser automation, and enterprise security.
+A full-featured, production-ready AI Coding Agent system with an interactive modern UI, Server-Sent Events (SSE) live streaming, multi-file ChangeSet diff approval workflow, persistent background job worker, Git/GitHub workspaces, Playwright browser automation with unrestricted external web access, Project Definitions & Settings, and enterprise security.
+
+---
+
+## What's New in v0.6.0
+
+1. **Project Definitions & Settings Management**:
+   - Define custom project profiles with:
+     - Name & detailed description
+     - Default AI Provider & Model
+     - Target Git Branch
+     - Project-specific instructions & system prompt additions
+     - Agent behavioral rules (`.agentrules`)
+     - Custom environment variables and quick commands
+   - Dedicated **Project Settings** tab in UI with live configuration editor and 1-click project switching.
+   - Dynamic prompt injection tailoring the AI agent's context to the active project definition.
+
+2. **Unrestricted External Web & Network Access**:
+   - Playwright browser and terminal operations have unrestricted access to any external websites, APIs, external git remotes, pip repositories, and curl requests.
+
+3. **In-UI Diff Approval & Rollback Engine**:
+   - Multi-file ChangeSet staging with interactive visual diffs (green additions / red deletions).
+   - In-chat inline diff cards with one-click **[Approve & Apply]** and **[Reject]** actions.
+   - Snapshot backups and version rollback for any file or changeset.
 
 ---
 
 ## Key Features & Architecture
 
-### 1. In-UI Diff Approval & Rollback Engine (Phase 4)
-- **ChangeSet System**: Agent file writes and dangerous modifications are staged into a ChangeSet instead of being written directly.
-- **Interactive Diff Viewer**: Colorized additions (green) and deletions (red) with hunk-by-hunk review.
-- **Granular Actions**:
-  - **Approve All**: Applies all staged changes atomically to disk.
-  - **Reject All**: Discards pending changes.
-  - **Approve / Reject Single File**: Approve only specific files within a multi-file ChangeSet.
-  - **Rollback**: One-click rollback of any ChangeSet or restore previous version snapshots.
-- **Automated Durability**: Version snapshots saved in SQLite (`file_versions`) and disk (`data/versions/`) on every modification.
+### 1. Project Management & Configuration
+- Create and manage multiple project definitions.
+- Set default provider and model preferences per project.
+- Configure project-specific instructions and agent rules.
 
-### 2. Multi-Protocol Model & Provider Catalog (Phase 11)
+### 2. Multi-Protocol Model & Provider Catalog
 - Seamless support for:
   - **OpenAI-Compatible** (`/v1/chat/completions`)
   - **Anthropic Native** (`/v1/messages`)
@@ -27,41 +45,30 @@ A full-featured, production-ready AI Coding Agent system with an interactive mod
 - **Circuit Breaker**: Detects provider failures and automatically routes to configured fallback models.
 - **Latency & Error Tracking**: Model health test runner in UI.
 
-### 3. Persistent Background Worker & Job Queue (Phase 2)
+### 3. Persistent Background Worker & Job Queue
 - SQLite WAL-mode job queue with concurrency semaphore (`MAX_CONCURRENT_JOBS`).
 - **Server Restart Recovery**: Stuck `running` jobs are automatically recovered and re-queued.
 - **Control Actions**: Cancel, Pause, Resume, and Manual Retry.
 - Step-by-step tool execution timeline with live logs.
 - Large output artifacts saved to disk (`data/job_outputs/`).
 
-### 4. Enterprise Security & RBAC (Phases 1 & 12)
+### 4. Enterprise Security & RBAC
 - **PBKDF2 Password Hashing** with random cryptographic salt.
-- **Role-Based Access Control (RBAC)**:
-  - **Admin**: Full system management, user management, environment secrets.
-  - **Developer**: Workspace edits, chat, terminal commands, git workflow.
-  - **Viewer**: Read-only inspection of files, logs, and job status.
+- **Role-Based Access Control (RBAC)**: Admin, Developer, Viewer.
 - **Master Key Encryption**: Secrets encrypted at rest with AES-256 Fernet.
 - **Log Sanitizer**: Automatic masking of API keys and Bearer tokens in all logs.
-- **Rate Limiting & CSRF**: Per-IP sliding window protection.
 
-### 5. Sandboxed Terminal Execution (Phase 5)
-- Confined to active workspace directory with path-traversal prevention.
-- Dangerous command protection (`rm -rf /`, `DROP TABLE`, `git push --force`) requiring explicit confirmation.
-- Active process supervisor with manual kill button.
-- Optional Docker container isolation mode.
-
-### 6. Full Git & GitHub Workspace (Phases 6 & 7)
+### 5. Git & GitHub Workspace
 - Branch manager (list, create, switch, delete).
 - Interactive 3-way merge conflict resolver.
 - Commit staging, push with explicit approval modal, stashes, tags, and commit history graphs.
 - Full GitHub API connector for Pull Requests (Create, Review, Merge) and GitHub Actions.
 
-### 7. Playwright Browser Automation (Phase 8)
-- Chromium sandbox browser controller.
+### 6. Playwright Browser Automation
+- Chromium browser controller with full external web access.
 - DOM content extraction, interactive form filling, clicks, and page screenshots.
-- SSRF security blocking private network ranges (`127.0.0.0/8`, `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`, `169.254.0.0/16`).
 
-### 8. Arena Modern UI (Phases 3, 9 & 10)
+### 7. Arena Modern UI
 - Collapsible desktop sidebar and mobile sliding drawer.
 - In-chat interactive tool cards with inline Diff Approve / Reject buttons.
 - Real-time token streaming over SSE.

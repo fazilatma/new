@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Arena AI Coding Agent</title>
+  <title>Arena AI Coding Agent v0.6.0</title>
   <style>
     :root[data-theme="dark"] {
       --bg-base: #0a0f1d;
@@ -118,7 +118,7 @@
       padding: 12px 16px;
       border-bottom: 1px solid var(--border-subtle);
     }
-    .ws-select-label { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; }
+    .ws-select-label { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; display:flex; justify-content:space-between; align-items:center; }
     
     nav.nav-menu {
       flex: 1;
@@ -236,6 +236,15 @@
       color: var(--primary);
       border-radius: 6px;
       font-weight: 500;
+    }
+
+    .network-badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-green);
+      font-weight: 600;
     }
 
     /* Views */
@@ -451,7 +460,7 @@
     }
     .composer-footer { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); }
 
-    /* Changesets & Approvals View (Phase 4) */
+    /* Change Sets & Approvals View */
     .changeset-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
     .changeset-card {
       background: var(--bg-surface);
@@ -467,15 +476,8 @@
       align-items: center;
       border-bottom: 1px solid var(--border-subtle);
     }
-    .changeset-files-table { width: 100%; border-collapse: collapse; }
-    .changeset-files-table th, .changeset-files-table td {
-      padding: 10px 16px;
-      text-align: left;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    .changeset-files-table th { background: var(--bg-base); font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
 
-    /* Code Editor View (Phase 3) */
+    /* Code Editor View */
     .editor-layout {
       display: grid;
       grid-template-columns: 240px 1fr;
@@ -584,7 +586,7 @@
       border: 1px solid var(--border-strong);
       border-radius: 12px;
       box-shadow: var(--shadow);
-      width: min(650px, 100%);
+      width: min(680px, 100%);
       max-height: 90vh;
       overflow: hidden;
       display: flex;
@@ -674,26 +676,32 @@
   <!-- Collapsible Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <a href="#" class="brand" onclick="navigate('workspace')">
+      <a href="#" class="brand" onclick="navigate('projects')">
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span>Coding Agent v0.5.0</span>
+          <span>Coding Agent v0.6.0</span>
         </div>
       </a>
       <button class="btn-ghost" onclick="toggleSidebar()" title="Toggle Sidebar">≡</button>
     </div>
 
     <div class="ws-select-wrap">
-      <div class="ws-select-label">Active Workspace</div>
-      <select id="activeWsSelect" class="input-control" onchange="switchWorkspace(this.value)">
-        <option value="default">Default Project</option>
+      <div class="ws-select-label">
+        <span>Active Project</span>
+        <button class="btn-ghost btn-sm" onclick="openNewProjectModal()" title="Create New Project" style="padding:0 4px;">+ New</button>
+      </div>
+      <select id="activeProjectSelect" class="input-control" onchange="switchProject(this.value)">
+        <option value="proj-default">Primary Project</option>
       </select>
     </div>
 
     <nav class="nav-menu">
       <button class="nav-btn active" data-view="chat" onclick="navigate('chat')">
         <span class="icon">💬</span><span class="nav-text">Agent Chat</span>
+      </button>
+      <button class="nav-btn" data-view="projects" onclick="navigate('projects')">
+        <span class="icon">📦</span><span class="nav-text">Project Settings</span>
       </button>
       <button class="nav-btn" data-view="changesets" onclick="navigate('changesets')">
         <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
@@ -703,7 +711,7 @@
         <span class="icon">📝</span><span class="nav-text">Code Editor</span>
       </button>
       <button class="nav-btn" data-view="terminal" onclick="navigate('terminal')">
-        <span class="icon">💻</span><span class="nav-text">Terminal Sandbox</span>
+        <span class="icon">💻</span><span class="nav-text">Terminal</span>
       </button>
       <button class="nav-btn" data-view="git" onclick="navigate('git')">
         <span class="icon">🌿</span><span class="nav-text">Git & Branches</span>
@@ -712,7 +720,7 @@
         <span class="icon">🐙</span><span class="nav-text">GitHub Workspace</span>
       </button>
       <button class="nav-btn" data-view="browser" onclick="navigate('browser')">
-        <span class="icon">🌐</span><span class="nav-text">Playwright Browser</span>
+        <span class="icon">🌐</span><span class="nav-text">Browser Automation</span>
       </button>
       <button class="nav-btn" data-view="jobs" onclick="navigate('jobs')">
         <span class="icon">⚡</span><span class="nav-text">Jobs & Worker</span>
@@ -722,9 +730,6 @@
       </button>
       <button class="nav-btn" data-view="observability" onclick="navigate('observability')">
         <span class="icon">📊</span><span class="nav-text">Observability & Logs</span>
-      </button>
-      <button class="nav-btn" data-view="workspaces" onclick="navigate('workspaces')">
-        <span class="icon">📁</span><span class="nav-text">Workspaces & Rules</span>
       </button>
       <button class="nav-btn" data-view="settings" onclick="navigate('settings')">
         <span class="icon">⚙️</span><span class="nav-text">Security & Settings</span>
@@ -755,6 +760,9 @@
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
         </div>
+        <div class="network-badge" title="Full external web access enabled">
+          🌐 Full Web Access
+        </div>
       </div>
       <div class="top-right">
         <button class="btn btn-ghost btn-sm" onclick="openCommandPalette()" title="Command Palette (Ctrl+K)">⌘K</button>
@@ -763,7 +771,7 @@
       </div>
     </header>
 
-    <!-- VIEW 1: AGENT CHAT -->
+    <!-- VIEW: AGENT CHAT -->
     <section class="view-panel active" id="view-chat">
       <div class="chat-layout">
         <div class="chat-sidebar">
@@ -792,9 +800,9 @@
           <div class="chat-messages" id="chatMessages">
             <div class="msg-wrapper assistant">
               <div class="msg-bubble">
-                Hello! I am your Arena AI Coding Agent. I can read, write, and safely modify workspace files, execute sandboxed terminal commands, and browse web pages. When file approvals are enabled, every file change produces a diff for your review before being applied.
+                Hello! I am your Arena AI Coding Agent v0.6.0. I can inspect, write, and safely modify workspace files, execute terminal commands with full external internet access, and automate web browsers. When file approvals are enabled, every file change produces an interactive diff for your review before being applied.
               </div>
-              <div class="msg-meta"><span>Agent · v0.5.0</span></div>
+              <div class="msg-meta"><span>Agent · v0.6.0</span></div>
             </div>
           </div>
 
@@ -813,7 +821,69 @@
       </div>
     </section>
 
-    <!-- VIEW 2: APPROVALS & CHANGE SETS (Phase 4) -->
+    <!-- VIEW: PROJECT DEFINITIONS & SETTINGS -->
+    <section class="view-panel" id="view-projects">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Project Definitions & Configuration</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Define custom project descriptions, instructions, agent rules, and default providers.</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary" onclick="openNewProjectModal()">+ Add Project</button>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:20px;">
+        <!-- Active Project Settings Editor -->
+        <div class="stat-card" style="display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="label">Active Project Configuration</div>
+            <span class="tool-status-tag success" id="activeProjStatusTag">Active</span>
+          </div>
+
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">Project Name</label>
+            <input id="projEditName" class="input-control" placeholder="Project name...">
+          </div>
+
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">Description & Purpose</label>
+            <textarea id="projEditDesc" class="input-control" style="height:60px;" placeholder="Overview of what this project does..."></textarea>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <label style="font-size:11px;color:var(--text-dim);">Default Provider</label>
+              <select id="projEditProvider" class="input-control"></select>
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-dim);">Default Branch</label>
+              <input id="projEditBranch" class="input-control" placeholder="arena/01a0ed4c-new">
+            </div>
+          </div>
+
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">Project Instructions (System Prompt Additions)</label>
+            <textarea id="projEditInstructions" class="input-control" style="height:90px;" placeholder="Custom instructions for the agent..."></textarea>
+          </div>
+
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">Agent Behavioral Rules (.agentrules)</label>
+            <textarea id="projEditRules" class="input-control" style="height:80px;" placeholder="- Rule 1: Follow standard formatting..."></textarea>
+          </div>
+
+          <button class="btn btn-primary" onclick="saveActiveProjectSettings()">Save Project Settings</button>
+        </div>
+
+        <!-- All Defined Projects List -->
+        <div class="stat-card">
+          <div class="label" style="margin-bottom:12px;">Configured Projects</div>
+          <div id="projectsListCards" class="changeset-list" style="margin-top:0;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: APPROVALS & CHANGE SETS (Phase 4) -->
     <section class="view-panel" id="view-changesets">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -828,7 +898,7 @@
       </div>
     </section>
 
-    <!-- VIEW 3: CODE EDITOR (Phase 3) -->
+    <!-- VIEW: CODE EDITOR (Phase 3) -->
     <section class="view-panel" id="view-editor">
       <div class="editor-layout">
         <div class="editor-file-tree">
@@ -858,17 +928,17 @@
       </div>
     </section>
 
-    <!-- VIEW 4: TERMINAL SANDBOX (Phase 5) -->
+    <!-- VIEW: TERMINAL (Phase 5) -->
     <section class="view-panel" id="view-terminal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div>
-          <h2>Sandboxed Terminal</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Commands run inside restricted workspace boundaries with resource limits and audit logging.</span>
+          <h2>Terminal Execution</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Commands run with full internet connectivity, process supervisor, and dangerous command safeguards.</span>
         </div>
         <button class="btn btn-ghost" onclick="loadActiveProcesses()">Processes</button>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <input id="termCmdInput" class="input-control" placeholder="Enter shell command (e.g. pytest, git status, ls -la)..." onkeydown="if(event.key==='Enter')runTerminalCommand()">
+        <input id="termCmdInput" class="input-control" placeholder="Enter shell command (e.g. curl, pip install, git status, npm run)..." onkeydown="if(event.key==='Enter')runTerminalCommand()">
         <button class="btn btn-primary" onclick="runTerminalCommand()">Execute</button>
       </div>
       <div class="tool-card" style="flex:1;display:flex;flex-direction:column;">
@@ -880,7 +950,7 @@
       </div>
     </section>
 
-    <!-- VIEW 5: GIT INTEGRATION (Phase 6) -->
+    <!-- VIEW: GIT INTEGRATION (Phase 6) -->
     <section class="view-panel" id="view-git">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -919,7 +989,7 @@
       </div>
     </section>
 
-    <!-- VIEW 6: GITHUB WORKSPACE (Phase 7) -->
+    <!-- VIEW: GITHUB WORKSPACE (Phase 7) -->
     <section class="view-panel" id="view-github">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -937,12 +1007,12 @@
       </div>
     </section>
 
-    <!-- VIEW 7: PLAYWRIGHT BROWSER (Phase 8) -->
+    <!-- VIEW: PLAYWRIGHT BROWSER (Phase 8) -->
     <section class="view-panel" id="view-browser">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
           <h2>Playwright Browser Automation</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Headless browser sandbox with DOM extraction, screenshot capture, and SSRF security.</span>
+          <span style="color:var(--text-muted);font-size:12px;">Full external web access with DOM extraction, screenshot capture, and interactive navigation.</span>
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
@@ -964,7 +1034,7 @@
       </div>
     </section>
 
-    <!-- VIEW 8: JOBS & WORKER (Phase 2) -->
+    <!-- VIEW: JOBS & WORKER (Phase 2) -->
     <section class="view-panel" id="view-jobs">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -976,7 +1046,7 @@
       <div id="jobsListContainer" class="changeset-list"></div>
     </section>
 
-    <!-- VIEW 9: PROVIDERS & MODELS (Phase 11) -->
+    <!-- VIEW: PROVIDERS & MODELS (Phase 11) -->
     <section class="view-panel" id="view-providers">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -992,7 +1062,7 @@
       <div id="providerCardsGrid" class="changeset-list"></div>
     </section>
 
-    <!-- VIEW 10: OBSERVABILITY & LOGS (Phase 13) -->
+    <!-- VIEW: OBSERVABILITY & LOGS (Phase 13) -->
     <section class="view-panel" id="view-observability">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -1025,28 +1095,7 @@
       </div>
     </section>
 
-    <!-- VIEW 11: WORKSPACES (Phase 14) -->
-    <section class="view-panel" id="view-workspaces">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <div>
-          <h2>Workspace & Agent Rules</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Configure isolated project environments, agent instructions, and behavioral rules.</span>
-        </div>
-        <button class="btn btn-primary" onclick="openNewWorkspaceModal()">+ New Workspace</button>
-      </div>
-      <div class="grid-2">
-        <div class="stat-card">
-          <div class="label">Project Instructions</div>
-          <textarea id="wsInstructions" class="input-control" style="height:140px;margin-top:8px;" placeholder="Project guidelines for the AI agent..."></textarea>
-        </div>
-        <div class="stat-card">
-          <div class="label">Agent Rules & Constraints (.agentrules)</div>
-          <textarea id="wsAgentRules" class="input-control" style="height:140px;margin-top:8px;" placeholder="- Rule 1: Always check tests..."></textarea>
-        </div>
-      </div>
-    </section>
-
-    <!-- VIEW 12: SECURITY & SETTINGS (Phases 1 & 12) -->
+    <!-- VIEW: SECURITY & SETTINGS (Phases 1 & 12) -->
     <section class="view-panel" id="view-settings">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
@@ -1068,6 +1117,48 @@
       </div>
     </section>
   </main>
+</div>
+
+<!-- MODAL: CREATE NEW PROJECT -->
+<div class="modal-backdrop" id="newProjectModal">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <strong>Define New Project</strong>
+      <button class="btn-ghost" onclick="closeModal('newProjectModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleCreateProjectSubmit(event)">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Project Name *</label>
+        <input id="newProjName" class="input-control" placeholder="e.g. My Fast API Backend" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Description & Purpose</label>
+        <input id="newProjDesc" class="input-control" placeholder="Short description of this project...">
+      </div>
+      <div class="grid-2">
+        <div>
+          <label style="font-size:12px;color:var(--text-dim)">Default Provider</label>
+          <select id="newProjProvider" class="input-control"></select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-dim)">Default Target Branch</label>
+          <input id="newProjBranch" class="input-control" placeholder="main" value="arena/01a0ed4c-new">
+        </div>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Project Instructions</label>
+        <textarea id="newProjInstructions" class="input-control" style="height:70px;" placeholder="Custom instructions for the AI Agent working on this project..."></textarea>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Agent Rules & Constraints</label>
+        <textarea id="newProjRules" class="input-control" style="height:70px;" placeholder="- Rule 1: Always run pytest after edits..."></textarea>
+      </div>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('newProjectModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Project</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <!-- MODAL: LOGIN / AUTH (Phase 1) -->
@@ -1120,6 +1211,7 @@
     <input id="cmdPaletteInput" class="cmd-input" placeholder="Type a command or navigate..." oninput="filterCommandPalette()">
     <div class="cmd-list" id="cmdPaletteList">
       <div class="cmd-item" onclick="navigate('chat');closeModal('cmdPaletteModal')">💬 Open Agent Chat</div>
+      <div class="cmd-item" onclick="navigate('projects');closeModal('cmdPaletteModal')">📦 Project Settings & Definitions</div>
       <div class="cmd-item" onclick="navigate('changesets');closeModal('cmdPaletteModal')">🔍 View Approvals & Changes</div>
       <div class="cmd-item" onclick="navigate('editor');closeModal('cmdPaletteModal')">📝 Open Code Editor</div>
       <div class="cmd-item" onclick="navigate('terminal');closeModal('cmdPaletteModal')">💻 Open Sandboxed Terminal</div>
@@ -1134,8 +1226,8 @@
 // Application State
 let STATE = {
   providers: [],
-  workspaces: [],
-  activeWorkspace: null,
+  projects: [],
+  activeProject: null,
   activeView: 'chat',
   user: null,
   conversations: [],
@@ -1165,6 +1257,7 @@ function navigate(viewName) {
   document.querySelectorAll('.view-panel').forEach(p => p.classList.toggle('active', p.id === `view-${viewName}`));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
 
+  if (viewName === 'projects') loadProjectsView();
   if (viewName === 'changesets') loadChangesets();
   if (viewName === 'editor') refreshFileTree();
   if (viewName === 'git') loadGitStatus();
@@ -1175,13 +1268,8 @@ function navigate(viewName) {
   if (viewName === 'github') loadGitHubRepos();
 }
 
-function toggleSidebar() {
-  $('#sidebar').classList.toggle('collapsed');
-}
-
-function toggleMobileSidebar() {
-  $('#sidebar').classList.toggle('mobile-open');
-}
+function toggleSidebar() { $('#sidebar').classList.toggle('collapsed'); }
+function toggleMobileSidebar() { $('#sidebar').classList.toggle('mobile-open'); }
 
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme');
@@ -1204,36 +1292,126 @@ async function initApp() {
       $('#userAvatar').textContent = STATE.user.username[0].toUpperCase();
     }
     
-    // Load Workspaces
-    const wsData = await api('/api/workspaces');
-    STATE.workspaces = wsData.workspaces;
-    STATE.activeWorkspace = wsData.active;
-    renderWorkspacesSelect();
-
     // Load Providers
     STATE.providers = await api('/api/providers');
     renderChatProviders();
 
-    // Load Pending Approvals Count
+    // Load Projects
+    await refreshProjects();
+
+    // Check Approvals
     checkPendingApprovals();
   } catch (err) {
     console.error('Init error:', err);
   }
 }
 
-function renderWorkspacesSelect() {
-  const sel = $('#activeWsSelect');
-  sel.innerHTML = STATE.workspaces.map(w => `<option value="${esc(w.id)}" ${w.id === STATE.activeWorkspace?.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
+async function refreshProjects() {
+  const projData = await api('/api/projects');
+  STATE.projects = projData.projects;
+  STATE.activeProject = projData.active;
+  renderProjectsSelect();
+  populateActiveProjectForm();
 }
 
-async function switchWorkspace(wsId) {
-  const active = await api('/api/workspaces/switch', {
+function renderProjectsSelect() {
+  const sel = $('#activeProjectSelect');
+  sel.innerHTML = STATE.projects.map(p => `<option value="${esc(p.id)}" ${p.id === STATE.activeProject?.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+}
+
+async function switchProject(projId) {
+  const active = await api(`/api/projects/${projId}/activate`, { method: 'POST' });
+  STATE.activeProject = active;
+  refreshProjects();
+  refreshCurrentView();
+}
+
+function populateActiveProjectForm() {
+  if (!STATE.activeProject) return;
+  const p = STATE.activeProject;
+  $('#projEditName').value = p.name || '';
+  $('#projEditDesc').value = p.description || '';
+  $('#projEditBranch').value = p.default_branch || 'main';
+  $('#projEditInstructions').value = p.instructions || '';
+  $('#projEditRules').value = p.agent_rules || '';
+
+  const pSel = $('#projEditProvider');
+  pSel.innerHTML = STATE.providers.map(pr => `<option value="${esc(pr.id)}" ${pr.id === p.default_provider ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
+}
+
+async function loadProjectsView() {
+  await refreshProjects();
+  const listEl = $('#projectsListCards');
+  listEl.innerHTML = STATE.projects.map(p => `
+    <div class="changeset-card" style="padding:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <strong style="font-size:14px;">${esc(p.name)}</strong>
+          ${p.is_default ? '<span class="tool-status-tag success" style="margin-left:6px;">Active</span>' : ''}
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${esc(p.description || 'No description')}</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">
+            Branch: <code>${esc(p.default_branch)}</code> · Provider: <code>${esc(p.default_provider)}</code>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          ${!p.is_default ? `<button class="btn btn-primary btn-sm" onclick="switchProject('${esc(p.id)}')">Switch</button>` : ''}
+          ${!p.is_default ? `<button class="btn btn-danger btn-sm" onclick="deleteProject('${esc(p.id)}')">Delete</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function saveActiveProjectSettings() {
+  if (!STATE.activeProject) return;
+  const payload = {
+    name: $('#projEditName').value.trim(),
+    description: $('#projEditDesc').value.trim(),
+    defaultBranch: $('#projEditBranch').value.trim(),
+    defaultProvider: $('#projEditProvider').value,
+    instructions: $('#projEditInstructions').value.trim(),
+    agentRules: $('#projEditRules').value.trim()
+  };
+  await api(`/api/projects/${STATE.activeProject.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  alert('Project configuration updated successfully.');
+  refreshProjects();
+}
+
+function openNewProjectModal() {
+  const pSel = $('#newProjProvider');
+  pSel.innerHTML = STATE.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  openModal('newProjectModal');
+}
+
+async function handleCreateProjectSubmit(e) {
+  e.preventDefault();
+  const payload = {
+    name: $('#newProjName').value.trim(),
+    description: $('#newProjDesc').value.trim(),
+    defaultProvider: $('#newProjProvider').value,
+    defaultBranch: $('#newProjBranch').value.trim() || 'main',
+    instructions: $('#newProjInstructions').value.trim(),
+    agentRules: $('#newProjRules').value.trim()
+  };
+  const created = await api('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceId: wsId })
+    body: JSON.stringify(payload)
   });
-  STATE.activeWorkspace = active;
-  refreshCurrentView();
+  closeModal('newProjectModal');
+  await switchProject(created.id);
+  navigate('projects');
+}
+
+async function deleteProject(projId) {
+  if (!confirm('Are you sure you want to delete this project configuration?')) return;
+  await api(`/api/projects/${projId}`, { method: 'DELETE' });
+  refreshProjects();
+  loadProjectsView();
 }
 
 function renderChatProviders() {
@@ -1250,7 +1428,7 @@ function onChatProviderChange() {
   $('#activeProviderBadge').textContent = `⚡ ${p?.name || 'Agent'} / ${mSel.value}`;
 }
 
-// Chat & Streaming (Phases 9 & 10)
+// Chat & Streaming
 let chatHistory = [];
 
 async function onComposerKeyDown(e) {
@@ -1279,7 +1457,7 @@ $('#chatForm').onsubmit = async (e) => {
 
   const assistantMsgEl = appendMessage('assistant', '');
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
-  bubble.textContent = 'Agent is analyzing workspace and tools...';
+  bubble.textContent = 'Agent is analyzing project and tools...';
 
   try {
     const res = await fetch('/api/chat/stream', {
@@ -1385,7 +1563,7 @@ function formatDiffHtml(diffText) {
   }).join('');
 }
 
-// Change Sets & Approvals (Phase 4)
+// Change Sets & Approvals
 async function loadChangesets() {
   const container = $('#changesetsContainer');
   container.innerHTML = '<p style="color:var(--text-dim)">Loading change sets...</p>';
@@ -1463,7 +1641,7 @@ async function checkPendingApprovals() {
   } catch (_) {}
 }
 
-// Code Editor (Phase 3)
+// Code Editor
 async function refreshFileTree() {
   const tree = $('#editorTree');
   try {
@@ -1492,10 +1670,7 @@ async function openEditorFile(path) {
   }
 }
 
-function onEditorInput() {
-  updateLineNumbers();
-}
-
+function onEditorInput() { updateLineNumbers(); }
 function updateLineNumbers() {
   const lines = $('#editorTextarea').value.split('\n').length;
   $('#lineNumbers').innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
@@ -1539,13 +1714,13 @@ async function previewEditorDiff() {
   openModal('diffApprovalModal');
 }
 
-// Terminal (Phase 5)
+// Terminal
 async function runTerminalCommand() {
   const cmd = $('#termCmdInput').value.trim();
   if (!cmd) return;
   $('#termStatus').textContent = `Running: ${cmd}...`;
   const out = $('#termOutput');
-  out.textContent = 'Executing sandboxed command...\n';
+  out.textContent = 'Executing command with full network access...\n';
   try {
     const res = await api('/api/terminal/exec', {
       method: 'POST',
@@ -1560,7 +1735,7 @@ async function runTerminalCommand() {
   }
 }
 
-// Git (Phase 6)
+// Git
 async function loadGitStatus() {
   try {
     const st = await api('/api/git/status');
@@ -1588,7 +1763,7 @@ async function commitApprovedGit() {
   alert('Git commit created successfully.');
 }
 
-// Playwright Browser (Phase 8)
+// Playwright Browser
 async function browserNavigate() {
   const url = $('#browserUrlInput').value.trim();
   $('#browserDomOutput').textContent = 'Loading page...';
@@ -1613,7 +1788,7 @@ async function browserScreenshot() {
   }
 }
 
-// Observability & Logs (Phase 13)
+// Observability & Logs
 async function loadObservabilityData() {
   const lvl = $('#logLevelFilter')?.value || '';
   const search = $('#logSearch')?.value || '';

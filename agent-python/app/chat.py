@@ -9,18 +9,32 @@ from .models import Provider, ModelSpec
 from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER
 from .agent_tools import AGENT_TOOL_DEFINITIONS, execute_agent_tool
 from .workspaces import get_active_workspace
+from .projects import get_active_project
 
 def build_system_prompt() -> str:
+    proj = get_active_project()
     ws = get_active_workspace()
+
     prompt = (
         "You are an expert AI Coding Agent running in the Arena Agent environment. "
-        "You have full access to workspace file tools, terminal command execution, and browser tools.\n\n"
-        f"Active Workspace: {ws['name']} ({ws['path']})\n"
+        "You have full access to workspace file tools, terminal execution with external internet connectivity, and browser tools.\n\n"
+        f"Active Project: {proj.get('name', 'Main Project')}\n"
     )
-    if ws.get("instructions"):
-        prompt += f"\nProject Instructions:\n{ws['instructions']}\n"
-    if ws.get("agent_rules"):
-        prompt += f"\nAgent Rules & Constraints:\n{ws['agent_rules']}\n"
+    if proj.get("description"):
+        prompt += f"Project Description: {proj['description']}\n"
+    if proj.get("path"):
+        prompt += f"Project Workspace Directory: {proj['path']}\n"
+    if proj.get("default_branch"):
+        prompt += f"Target Git Branch: {proj['default_branch']}\n"
+
+    if proj.get("instructions") or ws.get("instructions"):
+        ins = proj.get("instructions") or ws.get("instructions")
+        prompt += f"\nProject Instructions & Guidelines:\n{ins}\n"
+
+    if proj.get("agent_rules") or ws.get("agent_rules"):
+        rules = proj.get("agent_rules") or ws.get("agent_rules")
+        prompt += f"\nAgent Rules & Constraints:\n{rules}\n"
+
     return prompt
 
 async def call_provider_api(

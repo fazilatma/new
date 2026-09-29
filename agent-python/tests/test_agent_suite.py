@@ -18,6 +18,11 @@ from app.security import (
     ROLE_ADMIN, ROLE_DEVELOPER, ROLE_VIEWER
 )
 from app.workspaces import safe_path, get_workspace_root, list_workspace_files
+from app.projects import (
+    get_active_project, set_active_project, list_projects,
+    create_project, update_project, delete_project,
+    ProjectCreateRequest, ProjectUpdateRequest
+)
 from app.changesets import (
     compute_diff, parse_diff_hunks, create_changeset, get_changeset,
     approve_changeset, reject_changeset, rollback_changeset,
@@ -32,6 +37,7 @@ from app.worker import (
     cancel_job, pause_job, resume_job, retry_job
 )
 from app.observability import log_event, get_logs, get_system_metrics
+from app.browser_automation import validate_url
 
 client = TestClient(app)
 
@@ -39,10 +45,53 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
+    assert APP_VERSION == "0.6.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
     assert hr.json()["status"] == "ok"
+
+def test_projects_crud_and_settings():
+    # 1. Create a project
+    req = ProjectCreateRequest(
+        name="Test API Project",
+        description="A backend project for testing",
+        defaultProvider="openrouter",
+        defaultModel="qwen-2.5",
+        defaultBranch="main",
+        instructions="Always write modular code.",
+        agentRules="- Keep functions under 50 lines.",
+        envVars={"ENV_TEST": "true"}
+    )
+    proj = create_project(req)
+    assert proj["name"] == "Test API Project"
+    assert proj["description"] == "A backend project for testing"
+    assert proj["env_vars"] == {"ENV_TEST": "true"}
+
+    # 2. List projects
+    projs = list_projects()
+    assert any(p["id"] == proj["id"] for p in projs)
+
+    # 3. Update project settings
+    upd = ProjectUpdateRequest(
+        description="Updated project description",
+        defaultModel="claude-3-5"
+    )
+    updated_proj = update_project(proj["id"], upd)
+    assert updated_proj["description"] == "Updated project description"
+    assert updated_proj["default_model"] == "claude-3-5"
+
+    # 4. Activate project
+    act = set_active_project(proj["id"])
+    assert act["id"] == proj["id"]
+    active = get_active_project()
+    assert active["id"] == proj["id"]
+
+    # 5. Cleanup / switch back
+    default_p = next((p for p in projs if p["id"] != proj["id"]), None)
+    if default_p:
+        set_active_project(default_p["id"])
+        delete_project(proj["id"])
 
 def test_secrets_encryption_and_masking():
     raw_secret = "sk-ant-api03-secret1234567890abcdef"
@@ -77,13 +126,9 @@ def test_password_hashing_and_sessions():
 def test_file_locking():
     path = "locked_file.txt"
     assert acquire_file_lock(path, "user-1", ttl_seconds=60) is True
-    # Second user cannot acquire while locked
     assert acquire_file_lock(path, "user-2", ttl_seconds=60) is False
-    # Same user can re-acquire/extend
     assert acquire_file_lock(path, "user-1", ttl_seconds=60) is True
-    # Release lock
     assert release_file_lock(path, "user-1") is True
-    # Now user-2 can acquire
     assert acquire_file_lock(path, "user-2", ttl_seconds=60) is True
     release_file_lock(path, "user-2")
 
@@ -120,7 +165,7 @@ def test_changeset_lifecycle_and_approval():
     )
     assert cs["status"] == "pending"
     assert len(cs["files"]) == 1
-    assert not p.exists() # Should not be written yet!
+    assert not p.exists()
 
     # 2. Approve Changeset
     appr = approve_changeset(cs["id"], approved_by="pytest-admin")
@@ -156,6 +201,11 @@ def test_changeset_lifecycle_and_approval():
     if p.exists():
         p.unlink()
 
+def test_unrestricted_browser_url_validation():
+    assert validate_url("https://github.com") == "https://github.com"
+    assert validate_url("example.com") == "https://example.com"
+    assert validate_url("http://google.com/search?q=test") == "http://google.com/search?q=test"
+
 def test_dangerous_terminal_commands_protection():
     assert is_dangerous_command("rm -rf /") is True
     assert is_dangerous_command("DROP TABLE users") is True
@@ -167,7 +217,7 @@ def test_dangerous_terminal_commands_protection():
     assert res["requiresApproval"] is True
     assert res["exitCode"] == -1
 
-    # Safe command
+    # Safe command with full network execution
     safe_res = execute_sandboxed_command("echo 'Hello Arena'")
     assert safe_res["exitCode"] == 0
     assert "Hello Arena" in safe_res["stdout"]
@@ -230,6 +280,10 @@ def test_observability_and_logging():
     assert "disk" in metrics
 
 def test_api_routes_integration():
+    pr = client.get("/api/projects")
+    assert pr.status_code == 200
+    assert "projects" in pr.json()
+
     r = client.get("/api/workspaces")
     assert r.status_code == 200
     assert "workspaces" in r.json()
@@ -238,8 +292,8 @@ def test_api_routes_integration():
     assert cr.status_code == 200
     assert "changesets" in cr.json()
 
-    pr = client.get("/api/providers")
-    assert pr.status_code == 200
+    prov_r = client.get("/api/providers")
+    assert prov_r.status_code == 200
 
     jr = client.get("/api/jobs")
     assert jr.status_code == 200

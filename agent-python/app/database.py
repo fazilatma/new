@@ -61,6 +61,24 @@ def init_db():
             details TEXT DEFAULT ''
         );
 
+        CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            path TEXT NOT NULL,
+            git_url TEXT DEFAULT '',
+            default_branch TEXT DEFAULT 'main',
+            default_provider TEXT DEFAULT 'openrouter',
+            default_model TEXT DEFAULT '',
+            instructions TEXT DEFAULT '',
+            agent_rules TEXT DEFAULT '',
+            env_vars TEXT DEFAULT '{}',
+            custom_commands TEXT DEFAULT '[]',
+            is_default INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS workspaces (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -202,10 +220,28 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_job_steps_job ON job_steps(job_id);
         CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id);
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_projects_default ON projects(is_default);
         """)
 
-        # Ensure default workspace exists
+        # Ensure default project exists
         def_ws_path = str(get_default_workspace())
+        proj = conn.execute("SELECT id FROM projects WHERE is_default = 1").fetchone()
+        if not proj:
+            conn.execute("""
+            INSERT OR IGNORE INTO projects (id, name, description, path, default_branch, default_provider, instructions, agent_rules, is_default)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """, (
+                "proj-default",
+                "Primary Project",
+                "Main coding workspace with full file, terminal, and browser capabilities.",
+                def_ws_path,
+                "arena/01a0ed4c-new",
+                "openrouter",
+                "You are an expert AI Coding Agent working on this project. Inspect existing code before modifying, follow standard patterns, and test your work.",
+                "- Verify dependencies before running tests.\n- Maintain clean modular code structure.\n- Create explicit commit messages."
+            ))
+
+        # Ensure default workspace exists
         r = conn.execute("SELECT id FROM workspaces WHERE is_default = 1").fetchone()
         if not r:
             conn.execute("""
