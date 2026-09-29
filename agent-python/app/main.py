@@ -13,12 +13,7 @@ def ui():
 
 @app.get('/')
 def root():
-    return {
-        'name': 'Arena Python Agent',
-        'status': 'ok',
-        'docs': '/docs',
-        'providers': '/api/providers'
-    }
+    return FileResponse(Path(__file__).parent / 'static' / 'index.html')
 
 @app.get('/health')
 def health():
