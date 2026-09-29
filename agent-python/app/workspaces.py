@@ -202,3 +202,48 @@ if __name__ == "__main__":
         "agent_rules": agent_rules,
         "is_default": 0
     }
+
+def create_workspace_item(rel_path: str, is_dir: bool = False, content: str = "") -> Dict[str, Any]:
+    target = safe_path(rel_path)
+    if is_dir:
+        target.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": rel_path, "type": "dir"}
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return {"ok": True, "path": rel_path, "type": "file", "size": len(content.encode("utf-8"))}
+
+def delete_workspace_item(rel_path: str) -> Dict[str, Any]:
+    target = safe_path(rel_path)
+    if not target.exists():
+        raise FileNotFoundError(f"Path '{rel_path}' does not exist.")
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return {"ok": True, "path": rel_path}
+
+def rename_workspace_item(old_rel_path: str, new_rel_path: str) -> Dict[str, Any]:
+    old_target = safe_path(old_rel_path)
+    new_target = safe_path(new_rel_path)
+    if not old_target.exists():
+        raise FileNotFoundError(f"Source '{old_rel_path}' does not exist.")
+    if new_target.exists():
+        raise FileExistsError(f"Target '{new_rel_path}' already exists.")
+    new_target.parent.mkdir(parents=True, exist_ok=True)
+    old_target.rename(new_target)
+    return {"ok": True, "old_path": old_rel_path, "new_path": new_rel_path}
+
+def export_workspace_zip_bytes() -> bytes:
+    root = get_workspace_root()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in root.rglob("*"):
+            if any(ign in p.parts for ign in (".git", ".venv", "node_modules", "__pycache__", ".pytest_cache")):
+                continue
+            if p.is_file():
+                rel = p.relative_to(root)
+                zf.write(p, arcname=str(rel))
+    buf.seek(0)
+    return buf.getvalue()
+

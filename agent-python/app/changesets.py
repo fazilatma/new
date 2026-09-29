@@ -318,3 +318,28 @@ def rollback_to_version(rel_path: str, version_id: str, user_id: str = "user") -
 
         save_file_version_snapshot(r["workspace_id"], rel_path, r["content"], created_by=f"rollback-to-v{r['version_num']}")
         return {"ok": True, "path": rel_path, "restored_version": r["version_num"]}
+
+def export_changeset_patch(cs_id: str) -> str:
+    cs = get_changeset(cs_id)
+    if not cs:
+        raise ValueError("ChangeSet not found")
+    patches = []
+    for f in cs.get("files", []):
+        if f.get("diff"):
+            patches.append(f["diff"])
+        else:
+            diff = compute_diff(f.get("old_content", ""), f.get("new_content", ""), f["path"])
+            patches.append(diff)
+    return "\n".join(patches)
+
+def reject_changeset_with_feedback(cs_id: str, feedback: str, rejected_by: str = "user") -> Dict[str, Any]:
+    with get_db() as conn:
+        conn.execute("UPDATE changeset_files SET status = 'rejected' WHERE changeset_id = ?", (cs_id,))
+        conn.execute("UPDATE changesets SET status = 'rejected', updated_at = datetime('now') WHERE id = ?", (cs_id,))
+    return {
+        "ok": True,
+        "changeset_id": cs_id,
+        "status": "rejected",
+        "feedback": feedback
+    }
+

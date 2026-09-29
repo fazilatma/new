@@ -15,7 +15,8 @@ from .models import Provider, ModelSpec
 from .providers import PROVIDER_STORE
 from .workspaces import (
     get_active_workspace, set_active_workspace, list_workspace_files,
-    safe_path, create_workspace_from_template, get_workspace_metrics
+    safe_path, create_workspace_from_template, get_workspace_metrics,
+    create_workspace_item, delete_workspace_item, rename_workspace_item, export_workspace_zip_bytes
 )
 from .projects import (
     get_active_project, set_active_project, list_projects,
@@ -25,7 +26,8 @@ from .projects import (
 from .changesets import (
     create_changeset, get_changeset, list_changesets, approve_changeset,
     reject_changeset, rollback_changeset, approve_changeset_file, reject_changeset_file,
-    list_file_versions, compare_file_versions, rollback_to_version, acquire_file_lock, release_file_lock
+    list_file_versions, compare_file_versions, rollback_to_version, acquire_file_lock, release_file_lock,
+    export_changeset_patch, reject_changeset_with_feedback
 )
 from .workflow import preview, backup
 from .terminal_sandbox import execute_sandboxed_command, list_active_processes, kill_process
@@ -204,6 +206,50 @@ def workspace_write(payload: Dict[str, Any], user: Dict[str, Any] = Depends(requ
     except Exception as e:
         raise HTTPException(400, str(e))
 
+@app.post("/api/workspace/create")
+def workspace_create(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    path = str(payload.get("path", "")).strip()
+    is_dir = bool(payload.get("isDir", False))
+    content = str(payload.get("content", ""))
+    if not path:
+        raise HTTPException(400, "Path is required")
+    try:
+        return create_workspace_item(path, is_dir=is_dir, content=content)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.delete("/api/workspace/file")
+def workspace_delete(path: str, user: Dict[str, Any] = Depends(require_developer)):
+    if not path:
+        raise HTTPException(400, "Path is required")
+    try:
+        return delete_workspace_item(path)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/workspace/rename")
+def workspace_rename(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    old_p = str(payload.get("oldPath", "")).strip()
+    new_p = str(payload.get("newPath", "")).strip()
+    if not old_p or not new_p:
+        raise HTTPException(400, "Both oldPath and newPath are required")
+    try:
+        return rename_workspace_item(old_p, new_p)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/workspace/export-zip")
+def workspace_export_zip(user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        zip_bytes = export_workspace_zip_bytes()
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=workspace.zip"}
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to export zip: {str(e)}")
+
 # Change Sets & Approvals API (Phase 4)
 @app.get("/api/changesets")
 def get_changesets(limit: int = 50, user: Dict[str, Any] = Depends(require_viewer)):
@@ -215,6 +261,26 @@ def get_changeset_by_id(cs_id: str, user: Dict[str, Any] = Depends(require_viewe
     if not cs:
         raise HTTPException(404, "ChangeSet not found")
     return cs
+
+@app.get("/api/changesets/{cs_id}/patch")
+def get_changeset_patch(cs_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        patch_text = export_changeset_patch(cs_id)
+        return Response(
+            content=patch_text,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename=changeset-{cs_id}.patch"}
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/changesets/{cs_id}/reject-with-feedback")
+def reject_cs_with_feedback(cs_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    feedback = str(payload.get("feedback", ""))
+    try:
+        return reject_changeset_with_feedback(cs_id, feedback=feedback, rejected_by=user.get("username", "user"))
+    except Exception as e:
+        raise HTTPException(400, str(e))
 
 @app.post("/api/changesets/{cs_id}/approve")
 def approve_cs(cs_id: str, user: Dict[str, Any] = Depends(require_developer)):
@@ -452,6 +518,15 @@ async def browser_fill_endpoint(payload: Dict[str, Any], user: Dict[str, Any] = 
 async def browser_logs_endpoint(sessionId: str = "default", user: Dict[str, Any] = Depends(require_developer)):
     return await BROWSER_MANAGER.get_logs(sessionId)
 
+@app.post("/api/browser/eval")
+async def browser_eval_endpoint(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    expr = str(payload.get("expression", ""))
+    session_id = str(payload.get("sessionId", "default"))
+    try:
+        return await BROWSER_MANAGER.evaluate_js(expr, session_id=session_id)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
 @app.post("/api/browser/fetch")
 async def browser_fetch_compat(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
     return await BROWSER_MANAGER.navigate(str(payload["url"]))
@@ -516,6 +591,31 @@ def create_conversation(payload: Dict[str, Any], user: Dict[str, Any] = Depends(
     with get_db() as conn:
         conn.execute("INSERT INTO conversations (id, title, provider_id, model_id) VALUES (?, ?, ?, ?)", (conv_id, title, provider, model))
     return {"id": conv_id, "title": title}
+
+@app.get("/api/conversations/{conv_id}/messages")
+def get_conversation_messages(conv_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, conversation_id, role, content, tool_calls, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC", (conv_id,)).fetchall()
+        return {"messages": [dict(r) for r in rows]}
+
+@app.post("/api/conversations/{conv_id}/messages")
+def add_conversation_message(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    msg_id = f"msg-{int(time.time()*1000)}"
+    role = str(payload.get("role", "user"))
+    content = str(payload.get("content", ""))
+    tool_calls = json.dumps(payload.get("tool_calls")) if payload.get("tool_calls") else None
+    with get_db() as conn:
+        conn.execute("INSERT INTO messages (id, conversation_id, role, content, tool_calls) VALUES (?, ?, ?, ?, ?)", (msg_id, conv_id, role, content, tool_calls))
+        conn.execute("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?", (conv_id,))
+    return {"id": msg_id, "role": role, "content": content}
+
+@app.put("/api/conversations/{conv_id}")
+def update_conversation(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    title = payload.get("title")
+    with get_db() as conn:
+        if title:
+            conn.execute("UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?", (str(title), conv_id))
+    return {"ok": True, "id": conv_id}
 
 @app.delete("/api/conversations/{conv_id}")
 def delete_conversation(conv_id: str, user: Dict[str, Any] = Depends(require_developer)):
@@ -692,3 +792,19 @@ def observability_logs(level: Optional[str] = None, search: Optional[str] = None
 @app.get("/api/observability/metrics")
 def observability_metrics(user: Dict[str, Any] = Depends(require_viewer)):
     return get_system_metrics()
+
+@app.get("/api/observability/export")
+def observability_export(format: str = "json", user: Dict[str, Any] = Depends(require_viewer)):
+    logs = get_logs(limit=1000)
+    if format == "csv":
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Timestamp", "Level", "Module", "Message", "Details"])
+        for l in logs:
+            writer.writerow([l.get("id"), l.get("timestamp"), l.get("level"), l.get("module"), l.get("message"), l.get("details")])
+        return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=audit-logs.csv"})
+    else:
+        return Response(content=json.dumps(logs, indent=2), media_type="application/json", headers={"Content-Disposition": "attachment; filename=audit-logs.json"})
+

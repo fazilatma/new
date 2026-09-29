@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Arena AI Coding Agent v0.7.0</title>
+  <title>Arena AI Coding Agent v0.8.0</title>
   <style>
     :root[data-theme="dark"] {
       --bg-base: #0a0f1d;
@@ -704,6 +704,103 @@
     }
     .cmd-item:hover, .cmd-item.selected { background: var(--primary-bg); color: var(--primary); }
 
+    /* Enriched UI Elements (v0.8.0) */
+    .prompt-presets-bar {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 6px 12px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .preset-chip {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 3px 10px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .preset-chip:hover {
+      background: var(--primary-bg);
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .tree-toolbar {
+      display: flex;
+      gap: 4px;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      align-items: center;
+    }
+
+    .editor-tab .tab-close {
+      margin-left: 6px;
+      border-radius: 50%;
+      width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      opacity: 0.6;
+    }
+    .editor-tab .tab-close:hover {
+      background: var(--accent-red-bg);
+      color: var(--accent-red);
+      opacity: 1;
+    }
+    .editor-tab .tab-dirty {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-amber);
+      display: inline-block;
+    }
+
+    .term-presets-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .copy-msg-btn {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 10.5px;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .copy-msg-btn:hover {
+      background: var(--primary-bg);
+      color: var(--primary);
+    }
+
+    .log-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .log-badge.info { background: var(--primary-bg); color: var(--primary); }
+    .log-badge.warning { background: var(--accent-amber-bg); color: var(--accent-amber); }
+    .log-badge.error { background: var(--accent-red-bg); color: var(--accent-red); }
+    .log-badge.security { background: var(--accent-purple); color: #fff; }
+
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
 
     /* Mobile Responsive */
@@ -856,10 +953,24 @@
           <div class="chat-messages" id="chatMessages">
             <div class="msg-wrapper assistant">
               <div class="msg-bubble">
-                Hello! I am your Arena AI Coding Agent v0.7.0. Your model choices and settings are automatically preserved across refreshes. All changes to project settings, instructions, rules, and secrets auto-save in the background.
+                Hello! I am your Arena AI Coding Agent v0.8.0. Your model choices and settings are automatically preserved across refreshes. All changes to project settings, instructions, rules, and secrets auto-save in the background.
               </div>
-              <div class="msg-meta"><span>Agent · v0.7.0</span></div>
+              <div class="msg-meta">
+                <span>Agent · v0.8.0</span>
+                <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>
+              </div>
             </div>
+          </div>
+
+          <!-- Prompt Presets Bar (v0.8.0) -->
+          <div class="prompt-presets-bar">
+            <button type="button" class="preset-chip" onclick="applyPromptPreset('refactor')">🛠️ Refactor Code</button>
+            <button type="button" class="preset-chip" onclick="applyPromptPreset('test')">🧪 Write Tests</button>
+            <button type="button" class="preset-chip" onclick="applyPromptPreset('bugfix')">🐞 Fix Bugs</button>
+            <button type="button" class="preset-chip" onclick="applyPromptPreset('security')">🛡️ Security Audit</button>
+            <button type="button" class="preset-chip" onclick="applyPromptPreset('optimize')">⚡ Optimize Speed</button>
+            <button type="button" class="preset-chip" onclick="applyPromptPreset('explain')">📝 Explain Code</button>
+            <button type="button" class="preset-chip" onclick="attachActiveEditorFile()">📎 Attach File</button>
           </div>
 
           <form class="chat-composer" id="chatForm">
@@ -972,9 +1083,12 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
           <h2>Change Sets & File Approvals</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Review pending file diffs before applying changes, or rollback previously applied versions.</span>
+          <span style="color:var(--text-muted);font-size:12px;">Review pending file diffs before applying changes, download unified patches, or rollback previously applied versions.</span>
         </div>
-        <button class="btn btn-ghost" onclick="loadChangesets()">↻ Refresh</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="toggleDiffView()" id="diffViewToggleBtn">Toggle Split/Unified</button>
+          <button class="btn btn-ghost" onclick="loadChangesets()">↻ Refresh</button>
+        </div>
       </div>
 
       <div id="changesetsContainer" class="changeset-list">
@@ -988,7 +1102,15 @@
         <div class="editor-file-tree">
           <div class="tree-header">
             <span>Project Explorer</span>
-            <button class="btn btn-ghost btn-sm" onclick="refreshFileTree()">↻</button>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-ghost btn-sm" onclick="openCreateFileModal(false)" title="New File">+📄</button>
+              <button class="btn btn-ghost btn-sm" onclick="openCreateFileModal(true)" title="New Folder">+📁</button>
+              <button class="btn btn-ghost btn-sm" onclick="downloadWorkspaceZip()" title="Download Workspace Zip">📥</button>
+              <button class="btn btn-ghost btn-sm" onclick="refreshFileTree()" title="Refresh">↻</button>
+            </div>
+          </div>
+          <div class="tree-toolbar">
+            <input id="treeSearchInput" class="input-control" placeholder="Search files..." style="padding:3px 8px;font-size:11.5px;width:100%;" oninput="filterFileTree(this.value)">
           </div>
           <div class="tree-items" id="editorTree"></div>
         </div>
@@ -997,11 +1119,14 @@
             <div class="editor-tab active" id="activeTabName">README.md</div>
           </div>
           <div class="editor-toolbar">
-            <input id="editorPath" class="input-control" style="width:260px;" placeholder="File path...">
-            <button class="btn btn-ghost btn-sm" onclick="previewEditorDiff()">Preview Diff</button>
-            <button class="btn btn-primary btn-sm" onclick="saveEditorFile()">Save File</button>
-            <button class="btn btn-amber btn-sm" onclick="stageEditorChangeset()">Stage ChangeSet</button>
-            <button class="btn btn-ghost btn-sm" onclick="viewFileVersions()">History</button>
+            <input id="editorPath" class="input-control" style="width:240px;" placeholder="File path...">
+            <button class="btn btn-primary btn-sm" onclick="saveEditorFile()" title="Save (Ctrl+S)">💾 Save</button>
+            <button class="btn btn-ghost btn-sm" onclick="previewEditorDiff()" title="Preview Diff">👁️ Diff</button>
+            <button class="btn btn-amber btn-sm" onclick="stageEditorChangeset()" title="Stage ChangeSet">📦 Stage</button>
+            <button class="btn btn-ghost btn-sm" onclick="explainActiveFileInChat()" title="Explain in Chat">✨ Explain</button>
+            <button class="btn btn-ghost btn-sm" onclick="openRenameModal()" title="Rename File">✏️ Rename</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteActiveFile()" title="Delete File">🗑️</button>
+            <button class="btn btn-ghost btn-sm" onclick="viewFileVersions()" title="Version History">🕒 History</button>
             <span id="editorInfo" style="margin-left:auto;font-size:11px;color:var(--text-dim);">UTF-8 · LF</span>
           </div>
           <div class="code-area-wrap">
@@ -1016,13 +1141,28 @@
     <section class="view-panel" id="view-terminal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div>
-          <h2>Terminal Execution</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Commands run with full internet connectivity, process supervisor, and dangerous command safeguards.</span>
+          <h2>Terminal Execution Console</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Commands run with full internet connectivity, process supervisor, and dangerous command safeguards. (Use Up/Down for History)</span>
         </div>
-        <button class="btn btn-ghost" onclick="loadActiveProcesses()">Processes</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="loadActiveProcesses()">Active Processes</button>
+          <button class="btn btn-ghost btn-sm" onclick="copyTerminalOutput()">📋 Copy Output</button>
+        </div>
       </div>
+
+      <!-- Quick Action Presets -->
+      <div class="term-presets-bar">
+        <button type="button" class="preset-chip" onclick="runPresetCommand('pytest -v')">🧪 Run Pytest</button>
+        <button type="button" class="preset-chip" onclick="runPresetCommand('git status')">🌿 Git Status</button>
+        <button type="button" class="preset-chip" onclick="runPresetCommand('ls -la')">📁 List Files</button>
+        <button type="button" class="preset-chip" onclick="runPresetCommand('pip list')">📦 Pip List</button>
+        <button type="button" class="preset-chip" onclick="runPresetCommand('python -V')">🐍 Python Version</button>
+        <button type="button" class="preset-chip" onclick="runPresetCommand('df -h')">💾 Disk Space</button>
+        <button type="button" class="preset-chip" onclick="runPresetCommand('uptime')">⏱️ Uptime</button>
+      </div>
+
       <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <input id="termCmdInput" class="input-control" placeholder="Enter shell command (e.g. curl, pip install, git status, npm run)..." onkeydown="if(event.key==='Enter')runTerminalCommand()">
+        <input id="termCmdInput" class="input-control" placeholder="Enter shell command (e.g. curl, pip install, git status, npm run)..." onkeydown="onTerminalInputKeyDown(event)">
         <button class="btn btn-primary" onclick="runTerminalCommand()">Execute</button>
       </div>
       <div class="tool-card" style="flex:1;display:flex;flex-direction:column;">
@@ -1030,7 +1170,7 @@
           <span id="termStatus">Terminal Ready</span>
           <button class="btn btn-ghost btn-sm" onclick="document.getElementById('termOutput').textContent=''">Clear</button>
         </div>
-        <pre class="tool-card-body" id="termOutput" style="flex:1;max-height:none;"></pre>
+        <pre class="tool-card-body" id="termOutput" style="flex:1;max-height:none;font-family:monospace;font-size:12px;"></pre>
       </div>
     </section>
 
@@ -1044,6 +1184,9 @@
         <div style="display:flex;gap:8px;">
           <button class="btn btn-ghost" onclick="gitFetch()">Fetch</button>
           <button class="btn btn-ghost" onclick="gitPull()">Pull</button>
+          <button class="btn btn-ghost" onclick="gitStashSave()">💾 Stash</button>
+          <button class="btn btn-ghost" onclick="gitStashApply()">📦 Pop Stash</button>
+          <button class="btn btn-ghost" onclick="loadGitCommitHistory()">📜 History</button>
           <button class="btn btn-amber" onclick="openGitPushModal()">Push (Approve)</button>
         </div>
       </div>
@@ -1053,7 +1196,7 @@
           <div class="val" id="gitCurrentBranch">—</div>
           <div style="display:flex;gap:8px;margin-top:10px;">
             <select id="gitBranchSelect" class="input-control" style="flex:1;" onchange="switchGitBranch(this.value)"></select>
-            <button class="btn btn-primary btn-sm" onclick="promptNewBranch()">+ New</button>
+            <button class="btn btn-primary btn-sm" onclick="openGitBranchModal()">+ New Branch</button>
           </div>
         </div>
         <div class="stat-card">
@@ -1070,6 +1213,13 @@
           <button class="btn btn-ghost btn-sm" onclick="loadGitStatus()">↻ Refresh</button>
         </div>
         <div id="gitDiffOutput" class="tool-card-body" style="max-height:350px;"></div>
+      </div>
+      <div id="gitHistoryBox" class="tool-card" style="margin-top:16px;display:none;">
+        <div class="tool-card-head">
+          <span>Recent Git Commit Log</span>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('gitHistoryBox').style.display='none'">✕ Close</button>
+        </div>
+        <div id="gitHistoryList" class="tool-card-body" style="max-height:260px;overflow:auto;"></div>
       </div>
     </section>
 
@@ -1096,13 +1246,17 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
           <h2>Playwright Browser Automation</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Full external web access with DOM extraction, screenshot capture, and interactive navigation.</span>
+          <span style="color:var(--text-muted);font-size:12px;">Full external web access with DOM extraction, interactive navigation, JS evaluation, and screenshot capture.</span>
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <input id="browserUrlInput" class="input-control" placeholder="https://example.com" value="https://example.com">
+        <input id="browserUrlInput" class="input-control" placeholder="https://example.com" value="https://example.com" style="flex:2;">
         <button class="btn btn-primary" onclick="browserNavigate()">Navigate</button>
         <button class="btn btn-ghost" onclick="browserScreenshot()">Screenshot</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="browserEvalInput" class="input-control" placeholder="JavaScript Expression (e.g. document.title, window.location.href)..." style="flex:2;">
+        <button class="btn btn-ghost" onclick="browserEvaluate()">Evaluate JS</button>
       </div>
       <div class="grid-2" style="flex:1;">
         <div class="tool-card" style="display:flex;flex-direction:column;">
@@ -1112,7 +1266,7 @@
         <div class="tool-card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;">
           <div class="tool-card-head" style="width:100%"><span>Page Preview</span></div>
           <div id="browserScreenshotWrap" style="flex:1;display:flex;align-items:center;justify-content:center;padding:10px;">
-            <span style="color:var(--text-dim)">No screenshot captured yet.</span>
+            <span style="color:var(--text-dim)">No screenshot captured yet. Click 'Screenshot' above.</span>
           </div>
         </div>
       </div>
@@ -1137,7 +1291,11 @@
           <h2>Observability & System Health</h2>
           <span style="color:var(--text-muted);font-size:12px;">Structured logs, request metrics, disk quotas, and performance tracing.</span>
         </div>
-        <button class="btn btn-ghost" onclick="loadObservabilityData()">↻ Refresh</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="exportObservabilityLogs('json')">📥 Export JSON</button>
+          <button class="btn btn-ghost" onclick="exportObservabilityLogs('csv')">📥 Export CSV</button>
+          <button class="btn btn-ghost" onclick="loadObservabilityData()">↻ Refresh</button>
+        </div>
       </div>
       <div class="grid-4" style="margin-bottom:16px;" id="metricsCards">
         <div class="stat-card"><div class="label">Active Jobs</div><div class="val" id="metricActiveJobs">0</div></div>
@@ -1149,14 +1307,14 @@
         <div class="tool-card-head">
           <span>Structured Logs</span>
           <div style="display:flex;gap:8px;">
-            <select id="logLevelFilter" class="input-control" style="width:100px;padding:2px 6px;" onchange="loadObservabilityData()">
+            <select id="logLevelFilter" class="input-control" style="width:110px;padding:2px 6px;" onchange="loadObservabilityData()">
               <option value="">All Levels</option>
               <option value="INFO">INFO</option>
               <option value="WARNING">WARNING</option>
               <option value="ERROR">ERROR</option>
               <option value="SECURITY">SECURITY</option>
             </select>
-            <input id="logSearch" class="input-control" style="width:160px;padding:2px 6px;" placeholder="Search logs..." oninput="loadObservabilityData()">
+            <input id="logSearch" class="input-control" style="width:180px;padding:2px 6px;" placeholder="Search logs..." oninput="loadObservabilityData()">
           </div>
         </div>
         <pre class="tool-card-body" id="logsOutput" style="flex:1;max-height:none;"></pre>
@@ -1380,6 +1538,149 @@
   </div>
 </div>
 
+<!-- MODAL: CREATE FILE OR FOLDER (Enriched) -->
+<div class="modal-backdrop" id="createFileModal">
+  <div class="modal-dialog" style="max-width:420px;">
+    <div class="modal-header">
+      <strong id="createFileModalTitle">Create File</strong>
+      <button class="btn-ghost" onclick="closeModal('createFileModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleCreateFileSubmit(event)">
+      <input type="hidden" id="createFileIsDir" value="0">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Path / Name *</label>
+        <input id="createFilePath" class="input-control" placeholder="e.g. src/utils.py or components/" required>
+      </div>
+      <div id="createFileContentWrap">
+        <label style="font-size:12px;color:var(--text-dim)">Initial Content (Optional)</label>
+        <textarea id="createFileContent" class="input-control" style="height:80px;font-family:monospace;font-size:12px;" placeholder="# File content..."></textarea>
+      </div>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('createFileModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL: RENAME FILE (Enriched) -->
+<div class="modal-backdrop" id="renameFileModal">
+  <div class="modal-dialog" style="max-width:420px;">
+    <div class="modal-header">
+      <strong>Rename File / Folder</strong>
+      <button class="btn-ghost" onclick="closeModal('renameFileModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleRenameFileSubmit(event)">
+      <input type="hidden" id="renameOldPath">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Current Path</label>
+        <input id="renameOldDisplay" class="input-control" disabled>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">New Path / Name *</label>
+        <input id="renameNewPath" class="input-control" required>
+      </div>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('renameFileModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Rename</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL: NEW GIT BRANCH (Enriched) -->
+<div class="modal-backdrop" id="gitBranchModal">
+  <div class="modal-dialog" style="max-width:420px;">
+    <div class="modal-header">
+      <strong>Create Git Branch</strong>
+      <button class="btn-ghost" onclick="closeModal('gitBranchModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleGitBranchSubmit(event)">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">New Branch Name *</label>
+        <input id="newBranchName" class="input-control" placeholder="feature/my-enhancement" required>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+        <input type="checkbox" id="checkoutBranchCheck" checked>
+        <span>Checkout branch immediately</span>
+      </label>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('gitBranchModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Branch</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL: REJECT WITH FEEDBACK (Enriched) -->
+<div class="modal-backdrop" id="rejectFeedbackModal">
+  <div class="modal-dialog" style="max-width:480px;">
+    <div class="modal-header">
+      <strong>Reject ChangeSet with Feedback</strong>
+      <button class="btn-ghost" onclick="closeModal('rejectFeedbackModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleRejectFeedbackSubmit(event)">
+      <input type="hidden" id="rejectCsTargetId">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Explain why this changeset was rejected and what the agent should fix:</label>
+        <textarea id="rejectFeedbackText" class="input-control" style="height:100px;" placeholder="e.g. Please avoid modifying config.py and keep the original port 8000..." required></textarea>
+      </div>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('rejectFeedbackModal')">Cancel</button>
+        <button type="submit" class="btn btn-danger">Reject with Notes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL: ACTIVE PROCESSES (Enriched) -->
+<div class="modal-backdrop" id="activeProcessesModal">
+  <div class="modal-dialog" style="max-width:650px;">
+    <div class="modal-header">
+      <strong>Active Background Processes</strong>
+      <button class="btn-ghost" onclick="closeModal('activeProcessesModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="activeProcessesList" class="changeset-list" style="margin-top:0;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('activeProcessesModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: CREATE RBAC USER (Enriched) -->
+<div class="modal-backdrop" id="createUserModal">
+  <div class="modal-dialog" style="max-width:440px;">
+    <div class="modal-header">
+      <strong>Add RBAC User</strong>
+      <button class="btn-ghost" onclick="closeModal('createUserModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleCreateUserSubmit(event)">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Username *</label>
+        <input id="newUsername" class="input-control" placeholder="developer1" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Password *</label>
+        <input id="newUserPassword" type="password" class="input-control" placeholder="••••••••" required>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Role *</label>
+        <select id="newUserRole" class="input-control">
+          <option value="Developer">Developer (Read/Write)</option>
+          <option value="Admin">Admin (Full Control)</option>
+          <option value="Viewer">Viewer (Read-Only)</option>
+        </select>
+      </div>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('createUserModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create User</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- MODAL: LOGIN / AUTH (Phase 1) -->
 <div class="modal-backdrop" id="loginModal">
   <div class="modal-dialog" style="max-width:400px;">
@@ -1444,7 +1745,7 @@
 </div>
 
 <script>
-// Application State with LocalStorage Persistence
+// Application State with LocalStorage Persistence & Enriched Multi-Session Manager
 let STATE = {
   providers: [],
   projects: [],
@@ -1455,7 +1756,12 @@ let STATE = {
   activeConversationId: null,
   streamController: null,
   openTabs: ['README.md'],
-  activeTab: 'README.md'
+  activeTab: 'README.md',
+  dirtyTabs: {},
+  workspaceFiles: [],
+  terminalHistory: [],
+  termHistoryIndex: -1,
+  diffMode: 'unified'
 };
 
 const $ = sel => document.querySelector(sel);
@@ -1468,7 +1774,7 @@ async function api(path, opts = {}) {
     throw new Error('Authentication required');
   }
   const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || 'Request failed');
+  if (!res.ok) throw new Error(data.detail || data.error || 'Request failed');
   return data;
 }
 
@@ -1521,6 +1827,7 @@ function navigate(viewName) {
     toggleMobileSidebar();
   }
 
+  if (viewName === 'chat') loadConversationsList();
   if (viewName === 'projects') loadProjectsView();
   if (viewName === 'providers') loadProvidersList();
   if (viewName === 'changesets') loadChangesets();
@@ -1543,7 +1850,9 @@ function toggleTheme() {
 function openModal(id) { $(`#${id}`).classList.add('open'); }
 function closeModal(id) { $(`#${id}`).classList.remove('open'); }
 
-// Initialization
+// -------------------------------------------------------------
+// INITIALIZATION
+// -------------------------------------------------------------
 async function initApp() {
   // Restore saved theme
   const savedTheme = localStorage.getItem('arena_theme');
@@ -1566,85 +1875,86 @@ async function initApp() {
       $('#userRole').textContent = STATE.user.role;
       $('#userAvatar').textContent = STATE.user.username[0].toUpperCase();
     }
-    
-    // Load Providers
-    STATE.providers = await api('/api/providers');
+  } catch (_) {}
 
-    // Load Projects
-    await refreshProjects();
-
-    // Render Providers and restore user's saved Provider & Model selection
-    renderChatProviders();
-
-    // Check Approvals
-    checkPendingApprovals();
-  } catch (err) {
-    console.error('Init error:', err);
-  }
+  await refreshProjects();
+  await refreshProviders();
+  await loadConversationsList();
+  await checkPendingApprovals();
+  renderChatProviders();
 }
 
 // -------------------------------------------------------------
-// PROVIDERS & MODEL CATALOG MANAGEMENT (Phase 11 + User Request)
+// PROVIDERS & MODELS CATALOG
 // -------------------------------------------------------------
-async function loadProvidersList() {
-  const grid = $('#providerCardsGrid');
-  grid.innerHTML = '<p style="color:var(--text-dim)">Loading provider catalog...</p>';
+async function refreshProviders() {
   try {
     STATE.providers = await api('/api/providers');
-    renderChatProviders();
+  } catch (_) {
+    STATE.providers = [];
+  }
+}
 
-    if (!STATE.providers || STATE.providers.length === 0) {
-      grid.innerHTML = '<div class="stat-card" style="text-align:center;color:var(--text-dim)">No providers configured. Click "+ Add Provider" or "Import JSON" to begin.</div>';
-      return;
-    }
+async function loadProvidersList() {
+  await refreshProviders();
+  const grid = $('#providerCardsGrid');
+  if (!STATE.providers || STATE.providers.length === 0) {
+    grid.innerHTML = '<div class="stat-card" style="text-align:center;color:var(--text-dim)">No providers configured. Click "+ Add Provider" above.</div>';
+    return;
+  }
 
-    grid.innerHTML = STATE.providers.map(p => `
-      <div class="changeset-card">
-        <div class="changeset-header">
+  grid.innerHTML = STATE.providers.map(p => `
+    <div class="changeset-card">
+      <div class="changeset-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="font-size:24px;">${p.protocol === 'ollama' ? '🦙' : p.id === 'openrouter' ? '⚡' : p.id === 'anthropic' ? '🧠' : '🤖'}</div>
           <div>
-            <strong style="font-size:15px;">${esc(p.name)}</strong> 
-            <span style="font-size:11px;color:var(--text-dim);margin-left:6px;">(${esc(p.id)})</span>
-            <span class="tool-status-tag ${p.enabled ? 'success' : 'error'}" style="margin-left:8px;">${p.enabled ? 'Enabled' : 'Disabled'}</span>
-            ${p.hasApiKey ? '<span class="tool-status-tag success" style="margin-left:4px;">Key ✓</span>' : (p.protocol === 'ollama' ? '<span class="tool-status-tag success" style="margin-left:4px;">Local</span>' : '<span class="tool-status-tag error" style="margin-left:4px;">No Key</span>')}
-            ${p.circuitBreakerTripped ? '<span class="tool-status-tag error" style="margin-left:4px;">Tripped</span>' : ''}
-            <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
-              ${esc(p.url)} · Protocol: <code>${esc(p.protocol || 'openai-compatible')}</code> · Priority: ${p.priority || 1}
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong>${esc(p.name)}</strong>
+              <span style="font-size:11px;color:var(--text-dim);font-family:monospace;">(${esc(p.id)})</span>
+              <span class="tool-status-tag ${p.enabled ? 'success' : 'pending'}">${p.enabled ? 'Enabled' : 'Disabled'}</span>
+              ${p.circuitBreakerTripped ? '<span class="tool-status-tag error">Circuit Tripped</span>' : ''}
+              ${p.hasApiKey ? '<span class="tool-status-tag success">Key Set</span>' : (p.protocol === 'ollama' ? '<span class="tool-status-tag info">Local / No Key</span>' : '<span class="tool-status-tag warning">No Key</span>')}
             </div>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            ${p.circuitBreakerTripped ? `<button class="btn btn-amber btn-sm" onclick="resetCircuitBreaker('${esc(p.id)}')">Reset Circuit</button>` : ''}
-            <button class="btn btn-ghost btn-sm" onclick="openModelModal('${esc(p.id)}')">+ Model</button>
-            <button class="btn btn-ghost btn-sm" onclick="openProviderModal('${esc(p.id)}')">Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteProvider('${esc(p.id)}')">Delete</button>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">
+              ${esc(p.url || 'Default URL')} · Protocol: <b>${esc(p.protocol)}</b> · Priority: ${p.priority || 1}
+            </div>
           </div>
         </div>
-        <div class="provider-models-grid">
-          ${(p.models || []).map(m => `
-            <div class="model-chip">
-              <div class="model-chip-head">
-                <strong style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name || m.id)}</strong>
-                <button class="btn-ghost btn-sm" style="padding:0 4px;" onclick="openModelModal('${esc(p.id)}', '${esc(m.id)}')">✎</button>
-              </div>
-              <div style="font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><code>${esc(m.id)}</code></div>
-              <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;">
-                ${m.toolCalling ? '<span class="tool-status-tag success" style="font-size:9px;">Tools</span>' : ''}
-                ${m.vision ? '<span class="tool-status-tag pending" style="font-size:9px;">Vision</span>' : ''}
-                ${m.free ? '<span class="tool-status-tag running" style="font-size:9px;">Free</span>' : ''}
-                <span style="font-size:10px;color:var(--text-dim);margin-left:auto;">${m.maxInputTokens || 128}k</span>
-              </div>
-            </div>
-          `).join('') || '<div style="color:var(--text-dim);font-size:12px;padding:8px;">No models configured for this provider.</div>'}
+        <div style="display:flex;gap:6px;align-items:center;">
+          ${p.circuitBreakerTripped ? `<button class="btn btn-warning btn-sm" onclick="resetCircuitBreaker('${esc(p.id)}')">Reset Circuit</button>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="openModelModal('${esc(p.id)}')">+ Add Model</button>
+          <button class="btn btn-ghost btn-sm" onclick="openProviderModal('${esc(p.id)}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteProvider('${esc(p.id)}')">Delete</button>
         </div>
       </div>
-    `).join('');
-  } catch (err) {
-    grid.innerHTML = `<p style="color:var(--accent-red)">Error loading providers: ${esc(err.message)}</p>`;
-  }
+      <div class="provider-models-grid">
+        ${(p.models || []).length === 0 ? '<span style="font-size:12px;color:var(--text-dim);padding:4px;">No models configured.</span>' : ''}
+        ${(p.models || []).map(m => `
+          <div class="model-chip">
+            <div class="model-chip-head">
+              <strong style="font-size:12px;">${esc(m.name || m.id)}</strong>
+              <div style="display:flex;gap:4px;">
+                <button class="btn-ghost btn-sm" style="padding:1px 4px;font-size:10px;" onclick="openModelModal('${esc(p.id)}', '${esc(m.id)}')">✏️</button>
+              </div>
+            </div>
+            <div style="font-size:10.5px;color:var(--text-dim);font-family:monospace;">${esc(m.id)}</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
+              ${m.toolCalling ? '<span class="badge" style="font-size:9px;background:var(--primary-bg);color:var(--primary)">Tools</span>' : ''}
+              ${m.vision ? '<span class="badge" style="font-size:9px;background:var(--accent-green-bg);color:var(--accent-green)">Vision</span>' : ''}
+              ${m.free ? '<span class="badge" style="font-size:9px;background:var(--accent-amber-bg);color:var(--accent-amber)">Free</span>' : ''}
+              <span class="badge" style="font-size:9px;background:var(--bg-highlight)">${Math.round((m.maxInputTokens||128000)/1000)}k ctx</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
 }
 
 function openProviderModal(providerId = null) {
-  const p = STATE.providers.find(x => x.id === providerId);
-  $('#providerModalTitle').textContent = p ? `Edit Provider: ${p.name}` : 'Add New Provider';
+  const p = providerId ? STATE.providers.find(x => x.id === providerId) : null;
+  $('#providerModalTitle').textContent = p ? `Edit Provider: ${p.name}` : 'Add LLM Provider';
   $('#provInputId').value = p ? p.id : '';
   $('#provInputId').readOnly = !!p;
   $('#provInputName').value = p ? p.name : '';
@@ -1688,6 +1998,7 @@ async function handleSaveProviderSubmit(e) {
 
   closeModal('providerModal');
   await loadProvidersList();
+  renderChatProviders();
   flashAutoSave();
 }
 
@@ -1695,6 +2006,7 @@ async function deleteProvider(pid) {
   if (!confirm(`Are you sure you want to delete provider '${pid}'?`)) return;
   await api(`/api/providers/${pid}`, { method: 'DELETE' });
   await loadProvidersList();
+  renderChatProviders();
   flashAutoSave();
 }
 
@@ -1755,6 +2067,7 @@ async function handleSaveModelSubmit(e) {
 
   closeModal('modelModal');
   await loadProvidersList();
+  renderChatProviders();
   flashAutoSave();
 }
 
@@ -1782,7 +2095,7 @@ async function handleImportProvidersSubmit(e) {
   const replace = $('#importReplaceCheck').checked;
 
   try {
-    JSON.parse(rawJson); // validation
+    JSON.parse(rawJson);
     await api('/api/providers/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1790,6 +2103,7 @@ async function handleImportProvidersSubmit(e) {
     });
     closeModal('importProvidersModal');
     await loadProvidersList();
+    renderChatProviders();
     alert('Providers imported successfully!');
   } catch (err) {
     alert('Invalid JSON format: ' + err.message);
@@ -1828,30 +2142,43 @@ async function refreshProjects() {
   const projData = await api('/api/projects');
   STATE.projects = projData.projects;
   STATE.activeProject = projData.active;
-  renderProjectsSelect();
-  populateActiveProjectForm();
+
+  const sel = $('#workspaceSelect');
+  if (sel) {
+    sel.innerHTML = STATE.projects.map(p => `
+      <option value="${esc(p.id)}" ${p.id === STATE.activeProject?.id ? 'selected' : ''}>
+        ${esc(p.name)}
+      </option>
+    `).join('');
+  }
 }
 
-function renderProjectsSelect() {
-  const sel = $('#activeProjectSelect');
-  sel.innerHTML = STATE.projects.map(p => `<option value="${esc(p.id)}" ${p.id === STATE.activeProject?.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+async function onWorkspaceChange(projId) {
+  await switchProject(projId);
 }
 
 async function switchProject(projId) {
-  const active = await api(`/api/projects/${projId}/activate`, { method: 'POST' });
-  STATE.activeProject = active;
-  refreshProjects();
+  const p = await api(`/api/projects/${projId}/activate`, { method: 'POST' });
+  STATE.activeProject = p;
+  await refreshProjects();
+  if (STATE.activeView === 'projects') loadProjectsView();
+  if (STATE.activeView === 'editor') refreshFileTree();
+  if (STATE.activeView === 'git') loadGitStatus();
   renderChatProviders();
-  refreshCurrentView();
   flashAutoSave();
 }
 
+function loadProjectsView() {
+  populateActiveProjectForm();
+  renderProjectsList();
+}
+
 function populateActiveProjectForm() {
-  if (!STATE.activeProject) return;
   const p = STATE.activeProject;
+  if (!p) return;
   $('#projEditName').value = p.name || '';
   $('#projEditDesc').value = p.description || '';
-  $('#projEditBranch').value = p.default_branch || 'main';
+  $('#projEditBranch').value = p.default_branch || 'arena/01a0ed4c-new';
   $('#projEditInstructions').value = p.instructions || '';
   $('#projEditRules').value = p.agent_rules || '';
 
@@ -1865,38 +2192,40 @@ function triggerProjectAutoSave() {
   projectAutoSaveTimer = setTimeout(async () => {
     if (!STATE.activeProject) return;
     const payload = {
-      name: $('#projEditName').value.trim(),
+      name: $('#projEditName').value.trim() || STATE.activeProject.name,
       description: $('#projEditDesc').value.trim(),
-      defaultBranch: $('#projEditBranch').value.trim(),
-      defaultProvider: $('#projEditProvider').value,
+      default_provider: $('#projEditProvider').value,
+      default_branch: $('#projEditBranch').value.trim() || 'arena/01a0ed4c-new',
       instructions: $('#projEditInstructions').value.trim(),
-      agentRules: $('#projEditRules').value.trim()
+      agent_rules: $('#projEditRules').value.trim()
     };
-    await api(`/api/projects/${STATE.activeProject.id}`, {
+    const updated = await api(`/api/projects/${STATE.activeProject.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
+    STATE.activeProject = updated;
     flashAutoSave('projectAutoSave');
-  }, 400);
+  }, 600);
 }
 
-async function loadProjectsView() {
-  await refreshProjects();
-  const listEl = $('#projectsListCards');
-  listEl.innerHTML = STATE.projects.map(p => `
-    <div class="changeset-card" style="padding:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+function renderProjectsList() {
+  const container = $('#projectsListCards');
+  container.innerHTML = STATE.projects.map(p => `
+    <div class="changeset-card">
+      <div class="changeset-header">
         <div>
-          <strong style="font-size:14px;">${esc(p.name)}</strong>
-          ${p.is_default ? '<span class="tool-status-tag success" style="margin-left:6px;">Active</span>' : ''}
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${esc(p.description || 'No description')}</div>
-          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">
-            Branch: <code>${esc(p.default_branch)}</code> · Provider: <code>${esc(p.default_provider)}</code>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <strong>${esc(p.name)}</strong>
+            ${p.id === STATE.activeProject?.id ? '<span class="tool-status-tag success">Active</span>' : ''}
+            ${p.is_default ? '<span class="tool-status-tag info">Default</span>' : ''}
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">
+            Branch: <b>${esc(p.default_branch || 'main')}</b> · Provider: <b>${esc(p.default_provider || 'openrouter')}</b>
           </div>
         </div>
         <div style="display:flex;gap:6px;">
-          ${!p.is_default ? `<button class="btn btn-primary btn-sm" onclick="switchProject('${esc(p.id)}')">Switch</button>` : ''}
+          ${p.id !== STATE.activeProject?.id ? `<button class="btn btn-primary btn-sm" onclick="switchProject('${esc(p.id)}')">Switch</button>` : ''}
           ${!p.is_default ? `<button class="btn btn-danger btn-sm" onclick="deleteProject('${esc(p.id)}')">Delete</button>` : ''}
         </div>
       </div>
@@ -1916,7 +2245,7 @@ async function handleCreateProjectSubmit(e) {
     name: $('#newProjName').value.trim(),
     description: $('#newProjDesc').value.trim(),
     defaultProvider: $('#newProjProvider').value,
-    defaultBranch: $('#newProjBranch').value.trim() || 'main',
+    defaultBranch: $('#newProjBranch').value.trim() || 'arena/01a0ed4c-new',
     instructions: $('#newProjInstructions').value.trim(),
     agentRules: $('#newProjRules').value.trim()
   };
@@ -1938,8 +2267,134 @@ async function deleteProject(projId) {
 }
 
 // -------------------------------------------------------------
-// CHAT & STREAMING
+// CHAT & CONVERSATIONS & PROMPT PRESETS
 // -------------------------------------------------------------
+const PROMPT_PRESETS = {
+  refactor: "Please review and refactor the following code to enhance readability, clean modularity, and error handling without breaking existing behavior:\n",
+  test: "Please write comprehensive unit and integration tests covering positive paths, edge cases, and error handling for:\n",
+  bugfix: "Please investigate the current project codebase, diagnose potential bugs or errors, and propose an explicit fix for:\n",
+  security: "Please perform a security audit on the active codebase, checking for injection vulnerabilities, unsafe deserialization, race conditions, and improper secrets handling:\n",
+  optimize: "Please analyze the computational efficiency, I/O bottlenecks, and asymptotic complexity of the codebase and propose optimizations:\n",
+  explain: "Please explain the high-level architecture, design patterns, component interactions, and data flow of this project in clear detail:\n"
+};
+
+function applyPromptPreset(key) {
+  const prompt = PROMPT_PRESETS[key] || '';
+  const input = $('#chatInput');
+  input.value = prompt + (STATE.activeTab ? `Target File: ${STATE.activeTab}\n` : '');
+  input.focus();
+}
+
+function attachActiveEditorFile() {
+  if (!STATE.activeTab) return alert('No file is currently active in the editor.');
+  const input = $('#chatInput');
+  input.value += (input.value ? '\n\n' : '') + `Context Attachment: @${STATE.activeTab}`;
+  input.focus();
+}
+
+function copyMessageText(btn) {
+  const wrap = btn.closest('.msg-wrapper');
+  const bubble = wrap.querySelector('.msg-bubble');
+  if (bubble) {
+    navigator.clipboard.writeText(bubble.textContent.trim());
+    const original = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(() => btn.textContent = original, 1500);
+  }
+}
+
+async function loadConversationsList() {
+  try {
+    const data = await api('/api/conversations');
+    STATE.conversations = data.conversations || [];
+    renderConversationsSidebar();
+  } catch (_) {}
+}
+
+function renderConversationsSidebar() {
+  const list = $('#convList');
+  if (!list) return;
+  if (STATE.conversations.length === 0) {
+    list.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--text-dim);">No past threads.</div>';
+    return;
+  }
+  list.innerHTML = STATE.conversations.map(c => `
+    <div class="conv-item ${c.id === STATE.activeConversationId ? 'active' : ''}" onclick="selectConversation('${esc(c.id)}')">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${esc(c.title)}</span>
+      <button class="btn-ghost btn-sm" style="padding:1px 4px;font-size:10px;opacity:0.6;" onclick="deleteConversation('${esc(c.id)}', event)">✕</button>
+    </div>
+  `).join('');
+}
+
+async function newConversation() {
+  const title = prompt('Enter conversation title:', `Chat ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`);
+  if (!title) return;
+  const created = await api('/api/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title,
+      provider: $('#chatProvider')?.value || 'openrouter',
+      model: $('#chatModel')?.value || ''
+    })
+  });
+  await loadConversationsList();
+  selectConversation(created.id);
+}
+
+async function selectConversation(convId) {
+  STATE.activeConversationId = convId;
+  renderConversationsSidebar();
+  try {
+    const data = await api(`/api/conversations/${convId}/messages`);
+    chatHistory = (data.messages || []).map(m => ({
+      role: m.role,
+      content: m.content
+    }));
+    renderChatMessages();
+  } catch (_) {}
+}
+
+async function deleteConversation(convId, e) {
+  if (e) e.stopPropagation();
+  if (!confirm('Delete this conversation thread?')) return;
+  await api(`/api/conversations/${convId}`, { method: 'DELETE' });
+  if (STATE.activeConversationId === convId) {
+    STATE.activeConversationId = null;
+    chatHistory = [];
+    renderChatMessages();
+  }
+  await loadConversationsList();
+}
+
+function renderChatMessages() {
+  const container = $('#chatMessages');
+  if (chatHistory.length === 0) {
+    container.innerHTML = `
+      <div class="msg-wrapper assistant">
+        <div class="msg-bubble">
+          Hello! I am your Arena AI Coding Agent v0.8.0. Your model choices and settings are automatically preserved across refreshes. All changes to project settings, instructions, rules, and secrets auto-save in the background.
+        </div>
+        <div class="msg-meta">
+          <span>Agent · v0.8.0</span>
+          <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  container.innerHTML = chatHistory.map(m => `
+    <div class="msg-wrapper ${m.role}">
+      <div class="msg-bubble">${esc(m.content)}</div>
+      <div class="msg-meta">
+        <span>${m.role === 'user' ? 'You' : 'Agent'}</span>
+        ${m.role === 'assistant' ? '<button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>' : ''}
+      </div>
+    </div>
+  `).join('');
+  container.scrollTop = 1e9;
+}
+
 function renderChatProviders() {
   const pSel = $('#chatProvider');
   const savedProvider = localStorage.getItem('arena_selected_provider') || STATE.activeProject?.default_provider || STATE.providers[0]?.id;
@@ -1995,6 +2450,21 @@ function onApprovalToggle() {
 }
 
 let chatHistory = [];
+let abortController = null;
+
+function stopStreaming() {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  $('#sendBtn').style.display = 'inline-flex';
+  $('#stopBtn').style.display = 'none';
+}
+
+function clearChat() {
+  chatHistory = [];
+  renderChatMessages();
+}
 
 async function onComposerKeyDown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -2012,6 +2482,14 @@ $('#chatForm').onsubmit = async (e) => {
   appendMessage('user', text);
   chatHistory.push({ role: 'user', content: text });
 
+  if (STATE.activeConversationId) {
+    api(`/api/conversations/${STATE.activeConversationId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'user', content: text })
+    }).catch(() => {});
+  }
+
   const pid = $('#chatProvider').value;
   const mid = $('#chatModel').value;
   const steps = +$('#chatSteps').value;
@@ -2024,6 +2502,8 @@ $('#chatForm').onsubmit = async (e) => {
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
   bubble.textContent = 'Agent is analyzing project and tools...';
 
+  abortController = new AbortController();
+
   try {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
@@ -2034,7 +2514,8 @@ $('#chatForm').onsubmit = async (e) => {
         messages: chatHistory,
         maxSteps: steps,
         requireApproval: reqApproval
-      })
+      }),
+      signal: abortController.signal
     });
 
     const reader = res.body.getReader();
@@ -2066,25 +2547,25 @@ $('#chatForm').onsubmit = async (e) => {
     }
 
     chatHistory.push({ role: 'assistant', content: accumulated });
+
+    if (STATE.activeConversationId) {
+      api(`/api/conversations/${STATE.activeConversationId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'assistant', content: accumulated })
+      }).catch(() => {});
+    }
+
   } catch (err) {
-    bubble.textContent = 'Error: ' + err.message;
+    if (err.name !== 'AbortError') {
+      bubble.textContent = 'Error: ' + err.message;
+    }
   } finally {
     $('#sendBtn').style.display = 'inline-flex';
     $('#stopBtn').style.display = 'none';
+    abortController = null;
   }
 };
-
-function appendMessage(role, text) {
-  const wrap = document.createElement('div');
-  wrap.className = `msg-wrapper ${role}`;
-  wrap.innerHTML = `
-    <div class="msg-bubble">${esc(text)}</div>
-    <div class="msg-meta"><span>${role === 'user' ? 'You' : 'Agent'}</span></div>
-  `;
-  $('#chatMessages').appendChild(wrap);
-  $('#chatMessages').scrollTop = 1e9;
-  return wrap;
-}
 
 function renderInlineApprovalCard(container, approvalData) {
   const card = document.createElement('div');
@@ -2151,10 +2632,11 @@ async function loadChangesets() {
             <span class="tool-status-tag ${cs.status}">${cs.status}</span>
             ${cs.status === 'pending' ? `
               <button class="btn btn-success btn-sm" onclick="approveChangeSet('${esc(cs.id)}')">Approve All</button>
-              <button class="btn btn-danger btn-sm" onclick="rejectChangeSet('${esc(cs.id)}')">Reject All</button>
+              <button class="btn btn-danger btn-sm" onclick="openRejectFeedbackModal('${esc(cs.id)}')">Reject with Notes</button>
             ` : cs.status === 'approved' ? `
               <button class="btn btn-amber btn-sm" onclick="rollbackChangeSet('${esc(cs.id)}')">Rollback</button>
             ` : ''}
+            <button class="btn btn-ghost btn-sm" onclick="downloadChangesetPatch('${esc(cs.id)}')">Patch</button>
             <button class="btn btn-ghost btn-sm" onclick="viewChangesetDiff('${esc(cs.id)}')">View Diff</button>
           </div>
         </div>
@@ -2169,12 +2651,38 @@ async function approveChangeSet(csId) {
   await api(`/api/changesets/${csId}/approve`, { method: 'POST' });
   loadChangesets();
   checkPendingApprovals();
+  alert('ChangeSet approved and changes applied successfully.');
 }
 
 async function rejectChangeSet(csId) {
   await api(`/api/changesets/${csId}/reject`, { method: 'POST' });
   loadChangesets();
   checkPendingApprovals();
+}
+
+function openRejectFeedbackModal(csId) {
+  $('#rejectCsTargetId').value = csId;
+  $('#rejectFeedbackText').value = '';
+  openModal('rejectFeedbackModal');
+}
+
+async function handleRejectFeedbackSubmit(e) {
+  e.preventDefault();
+  const csId = $('#rejectCsTargetId').value;
+  const feedback = $('#rejectFeedbackText').value.trim();
+  await api(`/api/changesets/${csId}/reject-with-feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedback })
+  });
+  closeModal('rejectFeedbackModal');
+  loadChangesets();
+  checkPendingApprovals();
+  alert('ChangeSet rejected with feedback notes.');
+}
+
+function downloadChangesetPatch(csId) {
+  window.location.href = `/api/changesets/${csId}/patch`;
 }
 
 async function rollbackChangeSet(csId) {
@@ -2194,6 +2702,11 @@ async function viewChangesetDiff(csId) {
   openModal('diffApprovalModal');
 }
 
+function toggleDiffView() {
+  STATE.diffMode = STATE.diffMode === 'unified' ? 'split' : 'unified';
+  $('#diffViewToggleBtn').textContent = STATE.diffMode === 'unified' ? 'Toggle Split/Unified' : 'Diff: Split Mode';
+}
+
 async function checkPendingApprovals() {
   try {
     const data = await api('/api/changesets');
@@ -2209,37 +2722,90 @@ async function checkPendingApprovals() {
 }
 
 // -------------------------------------------------------------
-// CODE EDITOR
+// CODE EDITOR & FILE TREE
 // -------------------------------------------------------------
 async function refreshFileTree() {
   const tree = $('#editorTree');
   try {
-    const files = await api('/api/workspace/files');
-    tree.innerHTML = files.map(f => `
-      <div class="tree-node ${f.path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(f.path)}')">
-        <span>${f.type === 'dir' ? '📁' : '📄'}</span>
-        <span>${esc(f.path)}</span>
-      </div>
-    `).join('');
+    STATE.workspaceFiles = await api('/api/workspace/files');
+    filterFileTree($('#treeSearchInput')?.value || '');
   } catch (err) {
     tree.innerHTML = `<span style="color:var(--accent-red)">${esc(err.message)}</span>`;
   }
 }
 
+function filterFileTree(q) {
+  const tree = $('#editorTree');
+  const query = (q || '').toLowerCase();
+  const files = STATE.workspaceFiles.filter(f => f.path.toLowerCase().includes(query));
+  
+  if (files.length === 0) {
+    tree.innerHTML = '<span style="font-size:11px;color:var(--text-dim);padding:8px;">No matching files.</span>';
+    return;
+  }
+
+  tree.innerHTML = files.map(f => `
+    <div class="tree-node ${f.path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(f.path)}')">
+      <span>${f.type === 'dir' ? '📁' : '📄'}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.path)}</span>
+    </div>
+  `).join('');
+}
+
+function renderEditorTabs() {
+  const tabsWrap = $('#editorTabs');
+  tabsWrap.innerHTML = STATE.openTabs.map(path => `
+    <div class="editor-tab ${path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(path)}')">
+      <span>${esc(path)}</span>
+      ${STATE.dirtyTabs[path] ? '<span class="tab-dirty" title="Unsaved changes"></span>' : ''}
+      <span class="tab-close" onclick="closeTab('${esc(path)}', event)">✕</span>
+    </div>
+  `).join('');
+}
+
 async function openEditorFile(path) {
+  if (!STATE.openTabs.includes(path)) {
+    STATE.openTabs.push(path);
+  }
   STATE.activeTab = path;
   $('#editorPath').value = path;
-  $('#activeTabName').textContent = path;
+  renderEditorTabs();
+
   try {
     const data = await api(`/api/workspace/file?path=${encodeURIComponent(path)}`);
     $('#editorTextarea').value = data.content;
     updateLineNumbers();
+    $('#editorInfo').textContent = `${(data.size || 0).toLocaleString()} bytes · UTF-8`;
   } catch (err) {
     alert('Failed to read file: ' + err.message);
   }
 }
 
-function onEditorInput() { updateLineNumbers(); }
+function closeTab(path, e) {
+  if (e) e.stopPropagation();
+  STATE.openTabs = STATE.openTabs.filter(p => p !== path);
+  delete STATE.dirtyTabs[path];
+  if (STATE.activeTab === path) {
+    STATE.activeTab = STATE.openTabs[STATE.openTabs.length - 1] || '';
+    if (STATE.activeTab) {
+      openEditorFile(STATE.activeTab);
+    } else {
+      $('#editorPath').value = '';
+      $('#editorTextarea').value = '';
+      updateLineNumbers();
+    }
+  }
+  renderEditorTabs();
+}
+
+function onEditorInput() { 
+  if (STATE.activeTab) {
+    STATE.dirtyTabs[STATE.activeTab] = true;
+    renderEditorTabs();
+  }
+  updateLineNumbers(); 
+}
+
 function updateLineNumbers() {
   const lines = $('#editorTextarea').value.split('\n').length;
   $('#lineNumbers').innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
@@ -2248,11 +2814,14 @@ function updateLineNumbers() {
 async function saveEditorFile() {
   const path = $('#editorPath').value.trim();
   const content = $('#editorTextarea').value;
+  if (!path) return;
   await api('/api/workspace/file', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, content, requireApproval: false })
   });
+  delete STATE.dirtyTabs[path];
+  renderEditorTabs();
   flashAutoSave();
 }
 
@@ -2283,15 +2852,137 @@ async function previewEditorDiff() {
   openModal('diffApprovalModal');
 }
 
+function explainActiveFileInChat() {
+  if (!STATE.activeTab) return alert('No file is active.');
+  navigate('chat');
+  const input = $('#chatInput');
+  input.value = `Please explain the implementation and architecture of file: ${STATE.activeTab}\n`;
+  input.focus();
+}
+
+function openCreateFileModal(isDir = false) {
+  $('#createFileIsDir').value = isDir ? '1' : '0';
+  $('#createFileModalTitle').textContent = isDir ? 'Create New Folder' : 'Create New File';
+  $('#createFilePath').value = '';
+  $('#createFileContent').value = '';
+  $('#createFileContentWrap').style.display = isDir ? 'none' : 'block';
+  openModal('createFileModal');
+}
+
+async function handleCreateFileSubmit(e) {
+  e.preventDefault();
+  const path = $('#createFilePath').value.trim();
+  const isDir = $('#createFileIsDir').value === '1';
+  const content = $('#createFileContent').value;
+
+  await api('/api/workspace/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, isDir, content })
+  });
+
+  closeModal('createFileModal');
+  await refreshFileTree();
+  if (!isDir) openEditorFile(path);
+}
+
+function openRenameModal() {
+  if (!STATE.activeTab) return alert('Select a file to rename.');
+  $('#renameOldPath').value = STATE.activeTab;
+  $('#renameOldDisplay').value = STATE.activeTab;
+  $('#renameNewPath').value = STATE.activeTab;
+  openModal('renameFileModal');
+}
+
+async function handleRenameFileSubmit(e) {
+  e.preventDefault();
+  const oldPath = $('#renameOldPath').value;
+  const newPath = $('#renameNewPath').value.trim();
+
+  await api('/api/workspace/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldPath, newPath })
+  });
+
+  closeModal('renameFileModal');
+  closeTab(oldPath);
+  await refreshFileTree();
+  openEditorFile(newPath);
+}
+
+async function deleteActiveFile() {
+  if (!STATE.activeTab) return alert('No file selected.');
+  if (!confirm(`Permanently delete '${STATE.activeTab}'?`)) return;
+
+  await api(`/api/workspace/file?path=${encodeURIComponent(STATE.activeTab)}`, {
+    method: 'DELETE'
+  });
+
+  const p = STATE.activeTab;
+  closeTab(p);
+  await refreshFileTree();
+}
+
+function downloadWorkspaceZip() {
+  window.location.href = '/api/workspace/export-zip';
+}
+
+async function viewFileVersions() {
+  if (!STATE.activeTab) return alert('No file selected.');
+  try {
+    const versions = await api(`/api/workspace/versions?path=${encodeURIComponent(STATE.activeTab)}`);
+    if (!versions || versions.length === 0) {
+      alert('No version snapshots recorded yet for ' + STATE.activeTab);
+      return;
+    }
+    alert(`Found ${versions.length} version snapshots for ${STATE.activeTab}. Latest version: v${versions[0].version_num}`);
+  } catch (err) {
+    alert('Versions error: ' + err.message);
+  }
+}
+
 // -------------------------------------------------------------
-// TERMINAL
+// TERMINAL & PROCESSES
 // -------------------------------------------------------------
+function onTerminalInputKeyDown(e) {
+  if (e.key === 'Enter') {
+    runTerminalCommand();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (STATE.terminalHistory.length > 0) {
+      if (STATE.termHistoryIndex < STATE.terminalHistory.length - 1) {
+        STATE.termHistoryIndex++;
+      }
+      $('#termCmdInput').value = STATE.terminalHistory[STATE.terminalHistory.length - 1 - STATE.termHistoryIndex] || '';
+    }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (STATE.termHistoryIndex > 0) {
+      STATE.termHistoryIndex--;
+      $('#termCmdInput').value = STATE.terminalHistory[STATE.terminalHistory.length - 1 - STATE.termHistoryIndex] || '';
+    } else {
+      STATE.termHistoryIndex = -1;
+      $('#termCmdInput').value = '';
+    }
+  }
+}
+
+function runPresetCommand(cmd) {
+  $('#termCmdInput').value = cmd;
+  runTerminalCommand();
+}
+
 async function runTerminalCommand() {
   const cmd = $('#termCmdInput').value.trim();
   if (!cmd) return;
+  STATE.terminalHistory.push(cmd);
+  STATE.termHistoryIndex = -1;
+
   $('#termStatus').textContent = `Running: ${cmd}...`;
   const out = $('#termOutput');
-  out.textContent = 'Executing command with full network access...\n';
+  out.textContent = `Executing: ${cmd}\n\n`;
+
   try {
     const res = await api('/api/terminal/exec', {
       method: 'POST',
@@ -2304,6 +2995,42 @@ async function runTerminalCommand() {
     $('#termStatus').textContent = 'Error';
     out.textContent = err.message;
   }
+}
+
+function copyTerminalOutput() {
+  const text = $('#termOutput').textContent;
+  navigator.clipboard.writeText(text);
+  alert('Terminal output copied to clipboard.');
+}
+
+async function loadActiveProcesses() {
+  try {
+    const data = await api('/api/terminal/processes');
+    const container = $('#activeProcessesList');
+    if (!data.processes || data.processes.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-dim);font-size:12px;">No active background processes running.</span>';
+    } else {
+      container.innerHTML = data.processes.map(p => `
+        <div class="changeset-card" style="padding:8px 12px;">
+          <div class="changeset-header">
+            <div>
+              <strong>PID: ${p.pid}</strong>
+              <div style="font-size:11px;color:var(--text-dim);">${esc(p.command)}</div>
+            </div>
+            <button class="btn btn-danger btn-sm" onclick="killProcessById(${p.pid})">Kill Process</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    openModal('activeProcessesModal');
+  } catch (err) {
+    alert('Process manager error: ' + err.message);
+  }
+}
+
+async function killProcessById(pid) {
+  await api(`/api/terminal/processes/${pid}/kill`, { method: 'POST' });
+  loadActiveProcesses();
 }
 
 // -------------------------------------------------------------
@@ -2322,6 +3049,91 @@ async function loadGitStatus() {
   }
 }
 
+async function switchGitBranch(branchName) {
+  if (!branchName) return;
+  await api('/api/git/branch/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: branchName })
+  });
+  await loadGitStatus();
+  flashAutoSave();
+}
+
+function openGitBranchModal() {
+  $('#newBranchName').value = '';
+  openModal('gitBranchModal');
+}
+
+async function handleGitBranchSubmit(e) {
+  e.preventDefault();
+  const name = $('#newBranchName').value.trim();
+  const checkout = $('#checkoutBranchCheck').checked;
+  await api('/api/git/branch/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, checkout })
+  });
+  closeModal('gitBranchModal');
+  await loadGitStatus();
+  alert(`Branch '${name}' created successfully.`);
+}
+
+async function gitFetch() {
+  await api('/api/git/fetch', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+  await loadGitStatus();
+  alert('Git fetch completed.');
+}
+
+async function gitPull() {
+  await api('/api/git/pull', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+  await loadGitStatus();
+  alert('Git pull completed.');
+}
+
+async function gitStashSave() {
+  const msg = prompt('Enter stash message (optional):', 'WIP');
+  await api('/api/git/stash', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: msg || '' })
+  });
+  await loadGitStatus();
+  alert('Working tree stashed successfully.');
+}
+
+async function gitStashApply() {
+  await api('/api/git/stash/apply', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+  await loadGitStatus();
+  alert('Stash applied to working tree.');
+}
+
+async function loadGitCommitHistory() {
+  const box = $('#gitHistoryBox');
+  const list = $('#gitHistoryList');
+  box.style.display = 'block';
+  list.innerHTML = 'Loading commit log...';
+  try {
+    const logs = await api('/api/git/log');
+    if (!logs || logs.length === 0) {
+      list.innerHTML = '<span style="color:var(--text-dim);font-size:12px;">No commits found in log.</span>';
+      return;
+    }
+    list.innerHTML = logs.map(c => `
+      <div style="border-bottom:1px solid var(--border-subtle);padding:6px 0;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;">
+          <strong style="color:var(--primary);font-family:monospace;">${esc(c.shortHash)}</strong>
+          <span style="color:var(--text-dim);">${esc(c.date)}</span>
+        </div>
+        <div style="font-size:12px;margin-top:2px;">${esc(c.message)}</div>
+        <div style="font-size:10.5px;color:var(--text-muted);">${esc(c.author)}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    list.innerHTML = 'Failed to load log: ' + err.message;
+  }
+}
+
 async function commitApprovedGit() {
   const msg = $('#gitCommitMsg').value.trim();
   if (!msg) return alert('Enter a commit message.');
@@ -2336,6 +3148,16 @@ async function commitApprovedGit() {
   alert('Git commit created successfully.');
 }
 
+function openGitPushModal() {
+  if (confirm('Approve push to remote branch?')) {
+    api('/api/git/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true })
+    }).then(() => alert('Pushed to remote origin successfully.')).catch(err => alert('Push failed: ' + err.message));
+  }
+}
+
 // -------------------------------------------------------------
 // PLAYWRIGHT BROWSER
 // -------------------------------------------------------------
@@ -2348,7 +3170,7 @@ async function browserNavigate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url })
     });
-    $('#browserDomOutput').textContent = `Title: ${res.title}\nStatus: ${res.status}\n\nContent:\n${res.content}`;
+    $('#browserDomOutput').textContent = `Title: ${res.title}\nStatus: ${res.status}\nEngine: ${res.engine}\n\nContent:\n${res.content}`;
   } catch (err) {
     $('#browserDomOutput').textContent = 'Browser error: ' + err.message;
   }
@@ -2362,6 +3184,60 @@ async function browserScreenshot() {
     alert('Screenshot error: ' + err.message);
   }
 }
+
+async function browserEvaluate() {
+  const expression = $('#browserEvalInput').value.trim();
+  if (!expression) return;
+  try {
+    const res = await api('/api/browser/eval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression })
+    });
+    alert('JS Output: ' + JSON.stringify(res.result, null, 2));
+  } catch (err) {
+    alert('JS Evaluation error: ' + err.message);
+  }
+}
+
+// -------------------------------------------------------------
+// JOBS & WORKER
+// -------------------------------------------------------------
+async function loadJobsList() {
+  const container = $('#jobsListContainer');
+  container.innerHTML = '<p style="color:var(--text-dim)">Loading jobs...</p>';
+  try {
+    const res = await api('/api/jobs');
+    if (!res.jobs || res.jobs.length === 0) {
+      container.innerHTML = '<div class="stat-card" style="text-align:center;color:var(--text-dim)">No background jobs in queue.</div>';
+      return;
+    }
+    container.innerHTML = res.jobs.map(j => `
+      <div class="changeset-card">
+        <div class="changeset-header">
+          <div>
+            <strong>${esc(j.title)}</strong>
+            <div style="font-size:11px;color:var(--text-dim);">${j.created_at} · Steps: ${j.step_count || 0}/${j.max_steps || 8} · Provider: ${esc(j.provider_id)}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span class="tool-status-tag ${j.status}">${j.status}</span>
+            ${j.status === 'running' ? `<button class="btn btn-warning btn-sm" onclick="pauseJob('${esc(j.id)}')">Pause</button>` : ''}
+            ${j.status === 'paused' ? `<button class="btn btn-primary btn-sm" onclick="resumeJob('${esc(j.id)}')">Resume</button>` : ''}
+            ${j.status === 'queued' || j.status === 'running' ? `<button class="btn btn-danger btn-sm" onclick="cancelJob('${esc(j.id)}')">Cancel</button>` : ''}
+            ${j.status === 'failed' || j.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="retryJob('${esc(j.id)}')">Retry</button>` : ''}
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--accent-red)">Error: ${esc(err.message)}</p>`;
+  }
+}
+
+async function pauseJob(jid) { await api(`/api/jobs/${jid}/pause`, { method: 'POST' }); loadJobsList(); }
+async function resumeJob(jid) { await api(`/api/jobs/${jid}/resume`, { method: 'POST' }); loadJobsList(); }
+async function cancelJob(jid) { await api(`/api/jobs/${jid}/cancel`, { method: 'POST' }); loadJobsList(); }
+async function retryJob(jid) { await api(`/api/jobs/${jid}/retry`, { method: 'POST' }); loadJobsList(); }
 
 // -------------------------------------------------------------
 // OBSERVABILITY & LOGS
@@ -2377,22 +3253,28 @@ async function loadObservabilityData() {
     $('#metricDisk').textContent = m.disk.usedPercent + '%';
 
     const l = await api(`/api/observability/logs?level=${encodeURIComponent(lvl)}&search=${encodeURIComponent(search)}`);
-    $('#logsOutput').textContent = l.logs.map(e => `[${e.timestamp}] [${e.level}] [${e.category}] ${e.message}`).join('\n');
+    $('#logsOutput').textContent = l.logs.map(e => `[${e.timestamp}] [${e.level}] [${e.category || e.module || 'SYS'}] ${e.message}`).join('\n');
   } catch (_) {}
 }
 
+function exportObservabilityLogs(fmt = 'json') {
+  window.location.href = `/api/observability/export?format=${fmt}`;
+}
+
 // -------------------------------------------------------------
-// SETTINGS & SECRETS
+// SETTINGS, RBAC & ENVIRONMENT SECRETS
 // -------------------------------------------------------------
 let envAutoSaveTimer = null;
 async function loadSettings() {
-  const env = await api('/api/config/environment');
-  $('#envFields').innerHTML = Object.keys(env).map(k => `
-    <div>
-      <label style="font-size:11px;color:var(--text-dim)">${k}</label>
-      <input data-env-key="${k}" class="input-control" value="${esc(env[k])}" placeholder="${env[k] ? 'Configured (leave blank to preserve)' : 'Not configured'}" oninput="triggerEnvAutoSave()">
-    </div>
-  `).join('');
+  try {
+    const env = await api('/api/config/environment');
+    $('#envFields').innerHTML = Object.keys(env).map(k => `
+      <div>
+        <label style="font-size:11px;color:var(--text-dim)">${k}</label>
+        <input data-env-key="${k}" class="input-control" value="${esc(env[k])}" placeholder="${env[k] ? 'Configured (leave blank to preserve)' : 'Not configured'}" oninput="triggerEnvAutoSave()">
+      </div>
+    `).join('');
+  } catch (_) {}
 }
 
 function triggerEnvAutoSave() {
@@ -2409,6 +3291,30 @@ function triggerEnvAutoSave() {
     });
     flashAutoSave('settingsAutoSave');
   }, 500);
+}
+
+function openCreateUserModal() {
+  $('#newUsername').value = '';
+  $('#newUserPassword').value = '';
+  openModal('createUserModal');
+}
+
+async function handleCreateUserSubmit(e) {
+  e.preventDefault();
+  const username = $('#newUsername').value.trim();
+  const password = $('#newUserPassword').value.trim();
+  const role = $('#newUserRole').value;
+  try {
+    await api('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, role })
+    });
+    closeModal('createUserModal');
+    alert(`User '${username}' created with role '${role}'.`);
+  } catch (err) {
+    alert('User registration failed: ' + err.message);
+  }
 }
 
 // Auth Handlers
@@ -2440,10 +3346,23 @@ function openCommandPalette() {
   $('#cmdPaletteInput').focus();
 }
 
+function filterCommandPalette() {
+  const q = $('#cmdPaletteInput').value.toLowerCase();
+  document.querySelectorAll('#cmdPaletteList .cmd-item').forEach(el => {
+    el.style.display = el.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+  });
+}
+
 window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
     e.preventDefault();
     openCommandPalette();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    if (STATE.activeView === 'editor') {
+      e.preventDefault();
+      saveEditorFile();
+    }
   }
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('open'));
@@ -2452,6 +3371,27 @@ window.addEventListener('keydown', e => {
 
 function refreshCurrentView() {
   navigate(STATE.activeView);
+}
+
+// GitHub Connector UI Stub
+async function loadGitHubRepos() {
+  const container = $('#githubReposList');
+  container.innerHTML = '<span style="color:var(--text-dim);font-size:12px;">Connecting to GitHub API...</span>';
+  try {
+    const data = await api('/api/github/repos');
+    if (!data.repositories || data.repositories.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-dim);font-size:12px;">No repositories found. Ensure GITHUB_TOKEN is set in Settings.</span>';
+      return;
+    }
+    container.innerHTML = data.repositories.map(r => `
+      <div class="stat-card" style="cursor:pointer;" onclick="selectGitHubRepo('${esc(r.owner)}', '${esc(r.name)}')">
+        <strong style="color:var(--primary);">${esc(r.name)}</strong>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">${esc(r.owner)} · ★ ${r.stars || 0}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<span style="color:var(--accent-red);font-size:12px;">GitHub: ${esc(err.message)}</span>`;
+  }
 }
 
 // Run on page load

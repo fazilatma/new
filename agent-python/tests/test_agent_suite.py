@@ -46,7 +46,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.7.0"
+    assert APP_VERSION == "0.8.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -332,4 +332,42 @@ def test_api_routes_integration():
 
     lr = client.get("/api/observability/logs")
     assert lr.status_code == 200
+
+    # Test Observability Export
+    obs_exp = client.get("/api/observability/export?format=json")
+    assert obs_exp.status_code == 200
+    obs_exp_csv = client.get("/api/observability/export?format=csv")
+    assert obs_exp_csv.status_code == 200
+
+    # Test Workspace File CRUD & Zip
+    cf_r = client.post("/api/workspace/create", json={"path": "test_temp_doc.txt", "content": "Sample content"})
+    assert cf_r.status_code == 200
+    assert cf_r.json()["ok"] is True
+
+    rn_r = client.post("/api/workspace/rename", json={"oldPath": "test_temp_doc.txt", "newPath": "test_renamed_doc.txt"})
+    assert rn_r.status_code == 200
+    assert rn_r.json()["ok"] is True
+
+    zip_r = client.get("/api/workspace/export-zip")
+    assert zip_r.status_code == 200
+    assert len(zip_r.content) > 0
+
+    del_file_r = client.delete("/api/workspace/file?path=test_renamed_doc.txt")
+    assert del_file_r.status_code == 200
+
+    # Test Conversation Messages Flow
+    conv_r = client.post("/api/conversations", json={"title": "Test Chat Thread", "provider": "openrouter"})
+    assert conv_r.status_code == 200
+    cid = conv_r.json()["id"]
+
+    add_m_r = client.post(f"/api/conversations/{cid}/messages", json={"role": "user", "content": "Hello agent"})
+    assert add_m_r.status_code == 200
+
+    get_m_r = client.get(f"/api/conversations/{cid}/messages")
+    assert get_m_r.status_code == 200
+    assert len(get_m_r.json()["messages"]) >= 1
+
+    del_c_r = client.delete(f"/api/conversations/{cid}")
+    assert del_c_r.status_code == 200
+
 
