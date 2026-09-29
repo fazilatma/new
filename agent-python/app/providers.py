@@ -3,11 +3,16 @@ from pathlib import Path
 from .models import Provider, ModelSpec
 
 class ProviderStore:
-    def __init__(self, path: str): self.path=Path(path); self.data=self._load()
+    def __init__(self, path: str): self.path=Path(os.getenv('PROVIDERS_FILE', str(Path(path).with_name('runtime-providers.json')))); self.path.parent.mkdir(parents=True, exist_ok=True); self.data=self._load()
     def _load(self):
-        raw=json.loads(self.path.read_text()) if self.path.exists() else {}
+        
+        if self.path.exists():
+            raw=json.loads(self.path.read_text())
+        else:
+            seed=Path(__file__).parents[1]/'data/providers.json'
+            raw=json.loads(seed.read_text()) if seed.exists() else {}
         return {k:Provider.model_validate(v) for k,v in raw.items()}
-    def save(self): self.path.write_text(json.dumps({k:v.model_dump(exclude_none=True) for k,v in self.data.items()}, ensure_ascii=False, indent=2))
+    def save(self): tmp=self.path.with_suffix('.tmp'); tmp.write_text(json.dumps({k:v.model_dump(exclude_none=True) for k,v in self.data.items()}, ensure_ascii=False, indent=2)); tmp.replace(self.path)
     def public(self, p):
         x=p.model_dump(); key=x.pop('apiKey',''); x['hasApiKey']=bool(key or os.getenv(p.apiKeyEnv)); return x
     def all(self): return [self.public(p) for p in self.data.values()]
