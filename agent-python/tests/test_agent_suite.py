@@ -45,7 +45,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.6.0"
+    assert APP_VERSION == "0.7.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200

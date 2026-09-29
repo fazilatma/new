@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Arena AI Coding Agent v0.6.0</title>
+  <title>Arena AI Coding Agent v0.7.0</title>
   <style>
     :root[data-theme="dark"] {
       --bg-base: #0a0f1d;
@@ -65,8 +65,19 @@
     }
 
     /* Layout */
-    .app-container { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+    .app-container { display: flex; width: 100vw; height: 100vh; overflow: hidden; position: relative; }
     
+    /* Backdrop overlay for mobile drawer */
+    .drawer-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 95;
+      backdrop-filter: blur(2px);
+    }
+    .drawer-overlay.active { display: block; }
+
     /* Sidebar */
     aside.sidebar {
       width: 250px;
@@ -75,7 +86,7 @@
       display: flex;
       flex-direction: column;
       flex-shrink: 0;
-      transition: width 0.2s, transform 0.25s ease;
+      transition: width 0.2s, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
       z-index: 100;
     }
     aside.sidebar.collapsed { width: 64px; }
@@ -85,7 +96,7 @@
     aside.sidebar.collapsed .user-info { display: none; }
     
     .sidebar-header {
-      padding: 16px;
+      padding: 14px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -204,13 +215,31 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 18px;
+      padding: 0 16px;
       flex-shrink: 0;
       gap: 12px;
+      z-index: 50;
     }
-    .top-left { display: flex; align-items: center; gap: 12px; }
+    .top-left { display: flex; align-items: center; gap: 10px; }
     .top-right { display: flex; align-items: center; gap: 8px; }
     
+    .hamburger-btn {
+      width: 36px;
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-elevated);
+      color: var(--text-main);
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 700;
+      transition: background 0.15s;
+    }
+    .hamburger-btn:hover { background: var(--bg-highlight); }
+
     .status-pill {
       display: flex;
       align-items: center;
@@ -238,14 +267,17 @@
       font-weight: 500;
     }
 
-    .network-badge {
+    .autosave-pill {
       font-size: 11px;
-      padding: 3px 8px;
-      border-radius: 4px;
-      background: rgba(16, 185, 129, 0.15);
       color: var(--accent-green);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
       font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.3s ease;
     }
+    .autosave-pill.visible { opacity: 1; }
 
     /* Views */
     .view-panel {
@@ -673,17 +705,20 @@
 </head>
 <body>
 <div class="app-container">
-  <!-- Collapsible Sidebar -->
+  <!-- Mobile Drawer Backdrop -->
+  <div class="drawer-overlay" id="drawerOverlay" onclick="toggleMobileSidebar()"></div>
+
+  <!-- Collapsible Sidebar / Mobile Drawer -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <a href="#" class="brand" onclick="navigate('projects')">
+      <a href="#" class="brand" onclick="navigate('chat')">
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span>Coding Agent v0.6.0</span>
+          <span>Coding Agent v0.7.0</span>
         </div>
       </a>
-      <button class="btn-ghost" onclick="toggleSidebar()" title="Toggle Sidebar">≡</button>
+      <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
     </div>
 
     <div class="ws-select-wrap">
@@ -752,7 +787,9 @@
   <main class="main-content">
     <header class="top-bar">
       <div class="top-left">
-        <button class="btn btn-ghost" onclick="toggleMobileSidebar()" style="display:none;" id="mobileMenuBtn">☰</button>
+        <!-- Always Visible Hamburger Menu Button -->
+        <button class="hamburger-btn" onclick="handleMenuClick()" title="Open Navigation & Settings Menu">☰</button>
+        
         <div class="status-pill">
           <div class="status-dot" id="systemHealthDot"></div>
           <span id="systemHealthText">Agent Ready</span>
@@ -760,11 +797,10 @@
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
         </div>
-        <div class="network-badge" title="Full external web access enabled">
-          🌐 Full Web Access
-        </div>
+        <span class="autosave-pill" id="globalAutoSave">✓ Auto-saved</span>
       </div>
       <div class="top-right">
+        <button class="btn btn-ghost btn-sm" onclick="navigate('settings')" title="Security & Settings">⚙️ Settings</button>
         <button class="btn btn-ghost btn-sm" onclick="openCommandPalette()" title="Command Palette (Ctrl+K)">⌘K</button>
         <button class="btn btn-ghost btn-sm" onclick="toggleTheme()" title="Toggle Theme" id="themeBtn">🌙</button>
         <button class="btn btn-ghost btn-sm" onclick="refreshCurrentView()" title="Refresh View">↻</button>
@@ -785,14 +821,14 @@
         <div class="chat-main">
           <div class="chat-top-controls">
             <select id="chatProvider" class="input-control" style="width:160px" onchange="onChatProviderChange()"></select>
-            <select id="chatModel" class="input-control" style="width:200px"></select>
-            <select id="chatSteps" class="input-control" style="width:110px">
+            <select id="chatModel" class="input-control" style="width:200px" onchange="onChatModelChange()"></select>
+            <select id="chatSteps" class="input-control" style="width:110px" onchange="onChatStepsChange()">
               <option value="4">4 Steps</option>
               <option value="8" selected>8 Steps</option>
               <option value="16">16 Steps</option>
             </select>
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;">
-              <input type="checkbox" id="requireApprovalCheck" checked>
+              <input type="checkbox" id="requireApprovalCheck" onchange="onApprovalToggle()" checked>
               <span>Require Approval on File Writes</span>
             </label>
           </div>
@@ -800,9 +836,9 @@
           <div class="chat-messages" id="chatMessages">
             <div class="msg-wrapper assistant">
               <div class="msg-bubble">
-                Hello! I am your Arena AI Coding Agent v0.6.0. I can inspect, write, and safely modify workspace files, execute terminal commands with full external internet access, and automate web browsers. When file approvals are enabled, every file change produces an interactive diff for your review before being applied.
+                Hello! I am your Arena AI Coding Agent v0.7.0. Your model choices and settings are automatically preserved across refreshes. All changes to project settings, instructions, rules, and secrets auto-save in the background.
               </div>
-              <div class="msg-meta"><span>Agent · v0.6.0</span></div>
+              <div class="msg-meta"><span>Agent · v0.7.0</span></div>
             </div>
           </div>
 
@@ -813,7 +849,7 @@
               <button type="button" class="btn btn-danger" style="height:48px;display:none" id="stopBtn" onclick="stopStreaming()">Stop</button>
             </div>
             <div class="composer-footer">
-              <span>Supports tool calling, unified diff preview, and automated rollback backups</span>
+              <span>Supports auto-saved configurations, tool calling, diff previews, and rollbacks</span>
               <button type="button" class="btn btn-ghost btn-sm" onclick="clearChat()">Clear Chat</button>
             </div>
           </form>
@@ -826,53 +862,52 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
           <h2>Project Definitions & Configuration</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Define custom project descriptions, instructions, agent rules, and default providers.</span>
+          <span style="color:var(--text-muted);font-size:12px;">All project parameters, descriptions, and agent guidelines auto-save automatically as you type.</span>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="autosave-pill" id="projectAutoSave">✓ Auto-saved</span>
           <button class="btn btn-primary" onclick="openNewProjectModal()">+ Add Project</button>
         </div>
       </div>
 
       <div class="grid-2" style="margin-bottom:20px;">
-        <!-- Active Project Settings Editor -->
+        <!-- Active Project Settings Editor with Auto-Save -->
         <div class="stat-card" style="display:flex;flex-direction:column;gap:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div class="label">Active Project Configuration</div>
+            <div class="label">Active Project Configuration (Auto-saved)</div>
             <span class="tool-status-tag success" id="activeProjStatusTag">Active</span>
           </div>
 
           <div>
             <label style="font-size:11px;color:var(--text-dim);">Project Name</label>
-            <input id="projEditName" class="input-control" placeholder="Project name...">
+            <input id="projEditName" class="input-control" placeholder="Project name..." oninput="triggerProjectAutoSave()">
           </div>
 
           <div>
             <label style="font-size:11px;color:var(--text-dim);">Description & Purpose</label>
-            <textarea id="projEditDesc" class="input-control" style="height:60px;" placeholder="Overview of what this project does..."></textarea>
+            <textarea id="projEditDesc" class="input-control" style="height:60px;" placeholder="Overview of what this project does..." oninput="triggerProjectAutoSave()"></textarea>
           </div>
 
           <div class="grid-2">
             <div>
               <label style="font-size:11px;color:var(--text-dim);">Default Provider</label>
-              <select id="projEditProvider" class="input-control"></select>
+              <select id="projEditProvider" class="input-control" onchange="triggerProjectAutoSave()"></select>
             </div>
             <div>
               <label style="font-size:11px;color:var(--text-dim);">Default Branch</label>
-              <input id="projEditBranch" class="input-control" placeholder="arena/01a0ed4c-new">
+              <input id="projEditBranch" class="input-control" placeholder="arena/01a0ed4c-new" oninput="triggerProjectAutoSave()">
             </div>
           </div>
 
           <div>
             <label style="font-size:11px;color:var(--text-dim);">Project Instructions (System Prompt Additions)</label>
-            <textarea id="projEditInstructions" class="input-control" style="height:90px;" placeholder="Custom instructions for the agent..."></textarea>
+            <textarea id="projEditInstructions" class="input-control" style="height:90px;" placeholder="Custom instructions for the agent..." oninput="triggerProjectAutoSave()"></textarea>
           </div>
 
           <div>
             <label style="font-size:11px;color:var(--text-dim);">Agent Behavioral Rules (.agentrules)</label>
-            <textarea id="projEditRules" class="input-control" style="height:80px;" placeholder="- Rule 1: Follow standard formatting..."></textarea>
+            <textarea id="projEditRules" class="input-control" style="height:80px;" placeholder="- Rule 1: Follow standard formatting..." oninput="triggerProjectAutoSave()"></textarea>
           </div>
-
-          <button class="btn btn-primary" onclick="saveActiveProjectSettings()">Save Project Settings</button>
         </div>
 
         <!-- All Defined Projects List -->
@@ -1100,13 +1135,13 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
           <h2>Security & Environment Settings</h2>
-          <span style="color:var(--text-muted);font-size:12px;">Secrets encryption with Master Key, User & Role administration, and Proxy settings.</span>
+          <span style="color:var(--text-muted);font-size:12px;">Secrets encryption with Master Key, User & Role administration, and Proxy settings. (Auto-saved)</span>
         </div>
-        <button class="btn btn-primary" onclick="saveEnvironmentSettings()">Save Settings</button>
+        <span class="autosave-pill" id="settingsAutoSave">✓ Auto-saved</span>
       </div>
       <div class="grid-2">
         <div class="stat-card">
-          <div class="label">Encrypted Environment Secrets</div>
+          <div class="label">Encrypted Environment Secrets (Auto-saves on change)</div>
           <div id="envFields" style="display:flex;flex-direction:column;gap:10px;margin-top:10px;"></div>
         </div>
         <div class="stat-card">
@@ -1216,6 +1251,7 @@
       <div class="cmd-item" onclick="navigate('editor');closeModal('cmdPaletteModal')">📝 Open Code Editor</div>
       <div class="cmd-item" onclick="navigate('terminal');closeModal('cmdPaletteModal')">💻 Open Sandboxed Terminal</div>
       <div class="cmd-item" onclick="navigate('git');closeModal('cmdPaletteModal')">🌿 View Git Status & Diff</div>
+      <div class="cmd-item" onclick="navigate('settings');closeModal('cmdPaletteModal')">⚙️ Security & Settings</div>
       <div class="cmd-item" onclick="testAllModels();closeModal('cmdPaletteModal')">🤖 Test All Model Endpoints</div>
       <div class="cmd-item" onclick="toggleTheme();closeModal('cmdPaletteModal')">🌙 Toggle Dark / Light Theme</div>
     </div>
@@ -1223,7 +1259,7 @@
 </div>
 
 <script>
-// Application State
+// Application State with LocalStorage Persistence
 let STATE = {
   providers: [],
   projects: [],
@@ -1251,11 +1287,55 @@ async function api(path, opts = {}) {
   return data;
 }
 
-// Navigation & View Routing
+// Auto-Save Notification Helper
+function flashAutoSave(elId = 'globalAutoSave') {
+  const el = document.getElementById(elId);
+  if (el) {
+    el.classList.add('visible');
+    setTimeout(() => el.classList.remove('visible'), 2000);
+  }
+  const gEl = document.getElementById('globalAutoSave');
+  if (gEl && elId !== 'globalAutoSave') {
+    gEl.classList.add('visible');
+    setTimeout(() => gEl.classList.remove('visible'), 2000);
+  }
+}
+
+// Navigation & Hamburger Menu
+function handleMenuClick() {
+  if (window.innerWidth <= 768) {
+    toggleMobileSidebar();
+  } else {
+    toggleSidebar();
+  }
+}
+
+function toggleSidebar() { 
+  $('#sidebar').classList.toggle('collapsed'); 
+}
+
+function toggleMobileSidebar() { 
+  const sb = $('#sidebar');
+  const overlay = $('#drawerOverlay');
+  const isOpen = sb.classList.contains('mobile-open');
+  if (isOpen) {
+    sb.classList.remove('mobile-open');
+    overlay.classList.remove('active');
+  } else {
+    sb.classList.add('mobile-open');
+    overlay.classList.add('active');
+  }
+}
+
 function navigate(viewName) {
   STATE.activeView = viewName;
   document.querySelectorAll('.view-panel').forEach(p => p.classList.toggle('active', p.id === `view-${viewName}`));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
+
+  // If mobile drawer is open, close it on navigation
+  if (window.innerWidth <= 768 && $('#sidebar').classList.contains('mobile-open')) {
+    toggleMobileSidebar();
+  }
 
   if (viewName === 'projects') loadProjectsView();
   if (viewName === 'changesets') loadChangesets();
@@ -1268,13 +1348,11 @@ function navigate(viewName) {
   if (viewName === 'github') loadGitHubRepos();
 }
 
-function toggleSidebar() { $('#sidebar').classList.toggle('collapsed'); }
-function toggleMobileSidebar() { $('#sidebar').classList.toggle('mobile-open'); }
-
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme');
   const next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('arena_theme', next);
   $('#themeBtn').textContent = next === 'dark' ? '🌙' : '☀️';
 }
 
@@ -1283,6 +1361,19 @@ function closeModal(id) { $(`#${id}`).classList.remove('open'); }
 
 // Initialization
 async function initApp() {
+  // Restore saved theme
+  const savedTheme = localStorage.getItem('arena_theme');
+  if (savedTheme) {
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    $('#themeBtn').textContent = savedTheme === 'dark' ? '🌙' : '☀️';
+  }
+
+  // Restore approval setting
+  const savedApproval = localStorage.getItem('arena_require_approval');
+  if (savedApproval !== null) {
+    $('#requireApprovalCheck').checked = (savedApproval === 'true');
+  }
+
   try {
     const authStatus = await api('/api/auth/status');
     if (authStatus.authenticated && authStatus.user) {
@@ -1294,10 +1385,12 @@ async function initApp() {
     
     // Load Providers
     STATE.providers = await api('/api/providers');
-    renderChatProviders();
 
     // Load Projects
     await refreshProjects();
+
+    // Render Providers and restore user's saved Provider & Model selection
+    renderChatProviders();
 
     // Check Approvals
     checkPendingApprovals();
@@ -1323,7 +1416,9 @@ async function switchProject(projId) {
   const active = await api(`/api/projects/${projId}/activate`, { method: 'POST' });
   STATE.activeProject = active;
   refreshProjects();
+  renderChatProviders();
   refreshCurrentView();
+  flashAutoSave();
 }
 
 function populateActiveProjectForm() {
@@ -1337,6 +1432,29 @@ function populateActiveProjectForm() {
 
   const pSel = $('#projEditProvider');
   pSel.innerHTML = STATE.providers.map(pr => `<option value="${esc(pr.id)}" ${pr.id === p.default_provider ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
+}
+
+// Auto-Save Project Settings with Debounce
+let projectAutoSaveTimer = null;
+function triggerProjectAutoSave() {
+  clearTimeout(projectAutoSaveTimer);
+  projectAutoSaveTimer = setTimeout(async () => {
+    if (!STATE.activeProject) return;
+    const payload = {
+      name: $('#projEditName').value.trim(),
+      description: $('#projEditDesc').value.trim(),
+      defaultBranch: $('#projEditBranch').value.trim(),
+      defaultProvider: $('#projEditProvider').value,
+      instructions: $('#projEditInstructions').value.trim(),
+      agentRules: $('#projEditRules').value.trim()
+    };
+    await api(`/api/projects/${STATE.activeProject.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    flashAutoSave('projectAutoSave');
+  }, 400);
 }
 
 async function loadProjectsView() {
@@ -1360,25 +1478,6 @@ async function loadProjectsView() {
       </div>
     </div>
   `).join('');
-}
-
-async function saveActiveProjectSettings() {
-  if (!STATE.activeProject) return;
-  const payload = {
-    name: $('#projEditName').value.trim(),
-    description: $('#projEditDesc').value.trim(),
-    defaultBranch: $('#projEditBranch').value.trim(),
-    defaultProvider: $('#projEditProvider').value,
-    instructions: $('#projEditInstructions').value.trim(),
-    agentRules: $('#projEditRules').value.trim()
-  };
-  await api(`/api/projects/${STATE.activeProject.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  alert('Project configuration updated successfully.');
-  refreshProjects();
 }
 
 function openNewProjectModal() {
@@ -1414,18 +1513,60 @@ async function deleteProject(projId) {
   loadProjectsView();
 }
 
+// Provider & Model Persistence
 function renderChatProviders() {
   const pSel = $('#chatProvider');
-  pSel.innerHTML = STATE.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} ${p.hasApiKey ? '✓' : ''}</option>`).join('');
-  onChatProviderChange();
+  // Check localStorage first, or active project default, or first provider
+  const savedProvider = localStorage.getItem('arena_selected_provider') || STATE.activeProject?.default_provider || STATE.providers[0]?.id;
+
+  pSel.innerHTML = STATE.providers.map(p => `
+    <option value="${esc(p.id)}" ${p.id === savedProvider ? 'selected' : ''}>
+      ${esc(p.name)} ${p.hasApiKey ? '✓' : ''}
+    </option>
+  `).join('');
+
+  onChatProviderChange(false);
 }
 
-function onChatProviderChange() {
+function onChatProviderChange(save = true) {
   const pid = $('#chatProvider').value;
+  if (save) {
+    localStorage.setItem('arena_selected_provider', pid);
+    flashAutoSave();
+  }
+
   const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
   const mSel = $('#chatModel');
-  mSel.innerHTML = (p?.models || []).map(m => `<option value="${esc(m.id)}">${esc(m.name || m.id)}</option>`).join('');
-  $('#activeProviderBadge').textContent = `⚡ ${p?.name || 'Agent'} / ${mSel.value}`;
+  const savedModel = localStorage.getItem('arena_selected_model') || STATE.activeProject?.default_model || p?.models[0]?.id;
+
+  mSel.innerHTML = (p?.models || []).map(m => `
+    <option value="${esc(m.id)}" ${m.id === savedModel ? 'selected' : ''}>
+      ${esc(m.name || m.id)}
+    </option>
+  `).join('');
+
+  onChatModelChange(save);
+}
+
+function onChatModelChange(save = true) {
+  const mid = $('#chatModel').value;
+  if (save && mid) {
+    localStorage.setItem('arena_selected_model', mid);
+    flashAutoSave();
+  }
+  const pid = $('#chatProvider').value;
+  const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
+  $('#activeProviderBadge').textContent = `⚡ ${p?.name || 'Agent'} / ${mid}`;
+}
+
+function onChatStepsChange() {
+  localStorage.setItem('arena_chat_steps', $('#chatSteps').value);
+  flashAutoSave();
+}
+
+function onApprovalToggle() {
+  localStorage.setItem('arena_require_approval', $('#requireApprovalCheck').checked);
+  flashAutoSave();
 }
 
 // Chat & Streaming
@@ -1684,7 +1825,7 @@ async function saveEditorFile() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, content, requireApproval: false })
   });
-  alert('File saved directly.');
+  flashAutoSave();
 }
 
 async function stageEditorChangeset() {
@@ -1804,28 +1945,32 @@ async function loadObservabilityData() {
   } catch (_) {}
 }
 
-// Settings & Env
+// Settings & Env with Auto-Save on change
+let envAutoSaveTimer = null;
 async function loadSettings() {
   const env = await api('/api/config/environment');
   $('#envFields').innerHTML = Object.keys(env).map(k => `
     <div>
       <label style="font-size:11px;color:var(--text-dim)">${k}</label>
-      <input data-env-key="${k}" class="input-control" value="${esc(env[k])}" placeholder="${env[k] ? 'Configured (leave blank to preserve)' : 'Not configured'}">
+      <input data-env-key="${k}" class="input-control" value="${esc(env[k])}" placeholder="${env[k] ? 'Configured (leave blank to preserve)' : 'Not configured'}" oninput="triggerEnvAutoSave()">
     </div>
   `).join('');
 }
 
-async function saveEnvironmentSettings() {
-  const payload = {};
-  document.querySelectorAll('[data-env-key]').forEach(el => {
-    if (el.value) payload[el.dataset.envKey] = el.value;
-  });
-  await api('/api/config/environment', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  alert('Environment & Security Settings Saved.');
+function triggerEnvAutoSave() {
+  clearTimeout(envAutoSaveTimer);
+  envAutoSaveTimer = setTimeout(async () => {
+    const payload = {};
+    document.querySelectorAll('[data-env-key]').forEach(el => {
+      if (el.value) payload[el.dataset.envKey] = el.value;
+    });
+    await api('/api/config/environment', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    flashAutoSave('settingsAutoSave');
+  }, 500);
 }
 
 // Auth Handlers
