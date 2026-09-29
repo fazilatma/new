@@ -48,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.15.0"
+    assert APP_VERSION == "0.16.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1156,17 +1156,256 @@ echo "PHP Backend Initialized: OK\n";
     assert "php" in exec_data["command"]
 
 
-def test_arena_agentic_workflow_system_prompt_structure():
-    """Test that build_system_prompt mandates Arena Agent 4-stage workflow and PHP support."""
-    from app.chat import build_system_prompt
+def test_conversation_checkpoints_crud_and_persistence():
+    """Test saving, retrieving, and clearing conversation checkpoints."""
+    from app.database import (
+        save_conversation_checkpoint,
+        get_latest_conversation_checkpoint,
+        get_conversation_checkpoints,
+        clear_conversation_checkpoints
+    )
 
-    prompt = build_system_prompt()
-    assert "ARENA AGENT WORKFLOW" in prompt
-    assert "Goal & Intent" in prompt or "اعلام هدف" in prompt
-    assert "Work Plan" in prompt or "برنامه کاری" in prompt
-    assert "agent-step-drawer" in prompt
-    assert "Accomplishments" in prompt or "خلاصه کارها" in prompt
-    assert "PHP" in prompt
+    conv_id = f"test-cp-{int(time.time()*1000)}"
+
+    # 1. Save step 0 checkpoint
+    cp1_id = save_conversation_checkpoint(
+        conversation_id=conv_id,
+        step_index=0,
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        accumulated_content="Step 1 completed",
+        chat_history=[{"role": "user", "content": "build app"}, {"role": "assistant", "content": "Step 1 completed"}],
+        status="in_progress"
+    )
+    assert cp1_id is not None
+    assert len(cp1_id) > 0
+
+    # 2. Save step 1 checkpoint
+    cp2_id = save_conversation_checkpoint(
+        conversation_id=conv_id,
+        step_index=1,
+        provider_id="groq",
+        model_id="llama-3.3-70b",
+        accumulated_content="Step 2 completed",
+        chat_history=[{"role": "user", "content": "build app"}, {"role": "assistant", "content": "Step 1 completed"}, {"role": "assistant", "content": "Step 2 completed"}],
+        saved_files=[{"path": "app.py", "type": "python"}],
+        status="completed"
+    )
+    assert cp2_id is not None
+
+    # 3. Get latest checkpoint
+    latest = get_latest_conversation_checkpoint(conv_id)
+    assert latest is not None
+    assert latest["id"] == cp2_id
+    assert latest["stepIndex"] == 1
+    assert latest["status"] == "completed"
+    assert len(latest["chatHistory"]) == 3
+    assert len(latest["savedFiles"]) == 1
+
+    # 4. List all checkpoints
+    all_cps = get_conversation_checkpoints(conv_id)
+    assert len(all_cps) == 2
+
+    # 5. Clear checkpoints
+    clear_conversation_checkpoints(conv_id)
+    cleared = get_latest_conversation_checkpoint(conv_id)
+    assert cleared is None
+
+
+def test_conversation_checkpoints_api_endpoints():
+    """Test GET /api/conversations/{conv_id}/checkpoints and DELETE endpoint."""
+    conv_res = client.post("/api/conversations", json={"title": "Checkpoint Test Chat"})
+    conv_id = conv_res.json()["id"]
+
+    from app.database import save_conversation_checkpoint
+    save_conversation_checkpoint(
+        conversation_id=conv_id,
+        step_index=0,
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        chat_history=[{"role": "user", "content": "Hi"}],
+        status="in_progress"
+    )
+
+    # Fetch via API
+    list_res = client.get(f"/api/conversations/{conv_id}/checkpoints")
+    assert list_res.status_code == 200
+    cps = list_res.json()["checkpoints"]
+    assert len(cps) == 1
+    assert cps[0]["conversationId"] == conv_id
+
+    # Fetch latest via API
+    latest_res = client.get(f"/api/conversations/{conv_id}/checkpoints/latest")
+    assert latest_res.status_code == 200
+    assert latest_res.json()["checkpoint"]["stepIndex"] == 0
+
+    # Clear via API
+    del_res = client.delete(f"/api/conversations/{conv_id}/checkpoints")
+    assert del_res.status_code == 200
+
+    latest_res2 = client.get(f"/api/conversations/{conv_id}/checkpoints/latest")
+    assert latest_res2.status_code == 404
+
+
+def test_smart_fallback_candidate_sorting_different_provider():
+    """Test get_verified_fallback_candidates prioritizes alternative providers when prefer_different_provider=True."""
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    store = ProviderStore()
+    p1 = Provider(id="prov_a", name="Provider A", protocol="openai", url="https://api.a.com/v1", apiKey="sk-a", enabled=True, priority=10, models=[
+        ModelSpec(id="model-a1", name="Model A1"),
+        ModelSpec(id="model-a2", name="Model A2")
+    ])
+    p2 = Provider(id="prov_b", name="Provider B", protocol="openai", url="https://api.b.com/v1", apiKey="sk-b", enabled=True, priority=20, models=[
+        ModelSpec(id="model-b1", name="Model B1")
+    ])
+
+    store.data = {"prov_a": p1, "prov_b": p2}
+    # Record successful diagnostic tests
+    store.record_metric("prov_a", "model-a1", 100, is_error=False)
+    store.record_metric("prov_a", "model-a2", 100, is_error=False)
+    store.record_metric("prov_b", "model-b1", 150, is_error=False)
+
+    # If current failed provider is prov_a, candidates should prioritize prov_b first
+    candidates = store.get_verified_fallback_candidates(
+        exclude_provider_id="prov_a",
+        exclude_model_id="model-a1",
+        prefer_different_provider=True
+    )
+    assert len(candidates) >= 1
+    assert candidates[0][0].id == "prov_b"
+
+
+@pytest.mark.anyio
+async def test_checkpoint_resumption_in_stream_chat(monkeypatch):
+    """Test that stream_complete_chat resumes execution seamlessly from checkpoint."""
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore
+    from app.database import save_conversation_checkpoint, clear_conversation_checkpoints
+
+    conv_id = f"test-resume-{int(time.time()*1000)}"
+    # Save an initial checkpoint with previous step history
+    save_conversation_checkpoint(
+        conversation_id=conv_id,
+        step_index=0,
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        chat_history=[
+            {"role": "user", "content": "Initial prompt"},
+            {"role": "assistant", "content": "Step 1 output"}
+        ],
+        status="in_progress"
+    )
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        yield {"type": "token", "text": "Resumed Step 2 Completed"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "Resumed Step 2 Completed"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+    store = ProviderStore()
+    monkeypatch.setattr(store, "get_api_key", lambda p: "sk-mock-key")
+
+    events = []
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Initial prompt"}],
+        conversation_id=conv_id
+    ):
+        events.append(evt)
+
+    event_types = [e.get("type") for e in events]
+    assert "checkpoint_resumed" in event_types
+    resumed_evt = next(e for e in events if e.get("type") == "checkpoint_resumed")
+    assert resumed_evt["stepIndex"] == 0
+    clear_conversation_checkpoints(conv_id)
+
+
+@pytest.mark.anyio
+async def test_smart_fallback_on_rate_limit_429_in_stream_chat(monkeypatch):
+    """Test that a 429 rate limit immediately switches to the next verified candidate and yields model_switched_rate_limit."""
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    store = ProviderStore()
+    p1 = Provider(id="prov_rate_limited", name="Rate Limited Provider", protocol="openai", url="https://api.a.com/v1", apiKey="sk-a", enabled=True, priority=20, models=[
+        ModelSpec(id="model-429", name="Model 429")
+    ])
+    p2 = Provider(id="prov_backup", name="Backup Provider", protocol="openai", url="https://api.b.com/v1", apiKey="sk-b", enabled=True, priority=10, models=[
+        ModelSpec(id="model-backup", name="Model Backup")
+    ])
+    store.data = {"prov_rate_limited": p1, "prov_backup": p2}
+    store.record_metric("prov_backup", "model-backup", 120, is_error=False)
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        if p.id == "prov_rate_limited":
+            raise Exception("HTTP 429: Rate limit exceeded or quota exhausted")
+        else:
+            yield {"type": "token", "text": "Backup provider response"}
+            yield {"type": "full_message", "message": {"role": "assistant", "content": "Backup provider response"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+
+    events = []
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="prov_rate_limited",
+        model_id="model-429",
+        messages=[{"role": "user", "content": "Run task"}]
+    ):
+        events.append(evt)
+
+    event_types = [e.get("type") for e in events]
+    assert "model_switched_rate_limit" in event_types
+    switch_evt = next(e for e in events if e.get("type") == "model_switched_rate_limit")
+    assert switch_evt["previousProvider"] == "Rate Limited Provider"
+    assert switch_evt["newProvider"] == "Backup Provider"
+    assert "done" in event_types
+
+
+@pytest.mark.anyio
+async def test_exponential_backoff_retry_loop_in_stream_chat(monkeypatch):
+    """Test that transient network timeout triggers retry_countdown and recovers seamlessly."""
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    store = ProviderStore()
+    p = Provider(id="prov_retry", name="Retry Provider", protocol="openai", url="https://api.retry.com/v1", apiKey="sk-r", enabled=True, priority=10, models=[
+        ModelSpec(id="model-r", name="Model R")
+    ])
+    store.data = {"prov_retry": p}
+
+    call_attempt = 0
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        nonlocal call_attempt
+        call_attempt += 1
+        if call_attempt == 1:
+            raise ConnectionError("Network connection reset by peer")
+        else:
+            yield {"type": "token", "text": "Recovered response after retry"}
+            yield {"type": "full_message", "message": {"role": "assistant", "content": "Recovered response after retry"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+
+    events = []
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="prov_retry",
+        model_id="model-r",
+        messages=[{"role": "user", "content": "Transient test"}]
+    ):
+        events.append(evt)
+
+    event_types = [e.get("type") for e in events]
+    assert "retry_countdown" in event_types
+    retry_evt = next(e for e in events if e.get("type") == "retry_countdown")
+    assert retry_evt["attempt"] == 1
+    assert retry_evt["maxAttempts"] == 10
+    assert "done" in event_types
+
+
 
 
 

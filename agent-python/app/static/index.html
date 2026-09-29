@@ -723,6 +723,49 @@
       color: #ffffff;
     }
 
+    .retry-countdown-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 8px 0;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      color: #fbbf24;
+      font-weight: 500;
+      animation: pulse 1.5s infinite;
+    }
+
+    .checkpoint-resumed-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 6px 0;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+      font-weight: 500;
+    }
+
+    .model-switch-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 6px 0;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      color: #818cf8;
+      font-weight: 500;
+    }
+
     /* Model Test Table */
     .model-test-table {
       width: 100%;
@@ -5974,6 +6017,29 @@ async function streamAgentResponse() {
             if (data.type === 'execution_healed') {
               const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
                 (accumulated || '') + `\n\n> ✨ *کد با موفقیت اصلاح و بدون خطا اجرا شد (Exit 0).*`;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.type === 'checkpoint_resumed') {
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> 💾 **ادامه اجرای خودکار از چک‌پوینت ذخیره شده (مرحله ${data.stepIndex + 1})**...`;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.type === 'retry_countdown') {
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> ⏳ **تایمر تلاش مجدد ({attempt}/${maxAttempts})**: ${data.reason || 'تلاش مجدد در جریان است...'}`
+                .replace('{attempt}', data.attempt || 1)
+                .replace('{maxAttempts}', data.maxAttempts || 10);
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.type === 'model_switched_rate_limit') {
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> 🔀 **سوییچ هوشمند ارائه‌دهنده به علت ریت‌لیمیت**: ${data.reason || `تغییر مدل به ${data.newModel} از ${data.newProvider}`}`;
               bubble.innerHTML = renderMarkdown(fullDisplay);
               const container = $('#chatMessages');
               container.scrollTop = container.scrollHeight;

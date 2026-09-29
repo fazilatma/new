@@ -174,7 +174,12 @@ class ProviderStore:
                 1 if CIRCUIT_BREAKER.is_tripped(provider_id) else 0
             ))
 
-    def get_verified_fallback_candidates(self, exclude_provider_id: Optional[str] = None, exclude_model_id: Optional[str] = None) -> List[Tuple[Provider, ModelSpec]]:
+    def get_verified_fallback_candidates(
+        self,
+        exclude_provider_id: Optional[str] = None,
+        exclude_model_id: Optional[str] = None,
+        prefer_different_provider: bool = False
+    ) -> List[Tuple[Provider, ModelSpec]]:
         """Return a list of (Provider, ModelSpec) that passed diagnostic health checks, ordered by lowest latency and reliability."""
         verified_candidates: List[Tuple[Provider, ModelSpec]] = []
         seen = set()
@@ -214,6 +219,9 @@ class ProviderStore:
                     seen.add((pid, mid))
         except Exception:
             pass
+
+        if prefer_different_provider and exclude_provider_id:
+            verified_candidates.sort(key=lambda item: 0 if item[0].id != exclude_provider_id else 1)
 
         return verified_candidates
 

@@ -9,3 +9,7 @@ agent-python/data/
 agent-python/data/logs/
 agent-python/data/workspaces/
 agent-python/data/uploads/
+*.db
+*.sqlite
+*.sqlite3
+

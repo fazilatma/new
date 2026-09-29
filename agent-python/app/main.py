@@ -15,7 +15,10 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL, parse_proxy_setting, get_proxy_config, mask_secret
-from .database import get_db, init_db
+from .database import (
+    get_db, init_db, get_latest_conversation_checkpoint,
+    get_conversation_checkpoints, clear_conversation_checkpoints
+)
 from .models import Provider, ModelSpec
 from .providers import PROVIDER_STORE
 from .workspaces import (
@@ -1053,7 +1056,37 @@ def update_conversation(conv_id: str, payload: Dict[str, Any], user: Dict[str, A
 def delete_conversation(conv_id: str, user: Dict[str, Any] = Depends(require_developer)):
     with get_db() as conn:
         conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+    clear_conversation_checkpoints(conv_id)
     return {"ok": True}
+
+# Conversation Checkpoints API
+@app.get("/api/conversations/{conv_id}/checkpoints")
+def get_conversation_checkpoints_endpoint(conv_id: str, limit: int = 10, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        checkpoints = get_conversation_checkpoints(conv_id, limit=limit)
+        return {"checkpoints": checkpoints}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/conversations/{conv_id}/checkpoints/latest")
+def get_latest_conversation_checkpoint_endpoint(conv_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    try:
+        cp = get_latest_conversation_checkpoint(conv_id)
+        if not cp:
+            raise HTTPException(404, "No checkpoint found for conversation")
+        return {"checkpoint": cp}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.delete("/api/conversations/{conv_id}/checkpoints")
+def clear_conversation_checkpoints_endpoint(conv_id: str, user: Dict[str, Any] = Depends(require_developer)):
+    try:
+        clear_conversation_checkpoints(conv_id)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
 
 # Conversation References API
 @app.get("/api/conversations/{conv_id}/references")

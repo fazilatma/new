@@ -16,6 +16,11 @@ from .workspaces import (
     add_conversation_reference
 )
 from .projects import get_active_project
+from .database import (
+    save_conversation_checkpoint,
+    get_latest_conversation_checkpoint,
+    clear_conversation_checkpoints
+)
 
 def build_system_prompt(
     conversation_id: Optional[str] = None,
@@ -626,6 +631,24 @@ async def stream_complete_chat(
                 m["content"] = sys_prompt
     chat_msgs.extend([m for m in messages if m.get("role") != "system"])
 
+    # Resume from checkpoint if available
+    resumed_from_checkpoint = False
+    if conversation_id:
+        cp = get_latest_conversation_checkpoint(conversation_id)
+        if cp and cp.get("chatHistory") and len(cp["chatHistory"]) > 0:
+            non_sys_msgs = [m for m in messages if m.get("role") != "system"]
+            cp_non_sys = [m for m in cp["chatHistory"] if m.get("role") != "system"]
+            if len(cp_non_sys) >= len(non_sys_msgs) and any(m.get("role") in ("assistant", "tool") for m in cp["chatHistory"]):
+                chat_msgs = [m for m in cp["chatHistory"] if m.get("role") != "system"]
+                chat_msgs.insert(0, {"role": "system", "content": sys_prompt})
+                resumed_from_checkpoint = True
+                yield {
+                    "type": "checkpoint_resumed",
+                    "checkpointId": cp["id"],
+                    "stepIndex": cp.get("stepIndex", 0),
+                    "message": f"Resumed execution from checkpoint at step {cp.get('stepIndex', 0) + 1}."
+                }
+
     primary_p = store.data.get(provider_id)
     if not primary_p:
         raise ValueError(f"Provider '{provider_id}' is not configured in the Provider Catalog.")
@@ -663,7 +686,7 @@ async def stream_complete_chat(
     candidates: List[Tuple[Provider, ModelSpec, bool]] = [(primary_p, model, False)]
     seen = {(primary_p.id, model.id)}
 
-    verified_fallbacks = store.get_verified_fallback_candidates(exclude_provider_id=primary_p.id, exclude_model_id=model.id)
+    verified_fallbacks = store.get_verified_fallback_candidates(exclude_provider_id=primary_p.id, exclude_model_id=model.id, prefer_different_provider=True)
     for vp, vm in verified_fallbacks:
         if (vp.id, vm.id) not in seen:
             candidates.append((vp, vm, True))
@@ -704,13 +727,53 @@ async def stream_complete_chat(
         try:
             for step_idx in range(max_steps):
                 last_msg = None
-                async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key):
-                    if chunk["type"] == "token":
-                        yield {"type": "token", "text": chunk["text"]}
-                    elif chunk["type"] == "reasoning":
-                        yield {"type": "reasoning", "reasoning": chunk["reasoning"]}
-                    elif chunk["type"] == "full_message":
-                        last_msg = chunk["message"]
+
+                # Exponential backoff retry loop (1s, 2s, 4s, 8s, 16s... up to 10 attempts) for network drop/timeout
+                for attempt in range(1, 11):
+                    try:
+                        async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key):
+                            if chunk["type"] == "token":
+                                yield {"type": "token", "text": chunk["text"]}
+                            elif chunk["type"] == "reasoning":
+                                yield {"type": "reasoning", "reasoning": chunk["reasoning"]}
+                            elif chunk["type"] == "full_message":
+                                last_msg = chunk["message"]
+                        break # Stream completed cleanly
+                    except Exception as stream_err:
+                        err_str = str(stream_err).lower()
+                        is_rate_limit = (
+                            "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str or
+                            "402" in err_str or "quota" in err_str or "credit" in err_str or
+                            "billing" in err_str or "insufficient" in err_str
+                        )
+                        if is_rate_limit:
+                            raise stream_err
+
+                        is_network_or_timeout = (
+                            isinstance(stream_err, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError)) or
+                            "timeout" in err_str or "timed out" in err_str or "connect" in err_str or
+                            "connection" in err_str or "502" in err_str or "503" in err_str or "504" in err_str or
+                            "520" in err_str or "521" in err_str or "522" in err_str or "524" in err_str or
+                            "network" in err_str or "disconnected" in err_str or "remote protocol" in err_str
+                        )
+
+                        if not is_network_or_timeout or attempt >= 10:
+                            raise stream_err
+
+                        delay_sec = min(2 ** (attempt - 1), 60)
+                        max_sleep = float(os.getenv("MAX_RETRY_SLEEP_SEC", "60"))
+                        actual_delay = min(delay_sec, max_sleep)
+                        yield {
+                            "type": "retry_countdown",
+                            "attempt": attempt,
+                            "maxAttempts": 10,
+                            "delaySec": delay_sec,
+                            "provider": p.name,
+                            "model": target_model.name,
+                            "reason": f"قطع ارتباط شبکه یا تایم‌اوت ({type(stream_err).__name__}). تلاش مجدد در {delay_sec} ثانیه..."
+                        }
+                        if actual_delay > 0:
+                            await asyncio.sleep(actual_delay)
 
                 if not last_msg:
                     break
@@ -721,6 +784,21 @@ async def stream_complete_chat(
                 if not tool_calls:
                     saved_files = auto_detect_and_save_code_files(last_msg.get("content", ""), pending_approvals)
                     execution_reports = []
+
+                    # Save checkpoint upon saveable message
+                    if conversation_id:
+                        save_conversation_checkpoint(
+                            conversation_id=conversation_id,
+                            step_index=step_idx,
+                            provider_id=p.id,
+                            model_id=target_model.id,
+                            accumulated_content=last_msg.get("content", ""),
+                            accumulated_reasoning=last_msg.get("reasoning_content", ""),
+                            chat_history=chat_msgs,
+                            saved_files=saved_files,
+                            execution_results=execution_reports,
+                            status="completed"
+                        )
 
                     # Autonomous Self-Healing Execution Loop
                     for sf in saved_files:
@@ -826,6 +904,8 @@ async def stream_complete_chat(
                             "activeModel": target_model.id
                         } if is_fallback else None
                     }
+                    if conversation_id:
+                        clear_conversation_checkpoints(conversation_id)
                     return
 
                 # Execute tool calls
@@ -850,6 +930,17 @@ async def stream_complete_chat(
                         "content": json.dumps(res, ensure_ascii=False)
                     })
 
+                    # Save checkpoint after each tool execution
+                    if conversation_id:
+                        save_conversation_checkpoint(
+                            conversation_id=conversation_id,
+                            step_index=step_idx,
+                            provider_id=p.id,
+                            model_id=target_model.id,
+                            chat_history=chat_msgs,
+                            status="in_progress"
+                        )
+
             CIRCUIT_BREAKER.record_success(p.id)
             yield {
                 "type": "done",
@@ -858,12 +949,51 @@ async def stream_complete_chat(
                 "model": target_model.id,
                 "isFallback": is_fallback
             }
+            if conversation_id:
+                clear_conversation_checkpoints(conversation_id)
             return
 
         except Exception as e:
             err_text = str(e)
             CIRCUIT_BREAKER.record_failure(p.id)
             store.record_metric(p.id, target_model.id, 0, is_error=True)
+
+            # Save checkpoint on failure
+            if conversation_id:
+                save_conversation_checkpoint(
+                    conversation_id=conversation_id,
+                    step_index=step_idx if 'step_idx' in locals() else 0,
+                    provider_id=p.id,
+                    model_id=target_model.id,
+                    chat_history=chat_msgs,
+                    status="failed",
+                    error_message=err_text
+                )
+
+            err_lower = err_text.lower()
+            is_rate_limit = (
+                "429" in err_lower or "rate limit" in err_lower or "rate_limit" in err_lower or
+                "402" in err_lower or "quota" in err_lower or "credit" in err_lower or
+                "billing" in err_lower or "insufficient" in err_lower
+            )
+
+            if is_rate_limit:
+                fallbacks = store.get_verified_fallback_candidates(
+                    exclude_provider_id=p.id,
+                    exclude_model_id=target_model.id,
+                    prefer_different_provider=True
+                )
+                if fallbacks:
+                    next_p, next_m = fallbacks[0]
+                    yield {
+                        "type": "model_switched_rate_limit",
+                        "previousProvider": p.name,
+                        "previousModel": target_model.name,
+                        "newProvider": next_p.name,
+                        "newModel": next_m.name,
+                        "reason": f"خطای ریت‌لیمیت یا اتمام اعتبار ({err_text})؛ سوییچ هوشمند به مدل {next_m.name} از ارائه‌دهنده {next_p.name}"
+                    }
+
             if p.id == primary_p.id:
                 primary_error = f"{err_text} (Endpoint: {p.url})"
             else:
@@ -925,6 +1055,18 @@ async def complete_chat(
                 m["content"] = sys_prompt
     chat_msgs.extend([m for m in messages if m.get("role") != "system"])
 
+    # Resume from checkpoint if available
+    resumed_from_cp = False
+    if conversation_id:
+        cp = get_latest_conversation_checkpoint(conversation_id)
+        if cp and cp.get("chatHistory") and len(cp["chatHistory"]) > 0:
+            non_sys_msgs = [m for m in messages if m.get("role") != "system"]
+            cp_non_sys = [m for m in cp["chatHistory"] if m.get("role") != "system"]
+            if len(cp_non_sys) >= len(non_sys_msgs) and any(m.get("role") in ("assistant", "tool") for m in cp["chatHistory"]):
+                chat_msgs = [m for m in cp["chatHistory"] if m.get("role") != "system"]
+                chat_msgs.insert(0, {"role": "system", "content": sys_prompt})
+                resumed_from_cp = True
+
     # Provider Resolution & Fallback list
     primary_p = store.data.get(provider_id)
     if not primary_p:
@@ -971,7 +1113,7 @@ async def complete_chat(
     seen = {(primary_p.id, model.id)}
 
     # 2. Verified fallback candidates (Models that successfully passed health/latency tests)
-    verified_fallbacks = store.get_verified_fallback_candidates(exclude_provider_id=primary_p.id, exclude_model_id=model.id)
+    verified_fallbacks = store.get_verified_fallback_candidates(exclude_provider_id=primary_p.id, exclude_model_id=model.id, prefer_different_provider=True)
     for vp, vm in verified_fallbacks:
         if (vp.id, vm.id) not in seen:
             candidates.append((vp, vm, True))
@@ -1001,7 +1143,36 @@ async def complete_chat(
 
         try:
             for step_idx in range(max_steps):
-                resp = await call_provider_api(p, target_model, chat_msgs, api_key)
+                resp = None
+                for attempt in range(1, 11):
+                    try:
+                        resp = await call_provider_api(p, target_model, chat_msgs, api_key)
+                        break
+                    except Exception as req_err:
+                        err_str = str(req_err).lower()
+                        is_rate_limit = (
+                            "429" in err_str or "rate limit" in err_str or "rate_limit" in err_str or
+                            "402" in err_str or "quota" in err_str or "credit" in err_str or
+                            "billing" in err_str or "insufficient" in err_str
+                        )
+                        is_network_or_timeout = (
+                            isinstance(req_err, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError)) or
+                            "timeout" in err_str or "timed out" in err_str or "connect" in err_str or
+                            "connection" in err_str or "502" in err_str or "503" in err_str or "504" in err_str or
+                            "520" in err_str or "521" in err_str or "522" in err_str or "524" in err_str or
+                            "network" in err_str or "disconnected" in err_str
+                        )
+                        if is_rate_limit or not is_network_or_timeout or attempt >= 10:
+                            raise req_err
+                        delay_sec = min(2 ** (attempt - 1), 60)
+                        max_sleep = float(os.getenv("MAX_RETRY_SLEEP_SEC", "60"))
+                        actual_delay = min(delay_sec, max_sleep)
+                        if actual_delay > 0:
+                            await asyncio.sleep(actual_delay)
+
+                if not resp or not resp.get("choices"):
+                    break
+
                 choice = resp["choices"][0]
                 msg = choice["message"]
                 chat_msgs.append(msg)
@@ -1041,6 +1212,10 @@ async def complete_chat(
 
                     CIRCUIT_BREAKER.record_success(p.id)
                     store.record_metric(p.id, target_model.id, 0, is_error=False)
+
+                    if conversation_id:
+                        clear_conversation_checkpoints(conversation_id)
+
                     return {
                         "message": msg,
                         "steps": step_idx + 1,
@@ -1091,8 +1266,21 @@ async def complete_chat(
                         "content": json.dumps(res, ensure_ascii=False)
                     })
 
+                    if conversation_id:
+                        save_conversation_checkpoint(
+                            conversation_id=conversation_id,
+                            step_index=step_idx,
+                            provider_id=p.id,
+                            model_id=target_model.id,
+                            chat_history=chat_msgs,
+                            status="in_progress"
+                        )
+
             CIRCUIT_BREAKER.record_success(p.id)
             store.record_metric(p.id, target_model.id, 0, is_error=False)
+            if conversation_id:
+                clear_conversation_checkpoints(conversation_id)
+
             return {
                 "message": {"role": "assistant", "content": "Reached maximum tool execution steps."},
                 "steps": max_steps,
@@ -1106,6 +1294,18 @@ async def complete_chat(
             err_text = str(e)
             CIRCUIT_BREAKER.record_failure(p.id)
             store.record_metric(p.id, target_model.id, 0, is_error=True)
+
+            if conversation_id:
+                save_conversation_checkpoint(
+                    conversation_id=conversation_id,
+                    step_index=step_idx if 'step_idx' in locals() else 0,
+                    provider_id=p.id,
+                    model_id=target_model.id,
+                    chat_history=chat_msgs,
+                    status="failed",
+                    error_message=err_text
+                )
+
             if p.id == primary_p.id:
                 primary_error = f"{err_text} (Endpoint: {p.url})"
             else:

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.16.0 - Step Checkpointing & Resume, Smart Cross-Provider Fallback & Exponential Backoff Retry Loop
+
+- **Step Checkpointing & Seamless Resume**:
+  - Checkpoint persistence after every step of agent execution, tool call, and file save event (`conversation_checkpoints` SQLite table).
+  - Checkpoints store full accumulated reasoning, conversation chat history, saved files metadata, execution results, and execution status.
+  - Seamless resumption upon reconnect or session reload: Automatically loads the latest conversation checkpoint and continues from the exact interrupted step without restarting from scratch.
+  - Emits real-time `checkpoint_resumed` SSE events notifying the user of successful step continuation.
+  - Dedicated checkpoint API endpoints: `GET /api/conversations/{id}/checkpoints`, `GET /api/conversations/{id}/checkpoints/latest`, and `DELETE /api/conversations/{id}/checkpoints`.
+- **Smart Fallback on Rate Limit (429) & Quota Exhaustion (402)**:
+  - Immediate detection of rate limits (HTTP 429), quota limits (HTTP 402), billing or insufficient credit errors.
+  - Enhanced candidate selection with `prefer_different_provider=True` in `get_verified_fallback_candidates()` to prioritize verified alternative providers over secondary models on the same overloaded provider.
+  - Emits live `model_switched_rate_limit` SSE events in the chat stream displaying previous and newly activated provider/model pairs.
+- **Exponential Backoff Retry Timer for Network Drops & Timeouts**:
+  - Resilient retry loop ($1s, 2s, 4s, 8s, 16s...$ up to 10 attempts) for network disconnects, TCP drops, server gateway timeouts (502, 503, 504), and transient connectivity drops.
+  - Emits live `retry_countdown` SSE events displaying real-time attempt counter and countdown timer directly in the chat message stream.
+  - Dedicated UI badges for retry timer (`.retry-countdown-badge`), model switch notices (`.model-switch-badge`), and checkpoint resumption (`.checkpoint-resumed-badge`).
+- **Test Suite Expansion**: Added automated pytest verification for checkpoint CRUD, streaming checkpoint resumption, smart rate-limit provider switching, and exponential backoff retry loops (39/39 tests passing).
+
 ## 0.15.0 - PHP Scripting & Execution Support, Arena Agent Structured Agentic Coding Workflow & Collapsible Step Drawers
 
 - **PHP Language & Execution Engine Support**:
