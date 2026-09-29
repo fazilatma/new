@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Suite Version: 2.14.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.15.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -281,7 +281,60 @@ that cannot provide it. The alternative is to set `DATABASE_URL` to a PostgreSQL
 
 ---
 
-## 📱 7. Android Termux Battery & Kernel Optimization
+## 🐍 7. Python on shared hosting (`py-upgrade.sh`)
+
+On shared hosting you have no root, so `apt install python3.14` is out, and `pyenv` compiles from
+source — which usually fails on missing `openssl` / `zlib` / `libffi` headers, or gets killed by the
+account's CPU/RAM limits. `py-upgrade.sh` installs [uv](https://astral.sh/uv) (a static binary that
+needs neither Python nor a compiler) and fetches a **prebuilt** standalone CPython instead.
+Measured: Python 3.14.7 installed in 2.4 s.
+
+```bash
+# just install the latest 3.14
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/hostconsole-nvm-node20/py-upgrade.sh | bash
+
+# install it AND set up a project: .venv + requirements.txt
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/hostconsole-nvm-node20/py-upgrade.sh | bash -s -- 3.14 ~/apps/scraper
+```
+
+Note the `-s --` — without it `bash` treats the arguments as filenames. Use `bash`, not `sh`.
+
+It ends by printing the two commands to paste into the project's console settings:
+
+```
+دستور نصب :  /home/USER/apps/scraper/.venv/bin/python -m pip install -r requirements.txt
+دستور اجرا :  /home/USER/apps/scraper/.venv/bin/python scraper4.py
+```
+
+### ⚠️ The `python3` PATH trap
+
+Deploy scripts are generated with:
+
+```bash
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/opt/conda/bin:${HOME}/.local/bin:${PATH:-}"
+```
+
+`/usr/bin` comes **before** `$HOME/.local/bin`, so a newly installed interpreter is on PATH and yet:
+
+```
+python3     → /usr/local/bin/python3   (3.13.14)   ← still the old one
+python3.14  → ~/.local/bin/python3.14  (3.14.7)
+```
+
+Since the console hardcodes `python3 main.py` and `pip3 install -r requirements.txt`, installing a
+new Python changes nothing on its own. Always use the absolute interpreter path (the script prints
+it and warns when the two differ). Per-project Python version selection — the equivalent of the nvm
+support in §6 — is not implemented yet.
+
+To make `uv` permanent in interactive shells:
+
+```bash
+echo 'source ~/.local/bin/env' >> ~/.bashrc
+```
+
+---
+
+## 📱 8. Android Termux Battery & Kernel Optimization
 
 * **Zero Background Drain:** Run `wcp off` or `wcp shutdown` when finished to pause all background daemons.
 * **SELinux OPcache Fix:** Bypasses unrooted Android `/tmp` semaphore restrictions automatically.
@@ -297,9 +350,10 @@ can never be overwritten by `webconsole.php` again.
 
 | Component | Version |
 | :--- | :---: |
-| `hostconsole.php` (shared hosting) | **2.14.0** |
+| `hostconsole.php` (shared hosting) | **2.15.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
-| `wcp` CLI · `install.sh` · `update.sh` | 2.14.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.15.0 |
+| `py-upgrade.sh` | 1.0.0 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).

@@ -13,11 +13,47 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.14.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.15.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.14.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.14.0 | Follows the suite version |
+| `wcp` (CLI) | 2.15.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.15.0 | Follows the suite version |
+| `py-upgrade.sh` | 1.0.0 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.15.0] — 2026-09-29 · 🐍 `py-upgrade.sh`
+
+### Added
+* **`py-upgrade.sh` — a one-command Python installer for shared hosting**, runnable straight from
+  GitHub with `curl`. On shared hosting `apt install python3.14` is impossible without root, and
+  `pyenv` compiles from source, which typically dies on missing `openssl` / `zlib` / `libffi`
+  headers or gets killed by the account's CPU/RAM limits. This script instead installs
+  [uv](https://astral.sh/uv) — a static binary needing neither Python nor a compiler — and pulls a
+  prebuilt standalone CPython. Measured: **Python 3.14.7 installed in 2.4 s**.
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/fazilatma/new/hostconsole-nvm-node20/py-upgrade.sh | bash -s -- 3.14 ~/apps/scraper
+  ```
+
+  Given a project directory it also creates `.venv`, installs `requirements.txt`, detects the entry
+  script (`main.py`, `app.py`, `scraper4.py`, `bot.py`, …) and prints the exact install/start
+  commands to paste into the project's console settings.
+
+* **Warns about the `python3` PATH trap.** Deploy scripts are generated with
+  `PATH="/usr/local/bin:/usr/bin:/bin:…:$HOME/.local/bin:$PATH"`, where `/usr/bin` precedes
+  `$HOME/.local/bin` — so a freshly installed interpreter is on PATH yet bare `python3` still
+  resolves to the old system one, and every hardcoded `python3 main.py` keeps using it. The script
+  detects this and tells you to use the absolute interpreter path instead.
+
+### Notes
+* `uv venv` is invoked with `--seed`; without it the venv has no `pip` and the printed
+  `python -m pip install -r requirements.txt` would fail.
+* `UV_LINK_MODE=copy` is exported because on shared hosting the uv cache and the project usually
+  sit on different filesystems, which makes hardlinking warn and fall back.
+* Latest Python at release time: **3.14.7** (2026-08-05). 3.15.0 is due 2026-10-01.
+* Unchanged in this release: `hostconsole.php` still hardcodes `python3`; per-project Python
+  version selection (the equivalent of the nvm work in 2.12.0) is not implemented yet.
 
 ---
 
