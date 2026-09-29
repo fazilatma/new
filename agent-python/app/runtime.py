@@ -1,17 +1,22 @@
-import asyncio, uuid, sqlite3, json
-from pathlib import Path
-DB=Path(__file__).parents[1]/'data'/'jobs.sqlite3'; DB.parent.mkdir(exist_ok=True)
-conn=sqlite3.connect(DB,check_same_thread=False);conn.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY,status TEXT,result TEXT,error TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)');conn.commit()
-def _row(r): return {'id':r[0],'status':r[1],'result':json.loads(r[2]) if r[2] else None,'error':r[3]}
-def get(jid):
- r=conn.execute('SELECT id,status,result,error FROM jobs WHERE id=?',(jid,)).fetchone();return _row(r) if r else None
-def list_jobs(limit=50): return [_row(r) for r in conn.execute('SELECT id,status,result,error FROM jobs ORDER BY created_at DESC LIMIT ?',(limit,))]
-def submit(coro):
- jid=str(uuid.uuid4());conn.execute("INSERT INTO jobs(id,status) VALUES(?,?)",(jid,'queued'));conn.commit()
- async def run():
-  conn.execute("UPDATE jobs SET status='running',updated_at=CURRENT_TIMESTAMP WHERE id=?",(jid,));conn.commit()
-  try:
-   result=await coro;conn.execute("UPDATE jobs SET status='done',result=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(json.dumps(result,ensure_ascii=False),jid))
-  except Exception as e: conn.execute("UPDATE jobs SET status='failed',error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(str(e),jid))
-  conn.commit()
- asyncio.create_task(run());return get(jid)
+"""Runtime job submission and query interface."""
+from typing import Dict, Any, List, Optional
+from .worker import (
+    create_job, get_job_details, list_all_jobs,
+    cancel_job, pause_job, resume_job, retry_job, delete_old_jobs
+)
+
+def submit(payload: Dict[str, Any], title: str = "Agent Chat Task", provider: str = "openrouter", model: str = "", workspace_id: str = "default", user_id: str = "user") -> Dict[str, Any]:
+    return create_job(
+        title=title,
+        provider_id=provider,
+        model_id=model,
+        payload=payload,
+        workspace_id=workspace_id,
+        user_id=user_id
+    )
+
+def get(jid: str) -> Optional[Dict[str, Any]]:
+    return get_job_details(jid)
+
+def list_jobs(status: Optional[str] = None, provider: Optional[str] = None, model: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    return list_all_jobs(status=status, provider=provider, model=model, limit=limit)

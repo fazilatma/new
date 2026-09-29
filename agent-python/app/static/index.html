@@ -1,6 +1,1703 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Arena Agent Console v0.4.0</title><style>:root{--bg:#08111f;--p:#111d2e;--p2:#16253a;--line:#2b3c55;--text:#e8eef8;--muted:#93a4bd;--blue:#638cff;--green:#35d39b;--red:#f26d85}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% 0,#193764,#08111f 43%);color:var(--text);font:14px system-ui}.app{display:flex;min-height:100vh}.side{width:230px;background:#08111ee8;border-right:1px solid var(--line);padding:20px 14px}.brand{font-size:18px;font-weight:800;padding:8px 10px 28px}.brand b{background:linear-gradient(135deg,#638cff,#a070ff);padding:8px;border-radius:10px;margin-right:8px}.nav button{display:block;width:100%;text-align:left;background:transparent;color:var(--muted);margin:4px 0;padding:12px;border-radius:8px;border:0;cursor:pointer}.nav button.active,.nav button:hover{background:#31558a;color:#fff;box-shadow:inset 3px 0 var(--blue)}.menu{display:none}.main{flex:1;padding:28px;max-width:1400px;margin:auto;width:100%}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.title{font-size:28px;font-weight:800}.muted{color:var(--muted)}.view{display:none}.view.active{display:block}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.card,.panel{background:#111d2eee;border:1px solid var(--line);border-radius:13px;padding:18px}.card strong{display:block;font-size:25px;margin-top:8px}.panel{margin-top:16px}.panelhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.panel h2{font-size:16px;margin:0}button{background:#293c59;color:#fff;border:0;border-radius:7px;padding:9px 13px;cursor:pointer}button.primary{background:#638cff}button.danger{background:#8b2940}button.ghost{background:transparent;border:1px solid var(--line)}input,select,textarea{background:#091526;color:#fff;border:1px solid var(--line);border-radius:7px;padding:10px;width:100%}.toolbar{display:flex;gap:8px}.provider{border:1px solid var(--line);border-radius:10px;margin:10px 0;background:#0c1829;overflow:hidden}.phead{padding:14px;display:flex;justify-content:space-between;gap:10px;align-items:center}.pname{font-weight:750}.badge{font-size:11px;background:#263852;padding:4px 7px;border-radius:20px;color:#c9d7ed}.ok{background:#104638;color:#7af0c1}.models{border-top:1px solid var(--line);padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}.model{background:#111f32;padding:11px;border-radius:8px}.chat{height:calc(100vh - 125px);display:flex;flex-direction:column}.messages{flex:1;overflow:auto;padding:8px}.msg{max-width:80%;padding:12px;margin:9px 0;border-radius:10px;white-space:pre-wrap}.user{margin-left:auto;background:#2856a7}.assistant{background:#192a40;border:1px solid #30445f}.tool{font:12px monospace;color:#91eac7;background:#11362e}.composer{display:flex;gap:9px;border-top:1px solid var(--line);padding-top:14px}.composer textarea{height:65px;resize:none}.filegrid{display:grid;grid-template-columns:260px 1fr;gap:12px}.files{max-height:500px;overflow:auto}.file{padding:8px;border-bottom:1px solid #223149;cursor:pointer}.file:hover{background:#1b2c45}.code{min-height:500px;font-family:monospace;resize:vertical}.modal{display:none;position:fixed;inset:0;background:#0009;align-items:center;justify-content:center;padding:20px}.modal.open{display:flex}.dialog{background:#142238;border:1px solid #415777;border-radius:12px;padding:20px;width:min(600px,100%)}.row{display:flex;gap:9px;margin:10px 0}.row>*{flex:1}@media(max-width:800px){.menu{display:block;margin-right:10px;font-size:20px;background:#1c3150}.side{position:fixed;z-index:20;inset:0 auto 0 0;transform:translateX(-105%);transition:.2s;width:250px;padding:20px 14px;box-shadow:8px 0 30px #0008}.side.open{transform:translateX(0)}.brand{font-size:18px}.nav button{font-size:14px;text-align:left}.top{position:sticky;top:0;background:#08111fee;z-index:2;padding:10px 0}.composer{position:sticky;bottom:0;background:#111d2e;padding:10px}.composer button{min-width:72px}.models{grid-template-columns:1fr}.phead{flex-direction:column;align-items:flex-start}.phead>div:last-child{width:100%}.phead button{margin-top:5px}.filegrid{grid-template-columns:1fr}.code{min-height:260px}.side{width:60px;padding:12px 5px}.brand{font-size:0}.nav button{font-size:0;text-align:center}.main{padding:18px}.cards{grid-template-columns:repeat(2,1fr)}.filegrid{grid-template-columns:1fr}}
-</style></head><body><div class="app"><aside class="side"><div class="brand"><b>✦</b><span>Arena Agent</span></div><nav class="nav"><button class="active" data-view="home">⌂ <span>Workspace</span></button><button data-view="chat">◉ <span>Agent Chat</span></button><button data-view="files">▤ <span>Files & Terminal</span></button><button data-view="settings">⚙ <span>Settings</span></button><button data-view="connectors">◌ <span>GitHub & Browser</span></button><button onclick="location='/docs'">⌁ <span>API Docs</span></button></nav></aside><main class="main"><div class="top"><button class="menu" onclick="toggleSide()">☰</button><div><div class="muted">Arena Agent · v0.4.0</div><div class="title" id="heading">Workspace</div></div><button class="ghost" onclick="refreshAll()">↻ Refresh</button></div><section id="home" class="view active"><div class="cards"><div class="card"><span class="muted">Status</span><strong><i style="color:#35d39b">●</i> Online</strong></div><div class="card"><span class="muted">Providers</span><strong id="pc">—</strong></div><div class="card"><span class="muted">Models</span><strong id="mc">—</strong></div><div class="card"><span class="muted">Agent</span><strong>Ready</strong></div></div><div class="panel"><div class="panelhead"><h2>Start working</h2><button class="primary" onclick="go('chat')">Open Agent Chat</button></div><p class="muted">Use the Agent Chat to inspect files, edit your workspace and run project commands. Provider configuration is available under Settings.</p></div></section><section id="chat" class="view"><div class="panel chat"><div class="row"><select id="provider"></select><select id="model"></select><select id="steps"><option value="4">4 steps</option><option value="8" selected>8 steps</option><option value="16">16 steps</option></select></div><div id="messages" class="messages"><div class="msg assistant">I am ready. Ask me to inspect, modify or test your project.</div></div><form id="form" class="composer"><textarea id="input" placeholder="Ask the agent to inspect or modify your project…"></textarea><button class="primary">Send</button></form></div></section><section id="files" class="view"><div class="panel"><div class="panelhead"><h2>Workspace files and terminal</h2><div><button class="ghost" onclick="gitStatus()">Git status</button> <button onclick="runCmd()">Run command</button></div></div><div class="filegrid"><div id="filelist" class="files">Loading files…</div><textarea id="editor" class="code" placeholder="Select a text file…"></textarea></div><div class="row"><input id="filepath" placeholder="File path"><button class="ghost" onclick="previewFile()">Preview diff</button><button class="primary" onclick="saveFile()">Save file</button><input id="command" placeholder="Command, e.g. pytest"><pre id="output" class="muted"></pre></div><div class="panelhead" style="margin-top:18px"><h2>Git changes</h2><button class="ghost" onclick="gitDiff()">View diff</button></div><textarea id="gitout" class="code" style="min-height:180px" readonly placeholder="Git status and diff will appear here"></textarea><div class="row"><input id="commitmsg" placeholder="Commit message"><button class="primary" onclick="commitGit()">Commit approved changes</button></div></div></section><section id="settings" class="view"><div class="panel"><div class="panelhead"><div><h2>Providers and models</h2><span class="muted">All provider management is centralized here.</span></div><div><button onclick="testAll()">Test all models</button> <button onclick="importJson()">Import</button> <button onclick="exportJson()">Export</button> <button class="primary" onclick="providerModal()">Add provider</button></div></div><input id="search" placeholder="Search providers and models…" oninput="renderProviders()"><div id="providers"></div><div id="testresults" class="panel" style="display:none"><h3>Model test results</h3><pre id="testout" class="code"></pre></div></div><section id="environment" class="panel"><div class="panelhead"><div><h2>Environment & connections</h2><span class="muted">Secrets are masked and stored in the application data directory.</span></div><button class="primary" onclick="saveEnv()">Save environment</button></div><div id="envform" class="row" style="flex-wrap:wrap"></div></section></section><section id="connectors" class="view"><div class="panel"><div class="panelhead"><div><h2>GitHub connector</h2><span class="muted">Browse repositories and inspect files using the configured GitHub token.</span></div><button class="primary" onclick="loadRepos()">Load repositories</button></div><div id="repos" class="models"></div></div><div class="panel"><div class="panelhead"><h2>Browser fetch</h2><button class="primary" onclick="fetchPage()">Fetch page</button></div><div class="row"><input id="browseurl" placeholder="https://example.com"><textarea id="browseout" class="code" style="min-height:180px" readonly></textarea></div></div></section></main></div><div id="modal" class="modal"><div class="dialog"><h2 id="mtitle">Provider</h2><form id="pform"></form></div></div><script>
-let ps=[],history=[];const $=x=>document.querySelector(x),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));function go(v){document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===v));document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('#heading').textContent=v==='home'?'Workspace':v==='files'?'Files & Terminal':v[0].toUpperCase()+v.slice(1);if(v==='files')files();if(v==='settings')renderProviders()}document.querySelectorAll('[data-view]').forEach(x=>x.onclick=()=>go(x.dataset.view));async function api(u,o){let r=await fetch(u,o);let j=await r.json();if(!r.ok)throw Error(j.detail||'Request failed');return j}async function loadEnv(){let e=await api('/api/config/environment');$('#envform').innerHTML=Object.keys(e).map(k=>`<label style="min-width:260px;flex:1"><span class="muted">${k}</span><input data-env="${k}" type="password" placeholder="${e[k]?'Configured — leave blank to preserve':'Not configured'}" value=""></label>`).join('')}async function saveEnv(){let o={};document.querySelectorAll('[data-env]').forEach(x=>{if(x.value)o[x.dataset.env]=x.value});await api('/api/config/environment',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});alert('Environment saved')}
-async function refreshAll(){ps=await api('/api/providers');$('#pc').textContent=ps.length;$('#mc').textContent=ps.reduce((n,p)=>n+(p.models||[]).length,0);$('#provider').innerHTML=ps.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');pick();renderProviders()}function pick(){let p=ps.find(x=>x.id==$('#provider').value)||ps[0];$('#model').innerHTML=(p?.models||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.name||m.id)}</option>`).join('')}$('#provider').onchange=pick;function add(cls,t){let d=document.createElement('div');d.className='msg '+cls;d.textContent=t;$('#messages').append(d);$('#messages').scrollTop=1e9;return d}$('#form').onsubmit=async e=>{e.preventDefault();let t=$('#input').value.trim();if(!t)return;$('#input').value='';add('user',t);history.push({role:'user',content:t});let w=add('tool','Agent is thinking and executing tools…');try{let j=await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:$('#provider').value,model:$('#model').value,messages:history,maxSteps:+$('#steps').value})});w.remove();add('assistant',j.message?.content||'No response');history.push(j.message)}catch(e){w.remove();add('assistant','Error: '+e.message)}};
-async function files(){let a=await api('/api/workspace/files');$('#filelist').innerHTML=a.map(x=>`<div class="file" onclick="openFile('${esc(x.path)}')">${x.type==='dir'?'📁':'📄'} ${esc(x.path)}</div>`).join('')}async function openFile(p){let j=await api('/api/workspace/file?path='+encodeURIComponent(p));$('#filepath').value=p;$('#editor').value=j.content}async function saveFile(){await api('/api/workspace/file',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#filepath').value,content:$('#editor').value})});alert('File saved')}async function runCmd(){let j=await api('/api/terminal/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:$('#command').value})});$('#output').textContent=j.stdout+'\n'+j.stderr}async function gitStatus(){let j=await api('/api/git/status');$('#gitout').value=j.stdout+'\n'+j.stderr}async function gitDiff(){let j=await api('/api/git/diff');$('#gitout').value=j.stdout+'\n'+j.stderr}async function commitGit(){let m=$('#commitmsg').value.trim();if(!m||!confirm('Approve and create this Git commit?'))return;let j=await api('/api/git/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m,approved:true})});$('#gitout').value=j.stdout+'\n'+j.stderr;$('#commitmsg').value=''}
-function toggleSide(){document.querySelector('.side').classList.toggle('open')}function previewFile(){api('/api/workspace/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#filepath').value,content:$('#editor').value})}).then(x=>$('#gitout').value=x.diff||'No changes').catch(e=>$('#gitout').value=e.message)}function renderProviders(){let q=($('#search')?.value||'').toLowerCase();$('#providers').innerHTML=ps.filter(p=>(p.name+' '+p.id).toLowerCase().includes(q)).map(p=>`<div class="provider"><div class="phead"><div><div class="pname">${esc(p.name)}</div><span class="muted">${esc(p.url)} · ${(p.models||[]).length} models</span></div><div><span class="badge ${p.enabled?'ok':''}">${p.enabled?'Enabled':'Disabled'}</span> <button onclick="providerModal('${esc(p.id)}')">Edit</button> <button class="danger" onclick="deleteProvider('${esc(p.id)}')">Delete</button></div></div><div class="models">${(p.models||[]).map(m=>`<div class="model"><b>${esc(m.name||m.id)}</b><br><span class="muted">${esc(m.id)}</span><br><span class="badge">${m.toolCalling?'Tools':'Chat'}</span> <button onclick="modelModal('${esc(p.id)}','${esc(m.id)}')">Edit</button></div>`).join('')}</div></div>`).join('')||'<p class="muted">No providers.</p>'}async function testAll(){let box=$('#testresults');box.style.display='block';$('#testout').textContent='Testing all configured models…';try{let j=await api('/api/providers/test-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});$('#testout').textContent=j.results.map(x=>(x.ok?'✓ ':'✗ ')+x.provider+'/'+x.model+' — '+x.latencyMs+' ms'+(x.error?' — '+x.error:'')).join('\n')}catch(e){$('#testout').textContent='Error: '+e.message}}function close(){ $('#modal').classList.remove('open')}function providerModal(id){let p=ps.find(x=>x.id===id);$('#mtitle').textContent=p?'Edit provider':'Add provider';$('#pform').innerHTML=`<div class="row"><input name="id" placeholder="id" value="${esc(p?.id||'')}" ${p?'readonly':''}><input name="name" placeholder="name" value="${esc(p?.name||'')}"></div><input name="vendor" placeholder="vendor" value="${esc(p?.vendor||'custom')}"><br><br><input name="url" placeholder="base URL" value="${esc(p?.url||'')}"><br><br><input name="apiKeyEnv" placeholder="API key environment variable" value="${esc(p?.apiKeyEnv||'')}"><div class="row"><button type="button" onclick="close()">Cancel</button><button class="primary">Save</button></div>`;$('#pform').onsubmit=async e=>{e.preventDefault();let o=Object.fromEntries(new FormData(e.target));o.enabled=p?.enabled||false;o.models=p?.models||[];o.apiKey='';await api('/api/providers/'+encodeURIComponent(o.id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});close();refreshAll()};$('#modal').classList.add('open')}async function deleteProvider(id){if(confirm('Delete provider?')){await api('/api/providers/'+id,{method:'DELETE'});refreshAll()}}function exportJson(){location='/api/providers/export'}function importJson(){let i=document.createElement('input');i.type='file';i.accept='application/json,.json';i.onchange=async()=>{if(!i.files[0])return;let f=new FormData();f.append('file',i.files[0]);try{let r=await fetch('/api/providers/import',{method:'POST',body:f});if(!r.ok)throw Error(await r.text());alert('Provider configuration imported successfully');refreshAll()}catch(e){alert('Import failed: '+e.message)}};i.click()}async function loadRepos(){try{let r=await api('/api/github/repos');$('#repos').innerHTML=r.map(x=>`<div class="model"><b>${esc(x.full_name)}</b><br><span class="muted">${esc(x.description||'No description')}</span><br><a href="${esc(x.html_url)}" target="_blank">Open GitHub ↗</a></div>`).join('')}catch(e){$('#repos').innerHTML='<p class="muted">'+esc(e.message)+'</p>'}}async function fetchPage(){try{let r=await api('/api/browser/fetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('#browseurl').value})});$('#browseout').value=r.body}catch(e){$('#browseout').value='Error: '+e.message}}refreshAll();loadEnv();</script></body></html>
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Arena AI Coding Agent</title>
+  <style>
+    :root[data-theme="dark"] {
+      --bg-base: #0a0f1d;
+      --bg-surface: #10172a;
+      --bg-elevated: #162038;
+      --bg-highlight: #1e2c4d;
+      --border-subtle: #202d47;
+      --border-strong: #32476e;
+      --text-main: #f0f4fc;
+      --text-muted: #8fa0be;
+      --text-dim: #5c6e8e;
+      --primary: #4f79ff;
+      --primary-hover: #688eff;
+      --primary-bg: #1c2b54;
+      --accent-green: #10b981;
+      --accent-green-bg: #064e3b;
+      --accent-red: #ef4444;
+      --accent-red-bg: #4c1d24;
+      --accent-amber: #f59e0b;
+      --accent-amber-bg: #452a0a;
+      --accent-purple: #a855f7;
+      --code-bg: #070b14;
+      --shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    :root[data-theme="light"] {
+      --bg-base: #f4f6fa;
+      --bg-surface: #ffffff;
+      --bg-elevated: #f8fafc;
+      --bg-highlight: #e2e8f0;
+      --border-subtle: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --text-dim: #94a3b8;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --primary-bg: #dbeafe;
+      --accent-green: #059669;
+      --accent-green-bg: #d1fae5;
+      --accent-red: #dc2626;
+      --accent-red-bg: #fee2e2;
+      --accent-amber: #d97706;
+      --accent-amber-bg: #fef3c7;
+      --accent-purple: #7c3aed;
+      --code-bg: #f1f5f9;
+      --shadow: 0 8px 30px rgba(0,0,0,0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      font-size: 13.5px;
+      line-height: 1.5;
+      overflow-x: hidden;
+      height: 100vh;
+      display: flex;
+    }
+
+    /* Layout */
+    .app-container { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+    
+    /* Sidebar */
+    aside.sidebar {
+      width: 250px;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: width 0.2s, transform 0.25s ease;
+      z-index: 100;
+    }
+    aside.sidebar.collapsed { width: 64px; }
+    aside.sidebar.collapsed .brand-text,
+    aside.sidebar.collapsed .nav-text,
+    aside.sidebar.collapsed .ws-select-wrap,
+    aside.sidebar.collapsed .user-info { display: none; }
+    
+    .sidebar-header {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text-main);
+      text-decoration: none;
+    }
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #4f79ff, #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 16px;
+      box-shadow: 0 2px 10px rgba(79,121,255,0.3);
+    }
+    .brand-text span { font-size: 10px; color: var(--text-muted); font-weight: 500; display: block; }
+    
+    .ws-select-wrap {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .ws-select-label { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; }
+    
+    nav.nav-menu {
+      flex: 1;
+      padding: 12px 8px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 0;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13.5px;
+      font-weight: 500;
+      transition: background 0.15s, color 0.15s;
+      text-align: left;
+    }
+    .nav-btn:hover { background: var(--bg-elevated); color: var(--text-main); }
+    .nav-btn.active {
+      background: var(--primary-bg);
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .nav-btn .icon { font-size: 16px; width: 20px; text-align: center; }
+    .badge-count {
+      margin-left: auto;
+      background: var(--accent-amber);
+      color: #000;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 10px;
+    }
+
+    .sidebar-footer {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .user-profile { display: flex; align-items: center; gap: 10px; overflow: hidden; }
+    .user-avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--bg-highlight);
+      border: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--primary);
+    }
+    .user-info { overflow: hidden; line-height: 1.2; }
+    .user-name { font-weight: 600; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+    .user-role { font-size: 11px; color: var(--text-dim); }
+
+    /* Main Area */
+    main.main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-base);
+    }
+
+    /* Top Navigation Bar */
+    header.top-bar {
+      height: 54px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      flex-shrink: 0;
+      gap: 12px;
+    }
+    .top-left { display: flex; align-items: center; gap: 12px; }
+    .top-right { display: flex; align-items: center; gap: 8px; }
+    
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-green); }
+    .status-dot.busy { background: var(--accent-amber); animation: pulse 1.5s infinite; }
+    .status-dot.error { background: var(--accent-red); }
+
+    .provider-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 10px;
+      background: var(--primary-bg);
+      color: var(--primary);
+      border-radius: 6px;
+      font-weight: 500;
+    }
+
+    /* Views */
+    .view-panel {
+      flex: 1;
+      display: none;
+      height: calc(100vh - 54px);
+      overflow-y: auto;
+      padding: 20px;
+    }
+    .view-panel.active { display: flex; flex-direction: column; }
+
+    /* Shared UI Controls */
+    button, input, select, textarea {
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text-main);
+    }
+    .btn {
+      padding: 7px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-elevated);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .btn:hover { background: var(--bg-highlight); }
+    .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-success { background: var(--accent-green); color: #fff; border-color: var(--accent-green); }
+    .btn-danger { background: var(--accent-red); color: #fff; border-color: var(--accent-red); }
+    .btn-amber { background: var(--accent-amber); color: #000; border-color: var(--accent-amber); }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { background: var(--bg-elevated); color: var(--text-main); }
+    .btn-sm { padding: 4px 8px; font-size: 12px; }
+
+    .input-control, select.input-control, textarea.input-control {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 8px 12px;
+      outline: none;
+      width: 100%;
+      color: var(--text-main);
+    }
+    .input-control:focus { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-bg); }
+
+    /* Chat View */
+    .chat-layout {
+      display: flex;
+      flex: 1;
+      height: 100%;
+      gap: 16px;
+      overflow: hidden;
+    }
+    .chat-sidebar {
+      width: 220px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .chat-sidebar-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .conversation-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .conv-item {
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--text-muted);
+      font-size: 12.5px;
+    }
+    .conv-item:hover { background: var(--bg-elevated); color: var(--text-main); }
+    .conv-item.active { background: var(--primary-bg); color: var(--primary); font-weight: 600; }
+
+    .chat-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .chat-top-controls {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-elevated);
+      flex-wrap: wrap;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .msg-wrapper { display: flex; flex-direction: column; max-width: 85%; }
+    .msg-wrapper.user { align-self: flex-end; }
+    .msg-wrapper.assistant { align-self: flex-start; max-width: 92%; }
+    .msg-bubble {
+      padding: 12px 16px;
+      border-radius: 12px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+    .msg-wrapper.user .msg-bubble {
+      background: var(--primary);
+      color: #fff;
+      border-bottom-right-radius: 3px;
+    }
+    .msg-wrapper.assistant .msg-bubble {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-bottom-left-radius: 3px;
+    }
+    .msg-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+
+    /* Tool Call Cards */
+    .tool-card {
+      background: var(--code-bg);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      margin: 8px 0;
+      overflow: hidden;
+    }
+    .tool-card-head {
+      padding: 8px 12px;
+      background: var(--bg-highlight);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .tool-status-tag {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .tool-status-tag.success { background: var(--accent-green-bg); color: var(--accent-green); }
+    .tool-status-tag.running { background: var(--accent-amber-bg); color: var(--accent-amber); }
+    .tool-status-tag.error { background: var(--accent-red-bg); color: var(--accent-red); }
+    .tool-status-tag.pending { background: var(--primary-bg); color: var(--primary); }
+    .tool-card-body {
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      max-height: 250px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    /* Diff View Highlight */
+    .diff-container { font-family: monospace; font-size: 12px; line-height: 1.4; border-radius: 6px; overflow: hidden; }
+    .diff-line { padding: 1px 8px; white-space: pre-wrap; }
+    .diff-line.add { background: rgba(16, 185, 129, 0.18); color: #34d399; }
+    .diff-line.del { background: rgba(239, 68, 68, 0.18); color: #f87171; }
+    .diff-line.hdr { background: rgba(79, 121, 255, 0.15); color: #93c5fd; font-weight: 600; }
+
+    /* Approval Card inside chat */
+    .approval-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--accent-amber);
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 10px;
+    }
+    .approval-box-head { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--accent-amber); margin-bottom: 8px; }
+    .approval-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+    /* Composer */
+    .chat-composer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .composer-row { display: flex; gap: 8px; align-items: flex-end; }
+    .composer-textarea {
+      flex: 1;
+      min-height: 52px;
+      max-height: 180px;
+      resize: none;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      color: var(--text-main);
+    }
+    .composer-footer { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); }
+
+    /* Changesets & Approvals View (Phase 4) */
+    .changeset-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+    .changeset-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .changeset-header {
+      padding: 14px 18px;
+      background: var(--bg-elevated);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .changeset-files-table { width: 100%; border-collapse: collapse; }
+    .changeset-files-table th, .changeset-files-table td {
+      padding: 10px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .changeset-files-table th { background: var(--bg-base); font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+
+    /* Code Editor View (Phase 3) */
+    .editor-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      height: 100%;
+      gap: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .editor-file-tree {
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .tree-header { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); font-weight: 600; display: flex; justify-content: space-between; }
+    .tree-items { flex: 1; overflow-y: auto; padding: 6px; }
+    .tree-node {
+      padding: 5px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+    .tree-node:hover { background: var(--bg-elevated); color: var(--text-main); }
+    .tree-node.active { background: var(--primary-bg); color: var(--primary); font-weight: 600; }
+    
+    .editor-main { display: flex; flex-direction: column; overflow: hidden; }
+    .editor-tabs {
+      height: 38px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      overflow-x: auto;
+      padding: 0 4px;
+    }
+    .editor-tab {
+      padding: 0 12px;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      border-right: 1px solid var(--border-subtle);
+      cursor: pointer;
+      color: var(--text-muted);
+    }
+    .editor-tab.active { background: var(--bg-surface); color: var(--text-main); font-weight: 600; border-top: 2px solid var(--primary); }
+    .editor-toolbar {
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-surface);
+    }
+    .code-area-wrap { flex: 1; display: flex; position: relative; overflow: hidden; background: var(--code-bg); }
+    .line-numbers {
+      width: 44px;
+      padding: 12px 0;
+      text-align: right;
+      padding-right: 10px;
+      color: var(--text-dim);
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 20px;
+      user-select: none;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
+    }
+    .code-editor-textarea {
+      flex: 1;
+      background: transparent;
+      border: 0;
+      outline: none;
+      padding: 12px;
+      color: var(--text-main);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 20px;
+      white-space: pre;
+      overflow: auto;
+      tab-size: 4;
+    }
+
+    /* Modals & Dialogs */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-dialog {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      width: min(650px, 100%);
+      max-height: 90vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-body { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+    .modal-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      background: var(--bg-elevated);
+    }
+
+    /* Grid cards */
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .stat-card .label { font-size: 11px; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+    .stat-card .val { font-size: 24px; font-weight: 700; margin-top: 4px; color: var(--text-main); }
+
+    /* Command Palette */
+    .cmd-palette {
+      width: min(550px, 95%);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .cmd-input {
+      width: 100%;
+      padding: 16px 20px;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 15px;
+      outline: none;
+      color: var(--text-main);
+    }
+    .cmd-list { max-height: 300px; overflow-y: auto; padding: 8px; }
+    .cmd-item {
+      padding: 10px 14px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      color: var(--text-muted);
+    }
+    .cmd-item:hover, .cmd-item.selected { background: var(--primary-bg); color: var(--primary); }
+
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+
+    /* Mobile Responsive */
+    @media (max-width: 768px) {
+      aside.sidebar {
+        position: fixed;
+        inset: 0 auto 0 0;
+        transform: translateX(-105%);
+        width: 270px;
+        box-shadow: 10px 0 40px rgba(0,0,0,0.5);
+      }
+      aside.sidebar.mobile-open { transform: translateX(0); }
+      .grid-4, .grid-2 { grid-template-columns: 1fr; }
+      .chat-sidebar { display: none; }
+      .editor-layout { grid-template-columns: 1fr; }
+      .editor-file-tree { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="app-container">
+  <!-- Collapsible Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <a href="#" class="brand" onclick="navigate('workspace')">
+        <div class="brand-icon">✦</div>
+        <div class="brand-text">
+          Arena Agent
+          <span>Coding Agent v0.5.0</span>
+        </div>
+      </a>
+      <button class="btn-ghost" onclick="toggleSidebar()" title="Toggle Sidebar">≡</button>
+    </div>
+
+    <div class="ws-select-wrap">
+      <div class="ws-select-label">Active Workspace</div>
+      <select id="activeWsSelect" class="input-control" onchange="switchWorkspace(this.value)">
+        <option value="default">Default Project</option>
+      </select>
+    </div>
+
+    <nav class="nav-menu">
+      <button class="nav-btn active" data-view="chat" onclick="navigate('chat')">
+        <span class="icon">💬</span><span class="nav-text">Agent Chat</span>
+      </button>
+      <button class="nav-btn" data-view="changesets" onclick="navigate('changesets')">
+        <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
+        <span class="badge-count" id="pendingApprovalsBadge" style="display:none">0</span>
+      </button>
+      <button class="nav-btn" data-view="editor" onclick="navigate('editor')">
+        <span class="icon">📝</span><span class="nav-text">Code Editor</span>
+      </button>
+      <button class="nav-btn" data-view="terminal" onclick="navigate('terminal')">
+        <span class="icon">💻</span><span class="nav-text">Terminal Sandbox</span>
+      </button>
+      <button class="nav-btn" data-view="git" onclick="navigate('git')">
+        <span class="icon">🌿</span><span class="nav-text">Git & Branches</span>
+      </button>
+      <button class="nav-btn" data-view="github" onclick="navigate('github')">
+        <span class="icon">🐙</span><span class="nav-text">GitHub Workspace</span>
+      </button>
+      <button class="nav-btn" data-view="browser" onclick="navigate('browser')">
+        <span class="icon">🌐</span><span class="nav-text">Playwright Browser</span>
+      </button>
+      <button class="nav-btn" data-view="jobs" onclick="navigate('jobs')">
+        <span class="icon">⚡</span><span class="nav-text">Jobs & Worker</span>
+      </button>
+      <button class="nav-btn" data-view="providers" onclick="navigate('providers')">
+        <span class="icon">🤖</span><span class="nav-text">Providers & Models</span>
+      </button>
+      <button class="nav-btn" data-view="observability" onclick="navigate('observability')">
+        <span class="icon">📊</span><span class="nav-text">Observability & Logs</span>
+      </button>
+      <button class="nav-btn" data-view="workspaces" onclick="navigate('workspaces')">
+        <span class="icon">📁</span><span class="nav-text">Workspaces & Rules</span>
+      </button>
+      <button class="nav-btn" data-view="settings" onclick="navigate('settings')">
+        <span class="icon">⚙️</span><span class="nav-text">Security & Settings</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-profile">
+        <div class="user-avatar" id="userAvatar">A</div>
+        <div class="user-info">
+          <div class="user-name" id="userName">Admin</div>
+          <div class="user-role" id="userRole">Developer</div>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="openLoginModal()" title="Account / Login">🔑</button>
+    </div>
+  </aside>
+
+  <!-- Main Content Wrapper -->
+  <main class="main-content">
+    <header class="top-bar">
+      <div class="top-left">
+        <button class="btn btn-ghost" onclick="toggleMobileSidebar()" style="display:none;" id="mobileMenuBtn">☰</button>
+        <div class="status-pill">
+          <div class="status-dot" id="systemHealthDot"></div>
+          <span id="systemHealthText">Agent Ready</span>
+        </div>
+        <div class="provider-pill" id="activeProviderBadge">
+          <span>⚡ OpenRouter</span>
+        </div>
+      </div>
+      <div class="top-right">
+        <button class="btn btn-ghost btn-sm" onclick="openCommandPalette()" title="Command Palette (Ctrl+K)">⌘K</button>
+        <button class="btn btn-ghost btn-sm" onclick="toggleTheme()" title="Toggle Theme" id="themeBtn">🌙</button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshCurrentView()" title="Refresh View">↻</button>
+      </div>
+    </header>
+
+    <!-- VIEW 1: AGENT CHAT -->
+    <section class="view-panel active" id="view-chat">
+      <div class="chat-layout">
+        <div class="chat-sidebar">
+          <div class="chat-sidebar-header">
+            <strong>Conversations</strong>
+            <button class="btn btn-ghost btn-sm" onclick="newConversation()">+ New</button>
+          </div>
+          <div class="conversation-list" id="convList"></div>
+        </div>
+
+        <div class="chat-main">
+          <div class="chat-top-controls">
+            <select id="chatProvider" class="input-control" style="width:160px" onchange="onChatProviderChange()"></select>
+            <select id="chatModel" class="input-control" style="width:200px"></select>
+            <select id="chatSteps" class="input-control" style="width:110px">
+              <option value="4">4 Steps</option>
+              <option value="8" selected>8 Steps</option>
+              <option value="16">16 Steps</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;">
+              <input type="checkbox" id="requireApprovalCheck" checked>
+              <span>Require Approval on File Writes</span>
+            </label>
+          </div>
+
+          <div class="chat-messages" id="chatMessages">
+            <div class="msg-wrapper assistant">
+              <div class="msg-bubble">
+                Hello! I am your Arena AI Coding Agent. I can read, write, and safely modify workspace files, execute sandboxed terminal commands, and browse web pages. When file approvals are enabled, every file change produces a diff for your review before being applied.
+              </div>
+              <div class="msg-meta"><span>Agent · v0.5.0</span></div>
+            </div>
+          </div>
+
+          <form class="chat-composer" id="chatForm">
+            <div class="composer-row">
+              <textarea class="composer-textarea" id="chatInput" placeholder="Ask the agent to inspect, modify, or test your project... (Shift+Enter for new line)" onkeydown="onComposerKeyDown(event)"></textarea>
+              <button type="submit" class="btn btn-primary" style="height:48px;padding:0 20px" id="sendBtn">Send</button>
+              <button type="button" class="btn btn-danger" style="height:48px;display:none" id="stopBtn" onclick="stopStreaming()">Stop</button>
+            </div>
+            <div class="composer-footer">
+              <span>Supports tool calling, unified diff preview, and automated rollback backups</span>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="clearChat()">Clear Chat</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: APPROVALS & CHANGE SETS (Phase 4) -->
+    <section class="view-panel" id="view-changesets">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Change Sets & File Approvals</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Review pending file diffs before applying changes, or rollback previously applied versions.</span>
+        </div>
+        <button class="btn btn-ghost" onclick="loadChangesets()">↻ Refresh</button>
+      </div>
+
+      <div id="changesetsContainer" class="changeset-list">
+        <p style="color:var(--text-dim)">Loading change sets...</p>
+      </div>
+    </section>
+
+    <!-- VIEW 3: CODE EDITOR (Phase 3) -->
+    <section class="view-panel" id="view-editor">
+      <div class="editor-layout">
+        <div class="editor-file-tree">
+          <div class="tree-header">
+            <span>Project Explorer</span>
+            <button class="btn btn-ghost btn-sm" onclick="refreshFileTree()">↻</button>
+          </div>
+          <div class="tree-items" id="editorTree"></div>
+        </div>
+        <div class="editor-main">
+          <div class="editor-tabs" id="editorTabs">
+            <div class="editor-tab active" id="activeTabName">README.md</div>
+          </div>
+          <div class="editor-toolbar">
+            <input id="editorPath" class="input-control" style="width:260px;" placeholder="File path...">
+            <button class="btn btn-ghost btn-sm" onclick="previewEditorDiff()">Preview Diff</button>
+            <button class="btn btn-primary btn-sm" onclick="saveEditorFile()">Save File</button>
+            <button class="btn btn-amber btn-sm" onclick="stageEditorChangeset()">Stage ChangeSet</button>
+            <button class="btn btn-ghost btn-sm" onclick="viewFileVersions()">History</button>
+            <span id="editorInfo" style="margin-left:auto;font-size:11px;color:var(--text-dim);">UTF-8 · LF</span>
+          </div>
+          <div class="code-area-wrap">
+            <div class="line-numbers" id="lineNumbers">1</div>
+            <textarea class="code-editor-textarea" id="editorTextarea" spellcheck="false" oninput="onEditorInput()"></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: TERMINAL SANDBOX (Phase 5) -->
+    <section class="view-panel" id="view-terminal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div>
+          <h2>Sandboxed Terminal</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Commands run inside restricted workspace boundaries with resource limits and audit logging.</span>
+        </div>
+        <button class="btn btn-ghost" onclick="loadActiveProcesses()">Processes</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="termCmdInput" class="input-control" placeholder="Enter shell command (e.g. pytest, git status, ls -la)..." onkeydown="if(event.key==='Enter')runTerminalCommand()">
+        <button class="btn btn-primary" onclick="runTerminalCommand()">Execute</button>
+      </div>
+      <div class="tool-card" style="flex:1;display:flex;flex-direction:column;">
+        <div class="tool-card-head">
+          <span id="termStatus">Terminal Ready</span>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('termOutput').textContent=''">Clear</button>
+        </div>
+        <pre class="tool-card-body" id="termOutput" style="flex:1;max-height:none;"></pre>
+      </div>
+    </section>
+
+    <!-- VIEW 5: GIT INTEGRATION (Phase 6) -->
+    <section class="view-panel" id="view-git">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Git Version Control</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Branch management, commit history, merge conflict resolution, and staging.</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="gitFetch()">Fetch</button>
+          <button class="btn btn-ghost" onclick="gitPull()">Pull</button>
+          <button class="btn btn-amber" onclick="openGitPushModal()">Push (Approve)</button>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-bottom:16px;">
+        <div class="stat-card">
+          <div class="label">Current Branch</div>
+          <div class="val" id="gitCurrentBranch">—</div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <select id="gitBranchSelect" class="input-control" style="flex:1;" onchange="switchGitBranch(this.value)"></select>
+            <button class="btn btn-primary btn-sm" onclick="promptNewBranch()">+ New</button>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Commit Approved Changes</div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <input id="gitCommitMsg" class="input-control" placeholder="Commit message...">
+            <button class="btn btn-success" onclick="commitApprovedGit()">Commit</button>
+          </div>
+        </div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-card-head">
+          <span>Working Tree Diff & Status</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadGitStatus()">↻ Refresh</button>
+        </div>
+        <div id="gitDiffOutput" class="tool-card-body" style="max-height:350px;"></div>
+      </div>
+    </section>
+
+    <!-- VIEW 6: GITHUB WORKSPACE (Phase 7) -->
+    <section class="view-panel" id="view-github">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>GitHub Workspace Connector</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Browse repositories, inspect files, manage Pull Requests, and trigger GitHub Actions.</span>
+        </div>
+        <button class="btn btn-primary" onclick="loadGitHubRepos()">Load Repositories</button>
+      </div>
+      <div id="githubReposList" class="grid-4" style="margin-bottom:20px;"></div>
+      <div class="tool-card">
+        <div class="tool-card-head">
+          <span>Pull Requests & Actions</span>
+        </div>
+        <div id="githubDetails" class="tool-card-body">Select a repository to view Pull Requests and CI Workflow runs.</div>
+      </div>
+    </section>
+
+    <!-- VIEW 7: PLAYWRIGHT BROWSER (Phase 8) -->
+    <section class="view-panel" id="view-browser">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Playwright Browser Automation</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Headless browser sandbox with DOM extraction, screenshot capture, and SSRF security.</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="browserUrlInput" class="input-control" placeholder="https://example.com" value="https://example.com">
+        <button class="btn btn-primary" onclick="browserNavigate()">Navigate</button>
+        <button class="btn btn-ghost" onclick="browserScreenshot()">Screenshot</button>
+      </div>
+      <div class="grid-2" style="flex:1;">
+        <div class="tool-card" style="display:flex;flex-direction:column;">
+          <div class="tool-card-head"><span>DOM Content & Title</span></div>
+          <pre id="browserDomOutput" class="tool-card-body" style="flex:1;max-height:none;"></pre>
+        </div>
+        <div class="tool-card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <div class="tool-card-head" style="width:100%"><span>Page Preview</span></div>
+          <div id="browserScreenshotWrap" style="flex:1;display:flex;align-items:center;justify-content:center;padding:10px;">
+            <span style="color:var(--text-dim)">No screenshot captured yet.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 8: JOBS & WORKER (Phase 2) -->
+    <section class="view-panel" id="view-jobs">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Persistent Background Jobs</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Queue and supervise long-running agent tasks with automatic crash recovery.</span>
+        </div>
+        <button class="btn btn-ghost" onclick="loadJobsList()">↻ Refresh</button>
+      </div>
+      <div id="jobsListContainer" class="changeset-list"></div>
+    </section>
+
+    <!-- VIEW 9: PROVIDERS & MODELS (Phase 11) -->
+    <section class="view-panel" id="view-providers">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Providers & Model Catalog</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Manage model endpoints, protocols, multi-key rotation, and circuit breakers.</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="testAllModels()">Test All Models</button>
+          <button class="btn btn-ghost" onclick="exportProvidersJson()">Export JSON</button>
+          <button class="btn btn-primary" onclick="openProviderModal()">+ Add Provider</button>
+        </div>
+      </div>
+      <div id="providerCardsGrid" class="changeset-list"></div>
+    </section>
+
+    <!-- VIEW 10: OBSERVABILITY & LOGS (Phase 13) -->
+    <section class="view-panel" id="view-observability">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Observability & System Health</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Structured logs, request metrics, disk quotas, and performance tracing.</span>
+        </div>
+        <button class="btn btn-ghost" onclick="loadObservabilityData()">↻ Refresh</button>
+      </div>
+      <div class="grid-4" style="margin-bottom:16px;" id="metricsCards">
+        <div class="stat-card"><div class="label">Active Jobs</div><div class="val" id="metricActiveJobs">0</div></div>
+        <div class="stat-card"><div class="label">Completed Jobs</div><div class="val" id="metricDoneJobs">0</div></div>
+        <div class="stat-card"><div class="label">Failed Jobs</div><div class="val" id="metricFailedJobs">0</div></div>
+        <div class="stat-card"><div class="label">Disk Usage</div><div class="val" id="metricDisk">0%</div></div>
+      </div>
+      <div class="tool-card" style="flex:1;display:flex;flex-direction:column;">
+        <div class="tool-card-head">
+          <span>Structured Logs</span>
+          <div style="display:flex;gap:8px;">
+            <select id="logLevelFilter" class="input-control" style="width:100px;padding:2px 6px;" onchange="loadObservabilityData()">
+              <option value="">All Levels</option>
+              <option value="INFO">INFO</option>
+              <option value="WARNING">WARNING</option>
+              <option value="ERROR">ERROR</option>
+              <option value="SECURITY">SECURITY</option>
+            </select>
+            <input id="logSearch" class="input-control" style="width:160px;padding:2px 6px;" placeholder="Search logs..." oninput="loadObservabilityData()">
+          </div>
+        </div>
+        <pre class="tool-card-body" id="logsOutput" style="flex:1;max-height:none;"></pre>
+      </div>
+    </section>
+
+    <!-- VIEW 11: WORKSPACES (Phase 14) -->
+    <section class="view-panel" id="view-workspaces">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Workspace & Agent Rules</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Configure isolated project environments, agent instructions, and behavioral rules.</span>
+        </div>
+        <button class="btn btn-primary" onclick="openNewWorkspaceModal()">+ New Workspace</button>
+      </div>
+      <div class="grid-2">
+        <div class="stat-card">
+          <div class="label">Project Instructions</div>
+          <textarea id="wsInstructions" class="input-control" style="height:140px;margin-top:8px;" placeholder="Project guidelines for the AI agent..."></textarea>
+        </div>
+        <div class="stat-card">
+          <div class="label">Agent Rules & Constraints (.agentrules)</div>
+          <textarea id="wsAgentRules" class="input-control" style="height:140px;margin-top:8px;" placeholder="- Rule 1: Always check tests..."></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 12: SECURITY & SETTINGS (Phases 1 & 12) -->
+    <section class="view-panel" id="view-settings">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2>Security & Environment Settings</h2>
+          <span style="color:var(--text-muted);font-size:12px;">Secrets encryption with Master Key, User & Role administration, and Proxy settings.</span>
+        </div>
+        <button class="btn btn-primary" onclick="saveEnvironmentSettings()">Save Settings</button>
+      </div>
+      <div class="grid-2">
+        <div class="stat-card">
+          <div class="label">Encrypted Environment Secrets</div>
+          <div id="envFields" style="display:flex;flex-direction:column;gap:10px;margin-top:10px;"></div>
+        </div>
+        <div class="stat-card">
+          <div class="label">User Administration (RBAC)</div>
+          <div id="userAdminList" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;"></div>
+          <button class="btn btn-ghost btn-sm" style="margin-top:12px;" onclick="openCreateUserModal()">+ Add User</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- MODAL: LOGIN / AUTH (Phase 1) -->
+<div class="modal-backdrop" id="loginModal">
+  <div class="modal-dialog" style="max-width:400px;">
+    <div class="modal-header">
+      <strong>Authentication & Login</strong>
+      <button class="btn-ghost" onclick="closeModal('loginModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleLoginSubmit(event)">
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Username</label>
+        <input id="loginUsername" class="input-control" placeholder="admin">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">Password</label>
+        <input id="loginPassword" type="password" class="input-control" placeholder="••••••••">
+      </div>
+      <div style="text-align:center;font-size:11px;color:var(--text-dim)">— OR —</div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim)">API Token</label>
+        <input id="loginToken" type="password" class="input-control" placeholder="Bearer Token">
+      </div>
+      <div id="loginError" style="color:var(--accent-red);font-size:12px;display:none;"></div>
+      <button type="submit" class="btn btn-primary" style="margin-top:8px;">Login</button>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL: DIFF & APPROVAL PREVIEW (Phase 4) -->
+<div class="modal-backdrop" id="diffApprovalModal">
+  <div class="modal-dialog" style="max-width:800px;">
+    <div class="modal-header">
+      <strong id="diffModalTitle">Review File Diff</strong>
+      <button class="btn-ghost" onclick="closeModal('diffApprovalModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="diffModalContent" class="diff-container" style="max-height:450px;overflow:auto;background:var(--code-bg);padding:10px;"></div>
+    </div>
+    <div class="modal-footer" id="diffModalFooter">
+      <button class="btn btn-danger" id="diffRejectBtn">Reject</button>
+      <button class="btn btn-success" id="diffApproveBtn">Approve & Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: COMMAND PALETTE (Ctrl+K) -->
+<div class="modal-backdrop" id="cmdPaletteModal">
+  <div class="cmd-palette">
+    <input id="cmdPaletteInput" class="cmd-input" placeholder="Type a command or navigate..." oninput="filterCommandPalette()">
+    <div class="cmd-list" id="cmdPaletteList">
+      <div class="cmd-item" onclick="navigate('chat');closeModal('cmdPaletteModal')">💬 Open Agent Chat</div>
+      <div class="cmd-item" onclick="navigate('changesets');closeModal('cmdPaletteModal')">🔍 View Approvals & Changes</div>
+      <div class="cmd-item" onclick="navigate('editor');closeModal('cmdPaletteModal')">📝 Open Code Editor</div>
+      <div class="cmd-item" onclick="navigate('terminal');closeModal('cmdPaletteModal')">💻 Open Sandboxed Terminal</div>
+      <div class="cmd-item" onclick="navigate('git');closeModal('cmdPaletteModal')">🌿 View Git Status & Diff</div>
+      <div class="cmd-item" onclick="testAllModels();closeModal('cmdPaletteModal')">🤖 Test All Model Endpoints</div>
+      <div class="cmd-item" onclick="toggleTheme();closeModal('cmdPaletteModal')">🌙 Toggle Dark / Light Theme</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Application State
+let STATE = {
+  providers: [],
+  workspaces: [],
+  activeWorkspace: null,
+  activeView: 'chat',
+  user: null,
+  conversations: [],
+  activeConversationId: null,
+  streamController: null,
+  openTabs: ['README.md'],
+  activeTab: 'README.md'
+};
+
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { credentials: 'include', ...opts });
+  if (res.status === 401 && !path.includes('/auth/login') && !path.includes('/auth/status')) {
+    openLoginModal();
+    throw new Error('Authentication required');
+  }
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || 'Request failed');
+  return data;
+}
+
+// Navigation & View Routing
+function navigate(viewName) {
+  STATE.activeView = viewName;
+  document.querySelectorAll('.view-panel').forEach(p => p.classList.toggle('active', p.id === `view-${viewName}`));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
+
+  if (viewName === 'changesets') loadChangesets();
+  if (viewName === 'editor') refreshFileTree();
+  if (viewName === 'git') loadGitStatus();
+  if (viewName === 'jobs') loadJobsList();
+  if (viewName === 'providers') loadProvidersList();
+  if (viewName === 'observability') loadObservabilityData();
+  if (viewName === 'settings') loadSettings();
+  if (viewName === 'github') loadGitHubRepos();
+}
+
+function toggleSidebar() {
+  $('#sidebar').classList.toggle('collapsed');
+}
+
+function toggleMobileSidebar() {
+  $('#sidebar').classList.toggle('mobile-open');
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  $('#themeBtn').textContent = next === 'dark' ? '🌙' : '☀️';
+}
+
+function openModal(id) { $(`#${id}`).classList.add('open'); }
+function closeModal(id) { $(`#${id}`).classList.remove('open'); }
+
+// Initialization
+async function initApp() {
+  try {
+    const authStatus = await api('/api/auth/status');
+    if (authStatus.authenticated && authStatus.user) {
+      STATE.user = authStatus.user;
+      $('#userName').textContent = STATE.user.username;
+      $('#userRole').textContent = STATE.user.role;
+      $('#userAvatar').textContent = STATE.user.username[0].toUpperCase();
+    }
+    
+    // Load Workspaces
+    const wsData = await api('/api/workspaces');
+    STATE.workspaces = wsData.workspaces;
+    STATE.activeWorkspace = wsData.active;
+    renderWorkspacesSelect();
+
+    // Load Providers
+    STATE.providers = await api('/api/providers');
+    renderChatProviders();
+
+    // Load Pending Approvals Count
+    checkPendingApprovals();
+  } catch (err) {
+    console.error('Init error:', err);
+  }
+}
+
+function renderWorkspacesSelect() {
+  const sel = $('#activeWsSelect');
+  sel.innerHTML = STATE.workspaces.map(w => `<option value="${esc(w.id)}" ${w.id === STATE.activeWorkspace?.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
+}
+
+async function switchWorkspace(wsId) {
+  const active = await api('/api/workspaces/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId: wsId })
+  });
+  STATE.activeWorkspace = active;
+  refreshCurrentView();
+}
+
+function renderChatProviders() {
+  const pSel = $('#chatProvider');
+  pSel.innerHTML = STATE.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} ${p.hasApiKey ? '✓' : ''}</option>`).join('');
+  onChatProviderChange();
+}
+
+function onChatProviderChange() {
+  const pid = $('#chatProvider').value;
+  const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
+  const mSel = $('#chatModel');
+  mSel.innerHTML = (p?.models || []).map(m => `<option value="${esc(m.id)}">${esc(m.name || m.id)}</option>`).join('');
+  $('#activeProviderBadge').textContent = `⚡ ${p?.name || 'Agent'} / ${mSel.value}`;
+}
+
+// Chat & Streaming (Phases 9 & 10)
+let chatHistory = [];
+
+async function onComposerKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    $('#chatForm').dispatchEvent(new Event('submit'));
+  }
+}
+
+$('#chatForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $('#chatInput').value.trim();
+  if (!text) return;
+  $('#chatInput').value = '';
+
+  appendMessage('user', text);
+  chatHistory.push({ role: 'user', content: text });
+
+  const pid = $('#chatProvider').value;
+  const mid = $('#chatModel').value;
+  const steps = +$('#chatSteps').value;
+  const reqApproval = $('#requireApprovalCheck').checked;
+
+  $('#sendBtn').style.display = 'none';
+  $('#stopBtn').style.display = 'inline-flex';
+
+  const assistantMsgEl = appendMessage('assistant', '');
+  const bubble = assistantMsgEl.querySelector('.msg-bubble');
+  bubble.textContent = 'Agent is analyzing workspace and tools...';
+
+  try {
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: pid,
+        model: mid,
+        messages: chatHistory,
+        maxSteps: steps,
+        requireApproval: reqApproval
+      })
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    bubble.textContent = '';
+    let accumulated = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.text) {
+              accumulated += data.text;
+              bubble.textContent = accumulated;
+            }
+            if (data.approvals && data.approvals.length > 0) {
+              renderInlineApprovalCard(assistantMsgEl, data.approvals[0]);
+              checkPendingApprovals();
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    chatHistory.push({ role: 'assistant', content: accumulated });
+  } catch (err) {
+    bubble.textContent = 'Error: ' + err.message;
+  } finally {
+    $('#sendBtn').style.display = 'inline-flex';
+    $('#stopBtn').style.display = 'none';
+  }
+};
+
+function appendMessage(role, text) {
+  const wrap = document.createElement('div');
+  wrap.className = `msg-wrapper ${role}`;
+  wrap.innerHTML = `
+    <div class="msg-bubble">${esc(text)}</div>
+    <div class="msg-meta"><span>${role === 'user' ? 'You' : 'Agent'}</span></div>
+  `;
+  $('#chatMessages').appendChild(wrap);
+  $('#chatMessages').scrollTop = 1e9;
+  return wrap;
+}
+
+function renderInlineApprovalCard(container, approvalData) {
+  const card = document.createElement('div');
+  card.className = 'approval-box';
+  card.innerHTML = `
+    <div class="approval-box-head">⚠️ Change Requires Approval</div>
+    <div style="font-size:12px;margin-bottom:6px;">File: <b>${esc(approvalData.path)}</b></div>
+    <div class="diff-container" style="max-height:180px;overflow:auto;background:var(--code-bg);padding:8px;">
+      ${formatDiffHtml(approvalData.diff)}
+    </div>
+    <div class="approval-actions">
+      <button class="btn btn-success btn-sm" onclick="approveInlineChangeset('${esc(approvalData.changesetId)}', this)">✓ Approve & Apply</button>
+      <button class="btn btn-danger btn-sm" onclick="rejectInlineChangeset('${esc(approvalData.changesetId)}', this)">✕ Reject</button>
+    </div>
+  `;
+  container.appendChild(card);
+}
+
+async function approveInlineChangeset(csId, btn) {
+  btn.disabled = true;
+  await api(`/api/changesets/${csId}/approve`, { method: 'POST' });
+  btn.parentElement.innerHTML = '<span style="color:var(--accent-green);font-weight:600;">✓ Approved & Applied to Workspace</span>';
+  checkPendingApprovals();
+}
+
+async function rejectInlineChangeset(csId, btn) {
+  btn.disabled = true;
+  await api(`/api/changesets/${csId}/reject`, { method: 'POST' });
+  btn.parentElement.innerHTML = '<span style="color:var(--accent-red);font-weight:600;">✕ Rejected</span>';
+  checkPendingApprovals();
+}
+
+function formatDiffHtml(diffText) {
+  if (!diffText) return '<div class="diff-line">No diff details available</div>';
+  return diffText.split('\n').map(line => {
+    let cls = 'ctx';
+    if (line.startsWith('+') && !line.startsWith('+++')) cls = 'add';
+    else if (line.startsWith('-') && !line.startsWith('---')) cls = 'del';
+    else if (line.startsWith('@@')) cls = 'hdr';
+    return `<div class="diff-line ${cls}">${esc(line)}</div>`;
+  }).join('');
+}
+
+// Change Sets & Approvals (Phase 4)
+async function loadChangesets() {
+  const container = $('#changesetsContainer');
+  container.innerHTML = '<p style="color:var(--text-dim)">Loading change sets...</p>';
+  try {
+    const data = await api('/api/changesets');
+    if (!data.changesets || data.changesets.length === 0) {
+      container.innerHTML = '<div class="stat-card" style="text-align:center;color:var(--text-dim)">No pending or historical change sets recorded.</div>';
+      return;
+    }
+    container.innerHTML = data.changesets.map(cs => `
+      <div class="changeset-card">
+        <div class="changeset-header">
+          <div>
+            <strong>${esc(cs.title)}</strong>
+            <div style="font-size:11px;color:var(--text-dim);">${cs.created_at} · Created by ${esc(cs.created_by)}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="tool-status-tag ${cs.status}">${cs.status}</span>
+            ${cs.status === 'pending' ? `
+              <button class="btn btn-success btn-sm" onclick="approveChangeSet('${esc(cs.id)}')">Approve All</button>
+              <button class="btn btn-danger btn-sm" onclick="rejectChangeSet('${esc(cs.id)}')">Reject All</button>
+            ` : cs.status === 'approved' ? `
+              <button class="btn btn-amber btn-sm" onclick="rollbackChangeSet('${esc(cs.id)}')">Rollback</button>
+            ` : ''}
+            <button class="btn btn-ghost btn-sm" onclick="viewChangesetDiff('${esc(cs.id)}')">View Diff</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--accent-red)">Error: ${esc(err.message)}</p>`;
+  }
+}
+
+async function approveChangeSet(csId) {
+  await api(`/api/changesets/${csId}/approve`, { method: 'POST' });
+  loadChangesets();
+  checkPendingApprovals();
+}
+
+async function rejectChangeSet(csId) {
+  await api(`/api/changesets/${csId}/reject`, { method: 'POST' });
+  loadChangesets();
+  checkPendingApprovals();
+}
+
+async function rollbackChangeSet(csId) {
+  if (!confirm('Revert all files in this ChangeSet back to their previous snapshots?')) return;
+  await api(`/api/changesets/${csId}/rollback`, { method: 'POST' });
+  loadChangesets();
+  alert('ChangeSet rolled back successfully.');
+}
+
+async function viewChangesetDiff(csId) {
+  const cs = await api(`/api/changesets/${csId}`);
+  $('#diffModalTitle').textContent = `Diff: ${cs.title}`;
+  const diffs = cs.files.map(f => `<h4>${esc(f.path)} (${f.change_type})</h4>${formatDiffHtml(f.diff)}<br>`).join('');
+  $('#diffModalContent').innerHTML = diffs;
+  $('#diffApproveBtn').onclick = async () => { await approveChangeSet(csId); closeModal('diffApprovalModal'); };
+  $('#diffRejectBtn').onclick = async () => { await rejectChangeSet(csId); closeModal('diffApprovalModal'); };
+  openModal('diffApprovalModal');
+}
+
+async function checkPendingApprovals() {
+  try {
+    const data = await api('/api/changesets');
+    const pending = (data.changesets || []).filter(c => c.status === 'pending').length;
+    const badge = $('#pendingApprovalsBadge');
+    if (pending > 0) {
+      badge.textContent = pending;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (_) {}
+}
+
+// Code Editor (Phase 3)
+async function refreshFileTree() {
+  const tree = $('#editorTree');
+  try {
+    const files = await api('/api/workspace/files');
+    tree.innerHTML = files.map(f => `
+      <div class="tree-node ${f.path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(f.path)}')">
+        <span>${f.type === 'dir' ? '📁' : '📄'}</span>
+        <span>${esc(f.path)}</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    tree.innerHTML = `<span style="color:var(--accent-red)">${esc(err.message)}</span>`;
+  }
+}
+
+async function openEditorFile(path) {
+  STATE.activeTab = path;
+  $('#editorPath').value = path;
+  $('#activeTabName').textContent = path;
+  try {
+    const data = await api(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+    $('#editorTextarea').value = data.content;
+    updateLineNumbers();
+  } catch (err) {
+    alert('Failed to read file: ' + err.message);
+  }
+}
+
+function onEditorInput() {
+  updateLineNumbers();
+}
+
+function updateLineNumbers() {
+  const lines = $('#editorTextarea').value.split('\n').length;
+  $('#lineNumbers').innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
+}
+
+async function saveEditorFile() {
+  const path = $('#editorPath').value.trim();
+  const content = $('#editorTextarea').value;
+  await api('/api/workspace/file', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content, requireApproval: false })
+  });
+  alert('File saved directly.');
+}
+
+async function stageEditorChangeset() {
+  const path = $('#editorPath').value.trim();
+  const content = $('#editorTextarea').value;
+  await api('/api/workspace/file', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content, requireApproval: true })
+  });
+  alert('ChangeSet created and waiting in Approvals queue.');
+  checkPendingApprovals();
+}
+
+async function previewEditorDiff() {
+  const path = $('#editorPath').value.trim();
+  const content = $('#editorTextarea').value;
+  const p = await api('/api/workspace/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content })
+  });
+  $('#diffModalTitle').textContent = `Diff Preview: ${path}`;
+  $('#diffModalContent').innerHTML = formatDiffHtml(p.diff);
+  $('#diffApproveBtn').onclick = () => { saveEditorFile(); closeModal('diffApprovalModal'); };
+  $('#diffRejectBtn').onclick = () => { closeModal('diffApprovalModal'); };
+  openModal('diffApprovalModal');
+}
+
+// Terminal (Phase 5)
+async function runTerminalCommand() {
+  const cmd = $('#termCmdInput').value.trim();
+  if (!cmd) return;
+  $('#termStatus').textContent = `Running: ${cmd}...`;
+  const out = $('#termOutput');
+  out.textContent = 'Executing sandboxed command...\n';
+  try {
+    const res = await api('/api/terminal/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd })
+    });
+    $('#termStatus').textContent = `Exit Code: ${res.exitCode} (${res.durationMs}ms)`;
+    out.textContent = (res.stdout || '') + (res.stderr ? '\n[STDERR]\n' + res.stderr : '');
+  } catch (err) {
+    $('#termStatus').textContent = 'Error';
+    out.textContent = err.message;
+  }
+}
+
+// Git (Phase 6)
+async function loadGitStatus() {
+  try {
+    const st = await api('/api/git/status');
+    $('#gitCurrentBranch').textContent = st.branch || 'No Repo';
+    const branches = await api('/api/git/branches');
+    $('#gitBranchSelect').innerHTML = branches.branches.map(b => `<option value="${esc(b.name)}" ${b.current ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
+    const diff = await api('/api/git/diff');
+    $('#gitDiffOutput').innerHTML = formatDiffHtml(diff.diff);
+  } catch (err) {
+    $('#gitDiffOutput').textContent = 'Git Error: ' + err.message;
+  }
+}
+
+async function commitApprovedGit() {
+  const msg = $('#gitCommitMsg').value.trim();
+  if (!msg) return alert('Enter a commit message.');
+  if (!confirm(`Approve creating Git commit with message: "${msg}"?`)) return;
+  await api('/api/git/commit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: msg, approved: true })
+  });
+  $('#gitCommitMsg').value = '';
+  loadGitStatus();
+  alert('Git commit created successfully.');
+}
+
+// Playwright Browser (Phase 8)
+async function browserNavigate() {
+  const url = $('#browserUrlInput').value.trim();
+  $('#browserDomOutput').textContent = 'Loading page...';
+  try {
+    const res = await api('/api/browser/navigate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    $('#browserDomOutput').textContent = `Title: ${res.title}\nStatus: ${res.status}\n\nContent:\n${res.content}`;
+  } catch (err) {
+    $('#browserDomOutput').textContent = 'Browser error: ' + err.message;
+  }
+}
+
+async function browserScreenshot() {
+  try {
+    const res = await api('/api/browser/screenshot', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+    $('#browserScreenshotWrap').innerHTML = `<img src="data:image/png;base64,${res.image_base64}" style="max-width:100%;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">`;
+  } catch (err) {
+    alert('Screenshot error: ' + err.message);
+  }
+}
+
+// Observability & Logs (Phase 13)
+async function loadObservabilityData() {
+  const lvl = $('#logLevelFilter')?.value || '';
+  const search = $('#logSearch')?.value || '';
+  try {
+    const m = await api('/api/observability/metrics');
+    $('#metricActiveJobs').textContent = m.activeJobs;
+    $('#metricDoneJobs').textContent = m.completedJobs;
+    $('#metricFailedJobs').textContent = m.failedJobs;
+    $('#metricDisk').textContent = m.disk.usedPercent + '%';
+
+    const l = await api(`/api/observability/logs?level=${encodeURIComponent(lvl)}&search=${encodeURIComponent(search)}`);
+    $('#logsOutput').textContent = l.logs.map(e => `[${e.timestamp}] [${e.level}] [${e.category}] ${e.message}`).join('\n');
+  } catch (_) {}
+}
+
+// Settings & Env
+async function loadSettings() {
+  const env = await api('/api/config/environment');
+  $('#envFields').innerHTML = Object.keys(env).map(k => `
+    <div>
+      <label style="font-size:11px;color:var(--text-dim)">${k}</label>
+      <input data-env-key="${k}" class="input-control" value="${esc(env[k])}" placeholder="${env[k] ? 'Configured (leave blank to preserve)' : 'Not configured'}">
+    </div>
+  `).join('');
+}
+
+async function saveEnvironmentSettings() {
+  const payload = {};
+  document.querySelectorAll('[data-env-key]').forEach(el => {
+    if (el.value) payload[el.dataset.envKey] = el.value;
+  });
+  await api('/api/config/environment', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  alert('Environment & Security Settings Saved.');
+}
+
+// Auth Handlers
+function openLoginModal() { openModal('loginModal'); }
+async function handleLoginSubmit(e) {
+  e.preventDefault();
+  const u = $('#loginUsername').value.trim();
+  const p = $('#loginPassword').value.trim();
+  const t = $('#loginToken').value.trim();
+  $('#loginError').style.display = 'none';
+
+  try {
+    const res = await api('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p, token: t })
+    });
+    closeModal('loginModal');
+    location.reload();
+  } catch (err) {
+    $('#loginError').textContent = err.message;
+    $('#loginError').style.display = 'block';
+  }
+}
+
+// Command Palette (Ctrl+K)
+function openCommandPalette() {
+  openModal('cmdPaletteModal');
+  $('#cmdPaletteInput').focus();
+}
+
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    openCommandPalette();
+  }
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('open'));
+  }
+});
+
+function refreshCurrentView() {
+  navigate(STATE.activeView);
+}
+
+// Run on page load
+initApp();
+</script>
+</body>
+</html>

@@ -2,5 +2,13 @@
 .env
 __pycache__/
 *.py[cod]
-# Runtime provider data may contain local configuration or encrypted secrets.
+.pytest_cache/
+# Runtime data
+/data/*.sqlite3*
+/data/*.key
+/data/logs/
+/data/versions/
+/data/backups/
+/data/job_outputs/
+/data/workspaces/
 /data/runtime-providers.json
