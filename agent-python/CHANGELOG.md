@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.1 - Resilient Host Deployment, Python Detection & Environment Port Auto-Binding
+
+- **Deployment Script Pipefail Fix in WebConsole (`webconsole.php`)**:
+  - Implemented safe sequential `which` bash wrapper in deploy step templates to prevent CentOS/cPanel `which` exit code 10 from failing under `set -o pipefail`.
+  - Added robust Python virtualenv creation helper (`python_venv_safe()`) with automatic `--without-pip` fallback and versioned `get-pip.py` bootstrapping.
+  - Automatically exported extended `PATH` containing EA4 Python (`/opt/cpanel/ea-python*`), CloudLinux Alt-Python (`/opt/alt/python*`), and user local bin paths in `proj_runtime_env()`.
+- **Dynamic Port & Host Binding in Python Agent Runner (`agent-python/main.py`)**:
+  - `agent-python/main.py` dynamically binds to `PORT` (default 8787 or WebConsole configured port like 8788) and `HOST` (default `0.0.0.0`) from environment variables.
+
 ## 0.16.0 - Step Checkpointing & Resume, Smart Cross-Provider Fallback & Exponential Backoff Retry Loop
 
 - **Step Checkpointing & Seamless Resume**:
