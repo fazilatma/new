@@ -1,7 +1,7 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
-> *Suite Version: 2.17.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
+> *Suite Version: 2.18.0 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 
 ---
 
@@ -281,6 +281,66 @@ that cannot provide it. The alternative is to set `DATABASE_URL` to a PostgreSQL
 
 ---
 
+## 🐘 7b. Running a PHP script continuously (`php-daemon.php`)
+
+A PHP script written for the web is interrupted by things that have nothing to
+do with PHP: LiteSpeed/FPM request timeouts, proxy read timeouts, the browser
+going away. Authors work around it with `ignore_user_abort()`, `set_time_limit(0)`,
+finish-request tricks, a lock file and checkpoint/resume logic — machinery whose
+only purpose is surviving being cut off.
+
+**None of that applies to the CLI SAPI.** `max_execution_time` defaults to `0`
+there and nothing terminates the process. PHP can run for weeks, exactly like
+Node or Python; it is the web server in front of it that was never built for it.
+
+`php-daemon.php` turns a one-shot script into a continuous worker:
+
+```bash
+php php-daemon.php --script=scraper4.php --args=cron_run \
+    --idle-min=2 --idle-max=30 --idle-marker='هیچ پروفایلی کاری نداشت'
+```
+
+| Option | Meaning |
+|---|---|
+| `--script=` | the PHP file to run each cycle (required) |
+| `--args=` | arguments passed to it |
+| `--php=` | interpreter; defaults to the running one |
+| `--idle-min` / `--idle-max` | sleep after a productive cycle / ceiling when idle |
+| `--idle-marker=` | output substring meaning "nothing to do" — drives the backoff |
+| `--cycle-timeout=` | kill a cycle that overruns (default 3600s) |
+| `--max-fails=` | exit after N consecutive failures (0 = never) |
+| `--once` | single cycle, for testing |
+
+**A fresh child per cycle, deliberately.** A script written as a one-shot run
+accumulates globals, static caches and cyclic references; looping inside it
+grows the heap until the host's memory limit kills it. This is the same reason
+Laravel recycles its queue workers. Process startup costs milliseconds; a leak
+costs an outage. Measured: 607 cycles in 12 seconds, resident memory flat at 2 MB.
+
+Other behaviour worth knowing:
+
+* Child output is streamed as it arrives, not buffered, so a long job shows
+  progress in the console log instead of appearing to hang.
+* Adaptive backoff: productive cycles run back to back; when the queue empties
+  the interval doubles up to `--idle-max`, and snaps back the moment work returns.
+* Graceful stop with `touch .daemon.stop` — the in-flight cycle is allowed to
+  finish. `SIGTERM`/`SIGINT` do the same where `pcntl` exists; the stop-file
+  works everywhere, which matters because plenty of shared hosts omit `pcntl`.
+* `.daemon-heartbeat.json` carries pid, cycle count, uptime, last exit code and
+  memory, and is removed on a clean exit.
+* The child is launched with an `exec` prefix. Without it `proc_open()` runs the
+  command through a shell, `proc_terminate()` signals the shell, and the PHP
+  child is orphaned — a cycle timeout would leak a process every time.
+
+Run it as a normal console service (type `php`, `is_daemon` on). The cron
+watchdog from 2.17.0 restarts it if the host culls the process tree.
+
+> **This does not remove the need for a restart mechanism**, and nothing running
+> inside a shared-hosting account can. What it removes is the per-tick
+> machinery: one worker means no lock contention and no 60-second granularity.
+
+---
+
 ## 🐍 7a. Python projects: how the console picks an interpreter
 
 Since **2.16.0** none of the steps below have to be done by hand. When a project
@@ -389,9 +449,9 @@ can never be overwritten by `webconsole.php` again.
 
 | Component | Version |
 | :--- | :---: |
-| `hostconsole.php` (shared hosting) | **2.17.0** |
+| `hostconsole.php` (shared hosting) | **2.18.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
-| `wcp` CLI · `install.sh` · `update.sh` | 2.17.0 |
+| `wcp` CLI · `install.sh` · `update.sh` | 2.18.0 |
 | `py-upgrade.sh` | 1.0.2 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 

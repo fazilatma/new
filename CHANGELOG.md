@@ -13,12 +13,40 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.17.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.18.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.17.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.17.0 | Follows the suite version |
+| `wcp` (CLI) | 2.18.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.18.0 | Follows the suite version |
 | `py-upgrade.sh` | 1.0.2 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.18.0] — 2026-09-29 · 🐘 `php-daemon.php`
+
+### Added
+* **`php-daemon.php` 1.0.0** — runs a one-shot PHP script as a continuous worker,
+  so a PHP job can behave like its Node or Python equivalent instead of being
+  chopped into cron ticks. PHP 7.0+, no extensions, no Composer.
+  * Adaptive backoff driven by `--idle-marker`: productive cycles run back to
+    back, an empty queue doubles the interval up to `--idle-max`, and work
+    returning snaps it straight back to `--idle-min`.
+  * Child output streamed live rather than buffered.
+  * Graceful stop via `.daemon.stop`, plus signals where `pcntl` exists.
+  * `.daemon-heartbeat.json` with pid, cycle, uptime, exit code, memory.
+  * `--cycle-timeout` kills an overrunning cycle; `--max-fails` hands control
+    back to the supervisor rather than looping on a broken job.
+  * A fresh child per cycle by design — a script written for one-shot execution
+    leaks when looped in-process. Measured flat at 2 MB over 607 cycles.
+
+### Notes
+* The `exec` prefix on the child command is load-bearing. `proc_open()` goes
+  through a shell, so `proc_terminate()` would signal the shell and orphan the
+  PHP process; every cycle timeout would leak one. Caught in testing.
+* This is not a substitute for the 2.17.0 cron watchdog. Nothing inside a
+  shared-hosting account can stop the host from killing it. What it removes is
+  the per-tick machinery — one worker means no lock contention and no
+  60-second granularity.
 
 ---
 
