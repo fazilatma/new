@@ -6,6 +6,20 @@ from .providers import ProviderStore
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 app=FastAPI(title='Arena-like Coding Agent')
+
+@app.get('/')
+def root():
+    return {
+        'name': 'Arena Python Agent',
+        'status': 'ok',
+        'docs': '/docs',
+        'providers': '/api/providers'
+    }
+
+@app.get('/health')
+def health():
+    return {'status': 'ok'}
+
 @app.get('/api/providers')
 def providers(): return store.all()
 @app.put('/api/providers/{pid}')
