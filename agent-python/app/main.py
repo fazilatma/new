@@ -76,13 +76,22 @@ app = FastAPI(title="Arena-like Coding Agent", version=APP_VERSION, lifespan=lif
 
 # CORS Configuration
 origins = [o.strip() for o in get_raw_config("CORS_ORIGINS", "*").split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins if "*" not in origins else ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if "*" in origins or not origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://.*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.middleware("http")(auth_middleware)
 

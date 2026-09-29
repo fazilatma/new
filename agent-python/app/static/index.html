@@ -1343,6 +1343,94 @@
       border: 1px solid rgba(245, 158, 11, 0.3);
     }
 
+    .fs-close-btn-mobile {
+      display: none;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      border-radius: 6px;
+      background: rgba(239, 68, 68, 0.25);
+      border: 1px solid rgba(239, 68, 68, 0.6);
+      color: #ff8585;
+      font-size: 16px;
+      font-weight: bold;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      transition: all 0.15s ease;
+    }
+    .fs-close-btn-mobile:hover, .fs-close-btn-mobile:active {
+      background: rgba(239, 68, 68, 0.85);
+      color: #ffffff;
+    }
+
+    @media (max-width: 768px) {
+      .fs-render-modal {
+        width: 100vw;
+        max-width: 100vw;
+        overflow-x: hidden;
+      }
+      .fs-toolbar {
+        height: auto;
+        min-height: 48px;
+        padding: 6px 10px;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: space-between;
+      }
+      .fs-toolbar-left {
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+      }
+      .fs-close-btn-mobile {
+        display: inline-flex !important;
+      }
+      .fs-toolbar-center {
+        display: none !important;
+      }
+      .fs-toolbar-right {
+        width: 100%;
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        gap: 6px;
+        padding: 4px 0 2px 0;
+        border-top: 1px solid rgba(255,255,255,0.06);
+      }
+      .fs-toolbar-right .btn {
+        padding: 3px 8px;
+        font-size: 11px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .fs-main-stage {
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .fs-code-split-drawer {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: 50% !important;
+        min-height: 200px;
+        border-right: none;
+        border-top: 1px solid var(--border-subtle);
+      }
+      .fs-terminal-header {
+        padding: 6px 10px;
+        flex-wrap: wrap;
+        gap: 4px;
+        font-size: 11px;
+      }
+      .fs-terminal-body {
+        padding: 10px 12px;
+        font-size: 11.5px;
+        word-break: break-word;
+      }
+    }
+
     /* Autonomous Execution Feedback UI in Chat */
     .exec-live-card {
       margin-top: 12px;
@@ -3382,13 +3470,14 @@
   <!-- Top Navigation & Control Bar -->
   <div class="fs-toolbar">
     <div class="fs-toolbar-left">
-      <span id="fsFileIcon" style="font-size:22px;line-height:1;">⚡</span>
-      <div style="overflow:hidden;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <strong id="fsFileName" style="font-size:14px;color:var(--text-main);white-space:nowrap;">main.py</strong>
+      <button type="button" class="fs-close-btn-mobile" onclick="closeFullScreenRenderModal()" title="بستن حالت تمام‌صفحه (Esc)">✕</button>
+      <span id="fsFileIcon" style="font-size:20px;line-height:1;">⚡</span>
+      <div style="overflow:hidden;max-width:calc(100vw - 110px);">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <strong id="fsFileName" style="font-size:13.5px;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">main.py</strong>
           <span id="fsStatusBadge" class="fs-status-pill success">Ready</span>
         </div>
-        <div style="font-size:10.5px;color:var(--text-dim);font-family:monospace;white-space:nowrap;" id="fsFilePath">/workspace/main.py</div>
+        <div style="font-size:10px;color:var(--text-dim);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="fsFilePath">/workspace/main.py</div>
       </div>
     </div>
 
@@ -3413,12 +3502,12 @@
     <!-- Right: Action Controls -->
     <div class="fs-toolbar-right">
       <button type="button" class="btn btn-success btn-sm" id="fsRunBtn" onclick="executeFsCurrentFile()" title="اجرای مجدد کد (Ctrl+Enter)">
-        ▶️ اجرای مجدد (Run)
+        ▶️ اجرا (Run)
       </button>
       <button type="button" class="btn btn-ghost btn-sm" id="fsReloadBtn" onclick="refreshFsPreview()" title="بازخوانی پیش‌نمایش">
         🔄 بازخوانی
       </button>
-      <button type="button" class="btn btn-ghost btn-sm" id="fsCodeToggleBtn" onclick="toggleFsCodeSplit()" title="نمایش / پنهان کردن ویرایشگر کد در کنار خروجی">
+      <button type="button" class="btn btn-ghost btn-sm" id="fsCodeToggleBtn" onclick="toggleFsCodeSplit()" title="نمایش / پنهان کردن ویرایشگر کد">
         📝 مشاهده کد
       </button>
       <button type="button" class="btn btn-ghost btn-sm" onclick="copyFsOutput()" title="کپی خروجی ترمینال / محتوا">
@@ -3603,14 +3692,29 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 
 async function api(path, opts = {}) {
   let res;
-  try {
-    res = await fetch(path, { credentials: 'include', ...opts });
-  } catch (netErr) {
-    throw new Error(netErr.message || 'Failed to fetch (Server connection error)');
+  const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
+  const headers = { ...(opts.headers || {}) };
+  if (token && !headers['Authorization'] && !headers['authorization']) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
+  const fetchOpts = { ...opts, headers };
+  if (!fetchOpts.credentials) {
+    fetchOpts.credentials = 'same-origin';
+  }
+
+  try {
+    res = await fetch(path, fetchOpts);
+  } catch (netErr) {
+    try {
+      res = await fetch(path, { ...fetchOpts, credentials: 'omit' });
+    } catch (_) {
+      throw new Error(netErr.message || 'خطا در برقراری ارتباط با سرور (Failed to fetch)');
+    }
+  }
+
   if (res.status === 401 && !path.includes('/auth/login') && !path.includes('/auth/status')) {
     openLoginModal();
-    throw new Error('Authentication required');
+    throw new Error('احراز هویت مورد نیاز است (Authentication required)');
   }
   let data;
   const contentType = res.headers.get('content-type') || '';
@@ -3618,13 +3722,13 @@ async function api(path, opts = {}) {
     try {
       data = await res.json();
     } catch (_) {
-      data = { error: 'Invalid JSON response from server' };
+      data = { error: 'پاسخ نامعتبر از سرور (Invalid JSON)' };
     }
   } else {
     const text = await res.text();
     data = { error: text || `HTTP ${res.status}` };
   }
-  if (!res.ok) throw new Error(data.detail || data.error || data.message || `HTTP ${res.status}: Request failed`);
+  if (!res.ok) throw new Error(data.detail || data.error || data.message || `خطای سرور HTTP ${res.status}`);
   return data;
 }
 
