@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.0');
+define('WCP_VERSION', '2.9.1');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -199,6 +199,12 @@ function sh_ok($cmd, &$code = null) {
     $o=[]; exec($cmd.' 2>/dev/null',$o,$code); return implode("\n",$o);
 }
 function which($bin) { return trim(sh_ok('command -v '.esc($bin))) !== ''; }
+function which_path(string $bin): string {
+    if ($bin === '') return '';
+    if (($bin[0] === '/' || $bin[0] === '.') && is_executable($bin) && !is_dir($bin)) return $bin;
+    $out = trim((string)sh_ok('command -v ' . esc($bin)));
+    return ($out !== '' && is_executable($out) && !is_dir($out)) ? $out : '';
+}
 function mask_url($u) { return preg_replace('~//([^:@/]+):([^@/]+)@~','//$1:***@',(string)$u); }
 function act_log($m) { $who=PHP_SAPI==='cli'?'cli':($_SESSION['wcp_user']??'anon'); wcp_put_contents(DATA_DIR.'/activity.log','['.date('c')."] $who | $m\n",true,FILE_APPEND); }
 function wcp_random($n=8) { return bin2hex(random_bytes($n)); }
@@ -291,8 +297,8 @@ function wcp_find_best_python(): array {
     ];
     $found = [];
     foreach ($candidates as $bin) {
-        $path = which($bin);
-        if ($path && is_executable($path) && !isset($found[$path])) {
+        $path = which_path($bin);
+        if ($path !== '' && !isset($found[$path])) {
             $verStr = trim((string)sh_ok(esc($path) . ' -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\")" 2>/dev/null'));
             if ($verStr === '') {
                 $rawVer = trim((string)sh_ok(esc($path) . ' --version 2>&1'));
@@ -1057,6 +1063,23 @@ function proj_runtime_env(array $p): array {
     $defaults['UVICORN_PORT'] = $port;
     $defaults['WEB_PORT'] = $port;
     $defaults['PORT_NUMBER'] = $port;
+    $extraPaths = [
+        '/usr/local/bin',
+        '/opt/alt/python312/bin',
+        '/opt/alt/python311/bin',
+        '/opt/alt/python310/bin',
+        '/opt/alt/python39/bin',
+        '/opt/cpanel/ea-python312/root/usr/bin',
+        '/opt/cpanel/ea-python311/root/usr/bin',
+        '/opt/cpanel/ea-python310/root/usr/bin',
+        '/opt/cpanel/ea-python39/root/usr/bin',
+        ($defaults['HOME'] ?? '') . '/.local/bin',
+    ];
+    $currentPath = (string)getenv('PATH');
+    $validExtra = array_filter($extraPaths, fn($d) => $d !== '' && @is_dir($d));
+    if (!empty($validExtra)) {
+        $defaults['PATH'] = implode(':', $validExtra) . ($currentPath !== '' ? ':' . $currentPath : '');
+    }
     if (isset($p['env']['NPM_CONFIG_CACHE'])) unset($defaults['npm_config_cache']);
     return array_merge($defaults, $p['env'] ?? []);
 }
@@ -1305,9 +1328,10 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
     foreach (['install' => ($p['install_cmd'] ?: default_install_cmd($p['type'])), 'build' => $p['build_cmd']] as $label => $cmd) {
         if (trim($cmd) === '') continue;
         $script = "#!/bin/bash\nset -e\nset -o pipefail\ncd " . esc($dest) . "\n";
+        $script .= "which() { local found=\"\"; for arg in \"\$@\"; do if [ -x \"\$arg\" ] && [ ! -d \"\$arg\" ]; then found=\"\$arg\"; break; fi; local p; p=\$(command -v \"\$arg\" 2>/dev/null || true); if [ -n \"\$p\" ]; then found=\"\$p\"; break; fi; done; if [ -n \"\$found\" ]; then echo \"\$found\"; return 0; fi; return 0; }\n";
         $script .= "pip() { if [ \"\$1\" = \"install\" ] && echo \"\$*\" | grep -q -- \"-r \"; then local req_file=\"\"; local args=(); local skip_next=0; for arg in \"\$@\"; do if [ \"\$skip_next\" -eq 1 ]; then req_file=\"\$arg\"; skip_next=0; elif [ \"\$arg\" = \"-r\" ] || [ \"\$arg\" = \"--requirement\" ]; then skip_next=1; else args+=(\"\$arg\"); fi; done; if [ -n \"\$req_file\" ]; then if [ ! -f \"\$req_file\" ]; then echo \"[pip-smart NOTICE] Requirements file '\$req_file' not present in project directory. Skipping.\"; return 0; fi; if ! command pip \"\$@\" 2>/dev/null; then echo \"[pip-smart] Bulk install encountered platform-incompatible dependencies (e.g. desktop browser binaries on Android/ARM64). Installing compatible packages line-by-line...\"; while IFS= read -r line || [ -n \"\$line\" ]; do pkg=\$(echo \"\$line\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 's/#.*//'); if [ -n \"\$pkg\" ]; then if ! command pip install \"\${args[@]:1}\" \"\$pkg\" --no-warn-script-location 2>/dev/null; then echo \"[pip-smart WARNING] Skipped incompatible package on \$(uname -m): \$pkg\"; fi; fi; done < \"\$req_file\"; echo \"[pip-smart] Resilient package installation completed.\"; return 0; fi; return 0; fi; fi; command pip \"\$@\"; }\n";
         $script .= "pip3() { pip \"\$@\"; }\n";
-        $script .= "python_venv_safe() { local bin=\"\$1\"; shift; local vdir=\"\${@: -1}\"; if ! command \"\$bin\" \"\$@\" 2>/dev/null; then echo \"[venv-smart] Standard venv failed (ensurepip/system wheel issue). Retrying with --without-pip and bootstrapping pip...\"; command \"\$bin\" -m venv --without-pip \"\$vdir\"; if [ -d \"\$vdir\" ] && [ ! -f \"\$vdir/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || true); fi; fi; }\n";
+        $script .= "python_venv_safe() { local bin=\"\$1\"; shift; local vdir=\"\${@: -1}\"; if ! command \"\$bin\" \"\$@\" 2>/dev/null; then echo \"[venv-smart] Standard venv failed (ensurepip/system wheel issue). Retrying with --without-pip and bootstrapping pip...\"; rm -rf \"\$vdir\" 2>/dev/null || true; command \"\$bin\" -m venv --without-pip \"\$vdir\" || return 0; if [ -d \"\$vdir\" ] && [ ! -f \"\$vdir/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || curl -sS https://bootstrap.pypa.io/pip/3.6/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || true); fi; fi; }\n";
         $script .= "python3() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python3 \"\$@\"; else command python3 \"\$@\"; fi; }\n";
         $script .= "python() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python \"\$@\"; else command python \"\$@\"; fi; }\n";
         foreach (proj_runtime_env($p) as $k => $v) $script .= 'export ' . esc($k . '=' . $v) . "\n";
@@ -2292,7 +2316,7 @@ function default_install_cmd(string $type): string {
         case 'node':
             return 'if [ -f package-lock.json ]; then (npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund); elif [ -f package.json ]; then npm install --include=dev --no-audit --no-fund; fi';
         case 'python':
-            return 'if [ -f requirements.txt ]; then if ! (pip3 install --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null); then echo "[deploy-installer] Bulk install failed. Installing packages line-by-line..."; while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then if ! (pip3 install --break-system-packages --ignore-installed "$pkg" --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages "$pkg" --no-warn-script-location 2>/dev/null); then echo "[deploy-installer WARNING] Skipped incompatible package: $pkg"; fi; fi; done < requirements.txt; echo "[deploy-installer] Resilient installation completed."; fi; elif [ -f setup.py ] || [ -f pyproject.toml ]; then (pip3 install --break-system-packages --ignore-installed . --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages . --no-warn-script-location 2>/dev/null); elif [ -f scraper4.py ] || [ -f app.py ]; then (pip3 install --break-system-packages --ignore-installed flask requests beautifulsoup4 lxml python-dotenv basalam-sdk selectolax html5lib psutil --no-warn-script-location 2>/dev/null || true); fi';
+            return 'if [ -f requirements.txt ]; then if ! (pip3 install --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install -r requirements.txt --no-warn-script-location 2>/dev/null); then echo "[deploy-installer] Bulk install failed. Installing packages line-by-line..."; while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then if ! (pip3 install --break-system-packages --ignore-installed "$pkg" --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages "$pkg" --no-warn-script-location 2>/dev/null || pip3 install "$pkg" --no-warn-script-location 2>/dev/null); then echo "[deploy-installer WARNING] Skipped incompatible package: $pkg"; fi; fi; done < requirements.txt; echo "[deploy-installer] Resilient installation completed."; fi; elif [ -f setup.py ] || [ -f pyproject.toml ]; then (pip3 install --break-system-packages --ignore-installed . --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages . --no-warn-script-location 2>/dev/null || pip3 install . --no-warn-script-location 2>/dev/null); elif [ -f scraper4.py ] || [ -f app.py ]; then (pip3 install --break-system-packages --ignore-installed flask requests beautifulsoup4 lxml python-dotenv basalam-sdk selectolax html5lib psutil --no-warn-script-location 2>/dev/null || true); fi';
         default:return '';
     }
 }
