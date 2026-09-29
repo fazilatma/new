@@ -4,6 +4,7 @@ from fastapi.responses import Response, FileResponse
 from .models import Provider, ModelSpec
 from .providers import ProviderStore
 from .agent_tools import list_files, read_file, write_file, run_command
+from .chat import complete
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 app=FastAPI(title='Arena-like Coding Agent')
@@ -39,6 +40,14 @@ def workspace_write(payload: dict):
 def terminal_exec(payload: dict):
     try: return run_command(str(payload['command']), str(payload.get('cwd','.')), int(payload.get('timeout',60)))
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.post('/api/chat')
+async def chat(payload: dict):
+    try:
+        messages=payload.get('messages') or [{'role':'user','content':str(payload.get('message',''))}]
+        return await complete(store, str(payload['provider']), str(payload['model']), messages, int(payload.get('maxSteps',8)))
+    except Exception as e:
+        raise HTTPException(400, str(e))
 
 @app.get('/api/providers')
 def providers(): return store.all()
