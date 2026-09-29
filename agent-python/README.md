@@ -21,3 +21,14 @@ Host:    0.0.0.0
 ```
 
 The WebConsole can start/stop it as a daemon and expose the port through its project panel.
+
+## Agent tools API
+
+The foundation now includes workspace and terminal endpoints:
+
+- `GET /api/workspace/files?path=.`
+- `GET /api/workspace/file?path=README.md`
+- `PUT /api/workspace/file` with `{ "path": "file.txt", "content": "..." }`
+- `POST /api/terminal/exec` with `{ "command": "pytest", "cwd": ".", "timeout": 60 }`
+
+All paths are confined to `AGENT_WORKSPACE` (the current project directory by default). For production, run terminal jobs inside a Docker container and put these endpoints behind authentication.

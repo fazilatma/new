@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response, FileResponse
 from .models import Provider, ModelSpec
 from .providers import ProviderStore
+from .agent_tools import list_files, read_file, write_file, run_command
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 app=FastAPI(title='Arena-like Coding Agent')
@@ -18,6 +19,26 @@ def root():
 @app.get('/health')
 def health():
     return {'status': 'ok'}
+
+@app.get('/api/workspace/files')
+def workspace_files(path: str = '.'):
+    try: return list_files(path)
+    except Exception as e: raise HTTPException(400, str(e))
+
+@app.get('/api/workspace/file')
+def workspace_read(path: str):
+    try: return {'path':path,'content':read_file(path)}
+    except Exception as e: raise HTTPException(400, str(e))
+
+@app.put('/api/workspace/file')
+def workspace_write(payload: dict):
+    try: return write_file(str(payload['path']), str(payload.get('content','')))
+    except Exception as e: raise HTTPException(400, str(e))
+
+@app.post('/api/terminal/exec')
+def terminal_exec(payload: dict):
+    try: return run_command(str(payload['command']), str(payload.get('cwd','.')), int(payload.get('timeout',60)))
+    except Exception as e: raise HTTPException(400, str(e))
 
 @app.get('/api/providers')
 def providers(): return store.all()
