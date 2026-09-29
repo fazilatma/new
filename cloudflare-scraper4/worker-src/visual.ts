@@ -27,13 +27,49 @@ const STYLE=`<style>
 function fullModeJs(indirect=false):string{
   const proxy = indirect ? '/api/rp?indirect=1&url=' : '/api/rp?url=';
   const indirectFlag = indirect ? 'true' : 'false';
-  // PHP 10.170 parity: fetch/XHR/setAttribute proxy + property setters + baseURI fix for Emalls
+  // PHP 10.170 parity + Emalls fix: baseURI, property setters, document.write override, frame-busting block
   return `<script>window.__S4_INDIRECT__=${indirectFlag};(function(){
 var proxy='${proxy}';
 var proxyBase='/api/rp?url=';
 var proxyIndirect='/api/rp?indirect=1&url=';
 var useIndirect=${indirectFlag};
+var originHost=(function(){try{return new URL(document.baseURI||location.href).hostname;}catch(e){return '';}})();
+function isSameHost(abs){
+  try{
+    var h=new URL(abs).hostname;
+    return h===originHost || h==='www.'+originHost || originHost==='www.'+h;
+  }catch(e){return false;}
+}
 function toProxy(u){
+  if(!u||typeof u!=='string') return u;
+  u=u.trim();
+  if(!u) return u;
+  if(u.indexOf('/api/rp')!==-1) return u;
+  if(u.startsWith('data:')||u.startsWith('blob:')||u.startsWith('#')||u.startsWith('javascript:')||u.startsWith('mailto:')||u.startsWith('about:')) return u;
+  try{
+    var base=document.baseURI||location.href;
+    var abs=new URL(u, base).href;
+    if(abs.indexOf(location.origin+'/api/rp')===0) return abs;
+    if(abs.indexOf(location.origin+'/visual')===0) return abs;
+    if(abs.indexOf(location.origin+'/api/')===0 && abs.indexOf('/api/rp')===-1) return abs;
+    // For same-host static resources, load directly (PHP 10.170 did absolutize, not proxy)
+    // Only proxy cross-origin or API/XHR
+    var p=useIndirect?proxyIndirect:proxyBase;
+    if(abs.startsWith('http://')||abs.startsWith('https://')){
+      // If same host, return absolute directly to avoid proxy loop for JS/CSS
+      // Dynamic fetch/XHR will still be proxied via fetch/XHR patch below when needed
+      // For Emalls, we want direct load for static, proxied for API - detect API pattern
+      var isApi=/\\/(api|graphql|search|ajax|_next\\/data|wp-json)\\//i.test(abs) || /\\.(json)(\\?|$)/i.test(abs);
+      if(!isApi && isSameHost(abs)){
+        return abs;
+      }
+      return p+encodeURIComponent(abs);
+    }
+    return abs;
+  }catch(e){return u;}
+}
+function toProxyForce(u){
+  // Force proxy even for same-host (for API calls)
   if(!u||typeof u!=='string') return u;
   u=u.trim();
   if(!u) return u;
@@ -69,9 +105,9 @@ var _fetch=window.fetch;
 window.fetch=function(u,o){
   try{
     if(typeof u==='string'){
-      u=toProxy(u);
+      u=toProxyForce(u);
     }else if(u && typeof u.url==='string'){
-      var nu=toProxy(u.url);
+      var nu=toProxyForce(u.url);
       if(nu!==u.url){
         try{u=new Request(nu, u);}catch(e){u=new Request(nu);}
       }
@@ -86,9 +122,9 @@ try{
     window.Request=function(input, init){
       try{
         if(typeof input==='string'){
-          input=toProxy(input);
+          input=toProxyForce(input);
         }else if(input && typeof input.url==='string'){
-          var nurl=toProxy(input.url);
+          var nurl=toProxyForce(input.url);
           if(nurl!==input.url){
             try{input=new _OrigRequest(nurl, input);}catch(e){input=new _OrigRequest(nurl);}
           }
@@ -104,7 +140,7 @@ var _open=XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open=function(m,u){
   try{
     if(typeof u==='string'){
-      arguments[1]=toProxy(u);
+      arguments[1]=toProxyForce(u);
     }
   }catch(e){}
   return _open.apply(this,arguments);
@@ -159,6 +195,35 @@ try{
   if(window.HTMLVideoElement) patchProp(HTMLVideoElement.prototype,'src',false);
   if(window.HTMLAudioElement) patchProp(HTMLAudioElement.prototype,'src',false);
 }catch(e){}
+// --- Emalls / JS-heavy sites: block frame-busting, document.write wipe, etc (PHP 10.170 had no protection, but sandbox blocks top nav)
+try{
+  // Prevent document.write from wiping our toolbar/picker (common in Iranian shops)
+  var _write=document.write.bind(document);
+  var _writeln=document.writeln.bind(document);
+  document.write=function(){
+    try{
+      var html=Array.prototype.join.call(arguments,'');
+      if(html && html.indexOf('__s4bar')===-1){
+        var div=document.createElement('div');
+        div.innerHTML=html;
+        // Append scripts/styles safely, ignore if it tries to replace whole doc
+        while(div.firstChild){
+          var node=div.firstChild;
+          if(node.tagName==='SCRIPT'){
+            var s=document.createElement('script');
+            if(node.src) s.src=toProxy(node.src);
+            else s.textContent=node.textContent;
+            document.head.appendChild(s);
+            div.removeChild(node);
+          }else{
+            document.body.appendChild(node);
+          }
+        }
+      }
+    }catch(e){try{_write.apply(document,arguments);}catch(e2){}}
+  };
+  document.writeln=function(){try{document.write.apply(document,arguments);}catch(e){}};
+}catch(e){}
 document.addEventListener('click',function(e){
   var a=e.target.closest('a');
   if(a&&!a.closest('#__s4bar')&&!a.closest('.__s4pop')){
@@ -167,20 +232,25 @@ document.addEventListener('click',function(e){
   }
 },true);
 window.open=function(){return null;};
+// Block frame-busting attempts
+try{
+  Object.defineProperty(window,'top',{get:function(){return window;},configurable:false});
+  Object.defineProperty(window,'parent',{get:function(){return window;},configurable:false});
+}catch(e){}
+try{
+  window.addEventListener('beforeunload',function(e){e.stopPropagation();e.preventDefault();},true);
+}catch(e){}
 try{
   var _createElement=document.createElement.bind(document);
   document.createElement=function(tag, opts){
     var el=_createElement(tag, opts);
     if(tag.toLowerCase()==='base'){
-      // Prevent page from overriding our base
-      setTimeout(function(){
-        var b=document.querySelector('base');
-        if(b && b!==document.querySelector('base[href]')){}
-      },0);
+      setTimeout(function(){},0);
     }
     return el;
   };
 }catch(e){}
+console.log('[S4] Visual full mode active, originHost='+originHost+', indirect='+useIndirect);
 })();</script>`;
 }
 
