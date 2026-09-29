@@ -325,7 +325,7 @@ async def complete_chat(
     provider_id: str,
     model_id: str,
     messages: List[Dict[str, Any]],
-    max_steps: int = 8,
+    max_steps: int = 30,
     user_id: str = "user",
     conversation_id: Optional[str] = None,
     references: Optional[List[Dict[str, Any]]] = None

@@ -1600,11 +1600,6 @@
           <div class="chat-top-controls">
             <select id="chatProvider" class="input-control" style="width:160px" onchange="onChatProviderChange()"></select>
             <select id="chatModel" class="input-control" style="width:200px" onchange="onChatModelChange()"></select>
-            <select id="chatSteps" class="input-control" style="width:110px" onchange="onChatStepsChange()">
-              <option value="4">4 Steps</option>
-              <option value="8" selected>8 Steps</option>
-              <option value="16">16 Steps</option>
-            </select>
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;">
               <input type="checkbox" id="requireApprovalCheck" onchange="onApprovalToggle()" checked>
               <span>Require Approval on File Writes</span>
@@ -4362,11 +4357,6 @@ function onChatModelChange(save = true) {
   if (badge) badge.textContent = `⚡ ${p?.name || 'Agent'} / ${mid || 'Model'}`;
 }
 
-function onChatStepsChange() {
-  localStorage.setItem('arena_chat_steps', $('#chatSteps').value);
-  flashAutoSave();
-}
-
 function onApprovalToggle() {
   localStorage.setItem('arena_require_approval', $('#requireApprovalCheck').checked);
   flashAutoSave();
@@ -4710,7 +4700,6 @@ async function streamAgentResponse() {
 
   const pid = $('#chatProvider')?.value || 'openrouter';
   const mid = $('#chatModel')?.value || '';
-  const steps = +($('#chatSteps')?.value || 8);
   const reqApproval = $('#requireApprovalCheck')?.checked ?? true;
 
   // Auto-create active conversation if none exists
@@ -4764,7 +4753,7 @@ async function streamAgentResponse() {
         provider: pid,
         model: mid,
         messages: chatHistory,
-        maxSteps: steps,
+        maxSteps: 30,
         requireApproval: reqApproval,
         conversationId: STATE.activeConversationId,
         references: STATE.activeReferences

@@ -837,7 +837,7 @@ async def chat_endpoint(payload: Dict[str, Any], user: Dict[str, Any] = Depends(
     messages = payload.get("messages") or [{"role": "user", "content": str(payload.get("message", ""))}]
     provider_id = str(payload.get("provider", "openrouter"))
     model_id = str(payload.get("model", ""))
-    max_steps = int(payload.get("maxSteps", 8))
+    max_steps = int(payload.get("maxSteps") or 30)
     conversation_id = payload.get("conversationId") or payload.get("conversation_id")
     references = payload.get("references")
     try:
@@ -854,7 +854,7 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
     messages = payload.get("messages") or [{"role": "user", "content": str(payload.get("message", ""))}]
     provider_id = str(payload.get("provider", "openrouter"))
     model_id = str(payload.get("model", ""))
-    max_steps = int(payload.get("maxSteps", 8))
+    max_steps = int(payload.get("maxSteps") or 30)
     conversation_id = payload.get("conversationId") or payload.get("conversation_id")
     references = payload.get("references")
 
