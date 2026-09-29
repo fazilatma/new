@@ -360,18 +360,30 @@ function proxyUrl(value:string,base:string,indirect=false):string{
     return `${prefix}${encodeURIComponent(abs)}`;
   }catch{return value}
 }
+// For static HTML rewriting we now ABSOLUTIZE to finalUrl (like PHP 10.170 did),
+// NOT proxy via /api/rp. Static resources load directly from origin (works on same server).
+// Dynamic JS loads (fetch/XHR/setAttribute/property) are still proxied via fullModeJs toProxy.
+function absolutizeUrl(value:string,base:string):string{
+  try{
+    const abs=absolutize(value,base);
+    if(!abs||/^(data:|blob:|javascript:|#|mailto:|about:)/i.test(abs))return abs;
+    return abs;
+  }catch{return value}
+}
 
 function rewriteHtml(html:string,baseUrl:string,full=false,indirect=false):string{
+  // PHP 10.170 parity: remove base/CSP/refresh, keep scripts when full=1
   html=html.replace(/<base\b[^>]*>/gi,'').replace(/<meta\b[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi,'').replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi,'');
   if(!full){
     html=html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,'').replace(/<script\b[^>]*\/?>/gi,'').replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,'').replace(/\s+(href|src|action)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi,'');
   }
+  // Rewrite to ABSOLUTE URLs (not proxy) for static resources - direct load from origin
   const attrs=['src','href','data-src','data-lazy-src','data-original','data-lazy','data-thumb','data-image','data-zoom','data-large_image','data-large-image','data-zoom-image','data-full','data-srcset','data-lazy-srcset'];
   for(const attr of attrs){
     const re=new RegExp(`(<(?:img|source|video|audio|link|script|iframe|a)\\b[^>]*?\\s${attr}\\s*=\\s*)(["'])(.*?)\\2`,'gi');
     html=html.replace(re,(m,pre,q,url)=>{
       if(!url||/^(data:|blob:|#|mailto:|javascript:|about:)/i.test(url)||url.startsWith('/api/rp'))return m;
-      return `${pre}${q}${escapeAttr(proxyUrl(url,baseUrl,indirect))}${q}`;
+      return `${pre}${q}${escapeAttr(absolutizeUrl(url,baseUrl))}${q}`;
     });
   }
   html=html.replace(/\bsrcset\s*=\s*(["'])(.*?)\1/gi,(m,q,content)=>{
@@ -380,7 +392,7 @@ function rewriteHtml(html:string,baseUrl:string,full=false,indirect=false):strin
       if(!trimmed)return trimmed;
       const [url,...rest]=trimmed.split(/\s+/);
       if(!url||/^(data:|blob:)/i.test(url)||url.startsWith('/api/rp'))return trimmed;
-      return [proxyUrl(url,baseUrl,indirect),...rest].join(' ');
+      return [absolutizeUrl(url,baseUrl),...rest].join(' ');
     });
     return `srcset=${q}${parts.join(', ')}${q}`;
   });
@@ -390,37 +402,38 @@ function rewriteHtml(html:string,baseUrl:string,full=false,indirect=false):strin
       if(!trimmed)return trimmed;
       const [url,...rest]=trimmed.split(/\s+/);
       if(!url||/^(data:|blob:)/i.test(url)||url.startsWith('/api/rp'))return trimmed;
-      return [proxyUrl(url,baseUrl,indirect),...rest].join(' ');
+      return [absolutizeUrl(url,baseUrl),...rest].join(' ');
     });
     return `data-srcset=${q}${parts.join(', ')}${q}`;
   });
   html=html.replace(/style\s*=\s*(["'])(.*?)\1/gi,(m,q,style)=>{
     const rewritten=style.replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi,(mm: string, qq: string, url: string)=>{
       if(!url||/^(data:|blob:)/i.test(url)||url.startsWith('/api/rp'))return mm;
-      return `url(${qq}${proxyUrl(url,baseUrl,indirect)}${qq})`;
+      return `url(${qq}${absolutizeUrl(url,baseUrl)}${qq})`;
     });
     return `style=${q}${rewritten}${q}`;
   });
   html=html.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi,(m,css)=>{
     const rewritten=css.replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi,(mm: string, qq: string, url: string)=>{
       if(!url||/^(data:|blob:)/i.test(url)||url.startsWith('/api/rp'))return mm;
-      return `url(${qq}${proxyUrl(url,baseUrl,indirect)}${qq})`;
+      return `url(${qq}${absolutizeUrl(url,baseUrl)}${qq})`;
     });
     return `<style>${rewritten}</style>`;
   });
+  // Ensure img with data-src gets src if missing - absolutize
   html=html.replace(/<(img|source)\b([^>]*?)>/gi,(m,tag,attrsStr)=>{
     const hasSrc=/\ssrc\s*=/i.test(attrsStr);
     const dataMatch=attrsStr.match(/\sdata-(?:src|lazy-src|original|thumb|image|zoom|large_image|large-image|zoom-image|full)\s*=\s*(["'])(.*?)\1/i);
     if(!hasSrc&&dataMatch){
       const url=dataMatch[2];
       if(url&&!/^(data:|blob:)/i.test(url)){
-        return `<${tag} ${attrsStr} src="${escapeAttr(proxyUrl(url,baseUrl,indirect))}">`;
+        return `<${tag} ${attrsStr} src="${escapeAttr(absolutizeUrl(url,baseUrl))}">`;
       }
     }
     if(dataMatch){
       const url=dataMatch[2];
       if(url){
-        return m.replace(/\ssrc\s*=\s*(["']).*?\1/i,` src="${escapeAttr(proxyUrl(url,baseUrl,indirect))}"`);
+        return m.replace(/\ssrc\s*=\s*(["']).*?\1/i,` src="${escapeAttr(absolutizeUrl(url,baseUrl))}"`);
       }
     }
     return m;
