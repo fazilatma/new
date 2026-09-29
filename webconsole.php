@@ -279,6 +279,48 @@ function wcp_php_cli(): string {
     }
     throw new RuntimeException('No usable PHP CLI with exec/proc_open was found. Install php-cli, or configure an absolute WCP_PHP_CLI path. PHP-FPM/CGI is not PHP CLI.');
 }
+function wcp_find_best_python(): array {
+    $candidates = [
+        'python3.12', '/usr/local/bin/python3.12', '/usr/bin/python3.12',
+        'python3.11', '/usr/local/bin/python3.11', '/usr/bin/python3.11', '/opt/alt/python311/bin/python3', '/opt/cpanel/ea-python311/root/usr/bin/python3',
+        'python3.10', '/usr/local/bin/python3.10', '/usr/bin/python3.10', '/opt/alt/python310/bin/python3', '/opt/cpanel/ea-python310/root/usr/bin/python3',
+        'python3.9',  '/usr/local/bin/python3.9',  '/usr/bin/python3.9',  '/opt/alt/python39/bin/python3',  '/opt/cpanel/ea-python39/root/usr/bin/python3',
+        'python3.8',  '/usr/local/bin/python3.8',  '/usr/bin/python3.8',  '/opt/alt/python38/bin/python3',
+        'python3',    '/usr/local/bin/python3',    '/usr/bin/python3',
+        'python',     '/usr/local/bin/python',     '/usr/bin/python'
+    ];
+    $found = [];
+    foreach ($candidates as $bin) {
+        $path = which($bin);
+        if ($path && is_executable($path) && !isset($found[$path])) {
+            $verStr = trim((string)sh_ok(esc($path) . ' -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\")" 2>/dev/null'));
+            if ($verStr === '') {
+                $rawVer = trim((string)sh_ok(esc($path) . ' --version 2>&1'));
+                if (preg_match('/Python\s+([0-9.]+)/i', $rawVer, $vm)) {
+                    $verStr = $vm[1];
+                }
+            }
+            if ($verStr !== '') {
+                $parts = explode('.', $verStr);
+                $major = (int)($parts[0] ?? 0);
+                $minor = (int)($parts[1] ?? 0);
+                $found[$path] = [
+                    'path' => $path,
+                    'version' => $verStr,
+                    'major' => $major,
+                    'minor' => $minor,
+                    'is_modern' => ($major >= 3 && $minor >= 9)
+                ];
+            }
+        }
+    }
+    uasort($found, function($a, $b) {
+        if ($a['major'] !== $b['major']) return $b['major'] <=> $a['major'];
+        return $b['minor'] <=> $a['minor'];
+    });
+    return $found;
+}
+
 function wcp_job_alive(array $job): bool {
     $pid = (int)($job['pid'] ?? 0);
     if (!job_pid_alive($pid)) return false;
@@ -1265,6 +1307,9 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
         $script = "#!/bin/bash\nset -e\nset -o pipefail\ncd " . esc($dest) . "\n";
         $script .= "pip() { if [ \"\$1\" = \"install\" ] && echo \"\$*\" | grep -q -- \"-r \"; then local req_file=\"\"; local args=(); local skip_next=0; for arg in \"\$@\"; do if [ \"\$skip_next\" -eq 1 ]; then req_file=\"\$arg\"; skip_next=0; elif [ \"\$arg\" = \"-r\" ] || [ \"\$arg\" = \"--requirement\" ]; then skip_next=1; else args+=(\"\$arg\"); fi; done; if [ -n \"\$req_file\" ]; then if [ ! -f \"\$req_file\" ]; then echo \"[pip-smart NOTICE] Requirements file '\$req_file' not present in project directory. Skipping.\"; return 0; fi; if ! command pip \"\$@\" 2>/dev/null; then echo \"[pip-smart] Bulk install encountered platform-incompatible dependencies (e.g. desktop browser binaries on Android/ARM64). Installing compatible packages line-by-line...\"; while IFS= read -r line || [ -n \"\$line\" ]; do pkg=\$(echo \"\$line\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 's/#.*//'); if [ -n \"\$pkg\" ]; then if ! command pip install \"\${args[@]:1}\" \"\$pkg\" --no-warn-script-location 2>/dev/null; then echo \"[pip-smart WARNING] Skipped incompatible package on \$(uname -m): \$pkg\"; fi; fi; done < \"\$req_file\"; echo \"[pip-smart] Resilient package installation completed.\"; return 0; fi; return 0; fi; fi; command pip \"\$@\"; }\n";
         $script .= "pip3() { pip \"\$@\"; }\n";
+        $script .= "python_venv_safe() { local bin=\"\$1\"; shift; local vdir=\"\${@: -1}\"; if ! command \"\$bin\" \"\$@\" 2>/dev/null; then echo \"[venv-smart] Standard venv failed (ensurepip/system wheel issue). Retrying with --without-pip and bootstrapping pip...\"; command \"\$bin\" -m venv --without-pip \"\$vdir\"; if [ -d \"\$vdir\" ] && [ ! -f \"\$vdir/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || true); fi; fi; }\n";
+        $script .= "python3() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python3 \"\$@\"; else command python3 \"\$@\"; fi; }\n";
+        $script .= "python() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python \"\$@\"; else command python \"\$@\"; fi; }\n";
         foreach (proj_runtime_env($p) as $k => $v) $script .= 'export ' . esc($k . '=' . $v) . "\n";
         $script .= str_replace(["\r\n", "\r"], "\n", $cmd) . "\n";
         $script = str_replace(["\r\n", "\r"], "\n", $script);
@@ -2293,12 +2338,16 @@ function proj_preflight(array $p): array {
             }
         }
     } elseif (($p['type'] ?? '') === 'python') {
-        $pyPath = which('python3') || which('python');
-        if (!$pyPath) {
+        $pyList = wcp_find_best_python();
+        if (empty($pyList)) {
             $add('Python runtime', false, 'python3 is not installed or not in PATH.');
         } else {
-            $pyVer = trim((string)sh_ok('python3 --version 2>/dev/null || python --version 2>/dev/null'));
-            $add('Python version', true, $pyVer ?: 'Python is available');
+            $best = reset($pyList);
+            if (!$best['is_modern']) {
+                $add('Python version', false, "Detected {$best['version']} at {$best['path']} (Outdated). Modern Python packages (FastAPI, Pydantic, etc.) require Python >= 3.9 / 3.10 / 3.11. Check if higher python is installed (e.g. /usr/local/bin/python3.11 or /opt/alt/python311/bin/python3).");
+            } else {
+                $add('Python version', true, "Python {$best['version']} is compatible ({$best['path']})");
+            }
         }
     }
 
