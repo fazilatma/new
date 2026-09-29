@@ -8,7 +8,7 @@ from .chat import complete
 from .connectors import github, browse
 from .config import read as read_config, write as write_config
 from .workflow import preview
-from .runtime import submit, jobs
+from .runtime import submit, get as get_job, list_jobs
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi import Request
 from .auth import middleware as auth_middleware, configured, valid
@@ -126,10 +126,14 @@ async def browser_fetch(payload:dict):
     try: return await browse(str(payload['url']))
     except Exception as e: raise HTTPException(400,str(e))
 
+@app.get('/api/jobs')
+def jobs_list(): return {'jobs':list_jobs()}
+
 @app.get('/api/jobs/{job_id}')
 def job_status(job_id: str):
-    if job_id not in jobs: raise HTTPException(404,'Job not found')
-    return jobs[job_id]
+    job=get_job(job_id)
+    if not job: raise HTTPException(404,'Job not found')
+    return job
 
 @app.post('/api/chat/stream')
 async def chat_stream(payload: dict):
