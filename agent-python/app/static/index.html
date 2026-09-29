@@ -2554,9 +2554,30 @@ async function initApp() {
 
   await refreshProjects();
   await refreshProviders();
-  await loadConversationsList();
-  await checkPendingApprovals();
   renderChatProviders();
+  await loadConversationsList();
+
+  // Restore previous active conversation & chat history across page refreshes
+  const savedConvId = localStorage.getItem('arena_active_conversation_id');
+  if (savedConvId && (STATE.conversations || []).some(c => c.id === savedConvId)) {
+    await selectConversation(savedConvId);
+  } else if (STATE.conversations && STATE.conversations.length > 0) {
+    await selectConversation(STATE.conversations[0].id);
+  } else {
+    // If client has a local draft/session chat, restore it
+    try {
+      const draft = localStorage.getItem('arena_draft_chat_history');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          chatHistory = parsed;
+          renderChatMessages();
+        }
+      }
+    } catch (_) {}
+  }
+
+  await checkPendingApprovals();
   setupComposerDragAndDrop();
 }
 
@@ -3460,6 +3481,7 @@ async function submitEditUserMessage(idx) {
   // Update this message content and truncate any subsequent history
   chatHistory[idx].content = newContent;
   chatHistory = chatHistory.slice(0, idx + 1);
+  localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
 
   renderChatMessages();
 
@@ -3481,6 +3503,7 @@ async function retryAgentMessage(idx) {
   // Truncate assistant message and any subsequent messages
   // (Leaves the conversation up to the preceding user message)
   chatHistory = chatHistory.slice(0, idx);
+  localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
   renderChatMessages();
 
   // Stream new agent response from this point
@@ -3619,20 +3642,32 @@ async function newConversation() {
     })
   });
   await loadConversationsList();
-  selectConversation(created.id);
+  await selectConversation(created.id);
 }
 
 async function selectConversation(convId) {
+  if (!convId) return;
   STATE.activeConversationId = convId;
+  localStorage.setItem('arena_active_conversation_id', convId);
   renderConversationsSidebar();
   try {
+    const convObj = (STATE.conversations || []).find(c => c.id === convId);
+    if (convObj) {
+      if (convObj.provider_id && $('#chatProvider') && (STATE.providers || []).some(p => p.id === convObj.provider_id)) {
+        $('#chatProvider').value = convObj.provider_id;
+        onChatProviderChange();
+        if (convObj.model_id && $('#chatModel')) {
+          $('#chatModel').value = convObj.model_id;
+        }
+      }
+    }
+
     // Automatically activate dedicated session workspace for this conversation
-    const convObj = STATE.conversations.find(c => c.id === convId);
     await api(`/api/workspace/session/${convId}/activate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: convObj?.title || '' })
-    });
+    }).catch(() => {});
 
     if (STATE.workspaceScope !== 'project') {
       STATE.workspaceScope = 'session';
@@ -3647,6 +3682,7 @@ async function selectConversation(convId) {
       role: m.role,
       content: m.content
     }));
+    localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
     renderChatMessages();
     await loadConversationReferences(convId);
     await refreshFileTree();
@@ -3659,11 +3695,16 @@ async function deleteConversation(convId, e) {
   await api(`/api/conversations/${convId}`, { method: 'DELETE' });
   if (STATE.activeConversationId === convId) {
     STATE.activeConversationId = null;
+    localStorage.removeItem('arena_active_conversation_id');
+    localStorage.removeItem('arena_draft_chat_history');
     chatHistory = [];
     renderChatMessages();
     await loadConversationReferences(null);
   }
   await loadConversationsList();
+  if (!STATE.activeConversationId && STATE.conversations && STATE.conversations.length > 0) {
+    await selectConversation(STATE.conversations[0].id);
+  }
 }
 
 function renderChatMessages() {
@@ -4123,6 +4164,29 @@ async function streamAgentResponse() {
   const steps = +($('#chatSteps')?.value || 8);
   const reqApproval = $('#requireApprovalCheck')?.checked ?? true;
 
+  // Auto-create active conversation if none exists
+  if (!STATE.activeConversationId) {
+    try {
+      const firstUserMsg = chatHistory.find(m => m.role === 'user')?.content || 'New Chat';
+      const cleanTitle = firstUserMsg.split('\n')[0].slice(0, 32).trim() || `Chat ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
+      const created = await api('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: cleanTitle,
+          provider: pid,
+          model: mid
+        })
+      });
+      STATE.activeConversationId = created.id;
+      localStorage.setItem('arena_active_conversation_id', created.id);
+      await loadConversationsList();
+    } catch (_) {}
+  }
+
+  // Save current chat history snapshot
+  localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
+
   $('#sendBtn').style.display = 'none';
   $('#stopBtn').style.display = 'inline-flex';
 
@@ -4229,6 +4293,7 @@ async function streamAgentResponse() {
     }
 
     chatHistory.push({ role: 'assistant', content: accumulated });
+    localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
 
     if (STATE.activeConversationId) {
       api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {

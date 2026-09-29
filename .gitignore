@@ -1,0 +1,11 @@
+.venv/
+agent-python/.venv/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.tmp
+agent-python/data/
+agent-python/data/logs/
+agent-python/data/workspaces/
+agent-python/data/uploads/
