@@ -1011,6 +1011,53 @@
       text-align: center;
     }
 
+    /* Workspace Session Folder Explorer View (v0.12.0) */
+    .ws-folder-view-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-surface);
+    }
+    .ws-folder-toolbar {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .ws-folder-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+    .ws-folder-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .ws-folder-file-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 12px 14px;
+      cursor: pointer;
+      transition: all 0.18s ease-in-out;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+    .ws-folder-file-card:hover {
+      background: var(--bg-elevated);
+      border-color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.22);
+    }
+
     /* Cross-Chat & Cross-Project References (v0.10.0) */
     .chat-references-bar {
       display: flex;
@@ -1809,83 +1856,133 @@
           </div>
         </div>
 
-        <!-- Main Workspace Area (Multi-Format Viewer + Code Editor + Runner) -->
+        <!-- Main Workspace Area (Folder Explorer View + Multi-Format Viewer + Code Editor + Runner) -->
         <div class="editor-main">
-          <!-- Editor Tabs Bar -->
-          <div class="editor-tabs" id="editorTabs">
-            <button class="btn btn-ghost btn-sm" id="wsExpandTreeBtn" onclick="toggleWorkspaceFileTree()" title="نمایش منوی فایل‌های ورک‌اسپیس (Expand File Tree)" style="display:none;margin-left:6px;padding:2px 8px;font-size:11px;">📁 نمایش فایل‌ها</button>
-            <div class="editor-tab active" id="activeTabName">README.md</div>
-          </div>
-
-          <!-- Editor Actions Toolbar -->
-          <div class="editor-toolbar">
+          <!-- Top Mode Switcher Bar -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:var(--bg-elevated);border-bottom:1px solid var(--border-subtle);flex-wrap:wrap;gap:6px;">
             <div style="display:flex;align-items:center;gap:6px;">
-              <span id="activeFileTypeIcon" style="font-size:15px;">📄</span>
-              <input id="editorPath" class="input-control" style="width:200px;height:28px;font-size:12px;" placeholder="File path...">
-              <span id="activeFileRefBadge" class="tool-status-tag info" style="display:none;font-size:9.5px;padding:1px 6px;">🔗 Referenced</span>
+              <button class="btn btn-ghost btn-sm" id="wsExpandTreeBtn" onclick="toggleWorkspaceFileTree()" title="نمایش/بستن منوی جانبی فایل‌ها" style="padding:2px 8px;font-size:11.5px;">📁 سایدبار</button>
+              <div style="display:inline-flex;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:6px;padding:2px;">
+                <button type="button" class="btn btn-primary btn-sm" id="wsViewModeFolderBtn" onclick="switchWorkspaceMainMode('folder')" style="font-size:11px;padding:2px 10px;">📂 نمای پوشه (Folder View)</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="wsViewModeEditorBtn" onclick="switchWorkspaceMainMode('editor')" style="font-size:11px;padding:2px 10px;">📝 نمای ادیتور متنی (Editor View)</button>
+              </div>
             </div>
-
-            <!-- Import to active session button for referenced files -->
-            <button class="btn btn-amber btn-sm" id="wsImportRefBtn" onclick="importActiveReferencedFile()" title="Copy/Import this referenced file into current session workspace" style="display:none;">📥 Import to Session</button>
-
-            <!-- Run Button (Prominent for code files) -->
-            <button class="btn btn-success btn-sm" id="wsRunFileBtn" onclick="runActiveWorkspaceFile()" title="Run / Execute active file (Ctrl+Enter)">▶️ Run</button>
-
-            <!-- Mode Switchers (Code vs Live Preview) -->
-            <button class="btn btn-primary btn-sm" id="wsPreviewTabBtn" onclick="switchViewerMode('preview')" title="View Live Interactive Render / Preview" style="display:none;">👁️ Live Preview</button>
-            <button class="btn btn-ghost btn-sm" id="wsCodeTabBtn" onclick="switchViewerMode('code')" title="View / Edit Raw Source Code">📝 Code</button>
-
-            <!-- Standard Actions -->
-            <button class="btn btn-primary btn-sm" onclick="saveEditorFile()" title="Save (Ctrl+S)">💾 Save</button>
-            <button class="btn btn-ghost btn-sm" onclick="previewEditorDiff()" title="Preview Diff">👁️ Diff</button>
-            <button class="btn btn-amber btn-sm" onclick="stageEditorChangeset()" title="Stage ChangeSet">📦 Stage</button>
-            <button class="btn btn-ghost btn-sm" onclick="explainActiveFileInChat()" title="Explain in Chat">✨ Explain</button>
-            <button class="btn btn-ghost btn-sm" onclick="openRenameModal()" title="Rename File">✏️ Rename</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteActiveFile()" title="Delete File">🗑️</button>
-            <button class="btn btn-ghost btn-sm" onclick="viewFileVersions()" title="Version History">🕒 History</button>
-            <button class="btn btn-ghost btn-sm" onclick="navigate('chat')" title="بستن پنجره ورک‌اسپیس و بازگشت به چت" style="margin-right:auto;">✕ بستن پنجره</button>
-            <span id="editorInfo" style="font-size:11px;color:var(--text-dim);">UTF-8 · LF</span>
-          </div>
-
-          <!-- View Container: Code Editor Mode -->
-          <div class="code-area-wrap" id="wsCodeView">
-            <div class="line-numbers" id="lineNumbers">1</div>
-            <textarea class="code-editor-textarea" id="editorTextarea" spellcheck="false" oninput="onEditorInput()"></textarea>
-          </div>
-
-          <!-- View Container: Multi-Format Live Preview Mode -->
-          <div class="ws-preview-container" id="wsPreviewView" style="display:none;">
-            <div id="wsPreviewContent" style="flex:1;display:flex;flex-direction:column;overflow:hidden;"></div>
-          </div>
-
-          <!-- View Container: Empty Workspace State -->
-          <div class="ws-empty-state" id="wsEmptyState" style="display:none;">
-            <div style="font-size:36px;">✨</div>
-            <strong style="color:var(--text-main);font-size:15px;">Session Workspace is Empty</strong>
-            <p style="max-width:380px;font-size:12px;line-height:1.6;">
-              When the AI agent creates or writes files in your chat session, they will automatically appear, execute, and preview right here.
-            </p>
-            <div style="display:flex;gap:8px;margin-top:8px;">
-              <button class="btn btn-primary btn-sm" onclick="openCreateFileModal(false)">+ Create New File</button>
-              <button class="btn btn-ghost btn-sm" onclick="navigate('chat')">💬 Back to Chat</button>
+            
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="openCreateFileModal(false)" title="ایجاد فایل جدید">+📄 فایل جدید</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="openCreateFileModal(true)" title="ایجاد پوشه جدید">+📁 پوشه جدید</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="downloadWorkspaceZip()" title="دانلود کل فایل‌های این ورک‌اسپیس بصورت فایل زیپ">📥 دانلود ZIP</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="refreshFileTree()" title="بروزرسانی">🔄</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('chat')" title="بستن و بازگشت به چت">✕ بازگشت به چت</button>
             </div>
           </div>
 
-          <!-- Bottom Execution Console Output Drawer -->
-          <div class="ws-console-drawer" id="wsConsoleDrawer" style="display:none;">
-            <div class="ws-console-head">
+          <!-- 1. SESSION FOLDER EXPLORER VIEW (Default Intuitive View) -->
+          <div class="ws-folder-view-container" id="wsFolderExplorerView" style="display:flex;">
+            <!-- Folder Sub-toolbar with details & search -->
+            <div class="ws-folder-toolbar">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span style="font-size:20px;">📂</span>
+                <div>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <strong style="font-size:13.5px;color:var(--text-main);" id="wsSessionTitleBadge">گفتگوی فعال</strong>
+                    <span id="wsFolderCountBadge" class="tool-status-tag active" style="font-size:10px;padding:1px 6px;">0 فایل</span>
+                  </div>
+                  <div style="font-size:10.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px;margin-top:2px;">
+                    <span>مسیر اختصاصی چت:</span>
+                    <code id="wsSessionPathBadge" style="font-family:monospace;background:var(--code-bg);padding:1px 6px;border-radius:4px;color:var(--accent-blue);">/data/workspaces/session_default</code>
+                  </div>
+                </div>
+              </div>
+
               <div style="display:flex;align-items:center;gap:8px;">
-                <span id="wsConsoleStatus">Console Output</span>
-                <span id="wsConsoleBadge" class="tool-status-tag success" style="display:none;">Exit 0</span>
-                <span id="wsConsoleTime" style="font-size:10px;color:var(--text-dim);"></span>
-              </div>
-              <div style="display:flex;gap:6px;">
-                <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyConsoleOutput()">📋 Copy</button>
-                <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="clearConsoleOutput()">Clear</button>
-                <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="closeConsoleDrawer()">✕</button>
+                <input id="wsFolderSearchInput" class="input-control" placeholder="جستجو در فایل‌های این پوشه..." style="padding:4px 10px;font-size:12px;width:210px;" oninput="renderSessionFolderExplorer()">
               </div>
             </div>
-            <pre class="ws-console-output" id="wsConsoleOut"></pre>
+
+            <!-- Folder Cards Grid -->
+            <div class="ws-folder-body">
+              <div class="ws-folder-grid" id="wsFolderCardsGrid"></div>
+            </div>
+          </div>
+
+          <!-- 2. TABBED CODE EDITOR & RUNNER VIEW -->
+          <div id="wsCodeEditorWrap" style="display:none;flex:1;flex-direction:column;overflow:hidden;">
+            <!-- Editor Tabs Bar -->
+            <div class="editor-tabs" id="editorTabs">
+              <div class="editor-tab active" id="activeTabName">README.md</div>
+            </div>
+
+            <!-- Editor Actions Toolbar -->
+            <div class="editor-toolbar">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span id="activeFileTypeIcon" style="font-size:15px;">📄</span>
+                <input id="editorPath" class="input-control" style="width:200px;height:28px;font-size:12px;" placeholder="File path...">
+                <span id="activeFileRefBadge" class="tool-status-tag info" style="display:none;font-size:9.5px;padding:1px 6px;">🔗 Referenced</span>
+              </div>
+
+              <!-- Import to active session button for referenced files -->
+              <button class="btn btn-amber btn-sm" id="wsImportRefBtn" onclick="importActiveReferencedFile()" title="Copy/Import this referenced file into current session workspace" style="display:none;">📥 Import to Session</button>
+
+              <!-- Run Button (Prominent for code files) -->
+              <button class="btn btn-success btn-sm" id="wsRunFileBtn" onclick="runActiveWorkspaceFile()" title="Run / Execute active file (Ctrl+Enter)">▶️ Run</button>
+
+              <!-- Mode Switchers (Code vs Live Preview) -->
+              <button class="btn btn-primary btn-sm" id="wsPreviewTabBtn" onclick="switchViewerMode('preview')" title="View Live Interactive Render / Preview" style="display:none;">👁️ Live Preview</button>
+              <button class="btn btn-ghost btn-sm" id="wsCodeTabBtn" onclick="switchViewerMode('code')" title="View / Edit Raw Source Code">📝 Code</button>
+
+              <!-- Standard Actions -->
+              <button class="btn btn-primary btn-sm" onclick="saveEditorFile()" title="Save (Ctrl+S)">💾 Save</button>
+              <button class="btn btn-ghost btn-sm" onclick="previewEditorDiff()" title="Preview Diff">👁️ Diff</button>
+              <button class="btn btn-amber btn-sm" onclick="stageEditorChangeset()" title="Stage ChangeSet">📦 Stage</button>
+              <button class="btn btn-ghost btn-sm" onclick="explainActiveFileInChat()" title="Explain in Chat">✨ Explain</button>
+              <button class="btn btn-ghost btn-sm" onclick="openRenameModal()" title="Rename File">✏️ Rename</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteActiveFile()" title="Delete File">🗑️</button>
+              <button class="btn btn-ghost btn-sm" onclick="viewFileVersions()" title="Version History">🕒 History</button>
+              <button class="btn btn-ghost btn-sm" onclick="navigate('chat')" title="بستن پنجره ورک‌اسپیس و بازگشت به چت" style="margin-right:auto;">✕ بستن پنجره</button>
+              <span id="editorInfo" style="font-size:11px;color:var(--text-dim);">UTF-8 · LF</span>
+            </div>
+
+            <!-- View Container: Code Editor Mode -->
+            <div class="code-area-wrap" id="wsCodeView">
+              <div class="line-numbers" id="lineNumbers">1</div>
+              <textarea class="code-editor-textarea" id="editorTextarea" spellcheck="false" oninput="onEditorInput()"></textarea>
+            </div>
+
+            <!-- View Container: Multi-Format Live Preview Mode -->
+            <div class="ws-preview-container" id="wsPreviewView" style="display:none;">
+              <div id="wsPreviewContent" style="flex:1;display:flex;flex-direction:column;overflow:hidden;"></div>
+            </div>
+
+            <!-- View Container: Empty Workspace State -->
+            <div class="ws-empty-state" id="wsEmptyState" style="display:none;">
+              <div style="font-size:36px;">✨</div>
+              <strong style="color:var(--text-main);font-size:15px;">Session Workspace is Empty</strong>
+              <p style="max-width:380px;font-size:12px;line-height:1.6;">
+                When the AI agent creates or writes files in your chat session, they will automatically appear, execute, and preview right here.
+              </p>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <button class="btn btn-primary btn-sm" onclick="openCreateFileModal(false)">+ Create New File</button>
+                <button class="btn btn-ghost btn-sm" onclick="navigate('chat')">💬 Back to Chat</button>
+              </div>
+            </div>
+
+            <!-- Bottom Execution Console Output Drawer -->
+            <div class="ws-console-drawer" id="wsConsoleDrawer" style="display:none;">
+              <div class="ws-console-head">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span id="wsConsoleStatus">Console Output</span>
+                  <span id="wsConsoleBadge" class="tool-status-tag success" style="display:none;">Exit 0</span>
+                  <span id="wsConsoleTime" style="font-size:10px;color:var(--text-dim);"></span>
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyConsoleOutput()">📋 Copy</button>
+                  <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="clearConsoleOutput()">Clear</button>
+                  <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="closeConsoleDrawer()">✕</button>
+                </div>
+              </div>
+              <pre class="ws-console-output" id="wsConsoleOut"></pre>
+            </div>
           </div>
         </div>
       </div>
@@ -2728,6 +2825,77 @@
         <button type="button" class="btn btn-ghost btn-sm" id="modelDetailCopyBtn">📋 کپی تمام اطلاعات تست</button>
       </div>
       <button type="button" class="btn btn-ghost" onclick="closeModal('modelDetailModal')">بستن (Close)</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: ADVANCED WORKSPACE FILE INSPECTION, EDIT & EXECUTION (User Request - v0.12.0) -->
+<div class="modal-backdrop" id="workspaceFileModal">
+  <div class="modal-dialog" style="max-width:960px;width:95%;max-height:94vh;display:flex;flex-direction:column;border-radius:10px;overflow:hidden;">
+    <div class="modal-header" style="background:var(--bg-elevated);border-bottom:1px solid var(--border-subtle);padding:12px 18px;">
+      <div style="display:flex;align-items:center;gap:12px;overflow:hidden;">
+        <span id="fileModalIcon" style="font-size:24px;line-height:1;">📄</span>
+        <div style="overflow:hidden;">
+          <strong style="font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;" id="fileModalTitle">File Viewer</strong>
+          <div style="font-size:11px;color:var(--text-dim);display:flex;gap:10px;align-items:center;margin-top:2px;">
+            <code id="fileModalPath" style="font-family:monospace;background:var(--code-bg);padding:1px 6px;border-radius:4px;color:var(--accent-blue);"></code>
+            <span id="fileModalSizeBadge" style="background:var(--bg-highlight);padding:1px 6px;border-radius:4px;font-weight:600;"></span>
+          </div>
+        </div>
+      </div>
+      <button type="button" class="btn-ghost" onclick="closeModal('workspaceFileModal')" style="font-size:16px;">✕</button>
+    </div>
+
+    <!-- Modal Action Toolbar -->
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 16px;background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <button type="button" class="btn btn-success btn-sm" id="fileModalRunBtn" onclick="executeFileInModal()" title="اجرای فایل و نمایش خروجی (Run File)">▶️ اجرا (Run)</button>
+        <button type="button" class="btn btn-primary btn-sm" id="fileModalSaveBtn" onclick="saveModalFile()" title="ذخیره تغییرات (Save)">💾 ذخیره</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="fileModalPreviewBtn" onclick="switchModalViewMode('preview')" title="پیش‌نمایش تعاملی">👁️ پیش‌نمایش</button>
+        <button type="button" class="btn btn-primary btn-sm" id="fileModalCodeBtn" onclick="switchModalViewMode('code')" title="ویرایش کد">📝 کد منبع</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="copyModalFileContent()" title="کپی محتوا">📋 کپی</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="downloadModalFile()" title="دانلود فایل">📥 دانلود</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="explainModalFileInChat()" title="توضیح در چت">✨ ارجاع در چت</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="deleteModalFile()" title="حذف فایل">🗑️ حذف</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);" id="fileModalMetaInfo">UTF-8 · LF</div>
+    </div>
+
+    <!-- Modal Body: Code Editor vs Live Preview -->
+    <div class="modal-body" style="padding:0;gap:0;flex:1;overflow:hidden;position:relative;display:flex;flex-direction:column;min-height:360px;background:var(--code-bg);">
+      <!-- Code View Mode -->
+      <div class="code-area-wrap" id="fileModalCodeView" style="flex:1;display:flex;margin:0;border:none;border-radius:0;height:100%;">
+        <div class="line-numbers" id="fileModalLineNumbers" style="user-select:none;min-width:44px;">1</div>
+        <textarea class="code-editor-textarea" id="fileModalTextarea" spellcheck="false" oninput="onModalEditorInput()" style="flex:1;height:100%;"></textarea>
+      </div>
+
+      <!-- Live Preview Mode -->
+      <div class="ws-preview-container" id="fileModalPreviewView" style="display:none;flex:1;padding:12px;overflow-y:auto;background:var(--bg-surface);min-height:360px;">
+        <div id="fileModalPreviewContent" style="flex:1;display:flex;flex-direction:column;"></div>
+      </div>
+
+      <!-- Execution Console Output Drawer (Inside Modal) -->
+      <div class="ws-console-drawer" id="fileModalConsole" style="display:none;border-top:1px solid var(--border-strong);max-height:200px;">
+        <div class="ws-console-head">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="fileModalConsoleStatus">Console Output</span>
+            <span id="fileModalConsoleBadge" class="tool-status-tag success" style="display:none;">Exit 0</span>
+            <span id="fileModalConsoleTime" style="font-size:10px;color:var(--text-dim);"></span>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyModalConsoleOutput()">📋 Copy</button>
+            <button type="button" class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="clearModalConsoleOutput()">Clear</button>
+            <button type="button" class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="$('#fileModalConsole').style.display='none'">✕</button>
+          </div>
+        </div>
+        <pre class="ws-console-output" id="fileModalConsoleOut" style="max-height:150px;"></pre>
+      </div>
+    </div>
+
+    <!-- Modal Footer -->
+    <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:var(--bg-elevated);border-top:1px solid var(--border-subtle);">
+      <span style="font-size:11.5px;color:var(--text-dim);" id="fileModalFooterStatus">آماده برای اجرا و ویرایش</span>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('workspaceFileModal')">بستن (Close)</button>
     </div>
   </div>
 </div>
@@ -5438,7 +5606,7 @@ function formatFileSize(bytes) {
 async function refreshFileTree() {
   const tree = $('#editorTree');
   try {
-    const files = await api('/api/workspace/files');
+    const files = await api(`/api/workspace/files?conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`);
     STATE.workspaceFiles = Array.isArray(files) ? files : [];
     
     // Update count badge
@@ -5455,12 +5623,12 @@ async function refreshFileTree() {
       if (codeView) codeView.style.display = 'none';
       if (prevView) prevView.style.display = 'none';
       if (tree) tree.innerHTML = '<div style="padding:16px 12px;font-size:11.5px;color:var(--text-dim);text-align:center;">✨ Workspace is empty.</div>';
-      return;
     } else {
       if (emptyState) emptyState.style.display = 'none';
     }
 
     filterFileTree($('#treeSearchInput')?.value || '');
+    renderSessionFolderExplorer();
 
     // Open active tab or first file
     if (!STATE.activeTab || !STATE.workspaceFiles.some(f => f.path === STATE.activeTab)) {
@@ -5486,7 +5654,7 @@ function filterFileTree(q) {
   }
 
   tree.innerHTML = files.map(f => `
-    <div class="tree-node ${f.path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(f.path)}')">
+    <div class="tree-node ${f.path === STATE.activeTab ? 'active' : ''}" onclick="openEditorFile('${esc(f.path)}')" ondblclick="openWorkspaceFileModal('${esc(f.path)}')">
       <span>${f.type === 'dir' ? '📁' : getFileIcon(f.path)}</span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${esc(f.path)}</span>
       ${f.type === 'file' ? `<span style="font-size:10px;color:var(--text-dim);">${formatFileSize(f.size)}</span>` : ''}
@@ -5544,7 +5712,7 @@ async function openEditorFile(path) {
   renderEditorTabs();
 
   try {
-    const data = await api(`/api/workspace/file-preview?path=${encodeURIComponent(path)}`);
+    const data = await api(`/api/workspace/file-preview?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`);
     STATE.currentPreviewData = data;
 
     const runBtn = $('#wsRunFileBtn');
@@ -5806,6 +5974,449 @@ function switchViewerMode(mode) {
   }
 }
 
+// -------------------------------------------------------------
+// WORKSPACE SESSION FOLDER EXPLORER & ADVANCED FILE MODAL (v0.12.0)
+// -------------------------------------------------------------
+let currentWsViewMode = 'folder';
+let currentModalViewMode = 'code';
+
+function switchWorkspaceMainMode(mode) {
+  currentWsViewMode = mode;
+  const folderView = $('#wsFolderExplorerView');
+  const editorView = $('#wsCodeEditorWrap');
+  const folderBtn = $('#wsViewModeFolderBtn');
+  const editorBtn = $('#wsViewModeEditorBtn');
+
+  if (folderView) folderView.style.display = mode === 'folder' ? 'flex' : 'none';
+  if (editorView) editorView.style.display = mode === 'editor' ? 'flex' : 'none';
+
+  if (folderBtn) {
+    folderBtn.className = mode === 'folder' ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  }
+  if (editorBtn) {
+    editorBtn.className = mode === 'editor' ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  }
+
+  if (mode === 'folder') {
+    renderSessionFolderExplorer();
+  }
+}
+
+function renderSessionFolderExplorer() {
+  const container = $('#wsFolderCardsGrid');
+  if (!container) return;
+
+  const activeConv = (STATE.conversations || []).find(c => c.id === STATE.activeConversationId);
+  const convTitle = activeConv ? activeConv.title : (STATE.activeConversationId || 'گفتگوی فعال');
+  const sid = STATE.activeConversationId ? `session_${STATE.activeConversationId}` : 'default';
+
+  if ($('#wsSessionTitleBadge')) $('#wsSessionTitleBadge').textContent = convTitle;
+  if ($('#wsSessionPathBadge')) $('#wsSessionPathBadge').textContent = `/data/workspaces/${sid}`;
+  if ($('#wsFolderCountBadge')) $('#wsFolderCountBadge').textContent = `${STATE.workspaceFiles.length} فایل`;
+
+  const q = ($('#wsFolderSearchInput')?.value || '').toLowerCase().trim();
+  const files = STATE.workspaceFiles.filter(f => !q || f.path.toLowerCase().includes(q));
+
+  if (files.length === 0) {
+    container.innerHTML = `
+      <div style="grid-column: 1 / -1; padding: 48px 20px; text-align: center; color: var(--text-dim); background: var(--bg-elevated); border: 1px dashed var(--border-color); border-radius: 8px;">
+        <div style="font-size: 36px; margin-bottom: 8px;">📂</div>
+        <strong style="color:var(--text-main); font-size: 14.5px;">این پوشه هنوز فایلی ندارد</strong>
+        <p style="font-size: 12px; margin-top: 6px; max-width: 440px; margin-inline: auto; line-height: 1.6;">
+          فایل‌های تولید شده توسط هوش مصنوعی در این نشست به‌صورت خودکار در این پوشه قرار می‌گیرند.
+        </p>
+        <button type="button" class="btn btn-primary btn-sm" style="margin-top: 14px;" onclick="openCreateFileModal(false)">+ ایجاد فایل جدید</button>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = files.map(f => {
+    const icon = getFileIcon(f.path);
+    const ext = f.path.split('.').pop().toLowerCase();
+    const isRunnable = ['py', 'pyw', 'sh', 'bash', 'js', 'mjs', 'ts', 'html'].includes(ext);
+    const sizeStr = formatFileSize(f.size || 0);
+    const filename = f.path.split('/').pop() || f.path;
+
+    return `
+      <div class="ws-folder-file-card" onclick="openWorkspaceFileModal('${esc(f.path)}')" title="کلیک برای باز کردن فایل ${esc(f.path)}">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px;">
+          <div style="display:flex; align-items:center; gap:10px; overflow:hidden;">
+            <span style="font-size:26px; line-height:1; flex-shrink:0;">${icon}</span>
+            <div style="overflow:hidden;">
+              <strong style="font-size:13px; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block;" title="${esc(filename)}">${esc(filename)}</strong>
+              <span style="font-size:10.5px; color:var(--text-dim); font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block;">${esc(f.path)}</span>
+            </div>
+          </div>
+          <span style="font-size:10.5px; font-weight:600; background:var(--bg-highlight); padding:2px 7px; border-radius:10px; color:var(--text-muted); white-space:nowrap; flex-shrink:0;">${sizeStr}</span>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:10px; border-top:1px solid var(--border-subtle);" onclick="event.stopPropagation()">
+          <span style="font-size:10px; color:var(--text-dim); text-transform:uppercase; font-weight:600;">${esc(ext)}</span>
+          <div style="display:flex; gap:4px; align-items:center;">
+            ${isRunnable ? `<button type="button" class="btn btn-success btn-sm" style="padding:2px 8px; font-size:11px;" onclick="quickRunFile('${esc(f.path)}', this)" title="اجرای مستقیم اسکریپت">▶ اجرا</button>` : ''}
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:11px;" onclick="openWorkspaceFileModal('${esc(f.path)}')" title="مشاهده محتوا، ویرایش و اجرا">🔍 باز کردن</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px; font-size:11px;" onclick="downloadSingleFile('${esc(f.path)}')" title="دانلود فایل">📥</button>
+            <button type="button" class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:11px;" onclick="deleteFileFromCard('${esc(f.path)}')" title="حذف فایل">🗑️</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function openWorkspaceFileModal(filePath) {
+  if (!filePath) return;
+  STATE.activeModalFile = filePath;
+
+  const icon = getFileIcon(filePath);
+  const ext = filePath.split('.').pop().toLowerCase();
+  const filename = filePath.split('/').pop() || filePath;
+
+  if ($('#fileModalIcon')) $('#fileModalIcon').textContent = icon;
+  if ($('#fileModalTitle')) $('#fileModalTitle').textContent = filename;
+  if ($('#fileModalPath')) $('#fileModalPath').textContent = filePath;
+  if ($('#fileModalSizeBadge')) $('#fileModalSizeBadge').textContent = 'Loading...';
+  if ($('#fileModalFooterStatus')) $('#fileModalFooterStatus').textContent = `فایل ${filename} بارگذاری شد`;
+
+  const isRunnable = ['py', 'pyw', 'sh', 'bash', 'js', 'mjs', 'ts', 'html'].includes(ext);
+  const isPreviewable = ['html', 'htm', 'md', 'markdown', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'csv', 'pdf', 'audio', 'video'].includes(ext);
+
+  if ($('#fileModalRunBtn')) $('#fileModalRunBtn').style.display = isRunnable ? 'inline-flex' : 'none';
+  if ($('#fileModalPreviewBtn')) $('#fileModalPreviewBtn').style.display = isPreviewable ? 'inline-flex' : 'none';
+
+  // Reset modal console drawer
+  if ($('#fileModalConsole')) $('#fileModalConsole').style.display = 'none';
+  if ($('#fileModalConsoleOut')) $('#fileModalConsoleOut').textContent = '';
+
+  openModal('workspaceFileModal');
+
+  try {
+    const data = await api(`/api/workspace/file-preview?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`);
+    STATE.modalPreviewData = data;
+
+    if ($('#fileModalSizeBadge')) $('#fileModalSizeBadge').textContent = formatFileSize(data.size || 0);
+    if ($('#fileModalMetaInfo')) $('#fileModalMetaInfo').textContent = `${(data.size || 0).toLocaleString()} bytes · ${data.mimeType || 'UTF-8'}`;
+
+    if (data.content !== null && data.content !== undefined) {
+      $('#fileModalTextarea').value = data.content;
+      updateModalLineNumbers();
+    } else {
+      $('#fileModalTextarea').value = '';
+      updateModalLineNumbers();
+    }
+
+    renderModalPreview(data, filePath);
+
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'pdf', 'audio', 'video', 'csv'].includes(ext)) {
+      switchModalViewMode('preview');
+    } else {
+      switchModalViewMode('code');
+    }
+
+  } catch (err) {
+    if ($('#fileModalTextarea')) {
+      $('#fileModalTextarea').value = `// Failed reading file content: ${err.message}`;
+      updateModalLineNumbers();
+    }
+    if ($('#fileModalFooterStatus')) $('#fileModalFooterStatus').textContent = `خطا: ${err.message}`;
+  }
+}
+
+function renderModalPreview(data, filePath) {
+  const previewContent = $('#fileModalPreviewContent');
+  if (!previewContent) return;
+
+  const rawUrl = `/api/workspace/raw?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`;
+
+  if (data.type === 'html') {
+    previewContent.innerHTML = `<iframe class="ws-preview-frame" src="${esc(rawUrl)}" style="min-height:360px;"></iframe>`;
+  } else if (data.type === 'markdown') {
+    previewContent.innerHTML = `<div style="padding:20px;overflow:auto;line-height:1.7;font-size:13.5px;" class="markdown-body">${renderMarkdown(data.content || '')}</div>`;
+  } else if (data.type === 'image') {
+    previewContent.innerHTML = `
+      <div class="ws-image-viewer" style="min-height:300px;">
+        <img src="${esc(rawUrl)}" alt="${esc(data.filename)}" style="max-height:55vh;">
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+          <span style="font-size:12px;color:var(--text-muted);">${esc(data.filename)} (${formatFileSize(data.size)})</span>
+          <a href="${esc(rawUrl)}" download="${esc(data.filename)}" class="btn btn-ghost btn-sm">📥 دانلود تصویر</a>
+        </div>
+      </div>
+    `;
+  } else if (data.type === 'csv' && data.csvData) {
+    const headers = data.csvData.headers || [];
+    const rows = data.csvData.rows || [];
+    previewContent.innerHTML = `
+      <div class="ws-csv-table-wrap">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-size:12px;color:var(--text-dim);">نمایش ${rows.length} از ${data.csvData.totalRows} سطر</span>
+        </div>
+        <table class="ws-csv-table">
+          <thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  } else if (data.type === 'pdf') {
+    previewContent.innerHTML = `<embed src="${esc(rawUrl)}" type="application/pdf" style="width:100%;height:450px;border:0;">`;
+  } else if (data.type === 'audio') {
+    previewContent.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:30px;">
+        <div style="font-size:40px;">🎵</div>
+        <strong>${esc(data.filename)}</strong>
+        <audio controls src="${esc(rawUrl)}" style="width:min(400px, 90%);"></audio>
+      </div>
+    `;
+  } else if (data.type === 'video') {
+    previewContent.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;background:var(--code-bg);">
+        <video controls src="${esc(rawUrl)}" style="max-width:90%;max-height:55vh;border-radius:8px;"></video>
+        <span style="font-size:12px;color:var(--text-muted);">${esc(data.filename)}</span>
+      </div>
+    `;
+  } else {
+    previewContent.innerHTML = `<pre style="padding:16px;font-family:monospace;font-size:12px;white-space:pre-wrap;">${esc(data.content || '')}</pre>`;
+  }
+}
+
+function switchModalViewMode(mode) {
+  currentModalViewMode = mode;
+  const codeView = $('#fileModalCodeView');
+  const previewView = $('#fileModalPreviewView');
+  const codeBtn = $('#fileModalCodeBtn');
+  const previewBtn = $('#fileModalPreviewBtn');
+
+  if (mode === 'preview') {
+    if (codeView) codeView.style.display = 'none';
+    if (previewView) previewView.style.display = 'flex';
+    if (previewBtn) previewBtn.className = 'btn btn-primary btn-sm';
+    if (codeBtn) codeBtn.className = 'btn btn-ghost btn-sm';
+  } else {
+    if (codeView) codeView.style.display = 'flex';
+    if (previewView) previewView.style.display = 'none';
+    if (codeBtn) codeBtn.className = 'btn btn-primary btn-sm';
+    if (previewBtn) previewBtn.className = 'btn btn-ghost btn-sm';
+  }
+}
+
+function onModalEditorInput() {
+  updateModalLineNumbers();
+}
+
+function updateModalLineNumbers() {
+  const text = $('#fileModalTextarea')?.value || '';
+  const lines = text.split('\n').length;
+  if ($('#fileModalLineNumbers')) {
+    $('#fileModalLineNumbers').innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
+  }
+}
+
+async function executeFileInModal() {
+  const path = STATE.activeModalFile;
+  if (!path) return alert('فایلی برای اجرا انتخاب نشده است.');
+
+  const consoleDrawer = $('#fileModalConsole');
+  const outputEl = $('#fileModalConsoleOut');
+  const statusEl = $('#fileModalConsoleStatus');
+  const badgeEl = $('#fileModalConsoleBadge');
+  const timeEl = $('#fileModalConsoleTime');
+
+  if (consoleDrawer) consoleDrawer.style.display = 'flex';
+  if (statusEl) statusEl.textContent = `در حال اجرای ${path}...`;
+  if (badgeEl) badgeEl.style.display = 'none';
+  if (outputEl) outputEl.textContent = `▶ اجرای دستور: ${path}\n\n`;
+
+  try {
+    const res = await api('/api/workspace/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, conversation_id: STATE.activeConversationId })
+    });
+
+    if (res.type === 'html') {
+      switchModalViewMode('preview');
+      if (statusEl) statusEl.textContent = `پیش‌نمایش زنده برای ${path} فعال شد.`;
+      if (badgeEl) {
+        badgeEl.style.display = 'inline-block';
+        badgeEl.className = 'tool-status-tag success';
+        badgeEl.textContent = 'Preview Ready';
+      }
+      return;
+    }
+
+    if (statusEl) statusEl.textContent = `دستور: ${res.command || path}`;
+    if (badgeEl) {
+      badgeEl.style.display = 'inline-block';
+      badgeEl.className = res.exitCode === 0 ? 'tool-status-tag success' : 'tool-status-tag error';
+      badgeEl.textContent = `Exit ${res.exitCode}`;
+    }
+    if (timeEl) timeEl.textContent = `${res.durationMs || 0}ms`;
+
+    let fullOut = '';
+    if (res.stdout) fullOut += res.stdout;
+    if (res.stderr) fullOut += (fullOut ? '\n[STDERR]\n' : '[STDERR]\n') + res.stderr;
+    if (!fullOut) fullOut = '(اجرا بدون خروجی متنی به پایان رسید)';
+
+    if (outputEl) outputEl.textContent = `▶ ${res.command || path}\n\n` + fullOut;
+
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'خطا در اجرا';
+    if (badgeEl) {
+      badgeEl.style.display = 'inline-block';
+      badgeEl.className = 'tool-status-tag error';
+      badgeEl.textContent = 'Error';
+    }
+    if (outputEl) outputEl.textContent = `Execution Error: ${err.message}`;
+  }
+}
+
+async function quickRunFile(filePath, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳';
+  }
+  try {
+    const res = await api('/api/workspace/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath, conversation_id: STATE.activeConversationId })
+    });
+
+    await openWorkspaceFileModal(filePath);
+    const consoleDrawer = $('#fileModalConsole');
+    const outputEl = $('#fileModalConsoleOut');
+    const statusEl = $('#fileModalConsoleStatus');
+    const badgeEl = $('#fileModalConsoleBadge');
+    const timeEl = $('#fileModalConsoleTime');
+
+    if (consoleDrawer) consoleDrawer.style.display = 'flex';
+    if (statusEl) statusEl.textContent = `اجرا شد: ${res.command || filePath}`;
+    if (badgeEl) {
+      badgeEl.style.display = 'inline-block';
+      badgeEl.className = res.exitCode === 0 ? 'tool-status-tag success' : 'tool-status-tag error';
+      badgeEl.textContent = `Exit ${res.exitCode}`;
+    }
+    if (timeEl) timeEl.textContent = `${res.durationMs || 0}ms`;
+
+    let fullOut = '';
+    if (res.stdout) fullOut += res.stdout;
+    if (res.stderr) fullOut += (fullOut ? '\n[STDERR]\n' : '[STDERR]\n') + res.stderr;
+    if (!fullOut) fullOut = '(اجرا بدون خروجی به پایان رسید)';
+
+    if (outputEl) outputEl.textContent = `▶ ${res.command || filePath}\n\n` + fullOut;
+
+  } catch (err) {
+    alert(`خطا در اجرای اسکریپت: ${err.message}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '▶ اجرا';
+    }
+  }
+}
+
+async function saveModalFile() {
+  const path = STATE.activeModalFile;
+  if (!path) return;
+  const content = $('#fileModalTextarea')?.value || '';
+
+  try {
+    await api('/api/workspace/file', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path,
+        content,
+        conversation_id: STATE.activeConversationId,
+        requireApproval: false
+      })
+    });
+    flashAutoSave();
+    if ($('#fileModalFooterStatus')) $('#fileModalFooterStatus').textContent = `✓ فایل ${path} با موفقیت ذخیره شد`;
+    await refreshFileTree();
+  } catch (err) {
+    alert(`خطا در ذخیره فایل: ${err.message}`);
+  }
+}
+
+function copyModalFileContent() {
+  const content = $('#fileModalTextarea')?.value || '';
+  navigator.clipboard.writeText(content).then(() => {
+    alert('محتوای فایل در کلیپ‌بورد کپی شد.');
+  });
+}
+
+function downloadModalFile() {
+  const path = STATE.activeModalFile;
+  if (!path) return;
+  downloadSingleFile(path);
+}
+
+function downloadSingleFile(filePath) {
+  const url = `/api/workspace/raw?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`;
+  const filename = filePath.split('/').pop() || filePath;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function explainModalFileInChat() {
+  const path = STATE.activeModalFile;
+  if (!path) return;
+  closeModal('workspaceFileModal');
+  navigate('chat');
+  const input = $('#chatInput');
+  if (input) {
+    input.value = `لطفاً معماری و نحوه پیاده‌سازی این فایل را تحلیل و بررسی کن: ${path}\n`;
+    input.focus();
+  }
+}
+
+async function deleteModalFile() {
+  const path = STATE.activeModalFile;
+  if (!path) return;
+  if (!confirm(`آیا از حذف دائمی فایل '${path}' اطمینان دارید؟`)) return;
+
+  try {
+    await api(`/api/workspace/file?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`, {
+      method: 'DELETE'
+    });
+    closeModal('workspaceFileModal');
+    await refreshFileTree();
+  } catch (err) {
+    alert(`خطا در حذف فایل: ${err.message}`);
+  }
+}
+
+async function deleteFileFromCard(filePath) {
+  if (!filePath) return;
+  if (!confirm(`آیا از حذف فایل '${filePath}' اطمینان دارید؟`)) return;
+
+  try {
+    await api(`/api/workspace/file?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`, {
+      method: 'DELETE'
+    });
+    await refreshFileTree();
+  } catch (err) {
+    alert(`خطا در حذف فایل: ${err.message}`);
+  }
+}
+
+function copyModalConsoleOutput() {
+  const text = $('#fileModalConsoleOut')?.textContent || '';
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    alert('خروجی کنسول در کلیپ‌بورد کپی شد.');
+  });
+}
+
+function clearModalConsoleOutput() {
+  if ($('#fileModalConsoleOut')) $('#fileModalConsoleOut').textContent = '';
+}
+
 async function runActiveWorkspaceFile() {
   const path = $('#editorPath')?.value.trim() || STATE.activeTab;
   if (!path) return alert('No file selected to run.');
@@ -5825,7 +6436,7 @@ async function runActiveWorkspaceFile() {
     const res = await api('/api/workspace/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path })
+      body: JSON.stringify({ path, conversation_id: STATE.activeConversationId })
     });
 
     if (res.type === 'html') {

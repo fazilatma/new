@@ -844,6 +844,89 @@ def add(a, b): return a + b
     assert "def add(a, b)" in py_file.read_text(encoding="utf-8")
 
 
+def test_workspace_session_folder_view_and_advanced_file_execution():
+    """Test folder view listing, advanced file preview, and execution scoped to chat session workspace."""
+    session_id = f"test-folder-view-{int(time.time()*1000)}"
+
+    # 1. Activate session workspace
+    act_res = client.post(f"/api/workspace/session/{session_id}/activate", json={"title": "Data Analysis Chat"})
+    assert act_res.status_code == 200
+
+    # 2. Create Python script file with conversation_id parameter
+    script_content = 'print("Executing data analysis pipeline")\nprint("Results: OK")'
+    create_res = client.post("/api/workspace/create", json={
+        "path": "analysis.py",
+        "content": script_content,
+        "conversation_id": session_id
+    })
+    assert create_res.status_code == 200
+
+    # 3. Create helper markdown file
+    create_md = client.post("/api/workspace/create", json={
+        "path": "README.md",
+        "content": "# Pipeline Documentation\nDetailed steps for analysis.",
+        "conversation_id": session_id
+    })
+    assert create_md.status_code == 200
+
+    # 4. List files scoped to conversation_id
+    list_res = client.get(f"/api/workspace/files?conversation_id={session_id}")
+    assert list_res.status_code == 200
+    files = list_res.json()
+    paths = [f["path"] for f in files]
+    assert "analysis.py" in paths
+    assert "README.md" in paths
+
+    # 5. Get file preview for modal with conversation_id
+    preview_res = client.get(f"/api/workspace/file-preview?path=analysis.py&conversation_id={session_id}")
+    assert preview_res.status_code == 200
+    pdata = preview_res.json()
+    assert pdata["filename"] == "analysis.py"
+    assert pdata["isExecutable"] is True
+    assert pdata["type"] == "code"
+    assert "Executing data analysis pipeline" in pdata["content"]
+
+    # 6. Execute Python file in session workspace
+    exec_res = client.post("/api/workspace/execute", json={
+        "path": "analysis.py",
+        "conversation_id": session_id
+    })
+    assert exec_res.status_code == 200
+    edata = exec_res.json()
+    assert edata["ok"] is True
+    assert edata["exitCode"] == 0
+    assert "Executing data analysis pipeline" in edata["stdout"]
+    assert "Results: OK" in edata["stdout"]
+
+    # 7. Edit file in session workspace
+    updated_content = 'print("Updated analysis pipeline v2")'
+    write_res = client.put("/api/workspace/file", json={
+        "path": "analysis.py",
+        "content": updated_content,
+        "conversation_id": session_id
+    })
+    assert write_res.status_code == 200
+
+    # Re-execute to verify updated code runs
+    exec_res2 = client.post("/api/workspace/execute", json={
+        "path": "analysis.py",
+        "conversation_id": session_id
+    })
+    assert exec_res2.status_code == 200
+    assert "Updated analysis pipeline v2" in exec_res2.json()["stdout"]
+
+    # 8. Delete file with conversation_id
+    del_res = client.delete(f"/api/workspace/file?path=README.md&conversation_id={session_id}")
+    assert del_res.status_code == 200
+
+    # Verify deleted file is no longer in file list
+    list_res2 = client.get(f"/api/workspace/files?conversation_id={session_id}")
+    paths2 = [f["path"] for f in list_res2.json()]
+    assert "README.md" not in paths2
+    assert "analysis.py" in paths2
+
+
+
 
 
 

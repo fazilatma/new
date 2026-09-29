@@ -1,16 +1,20 @@
 # Changelog
 
-## 0.12.0 - Universal Proxy Gateway & Forward Proxy Routing, Sidebar Folding & Model Exporter
+## 0.12.0 - Session Workspace Folder View, Advanced File Modal, Execution Engine & Universal Proxy Gateway
 
-- **Interactive Model Test Details & Diagnostics Modal**: Clicking any row in the Model Health & Latency Test Results table now opens a dedicated diagnostics modal displaying full model information, the exact request sent (masked headers and JSON payload), direct and proxy-routed endpoints, rendered assistant response and reasoning traces, and the full raw JSON response with 1-click copy actions and live retesting.
-- **Moved Active References Bar to Settings**: Removed the references section from the main chat viewport to maximize message viewing real estate, and relocated the full Cross-Chat & Cross-Project References management card into the Settings view.
+- **Intuitive Session Workspace Folder Explorer View**: Files created by the AI agent in the chat session's dedicated workspace (`session_{convId}`) are now displayed in a clean, standard folder & file explorer view with file type icons, formatted sizes, extensions, search filtering, and quick action chips (`▶ اجرا`, `🔍 باز کردن`, `📥 دانلود`, `🗑️ حذف`).
+- **Advanced Workspace File Details, Edit & Execution Modal**: Clicking any file card or item opens an advanced modal featuring:
+  - Full file metadata (relative path, formatted size, MIME format).
+  - Code Editor with line numbers, line/character counters, syntax editing, and direct save capability.
+  - Multi-format Live Preview for HTML (iframe sandbox), Markdown (rendered HTML), Image viewer, CSV data table, Audio player, Video player, and PDF viewer.
+  - Interactive Action Toolbar: `▶️ اجرا (Run)`, `💾 ذخیره (Save)`, `👁️ پیش‌نمایش (Preview)`, `📝 کد منبع (Source Code)`, `📋 کپی (Copy)`, `📥 دانلود (Download)`, `✨ ارجاع در چت (Explain in Chat)`, and `🗑️ حذف (Delete)`.
+  - Built-in Execution Console Drawer displaying real-time command execution, exit codes (`Exit 0`), latency (`XXms`), stdout, and stderr with copy and clear actions.
+- **Session Workspace Execution Routing & Path Traversal Fix**: Resolved file execution path traversal and `Failed to fetch` errors by introducing automatic session workspace activation via `conversation_id`, directory-aware execution, and handling for both relative and absolute paths.
+- **Interactive Model Test Details & Diagnostics Modal**: Clicking any row in the Model Health & Latency Test Results table opens a dedicated diagnostics modal displaying full model information, the exact request sent (masked headers and JSON payload), direct and proxy-routed endpoints, rendered assistant response and reasoning traces, and the full raw JSON response with 1-click copy actions and live retesting.
 - **Universal Proxy Traffic Routing for Model Responses**: Fixed proxy routing to support both standard forward proxies (`http://...`, `https://...`, `socks5://...`, `socks5h://...`) via HTTP client tunneling (`httpx.AsyncClient(proxy=...)`) and URL-rewriting gateways (like Cloudflare Workers `?url={url}` or `/proxy?target=`). Includes adaptive direct retry fallback on connectivity errors.
-- **Unified Per-Provider and Global Proxy Settings**: Per-provider proxy overrides and global proxy settings now use the same unified proxy parser (`parse_proxy_setting`).
-- **Browser Automation Proxy Routing**: Multi-tier HTTPX web fetching in browser automation now respects proxy configuration for unrestricted global web access.
-- **Workspace Sidebar Folding & Closing**: Added collapse/fold toggle (`◀ بستن منو` / `📁 نمایش فایل‌ها`) for the workspace file tree sidebar with persistent state across sessions, plus an instant "✕ بستن پنجره" button to close the workspace panel and return to chat.
 - **Dedicated Proxy Server Configuration**: Integrated first-class Proxy Server settings with default `https://proxy.fazilat-ma.workers.dev/?url={url}` for seamless routing of model endpoints, web searches, and browser operations; supports live connection testing and instant default reset.
 - **Copy All AI Model Test Results**: Added 1-click export and copy actions for all AI model diagnostic tests in both structured Markdown Table and JSON formats, complete with status indicators, latency metrics, and diagnostic traces.
-- **Test Suite Expansion**: Added automated pytest verification for proxy configuration, forward proxy client parsing, SOCKS5 support, URL template substitution, and testing endpoints (24/24 tests passing).
+- **Test Suite Expansion**: Added automated pytest verification for session workspace folder listing, file execution routing, proxy configuration, forward proxy client parsing, and testing endpoints (25/25 tests passing).
 
 ## 0.11.0 - RTL Persian Typography, Isolated LTR Terminals, Message Sync & Edit Lifecycle
 

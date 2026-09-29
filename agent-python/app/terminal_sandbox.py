@@ -106,7 +106,15 @@ def execute_sandboxed_command(
             "requiresApproval": True
         }
 
-    target_dir = safe_path(cwd)
+    try:
+        p_cwd = Path(cwd)
+        if p_cwd.is_absolute() and p_cwd.exists() and p_cwd.is_dir():
+            target_dir = p_cwd
+        else:
+            target_dir = safe_path(cwd)
+    except Exception:
+        target_dir = get_workspace_root()
+
     started = time.time()
     env = get_clean_env()
 

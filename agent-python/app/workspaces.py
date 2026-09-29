@@ -96,6 +96,17 @@ def safe_path(raw: str) -> pathlib.Path:
     root = get_workspace_root()
     # Normalize empty or current directory
     clean = (raw or ".").strip()
+
+    # If raw is already an absolute path inside workspace root
+    try:
+        p_raw = pathlib.Path(clean)
+        if p_raw.is_absolute():
+            resolved = p_raw.resolve()
+            if resolved == root or root in resolved.parents:
+                return resolved
+    except Exception:
+        pass
+
     if clean.startswith("/"):
         # Strip leading slash if referring to relative workspace path
         clean = clean.lstrip("/")

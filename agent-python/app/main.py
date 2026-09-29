@@ -181,14 +181,26 @@ def workspace_metrics(user: Dict[str, Any] = Depends(require_viewer)):
 
 # Workspace Files API
 @app.get("/api/workspace/files")
-def workspace_files(path: str = ".", user: Dict[str, Any] = Depends(require_viewer)):
+def workspace_files(path: str = ".", conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    if conversation_id:
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     try:
         return list_workspace_files(path)
     except Exception as e:
         raise HTTPException(400, str(e))
 
 @app.get("/api/workspace/file")
-def workspace_read(path: str, user: Dict[str, Any] = Depends(require_viewer)):
+def workspace_read(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    if conversation_id:
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     try:
         p = safe_path(path)
         if not p.exists():
@@ -201,7 +213,13 @@ def workspace_read(path: str, user: Dict[str, Any] = Depends(require_viewer)):
         raise HTTPException(400, str(e))
 
 @app.get("/api/workspace/raw")
-def workspace_raw_file(path: str, user: Dict[str, Any] = Depends(require_viewer)):
+def workspace_raw_file(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    if conversation_id:
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     try:
         p = safe_path(path)
         if not p.exists() or p.is_dir():
@@ -216,7 +234,13 @@ def workspace_raw_file(path: str, user: Dict[str, Any] = Depends(require_viewer)
         raise HTTPException(400, str(e))
 
 @app.get("/api/workspace/file-preview")
-def workspace_file_preview(path: str, user: Dict[str, Any] = Depends(require_viewer)):
+def workspace_file_preview(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    if conversation_id:
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     try:
         p = safe_path(path)
         if not p.exists():
@@ -426,25 +450,33 @@ def workspace_import_reference_file(payload: Dict[str, Any], user: Dict[str, Any
 async def workspace_execute_file(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
     path = str(payload.get("path", "")).strip()
     args = payload.get("args") or []
+    conversation_id = payload.get("conversation_id") or payload.get("session_id")
     if not path:
         raise HTTPException(400, "File path is required")
+
+    # If conversation_id is provided, activate session workspace
+    if conversation_id:
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
+
     try:
-        p = safe_path(path)
+        # Check if reference path e.g. @chat:conv-xxx/file.py or @project:proj-xxx/file.py
+        if path.startswith("@") and ":" in path and "/" in path:
+            prefix, rel_file = path.split("/", 1)
+            target_type, target_id = prefix[1:].split(":", 1)
+            p = safe_reference_path(target_type, target_id, rel_file)
+        else:
+            p = safe_path(path)
+
         if not p.exists():
-            raise HTTPException(404, "File not found")
+            raise HTTPException(404, f"File not found: {path}")
 
         suffix = p.suffix.lower()
         cmd = ""
         arg_str = " ".join(f"'{a}'" for a in args) if args else ""
-        ws_root = get_workspace_root()
-
-        try:
-            rel_cwd = str(p.parent.relative_to(ws_root))
-            if not rel_cwd:
-                rel_cwd = "."
-        except Exception:
-            rel_cwd = "."
-        rel_file_path = str(p.relative_to(ws_root))
 
         if suffix in (".py", ".pyw"):
             cmd = f"python3 '{p.name}' {arg_str}".strip()
@@ -464,7 +496,7 @@ async def workspace_execute_file(payload: Dict[str, Any], user: Dict[str, Any] =
         else:
             cmd = f"cat '{p.name}' {arg_str}".strip()
 
-        res = execute_sandboxed_command(cmd, cwd=rel_cwd, confirmed_dangerous=True)
+        res = execute_sandboxed_command(cmd, cwd=str(p.parent), confirmed_dangerous=True)
         return {
             "ok": True,
             "command": cmd,
@@ -481,6 +513,13 @@ async def workspace_execute_file(payload: Dict[str, Any], user: Dict[str, Any] =
 
 @app.post("/api/workspace/preview")
 def workspace_preview(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
+    conv_id = payload.get("conversation_id") or payload.get("session_id")
+    if conv_id:
+        try:
+            session_ws = get_or_create_session_workspace(conv_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     try:
         return preview(str(payload["path"]), str(payload.get("content", "")))
     except Exception as e:
@@ -488,6 +527,13 @@ def workspace_preview(payload: Dict[str, Any], user: Dict[str, Any] = Depends(re
 
 @app.put("/api/workspace/file")
 def workspace_write(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    conv_id = payload.get("conversation_id") or payload.get("session_id")
+    if conv_id:
+        try:
+            session_ws = get_or_create_session_workspace(conv_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     path = str(payload["path"])
     content = str(payload.get("content", ""))
     require_appr = payload.get("requireApproval", False)
@@ -508,6 +554,13 @@ def workspace_write(payload: Dict[str, Any], user: Dict[str, Any] = Depends(requ
 
 @app.post("/api/workspace/create")
 def workspace_create(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    conv_id = payload.get("conversation_id") or payload.get("session_id")
+    if conv_id:
+        try:
+            session_ws = get_or_create_session_workspace(conv_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     path = str(payload.get("path", "")).strip()
     is_dir = bool(payload.get("isDir", False))
     content = str(payload.get("content", ""))
@@ -519,7 +572,13 @@ def workspace_create(payload: Dict[str, Any], user: Dict[str, Any] = Depends(req
         raise HTTPException(400, str(e))
 
 @app.delete("/api/workspace/file")
-def workspace_delete(path: str, user: Dict[str, Any] = Depends(require_developer)):
+def workspace_delete(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_developer)):
+    if conversation_id:
+        try:
+            session_ws = get_or_create_session_workspace(conversation_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     if not path:
         raise HTTPException(400, "Path is required")
     try:
@@ -529,6 +588,13 @@ def workspace_delete(path: str, user: Dict[str, Any] = Depends(require_developer
 
 @app.post("/api/workspace/rename")
 def workspace_rename(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    conv_id = payload.get("conversation_id") or payload.get("session_id")
+    if conv_id:
+        try:
+            session_ws = get_or_create_session_workspace(conv_id)
+            set_active_workspace(session_ws["id"])
+        except Exception:
+            pass
     old_p = str(payload.get("oldPath", "")).strip()
     new_p = str(payload.get("newPath", "")).strip()
     if not old_p or not new_p:
