@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.15.0');
+define('WCP_VERSION', '2.15.1');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -3816,7 +3816,12 @@ function cli_service(array $job): int {
                             if ($tok === '' || in_array(strtolower($tok), ['or', 'and', 'pip', 'pip3', 'install', '-r', 'run:', 'run', 'please'], true)) {
                                 continue;
                             }
-                            if (preg_match('/^[a-zA-Z0-9_\-\.\[\]\<\>\=\!]+$/', $tok)) {
+                            // A PyPI name starts alphanumeric and holds only [A-Za-z0-9._-].
+                            // The old pattern also allowed [ ] < > = ! , which made pip's own
+                            // usage text ("[options]", "<requirement", "[-e]", "<vcs") parse as
+                            // package names — each failed run then fed more garbage into the next.
+                            if (preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/', $tok)
+                                && !preg_match('/^(options|requirement|specifier|file|url|path|archive|vcs|project|local|package-index-options)$/i', $tok)) {
                                 $mapped = $modMap[$tok] ?? $tok;
                                 $pkgsToInstall[$mapped] = true;
                             }

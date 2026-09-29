@@ -13,12 +13,28 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.15.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.15.1** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
 | `wcp` (CLI) | 2.15.0 | Follows the suite version |
 | `install.sh` / `update.sh` | 2.15.0 | Follows the suite version |
 | `py-upgrade.sh` | 1.0.2 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.15.1] — 2026-09-29 · `hostconsole.php`
+
+### Fixed
+* **The Python auto-installer harvested pip's own usage text as package names.** When a run failed
+  and `pip` printed its usage block, the token filter accepted `[options]`, `<requirement`,
+  `specifier>`, `[package-index-options]`, `<requirements`, `file>`, `[-e]`, `<vcs`, `project`,
+  `url>`, `<local`, `path>` and `<archive` as installable packages, because the pattern allowed
+  `[ ] < > = !`. Each failed attempt appended that garbage to the next install command, so the
+  list grew on every restart and the install could never succeed. Package names are now matched
+  as `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$` with an explicit stop-list for pip's usage words.
+
+  Verified against the real log from the report: before, 12 junk tokens were collected alongside
+  the 14 genuine ones; after, only the 14 genuine ones remain.
 
 ---
 
