@@ -12,6 +12,17 @@
 | `server.conf.sample` | نمونهٔ پیکربندی → با نام `server.conf` کپی شود |
 | `scraper4-server.service` | نمونهٔ یونیت systemd (لایهٔ دومِ تاب‌آوری) |
 
+### سروکردنِ نسخهٔ لاراول (پوشهٔ `laravel/`) با همین سوپروایزر
+
+```bash
+SCRAPER_DOCROOT=laravel/public SCRAPER_ROUTER=laravel/public/index.php \
+SCRAPER_PORT=8001 SCRAPER_CRON_TICK=0 \
+SCRAPER_LOG=./logs/laravel-server.log RUN_DIR=./run-laravel ./server.sh start
+```
+
+(`RUN_DIR` و لاگِ جدا بدهید که PID فایل‌های دو سرویس قاطی نشود؛ زمان‌بندِ لاراول
+خودش `schedule:run` را دارد و به تیکِ قدیمی نیاز ندارد.)
+
 ## دو حالتِ قابلِ تنظیم
 
 ### حالت ۱ — پیش‌زمینه (`run`)

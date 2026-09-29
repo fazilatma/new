@@ -39,6 +39,9 @@ SCRAPER_RESTART_DELAY_MAX="${SCRAPER_RESTART_DELAY_MAX:-30}"
 SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"  # ثانیه؛ 0 یعنی تیکِ کران خاموش
 SCRAPER_LOG="${SCRAPER_LOG:-$HERE/logs/server.log}"
 SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-$HERE/logs/cron-tick.log}"
+# ریشهٔ سند اختیاری برای چیدمان‌های چندپوشه‌ای (مثلاً حالت لاراول:
+#   SCRAPER_DOCROOT=laravel/public SCRAPER_ROUTER=laravel/public/index.php)
+SCRAPER_DOCROOT="${SCRAPER_DOCROOT:-}"
 RUN_DIR="${RUN_DIR:-$HERE/run}"
 
 STOP_FLAG="$RUN_DIR/STOP"
@@ -77,14 +80,18 @@ rotate_log() {
 start_php_server() {
   # max_execution_time=0 و ignore_user_abort=1 یعنی خودِ PHP هرگز پردازه را
   # برای طولانی‌بودن نمی‌کشد و قطعِ مرورگر هم کارِ پس‌زمینه را نمی‌بندد.
-  PHP_CLI_SERVER_WORKERS="$SCRAPER_WORKERS" "$SCRAPER_PHP" \
-    -d max_execution_time=0 \
-    -d max_input_time=-1 \
-    -d memory_limit="$SCRAPER_MEMORY" \
-    -d ignore_user_abort=1 \
-    -d default_socket_timeout=-1 \
-    -d variables_order=EGPCS \
-    -S "$SCRAPER_HOST:$SCRAPER_PORT" "$SCRAPER_ROUTER" &
+  # سازگار با bash قدیمی مک هم (بدون آرایهٔ شرطی — با set -u روی bash<4.4 می‌شکست)
+  if [ -n "$SCRAPER_DOCROOT" ]; then
+    PHP_CLI_SERVER_WORKERS="$SCRAPER_WORKERS" "$SCRAPER_PHP" \
+      -d max_execution_time=0 -d max_input_time=-1 -d memory_limit="$SCRAPER_MEMORY" \
+      -d ignore_user_abort=1 -d default_socket_timeout=-1 -d variables_order=EGPCS \
+      -S "$SCRAPER_HOST:$SCRAPER_PORT" -t "$SCRAPER_DOCROOT" "$SCRAPER_ROUTER" &
+  else
+    PHP_CLI_SERVER_WORKERS="$SCRAPER_WORKERS" "$SCRAPER_PHP" \
+      -d max_execution_time=0 -d max_input_time=-1 -d memory_limit="$SCRAPER_MEMORY" \
+      -d ignore_user_abort=1 -d default_socket_timeout=-1 -d variables_order=EGPCS \
+      -S "$SCRAPER_HOST:$SCRAPER_PORT" "$SCRAPER_ROUTER" &
+  fi
   SERVER_PID=$!
   echo "$SERVER_PID" > "$SRV_PIDFILE"
 }
