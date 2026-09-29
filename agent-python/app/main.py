@@ -13,6 +13,10 @@ app=FastAPI(title='Arena-like Coding Agent')
 def ui():
     return FileResponse(Path(__file__).parent / 'static' / 'index.html')
 
+@app.get('/chat')
+def chat_ui():
+    return FileResponse(Path(__file__).parent / 'static' / 'chat.html')
+
 @app.get('/')
 def root():
     return FileResponse(Path(__file__).parent / 'static' / 'index.html')
