@@ -7,6 +7,7 @@ from .agent_tools import list_files, read_file, write_file, run_command, git_sta
 from .chat import complete
 from .connectors import github, browse
 from .config import read as read_config, write as write_config
+from .workflow import preview
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 APP_VERSION='0.3.0'
@@ -41,6 +42,11 @@ def workspace_files(path: str = '.'):
 def workspace_read(path: str):
     try: return {'path':path,'content':read_file(path)}
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.post('/api/workspace/preview')
+def workspace_preview(payload: dict):
+    try: return preview(str(payload['path']),str(payload.get('content','')))
+    except Exception as e: raise HTTPException(400,str(e))
 
 @app.put('/api/workspace/file')
 def workspace_write(payload: dict):
@@ -84,6 +90,17 @@ async def github_repos():
 async def github_file(owner:str,repo:str,path:str):
     try: return await github(f'repos/{owner}/{repo}/contents/{path}')
     except Exception as e: raise HTTPException(400,str(e))
+
+@app.post('/api/github/pull-request')
+async def github_pr(payload: dict):
+    import os, httpx
+    token=os.getenv('GITHUB_TOKEN',''); owner=str(payload['owner']); repo=str(payload['repo'])
+    if not token: raise HTTPException(400,'GITHUB_TOKEN is not configured')
+    body={k:payload[k] for k in ('title','head','base','body') if k in payload}
+    async with httpx.AsyncClient(timeout=30) as c:
+        r=await c.post(f'https://api.github.com/repos/{owner}/{repo}/pulls',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json'},json=body)
+        if r.status_code>=400: raise HTTPException(r.status_code,r.text)
+        return r.json()
 
 @app.post('/api/browser/fetch')
 async def browser_fetch(payload:dict):
