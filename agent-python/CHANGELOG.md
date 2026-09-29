@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.8.0 - Comprehensive Platform Enrichment (Editor, Chat Presets, History, Diff & Logs)
+## 0.12.0 - Workspace Sidebar Folding, Proxy Server Integration & Model Test Results Exporter
+
+- **Workspace Sidebar Folding & Closing**: Added collapse/fold toggle (`◀ بستن منو` / `📁 نمایش فایل‌ها`) for the workspace file tree sidebar with persistent state across sessions, plus an instant "✕ بستن پنجره" button to close the workspace panel and return to chat.
+- **Dedicated Proxy Server Configuration**: Integrated first-class Proxy Server settings with default `https://proxy.fazilat-ma.workers.dev/?url={url}` for seamless routing of model endpoints, web searches, and browser operations; supports live connection testing and instant default reset.
+- **Copy All AI Model Test Results**: Added 1-click export and copy actions for all AI model diagnostic tests in both structured Markdown Table and JSON formats, complete with status indicators, latency metrics, and diagnostic traces.
+- **Test Suite Expansion**: Added automated pytest verification for proxy configuration, URL template substitution, and testing endpoints (22/22 tests passing).
+
+## 0.11.0 - RTL Persian Typography, Isolated LTR Terminals, Message Sync & Edit Lifecycle
 
 - **Enriched File Management & Explorer**: Added one-click creation for files and folders (`+📄`, `+📁`), file renaming, deletion, file tree real-time fuzzy search filter, and full workspace zip archive export (`/api/workspace/export-zip`).
 - **Tabbed Code Editor**: Multi-tab document management with unsaved change indicators (`*`), line & character stats, `Ctrl+S` quick save shortcut, and direct "Explain in Chat" context transfer.

@@ -48,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.11.0"
+    assert APP_VERSION == "0.12.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -681,6 +681,40 @@ def test_chat_message_sync_and_edit_lifecycle():
     assert len(msgs) == 2
     assert msgs[0]["content"] == "Write a mergesort function instead"
     assert "mergesort with O(n log n)" in msgs[1]["content"]
+
+def test_proxy_configuration_and_routing():
+    from app.config import get_proxy_url, DEFAULT_PROXY_URL, read_environment, write_environment
+
+    # 1. Test default proxy constant
+    assert DEFAULT_PROXY_URL == "https://proxy.fazilat-ma.workers.dev/?url={url}"
+
+    # 2. Test reading and saving proxy configuration via environment endpoints
+    write_environment({
+        "AGENT_PROXY_URL": "https://proxy.fazilat-ma.workers.dev/?url={url}",
+        "AGENT_PROXY_ENABLED": "true"
+    })
+    env = read_environment()
+    assert env["AGENT_PROXY_URL"] == "https://proxy.fazilat-ma.workers.dev/?url={url}"
+    assert env["AGENT_PROXY_ENABLED"] == "true"
+
+    # 3. Test get_proxy_url template substitution
+    target = "https://api.openai.com/v1/chat/completions"
+    proxied = get_proxy_url(target)
+    assert proxied is not None
+    assert "https://proxy.fazilat-ma.workers.dev/?url=" in proxied
+    assert "api.openai.com" in proxied
+
+    # 4. Test proxy test endpoint
+    res = client.post("/api/config/test-proxy", json={
+        "proxy_url": "https://proxy.fazilat-ma.workers.dev/?url={url}",
+        "target_url": "https://httpbin.org/status/200"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert "effective_url" in data
+    assert "latency_ms" in data
+    assert "ok" in data
+
 
 
 

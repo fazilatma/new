@@ -7,6 +7,7 @@ import httpx
 from typing import Dict, Any, List, Optional, AsyncGenerator
 
 from .models import Provider, ModelSpec
+from .config import get_proxy_url, get_raw_config
 from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER
 from .agent_tools import AGENT_TOOL_DEFINITIONS, execute_agent_tool
 from .workspaces import (
@@ -118,7 +119,8 @@ async def call_provider_api(
     custom_connect_sec: Optional[float] = None
 ) -> Dict[str, Any]:
     base_url = provider.url.rstrip("/")
-    proxy_url = provider.proxyUrl or os.getenv("AGENT_PROXY_URL", "")
+    proxy_url = provider.proxyUrl or get_raw_config("AGENT_PROXY_URL", "https://proxy.fazilat-ma.workers.dev/?url={url}")
+    proxy_enabled = get_raw_config("AGENT_PROXY_ENABLED", "true").lower() in ("1", "true", "yes")
 
     headers = {
         "Content-Type": "application/json"
@@ -161,8 +163,12 @@ async def call_provider_api(
         if model.toolCalling:
             body["tools"] = AGENT_TOOL_DEFINITIONS
 
-    if proxy_url:
-        url = proxy_url.replace("{url}", url)
+    if provider.proxyUrl:
+        url = provider.proxyUrl.replace("{url}", url)
+    else:
+        proxied = get_proxy_url(url)
+        if proxied:
+            url = proxied
 
     started = time.perf_counter()
     tot_timeout = custom_timeout_sec if custom_timeout_sec is not None else (provider.timeoutSec or 120.0)

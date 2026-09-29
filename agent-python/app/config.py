@@ -33,7 +33,7 @@ ENV_FILE = DATA_DIR / "environment.json"
 MASTER_KEY_FILE = DATA_DIR / "master.key"
 
 # Version
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.12.0"
 
 # Secret Encryption (Fernet / AES)
 def get_or_create_master_key() -> bytes:
@@ -78,6 +78,22 @@ def mask_secret(value: str) -> str:
         return "••••••••"
     return f"{decrypted[:3]}••••••••{decrypted[-4:]}"
 
+DEFAULT_PROXY_URL = "https://proxy.fazilat-ma.workers.dev/?url={url}"
+
+def get_proxy_url(target_url: str) -> Optional[str]:
+    """Return proxied URL if proxy is enabled, otherwise None or direct URL."""
+    enabled_val = get_raw_config("AGENT_PROXY_ENABLED", "1").lower()
+    if enabled_val in ("0", "false", "no", "off"):
+        return None
+    proxy_pattern = get_raw_config("AGENT_PROXY_URL", DEFAULT_PROXY_URL).strip()
+    if not proxy_pattern:
+        return None
+    if "{url}" in proxy_pattern:
+        return proxy_pattern.replace("{url}", target_url)
+    if proxy_pattern.endswith("?") or "?" in proxy_pattern:
+        return f"{proxy_pattern}&url={target_url}" if "?" in proxy_pattern and not proxy_pattern.endswith("?") else f"{proxy_pattern}url={target_url}"
+    return f"{proxy_pattern}?url={target_url}"
+
 # Configuration Names
 CONFIG_KEYS = [
     "OPENROUTER_API_KEY",
@@ -93,6 +109,7 @@ CONFIG_KEYS = [
     "AGENT_WORKSPACE",
     "PROVIDERS_FILE",
     "AGENT_PROXY_URL",
+    "AGENT_PROXY_ENABLED",
     "AGENT_AUTH_TOKEN",
     "AUTH_ENABLED",
     "REQUIRE_FILE_APPROVAL",
@@ -112,6 +129,8 @@ def read_environment() -> Dict[str, str]:
     res = {}
     for k in CONFIG_KEYS:
         val = data.get(k, os.getenv(k, ""))
+        if k == "AGENT_PROXY_URL" and not val:
+            val = DEFAULT_PROXY_URL
         # Mask sensitive keys
         if any(secret_word in k for secret_word in ("KEY", "TOKEN", "SECRET", "AUTH_TOKEN")):
             res[k] = mask_secret(val) if val else ""
@@ -120,10 +139,12 @@ def read_environment() -> Dict[str, str]:
     return res
 
 def get_raw_config(key: str, default: str = "") -> str:
+    if key == "AGENT_PROXY_URL" and not default:
+        default = DEFAULT_PROXY_URL
     if ENV_FILE.exists():
         try:
             data = json.loads(ENV_FILE.read_text(encoding="utf-8"))
-            if key in data and data[key]:
+            if key in data and data[key] is not None and str(data[key]).strip():
                 val = data[key]
                 if str(val).startswith("enc:"):
                     return decrypt_secret(val)
