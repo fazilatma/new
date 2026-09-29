@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-PYUP_VERSION="1.0.0"
+PYUP_VERSION="1.0.1"
 RAW_BASE="https://raw.githubusercontent.com/fazilatma/new/hostconsole-nvm-node20"
 
 # ── رنگ فقط وقتی خروجی ترمینال است ────────────────────────────────────────────
@@ -73,7 +73,28 @@ fi
 
 printf '%s╭─ py-upgrade.sh v%s ─ پایتون %s%s\n' "$C_DIM" "$PYUP_VERSION" "$VER" "$C_OFF"
 
-[ -n "${HOME:-}" ] || die "متغیر HOME تعریف نشده."
+# ── HOME ────────────────────────────────────────────────────────────────────
+# روی بعضی هاست‌های اشتراکی (jailshell / CageFS / cron) متغیر HOME خالی است یا
+# export نشده، پس یک شل جدید آن را نمی‌بیند. نتیجه‌اش این است که "$HOME/.local/bin"
+# به "/.local/bin" تبدیل می‌شود و همه چیز خراب می‌شود. اینجا خودمان پیدایش می‌کنیم.
+if [ -z "${HOME:-}" ] || [ ! -d "${HOME:-/nonexistent}" ]; then
+    _was="${HOME-<unset>}"
+    _u="$(id -un 2>/dev/null || echo '')"
+    _h=""
+    if [ -n "$_u" ]; then
+        command -v getent >/dev/null 2>&1 && _h="$(getent passwd "$_u" 2>/dev/null | cut -d: -f6 || true)"
+        [ -n "$_h" ] || { [ -r /etc/passwd ] && _h="$(awk -F: -v u="$_u" '$1==u{print $6; exit}' /etc/passwd 2>/dev/null || true)"; }
+        [ -n "$_h" ] || { [ -d "/home/$_u" ] && _h="/home/$_u"; }
+    fi
+    # bash خودش «~» را از passwd حل می‌کند حتی وقتی HOME خالی است
+    [ -n "$_h" ] || _h="$(cd ~ 2>/dev/null && pwd || true)"
+    [ -n "$_h" ] && [ -d "$_h" ] || die "HOME تعریف نشده و نتوانستم پیدایش کنم. دستی بده:  export HOME=/home/USERNAME"
+    export HOME="$_h"
+    warn "متغیر HOME قابل استفاده نبود (مقدارش: $_was) — خودم پیدایش کردم: $HOME"
+    warn "به همین دلیل بود که «export PATH=\"\$HOME/.local/bin:...\"» قبلاً به /.local/bin تبدیل می‌شد."
+    warn "برای همیشه:  echo 'export HOME=$_h' >> ~/.bashrc"
+fi
+export HOME
 LB="$HOME/.local/bin"
 export PATH="$LB:$PATH"
 export UV_LINK_MODE=copy   # روی هاست اشتراکی، کش و پروژه معمولاً روی دو فایل‌سیستم‌اند
@@ -169,4 +190,4 @@ fi
 
 say "تمام"
 printf '  برای اینکه uv و پایتون در SSH همیشه در دسترس باشند، یک بار این را بزن:\n'
-printf "    echo 'source ~/.local/bin/env' >> ~/.bashrc\n"
+printf "    echo 'source %s/env' >> %s/.bashrc\n" "$LB" "$HOME"

@@ -17,7 +17,7 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
 | `wcp` (CLI) | 2.15.0 | Follows the suite version |
 | `install.sh` / `update.sh` | 2.15.0 | Follows the suite version |
-| `py-upgrade.sh` | 1.0.0 | Standalone Python installer, versioned separately |
+| `py-upgrade.sh` | 1.0.1 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
 
 ---
@@ -45,6 +45,15 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
   `$HOME/.local/bin` — so a freshly installed interpreter is on PATH yet bare `python3` still
   resolves to the old system one, and every hardcoded `python3 main.py` keeps using it. The script
   detects this and tells you to use the absolute interpreter path instead.
+
+### Fixed (1.0.1)
+* **Recover when `HOME` is unset or bogus.** Some shared hosts (jailshell / CageFS, and cron)
+  hand you a shell where `HOME` is empty or not exported, so a piped `bash` never sees it. The
+  damage is silent and confusing: `export PATH="$HOME/.local/bin:$PATH"` collapses to
+  `/.local/bin`, PATH gets clobbered, and the freshly installed `uv` becomes "command not found".
+  The script now resolves the real home from `getent passwd`, then `/etc/passwd`, then `/home/$(id -un)`,
+  then bash's own `~` expansion (which reads passwd directly), exports it, and explains what
+  happened. Verified against `HOME` unset, `HOME=""`, `HOME=/no/such/dir` and a scrubbed `env -i`.
 
 ### Notes
 * `uv venv` is invoked with `--seed`; without it the venv has no `pip` and the printed

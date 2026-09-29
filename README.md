@@ -326,6 +326,18 @@ new Python changes nothing on its own. Always use the absolute interpreter path 
 it and warns when the two differ). Per-project Python version selection — the equivalent of the nvm
 support in §6 — is not implemented yet.
 
+### If `HOME` is unset
+
+Some shared hosts (jailshell / CageFS) give you a shell where `HOME` is empty or not exported.
+Then `export PATH="$HOME/.local/bin:$PATH"` silently becomes `/.local/bin`, PATH gets clobbered and
+`uv` turns into "command not found". Since 1.0.1 the script detects this, recovers the real home
+from `getent passwd` (falling back to `/etc/passwd`, `/home/$(id -un)` and bash's `~`), and tells
+you to make it permanent:
+
+```bash
+echo 'export HOME=/home/YOURUSER' >> ~/.bashrc
+```
+
 To make `uv` permanent in interactive shells:
 
 ```bash
@@ -353,7 +365,7 @@ can never be overwritten by `webconsole.php` again.
 | `hostconsole.php` (shared hosting) | **2.15.0** |
 | `webconsole.php` (VPS) | 2.9.0 |
 | `wcp` CLI · `install.sh` · `update.sh` | 2.15.0 |
-| `py-upgrade.sh` | 1.0.0 |
+| `py-upgrade.sh` | 1.0.1 |
 | `webconsole.worker.js` (Cloudflare) | 2.8.0 |
 
 Full release notes: [CHANGELOG.md](CHANGELOG.md).
