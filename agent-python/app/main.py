@@ -5,6 +5,7 @@ from .models import Provider, ModelSpec
 from .providers import ProviderStore
 from .agent_tools import list_files, read_file, write_file, run_command, git_status, git_diff, git_commit
 from .chat import complete
+from .connectors import github, browse
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 APP_VERSION='0.3.0'
@@ -64,6 +65,21 @@ def git_commit_api(payload: dict):
 def terminal_exec(payload: dict):
     try: return run_command(str(payload['command']), str(payload.get('cwd','.')), int(payload.get('timeout',60)))
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.get('/api/github/repos')
+async def github_repos():
+    try: return await github('user/repos?per_page=100&sort=updated')
+    except Exception as e: raise HTTPException(400,str(e))
+
+@app.get('/api/github/repo/{owner}/{repo}/contents/{path:path}')
+async def github_file(owner:str,repo:str,path:str):
+    try: return await github(f'repos/{owner}/{repo}/contents/{path}')
+    except Exception as e: raise HTTPException(400,str(e))
+
+@app.post('/api/browser/fetch')
+async def browser_fetch(payload:dict):
+    try: return await browse(str(payload['url']))
+    except Exception as e: raise HTTPException(400,str(e))
 
 @app.post('/api/chat')
 async def chat(payload: dict):

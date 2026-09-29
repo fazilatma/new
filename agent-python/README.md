@@ -49,3 +49,9 @@ Current release: `0.3.0`.
 - `POST /api/git/commit` with `{ "message": "...", "approved": true }`
 
 Commit operations require explicit approval.
+
+## Additional connectors
+
+- `GET /api/github/repos` uses `GITHUB_TOKEN`.
+- `GET /api/github/repo/{owner}/{repo}/contents/{path}` reads GitHub files.
+- `POST /api/browser/fetch` fetches a permitted HTTP(S) URL from the VPS.
