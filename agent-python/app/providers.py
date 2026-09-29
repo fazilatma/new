@@ -3,7 +3,7 @@ from pathlib import Path
 from .models import Provider, ModelSpec
 
 class ProviderStore:
-    def __init__(self, path: str): self.path=Path(os.getenv('PROVIDERS_FILE', str(Path(path).with_name('runtime-providers.json')))); self.path.parent.mkdir(parents=True, exist_ok=True); self.data=self._load()
+    def __init__(self, path: str): self.path=Path(os.getenv('PROVIDERS_FILE', path)); self.path.parent.mkdir(parents=True, exist_ok=True); self.data=self._load()
     def _load(self):
         
         if self.path.exists():
