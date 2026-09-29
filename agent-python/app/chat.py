@@ -163,7 +163,10 @@ async def call_provider_api(
         if model.toolCalling:
             body["tools"] = AGENT_TOOL_DEFINITIONS
 
-    if provider.proxyUrl:
+    # If provider is local Ollama (127.0.0.1 or localhost), NEVER route through external proxy
+    if provider.protocol == "ollama" or "127.0.0.1" in base_url or "localhost" in base_url:
+        proxied = None
+    elif provider.proxyUrl:
         url = provider.proxyUrl.replace("{url}", url)
     else:
         proxied = get_proxy_url(url)
@@ -175,7 +178,8 @@ async def call_provider_api(
     conn_timeout = custom_connect_sec if custom_connect_sec is not None else 15.0
     timeout = httpx.Timeout(tot_timeout, connect=conn_timeout)
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    # Attempt primary request (using proxy if enabled, or direct)
+    async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
         try:
             r = await client.post(url, headers=headers, json=body)
             r.raise_for_status()
@@ -208,11 +212,36 @@ async def call_provider_api(
                     }]
                 }
             return data
-        except Exception as e:
+        except Exception as proxy_or_direct_err:
+            # If request through proxy failed, automatically retry directly to provider endpoint
+            # as an adaptive fallback if proxy was active
+            direct_url = base_url if provider.protocol != "anthropic" else (f"{base_url}/v1/messages" if not base_url.endswith("/messages") else base_url)
+            if provider.protocol not in ("anthropic", "ollama"):
+                direct_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+
+            if url != direct_url and provider.protocol != "ollama":
+                try:
+                    r = await client.post(direct_url, headers=headers, json=body)
+                    r.raise_for_status()
+                    data = r.json()
+                    latency = (time.perf_counter() - started) * 1000
+                    CIRCUIT_BREAKER.record_success(provider.id)
+                    PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=False)
+                    if provider.protocol == "anthropic":
+                        content_text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                        thinking_text = "".join(b.get("thinking", "") for b in data.get("content", []) if b.get("type") == "thinking")
+                        msg_dict = {"role": "assistant", "content": content_text}
+                        if thinking_text:
+                            msg_dict["reasoning_content"] = thinking_text
+                        return {"choices": [{"message": msg_dict}]}
+                    return data
+                except Exception:
+                    pass
+
             latency = (time.perf_counter() - started) * 1000
             CIRCUIT_BREAKER.record_failure(provider.id)
             PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=True)
-            raise e
+            raise proxy_or_direct_err
 
 def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[List[Dict[str, Any]]] = None):
     from .workspaces import create_workspace_item, get_active_workspace
