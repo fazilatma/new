@@ -188,18 +188,23 @@ async def call_provider_api(
             # Normalize response to OpenAI format
             if provider.protocol == "anthropic":
                 content_text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                thinking_text = "".join(b.get("thinking", "") for b in data.get("content", []) if b.get("type") == "thinking")
+                msg_dict = {
+                    "role": "assistant",
+                    "content": content_text
+                }
+                if thinking_text:
+                    msg_dict["reasoning_content"] = thinking_text
                 return {
                     "choices": [{
-                        "message": {
-                            "role": "assistant",
-                            "content": content_text
-                        }
+                        "message": msg_dict
                     }]
                 }
             elif provider.protocol == "ollama":
+                msg_dict = data.get("message", {"role": "assistant", "content": ""})
                 return {
                     "choices": [{
-                        "message": data.get("message", {"role": "assistant", "content": ""})
+                        "message": msg_dict
                     }]
                 }
             return data

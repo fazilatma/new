@@ -868,7 +868,12 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
             )
             msg = res.get("message", {})
             content = msg.get("content", "")
+            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("thought") or ""
             err_details = res.get("errorDetails")
+
+            # If there is reasoning / thinking process, send it first
+            if reasoning:
+                yield 'event: reasoning\ndata: ' + json.dumps({"reasoning": reasoning}, ensure_ascii=False) + '\n\n'
 
             # Stream text in chunks
             chunk_size = 25
@@ -890,6 +895,7 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
                 "steps": res.get("steps", 1),
                 "provider": res.get("provider"),
                 "model": res.get("model"),
+                "reasoning": reasoning,
                 "isFallback": res.get("isFallback", False),
                 "fallbackDetails": res.get("fallbackDetails"),
                 "hasError": bool(err_details)

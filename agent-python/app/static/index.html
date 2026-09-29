@@ -555,6 +555,64 @@
       white-space: pre-wrap;
     }
 
+    /* Thinking / Reasoning Accordion (Arena-style) */
+    .thought-card {
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      margin-bottom: 10px;
+      background: var(--bg-surface);
+      overflow: hidden;
+      font-size: 12.5px;
+    }
+    .thought-header {
+      padding: 8px 12px;
+      background: var(--bg-elevated);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-bottom: 1px solid transparent;
+      transition: background 0.15s;
+    }
+    .thought-header:hover {
+      background: var(--bg-highlight);
+      color: var(--text-main);
+    }
+    .thought-card.expanded .thought-header {
+      border-bottom-color: var(--border-subtle);
+    }
+    .thought-body {
+      padding: 12px 14px;
+      font-family: inherit;
+      color: var(--text-muted);
+      line-height: 1.6;
+      background: rgba(0, 0, 0, 0.15);
+      border-top: 1px solid var(--border-subtle);
+      max-height: 380px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+      direction: rtl;
+      text-align: right;
+    }
+    .thought-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+    }
+    .thought-pulse {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--primary);
+      animation: pulse 1.5s infinite;
+    }
+
     /* Diff View Highlight */
     .diff-container { font-family: monospace; font-size: 12px; line-height: 1.4; border-radius: 6px; overflow: hidden; }
     .diff-line { padding: 1px 8px; white-space: pre-wrap; }
@@ -956,14 +1014,38 @@
     /* Cross-Chat & Cross-Project References (v0.10.0) */
     .chat-references-bar {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 16px;
+      flex-direction: column;
       background: var(--bg-surface);
       border-top: 1px solid var(--border-subtle);
       border-bottom: 1px solid var(--border-subtle);
+      transition: all 0.2s ease;
+    }
+    .chat-references-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 14px;
+      cursor: pointer;
+      user-select: none;
+      background: var(--bg-elevated);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-dim);
+    }
+    .chat-references-header:hover {
+      background: var(--bg-highlight);
+      color: var(--text-main);
+    }
+    .chat-references-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
       flex-wrap: wrap;
-      min-height: 34px;
+      min-height: 32px;
+    }
+    .chat-references-bar.collapsed .chat-references-content {
+      display: none;
     }
     .ref-pill {
       display: inline-flex;
@@ -1331,8 +1413,42 @@
 
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
 
-    /* Mobile Responsive */
-    @media (max-width: 768px) {
+    /* Top Navigation Bar Collapsible state & Zoom responsiveness */
+    header.top-bar {
+      transition: all 0.25s ease;
+    }
+    header.top-bar.collapsed-bar {
+      height: 38px;
+      padding: 0 10px;
+    }
+    header.top-bar.collapsed-bar .status-pill,
+    header.top-bar.collapsed-bar .provider-pill,
+    header.top-bar.collapsed-bar .autosave-pill,
+    header.top-bar.collapsed-bar .btn:not(.header-collapse-toggle):not(#topWorkspaceToggleBtn) {
+      display: none !important;
+    }
+    .header-collapse-toggle {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 0;
+      transition: all 0.15s ease;
+    }
+    .header-collapse-toggle:hover {
+      background: var(--bg-highlight);
+      color: var(--text-main);
+    }
+
+    /* Mobile Responsive & High Zoom Viewports */
+    @media (max-width: 768px), (max-height: 550px) {
       aside.sidebar {
         position: fixed;
         inset: 0 auto 0 0;
@@ -1345,6 +1461,22 @@
       .chat-sidebar { display: none; }
       .editor-layout { grid-template-columns: 1fr; }
       .editor-file-tree { display: none; }
+      header.top-bar {
+        padding: 0 8px;
+        gap: 6px;
+      }
+      .top-left { gap: 6px; }
+      .top-right { gap: 4px; }
+      .status-pill { padding: 3px 6px; font-size: 11px; }
+      .provider-pill { padding: 3px 6px; font-size: 11px; }
+      .prompt-presets-bar {
+        padding: 4px 8px;
+        gap: 4px;
+      }
+      .preset-chip {
+        font-size: 11px;
+        padding: 3px 8px;
+      }
     }
   </style>
 </head>
@@ -1430,7 +1562,7 @@
 
   <!-- Main Content Wrapper -->
   <main class="main-content">
-    <header class="top-bar">
+    <header class="top-bar" id="mainTopBar">
       <div class="top-left">
         <!-- Always Visible Hamburger Menu Button -->
         <button class="hamburger-btn" onclick="handleMenuClick()" title="Open Navigation & Settings Menu">☰</button>
@@ -1449,6 +1581,7 @@
         <button class="btn btn-ghost btn-sm" onclick="openCommandPalette()" title="Command Palette (Ctrl+K)">⌘K</button>
         <button class="btn btn-ghost btn-sm" onclick="toggleTheme()" title="Toggle Theme" id="themeBtn">🌙</button>
         <button class="btn btn-ghost btn-sm" onclick="refreshCurrentView()" title="Refresh View">↻</button>
+        <button class="header-collapse-toggle" id="headerCollapseBtn" onclick="toggleTopBarCollapse()" title="تا کردن یا باز کردن هدر برای دید بهتر در موبایل و زوم بالا (Collapse/Expand Header)">▲</button>
       </div>
     </header>
 
@@ -1492,13 +1625,19 @@
 
           <!-- Chat References Bar (v0.10.0) -->
           <div class="chat-references-bar" id="chatReferencesBar">
-            <span style="font-size:11px;font-weight:600;color:var(--text-dim);display:flex;align-items:center;gap:4px;">
-              <span>🔗</span> <span>References:</span>
-            </span>
-            <div id="chatRefPills" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
-              <span style="font-size:11px;color:var(--text-dim);font-style:italic;">None linked</span>
+            <div class="chat-references-header" onclick="toggleChatReferencesBar()">
+              <span style="display:flex;align-items:center;gap:6px;">
+                <span id="chatRefToggleArrow">▼</span>
+                <span>🔗 ارجاعات و رفرنس‌های فعال (References)</span>
+                <span id="chatRefBadgeCount" style="font-size:10px;background:var(--bg-highlight);padding:1px 6px;border-radius:10px;">0</span>
+              </span>
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10.5px;" onclick="event.stopPropagation(); openReferencePickerModal();" title="Link other chat sessions or projects to this chat">+ Link Reference</button>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;margin-left:auto;" onclick="openReferencePickerModal()" title="Link other chat sessions or projects to this chat">+ Link Reference</button>
+            <div class="chat-references-content" id="chatReferencesContent">
+              <div id="chatRefPills" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
+                <span style="font-size:11px;color:var(--text-dim);font-style:italic;">None linked</span>
+              </div>
+            </div>
           </div>
 
           <!-- Prompt Presets Bar (v0.10.0) -->
@@ -2636,6 +2775,27 @@ function handleMenuClick() {
   }
 }
 
+function toggleTopBarCollapse() {
+  const topBar = $('#mainTopBar');
+  const btn = $('#headerCollapseBtn');
+  if (!topBar) return;
+  const isCollapsed = topBar.classList.toggle('collapsed-bar');
+  if (btn) {
+    btn.textContent = isCollapsed ? '▼' : '▲';
+    btn.title = isCollapsed ? 'باز کردن کامل هدر (Expand Header)' : 'تا کردن هدر (Collapse Header)';
+  }
+}
+
+function toggleChatReferencesBar() {
+  const bar = $('#chatReferencesBar');
+  const arrow = $('#chatRefToggleArrow');
+  if (!bar) return;
+  const isCollapsed = bar.classList.toggle('collapsed');
+  if (arrow) {
+    arrow.textContent = isCollapsed ? '►' : '▼';
+  }
+}
+
 function toggleSidebar() { 
   $('#sidebar').classList.toggle('collapsed'); 
 }
@@ -3646,9 +3806,35 @@ function setupComposerDragAndDrop() {
   });
 }
 
+function toggleThoughtCard(headerEl) {
+  const card = headerEl.closest('.thought-card');
+  if (!card) return;
+  const isExpanded = card.classList.toggle('expanded');
+  const arrow = card.querySelector('.thought-arrow');
+  const body = card.querySelector('.thought-body');
+  if (arrow) arrow.textContent = isExpanded ? '▼' : '►';
+  if (body) body.style.display = isExpanded ? 'block' : 'none';
+}
+
 function renderMarkdown(md) {
   if (!md) return '';
   let html = esc(md);
+
+  // DeepSeek / Reasoning models <think> tags or reasoning blocks
+  html = html.replace(/&lt;think&gt;([\s\S]*?)&lt;\/think&gt;/gi, (match, thoughtContent) => {
+    return `
+      <div class="thought-card">
+        <div class="thought-header" onclick="toggleThoughtCard(this)">
+          <div class="thought-badge">
+            <span class="thought-pulse"></span>
+            <span>🧠 روند و فرآیند تفکر مدل هوش مصنوعی (Thinking Process)</span>
+          </div>
+          <span class="thought-arrow">►</span>
+        </div>
+        <div class="thought-body" style="display:none;">${thoughtContent.trim()}</div>
+      </div>
+    `;
+  });
 
   // Fenced code blocks ```lang ... ```
   html = html.replace(/```([a-zA-Z0-9_\-\.\+]*)\n([\s\S]*?)```/g, (match, lang, code) => {
@@ -4230,8 +4416,10 @@ async function loadConversationReferences(convId) {
 
 function renderChatReferences() {
   const container = $('#chatRefPills');
-  if (!container) return;
+  const badge = $('#chatRefBadgeCount');
   const refs = STATE.activeReferences || [];
+  if (badge) badge.textContent = refs.length;
+  if (!container) return;
   if (refs.length === 0) {
     container.innerHTML = '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">None linked (type @ to reference)</span>';
     return;
@@ -4593,6 +4781,7 @@ async function streamAgentResponse() {
     const decoder = new TextDecoder();
     let buffer = '';
     bubble.textContent = '';
+    let accumulatedReasoning = '';
 
     while (true) {
       const { value, done } = await reader.read();
@@ -4606,9 +4795,17 @@ async function streamAgentResponse() {
         if (trimmed.startsWith('data: ')) {
           try {
             const data = JSON.parse(trimmed.slice(6));
+            if (data.reasoning) {
+              accumulatedReasoning += data.reasoning;
+              const fullDisplay = `<think>${accumulatedReasoning}</think>\n` + (accumulated || '');
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
             if (data.text) {
               accumulated += data.text;
-              bubble.innerHTML = renderMarkdown(accumulated);
+              const fullDisplay = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
               const container = $('#chatMessages');
               container.scrollTop = container.scrollHeight;
             }
@@ -4638,7 +4835,9 @@ async function streamAgentResponse() {
       }
     }
 
-    if (!accumulated && isError) {
+    const finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
+
+    if (!finalContent && isError) {
       accumulated = `⚠️ **Error occurred**: ${errorData?.error || 'Provider communication failed'}`;
       bubble.innerHTML = renderMarkdown(accumulated);
     }
@@ -4659,7 +4858,7 @@ async function streamAgentResponse() {
 
     chatHistory.push({
       role: 'assistant',
-      content: accumulated,
+      content: finalContent || accumulated,
       isFallback: Boolean(fallbackDetails),
       fallbackDetails: fallbackDetails
     });
