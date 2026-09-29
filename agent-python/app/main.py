@@ -6,6 +6,7 @@ from .providers import ProviderStore
 from .agent_tools import list_files, read_file, write_file, run_command, git_status, git_diff, git_commit
 from .chat import complete
 from .connectors import github, browse
+from .config import read as read_config, write as write_config
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 APP_VERSION='0.3.0'
@@ -65,6 +66,14 @@ def git_commit_api(payload: dict):
 def terminal_exec(payload: dict):
     try: return run_command(str(payload['command']), str(payload.get('cwd','.')), int(payload.get('timeout',60)))
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.get('/api/config/environment')
+def environment_config():
+    return read_config()
+
+@app.put('/api/config/environment')
+def save_environment(payload: dict):
+    return write_config(payload)
 
 @app.get('/api/github/repos')
 async def github_repos():
