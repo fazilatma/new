@@ -7,7 +7,7 @@ from .agent_tools import list_files, read_file, write_file, run_command, git_sta
 from .chat import complete
 from .connectors import github, browse
 from .config import read as read_config, write as write_config
-from .workflow import preview
+from .workflow import preview, backup, rollback
 from .runtime import submit, get as get_job, list_jobs
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi import Request
@@ -69,8 +69,15 @@ def workspace_preview(payload: dict):
 
 @app.put('/api/workspace/file')
 def workspace_write(payload: dict):
-    try: return write_file(str(payload['path']), str(payload.get('content','')))
+    try:
+        old=backup(str(payload['path']))
+        result=write_file(str(payload['path']), str(payload.get('content',''))); result['backup']=old; return result
     except Exception as e: raise HTTPException(400, str(e))
+
+@app.post('/api/workspace/rollback')
+def workspace_rollback(payload: dict):
+    try: return rollback(str(payload['path']),str(payload['backup']))
+    except Exception as e: raise HTTPException(400,str(e))
 
 @app.get('/api/git/status')
 def git_status_api():
