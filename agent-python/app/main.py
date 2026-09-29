@@ -1116,17 +1116,14 @@ def delete_model(pid: str, mid: str, user: Dict[str, Any] = Depends(require_admi
 @app.post("/api/providers/test-all")
 async def test_all_models(payload: Dict[str, Any] = {}, user: Dict[str, Any] = Depends(require_developer)):
     selected_pid = payload.get("provider")
-    results = []
+    tasks = []
+    sem = asyncio.Semaphore(10)
 
-    for pid, p in PROVIDER_STORE.data.items():
-        if selected_pid and pid != selected_pid:
-            continue
-        api_key = PROVIDER_STORE.get_api_key(p)
-
-        for m in p.models:
+    async def _test_one(p: Provider, m: ModelSpec, api_key: str) -> Dict[str, Any]:
+        async with sem:
             if not api_key and p.protocol != "ollama":
-                results.append({
-                    "provider": pid,
+                return {
+                    "provider": p.id,
                     "providerName": p.name,
                     "model": m.id,
                     "modelName": m.name,
@@ -1135,40 +1132,59 @@ async def test_all_models(payload: Dict[str, Any] = {}, user: Dict[str, Any] = D
                     "protocol": p.protocol,
                     "error": f"API key not configured for provider '{p.name}'",
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                })
-                continue
+                }
 
             started = time.perf_counter()
             try:
-                out = await call_provider_api(p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key)
+                out = await call_provider_api(
+                    p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
+                    custom_timeout_sec=6.0, custom_connect_sec=3.0
+                )
                 latency = round((time.perf_counter() - started) * 1000)
-                msg_text = out["choices"][0]["message"].get("content", "")[:100]
-                results.append({
-                    "provider": pid,
+                msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
+                return {
+                    "provider": p.id,
                     "providerName": p.name,
                     "model": m.id,
                     "modelName": m.name,
                     "ok": True,
                     "latencyMs": latency,
                     "protocol": p.protocol,
-                    "message": msg_text,
+                    "message": msg_text or "OK",
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                })
+                }
             except Exception as e:
                 latency = round((time.perf_counter() - started) * 1000)
-                results.append({
-                    "provider": pid,
+                err_str = str(e)
+                if "ConnectError" in err_str or "Connection refused" in err_str:
+                    err_str = f"Connection refused to {p.url}"
+                elif "Timeout" in err_str:
+                    err_str = f"Connection timeout after 6s to {p.url}"
+                return {
+                    "provider": p.id,
                     "providerName": p.name,
                     "model": m.id,
                     "modelName": m.name,
                     "ok": False,
                     "latencyMs": latency,
                     "protocol": p.protocol,
-                    "error": str(e),
+                    "error": err_str,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                })
+                }
 
-    return {"results": results}
+    for pid, p in PROVIDER_STORE.data.items():
+        if selected_pid and pid != selected_pid:
+            continue
+        api_key = PROVIDER_STORE.get_api_key(p)
+        for m in p.models:
+            tasks.append(_test_one(p, m, api_key))
+
+    if tasks:
+        results = await asyncio.gather(*tasks)
+    else:
+        results = []
+
+    return {"results": list(results)}
 
 @app.post("/api/providers/{pid}/models/{mid:path}/test")
 async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(require_developer)):
@@ -1195,9 +1211,12 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
 
     started = time.perf_counter()
     try:
-        out = await call_provider_api(p, model, [{"role": "user", "content": "Reply with 'OK' only."}], api_key)
+        out = await call_provider_api(
+            p, model, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
+            custom_timeout_sec=8.0, custom_connect_sec=4.0
+        )
         latency = round((time.perf_counter() - started) * 1000)
-        msg_text = out["choices"][0]["message"].get("content", "")[:100]
+        msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
         return {
             "provider": pid,
             "providerName": p.name,
@@ -1206,11 +1225,16 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
             "ok": True,
             "latencyMs": latency,
             "protocol": p.protocol,
-            "message": msg_text,
+            "message": msg_text or "OK",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         }
     except Exception as e:
         latency = round((time.perf_counter() - started) * 1000)
+        err_str = str(e)
+        if "ConnectError" in err_str or "Connection refused" in err_str:
+            err_str = f"Connection refused to {p.url}"
+        elif "Timeout" in err_str:
+            err_str = f"Connection timeout after 8s to {p.url}"
         return {
             "provider": pid,
             "providerName": p.name,
@@ -1219,7 +1243,7 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
             "ok": False,
             "latencyMs": latency,
             "protocol": p.protocol,
-            "error": str(e),
+            "error": err_str,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         }
 

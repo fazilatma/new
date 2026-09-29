@@ -1434,7 +1434,9 @@
           <span style="color:var(--text-muted);font-size:12px;">Manage model endpoints, protocols, multi-key rotation, circuit breakers, and import/export configurations.</span>
         </div>
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-ghost" onclick="openModelTestModal(true)">🧪 Test All Models</button>
+          <button class="btn btn-ghost" onclick="toggleAllProvidersCollapse(false)">▼ Expand All</button>
+          <button class="btn btn-ghost" onclick="toggleAllProvidersCollapse(true)">► Collapse All</button>
+          <button class="btn btn-primary" onclick="openModelTestModal(true)">🧪 Test All Models</button>
           <button class="btn btn-ghost" onclick="openModelTestModal(false)">📊 Results Table</button>
           <button class="btn btn-ghost" onclick="openImportProvidersModal()">📥 Import JSON</button>
           <button class="btn btn-ghost" onclick="exportProvidersJson()">📤 Export JSON</button>
@@ -2554,62 +2556,131 @@ async function refreshProviders() {
   }
 }
 
-async function loadProvidersList() {
-  await refreshProviders();
+let providerCollapsedState = {};
+
+function toggleProviderCollapse(pid) {
+  providerCollapsedState[pid] = providerCollapsedState[pid] !== undefined ? !providerCollapsedState[pid] : false;
+  renderProviderCards();
+}
+
+function toggleAllProvidersCollapse(collapse) {
+  (STATE.providers || []).forEach(p => {
+    providerCollapsedState[p.id] = collapse;
+  });
+  renderProviderCards();
+}
+
+function renderProviderCards() {
   const grid = $('#providerCardsGrid');
+  if (!grid) return;
   const providersList = Array.isArray(STATE.providers) ? STATE.providers : [];
   if (providersList.length === 0) {
     grid.innerHTML = '<div class="stat-card" style="text-align:center;color:var(--text-dim)">No providers configured. Click "+ Add Provider" above.</div>';
     return;
   }
 
-  grid.innerHTML = providersList.map(p => `
-    <div class="changeset-card">
-      <div class="changeset-header">
-        <div style="display:flex;align-items:center;gap:12px;">
-          <div style="font-size:24px;">${p.protocol === 'ollama' ? '🦙' : p.id === 'openrouter' ? '⚡' : p.id === 'anthropic' ? '🧠' : '🤖'}</div>
-          <div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <strong>${esc(p.name)}</strong>
-              <span style="font-size:11px;color:var(--text-dim);font-family:monospace;">(${esc(p.id)})</span>
-              <span class="tool-status-tag ${p.enabled ? 'success' : 'pending'}">${p.enabled ? 'Enabled' : 'Disabled'}</span>
-              ${p.circuitBreakerTripped ? '<span class="tool-status-tag error">Circuit Tripped</span>' : ''}
-              ${p.hasApiKey ? '<span class="tool-status-tag success">Key Set</span>' : (p.protocol === 'ollama' ? '<span class="tool-status-tag info">Local / No Key</span>' : '<span class="tool-status-tag warning">No Key</span>')}
-            </div>
-            <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">
-              ${esc(p.url || 'Default URL')} · Protocol: <b>${esc(p.protocol)}</b> · Priority: ${p.priority || 1}
-            </div>
-          </div>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;">
-          ${p.circuitBreakerTripped ? `<button class="btn btn-warning btn-sm" onclick="resetCircuitBreaker('${esc(p.id)}')">Reset Circuit</button>` : ''}
-          <button class="btn btn-ghost btn-sm" onclick="openModelModal('${esc(p.id)}')">+ Add Model</button>
-          <button class="btn btn-ghost btn-sm" onclick="openProviderModal('${esc(p.id)}')">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteProvider('${esc(p.id)}')">Delete</button>
-        </div>
-      </div>
-      <div class="provider-models-grid">
-        ${(p.models || []).length === 0 ? '<span style="font-size:12px;color:var(--text-dim);padding:4px;">No models configured.</span>' : ''}
-        ${(p.models || []).map(m => `
-          <div class="model-chip">
-            <div class="model-chip-head">
-              <strong style="font-size:12px;">${esc(m.name || m.id)}</strong>
-              <div style="display:flex;gap:4px;">
-                <button class="btn-ghost btn-sm" style="padding:1px 4px;font-size:10px;" onclick="openModelModal('${esc(p.id)}', '${esc(m.id)}')">✏️</button>
+  STATE.modelTestResults = STATE.modelTestResults || {};
+
+  grid.innerHTML = providersList.map(p => {
+    // Collapsed by default (initially closed)
+    const isCollapsed = providerCollapsedState[p.id] !== undefined ? providerCollapsedState[p.id] : true;
+    
+    // Count test results for this provider
+    let passedCount = 0;
+    let failedCount = 0;
+    (p.models || []).forEach(m => {
+      const testRes = STATE.modelTestResults[`${p.id}::${m.id}`];
+      if (testRes) {
+        if (testRes.ok) passedCount++;
+        else failedCount++;
+      }
+    });
+
+    return `
+      <div class="changeset-card" style="overflow:hidden;margin-bottom:12px;">
+        <div class="changeset-header" onclick="toggleProviderCollapse('${esc(p.id)}')" style="cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-size:12px;color:var(--text-dim);width:14px;">${isCollapsed ? '►' : '▼'}</span>
+            <div style="font-size:24px;">${p.protocol === 'ollama' ? '🦙' : p.id === 'openrouter' ? '⚡' : p.id === 'anthropic' ? '🧠' : '🤖'}</div>
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <strong>${esc(p.name)}</strong>
+                <span style="font-size:11px;color:var(--text-dim);font-family:monospace;">(${esc(p.id)})</span>
+                <span class="badge" style="font-size:10px;background:var(--bg-elevated);">${(p.models || []).length} models</span>
+                <span class="tool-status-tag ${p.enabled ? 'success' : 'pending'}">${p.enabled ? 'Enabled' : 'Disabled'}</span>
+                ${p.circuitBreakerTripped ? '<span class="tool-status-tag error">Circuit Tripped</span>' : ''}
+                ${p.hasApiKey ? '<span class="tool-status-tag success">Key Set</span>' : (p.protocol === 'ollama' ? '<span class="tool-status-tag info">Local / No Key</span>' : '<span class="tool-status-tag warning">No Key</span>')}
+                ${passedCount > 0 ? `<span class="tool-status-tag success" style="font-size:9.5px;padding:1px 6px;">✓ ${passedCount} Passed</span>` : ''}
+                ${failedCount > 0 ? `<span class="tool-status-tag error" style="font-size:9.5px;padding:1px 6px;">✕ ${failedCount} Failed</span>` : ''}
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">
+                ${esc(p.url || 'Default URL')} · Protocol: <b>${esc(p.protocol)}</b> · Priority: ${p.priority || 1}
               </div>
             </div>
-            <div style="font-size:10.5px;color:var(--text-dim);font-family:monospace;">${esc(m.id)}</div>
-            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-              ${m.toolCalling ? '<span class="badge" style="font-size:9px;background:var(--primary-bg);color:var(--primary)">Tools</span>' : ''}
-              ${m.vision ? '<span class="badge" style="font-size:9px;background:var(--accent-green-bg);color:var(--accent-green)">Vision</span>' : ''}
-              ${m.free ? '<span class="badge" style="font-size:9px;background:var(--accent-amber-bg);color:var(--accent-amber)">Free</span>' : ''}
-              <span class="badge" style="font-size:9px;background:var(--bg-highlight)">${Math.round((m.maxInputTokens||128000)/1000)}k ctx</span>
-            </div>
           </div>
-        `).join('')}
+          <div style="display:flex;gap:6px;align-items:center;" onclick="event.stopPropagation()">
+            ${p.circuitBreakerTripped ? `<button class="btn btn-warning btn-sm" onclick="resetCircuitBreaker('${esc(p.id)}')">Reset Circuit</button>` : ''}
+            <button class="btn btn-ghost btn-sm" onclick="openModelModal('${esc(p.id)}')">+ Add Model</button>
+            <button class="btn btn-ghost btn-sm" onclick="openProviderModal('${esc(p.id)}')">Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteProvider('${esc(p.id)}')">Delete</button>
+          </div>
+        </div>
+        
+        <div class="provider-models-grid" style="display:${isCollapsed ? 'none' : 'grid'};">
+          ${(p.models || []).length === 0 ? '<span style="font-size:12px;color:var(--text-dim);padding:8px;">No models configured.</span>' : ''}
+          ${(p.models || []).map(m => {
+            const testRes = STATE.modelTestResults[`${p.id}::${m.id}`];
+            let borderStyle = 'border: 1px solid var(--border-subtle);';
+            let bgStyle = 'background: var(--bg-elevated);';
+            
+            if (testRes) {
+              if (testRes.ok) {
+                borderStyle = 'border: 1.5px solid var(--accent-green) !important;';
+                bgStyle = 'background: rgba(16, 185, 129, 0.08) !important;';
+              } else {
+                borderStyle = 'border: 1.5px solid var(--danger) !important;';
+                bgStyle = 'background: rgba(239, 68, 68, 0.08) !important;';
+              }
+            }
+
+            return `
+              <div class="model-chip" style="${borderStyle} ${bgStyle}">
+                <div class="model-chip-head">
+                  <strong style="font-size:12px;">${esc(m.name || m.id)}</strong>
+                  <div style="display:flex;gap:4px;">
+                    <button class="btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="testSingleModelFromCatalog('${esc(p.id)}', '${esc(m.id)}', this)" title="Test this model endpoint live">⚡ Test</button>
+                    <button class="btn-ghost btn-sm" style="padding:1px 4px;font-size:10px;" onclick="openModelModal('${esc(p.id)}', '${esc(m.id)}')">✏️</button>
+                  </div>
+                </div>
+                <div style="font-size:10.5px;color:var(--text-dim);font-family:monospace;">${esc(m.id)}</div>
+                
+                ${testRes ? `
+                  <div style="margin-top:4px;">
+                    ${testRes.ok 
+                      ? `<span class="tool-status-tag success" style="font-size:9.5px;padding:1px 6px;">✓ Operational (${testRes.latencyMs}ms)</span>`
+                      : `<span class="tool-status-tag error" style="font-size:9.5px;padding:1px 6px;" title="${esc(testRes.error)}">✕ Failed: ${esc(testRes.error || 'Failed')}</span>`
+                    }
+                  </div>
+                ` : ''}
+
+                <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
+                  ${m.toolCalling ? '<span class="badge" style="font-size:9px;background:var(--primary-bg);color:var(--primary)">Tools</span>' : ''}
+                  ${m.vision ? '<span class="badge" style="font-size:9px;background:var(--accent-green-bg);color:var(--accent-green)">Vision</span>' : ''}
+                  ${m.free ? '<span class="badge" style="font-size:9px;background:var(--accent-amber-bg);color:var(--accent-amber)">Free</span>' : ''}
+                  <span class="badge" style="font-size:9px;background:var(--bg-highlight)">${Math.round((m.maxInputTokens||128000)/1000)}k ctx</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
+}
+
+async function loadProvidersList() {
+  await refreshProviders();
+  renderProviderCards();
 }
 
 function openProviderModal(providerId = null) {
@@ -2823,7 +2894,17 @@ async function runAllModelTests() {
       body: JSON.stringify({ provider: selectedPid || undefined })
     });
     lastModelTestResults = res.results || [];
+    
+    // Update global model test results state
+    STATE.modelTestResults = STATE.modelTestResults || {};
+    lastModelTestResults.forEach(r => {
+      STATE.modelTestResults[`${r.provider}::${r.model}`] = r;
+      // Auto-expand tested provider
+      providerCollapsedState[r.provider] = false;
+    });
+
     renderTestResultsTable();
+    renderProviderCards();
   } catch (err) {
     if (tbody) {
       tbody.innerHTML = `
@@ -2918,6 +2999,9 @@ async function testSingleModelLive(pid, mid, btn) {
     const res = await api(`/api/providers/${pid}/models/${encodeURIComponent(mid)}/test`, {
       method: 'POST'
     });
+    STATE.modelTestResults = STATE.modelTestResults || {};
+    STATE.modelTestResults[`${pid}::${mid}`] = res;
+
     const idx = lastModelTestResults.findIndex(r => r.provider === pid && r.model === mid);
     if (idx !== -1) {
       lastModelTestResults[idx] = res;
@@ -2925,8 +3009,36 @@ async function testSingleModelLive(pid, mid, btn) {
       lastModelTestResults.push(res);
     }
     renderTestResultsTable();
+    renderProviderCards();
   } catch (err) {
     alert(`Single test error for ${pid}/${mid}: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+async function testSingleModelFromCatalog(pid, mid, btn) {
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+
+  try {
+    const res = await api(`/api/providers/${pid}/models/${encodeURIComponent(mid)}/test`, {
+      method: 'POST'
+    });
+    STATE.modelTestResults = STATE.modelTestResults || {};
+    STATE.modelTestResults[`${pid}::${mid}`] = res;
+
+    const idx = lastModelTestResults.findIndex(r => r.provider === pid && r.model === mid);
+    if (idx !== -1) {
+      lastModelTestResults[idx] = res;
+    } else {
+      lastModelTestResults.push(res);
+    }
+    renderProviderCards();
+  } catch (err) {
+    alert(`Model test failed: ${err.message}`);
   } finally {
     btn.disabled = false;
     btn.textContent = origText;

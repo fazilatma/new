@@ -105,7 +105,9 @@ async def call_provider_api(
     model: ModelSpec,
     messages: List[Dict[str, Any]],
     api_key: str,
-    stream: bool = False
+    stream: bool = False,
+    custom_timeout_sec: Optional[float] = None,
+    custom_connect_sec: Optional[float] = None
 ) -> Dict[str, Any]:
     base_url = provider.url.rstrip("/")
     proxy_url = provider.proxyUrl or os.getenv("AGENT_PROXY_URL", "")
@@ -155,7 +157,9 @@ async def call_provider_api(
         url = proxy_url.replace("{url}", url)
 
     started = time.perf_counter()
-    timeout = httpx.Timeout(provider.timeoutSec or 120.0, connect=15.0)
+    tot_timeout = custom_timeout_sec if custom_timeout_sec is not None else (provider.timeoutSec or 120.0)
+    conn_timeout = custom_connect_sec if custom_connect_sec is not None else 15.0
+    timeout = httpx.Timeout(tot_timeout, connect=conn_timeout)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
