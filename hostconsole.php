@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.15.1');
+define('WCP_VERSION', '2.16.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -1080,6 +1080,145 @@ function wcp_node_version_of(string $want = ''): string {
     $bin = wcp_nvm_node_bin($want);
     if ($bin !== '') { foreach (wcp_nvm_versions() as $v) if ($v['bin'] === $bin) return $v['version']; }
     return ltrim(trim((string)sh_ok('node -v 2>/dev/null')), 'vV');
+}
+
+/* ============================================================
+ *  Python runtime resolution (shared hosting, no root)
+ *  Mirrors the nvm/Node helpers above. The system python3 on
+ *  CentOS 7 / CloudLinux is 3.6, which cannot even parse modern
+ *  syntax, and there is no sudo to install packages globally.
+ *  So: resolve an interpreter via uv, and run out of a per-project
+ *  virtualenv that we create and populate ourselves.
+ * ============================================================ */
+
+function wcp_uv_bin(): string {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    $cands = [];
+    $home = wcp_account_home();
+    if ($home !== '') { $cands[] = $home . '/.local/bin/uv'; $cands[] = $home . '/.cargo/bin/uv'; }
+    $cands[] = '/usr/local/bin/uv';
+    $cands[] = '/usr/bin/uv';
+    foreach ($cands as $c) { if (@is_file($c) && @is_executable($c)) return $cached = $c; }
+    $w = trim((string)@shell_exec('command -v uv 2>/dev/null'));
+    return $cached = ($w !== '' && @is_file($w)) ? $w : '';
+}
+
+/** Interpreter inside an existing project virtualenv, if any. */
+function wcp_py_venv_python(string $dir): string {
+    if ($dir === '') return '';
+    $dir = rtrim($dir, '/');
+    foreach (['.venv', 'venv', 'env'] as $d) {
+        $p = $dir . '/' . $d . '/bin/python';
+        if (@is_file($p) && @is_executable($p)) return $p;
+    }
+    return '';
+}
+
+/** requirements.txt in the project root, or one level down. */
+function wcp_py_requirements(string $dir): string {
+    if ($dir === '') return '';
+    $dir = rtrim($dir, '/');
+    foreach (['/requirements.txt', '/requirements/base.txt'] as $rel) {
+        if (@is_file($dir . $rel)) return $dir . $rel;
+    }
+    foreach (glob($dir . '/*/requirements.txt') ?: [] as $g) { if (@is_file($g)) return $g; }
+    return '';
+}
+
+/** Python versions uv has already downloaded, newest first. */
+function wcp_uv_pythons(): array {
+    $uv = wcp_uv_bin();
+    if ($uv === '') return [];
+    $out = (string)@shell_exec(escapeshellarg($uv) . ' python list --only-installed 2>/dev/null');
+    $vs = [];
+    foreach (preg_split('/\R/', $out) as $line) {
+        if (preg_match('/(\d+\.\d+\.\d+)/', $line, $m)) $vs[$m[1]] = true;
+    }
+    $vs = array_keys($vs);
+    usort($vs, function ($a, $b) { return version_compare($b, $a); });
+    return $vs;
+}
+
+/**
+ * Resolution order, same shape as wcp_node_version_of():
+ *   project python_version -> console default -> newest uv-managed -> ''
+ */
+function wcp_python_version_of(string $want = ''): string {
+    foreach ([$want, (string)(cfg()['python_version'] ?? '')] as $cand) {
+        $cand = trim($cand);
+        if ($cand !== '' && preg_match('/^\d+(\.\d+){0,2}$/', $cand)) return $cand;
+    }
+    $inst = wcp_uv_pythons();
+    return !empty($inst) ? $inst[0] : '';
+}
+
+/**
+ * Make sure the project has a usable virtualenv and that its
+ * requirements are installed. Returns the interpreter path, or ''
+ * when nothing better than the system python could be arranged.
+ * Safe to call on every start: uv re-checks an up-to-date env in ms.
+ */
+function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = true): string {
+    $dir = rtrim($dir, '/');
+    if ($dir === '' || !@is_dir($dir)) return '';
+    $log = function ($m) { if (function_exists('cli_log')) cli_log($m); };
+    $uv  = wcp_uv_bin();
+    $py  = wcp_py_venv_python($dir);
+
+    if ($py === '' && $uv !== '') {
+        $ver = wcp_python_version_of($want);
+        $log('[python] No virtualenv in project. Creating one with uv' . ($ver !== '' ? " (Python {$ver})" : '') . '...');
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv) . ' venv --seed'
+             . ($ver !== '' ? ' -p ' . escapeshellarg($ver) : '') . ' .venv 2>&1';
+        $rc = null;
+        if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
+        $py = wcp_py_venv_python($dir);
+        if ($py === '') $log('[python] uv could not create a virtualenv; falling back to the system interpreter.');
+    }
+    if ($py === '') return '';
+
+    if ($installDeps) {
+        $req = wcp_py_requirements($dir);
+        if ($req !== '') {
+            $log('[python] Syncing dependencies from ' . basename(dirname($req)) . '/' . basename($req) . '...');
+            $rc = null;
+            // -r before -p: the launcher's own start-command regex latches onto
+            // the first "python <word>" it sees, and --python would feed it a
+            // bogus target. See CHANGELOG 2.16.0.
+            $cmd = $uv !== ''
+                ? 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv)
+                  . ' pip install -r ' . escapeshellarg($req) . ' -p ' . escapeshellarg($py) . ' 2>&1'
+                : 'cd ' . escapeshellarg($dir) . ' && ' . escapeshellarg($py)
+                  . ' -m pip install -r ' . escapeshellarg($req) . ' 2>&1';
+            if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
+            if ($rc !== null && $rc !== 0) {
+                $log('[python] Dependency sync reported errors (exit ' . $rc . '). Starting anyway; see the output above for the offending package.');
+            }
+        }
+    }
+    return $py;
+}
+
+/** Install packages into the project venv. No sudo: it does not exist here. */
+function wcp_py_install_packages(string $dir, array $pkgs, &$rc = null): string {
+    $rc = 1;
+    if (empty($pkgs)) return '';
+    $py = wcp_py_ensure_venv($dir, '', false);
+    $uv = wcp_uv_bin();
+    $args = implode(' ', array_map('escapeshellarg', $pkgs));
+    if ($py !== '' && $uv !== '') {
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv)
+             . ' pip install ' . $args . ' -p ' . escapeshellarg($py) . ' 2>&1';
+    } elseif ($py !== '') {
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && ' . escapeshellarg($py) . ' -m pip install ' . $args . ' 2>&1';
+    } else {
+        // Last resort: user-site install against whatever python3 exists.
+        // --break-system-packages only exists in pip >= 23.0, so probe first.
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && { BSP=""; python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages && BSP=--break-system-packages; '
+             . 'python3 -m pip install --user $BSP ' . $args . '; } 2>&1';
+    }
+    return function_exists('cli_run') ? cli_run($cmd, $rc) : (string)@shell_exec($cmd);
 }
 
 function proj_runtime_env(array $p): array {
@@ -2176,6 +2315,8 @@ function proj_service_job(array $p): ?array {
 }
 function public_project(array $p): array {$p['has_token_hint']=!empty($p['auth_token']);unset($p['auth_token']);
     $p['node_version']=(string)($p['node_version']??'');
+    $p['python_version']=(string)($p['python_version']??'');
+    if(($p['type']??'')==='python'){$p['python_resolved']=wcp_python_version_of($p['python_version']);$p['python_venv']=wcp_py_venv_python((string)($p['deploy_path']??''));}
     if(($p['type']??'')==='node'){$p['node_resolved']=wcp_node_version_of($p['node_version']);$p['node_sqlite']=$p['node_resolved']!==''&&wcp_node_has_sqlite($p['node_resolved']);}
     $p['domain_enabled']=!empty($p['domain_enabled']);$p['domain']=(string)($p['domain']??'');$p['domain_path']=(string)($p['domain_path']??'/');$p['domain_kind']=dom_kind($p);
     $p['domain_url']=dom_public_url($p);
@@ -2879,6 +3020,20 @@ function handle_api() {
         $job = job_create('install_component', $title, ['component' => $comp]);
         job_start($job);
         jout(true, ['job' => $job['id'], 'title' => $title]);
+    case 'sys.python_versions':
+        $want=trim((string)($in['want']??''));
+        jout(true,['versions'=>wcp_uv_pythons(),'selected'=>wcp_python_version_of($want),
+                   'console_default'=>(string)(cfg()['python_version']??''),
+                   'uv_bin'=>wcp_uv_bin(),'uv_installed'=>(wcp_uv_bin()!==''),
+                   'system_python'=>trim((string)sh_ok('python3 -V 2>&1'))]);
+    case 'sys.python_install':
+        $ver=trim((string)($in['version']??''));
+        if(!preg_match('/^\\d+(\\.\\d+){0,2}$/',$ver))jout(false,null,'نسخهٔ پایتون نامعتبر است؛ مثلاً 3.14 یا 3.12.7');
+        $uv=wcp_uv_bin();
+        if($uv==='')jout(false,null,'uv نصب نیست. اول py-upgrade.sh را اجرا کنید تا uv و پایتون نصب شود.');
+        $job=job_create('python_install','نصب پایتون '.$ver.' با uv',['version'=>$ver]);
+        job_start($job);
+        jout(true,['job'=>$job['id'],'version'=>$ver]);
     case 'sys.node_versions':
         $want=trim((string)($in['want']??''));
         $sel=wcp_nvm_node_bin($want);
@@ -3055,6 +3210,8 @@ function handle_api() {
         if($api==='proj.quick_deploy')$p=proj_quick_settings($p);
         $p['node_version']=trim((string)($p['node_version']??''));
         if($p['node_version']!==''&&!preg_match('/^\d+(\.\d+){0,2}$/',$p['node_version']))jout(false,null,'نسخهٔ Node نامعتبر است؛ مثلاً 24 یا 22.13.0');
+        $p['python_version']=trim((string)($p['python_version']??''));
+        if($p['python_version']!==''&&!preg_match('/^\\d+(\\.\\d+){0,2}$/',$p['python_version']))jout(false,null,'نسخهٔ پایتون نامعتبر است؛ مثلاً 3.14 یا 3.12.7');
         $p=dom_sanitize_project_input($p);
         if(($p['auth_token']??'')==='__KEEP__'||($p['auth_token']??'')==='')unset($p['auth_token']);$p['keep_git']=!empty($p['keep_git']);$p['preserve_configs']=!isset($p['preserve_configs'])||!empty($p['preserve_configs']);$p['auto_start']=!empty($p['auto_start']);$p['is_daemon']=!empty($p['is_daemon']);$p['auto_update']=!empty($p['auto_update']);$p['auto_update_interval']=max(30,min(86400,(int)($p['auto_update_interval']??60)));$existing=$p['id']!==''?proj_find($list,$p['id']):null;if(!$existing)$p['id']=wcp_random(5);$p['deploy_path']=proj_resolve_deploy_path($p,$existing);if($p['deploy_path']==='/')jout(false,null,'Invalid deployment root');
         $found=false;if($p['id']!==''){foreach($list as&$x)if($x['id']===$p['id']){$p=array_merge($x,$p);$x=$p;$found=true;}unset($x);}if(!$found){$p['created']=date('c');$list[]=$p;}proj_save_all($list);
@@ -3660,10 +3817,16 @@ function cli_service(array $job): int {
             if (!empty($deployDir)) {
                 wcp_kill_directory_procs($deployDir);
             }
-            if (preg_match('/(?:python3?|node)\s+([a-zA-Z0-9_\-\.\/]+)/', $startCmd, $sm)) {
-                $scriptBase = basename($sm[1]);
-                if ($scriptBase !== '' && !in_array($scriptBase, ['python', 'python3', 'node', 'sh', 'bash'], true)) {
+            // Find the entrypoint script to clean up after. Interpreter flags
+            // must be skipped: "python3 -u app.py" used to yield "-u" here, and
+            // `pkill -9 -f -u` matches the command line of unrelated processes.
+            if (preg_match_all('/(?:python3?|node)\s+((?:-{1,2}[A-Za-z0-9_\-]+\s+)*)([A-Za-z0-9_\-\.\/]+)/', $startCmd, $sm, PREG_SET_ORDER)) {
+                foreach ($sm as $hit) {
+                    $scriptBase = basename($hit[2]);
+                    if ($scriptBase === '' || $scriptBase[0] === '-') continue;
+                    if (in_array($scriptBase, ['python', 'python3', 'node', 'sh', 'bash'], true)) continue;
                     @shell_exec("pkill -9 -f " . escapeshellarg($scriptBase) . " 2>/dev/null");
+                    break;
                 }
             }
             usleep(150000);
@@ -3691,6 +3854,24 @@ function cli_service(array $job): int {
                 }
             }
 
+            // Bind Python start commands to a per-project virtualenv.
+            // The bare `python3` on this class of host is often 3.6 and has no
+            // writable site-packages, which is the root cause of both the
+            // SyntaxError-on-modern-syntax and the ModuleNotFoundError loops.
+            $pyInterp = '';
+            $isPyCmd = (bool)preg_match('/^\s*(?:python3?|py)\s+\S/', $startCmd);
+            if (is_dir($deployDir) && ($isPyCmd || ($currentP['type'] ?? '') === 'python')) {
+                $pyInterp = wcp_py_ensure_venv($deployDir, (string)($currentP['python_version'] ?? ''));
+                if ($pyInterp !== '' && $isPyCmd) {
+                    // Callback form: a literal replacement would let $ and \ in the
+                    // interpreter path be read as backreferences.
+                    $startCmd = preg_replace_callback('/^\s*(?:python3?|py)(?=\s)/',
+                        function () use ($pyInterp) { return escapeshellarg($pyInterp); }, $startCmd, 1);
+                    cli_log('[python] Using interpreter: ' . $pyInterp
+                        . ' (' . trim((string)@shell_exec(escapeshellarg($pyInterp) . ' -V 2>&1')) . ')');
+                }
+            }
+
             // Auto-synchronize .env file in project directory with chosen port
             $chosenPort = !empty($currentP['port']) ? $currentP['port'] : (!empty($portsToFree) ? reset($portsToFree) : '');
             if (is_dir($deployDir) && !empty($chosenPort)) {
@@ -3711,9 +3892,16 @@ function cli_service(array $job): int {
             $script = "#!/bin/bash\nset -e\ncd " . esc($deployDir) . "\nexport NODE_ENV=production\nexport PYTHONUNBUFFERED=1\n";
             $script .= 'export PYTHONUSERBASE=/var/www/.local' . "\n";
             $script .= 'export PIP_CACHE_DIR=/tmp/pip_cache' . "\n";
-            $script .= 'for pdir in /usr/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages /home/*/.local/lib/python3*/site-packages /root/.local/lib/python3*/site-packages /var/www/.local/lib/python3*/site-packages /tmp/.local/lib/python3*/site-packages /opt/conda/lib/python3*/site-packages /opt/python/*/lib/python3*/site-packages; do' . "\n";
-            $script .= '    if [ -d "$pdir" ]; then export PYTHONPATH="${pdir}:${PYTHONPATH:-}"; fi' . "\n";
-            $script .= 'done' . "\n";
+            // PYTHONPATH is only a help when there is no virtualenv. With one,
+            // pointing at the system 3.6 dist-packages actively shadows the
+            // venv's own, correctly-built packages.
+            if ($pyInterp !== '') {
+                $script .= 'unset PYTHONPATH' . "\n";
+            } else {
+                $script .= 'for pdir in /usr/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages /home/*/.local/lib/python3*/site-packages /root/.local/lib/python3*/site-packages /var/www/.local/lib/python3*/site-packages /tmp/.local/lib/python3*/site-packages /opt/conda/lib/python3*/site-packages /opt/python/*/lib/python3*/site-packages; do' . "\n";
+                $script .= '    if [ -d "$pdir" ]; then export PYTHONPATH="${pdir}:${PYTHONPATH:-}"; fi' . "\n";
+                $script .= 'done' . "\n";
+            }
             $script .= 'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/opt/conda/bin:${HOME}/.local/bin:${PATH:-}"' . "\n";
             foreach (proj_runtime_env($currentP) as $k => $v) $script .= "export " . esc($k . '=' . $v) . "\n";
             if (!empty($chosenPort)) {
@@ -3844,10 +4032,21 @@ function cli_service(array $job): int {
                         cli_log("[auto-installer WARNING] Package(s) " . implode(', ', $pkgList) . " were installed but Python runtime still cannot locate them. Halting auto-restart loop.");
                         $depsAutoInstalled = false;
                     } else {
-                        $pkgArgs = implode(' ', array_map('escapeshellarg', $pkgList));
-                        cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing with sudo & ignore-installed...");
-                        $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; (sudo -n python3 -m pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || python3 -m pip install --break-system-packages --ignore-installed --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1)';
-                        cli_run($pipCmd, $pipRc);
+                        $req = wcp_py_requirements($deployDir);
+                        cli_log("[auto-installer] Missing Python package(s): " . implode(', ', $pkgList)
+                            . ($req !== '' ? ". Installing from " . basename($req) . " into the project virtualenv..."
+                                           : ". Installing into the project virtualenv..."));
+                        // Install into the project's own virtualenv. There is no sudo on
+                        // shared hosting, and the system interpreter is both too old and
+                        // not writable, so the previous sudo/pip chain could only ever
+                        // fail with exit 127.
+                        $pipRc = null;
+                        if ($req !== '') {
+                            wcp_py_ensure_venv($deployDir, (string)($currentP['python_version'] ?? ''), true);
+                            $pipRc = (wcp_py_venv_python($deployDir) !== '') ? 0 : 1;
+                        } else {
+                            wcp_py_install_packages($deployDir, $pkgList, $pipRc);
+                        }
                         if ($pipRc === 0) {
                             cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));
                             $depsAutoInstalled = true;
@@ -3925,6 +4124,31 @@ function cli_service(array $job): int {
     }
 }
 /** نصب یک نسخهٔ Node با NVM در هوم حساب کاربری — بدون sudo، مناسب هاست اشتراکی. */
+function cli_python_install(array $job): int {
+    $ver = (string)($job['params']['version'] ?? '');
+    cli_log('=================================================');
+    cli_log('Installing Python ' . $ver . ' with uv');
+    cli_log('=================================================');
+    $uv = wcp_uv_bin();
+    if ($uv === '') {
+        cli_log('[uv] Not found — installing it first...');
+        $home = wcp_account_home();
+        cli_run(($home !== '' ? 'export HOME=' . esc($home) . '; ' : '')
+            . 'curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1', $rc);
+        // wcp_uv_bin() memoises a miss, so probe the known install paths directly.
+        foreach ([$home . '/.local/bin/uv', $home . '/.cargo/bin/uv'] as $cand) {
+            if (@is_file($cand) && @is_executable($cand)) { $uv = $cand; break; }
+        }
+        if ($uv === '') { cli_log('✗ uv installation failed. Run py-upgrade.sh over SSH and try again.'); return 1; }
+    }
+    cli_log('[uv] Binary: ' . $uv);
+    cli_run(escapeshellarg($uv) . ' python install ' . esc($ver) . ' 2>&1', $rc);
+    if ($rc !== 0) { cli_log('✗ Python ' . $ver . ' could not be installed (exit ' . $rc . ').'); return 1; }
+    cli_run(escapeshellarg($uv) . ' python list --only-installed 2>&1', $rc2);
+    cli_log('✓ Python ' . $ver . ' is available. Restart the project to rebuild its virtualenv on it.');
+    return 0;
+}
+
 function cli_nvm_install(array $job): int {
     $ver = (string)($job['params']['version'] ?? '24');
     $setDefault = !empty($job['params']['set_default']);
@@ -4033,7 +4257,7 @@ function wcp_cli(array $argv) {
             wcp_put_contents(JOBS_DIR . '/' . $id . '.pid', getmypid() . "\n", false);
         }
         @set_time_limit(0);ini_set('memory_limit','512M');$code=1;cli_log('WebConsole job '.$id.' ('.$job['type'].')');
-        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;case 'nvm_install':$code=cli_nvm_install($job);break;default:throw new RuntimeException('Unknown job type');}}
+        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;case 'nvm_install':$code=cli_nvm_install($job);break;case 'python_install':$code=cli_python_install($job);break;default:throw new RuntimeException('Unknown job type');}}
         catch(Throwable $e){cli_log('ERROR: '.mask_url($e->getMessage()));$code=1;}
         $exit=JOBS_DIR.'/'.$id.'.exit';if(!is_file($exit))wcp_put_contents($exit,$code."\n",false);exit($code);
     }
@@ -6576,6 +6800,7 @@ function parseProjectJson(text){
  if(out.domain&&!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(out.domain))throw Error('دامنه نامعتبر است');
  if(out.domain_kind!==undefined&&!['subdomain','path'].includes(out.domain_kind))throw Error('domain_kind باید subdomain یا path باشد');
  if(out.node_version&&!/^\d+(\.\d+){0,2}$/.test(out.node_version))throw Error('node_version نامعتبر است؛ مثلاً 24')
+ if(out.python_version&&!/^\d+(\.\d+){0,2}$/.test(out.python_version))throw Error('python_version نامعتبر است؛ مثلاً 3.14')
  if(Object.prototype.hasOwnProperty.call(d,'env')){if(!record(d.env))throw Error('env باید یک شیء کلید/مقدار باشد');out.env=Object.create(null);for(const[k,v]of Object.entries(d.env)){if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||!['string','number','boolean'].includes(typeof v)||(typeof v==='number'&&!Number.isFinite(v))||/[\r\n\0]/.test(String(v)))throw Error('متغیر محیطی نامعتبر: '+k);out.env[k]=String(v)}}
  // A portable profile cannot change the identity of the dialog being edited.
  return out;
@@ -6587,6 +6812,7 @@ function applyProjectJson(sh,d){
  if(d.auto_start!==undefined)sh.querySelector('#jq-auto').checked=d.auto_start;
  if(d.is_daemon!==undefined)sh.querySelector('#jq-daemon').checked=d.is_daemon;if(d.preserve_configs!==undefined)sh.querySelector('#jq-preserve').checked=d.preserve_configs;
  if(d.node_version!==undefined){const el=sh.querySelector('#jq-nodever');if(el)el.value=d.node_version}
+ if(d.python_version!==undefined){const el=sh.querySelector('#jq-pyver');if(el)el.value=d.python_version}
  for(const[k,id]of[['domain','dq-domain'],['domain_mode','dq-mode'],['domain_path','dq-path'],['domain_docroot','dq-docroot'],['bind_host','dq-bind'],['domain_timeout','dq-timeout'],['domain_kind','dq-kind']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.value=d[k]}
  for(const[k,id]of[['domain_enabled','dq-enabled'],['domain_ws','dq-ws'],['domain_https','dq-https']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.checked=d[k]}
  const dqBox=sh.querySelector('#dq-box'),dqEn=sh.querySelector('#dq-enabled');if(dqBox&&dqEn)dqBox.classList.toggle('hide',!dqEn.checked);
@@ -6598,7 +6824,7 @@ function compareProjectVersions(a,b){const x=parsedProjectVersion(a),y=parsedPro
 function branchVersion(row,path='*'){const apps=(row.apps||[]).filter(a=>path==='*'||a.subfolder===path);return apps.map(a=>a.version).filter(v=>parsedProjectVersion(v)).sort(compareProjectVersions)[0]||''}
 function sortedBranchRows(rows,path='*'){return [...rows].sort((a,b)=>compareProjectVersions(branchVersion(a,path),branchVersion(b,path))||a.name.localeCompare(b.name))}
 
-function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div><div id="jq-nodever-wrap"><label class="lb">نسخه Node.js</label><div class="row" style="gap:6px"><select class="inp" id="jq-nodever" style="flex:1"><option value="">در حال خواندن…</option></select><button class="btn sm" id="jq-nodever-install" title="نصب نسخه جدید با NVM">⬇️ نصب</button></div><p class="hint" id="jq-nodever-note" style="font-size:11.5px;margin:4px 0 0"></p></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div>${domainFormHtml(p,'dq')}<button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
+function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div><div id="jq-nodever-wrap"><label class="lb">نسخه Node.js</label><div class="row" style="gap:6px"><select class="inp" id="jq-nodever" style="flex:1"><option value="">در حال خواندن…</option></select><button class="btn sm" id="jq-nodever-install" title="نصب نسخه جدید با NVM">⬇️ نصب</button></div><p class="hint" id="jq-nodever-note" style="font-size:11.5px;margin:4px 0 0"></p></div><div id="jq-pyver-wrap"><label class="lb">نسخه پایتون</label><div class="row" style="gap:6px"><select class="inp" id="jq-pyver" style="flex:1"><option value="">در حال خواندن…</option></select><button class="btn sm" id="jq-pyver-install" title="نصب نسخه جدید با uv">⬇️ نصب</button></div><p class="hint" id="jq-pyver-note" style="font-size:11.5px;margin:4px 0 0"></p></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div>${domainFormHtml(p,'dq')}<button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
  const showTab=id=>{for(const tab of ['gh','man','json']){sh.querySelector('#'+tab+'-exp').classList.toggle('hide',tab!==id);sh.querySelector('#tab-'+tab).classList.toggle('pri',tab===id)}};
  const man=()=>showTab('man'),gh=()=>showTab('gh');sh.querySelector('#tab-man').onclick=man;sh.querySelector('#tab-gh').onclick=gh;sh.querySelector('#tab-json').onclick=()=>showTab('json');
  const jsonText=sh.querySelector('#jq-json-text'),jsonStatus=sh.querySelector('#jq-json-status');let jsonEpoch=0;
@@ -6607,6 +6833,21 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#jq-json-apply').onclick=()=>{try{const imported=parseProjectJson(jsonText.value);jsonEpoch++;applyProjectJson(sh,imported);man();toast('JSON در فرم اعمال شد؛ دستورات و مسیر را بررسی و سپس ذخیره کنید','ok')}catch(error){jsonStatus.textContent=error.message}};
  const fill=app=>{applyProjectJson(sh,app);sh.querySelector('#jq-type').value=app.type||'node';man()};
  const nvSel=sh.querySelector('#jq-nodever'),nvNote=sh.querySelector('#jq-nodever-note');
+ const pvSel=sh.querySelector('#jq-pyver'),pvNote=sh.querySelector('#jq-pyver-note');
+ const pyVerSync=()=>sh.querySelector('#jq-pyver-wrap').classList.toggle('hide',sh.querySelector('#jq-type').value!=='python');
+ const loadPyVers=async keep=>{
+   const cur=keep!==undefined?keep:(p.python_version||'');
+   try{
+     const d=await api('sys.python_versions',{want:cur});
+     const opts=['<option value="">خودکار (جدیدترین نصب‌شده'+(d.console_default?' / پیش‌فرض کنسول '+esc(d.console_default):'')+')</option>'];
+     for(const v of (d.versions||[]))opts.push('<option value="'+esc(v)+'" '+(v===cur?'selected':'')+'>'+esc(v)+'</option>');
+     if(cur&&!(d.versions||[]).includes(cur))opts.push('<option value="'+esc(cur)+'" selected>'+esc(cur)+' (نصب‌نشده)</option>');
+     pvSel.innerHTML=opts.join('');
+     pvNote.innerHTML=d.uv_installed
+       ?'uv: <code class="ltr">'+esc(d.uv_bin)+'</code> — انتخاب‌شده: <b>'+esc(d.selected||'—')+'</b><br>پایتون سیستم: <code class="ltr">'+esc(d.system_python||'?')+'</code>. کنسول برای هر پروژه یک virtualenv جدا می‌سازد و requirements.txt را در آن نصب می‌کند.'
+       :'⚠️ uv نصب نیست؛ کنسول مجبور است از پایتون سیستم استفاده کند (<code class="ltr">'+esc(d.system_python||'?')+'</code>). دکمهٔ نصب، uv و نسخهٔ خواسته‌شده را با هم نصب می‌کند.';
+   }catch(e){pvSel.innerHTML='<option value="">خطا در خواندن نسخه‌ها</option>';pvNote.textContent=String(e.message||e)}
+ };
  const nodeVerSync=()=>sh.querySelector('#jq-nodever-wrap').classList.toggle('hide',sh.querySelector('#jq-type').value!=='node');
  const loadNodeVers=async(keep)=>{
    try{
@@ -6623,8 +6864,23 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
                   :`⚠️ اجرا با <b class="ltr">v${esc(d.selected)}</b> — هیچ نسخهٔ نصب‌شده‌ای <code class="ltr">node:sqlite</code> را بدون فلگ ندارد؛ Node 24 را نصب کنید.`);
    }catch(e){nvNote.textContent=e.message}
  };
- nodeVerSync();loadNodeVers();
- sh.querySelector('#jq-type').addEventListener('change',nodeVerSync);
+ nodeVerSync();pyVerSync();loadNodeVers();loadPyVers();
+ sh.querySelector('#jq-type').addEventListener('change',()=>{nodeVerSync();pyVerSync()});
+ sh.querySelector('#jq-pyver-install').onclick=async()=>{
+   const v=(prompt('کدام نسخه پایتون نصب شود؟ (پیشنهاد: 3.14)','3.14')||'').trim();
+   if(!v)return;
+   if(!/^\d+(\.\d+){0,2}$/.test(v)){toast('نسخه نامعتبر است','err');return}
+   try{
+     const r=await api('sys.python_install',{version:v});
+     toast('نصب پایتون '+v+' شروع شد؛ لاگ کامل در تب کارها','ok');
+     pvNote.textContent='⏳ در حال نصب پایتون '+v+'…';
+     const poll=setInterval(async()=>{
+       try{const st=await api('jobs.status',{id:r.job});
+         if(st.status!=='running'){clearInterval(poll);await loadPyVers(v);toast('نصب پایتون '+v+' تمام شد','ok')}
+       }catch(e){clearInterval(poll)}
+     },4000);
+   }catch(e){toast(e.message||'نصب پایتون ناموفق بود','err')}
+ };
  sh.querySelector('#jq-nodever-install').onclick=async()=>{
    const v=(prompt('کدام نسخه Node نصب شود؟ (پیشنهاد: 24 — شامل node:sqlite بدون فلگ)','24')||'').trim();
    if(!v)return;
@@ -6659,7 +6915,7 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#jq-managed-path').onclick=async()=>{try{const d=await api('proj.managed_path',{id:p.id||'',name:sh.querySelector('#jq-name').value});sh.querySelector('#jq-deploy_path').value=d.path;toast('مسیر پیشنهادی در فرم قرار گرفت؛ پس از بازبینی ذخیره کنید','ok')}catch(e){toast(e.message,'err')}};
  sh.querySelector('#jq-autoupdate').onchange=e=>sh.querySelector('#jq-autoupdate-box').classList.toggle('hide',!e.target.checked);
  domainFormBind(sh,'dq');
- sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,node_version:(sh.querySelector('#jq-nodever')||{}).value||'',auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();Object.assign(q,domainFormRead(sh,'dq'));if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');const res=await api('proj.save',{project:q});__closeSheet();renderProj();if(res&&res.domain_error)toast('پروژه ذخیره شد اما نگاشت دامنه ناموفق بود: '+res.domain_error,'warn');else if(res&&res.domain)toast('ذخیره شد و دامنه روی '+res.domain.url+' منتشر شد','ok');else toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
+ sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,node_version:(sh.querySelector('#jq-nodever')||{}).value||'',python_version:(sh.querySelector('#jq-pyver')||{}).value||'',auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();Object.assign(q,domainFormRead(sh,'dq'));if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');const res=await api('proj.save',{project:q});__closeSheet();renderProj();if(res&&res.domain_error)toast('پروژه ذخیره شد اما نگاشت دامنه ناموفق بود: '+res.domain_error,'warn');else if(res&&res.domain)toast('ذخیره شد و دامنه روی '+res.domain.url+' منتشر شد','ok');else toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
  if(fresh){gh();sh.querySelector('#gh-load').click()}
 }
 INITS.jobs={fn(){renderJobs();setInterval(()=>{if(curTab==='jobs'&&!document.hidden&&!__sheet)renderJobs()},5000)}};
@@ -6748,7 +7004,7 @@ function domainFormRead(root,pf){
 // ساخت payload کامل برای proj.save تا فیلدهای دیگر پروژه پاک نشوند
 function projectSavePayload(p,ov){
   const q=Object.assign({},p,ov||{});
-  return {id:q.id||'',name:q.name||'',type:q.type||'node',node_version:q.node_version||'',repo_url:q.repo_url||'',branch:q.branch||'main',
+  return {id:q.id||'',name:q.name||'',type:q.type||'node',node_version:q.node_version||'',python_version:q.python_version||'',repo_url:q.repo_url||'',branch:q.branch||'main',
     subfolder:q.subfolder||'',deploy_path:q.deploy_path||'',install_cmd:q.install_cmd||'',build_cmd:q.build_cmd||'',
     start_cmd:q.start_cmd||'',port:String(q.port||''),env_text:Object.entries(q.env||{}).map(([k,v])=>k+'='+v).join('\n'),
     auto_start:!!q.auto_start,is_daemon:!!q.is_daemon,auto_update:!!q.auto_update,

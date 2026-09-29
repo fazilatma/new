@@ -13,12 +13,56 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.15.1** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.16.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.15.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.15.0 | Follows the suite version |
+| `wcp` (CLI) | 2.16.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.16.0 | Follows the suite version |
 | `py-upgrade.sh` | 1.0.2 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.16.0] — 2026-09-29 · 🐍 Python projects get a real runtime
+
+Python projects were being run with whatever `python3` happened to be on `PATH`.
+On CentOS 7 / CloudLinux that is 3.6, which cannot parse `from __future__ import
+annotations`, has no writable `site-packages`, and cannot be upgraded without
+root. Every Python deploy on such a host failed, and the recovery paths made it
+worse. This release gives Python the same treatment Node already had via nvm.
+
+### Added
+* **Per-project Python version**, mirroring `node_version`. Resolution order:
+  project `python_version` → console default → newest uv-managed runtime → none.
+* **Automatic per-project virtualenv.** On service start the console creates
+  `.venv` with uv, installs `requirements.txt` into it, and points the start
+  command at `.venv/bin/python`. Re-checked on every start; a satisfied
+  environment costs about 1 ms.
+* `requirements.txt` is also found one directory down, which is where project
+  templates that keep a nested package tend to put it.
+* **Python version picker** in the project dialog, with a `⬇️ نصب` button that
+  installs uv and the requested runtime as a background job
+  (`sys.python_versions`, `sys.python_install`, job type `python_install`).
+* New helpers: `wcp_uv_bin()`, `wcp_uv_pythons()`, `wcp_python_version_of()`,
+  `wcp_py_venv_python()`, `wcp_py_requirements()`, `wcp_py_ensure_venv()`,
+  `wcp_py_install_packages()`.
+
+### Fixed
+* **The auto-installer could never succeed on shared hosting.** It ran a chain of
+  five `sudo` / `pip3` / `--break-system-packages` commands. There is no `sudo`
+  on these accounts, `pip3` is not on `PATH`, and pip 9 (shipped with Python 3.6)
+  has no `--break-system-packages`, so the chain always ended in exit 127. It now
+  installs into the project virtualenv, preferring `requirements.txt` over the
+  package names scraped from the traceback, and only falls back to
+  `pip install --user` — probing for `--break-system-packages` before passing it.
+* **The launcher poisoned its own virtualenv.** It prepended every
+  `/usr/lib/python3*/dist-packages` it could find to `PYTHONPATH`, so a system
+  3.6 package shadowed the correctly built one inside the venv. `PYTHONPATH` is
+  now cleared when a virtualenv is in use, and left alone otherwise.
+* **`pkill -9 -f` could target an interpreter flag.** For `python3 -u app.py` the
+  entrypoint scanner returned `-u`, and `pkill -f -u` matches the command line of
+  unrelated processes. Flags are skipped and the first real script name is used.
+* `preg_replace` with a path as the replacement string would have treated `$` and
+  `\` in that path as backreferences; the callback form is used instead.
 
 ---
 

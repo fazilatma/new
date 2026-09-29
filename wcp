@@ -144,7 +144,7 @@ check_auto_serve() {
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v2.15.0)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v2.16.0)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
