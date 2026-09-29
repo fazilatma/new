@@ -37,6 +37,7 @@ from app.worker import (
     recover_orphaned_jobs, create_job, get_job_details,
     cancel_job, pause_job, resume_job, retry_job
 )
+from app.browser_automation import BROWSER_MANAGER, validate_url
 from app.observability import log_event, get_logs, get_system_metrics
 from app.browser_automation import validate_url
 
@@ -202,10 +203,36 @@ def test_changeset_lifecycle_and_approval():
     if p.exists():
         p.unlink()
 
-def test_unrestricted_browser_url_validation():
+@pytest.mark.anyio
+async def test_unrestricted_browser_url_validation_and_multi_tier_fallback():
     assert validate_url("https://github.com") == "https://github.com"
     assert validate_url("example.com") == "https://example.com"
     assert validate_url("http://google.com/search?q=test") == "http://google.com/search?q=test"
+
+    # Test Multi-Tier Browser Automation Fallback Pipeline (Playwright -> HTTP-DOM -> Synthetic Wireframe)
+    session_id = "test-automated-suite"
+    nav = await BROWSER_MANAGER.navigate("https://example.com", session_id=session_id)
+    assert nav["status"] in (200, 301, 302)
+    assert "title" in nav
+    assert "engine" in nav
+
+    shot = await BROWSER_MANAGER.screenshot(session_id=session_id)
+    assert shot["mime"] == "image/png"
+    assert len(shot["image_base64"]) > 500
+
+    ev = await BROWSER_MANAGER.evaluate_js("document.title", session_id=session_id)
+    assert "result" in ev
+
+    fill = await BROWSER_MANAGER.fill("input[name=search]", "test text", session_id=session_id)
+    assert fill["ok"] is True
+
+    clk = await BROWSER_MANAGER.click("a.more-info", session_id=session_id)
+    assert clk["ok"] is True
+
+    logs = await BROWSER_MANAGER.get_logs(session_id=session_id)
+    assert len(logs["console"]) > 0
+
+    await BROWSER_MANAGER.close_session(session_id=session_id)
 
 def test_dangerous_terminal_commands_protection():
     assert is_dangerous_command("rm -rf /") is True

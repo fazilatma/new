@@ -3179,7 +3179,12 @@ async function browserNavigate() {
 async function browserScreenshot() {
   try {
     const res = await api('/api/browser/screenshot', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
-    $('#browserScreenshotWrap').innerHTML = `<img src="data:image/png;base64,${res.image_base64}" style="max-width:100%;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">`;
+    $('#browserScreenshotWrap').innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;">
+        <span class="tool-status-tag success" style="align-self:flex-start;">Engine: ${res.engine || 'native'}</span>
+        <img src="data:image/png;base64,${res.image_base64}" style="max-width:100%;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);border:1px solid var(--border-subtle);">
+      </div>
+    `;
   } catch (err) {
     alert('Screenshot error: ' + err.message);
   }
