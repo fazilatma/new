@@ -145,6 +145,11 @@ class ProviderStore:
             self.save()
 
     def record_metric(self, provider_id: str, model_id: str, latency_ms: float, is_error: bool, tokens: int = 0):
+        if is_error:
+            CIRCUIT_BREAKER.record_failure(provider_id)
+        else:
+            CIRCUIT_BREAKER.record_success(provider_id)
+
         with get_db() as conn:
             conn.execute("""
             INSERT INTO provider_metrics (provider_id, model_id, request_count, error_count, total_tokens, total_latency_ms, last_latency_ms, last_status, circuit_breaker_tripped, updated_at)

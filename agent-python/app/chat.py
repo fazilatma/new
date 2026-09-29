@@ -209,26 +209,80 @@ async def call_provider_api(
             PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=True)
             raise e
 
-def auto_detect_and_save_code_files(content: str, pending_approvals: List[Dict[str, Any]]):
-    from .agent_tools import agent_write_file
-    pattern = r'```(?:[a-zA-Z0-9_\-\.]*(?::|\s+file=|\s+path=|\s+filename=)?([a-zA-Z0-9_\-\./]+)?)?\n([\s\S]*?)```'
-    for m in re.finditer(pattern, content):
-        lang_file = m.group(1)
-        code = m.group(2)
-        filename = lang_file
+def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[List[Dict[str, Any]]] = None):
+    from .workspaces import create_workspace_item, get_active_workspace
+    from .changesets import save_file_version_snapshot
+    if not content or "```" not in content:
+        return
+
+    used_names = set()
+    blocks = re.split(r'```', content)
+    for i in range(1, len(blocks), 2):
+        block = blocks[i]
+        preceding_text = blocks[i-1] if i > 0 else ""
+        lines = block.split('\n', 1)
+        first_line = lines[0].strip()
+        code = lines[1] if len(lines) > 1 else ""
+        if not code.strip():
+            continue
+
+        filename = None
+        lang = first_line.lower()
+
+        # 1. Check for filename directly attached to language tag (e.g. `html:index.html` or `python filename=main.py`)
+        tag_match = re.search(r'(?:^|[\s:])(?:file=|filename=|path=|:)?\s*([a-zA-Z0-9_\-\./]+\.[a-zA-Z0-9]+)', first_line, re.IGNORECASE)
+        if tag_match:
+            filename = tag_match.group(1).strip()
+
+        # 2. Check for filename in first 3 lines of code inside block
         if not filename:
-            first_line = code.strip().split('\n')[0].strip() if code.strip() else ""
-            f_match = re.search(r'(?:#|//|/\*|<!--)\s*(?:filename|filepath|file|path):\s*([a-zA-Z0-9_\-\./]+)', first_line, re.IGNORECASE)
-            if f_match:
-                filename = f_match.group(1).rstrip('*/--> \t')
-        
+            code_head = "\n".join(code.strip().split('\n')[:3])
+            code_fn_match = re.search(r'(?:#|//|/\*|<!--)\s*(?:filename|filepath|file|path|نام فایل)?\s*:?\s*`?([a-zA-Z0-9_\-\./]+\.[a-zA-Z0-9]+)`?', code_head, re.IGNORECASE)
+            if code_fn_match:
+                filename = code_fn_match.group(1).strip()
+
+        # 3. Check preceding text (heading or line before code block)
+        if not filename and preceding_text:
+            last_lines = [l.strip() for l in preceding_text.strip().split('\n')[-3:] if l.strip()]
+            for l in reversed(last_lines):
+                prec_match = re.search(r'(?:###|##|#|\*\*|فایل|File:?|ساخت فایل|کد فایل)?\s*`?([a-zA-Z0-9_\-\./]+\.(?:html|htm|py|js|ts|css|json|sql|sh|md|txt))`?', l, re.IGNORECASE)
+                if prec_match:
+                    filename = prec_match.group(1).strip()
+                    break
+
+        # 4. Fallback based on code content and language tag
+        if not filename:
+            clean_lang = re.split(r'[\s:]', lang)[0].strip()
+            if "<!doctype html" in code.lower() or "<html" in code.lower():
+                filename = "index.html"
+            elif clean_lang in ("html", "htm"):
+                filename = "index.html" if "index.html" not in used_names else f"page_{len(used_names)+1}.html"
+            elif clean_lang in ("css",):
+                filename = "style.css" if "style.css" not in used_names else f"style_{len(used_names)+1}.css"
+            elif clean_lang in ("javascript", "js"):
+                filename = "app.js" if "app.js" not in used_names else f"script_{len(used_names)+1}.js"
+            elif clean_lang in ("typescript", "ts"):
+                filename = "app.ts" if "app.ts" not in used_names else f"script_{len(used_names)+1}.ts"
+            elif clean_lang in ("python", "py"):
+                if "tkinter" in code or "math" in code or "calculator" in content.lower():
+                    filename = "main.py" if "main.py" not in used_names else "calculator.py"
+                else:
+                    filename = "main.py" if "main.py" not in used_names else f"script_{len(used_names)+1}.py"
+            elif clean_lang in ("json",):
+                filename = "data.json"
+            elif clean_lang in ("sql",):
+                filename = "schema.sql"
+            elif clean_lang in ("bash", "sh", "zsh"):
+                filename = "run.sh"
+
         if filename:
-            clean_fn = filename.strip().lstrip("/")
-            if clean_fn and not clean_fn.startswith("..") and ("." in clean_fn):
+            clean_fn = filename.strip().lstrip("/").replace("\\", "/")
+            if clean_fn and not clean_fn.startswith("..") and "." in clean_fn:
                 try:
-                    res = agent_write_file(clean_fn, code)
-                    if isinstance(res, dict) and res.get("requiresApproval"):
-                        pending_approvals.append(res)
+                    create_workspace_item(clean_fn, is_dir=False, content=code)
+                    ws = get_active_workspace()
+                    save_file_version_snapshot(ws["id"], clean_fn, code, created_by="agent-auto-save")
+                    used_names.add(clean_fn)
                 except Exception:
                     pass
 

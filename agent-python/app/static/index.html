@@ -1390,7 +1390,7 @@
         <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
         <span class="badge-count" id="pendingApprovalsBadge" style="display:none">0</span>
       </button>
-      <button class="nav-btn" data-view="editor" onclick="navigate('editor')">
+      <button class="nav-btn" data-view="editor" onclick="toggleWorkspaceView()" title="نمایش یا بستن پنجره ورک‌اسپیس (Toggle Workspace)">
         <span class="icon">📁</span><span class="nav-text">Workspace</span>
       </button>
       <button class="nav-btn" data-view="terminal" onclick="navigate('terminal')">
@@ -1445,7 +1445,7 @@
         <span class="autosave-pill" id="globalAutoSave">✓ Auto-saved</span>
       </div>
       <div class="top-right">
-        <button class="btn btn-primary btn-sm" onclick="navigate('editor')" title="Open Session Workspace & File Viewer">📁 Workspace</button>
+        <button class="btn btn-primary btn-sm" id="topWorkspaceToggleBtn" onclick="toggleWorkspaceView()" title="باز کردن یا بستن پنجره ورک‌اسپیس (Toggle Workspace)">📁 Workspace</button>
         <button class="btn btn-ghost btn-sm" onclick="openCommandPalette()" title="Command Palette (Ctrl+K)">⌘K</button>
         <button class="btn btn-ghost btn-sm" onclick="toggleTheme()" title="Toggle Theme" id="themeBtn">🌙</button>
         <button class="btn btn-ghost btn-sm" onclick="refreshCurrentView()" title="Refresh View">↻</button>
@@ -2653,10 +2653,31 @@ function toggleMobileSidebar() {
   }
 }
 
+function toggleWorkspaceView() {
+  if (STATE.activeView === 'editor') {
+    navigate('chat');
+  } else {
+    navigate('editor');
+  }
+}
+
 function navigate(viewName) {
   STATE.activeView = viewName;
   document.querySelectorAll('.view-panel').forEach(p => p.classList.toggle('active', p.id === `view-${viewName}`));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewName));
+
+  const topWsBtn = $('#topWorkspaceToggleBtn');
+  if (topWsBtn) {
+    if (viewName === 'editor') {
+      topWsBtn.textContent = '✕ بستن ورک‌اسپیس';
+      topWsBtn.classList.add('btn-amber');
+      topWsBtn.classList.remove('btn-primary');
+    } else {
+      topWsBtn.textContent = '📁 Workspace';
+      topWsBtn.classList.add('btn-primary');
+      topWsBtn.classList.remove('btn-amber');
+    }
+  }
 
   if (window.innerWidth <= 768 && $('#sidebar').classList.contains('mobile-open')) {
     toggleMobileSidebar();
@@ -3677,17 +3698,29 @@ async function saveCodeBlockToWorkspace(btn) {
   tempDiv.innerHTML = codeEl.innerHTML;
   const rawCode = tempDiv.textContent || tempDiv.innerText || '';
 
-  // Detect filename if present in code
+  // 1. Detect filename if present in first lines of code
   let suggested = '';
-  const firstLine = rawCode.trim().split('\n')[0].trim();
-  const fMatch = firstLine.match(/(?:#|\/\/|\/\*|<!--)\s*(?:filename|filepath|file|path):\s*([a-zA-Z0-9_\-\.\/]+)/i);
-  if (fMatch) {
-    suggested = fMatch[1].replace(/[\*\/ \t\->]/g, '');
+  const firstLines = rawCode.trim().split('\n').slice(0, 3);
+  for (const line of firstLines) {
+    const fMatch = line.match(/(?:#|\/\/|\/\*|<!--)\s*(?:filename|filepath|file|path|نام فایل)?\s*:?\s*`?([a-zA-Z0-9_\-\.\/]+)`?/i);
+    if (fMatch) {
+      suggested = fMatch[1].replace(/[\*\/ \t\->]/g, '');
+      break;
+    }
   }
 
+  // 2. Detect filename from preceding element in chat bubble
+  if (!suggested && card.previousElementSibling) {
+    const prevText = card.previousElementSibling.textContent || '';
+    const fnMatch = prevText.match(/(?:###|##|#|\*\*|فایل|File:?)\s*`?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)`?/i);
+    if (fnMatch) suggested = fnMatch[1].replace(/[\*\/ \t\->]/g, '');
+  }
+
+  // 3. Fallback based on language tag & content
   const langTag = card.querySelector('.code-lang-tag')?.textContent?.toLowerCase() || '';
   if (!suggested) {
-    if (langTag === 'python' || langTag === 'py') suggested = 'main.py';
+    if (rawCode.toLowerCase().includes('<!doctype html') || rawCode.toLowerCase().includes('<html')) suggested = 'index.html';
+    else if (langTag === 'python' || langTag === 'py') suggested = 'main.py';
     else if (langTag === 'javascript' || langTag === 'js') suggested = 'index.js';
     else if (langTag === 'typescript' || langTag === 'ts') suggested = 'index.ts';
     else if (langTag === 'html') suggested = 'index.html';
@@ -3698,7 +3731,7 @@ async function saveCodeBlockToWorkspace(btn) {
     else suggested = 'script.txt';
   }
 
-  const filename = prompt('مسیر و نام فایل را برای ذخیره در ورک‌اسپیس وارد کنید:', suggested);
+  const filename = prompt('مسیر و نام فایل را برای ذخیره در ورک‌اسپیس تایید یا ویرایش کنید:', suggested);
   if (!filename) return;
 
   try {
@@ -3710,8 +3743,12 @@ async function saveCodeBlockToWorkspace(btn) {
     flashAutoSave();
     await refreshFileTree();
     const origText = btn.textContent;
-    btn.textContent = '✓ ذخیره شد';
-    setTimeout(() => btn.textContent = origText, 2000);
+    btn.textContent = `✓ در ورک‌اسپیس ذخیره شد (${filename})`;
+    btn.style.color = 'var(--accent-green)';
+    setTimeout(() => {
+      btn.textContent = origText;
+      btn.style.color = '';
+    }, 3000);
   } catch (err) {
     alert(`خطا در ذخیره فایل در ورک‌اسپیس: ${err.message}`);
   }

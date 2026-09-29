@@ -755,6 +755,55 @@ def test_verified_model_fallback_mechanism():
     backup_cand = next(c for c in candidates if c[0].id == "test-backup")
     assert backup_cand[1].id == "model-verified"
 
+def test_auto_detect_and_save_code_files_in_workspace():
+    from app.chat import auto_detect_and_save_code_files
+    from app.workspaces import get_workspace_root, get_or_create_session_workspace, set_active_workspace
+
+    ws = get_or_create_session_workspace("test-code-save-session")
+    set_active_workspace(ws["id"])
+    ws_root = get_workspace_root()
+
+    sample_ai_response = """
+برای ساخت یک ماشین حساب مهندسی، فایل‌های زیر ایجاد شدند:
+
+### index.html
+```html
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head><title>ماشین حساب</title></head>
+<body><h1>ماشین حساب مهندسی</h1></body>
+</html>
+```
+
+### style.css
+```css
+body { background: #1e1e2e; color: #fff; }
+```
+
+### calculator.py
+```python
+import math
+def add(a, b): return a + b
+```
+"""
+
+    auto_detect_and_save_code_files(sample_ai_response)
+
+    # Verify that files were created directly in the session workspace
+    html_file = ws_root / "index.html"
+    css_file = ws_root / "style.css"
+    py_file = ws_root / "calculator.py"
+
+    assert html_file.exists()
+    assert "ماشین حساب مهندسی" in html_file.read_text(encoding="utf-8")
+
+    assert css_file.exists()
+    assert "#1e1e2e" in css_file.read_text(encoding="utf-8")
+
+    assert py_file.exists()
+    assert "def add(a, b)" in py_file.read_text(encoding="utf-8")
+
+
 
 
 
