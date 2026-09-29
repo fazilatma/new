@@ -2,6 +2,7 @@
 
 ## 0.12.0 - Universal Proxy Gateway & Forward Proxy Routing, Sidebar Folding & Model Exporter
 
+- **Interactive Model Test Details & Diagnostics Modal**: Clicking any row in the Model Health & Latency Test Results table now opens a dedicated diagnostics modal displaying full model information, the exact request sent (masked headers and JSON payload), direct and proxy-routed endpoints, rendered assistant response and reasoning traces, and the full raw JSON response with 1-click copy actions and live retesting.
 - **Moved Active References Bar to Settings**: Removed the references section from the main chat viewport to maximize message viewing real estate, and relocated the full Cross-Chat & Cross-Project References management card into the Settings view.
 - **Universal Proxy Traffic Routing for Model Responses**: Fixed proxy routing to support both standard forward proxies (`http://...`, `https://...`, `socks5://...`, `socks5h://...`) via HTTP client tunneling (`httpx.AsyncClient(proxy=...)`) and URL-rewriting gateways (like Cloudflare Workers `?url={url}` or `/proxy?target=`). Includes adaptive direct retry fallback on connectivity errors.
 - **Unified Per-Provider and Global Proxy Settings**: Per-provider proxy overrides and global proxy settings now use the same unified proxy parser (`parse_proxy_setting`).

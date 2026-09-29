@@ -2609,6 +2609,129 @@
   </div>
 </div>
 
+<!-- MODAL: MODEL TEST DETAILS & DIAGNOSTICS (User Request) -->
+<div class="modal-backdrop" id="modelDetailModal">
+  <div class="modal-dialog" style="max-width:880px;width:95%;max-height:92vh;display:flex;flex-direction:column;">
+    <div class="modal-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:20px;">🔬</span>
+        <div>
+          <strong style="font-size:15px;" id="modelDetailTitle">جزئیات کامل تست مدل و درخواست/پاسخ (Model Test Diagnostics)</strong>
+          <div style="font-size:11px;color:var(--text-dim);" id="modelDetailSubtitle">اطلاعات مدل، اندپوینت نهایی، ریکوئست ارسالی، پاسخ رندر شده و خروجی خام JSON</div>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="closeModal('modelDetailModal')">✕</button>
+    </div>
+
+    <div class="modal-body" style="padding:16px;gap:14px;overflow-y:auto;flex:1;">
+      <!-- Top Overview Bar -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;background:var(--bg-elevated);padding:12px;border-radius:8px;border:1px solid var(--border-subtle);">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span id="modelDetailStatusBadge"></span>
+          <span id="modelDetailLatencyBadge"></span>
+          <span class="tool-status-tag pending" id="modelDetailProtocolBadge" style="font-size:11px;"></span>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);" id="modelDetailTimestamp"></div>
+      </div>
+
+      <!-- Section 1: Endpoints & Proxy Routing -->
+      <div class="stat-card" style="margin:0;padding:12px;border:1px solid var(--border-color);background:var(--bg-surface);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;">
+            <span>🌐</span>
+            <span>مسیر اندپوینت و سرور پروکسی (Endpoints & Proxy Route)</span>
+          </div>
+          <span id="modelDetailProxyStatus" style="font-size:11.5px;"></span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;">
+          <div>
+            <div style="font-size:10.5px;color:var(--text-dim);margin-bottom:2px;">اندپوینت مستقیم مقصد (Direct Target Endpoint):</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <code id="modelDetailDirectEndpoint" style="flex:1;background:var(--code-bg);padding:6px 10px;border-radius:4px;font-family:monospace;direction:ltr;text-align:left;overflow-x:auto;"></code>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="copyTextFromElement('#modelDetailDirectEndpoint', 'آدرس اندپوینت مستقیم')">📋 کپی</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;color:var(--text-dim);margin-bottom:2px;">اندپوینت نهایی تولید شده همراه با پروکسی (Final Effective / Proxied Endpoint):</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <code id="modelDetailEffectiveEndpoint" style="flex:1;background:var(--code-bg);padding:6px 10px;border-radius:4px;font-family:monospace;color:var(--accent-green);direction:ltr;text-align:left;overflow-x:auto;"></code>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="copyTextFromElement('#modelDetailEffectiveEndpoint', 'آدرس نهایی اندپوینت')">📋 کپی</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Request Sent (Headers & JSON Body) -->
+      <div class="stat-card" style="margin:0;padding:12px;border:1px solid var(--border-color);background:var(--bg-surface);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;">
+            <span>📤</span>
+            <span>درخواست ارسالی به مدل (HTTP Request Details)</span>
+          </div>
+          <span class="tool-status-tag active" style="font-size:10px;padding:1px 6px;">POST</span>
+        </div>
+        
+        <div class="grid-2" style="gap:10px;margin-bottom:0;">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+              <span style="font-size:11px;color:var(--text-dim);">هدرهای درخواست (Headers - Masked Key):</span>
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyTextFromElement('#modelDetailReqHeaders', 'هدرهای درخواست')">📋 کپی</button>
+            </div>
+            <pre id="modelDetailReqHeaders" style="max-height:130px;overflow:auto;background:var(--code-bg);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:11px;direction:ltr;text-align:left;"></pre>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+              <span style="font-size:11px;color:var(--text-dim);">بدنه پیام ارسالی (JSON Payload Body):</span>
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyTextFromElement('#modelDetailReqBody', 'بدنه JSON درخواست')">📋 کپی</button>
+            </div>
+            <pre id="modelDetailReqBody" style="max-height:130px;overflow:auto;background:var(--code-bg);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:11px;direction:ltr;text-align:left;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Rendered Response -->
+      <div class="stat-card" style="margin:0;padding:12px;border:1px solid var(--border-color);background:var(--bg-surface);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;">
+            <span>📥</span>
+            <span>پاسخ رندر شده مدل (Rendered Response Output)</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyTextFromElement('#modelDetailRenderedText', 'متن پاسخ رندر شده')">📋 کپی پاسخ</button>
+        </div>
+        
+        <div id="modelDetailErrorBox" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:10px 12px;border-radius:6px;font-size:12px;font-family:monospace;direction:ltr;text-align:left;white-space:pre-wrap;"></div>
+        
+        <div id="modelDetailRenderedText" style="background:var(--bg-elevated);border:1px solid var(--border-subtle);padding:10px 12px;border-radius:6px;font-size:12.5px;line-height:1.6;color:var(--text-main);white-space:pre-wrap;"></div>
+
+        <div id="modelDetailReasoningWrap" style="display:none;margin-top:8px;">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">🧠 فرآیند تفکر / استدلال (Thinking / Reasoning):</div>
+          <pre id="modelDetailReasoningText" style="max-height:120px;overflow:auto;background:var(--code-bg);padding:8px 10px;border-radius:6px;font-family:monospace;font-size:11px;color:#cbd5e1;white-space:pre-wrap;"></pre>
+        </div>
+      </div>
+
+      <!-- Section 4: Raw Model Response (Full JSON) -->
+      <div class="stat-card" style="margin:0;padding:12px;border:1px solid var(--border-color);background:var(--bg-surface);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;">
+            <span>📦</span>
+            <span>پاسخ خام مدل (Raw Response JSON Object)</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px;" onclick="copyTextFromElement('#modelDetailRawJson', 'پاسخ خام مدل')">📋 کپی پاسخ خام JSON</button>
+        </div>
+        <pre id="modelDetailRawJson" style="max-height:220px;overflow:auto;background:var(--code-bg);padding:10px 12px;border-radius:6px;font-family:monospace;font-size:11px;direction:ltr;text-align:left;margin:0;"></pre>
+      </div>
+    </div>
+
+    <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="button" class="btn btn-primary btn-sm" id="modelDetailRetestBtn">⚡ تست مجدد این مدل (Retest Model)</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="modelDetailCopyBtn">📋 کپی تمام اطلاعات تست</button>
+      </div>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('modelDetailModal')">بستن (Close)</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: CHAT ERROR DIAGNOSTICS (v0.9.0) -->
 <div class="modal-backdrop" id="chatErrorModal">
   <div class="modal-dialog" style="max-width:680px;width:95%;">
@@ -3387,7 +3510,7 @@ function renderTestResultsTable() {
     const modelSafeId = String(r.model).replace(/[^a-zA-Z0-9_-]/g, '_');
 
     return `
-      <tr id="test-row-${esc(r.provider)}-${esc(modelSafeId)}">
+      <tr id="test-row-${esc(r.provider)}-${esc(modelSafeId)}" onclick="openModelDetailModal('${esc(r.provider)}', '${esc(r.model)}')" style="cursor:pointer;" title="کلیک برای مشاهده جزئیات کامل، ریکوئست ارسالی، اندپوینت پروکسی و پاسخ خام مدل">
         <td>
           <div style="font-weight:600;">${esc(r.providerName || r.provider)}</div>
           <div style="font-size:10.5px;color:var(--text-dim);">${esc(r.protocol || 'openai-compatible')}</div>
@@ -3408,11 +3531,221 @@ function renderTestResultsTable() {
           ${esc(diagText)}
         </td>
         <td style="text-align:right;">
-          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;" onclick="testSingleModelLive('${esc(r.provider)}', '${esc(r.model)}', this)">⚡ Test</button>
+          <div style="display:flex;gap:4px;justify-content:flex-end;">
+            <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;" onclick="event.stopPropagation(); openModelDetailModal('${esc(r.provider)}', '${esc(r.model)}')" title="مشاهده جزئیات کامل و ریکوئست/ریسپانس">🔍 جزئیات</button>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;" onclick="event.stopPropagation(); testSingleModelLive('${esc(r.provider)}', '${esc(r.model)}', this)" title="تست زنده">⚡ تست</button>
+          </div>
         </td>
       </tr>
     `;
   }).join('');
+}
+
+function copyTextFromElement(selectorOrEl, label = 'متن') {
+  const el = typeof selectorOrEl === 'string' ? $(selectorOrEl) : selectorOrEl;
+  if (!el) return;
+  const text = el.textContent || el.innerText || '';
+  if (!text) {
+    alert(`مقداری برای کپی ${label} وجود ندارد.`);
+    return;
+  }
+  navigator.clipboard.writeText(text).then(() => {
+    alert(`${label} با موفقیت در کلیپ‌بورد کپی شد.`);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert(`${label} با موفقیت در کلیپ‌بورد کپی شد.`);
+  });
+}
+
+function openModelDetailModal(providerId, modelId) {
+  const result = (lastModelTestResults || []).find(r => r.provider === providerId && r.model === modelId)
+    || (STATE.modelTestResults && STATE.modelTestResults[`${providerId}::${modelId}`]);
+
+  if (!result) {
+    alert(`اطلاعات تست برای مدل «${providerId} / ${modelId}» یافت نشد. لطفاً ابتدا روی تست کلیک کنید.`);
+    return;
+  }
+
+  // Titles & meta
+  const titleEl = $('#modelDetailTitle');
+  if (titleEl) titleEl.textContent = `${result.modelName || result.model} (${result.providerName || result.provider})`;
+  const subEl = $('#modelDetailSubtitle');
+  if (subEl) subEl.textContent = `Provider: ${result.providerName || result.provider} (ID: ${result.provider}) | Model ID: ${result.model} | Timestamp: ${result.timestamp || 'Recent'}`;
+
+  // Badges
+  const statusBadge = $('#modelDetailStatusBadge');
+  if (statusBadge) {
+    statusBadge.innerHTML = result.ok 
+      ? '<span class="status-pass" style="font-size:12px;padding:3px 10px;">✓ PASS</span>' 
+      : '<span class="status-fail" style="font-size:12px;padding:3px 10px;">✗ FAIL</span>';
+  }
+
+  const latBadge = $('#modelDetailLatencyBadge');
+  if (latBadge) {
+    let latClass = 'latency-fast';
+    if (result.latencyMs > 1200) latClass = 'latency-slow';
+    else if (result.latencyMs > 400) latClass = 'latency-med';
+    latBadge.className = `latency-pill ${latClass}`;
+    latBadge.style.fontSize = '12px';
+    latBadge.style.padding = '3px 10px';
+    latBadge.textContent = `${result.latencyMs}ms`;
+  }
+
+  const protoBadge = $('#modelDetailProtocolBadge');
+  if (protoBadge) {
+    protoBadge.textContent = `Protocol: ${result.protocol || 'openai-compatible'}`;
+  }
+
+  const timeEl = $('#modelDetailTimestamp');
+  if (timeEl) {
+    timeEl.textContent = `زمان تست: ${result.timestamp || new Date().toLocaleString()}`;
+  }
+
+  // Request & Endpoint section
+  const req = result.request || {};
+  const directEp = $('#modelDetailDirectEndpoint');
+  if (directEp) directEp.textContent = req.directEndpoint || result.directEndpoint || (result.url || '-');
+
+  const proxyStatus = $('#modelDetailProxyStatus');
+  if (proxyStatus) {
+    if (req.isProxyActive) {
+      proxyStatus.innerHTML = `<span style="color:var(--accent-green);font-weight:600;">🟢 پروکسی فعال (${esc(req.proxyMode || 'Active')})</span>`;
+    } else {
+      proxyStatus.innerHTML = `<span style="color:var(--text-dim);">⚪ اتصال مستقیم (${esc(req.proxyMode || 'Direct / No Proxy')})</span>`;
+    }
+  }
+
+  const effEp = $('#modelDetailEffectiveEndpoint');
+  if (effEp) {
+    if (req.effectiveEndpoint && req.effectiveEndpoint !== req.directEndpoint) {
+      effEp.textContent = req.effectiveEndpoint;
+    } else if (req.proxyClient) {
+      effEp.textContent = `[Forward Proxy: ${req.proxyClient}] -> ${req.directEndpoint || '-'}`;
+    } else {
+      effEp.textContent = req.directEndpoint || (directEp ? directEp.textContent : '-');
+    }
+  }
+
+  const headersEl = $('#modelDetailReqHeaders');
+  if (headersEl) {
+    headersEl.textContent = JSON.stringify(req.headers || { "Content-Type": "application/json" }, null, 2);
+  }
+
+  const bodyEl = $('#modelDetailReqBody');
+  if (bodyEl) {
+    bodyEl.textContent = JSON.stringify(req.body || { model: result.model, messages: [{ role: "user", content: "Reply with 'OK' only." }] }, null, 2);
+  }
+
+  // Response section
+  const resp = result.response || {};
+  const errBox = $('#modelDetailErrorBox');
+  const renderedBox = $('#modelDetailRenderedText');
+  const reasoningWrap = $('#modelDetailReasoningWrap');
+  const reasoningBox = $('#modelDetailReasoningText');
+
+  if (result.ok) {
+    if (errBox) errBox.style.display = 'none';
+    if (renderedBox) {
+      renderedBox.style.display = 'block';
+      renderedBox.textContent = resp.renderedText || result.message || 'OK';
+    }
+    if (reasoningWrap) {
+      if (resp.reasoningContent) {
+        reasoningWrap.style.display = 'block';
+        if (reasoningBox) reasoningBox.textContent = resp.reasoningContent;
+      } else {
+        reasoningWrap.style.display = 'none';
+      }
+    }
+  } else {
+    if (renderedBox) renderedBox.style.display = 'none';
+    if (reasoningWrap) reasoningWrap.style.display = 'none';
+    if (errBox) {
+      errBox.style.display = 'block';
+      errBox.textContent = result.error || resp.rawError || 'خطا در ارتباط با مدل یا اندپوینت';
+    }
+  }
+
+  // Raw Response JSON
+  const rawJsonEl = $('#modelDetailRawJson');
+  if (rawJsonEl) {
+    if (resp.rawJson) {
+      rawJsonEl.textContent = JSON.stringify(resp.rawJson, null, 2);
+    } else if (resp.rawError) {
+      rawJsonEl.textContent = String(resp.rawError);
+    } else if (result.error) {
+      rawJsonEl.textContent = JSON.stringify({ ok: false, error: result.error, latencyMs: result.latencyMs, protocol: result.protocol }, null, 2);
+    } else {
+      rawJsonEl.textContent = JSON.stringify(result, null, 2);
+    }
+  }
+
+  // Retest button in detail modal
+  const retestBtn = $('#modelDetailRetestBtn');
+  if (retestBtn) {
+    retestBtn.onclick = async () => {
+      const origText = retestBtn.textContent;
+      retestBtn.disabled = true;
+      retestBtn.textContent = '⏳ در حال تست...';
+      try {
+        const updated = await api(`/api/providers/${providerId}/models/${encodeURIComponent(modelId)}/test`, { method: 'POST' });
+        STATE.modelTestResults = STATE.modelTestResults || {};
+        STATE.modelTestResults[`${providerId}::${modelId}`] = updated;
+        const idx = lastModelTestResults.findIndex(r => r.provider === providerId && r.model === modelId);
+        if (idx !== -1) lastModelTestResults[idx] = updated;
+        else lastModelTestResults.push(updated);
+        renderTestResultsTable();
+        renderProviderCards();
+        openModelDetailModal(providerId, modelId);
+      } catch (err) {
+        alert('خطا در تست مجدد مدل: ' + err.message);
+      } finally {
+        retestBtn.disabled = false;
+        retestBtn.textContent = origText;
+      }
+    };
+  }
+
+  // Copy full report button
+  const copyBtn = $('#modelDetailCopyBtn');
+  if (copyBtn) {
+    copyBtn.onclick = () => {
+      const diagReport = {
+        model: result.model,
+        modelName: result.modelName,
+        provider: result.provider,
+        providerName: result.providerName,
+        status: result.ok ? 'PASS' : 'FAIL',
+        latencyMs: result.latencyMs,
+        protocol: result.protocol,
+        timestamp: result.timestamp,
+        request: result.request || req,
+        response: result.response || resp,
+        error: result.error || null
+      };
+      const text = JSON.stringify(diagReport, null, 2);
+      navigator.clipboard.writeText(text).then(() => {
+        alert('تمام اطلاعات تشخیصی و ریکوئست/ریسپانس مدل با موفقیت کپی شد.');
+      }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert('تمام اطلاعات تشخیصی مدل با موفقیت کپی شد.');
+      });
+    };
+  }
+
+  openModal('modelDetailModal');
 }
 
 async function testSingleModelLive(pid, mid, btn) {

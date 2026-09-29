@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response,
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL, parse_proxy_setting
+from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL, parse_proxy_setting, get_proxy_config, mask_secret
 from .database import get_db, init_db
 from .models import Provider, ModelSpec
 from .providers import PROVIDER_STORE
@@ -1136,6 +1136,166 @@ def delete_model(pid: str, mid: str, user: Dict[str, Any] = Depends(require_admi
     PROVIDER_STORE.delete_model(pid, mid)
     return {"ok": True}
 
+async def _execute_model_diagnostic_test(
+    p: Provider,
+    m: ModelSpec,
+    api_key: str,
+    timeout_sec: float = 5.0,
+    connect_sec: float = 2.5
+) -> Dict[str, Any]:
+    base_url = p.url.rstrip("/")
+    
+    # 1. Direct Target Endpoint & Headers Construction
+    if p.protocol == "anthropic":
+        direct_url = f"{base_url}/v1/messages" if not base_url.endswith("/messages") else base_url
+        req_headers = {"Content-Type": "application/json"}
+        if api_key:
+            req_headers["x-api-key"] = mask_secret(api_key)
+            req_headers["anthropic-version"] = "2023-06-01"
+        req_body = {
+            "model": m.id,
+            "system": "",
+            "messages": [{"role": "user", "content": "Reply with 'OK' only."}],
+            "max_tokens": m.maxOutputTokens or 4096,
+            "temperature": 0.2
+        }
+    elif p.protocol == "ollama":
+        direct_url = f"{base_url}/api/chat" if not base_url.endswith("/chat") else base_url
+        req_headers = {"Content-Type": "application/json"}
+        req_body = {
+            "model": m.id,
+            "messages": [{"role": "user", "content": "Reply with 'OK' only."}],
+            "stream": False
+        }
+    elif p.protocol == "azure":
+        direct_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        req_headers = {"Content-Type": "application/json"}
+        if api_key:
+            req_headers["api-key"] = mask_secret(api_key)
+        req_body = {
+            "model": m.id,
+            "messages": [{"role": "user", "content": "Reply with 'OK' only."}],
+            "temperature": 0.2
+        }
+    else: # openai-compatible, mistral, cloudflare, openrouter
+        direct_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        req_headers = {"Content-Type": "application/json"}
+        if api_key:
+            req_headers["Authorization"] = f"Bearer {mask_secret(api_key)}"
+        req_body = {
+            "model": m.id,
+            "messages": [{"role": "user", "content": "Reply with 'OK' only."}],
+            "temperature": 0.2
+        }
+
+    # 2. Proxy Configuration & Routing
+    if p.protocol == "ollama" or "127.0.0.1" in base_url or "localhost" in base_url:
+        effective_url = direct_url
+        proxy_client = None
+        proxy_mode = "Direct (Local / Ollama)"
+        is_proxy_active = False
+    elif p.proxyUrl:
+        effective_url, proxy_client = get_proxy_config(direct_url, custom_proxy_url=p.proxyUrl)
+        is_proxy_active = (effective_url != direct_url) or (proxy_client is not None)
+        proxy_mode = "Forward Proxy (Client Tunnel)" if proxy_client else ("Gateway (URL Rewrite)" if effective_url != direct_url else "Direct")
+    else:
+        effective_url, proxy_client = get_proxy_config(direct_url)
+        is_proxy_active = (effective_url != direct_url) or (proxy_client is not None)
+        proxy_mode = "Forward Proxy (Client Tunnel)" if proxy_client else ("Gateway (URL Rewrite)" if effective_url != direct_url else "Direct")
+
+    request_info = {
+        "method": "POST",
+        "directEndpoint": direct_url,
+        "effectiveEndpoint": effective_url,
+        "proxyClient": proxy_client,
+        "isProxyActive": is_proxy_active,
+        "proxyMode": proxy_mode,
+        "headers": req_headers,
+        "body": req_body
+    }
+
+    if not api_key and p.protocol != "ollama":
+        PROVIDER_STORE.record_metric(p.id, m.id, 0, is_error=True)
+        return {
+            "provider": p.id,
+            "providerName": p.name,
+            "model": m.id,
+            "modelName": m.name,
+            "ok": False,
+            "latencyMs": 0,
+            "protocol": p.protocol,
+            "error": f"API key not configured for provider '{p.name}'",
+            "request": request_info,
+            "response": {
+                "statusCode": 401,
+                "renderedText": "",
+                "reasoningContent": "",
+                "rawJson": None,
+                "rawError": f"API key not configured for provider '{p.name}'"
+            },
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
+
+    started = time.perf_counter()
+    try:
+        out = await call_provider_api(
+            p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
+            custom_timeout_sec=timeout_sec, custom_connect_sec=connect_sec
+        )
+        latency = round((time.perf_counter() - started) * 1000)
+        choice = out.get("choices", [{}])[0]
+        msg_dict = choice.get("message", {})
+        msg_text = msg_dict.get("content", "")
+        reasoning_text = msg_dict.get("reasoning_content", "") or msg_dict.get("thinking", "")
+        PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=False)
+
+        return {
+            "provider": p.id,
+            "providerName": p.name,
+            "model": m.id,
+            "modelName": m.name,
+            "ok": True,
+            "latencyMs": latency,
+            "protocol": p.protocol,
+            "message": (msg_text[:120] if msg_text else "OK"),
+            "request": request_info,
+            "response": {
+                "statusCode": 200,
+                "renderedText": msg_text or "OK",
+                "reasoningContent": reasoning_text,
+                "rawJson": out,
+                "rawError": None
+            },
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
+    except Exception as e:
+        latency = round((time.perf_counter() - started) * 1000)
+        err_str = str(e)
+        if "ConnectError" in err_str or "Connection refused" in err_str or "All connection attempts failed" in err_str:
+            err_str = f"Connection refused/unreachable: {p.url}"
+        elif "Timeout" in err_str:
+            err_str = f"Connection timeout to {p.url}"
+        PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=True)
+        return {
+            "provider": p.id,
+            "providerName": p.name,
+            "model": m.id,
+            "modelName": m.name,
+            "ok": False,
+            "latencyMs": latency,
+            "protocol": p.protocol,
+            "error": err_str,
+            "request": request_info,
+            "response": {
+                "statusCode": 0,
+                "renderedText": "",
+                "reasoningContent": "",
+                "rawJson": None,
+                "rawError": str(e)
+            },
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
+
 @app.post("/api/providers/test-all")
 async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_developer)):
     payload = payload or {}
@@ -1143,75 +1303,9 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
     tasks = []
     sem = asyncio.Semaphore(15)
 
-    async def _test_one(p: Provider, m: ModelSpec, api_key: str) -> Dict[str, Any]:
+    async def _test_worker(p: Provider, m: ModelSpec, api_key: str):
         async with sem:
-            try:
-                if not api_key and p.protocol != "ollama":
-                    PROVIDER_STORE.record_metric(p.id, m.id, 0, is_error=True)
-                    return {
-                        "provider": p.id,
-                        "providerName": p.name,
-                        "model": m.id,
-                        "modelName": m.name,
-                        "ok": False,
-                        "latencyMs": 0,
-                        "protocol": p.protocol,
-                        "error": f"API key not configured for provider '{p.name}'",
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                    }
-
-                started = time.perf_counter()
-                try:
-                    out = await call_provider_api(
-                        p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
-                        custom_timeout_sec=4.0, custom_connect_sec=2.0
-                    )
-                    latency = round((time.perf_counter() - started) * 1000)
-                    msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
-                    PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=False)
-                    return {
-                        "provider": p.id,
-                        "providerName": p.name,
-                        "model": m.id,
-                        "modelName": m.name,
-                        "ok": True,
-                        "latencyMs": latency,
-                        "protocol": p.protocol,
-                        "message": msg_text or "OK",
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                    }
-                except Exception as e:
-                    latency = round((time.perf_counter() - started) * 1000)
-                    err_str = str(e)
-                    if "ConnectError" in err_str or "Connection refused" in err_str or "All connection attempts failed" in err_str:
-                        err_str = f"Connection refused/unreachable: {p.url}"
-                    elif "Timeout" in err_str:
-                        err_str = f"Connection timeout to {p.url}"
-                    PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=True)
-                    return {
-                        "provider": p.id,
-                        "providerName": p.name,
-                        "model": m.id,
-                        "modelName": m.name,
-                        "ok": False,
-                        "latencyMs": latency,
-                        "protocol": p.protocol,
-                        "error": err_str,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                    }
-            except Exception as outer_e:
-                PROVIDER_STORE.record_metric(getattr(p, "id", "unknown"), getattr(m, "id", "unknown"), 0, is_error=True)
-                return {
-                    "provider": getattr(p, "id", "unknown"),
-                    "providerName": getattr(p, "name", "Unknown"),
-                    "model": getattr(m, "id", "unknown"),
-                    "modelName": getattr(m, "name", "Unknown"),
-                    "ok": False,
-                    "latencyMs": 0,
-                    "protocol": getattr(p, "protocol", "unknown"),
-                    "error": str(outer_e),
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                }
+            return await _execute_model_diagnostic_test(p, m, api_key, timeout_sec=4.0, connect_sec=2.0)
 
     for pid, p in list(PROVIDER_STORE.data.items()):
         if selected_pid and pid != selected_pid:
@@ -1221,7 +1315,7 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
         except Exception:
             api_key = ""
         for m in (p.models or []):
-            tasks.append(_test_one(p, m, api_key))
+            tasks.append(_test_worker(p, m, api_key))
 
     if tasks:
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1264,59 +1358,7 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
     except Exception:
         api_key = ""
 
-    if not api_key and p.protocol != "ollama":
-        PROVIDER_STORE.record_metric(pid, mid, 0, is_error=True)
-        return {
-            "provider": pid,
-            "providerName": p.name,
-            "model": mid,
-            "modelName": model.name,
-            "ok": False,
-            "latencyMs": 0,
-            "protocol": p.protocol,
-            "error": f"API key not configured for provider '{p.name}'",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-        }
-
-    started = time.perf_counter()
-    try:
-        out = await call_provider_api(
-            p, model, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
-            custom_timeout_sec=5.0, custom_connect_sec=2.5
-        )
-        latency = round((time.perf_counter() - started) * 1000)
-        msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
-        PROVIDER_STORE.record_metric(pid, mid, latency, is_error=False)
-        return {
-            "provider": pid,
-            "providerName": p.name,
-            "model": mid,
-            "modelName": model.name,
-            "ok": True,
-            "latencyMs": latency,
-            "protocol": p.protocol,
-            "message": msg_text or "OK",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-        }
-    except Exception as e:
-        latency = round((time.perf_counter() - started) * 1000)
-        err_str = str(e)
-        if "ConnectError" in err_str or "Connection refused" in err_str or "All connection attempts failed" in err_str:
-            err_str = f"Connection refused/unreachable: {p.url}"
-        elif "Timeout" in err_str:
-            err_str = f"Connection timeout after 5s to {p.url}"
-        PROVIDER_STORE.record_metric(pid, mid, latency, is_error=True)
-        return {
-            "provider": pid,
-            "providerName": p.name,
-            "model": mid,
-            "modelName": model.name,
-            "ok": False,
-            "latencyMs": latency,
-            "protocol": p.protocol,
-            "error": err_str,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-        }
+    return await _execute_model_diagnostic_test(p, model, api_key, timeout_sec=5.0, connect_sec=2.5)
 
 @app.post("/api/providers/{pid}/reset-circuit")
 def reset_provider_circuit(pid: str, user: Dict[str, Any] = Depends(require_developer)):

@@ -438,13 +438,17 @@ def test_model_endpoint_testing_and_diagnostics():
     assert isinstance(data["results"], list)
     assert len(data["results"]) > 0
 
-    # Every item should have provider, model, latencyMs, ok, timestamp
+    # Every item should have provider, model, latencyMs, ok, timestamp, request, response
     first = data["results"][0]
     assert "provider" in first
     assert "model" in first
     assert "latencyMs" in first
     assert "ok" in first
     assert "timestamp" in first
+    assert "request" in first
+    assert "directEndpoint" in first["request"]
+    assert "effectiveEndpoint" in first["request"]
+    assert "response" in first
 
     # 2. Test single model test endpoint
     single_res = client.post(f"/api/providers/{first['provider']}/models/{first['model']}/test")
@@ -454,6 +458,10 @@ def test_model_endpoint_testing_and_diagnostics():
     assert single_data["model"] == first["model"]
     assert "ok" in single_data
     assert "latencyMs" in single_data
+    assert "request" in single_data
+    assert "directEndpoint" in single_data["request"]
+    assert "effectiveEndpoint" in single_data["request"]
+    assert "response" in single_data
 
 def test_chat_streaming_and_error_diagnostics():
     # Test chat streaming endpoint
