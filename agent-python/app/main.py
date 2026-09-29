@@ -1,11 +1,15 @@
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 from .models import Provider, ModelSpec
 from .providers import ProviderStore
 
 store=ProviderStore(str(Path(__file__).parents[1]/'data/providers.json'))
 app=FastAPI(title='Arena-like Coding Agent')
+
+@app.get('/ui')
+def ui():
+    return FileResponse(Path(__file__).parent / 'static' / 'index.html')
 
 @app.get('/')
 def root():
