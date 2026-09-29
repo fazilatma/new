@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 import httpx
 from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
+from .config import get_proxy_config
 
 def validate_url(url: str) -> str:
     cleaned = (url or "").strip()
@@ -189,24 +190,39 @@ class BrowserManager:
         status_code = 200
         final_url = target_url
 
+        eff_url, proxy_client = get_proxy_config(target_url)
+
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False, headers=headers) as client:
-                resp = await client.get(target_url)
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False, headers=headers, proxy=proxy_client) as client:
+                resp = await client.get(eff_url)
                 html = resp.text
                 status_code = resp.status_code
                 final_url = str(resp.url)
         except Exception as e_httpx:
-            session.console_logs.append(f"[warning] HTTPX fetch failed ({str(e_httpx)}), trying curl / urllib fallback...")
-            # Tier 4: Curl Subprocess Fallback
-            curl_bin = shutil.which("curl")
-            if curl_bin:
+            session.console_logs.append(f"[warning] HTTPX fetch failed ({str(e_httpx)}), trying direct / curl fallback...")
+            # If proxy was used, try direct httpx
+            if eff_url != target_url or proxy_client:
                 try:
-                    c_res = subprocess.run([curl_bin, "-sL", "-k", target_url], capture_output=True, text=True, timeout=15)
-                    if c_res.returncode == 0 and c_res.stdout:
-                        html = c_res.stdout
-                        status_code = 200
-                        final_url = target_url
+                    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False, headers=headers) as direct_client:
+                        resp = await direct_client.get(target_url)
+                        html = resp.text
+                        status_code = resp.status_code
+                        final_url = str(resp.url)
                 except Exception:
+                    pass
+
+            # Tier 4: Curl Subprocess Fallback
+            if not html:
+                curl_bin = shutil.which("curl")
+                if curl_bin:
+                    try:
+                        c_res = subprocess.run([curl_bin, "-sL", "-k", target_url], capture_output=True, text=True, timeout=15)
+                        if c_res.returncode == 0 and c_res.stdout:
+                            html = c_res.stdout
+                            status_code = 200
+                            final_url = target_url
+                    except Exception:
+                        pass
                     pass
 
             # Tier 5: Urllib Fallback

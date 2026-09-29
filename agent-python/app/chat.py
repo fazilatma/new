@@ -7,7 +7,7 @@ import httpx
 from typing import Dict, Any, List, Optional, AsyncGenerator
 
 from .models import Provider, ModelSpec
-from .config import get_proxy_url, get_raw_config
+from .config import get_proxy_url, get_proxy_config, get_raw_config
 from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER
 from .agent_tools import AGENT_TOOL_DEFINITIONS, execute_agent_tool
 from .workspaces import (
@@ -163,25 +163,27 @@ async def call_provider_api(
         if model.toolCalling:
             body["tools"] = AGENT_TOOL_DEFINITIONS
 
-    # If provider is local Ollama (127.0.0.1 or localhost), NEVER route through external proxy
+    # Resolve Proxy Routing
+    proxy_client = None
+    direct_url = url
+
     if provider.protocol == "ollama" or "127.0.0.1" in base_url or "localhost" in base_url:
-        proxied = None
+        target_url = url
+        proxy_client = None
     elif provider.proxyUrl:
-        url = provider.proxyUrl.replace("{url}", url)
+        target_url, proxy_client = get_proxy_config(url, custom_proxy_url=provider.proxyUrl)
     else:
-        proxied = get_proxy_url(url)
-        if proxied:
-            url = proxied
+        target_url, proxy_client = get_proxy_config(url)
 
     started = time.perf_counter()
     tot_timeout = custom_timeout_sec if custom_timeout_sec is not None else (provider.timeoutSec or 120.0)
     conn_timeout = custom_connect_sec if custom_connect_sec is not None else 15.0
     timeout = httpx.Timeout(tot_timeout, connect=conn_timeout)
 
-    # Attempt primary request (using proxy if enabled, or direct)
-    async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-        try:
-            r = await client.post(url, headers=headers, json=body)
+    # 1. Primary Attempt: with proxy routing if enabled
+    try:
+        async with httpx.AsyncClient(timeout=timeout, verify=False, proxy=proxy_client) as client:
+            r = await client.post(target_url, headers=headers, json=body)
             r.raise_for_status()
             data = r.json()
             latency = (time.perf_counter() - started) * 1000
@@ -212,16 +214,12 @@ async def call_provider_api(
                     }]
                 }
             return data
-        except Exception as proxy_or_direct_err:
-            # If request through proxy failed, automatically retry directly to provider endpoint
-            # as an adaptive fallback if proxy was active
-            direct_url = base_url if provider.protocol != "anthropic" else (f"{base_url}/v1/messages" if not base_url.endswith("/messages") else base_url)
-            if provider.protocol not in ("anthropic", "ollama"):
-                direct_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-
-            if url != direct_url and provider.protocol != "ollama":
-                try:
-                    r = await client.post(direct_url, headers=headers, json=body)
+    except Exception as proxy_or_direct_err:
+        # 2. Adaptive Direct Fallback: If proxy was used and failed, retry directly without proxy
+        if (target_url != direct_url or proxy_client is not None) and provider.protocol != "ollama":
+            try:
+                async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
+                    r = await direct_client.post(direct_url, headers=headers, json=body)
                     r.raise_for_status()
                     data = r.json()
                     latency = (time.perf_counter() - started) * 1000
@@ -235,13 +233,13 @@ async def call_provider_api(
                             msg_dict["reasoning_content"] = thinking_text
                         return {"choices": [{"message": msg_dict}]}
                     return data
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-            latency = (time.perf_counter() - started) * 1000
-            CIRCUIT_BREAKER.record_failure(provider.id)
-            PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=True)
-            raise proxy_or_direct_err
+        latency = (time.perf_counter() - started) * 1000
+        CIRCUIT_BREAKER.record_failure(provider.id)
+        PROVIDER_STORE.record_metric(provider.id, model.id, latency, is_error=True)
+        raise proxy_or_direct_err
 
 def auto_detect_and_save_code_files(content: str, pending_approvals: Optional[List[Dict[str, Any]]] = None):
     from .workspaces import create_workspace_item, get_active_workspace

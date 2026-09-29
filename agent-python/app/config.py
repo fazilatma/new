@@ -4,7 +4,7 @@ import json
 import base64
 import hashlib
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from cryptography.fernet import Fernet
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -80,19 +80,61 @@ def mask_secret(value: str) -> str:
 
 DEFAULT_PROXY_URL = "https://proxy.fazilat-ma.workers.dev/?url={url}"
 
-def get_proxy_url(target_url: str) -> Optional[str]:
-    """Return proxied URL if proxy is enabled, otherwise None or direct URL."""
+def parse_proxy_setting(proxy_val: str, target_url: str) -> Tuple[str, Optional[str]]:
+    """
+    Parse a proxy setting string against a target URL.
+    Returns (effective_url, proxy_client_url).
+    - If URL rewrite (e.g. Cloudflare Worker or template with {url}), returns (rewritten_url, None).
+    - If forward proxy (e.g. http://127.0.0.1:7890, socks5://127.0.0.1:1080), returns (target_url, proxy_client_url).
+    """
+    if not proxy_val or not proxy_val.strip():
+        return target_url, None
+
+    proxy_val = proxy_val.strip()
+
+    # 1. Template substitution with {url} / {URL} / {target} / {TARGET}
+    for placeholder in ["{url}", "{URL}", "{target}", "{TARGET}"]:
+        if placeholder in proxy_val:
+            return proxy_val.replace(placeholder, target_url), None
+
+    # 2. Cloudflare Worker or reverse gateway URL (e.g. workers.dev, ?url=, ?target=)
+    if "workers.dev" in proxy_val or "?" in proxy_val or proxy_val.endswith("="):
+        if proxy_val.endswith("=") or proxy_val.endswith("?"):
+            return f"{proxy_val}{target_url}", None
+        elif "?" in proxy_val:
+            return f"{proxy_val}&url={target_url}", None
+        else:
+            base = proxy_val.rstrip("/")
+            return f"{base}/?url={target_url}", None
+
+    # 3. Standard HTTP / HTTPS / SOCKS forward proxy server (e.g. http://127.0.0.1:7890, socks5://127.0.0.1:1080)
+    if proxy_val.startswith(("http://", "https://", "socks5://", "socks5h://", "socks4://")):
+        return target_url, proxy_val
+
+    return target_url, None
+
+def get_proxy_config(target_url: str, custom_proxy_url: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """
+    Return (effective_url, proxy_client_url).
+    If custom_proxy_url is provided, it is parsed directly.
+    Otherwise, reads AGENT_PROXY_ENABLED and AGENT_PROXY_URL from config.
+    """
+    if custom_proxy_url:
+        return parse_proxy_setting(custom_proxy_url, target_url)
+
     enabled_val = get_raw_config("AGENT_PROXY_ENABLED", "1").lower()
     if enabled_val in ("0", "false", "no", "off"):
-        return None
-    proxy_pattern = get_raw_config("AGENT_PROXY_URL", DEFAULT_PROXY_URL).strip()
-    if not proxy_pattern:
-        return None
-    if "{url}" in proxy_pattern:
-        return proxy_pattern.replace("{url}", target_url)
-    if proxy_pattern.endswith("?") or "?" in proxy_pattern:
-        return f"{proxy_pattern}&url={target_url}" if "?" in proxy_pattern and not proxy_pattern.endswith("?") else f"{proxy_pattern}url={target_url}"
-    return f"{proxy_pattern}?url={target_url}"
+        return target_url, None
+
+    proxy_val = get_raw_config("AGENT_PROXY_URL", DEFAULT_PROXY_URL).strip()
+    return parse_proxy_setting(proxy_val, target_url)
+
+def get_proxy_url(target_url: str) -> Optional[str]:
+    """Return proxied URL if URL rewriting proxy is enabled, otherwise None."""
+    eff_url, proxy_client = get_proxy_config(target_url)
+    if eff_url != target_url:
+        return eff_url
+    return None
 
 # Configuration Names
 CONFIG_KEYS = [

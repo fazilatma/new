@@ -683,7 +683,7 @@ def test_chat_message_sync_and_edit_lifecycle():
     assert "mergesort with O(n log n)" in msgs[1]["content"]
 
 def test_proxy_configuration_and_routing():
-    from app.config import get_proxy_url, DEFAULT_PROXY_URL, read_environment, write_environment
+    from app.config import get_proxy_url, get_proxy_config, parse_proxy_setting, DEFAULT_PROXY_URL, read_environment, write_environment
 
     # 1. Test default proxy constant
     assert DEFAULT_PROXY_URL == "https://proxy.fazilat-ma.workers.dev/?url={url}"
@@ -697,14 +697,36 @@ def test_proxy_configuration_and_routing():
     assert env["AGENT_PROXY_URL"] == "https://proxy.fazilat-ma.workers.dev/?url={url}"
     assert env["AGENT_PROXY_ENABLED"] == "true"
 
-    # 3. Test get_proxy_url template substitution
+    # 3. Test URL rewriting proxy templates
     target = "https://api.openai.com/v1/chat/completions"
-    proxied = get_proxy_url(target)
-    assert proxied is not None
-    assert "https://proxy.fazilat-ma.workers.dev/?url=" in proxied
-    assert "api.openai.com" in proxied
+    eff_url, p_client = parse_proxy_setting("https://proxy.fazilat-ma.workers.dev/?url={url}", target)
+    assert eff_url == f"https://proxy.fazilat-ma.workers.dev/?url={target}"
+    assert p_client is None
 
-    # 4. Test proxy test endpoint
+    # 4. Test Cloudflare Worker prefix without placeholder
+    eff_url2, p_client2 = parse_proxy_setting("https://custom-worker.workers.dev", target)
+    assert eff_url2 == f"https://custom-worker.workers.dev/?url={target}"
+    assert p_client2 is None
+
+    # 5. Test Standard Forward Proxy (HTTP & SOCKS5)
+    eff_url3, p_client3 = parse_proxy_setting("http://127.0.0.1:7890", target)
+    assert eff_url3 == target
+    assert p_client3 == "http://127.0.0.1:7890"
+
+    eff_url4, p_client4 = parse_proxy_setting("socks5://127.0.0.1:1080", target)
+    assert eff_url4 == target
+    assert p_client4 == "socks5://127.0.0.1:1080"
+
+    # 6. Test Disabled Proxy
+    write_environment({"AGENT_PROXY_ENABLED": "false"})
+    eff_url5, p_client5 = get_proxy_config(target)
+    assert eff_url5 == target
+    assert p_client5 is None
+
+    # Re-enable proxy
+    write_environment({"AGENT_PROXY_ENABLED": "true", "AGENT_PROXY_URL": "https://proxy.fazilat-ma.workers.dev/?url={url}"})
+
+    # 7. Test proxy test endpoint with URL rewrite
     res = client.post("/api/config/test-proxy", json={
         "proxy_url": "https://proxy.fazilat-ma.workers.dev/?url={url}",
         "target_url": "https://httpbin.org/status/200"
@@ -714,6 +736,16 @@ def test_proxy_configuration_and_routing():
     assert "effective_url" in data
     assert "latency_ms" in data
     assert "ok" in data
+
+    # 8. Test proxy test endpoint with forward proxy client
+    res_fwd = client.post("/api/config/test-proxy", json={
+        "proxy_url": "http://127.0.0.1:9999",
+        "target_url": "https://httpbin.org/status/200"
+    })
+    assert res_fwd.status_code == 200
+    data_fwd = res_fwd.json()
+    assert data_fwd["effective_url"] == "https://httpbin.org/status/200"
+    assert data_fwd["proxy_client"] == "http://127.0.0.1:9999"
 
 def test_verified_model_fallback_mechanism():
     from app.providers import PROVIDER_STORE

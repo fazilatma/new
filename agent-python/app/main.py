@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response,
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL
+from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL, parse_proxy_setting
 from .database import get_db, init_db
 from .models import Provider, ModelSpec
 from .providers import PROVIDER_STORE
@@ -1360,28 +1360,24 @@ def put_env_config(payload: Dict[str, Any], user: Dict[str, Any] = Depends(requi
 @app.post("/api/config/test-proxy")
 async def test_proxy_endpoint(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):
     payload = payload or {}
-    proxy_url = payload.get("proxy_url") or get_raw_config("AGENT_PROXY_URL", DEFAULT_PROXY_URL)
+    proxy_val = (payload.get("proxy_url") or get_raw_config("AGENT_PROXY_URL", DEFAULT_PROXY_URL)).strip()
     test_target = payload.get("target_url") or "https://httpbin.org/get"
     
-    if "{url}" in proxy_url:
-        actual_url = proxy_url.replace("{url}", test_target)
-    elif proxy_url.endswith("?") or "?" in proxy_url:
-        actual_url = f"{proxy_url}&url={test_target}" if "?" in proxy_url and not proxy_url.endswith("?") else f"{proxy_url}url={test_target}"
-    else:
-        actual_url = f"{proxy_url}?url={test_target}"
+    actual_url, proxy_client = parse_proxy_setting(proxy_val, test_target)
     
     started = time.perf_counter()
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, verify=False) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, verify=False, proxy=proxy_client) as client:
             resp = await client.get(actual_url)
             latency = round((time.perf_counter() - started) * 1000)
             return {
                 "ok": resp.status_code < 400 or resp.status_code == 404,
                 "status_code": resp.status_code,
                 "latency_ms": latency,
-                "proxy_url": proxy_url,
+                "proxy_url": proxy_val,
                 "effective_url": actual_url,
+                "proxy_client": proxy_client,
                 "message": f"Proxy responded with HTTP {resp.status_code} in {latency}ms"
             }
     except Exception as e:
@@ -1390,8 +1386,9 @@ async def test_proxy_endpoint(payload: Optional[Dict[str, Any]] = None, user: Di
             "ok": False,
             "status_code": 0,
             "latency_ms": latency,
-            "proxy_url": proxy_url,
+            "proxy_url": proxy_val,
             "effective_url": actual_url,
+            "proxy_client": proxy_client,
             "error": str(e),
             "message": f"Proxy connection check failed: {str(e)}"
         }

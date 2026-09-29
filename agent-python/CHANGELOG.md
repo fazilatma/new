@@ -1,11 +1,14 @@
 # Changelog
 
-## 0.12.0 - Workspace Sidebar Folding, Proxy Server Integration & Model Test Results Exporter
+## 0.12.0 - Universal Proxy Gateway & Forward Proxy Routing, Sidebar Folding & Model Exporter
 
+- **Universal Proxy Traffic Routing for Model Responses**: Fixed proxy routing to support both standard forward proxies (`http://...`, `https://...`, `socks5://...`, `socks5h://...`) via HTTP client tunneling (`httpx.AsyncClient(proxy=...)`) and URL-rewriting gateways (like Cloudflare Workers `?url={url}` or `/proxy?target=`). Includes adaptive direct retry fallback on connectivity errors.
+- **Unified Per-Provider and Global Proxy Settings**: Per-provider proxy overrides and global proxy settings now use the same unified proxy parser (`parse_proxy_setting`).
+- **Browser Automation Proxy Routing**: Multi-tier HTTPX web fetching in browser automation now respects proxy configuration for unrestricted global web access.
 - **Workspace Sidebar Folding & Closing**: Added collapse/fold toggle (`◀ بستن منو` / `📁 نمایش فایل‌ها`) for the workspace file tree sidebar with persistent state across sessions, plus an instant "✕ بستن پنجره" button to close the workspace panel and return to chat.
 - **Dedicated Proxy Server Configuration**: Integrated first-class Proxy Server settings with default `https://proxy.fazilat-ma.workers.dev/?url={url}` for seamless routing of model endpoints, web searches, and browser operations; supports live connection testing and instant default reset.
 - **Copy All AI Model Test Results**: Added 1-click export and copy actions for all AI model diagnostic tests in both structured Markdown Table and JSON formats, complete with status indicators, latency metrics, and diagnostic traces.
-- **Test Suite Expansion**: Added automated pytest verification for proxy configuration, URL template substitution, and testing endpoints (22/22 tests passing).
+- **Test Suite Expansion**: Added automated pytest verification for proxy configuration, forward proxy client parsing, SOCKS5 support, URL template substitution, and testing endpoints (24/24 tests passing).
 
 ## 0.11.0 - RTL Persian Typography, Isolated LTR Terminals, Message Sync & Edit Lifecycle
 
