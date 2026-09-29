@@ -1129,88 +1129,129 @@ def delete_model(pid: str, mid: str, user: Dict[str, Any] = Depends(require_admi
     return {"ok": True}
 
 @app.post("/api/providers/test-all")
-async def test_all_models(payload: Dict[str, Any] = {}, user: Dict[str, Any] = Depends(require_developer)):
+async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_developer)):
+    payload = payload or {}
     selected_pid = payload.get("provider")
     tasks = []
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(15)
 
     async def _test_one(p: Provider, m: ModelSpec, api_key: str) -> Dict[str, Any]:
         async with sem:
-            if not api_key and p.protocol != "ollama":
+            try:
+                if not api_key and p.protocol != "ollama":
+                    return {
+                        "provider": p.id,
+                        "providerName": p.name,
+                        "model": m.id,
+                        "modelName": m.name,
+                        "ok": False,
+                        "latencyMs": 0,
+                        "protocol": p.protocol,
+                        "error": f"API key not configured for provider '{p.name}'",
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                    }
+
+                started = time.perf_counter()
+                try:
+                    out = await call_provider_api(
+                        p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
+                        custom_timeout_sec=4.0, custom_connect_sec=2.0
+                    )
+                    latency = round((time.perf_counter() - started) * 1000)
+                    msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
+                    return {
+                        "provider": p.id,
+                        "providerName": p.name,
+                        "model": m.id,
+                        "modelName": m.name,
+                        "ok": True,
+                        "latencyMs": latency,
+                        "protocol": p.protocol,
+                        "message": msg_text or "OK",
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                    }
+                except Exception as e:
+                    latency = round((time.perf_counter() - started) * 1000)
+                    err_str = str(e)
+                    if "ConnectError" in err_str or "Connection refused" in err_str or "All connection attempts failed" in err_str:
+                        err_str = f"Connection refused/unreachable: {p.url}"
+                    elif "Timeout" in err_str:
+                        err_str = f"Connection timeout to {p.url}"
+                    return {
+                        "provider": p.id,
+                        "providerName": p.name,
+                        "model": m.id,
+                        "modelName": m.name,
+                        "ok": False,
+                        "latencyMs": latency,
+                        "protocol": p.protocol,
+                        "error": err_str,
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                    }
+            except Exception as outer_e:
                 return {
-                    "provider": p.id,
-                    "providerName": p.name,
-                    "model": m.id,
-                    "modelName": m.name,
+                    "provider": getattr(p, "id", "unknown"),
+                    "providerName": getattr(p, "name", "Unknown"),
+                    "model": getattr(m, "id", "unknown"),
+                    "modelName": getattr(m, "name", "Unknown"),
                     "ok": False,
                     "latencyMs": 0,
-                    "protocol": p.protocol,
-                    "error": f"API key not configured for provider '{p.name}'",
+                    "protocol": getattr(p, "protocol", "unknown"),
+                    "error": str(outer_e),
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
                 }
 
-            started = time.perf_counter()
-            try:
-                out = await call_provider_api(
-                    p, m, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
-                    custom_timeout_sec=6.0, custom_connect_sec=3.0
-                )
-                latency = round((time.perf_counter() - started) * 1000)
-                msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
-                return {
-                    "provider": p.id,
-                    "providerName": p.name,
-                    "model": m.id,
-                    "modelName": m.name,
-                    "ok": True,
-                    "latencyMs": latency,
-                    "protocol": p.protocol,
-                    "message": msg_text or "OK",
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                }
-            except Exception as e:
-                latency = round((time.perf_counter() - started) * 1000)
-                err_str = str(e)
-                if "ConnectError" in err_str or "Connection refused" in err_str:
-                    err_str = f"Connection refused to {p.url}"
-                elif "Timeout" in err_str:
-                    err_str = f"Connection timeout after 6s to {p.url}"
-                return {
-                    "provider": p.id,
-                    "providerName": p.name,
-                    "model": m.id,
-                    "modelName": m.name,
-                    "ok": False,
-                    "latencyMs": latency,
-                    "protocol": p.protocol,
-                    "error": err_str,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                }
-
-    for pid, p in PROVIDER_STORE.data.items():
+    for pid, p in list(PROVIDER_STORE.data.items()):
         if selected_pid and pid != selected_pid:
             continue
-        api_key = PROVIDER_STORE.get_api_key(p)
-        for m in p.models:
+        try:
+            api_key = PROVIDER_STORE.get_api_key(p)
+        except Exception:
+            api_key = ""
+        for m in (p.models or []):
             tasks.append(_test_one(p, m, api_key))
 
     if tasks:
-        results = await asyncio.gather(*tasks)
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = []
+        for r in raw_results:
+            if isinstance(r, Exception):
+                results.append({
+                    "provider": "unknown",
+                    "providerName": "Unknown",
+                    "model": "unknown",
+                    "modelName": "Unknown",
+                    "ok": False,
+                    "latencyMs": 0,
+                    "protocol": "unknown",
+                    "error": str(r),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                })
+            elif isinstance(r, dict):
+                results.append(r)
     else:
         results = []
 
-    return {"results": list(results)}
+    return {"results": results}
+
+@app.post("/api/providers/{pid}/test")
+async def test_provider_models(pid: str, user: Dict[str, Any] = Depends(require_developer)):
+    return await test_all_models(payload={"provider": pid}, user=user)
 
 @app.post("/api/providers/{pid}/models/{mid:path}/test")
 async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(require_developer)):
     p = PROVIDER_STORE.data.get(pid)
     if not p:
         raise HTTPException(404, f"Provider '{pid}' not found")
-    model = next((m for m in p.models if m.id == mid), None)
+    model = next((m for m in (p.models or []) if m.id == mid), None)
     if not model:
         model = ModelSpec(id=mid, name=mid, toolCalling=True)
 
-    api_key = PROVIDER_STORE.get_api_key(p)
+    try:
+        api_key = PROVIDER_STORE.get_api_key(p)
+    except Exception:
+        api_key = ""
+
     if not api_key and p.protocol != "ollama":
         return {
             "provider": pid,
@@ -1228,7 +1269,7 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
     try:
         out = await call_provider_api(
             p, model, [{"role": "user", "content": "Reply with 'OK' only."}], api_key,
-            custom_timeout_sec=8.0, custom_connect_sec=4.0
+            custom_timeout_sec=5.0, custom_connect_sec=2.5
         )
         latency = round((time.perf_counter() - started) * 1000)
         msg_text = out.get("choices", [{}])[0].get("message", {}).get("content", "")[:100]
@@ -1246,10 +1287,10 @@ async def test_single_model(pid: str, mid: str, user: Dict[str, Any] = Depends(r
     except Exception as e:
         latency = round((time.perf_counter() - started) * 1000)
         err_str = str(e)
-        if "ConnectError" in err_str or "Connection refused" in err_str:
-            err_str = f"Connection refused to {p.url}"
+        if "ConnectError" in err_str or "Connection refused" in err_str or "All connection attempts failed" in err_str:
+            err_str = f"Connection refused/unreachable: {p.url}"
         elif "Timeout" in err_str:
-            err_str = f"Connection timeout after 8s to {p.url}"
+            err_str = f"Connection timeout after 5s to {p.url}"
         return {
             "provider": pid,
             "providerName": p.name,

@@ -2427,13 +2427,29 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: 'include', ...opts });
+  let res;
+  try {
+    res = await fetch(path, { credentials: 'include', ...opts });
+  } catch (netErr) {
+    throw new Error(netErr.message || 'Failed to fetch (Server connection error)');
+  }
   if (res.status === 401 && !path.includes('/auth/login') && !path.includes('/auth/status')) {
     openLoginModal();
     throw new Error('Authentication required');
   }
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || data.error || 'Request failed');
+  let data;
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      data = await res.json();
+    } catch (_) {
+      data = { error: 'Invalid JSON response from server' };
+    }
+  } else {
+    const text = await res.text();
+    data = { error: text || `HTTP ${res.status}` };
+  }
+  if (!res.ok) throw new Error(data.detail || data.error || data.message || `HTTP ${res.status}: Request failed`);
   return data;
 }
 
@@ -2888,18 +2904,51 @@ async function runAllModelTests() {
   }
 
   try {
-    const res = await api('/api/providers/test-all', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: selectedPid || undefined })
-    });
-    lastModelTestResults = res.results || [];
-    
-    // Update global model test results state
+    let results = [];
+    try {
+      const res = await api('/api/providers/test-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: selectedPid || undefined })
+      });
+      results = res.results || [];
+    } catch (bulkErr) {
+      // Fallback: Test models individually in case bulk proxy request times out or disconnects
+      const targetProviders = selectedPid 
+        ? (STATE.providers || []).filter(p => p.id === selectedPid) 
+        : (STATE.providers || []);
+      
+      for (const p of targetProviders) {
+        for (const m of (p.models || [])) {
+          try {
+            const single = await api(`/api/providers/${p.id}/models/${encodeURIComponent(m.id)}/test`, { method: 'POST' });
+            results.push(single);
+            STATE.modelTestResults = STATE.modelTestResults || {};
+            STATE.modelTestResults[`${p.id}::${m.id}`] = single;
+            lastModelTestResults = results;
+            renderTestResultsTable();
+          } catch (mErr) {
+            results.push({
+              provider: p.id,
+              providerName: p.name,
+              model: m.id,
+              modelName: m.name,
+              ok: false,
+              latencyMs: 0,
+              protocol: p.protocol,
+              error: mErr.message || 'Test failed'
+            });
+            lastModelTestResults = results;
+            renderTestResultsTable();
+          }
+        }
+      }
+    }
+
+    lastModelTestResults = results;
     STATE.modelTestResults = STATE.modelTestResults || {};
     lastModelTestResults.forEach(r => {
       STATE.modelTestResults[`${r.provider}::${r.model}`] = r;
-      // Auto-expand tested provider
       providerCollapsedState[r.provider] = false;
     });
 
@@ -2910,7 +2959,8 @@ async function runAllModelTests() {
       tbody.innerHTML = `
         <tr>
           <td colspan="6" style="text-align:center;padding:20px;color:var(--accent-red);">
-            Test request failed: ${esc(err.message)}
+            Test request failed: ${esc(err.message)}<br>
+            <button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="runAllModelTests()">🔄 Retry Tests</button>
           </td>
         </tr>
       `;
