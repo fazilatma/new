@@ -926,6 +926,32 @@ def test_workspace_session_folder_view_and_advanced_file_execution():
     assert "analysis.py" in paths2
 
 
+def test_quick_project_creation_with_minimal_fields():
+    """Test quick 1-click project creation where only name is supplied and all optional fields use defaults."""
+    res = client.post("/api/projects", json={
+        "name": "Fast Created Project"
+    })
+    assert res.status_code == 200
+    pdata = res.json()
+    assert pdata["name"] == "Fast Created Project"
+    assert pdata["default_branch"] in ("main", "arena/01a0ed4c-new")
+    assert pdata["id"] is not None
+
+
+def test_chat_stream_sse_realtime_events():
+    """Test /api/chat/stream returns valid text/event-stream headers and events."""
+    res = client.post("/api/chat/stream", json={
+        "provider": "openrouter",
+        "model": "google/gemini-2.5-flash",
+        "messages": [{"role": "user", "content": "Hello"}]
+    })
+    assert res.status_code == 200
+    assert "text/event-stream" in res.headers["content-type"]
+    assert "no-cache" in res.headers.get("cache-control", "")
+    assert "no" in res.headers.get("x-accel-buffering", "")
+
+
+
 
 
 

@@ -54,7 +54,7 @@ from .github_workspace import (
     create_issue, add_issue_comment
 )
 from .browser_automation import BROWSER_MANAGER
-from .chat import complete_chat, call_provider_api
+from .chat import complete_chat, stream_complete_chat, call_provider_api
 from .worker import persistent_worker_loop, create_job, get_job_details, list_all_jobs, cancel_job, pause_job, resume_job, retry_job, delete_old_jobs
 from .observability import log_event, get_logs, get_system_metrics
 from .auth import auth_middleware, register_auth_routes, get_current_user, require_admin, require_developer, require_viewer
@@ -925,58 +925,33 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
     references = payload.get("references")
 
     async def event_generator():
-        yield 'event: status\ndata: ' + json.dumps({"status": "started", "provider": provider_id, "model": model_id}) + '\n\n'
         try:
-            res = await complete_chat(
+            async for event in stream_complete_chat(
                 PROVIDER_STORE, provider_id, model_id, messages,
                 max_steps=max_steps, user_id=user.get("username", "user"),
                 conversation_id=conversation_id, references=references
-            )
-            msg = res.get("message", {})
-            content = msg.get("content", "")
-            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("thought") or ""
-            err_details = res.get("errorDetails")
-
-            # If there is reasoning / thinking process, send it first
-            if reasoning:
-                yield 'event: reasoning\ndata: ' + json.dumps({"reasoning": reasoning}, ensure_ascii=False) + '\n\n'
-
-            # Stream text in chunks
-            chunk_size = 25
-            for i in range(0, len(content), chunk_size):
-                chunk = content[i:i + chunk_size]
-                yield 'event: token\ndata: ' + json.dumps({"text": chunk}, ensure_ascii=False) + '\n\n'
-                await asyncio.sleep(0.01)
-
-            # Send pending approvals if any
-            approvals = res.get("pendingApprovals", [])
-            if approvals:
-                yield 'event: approvals\ndata: ' + json.dumps({"approvals": approvals}, ensure_ascii=False) + '\n\n'
-
-            # Send error details if any
-            if err_details:
-                yield 'event: error_details\ndata: ' + json.dumps({"errorDetails": err_details}, ensure_ascii=False) + '\n\n'
-
-            yield 'event: done\ndata: ' + json.dumps({
-                "steps": res.get("steps", 1),
-                "provider": res.get("provider"),
-                "model": res.get("model"),
-                "reasoning": reasoning,
-                "isFallback": res.get("isFallback", False),
-                "fallbackDetails": res.get("fallbackDetails"),
-                "hasError": bool(err_details)
-            }, ensure_ascii=False) + '\n\n'
+            ):
+                event_type = event.get("type", "message")
+                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             err_meta = {
                 "provider": provider_id,
                 "model": model_id,
                 "error": str(e),
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                "remediation": "Check provider settings, API key, and network connectivity."
+                "remediation": "1. Check provider API key and internet connectivity.\n2. In Providers & Models, test your model connection.\n3. Verify your proxy server settings."
             }
-            yield 'event: error\ndata: ' + json.dumps({"error": str(e), "errorDetails": err_meta}, ensure_ascii=False) + '\n\n'
+            yield f"event: error\ndata: {json.dumps({'error': str(e), 'errorDetails': err_meta}, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 @app.post("/api/chat/upload")
 async def chat_upload_file(file: UploadFile = File(...), user: Dict[str, Any] = Depends(require_developer)):

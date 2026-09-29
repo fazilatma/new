@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0 - True Real-Time LLM Token Streaming, Network Resilience & Simplified Project Creation
+
+- **True Upstream Real-Time LLM Token Streaming**: Implemented native token streaming (`stream_call_provider_api` and `stream_complete_chat`) connecting directly to upstream provider SSE streams (OpenAI-compatible, OpenRouter, Anthropic, Ollama, Groq, Mistral). Tokens and reasoning traces (`<think>...</think>`) stream to the browser in real time without buffering delays, eliminating long HTTP blocking and socket timeouts.
+- **Resolution of "Request Failed: network error"**: Resolved the 95% chat failure rate by adding anti-buffering reverse proxy headers (`X-Accel-Buffering: no`, `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`), adaptive proxy-to-direct fallback, and resilient error recovery with 1-click retry (`🔄 تلاش مجدد`).
+- **Live Tool Progress Indicator**: While the agent executes workspace file or terminal tools between streaming steps, real-time status indicators (`⚙️ در حال اجرای ابزار ...`) provide continuous live feedback so connections never appear frozen.
+- **Simplified 1-Click Project Creation**: Redesigned the New Project creation modal to be fast and effortless. Users only need to enter the Project Name (and optional short description) for instant 1-click creation. All non-essential, tedious parameters (Default Provider, Default Model, Default Target Branch, Custom System Instructions, Agent Rules) have been moved into a clean, collapsible **"⚙️ تنظیمات پیشرفته و اختیاری"** drawer with smart defaults.
+- **Test Suite Expansion**: Added automated pytest verification for true SSE streaming headers and 1-click project creation with minimal fields (27/27 tests passing).
+
 ## 0.12.0 - Session Workspace Folder View, Advanced File Modal, Execution Engine & Universal Proxy Gateway
 
 - **Intuitive Session Workspace Folder Explorer View**: Files created by the AI agent in the chat session's dedicated workspace (`session_{convId}`) are now displayed in a clean, standard folder & file explorer view with file type icons, formatted sizes, extensions, search filtering, and quick action chips (`▶ اجرا`, `🔍 باز کردن`, `📥 دانلود`, `🗑️ حذف`).

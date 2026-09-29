@@ -2416,43 +2416,58 @@
   </div>
 </div>
 
-<!-- MODAL: CREATE NEW PROJECT -->
+<!-- MODAL: CREATE NEW PROJECT (Simplified with Advanced Settings Drawer) -->
 <div class="modal-backdrop" id="newProjectModal">
-  <div class="modal-dialog">
+  <div class="modal-dialog" style="max-width:540px;">
     <div class="modal-header">
-      <strong>Define New Project</strong>
-      <button class="btn-ghost" onclick="closeModal('newProjectModal')">✕</button>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:18px;">📦</span>
+        <strong style="font-size:14.5px;">ایجاد پروژه جدید (New Project)</strong>
+      </div>
+      <button type="button" class="btn-ghost" onclick="closeModal('newProjectModal')">✕</button>
     </div>
-    <form class="modal-body" onsubmit="handleCreateProjectSubmit(event)">
+    <form class="modal-body" onsubmit="handleCreateProjectSubmit(event)" style="gap:12px;">
+      <!-- Essential Fields (Fast & Simple) -->
       <div>
-        <label style="font-size:12px;color:var(--text-dim)">Project Name *</label>
-        <input id="newProjName" class="input-control" placeholder="e.g. My Fast API Backend" required>
+        <label style="font-size:12px;font-weight:600;color:var(--text-main);margin-bottom:4px;display:block;">نام پروژه (Project Name) *</label>
+        <input id="newProjName" class="input-control" placeholder="مثال: فروشگاه آنلاین، API سرویس یا ربات چت..." required autofocus>
       </div>
       <div>
-        <label style="font-size:12px;color:var(--text-dim)">Description & Purpose</label>
-        <input id="newProjDesc" class="input-control" placeholder="Short description of this project...">
+        <label style="font-size:12px;color:var(--text-dim);margin-bottom:4px;display:block;">توضیحات کوتاه یا هدف پروژه (اختیاری)</label>
+        <input id="newProjDesc" class="input-control" placeholder="توضیح مختصر درباره هدف یا امکانات این پروژه...">
       </div>
-      <div class="grid-2">
-        <div>
-          <label style="font-size:12px;color:var(--text-dim)">Default Provider</label>
-          <select id="newProjProvider" class="input-control"></select>
+
+      <!-- Advanced Settings Collapsible Drawer (Optional) -->
+      <details style="border:1px solid var(--border-subtle);border-radius:8px;padding:8px 12px;background:var(--bg-elevated);margin-top:2px;">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text-muted);display:flex;align-items:center;gap:6px;user-select:none;">
+          <span>⚙️</span>
+          <span>تنظیمات پیشرفته، دستورالعمل‌ها و قوانین (اختیاری)</span>
+        </summary>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--border-subtle);">
+          <div class="grid-2" style="margin-bottom:0;">
+            <div>
+              <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">ارائه‌دهنده پیش‌فرض</label>
+              <select id="newProjProvider" class="input-control" style="font-size:12px;"></select>
+            </div>
+            <div>
+              <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">برنچ گیت پیش‌فرض</label>
+              <input id="newProjBranch" class="input-control" style="font-size:12px;" placeholder="main" value="arena/01a0ed4c-new">
+            </div>
+          </div>
+          <div>
+            <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">دستورالعمل‌های اختصاصی هوش مصنوعی (System Instructions)</label>
+            <textarea id="newProjInstructions" class="input-control" style="height:65px;font-size:12px;" placeholder="دستورالعمل‌های اختصاصی برای ایجنت در این پروژه..."></textarea>
+          </div>
+          <div>
+            <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">قوانین و محدودیت‌های ایجنت (Agent Rules)</label>
+            <textarea id="newProjRules" class="input-control" style="height:65px;font-size:12px;" placeholder="- قانون ۱: همیشه پس از تغییرات تست اجرا کن..."></textarea>
+          </div>
         </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-dim)">Default Target Branch</label>
-          <input id="newProjBranch" class="input-control" placeholder="main" value="arena/01a0ed4c-new">
-        </div>
-      </div>
-      <div>
-        <label style="font-size:12px;color:var(--text-dim)">Project Instructions</label>
-        <textarea id="newProjInstructions" class="input-control" style="height:70px;" placeholder="Custom instructions for the AI Agent working on this project..."></textarea>
-      </div>
-      <div>
-        <label style="font-size:12px;color:var(--text-dim)">Agent Rules & Constraints</label>
-        <textarea id="newProjRules" class="input-control" style="height:70px;" placeholder="- Rule 1: Always run pytest after edits..."></textarea>
-      </div>
-      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
-        <button type="button" class="btn btn-ghost" onclick="closeModal('newProjectModal')">Cancel</button>
-        <button type="submit" class="btn btn-primary">Create Project</button>
+      </details>
+
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;display:flex;justify-content:space-between;align-items:center;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('newProjectModal')">انصراف (Cancel)</button>
+        <button type="submit" class="btn btn-primary">🚀 ایجاد سریع پروژه</button>
       </div>
     </form>
   </div>
@@ -5253,7 +5268,7 @@ async function streamAgentResponse() {
     }).catch(() => {});
   }
 
-  const assistantMsgEl = appendMessage('assistant', 'Agent is analyzing project and tools...');
+  const assistantMsgEl = appendMessage('assistant', 'در حال اتصال به مدل و تحلیل پروژه...');
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
 
   abortController = new AbortController();
@@ -5265,7 +5280,10 @@ async function streamAgentResponse() {
   try {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream'
+      },
       body: JSON.stringify({
         provider: pid,
         model: mid,
@@ -5280,7 +5298,12 @@ async function streamAgentResponse() {
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+      let parsedErr = errText;
+      try {
+        const j = JSON.parse(errText);
+        parsedErr = j.detail || j.message || errText;
+      } catch (_) {}
+      throw new Error(`HTTP ${res.status}: ${parsedErr}`);
     }
 
     const reader = res.body.getReader();
@@ -5315,7 +5338,15 @@ async function streamAgentResponse() {
               const container = $('#chatMessages');
               container.scrollTop = container.scrollHeight;
             }
-            if (data.fallbackDetails) {
+            if (data.type === 'tool_executing' || data.tool) {
+              const toolName = data.tool || 'agent_tool';
+              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
+                (accumulated || '') + `\n\n> ⚙️ *در حال اجرای ابزار \`${toolName}\`...*`;
+              bubble.innerHTML = renderMarkdown(fullDisplay);
+              const container = $('#chatMessages');
+              container.scrollTop = container.scrollHeight;
+            }
+            if (data.fallbackDetails || data.type === 'fallback_activated') {
               fallbackDetails = data.fallbackDetails;
             }
             if (data.approvals && data.approvals.length > 0) {
@@ -5344,17 +5375,17 @@ async function streamAgentResponse() {
     const finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
 
     if (!finalContent && isError) {
-      accumulated = `⚠️ **Error occurred**: ${errorData?.error || 'Provider communication failed'}`;
+      accumulated = `⚠️ **خطا در دریافت پاسخ**: ${errorData?.error || 'ارتباط با ارائه‌دهنده مدل برقرار نشد.'}`;
       bubble.innerHTML = renderMarkdown(accumulated);
     }
 
     if (isError && errorData) {
       bubble.classList.add('is-error');
-      bubble.title = 'Click to view diagnostic log';
+      bubble.title = 'کلیک برای مشاهده لاگ خطای تشخیصی';
       bubble.onclick = () => openChatErrorModal(errorData);
       const badge = document.createElement('div');
       badge.className = 'error-diag-badge';
-      badge.innerHTML = '🔍 Click to view diagnostic log & resolution';
+      badge.innerHTML = '🔍 مشاهده لاگ تشخیصی و راهنمای حل خطا';
       badge.onclick = (e) => {
         e.stopPropagation();
         openChatErrorModal(errorData);
@@ -5387,11 +5418,46 @@ async function streamAgentResponse() {
         model: mid,
         error: err.message,
         timestamp: new Date().toISOString(),
-        remediation: '1. Check network connectivity and API keys.\n2. Ensure dev server is running.\n3. Verify model endpoint status in Providers & Models.'
+        remediation: '1. کلید API و تنظیمات ارائه‌دهنده را در تب Providers & Models بررسی کنید.\n2. از اتصال اینترنت یا پروکسی فعال مطمئن شوید.\n3. در صورت نیاز، مدل دیگری را انتخاب نمایید.'
       };
-      const errMsg = `⚠️ **Request Failed**: ${err.message}`;
-      chatHistory.push({ role: 'assistant', content: errMsg });
+      const errMsg = `⚠️ **خطا در ارسال یا دریافت پاسخ (Request Failed)**:\n\`${err.message}\`\n\n> 💡 **راهنمای سریع**: لطفاً تنظیمات مدل و ارائه‌دهنده را در بخش **ارائه‌دهندگان و مدل‌ها** بررسی کنید یا بر روی دکمه تلاش مجدد کلیک نمایید.`;
+      
+      chatHistory.push({
+        role: 'assistant',
+        content: errMsg,
+        isError: true,
+        errorDetails: errDiag
+      });
       localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
+
+      if (STATE.activeConversationId) {
+        api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: chatHistory })
+        }).catch(() => {});
+      }
+      renderChatMessages();
+    }
+  } finally {
+    $('#sendBtn').style.display = 'inline-flex';
+    $('#stopBtn').style.display = 'none';
+    abortController = null;
+    if (STATE.activeConversationId) {
+      loadConversationReferences(STATE.activeConversationId).catch(() => {});
+    }
+    refreshFileTree().catch(() => {});
+  }
+}
+
+function retryLastMessage() {
+  if (chatHistory.length === 0) return;
+  if (chatHistory[chatHistory.length - 1].role === 'assistant') {
+    chatHistory.pop();
+  }
+  renderChatMessages();
+  streamAgentResponse();
+}
 
       if (STATE.activeConversationId) {
         api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
