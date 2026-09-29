@@ -3,6 +3,7 @@ import asyncio
 import os
 import json
 import time
+import uuid
 import base64
 import mimetypes
 import csv
@@ -944,7 +945,7 @@ def get_conversations(user: Dict[str, Any] = Depends(require_viewer)):
 
 @app.post("/api/conversations")
 def create_conversation(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
-    conv_id = f"conv-{int(time.time())}"
+    conv_id = f"conv-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
     title = str(payload.get("title", "New Conversation"))
     provider = str(payload.get("provider", ""))
     model = str(payload.get("model", ""))
@@ -960,7 +961,7 @@ def get_conversation_messages(conv_id: str, user: Dict[str, Any] = Depends(requi
 
 @app.post("/api/conversations/{conv_id}/messages")
 def add_conversation_message(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
-    msg_id = f"msg-{int(time.time()*1000)}"
+    msg_id = f"msg-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
     role = str(payload.get("role", "user"))
     content = str(payload.get("content", ""))
     tool_calls = json.dumps(payload.get("tool_calls")) if payload.get("tool_calls") else None
@@ -968,6 +969,20 @@ def add_conversation_message(conv_id: str, payload: Dict[str, Any], user: Dict[s
         conn.execute("INSERT INTO messages (id, conversation_id, role, content, tool_calls) VALUES (?, ?, ?, ?, ?)", (msg_id, conv_id, role, content, tool_calls))
         conn.execute("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?", (conv_id,))
     return {"id": msg_id, "role": role, "content": content}
+
+@app.put("/api/conversations/{conv_id}/messages/sync")
+def sync_conversation_messages(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    msgs = payload.get("messages") or []
+    with get_db() as conn:
+        conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conv_id,))
+        for idx, m in enumerate(msgs):
+            msg_id = f"msg-{int(time.time()*1000)}-{idx}"
+            role = str(m.get("role", "user"))
+            content = str(m.get("content", ""))
+            tool_calls = json.dumps(m.get("tool_calls")) if m.get("tool_calls") else None
+            conn.execute("INSERT INTO messages (id, conversation_id, role, content, tool_calls) VALUES (?, ?, ?, ?, ?)", (msg_id, conv_id, role, content, tool_calls))
+        conn.execute("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?", (conv_id,))
+    return {"ok": True, "count": len(msgs)}
 
 @app.put("/api/conversations/{conv_id}")
 def update_conversation(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):

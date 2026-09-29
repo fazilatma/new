@@ -48,7 +48,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.10.0"
+    assert APP_VERSION == "0.11.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -653,6 +653,34 @@ def test_cross_chat_and_project_references_and_file_access():
     assert del_res.status_code == 200
     get_refs_after = client.get(f"/api/conversations/{conv_b_id}/references")
     assert not any(r["target_id"] == conv_a_id for r in get_refs_after.json()["references"])
+
+def test_chat_message_sync_and_edit_lifecycle():
+    # 1. Create a conversation
+    create_conv = client.post("/api/conversations", json={"title": "Edit Test Conversation"})
+    assert create_conv.status_code == 200
+    conv_id = create_conv.json()["id"]
+
+    # 2. Add initial user message and assistant response
+    client.post(f"/api/conversations/{conv_id}/messages", json={"role": "user", "content": "Write a sorting function"})
+    client.post(f"/api/conversations/{conv_id}/messages", json={"role": "assistant", "content": "Here is quicksort..."})
+
+    # 3. Simulate message edit & retry by syncing truncated/updated chain
+    updated_chain = [
+        {"role": "user", "content": "Write a mergesort function instead"},
+        {"role": "assistant", "content": "Here is mergesort with O(n log n)..."}
+    ]
+    sync_res = client.put(f"/api/conversations/{conv_id}/messages/sync", json={"messages": updated_chain})
+    assert sync_res.status_code == 200
+    assert sync_res.json()["ok"] is True
+    assert sync_res.json()["count"] == 2
+
+    # 4. Fetch messages and verify updated contents
+    get_msgs = client.get(f"/api/conversations/{conv_id}/messages")
+    assert get_msgs.status_code == 200
+    msgs = get_msgs.json()["messages"]
+    assert len(msgs) == 2
+    assert msgs[0]["content"] == "Write a mergesort function instead"
+    assert "mergesort with O(n log n)" in msgs[1]["content"]
 
 
 

@@ -1369,10 +1369,10 @@
           <div class="chat-messages" id="chatMessages">
             <div class="msg-wrapper assistant">
               <div class="msg-bubble">
-                Hello! I am your Arena AI Coding Agent v0.10.0. Each chat has its own dedicated workspace and can reference any other chat (<code>@chat:...</code>) or project (<code>@project:...</code>) to inspect, read, and copy their files seamlessly.
+                Hello! I am your Arena AI Coding Agent v0.11.0. Each chat has its own dedicated workspace and can reference any other chat (<code>@chat:...</code>) or project (<code>@project:...</code>) to inspect, read, and copy their files seamlessly.
               </div>
               <div class="msg-meta">
-                <span>Agent · v0.10.0</span>
+                <span>Agent · v0.11.0</span>
                 <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>
               </div>
             </div>
@@ -3366,13 +3366,75 @@ function renderMarkdown(md) {
 
 function copyMessageText(btn) {
   const wrap = btn.closest('.msg-wrapper');
-  const bubble = wrap.querySelector('.msg-bubble');
-  if (bubble) {
-    navigator.clipboard.writeText(bubble.textContent.trim());
+  const bubble = wrap ? wrap.querySelector('.msg-bubble') : null;
+  const text = bubble ? bubble.textContent.trim() : '';
+  if (text) {
+    navigator.clipboard.writeText(text);
     const original = btn.textContent;
     btn.textContent = '✓ Copied';
     setTimeout(() => btn.textContent = original, 1500);
   }
+}
+
+function copyUserMessageText(idx, btn) {
+  const msg = chatHistory[idx];
+  const text = msg ? (msg.content || '') : '';
+  if (text) {
+    navigator.clipboard.writeText(text);
+    const original = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(() => btn.textContent = original, 1500);
+  }
+}
+
+let editingMessageIndex = -1;
+
+function startEditUserMessage(idx) {
+  editingMessageIndex = idx;
+  renderChatMessages();
+}
+
+function cancelEditUserMessage() {
+  editingMessageIndex = -1;
+  renderChatMessages();
+}
+
+async function submitEditUserMessage(idx) {
+  const editArea = document.getElementById(`editUserMsgArea_${idx}`);
+  if (!editArea) return;
+  const newContent = editArea.value.trim();
+  if (!newContent) return;
+
+  editingMessageIndex = -1;
+
+  // Update this message content and truncate any subsequent history
+  chatHistory[idx].content = newContent;
+  chatHistory = chatHistory.slice(0, idx + 1);
+
+  renderChatMessages();
+
+  // Stream new agent response from this point
+  await streamAgentResponse();
+}
+
+function onEditUserMsgKeyDown(e, idx) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    submitEditUserMessage(idx);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    cancelEditUserMessage();
+  }
+}
+
+async function retryAgentMessage(idx) {
+  // Truncate assistant message and any subsequent messages
+  // (Leaves the conversation up to the preceding user message)
+  chatHistory = chatHistory.slice(0, idx);
+  renderChatMessages();
+
+  // Stream new agent response from this point
+  await streamAgentResponse();
 }
 
 // Chat Diagnostic Error Modal Handlers
@@ -3442,8 +3504,22 @@ function appendMessage(role, content, attachments = [], isError = false, errorDa
 
   const meta = document.createElement('div');
   meta.className = 'msg-meta';
-  const roleName = role === 'user' ? 'You' : `Agent (${$('#chatModel')?.value || 'v0.9.0'})`;
-  meta.innerHTML = `<span>${esc(roleName)}</span> ${role === 'assistant' ? '<button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>' : ''}`;
+  const roleName = role === 'user' ? 'You' : `Agent (${$('#chatModel')?.value || 'v0.10.0'})`;
+  const currIdx = chatHistory.length - 1;
+
+  if (role === 'user') {
+    meta.innerHTML = `
+      <span>You</span>
+      <button type="button" class="copy-msg-btn" onclick="copyUserMessageText(${currIdx}, this)" title="Copy message text">📋 Copy</button>
+      <button type="button" class="copy-msg-btn" onclick="startEditUserMessage(${currIdx})" title="Edit message & regenerate response">✏️ Edit</button>
+    `;
+  } else {
+    meta.innerHTML = `
+      <span>${esc(roleName)}</span>
+      <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)" title="Copy message text">📋 Copy</button>
+      <button type="button" class="copy-msg-btn" onclick="retryAgentMessage(${currIdx})" title="Regenerate this response">🔄 Retry</button>
+    `;
+  }
 
   if (attachHtml) {
     const attachWrapper = document.createElement('div');
@@ -3547,25 +3623,55 @@ function renderChatMessages() {
     container.innerHTML = `
       <div class="msg-wrapper assistant">
         <div class="msg-bubble">
-          Hello! I am your Arena AI Coding Agent v0.9.0. Your model choices and settings are automatically preserved across refreshes. Multi-modal file and image attachments, live test diagnostics, tool execution, diff reviews, and rollback history are fully supported.
+          Hello! I am your Arena AI Coding Agent v0.11.0. Each chat has its own dedicated workspace and can reference any other chat (<code>@chat:...</code>) or project (<code>@project:...</code>) to inspect, read, and copy their files seamlessly.
         </div>
         <div class="msg-meta">
-          <span>Agent · v0.9.0</span>
+          <span>Agent · v0.11.0</span>
           <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>
         </div>
       </div>
     `;
     return;
   }
-  container.innerHTML = chatHistory.map(m => `
-    <div class="msg-wrapper ${m.role}">
-      <div class="msg-bubble">${renderMarkdown(m.content)}</div>
-      <div class="msg-meta">
-        <span>${m.role === 'user' ? 'You' : 'Agent'}</span>
-        ${m.role === 'assistant' ? '<button type="button" class="copy-msg-btn" onclick="copyMessageText(this)">📋 Copy</button>' : ''}
-      </div>
-    </div>
-  `).join('');
+
+  container.innerHTML = chatHistory.map((m, idx) => {
+    if (m.role === 'user') {
+      const isEditing = (editingMessageIndex === idx);
+      return `
+        <div class="msg-wrapper user" id="msg-wrapper-${idx}">
+          ${isEditing ? `
+            <div class="msg-bubble" style="width:100%;background:var(--bg-surface);border:1px solid var(--primary);padding:10px;">
+              <textarea class="composer-textarea" id="editUserMsgArea_${idx}" style="width:100%;min-height:70px;background:var(--bg-elevated);margin-bottom:8px;" onkeydown="onEditUserMsgKeyDown(event, ${idx})">${esc(m.content)}</textarea>
+              <div style="display:flex;gap:6px;justify-content:flex-end;">
+                <button type="button" class="btn btn-ghost btn-sm" onclick="cancelEditUserMessage()">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="submitEditUserMessage(${idx})">💾 Save & Retry</button>
+              </div>
+            </div>
+          ` : `
+            <div class="msg-bubble">${renderMarkdown(m.content)}</div>
+            <div class="msg-meta">
+              <span>You</span>
+              <button type="button" class="copy-msg-btn" onclick="copyUserMessageText(${idx}, this)" title="Copy message text">📋 Copy</button>
+              <button type="button" class="copy-msg-btn" onclick="startEditUserMessage(${idx})" title="Edit message & regenerate response">✏️ Edit</button>
+            </div>
+          `}
+        </div>
+      `;
+    } else {
+      const modelName = $('#chatModel')?.value || 'Agent';
+      return `
+        <div class="msg-wrapper assistant" id="msg-wrapper-${idx}">
+          <div class="msg-bubble">${renderMarkdown(m.content)}</div>
+          <div class="msg-meta">
+            <span>Agent (${esc(modelName)})</span>
+            <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)" title="Copy message text">📋 Copy</button>
+            <button type="button" class="copy-msg-btn" onclick="retryAgentMessage(${idx})" title="Regenerate this response">🔄 Retry</button>
+          </div>
+        </div>
+      `;
+    }
+  }).join('');
+
   container.scrollTop = 1e9;
 }
 
@@ -3953,24 +4059,30 @@ $('#chatForm').onsubmit = async (e) => {
     promptContent = text ? `${text}\n\n--- Attached Files ---\n${attachmentsContext}` : attachmentsContext;
   }
 
-  appendMessage('user', text || '(Attached files)', currentAttachments);
   chatHistory.push({ role: 'user', content: promptContent });
+  renderChatMessages();
 
-  if (STATE.activeConversationId) {
-    api(`/api/conversations/${STATE.activeConversationId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', content: promptContent })
-    }).catch(() => {});
-  }
+  await streamAgentResponse();
+};
 
-  const pid = $('#chatProvider').value;
-  const mid = $('#chatModel').value;
-  const steps = +$('#chatSteps').value;
-  const reqApproval = $('#requireApprovalCheck').checked;
+async function streamAgentResponse() {
+  if (chatHistory.length === 0) return;
+
+  const pid = $('#chatProvider')?.value || 'openrouter';
+  const mid = $('#chatModel')?.value || '';
+  const steps = +($('#chatSteps')?.value || 8);
+  const reqApproval = $('#requireApprovalCheck')?.checked ?? true;
 
   $('#sendBtn').style.display = 'none';
   $('#stopBtn').style.display = 'inline-flex';
+
+  if (STATE.activeConversationId) {
+    api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: chatHistory })
+    }).catch(() => {});
+  }
 
   const assistantMsgEl = appendMessage('assistant', 'Agent is analyzing project and tools...');
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
@@ -4011,7 +4123,7 @@ $('#chatForm').onsubmit = async (e) => {
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep last incomplete line
+      buffer = lines.pop();
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -4069,12 +4181,14 @@ $('#chatForm').onsubmit = async (e) => {
     chatHistory.push({ role: 'assistant', content: accumulated });
 
     if (STATE.activeConversationId) {
-      api(`/api/conversations/${STATE.activeConversationId}/messages`, {
-        method: 'POST',
+      api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'assistant', content: accumulated })
+        body: JSON.stringify({ messages: chatHistory })
       }).catch(() => {});
     }
+
+    renderChatMessages();
 
   } catch (err) {
     if (err.name !== 'AbortError') {
@@ -4106,7 +4220,7 @@ $('#chatForm').onsubmit = async (e) => {
     }
     refreshFileTree().catch(() => {});
   }
-};
+}
 
 function renderInlineApprovalCard(container, approvalData) {
   const card = document.createElement('div');
