@@ -5294,12 +5294,14 @@ function getProjectWebUrl(p){
   if(!p.port)return '';
   const port=p.port;
   const host=window.location.hostname;
-  const proto=window.location.protocol;
   if(host.includes('.app.github.dev')){
     const cs=host.replace(/-\d+\.app\.github\.dev$/,'').replace(/\.app\.github\.dev$/,'');
     return `https://${cs}-${port}.app.github.dev/`;
   }
-  return `${proto}//${host}:${port}/`;
+  // Project daemons started by WebConsole (uvicorn, Node, etc.) serve plain
+  // HTTP unless the project explicitly terminates TLS. Reusing the console's
+  // https: scheme produces an invalid TLS URL such as https://host:8800.
+  return `http://${host}:${port}/`;
 }
 
 async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
