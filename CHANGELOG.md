@@ -13,12 +13,40 @@ Each console file carries its own `WCP_VERSION`; the suite version is the highes
 
 | Component | Version | Notes |
 | :--- | :---: | :--- |
-| `hostconsole.php` | **2.18.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
+| `hostconsole.php` | **2.19.0** | Shared-hosting edition (`WCP_EDITION = hostconsole`) |
 | `webconsole.php` | 2.9.0 | VPS edition — domain publishing not ported yet |
-| `wcp` (CLI) | 2.18.0 | Follows the suite version |
-| `install.sh` / `update.sh` | 2.18.0 | Follows the suite version |
+| `wcp` (CLI) | 2.19.0 | Follows the suite version |
+| `install.sh` / `update.sh` | 2.19.0 | Follows the suite version |
 | `py-upgrade.sh` | 1.0.2 | Standalone Python installer, versioned separately |
 | `webconsole.worker.js` | 2.8.0 | Cloudflare Workers edition, versioned separately |
+
+---
+
+## [2.19.0] — 2026-09-30 · 🗂️ Collapsible project cards
+
+### Changed
+* **Project cards start collapsed.** The header still carries everything needed
+  to identify a project at a glance — icon, name, running state and port, type,
+  published domain, auto-update interval — while the details grid and the
+  fourteen-button toolbar are folded away until the card is opened.
+* Click anywhere on the header to toggle, or focus it and press Enter/Space.
+  A chevron rotates to show the state and `aria-expanded` is kept in sync.
+* New **باز کردن همه / بستن همه** control beside the project filter.
+
+### Notes
+* Open cards survive the 25-second auto-update poll. That poll calls
+  `renderProj()`, which rebuilds the list from scratch, so without tracking the
+  expanded set separately a card would slam shut every 25 seconds while being
+  read. State lives in a `projOpen` Set that is rebuilt empty on page load,
+  which is what makes cards start collapsed without also making them forget.
+* Toggling patches the DOM directly instead of re-rendering the tab; a full
+  `renderProj()` refetches the project list and made the click feel laggy.
+* Clicks that land on a link or button inside the header are ignored by the
+  toggle, so *باز کردن صفحه وب* does not fold the card on the way out.
+* Verified with jsdom against the template and handler extracted from this
+  file: initial collapse, single-card toggle, chevron and aria state,
+  survival across a re-render, control clicks not collapsing, expand-all and
+  collapse-all with the label flip, and keyboard activation — 11 assertions.
 
 ---
 

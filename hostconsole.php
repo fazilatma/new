@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.18.0');
+define('WCP_VERSION', '2.19.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -6764,6 +6764,11 @@ INITS.proj={
     },25000);
   }
 };let projectList=[];
+/* Which project cards are expanded. Rebuilt from scratch on page load, so
+   cards always start collapsed, but preserved across renderProj() calls —
+   the poll timer re-renders every 25s and would otherwise snap shut a card
+   the operator is reading. */
+let projOpen=new Set();
 function getProjectWebUrl(p){
   if(p.domain_enabled&&p.domain_url)return p.domain_url;
   if(!p.port)return '';
@@ -6777,13 +6782,14 @@ function getProjectWebUrl(p){
   return `${proto}//${host}:${port}/`;
 }
 
-async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><button class="btn" id="proj-dom-btn" title="انتشار پروژه‌ها روی ساب‌دامین به‌جای پورت">🌐 دامنه‌ها و ساب‌دامین‌ها</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
+async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><button class="btn" id="proj-dom-btn" title="انتشار پروژه‌ها روی ساب‌دامین به‌جای پورت">🌐 دامنه‌ها و ساب‌دامین‌ها</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><button class="btn sm" id="proj-expand-all" title="باز یا بسته کردن همهٔ کارت‌ها">🔽 باز کردن همه</button><select class="mini" id="project-preset"><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
   const isRunning=p.service?.status==='running';
   const webUrl=getProjectWebUrl(p);
   return `
   <div class="card project-card compact-proj-card" style="padding:14px 16px;margin-bottom:14px;border-right: 5px solid ${isRunning?'var(--ok)':'var(--line2)'};background:var(--panel)">
-    <div class="proj-card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+    <div class="proj-card-header" data-proj-toggle="${p.id}" role="button" tabindex="0" aria-expanded="${projOpen.has(p.id)?'true':'false'}" title="کلیک برای باز و بسته کردن" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:${projOpen.has(p.id)?'10px':'0'};cursor:pointer;user-select:none">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="proj-chevron" style="display:inline-block;width:14px;font-size:12px;color:var(--muted);transition:transform .15s;transform:rotate(${projOpen.has(p.id)?'90':'0'}deg)">▶</span>
         <span style="font-size:20px">${p.type==='python'?'🐍':p.type==='php'?'🐘':p.type==='node'?'⚡':p.type==='static'?'📄':'📦'}</span>
         <h3 style="margin:0;font-size:16px;font-weight:700">${esc(p.name)}</h3>
         <span class="tag ${isRunning?'ok':'warn'}" style="font-weight:700">${isRunning?`🟢 فعال روی پورت ${esc(p.port||'8888')}`:'⚪ متوقف'}</span>
@@ -6800,6 +6806,7 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
       `:''}
     </div>
 
+    <div class="proj-card-body" ${projOpen.has(p.id)?'':'hidden'}>
     <!-- Compact Details Grid -->
     <div style="background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.7">
       <div style="display:flex;flex-wrap:wrap;gap:12px 18px">
@@ -6844,6 +6851,7 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
       <button class="btn sm" data-export="${p.id}" title="خروجی پیکربندی JSON">📄 JSON</button>
       <button class="btn danger sm" data-del="${p.id}" title="حذف این پروژه">🗑️ حذف</button>
     </div>
+    </div>
   </div>
   `;
 }).join('');$('#project-storage').onclick=projectStorageDlg;
@@ -6856,6 +6864,47 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
     }catch(e){toast(e.message,'err')}
     finally{cronBtn.disabled=false;cronBtn.textContent='⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)';}
   };$('#padd').onclick=()=>projectDlg(null);$('#preset-new').onclick=()=>projectDlg(presetProject($('#project-preset').value));$('#project-filter').oninput=e=>v.querySelectorAll('.project-card').forEach(c=>c.classList.toggle('hide',!c.textContent.toLowerCase().includes(e.target.value.trim().toLowerCase())));actions(v,'data-check',projectPreflight);
+ /* Expand/collapse. Delegated from the list root so it survives re-renders,
+    and toggled in the DOM directly rather than by re-rendering the whole tab —
+    a full renderProj() would refetch and make the click feel laggy. */
+ const setProjOpen=(card,open)=>{
+   const body=card.querySelector('.proj-card-body');
+   const head=card.querySelector('.proj-card-header');
+   const chev=card.querySelector('.proj-chevron');
+   if(!body||!head)return;
+   body.hidden=!open;
+   head.style.marginBottom=open?'10px':'0';
+   head.setAttribute('aria-expanded',open?'true':'false');
+   if(chev)chev.style.transform='rotate('+(open?90:0)+'deg)';
+ };
+ v.querySelectorAll('[data-proj-toggle]').forEach(head=>{
+   const id=head.getAttribute('data-proj-toggle');
+   const card=head.closest('.project-card');
+   const flip=ev=>{
+     /* Let the header's own link and buttons work without folding the card. */
+     if(ev.target.closest('a,button'))return;
+     const open=!projOpen.has(id);
+     if(open)projOpen.add(id); else projOpen.delete(id);
+     setProjOpen(card,open);
+   };
+   head.addEventListener('click',flip);
+   head.addEventListener('keydown',ev=>{
+     if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();flip(ev)}
+   });
+ });
+ const allBtn=$('#proj-expand-all');
+ if(allBtn)allBtn.onclick=()=>{
+   const cards=[...v.querySelectorAll('.project-card')];
+   const anyClosed=cards.some(c=>c.querySelector('.proj-card-body')?.hidden);
+   cards.forEach(c=>{
+     const head=c.querySelector('[data-proj-toggle]');
+     if(!head)return;
+     const id=head.getAttribute('data-proj-toggle');
+     if(anyClosed)projOpen.add(id); else projOpen.delete(id);
+     setProjOpen(c,anyClosed);
+   });
+   allBtn.textContent=anyClosed?'🔼 بستن همه':'🔽 باز کردن همه';
+ };
  actions(v,'data-toggle-update',async id=>{try{const d=await api('proj.toggle_auto_update',{id});if(d.auto_update){if(d.poll?.triggered?.length>0){toast(`🚀 به‌روزرسانی خودکار فعال شد؛ کامیت جدید (${d.poll.triggered[0].remote_commit}) در حال نصب است.`,'ok');openJob(d.poll.triggered[0].job_id,'دیپلوی خودکار');}else{toast('به‌روزرسانی خودکار با موفقیت فعال شد (بررسی منظم برنچ)','ok');}}else{toast('به‌روزرسانی خودکار غیرفعال شد','warn');}renderProj();}catch(e){toast(e.message,'err')}});
  actions(v,'data-check-update',async id=>{try{toast('در حال بررسی مخزن گیت‌هاب...','acc');const d=await api('proj.check_update',{id});if(d.has_update){if(await confirmDlg(`نسخه جدید (${d.remote_commit}) در شاخه ${d.branch} یافت شد (نسخه فعلی: ${d.local_commit}). هم‌اکنون نصب شود؟`)){const dep=await api('proj.deploy',{id});openJob(dep.job,'دیپلوی و به‌روزرسانی پروژه');}}else{toast(`پروژه با شاخه ${d.branch} (کامیت ${d.remote_commit||d.local_commit}) کاملاً به‌روز است`,'ok');}}catch(e){toast(e.message,'err')}});actions(v,'data-export',id=>projectExport(projectList.find(p=>p.id===id)));$('#pref').onclick=renderProj;if($('#proj-ports-btn'))$('#proj-ports-btn').onclick=openPortsSheet;if($('#proj-dom-btn'))$('#proj-dom-btn').onclick=()=>switchTab('dom');actions(v,'data-domain',id=>domainDlg(projectList.find(p=>p.id===id)));actions(v,'data-deploy',async id=>{if(!await confirmDlg('فایل‌های پروژه به‌روزرسانی شوند؟ از داده‌ها بکاپ داشته باشید.'))return;const d=await api('proj.deploy',{id});openJob(d.job,'دیپلوی پروژه')});for(const action of ['start','stop','restart'])actions(v,'data-'+action,async id=>{const d=await api('proj.service',{id,action});renderProj();if(d?.job)openJob(d.job,'سرویس')});actions(v,'data-log',id=>openJob(id,'لاگ سرویس'));actions(v,'data-copylog',async jid=>{try{toast('در حال دریافت لاگ...','acc');const d=await api('jobs.log',{id:jid,offset:0});const txt=d.b64?decode(d.b64):'';await copyText(txt,'لاگ سرویس پروژه با موفقیت کپی شد');}catch(e){toast(e.message,'err')}});actions(v,'data-edit',id=>projectDlg(projectList.find(p=>p.id===id)));actions(v,'data-files',id=>{switchTab('files');navFm(projectList.find(p=>p.id===id).deploy_path)});actions(v,'data-del',async id=>{if(await confirmDlg('پروفایل حذف و سرویس آن متوقف شود؟ فایل‌ها باقی می‌مانند.')){await api('proj.delete',{id});renderProj()}})}catch(e){toast(e.message,'err')}}
 // Import is data-only: it never saves, deploys, evaluates, or starts commands.
