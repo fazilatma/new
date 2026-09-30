@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.181';
+const APP_VERSION = '10.182';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -26781,6 +26781,131 @@ if (isset($_GET['pag_probe'])) {
     echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
 }
 
+/* v10.182: تست سه‌صفحه‌ای همهٔ موتورهای PHP-native روی پروفایل جاری.
+   این همان ایدهٔ benchmark پروژهٔ Node است، با این تفاوت که اینجا فقط موتورهایی
+   اجرا می‌شوند که داخل همین تک‌فایل PHP و بدون وابستگی Node/Python قابل اجرا هستند. */
+if (isset($_GET['engine_benchmark'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(0); @ignore_user_abort(true);
+    $u = trim((string)($_POST['url'] ?? $_GET['url'] ?? ''));
+    if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) {
+        echo json_encode(['ok' => false, 'error' => 'آدرس پروفایل نامعتبر است.'], JSON_UNESCAPED_UNICODE); exit;
+    }
+    $pt = (string)($_POST['pagType'] ?? $_GET['pagType'] ?? 'query_page');
+    $pv = trim((string)($_POST['pagVal'] ?? $_GET['pagVal'] ?? ''));
+    $benchPages = 3;
+    $sel = [];
+    if (isset($_POST['selectors'])) {
+        $__tmp = json_decode((string)$_POST['selectors'], true);
+        if (is_array($__tmp)) $sel = $__tmp;
+    } elseif (!empty($_GET['selectors'])) {
+        $__tmp = json_decode((string)$_GET['selectors'], true);
+        if (is_array($__tmp)) $sel = $__tmp;
+    }
+    $engines = extractionEngineAllowed();
+    $results = [];
+    $startedAll = microtime(true);
+    foreach ($engines as $engine) {
+        $rowStart = microtime(true);
+        $errors = [];
+        $seen = [];
+        $usedLayers = [];
+        $pageRows = [];
+        $totalParsed = 0;
+        $unique = 0;
+        $nextUrl = null;
+        if ($engine === 'selectors' && empty($sel['container'])) {
+            $results[] = [
+                'engine' => $engine, 'label' => extractionEngineLabel($engine), 'ok' => false,
+                'pages_scanned' => 0, 'products_total' => 0, 'products_unique' => 0,
+                'products_duplicate' => 0,
+                'elapsed_ms' => 0, 'products_per_minute' => 0,
+                'errors' => ['برای موتور CSS selectors، سلکتور container لازم است.'],
+                'pages' => [], 'used_layers' => [], 'hint' => 'اگر می‌خواهید بدون سلکتور تست کنید، موتور Structural/heuristic یا Auto smart را ببینید.'
+            ];
+            continue;
+        }
+        for ($page = 1; $page <= $benchPages; $page++) {
+            if ($page === 1) $pageUrl = $u;
+            elseif ($pt === 'next_selector' && $nextUrl) $pageUrl = $nextUrl;
+            elseif ($pt === 'next_selector' && !$nextUrl) { $errors[] = 'صفحهٔ بعد پیدا نشد (next_selector).'; break; }
+            else $pageUrl = build_page_url_custom($u, $u, $page, $pt, $pv);
+
+            $fetchStart = microtime(true);
+            $res = fetch_html_smart($pageUrl, 20);
+            $fetchMs = (int)round((microtime(true) - $fetchStart) * 1000);
+            $html = (string)($res['html'] ?? '');
+            $parseStart = microtime(true);
+            $used = '';
+            $products = !empty($res['ok']) ? parse_list_by_engine($html, (string)($res['url'] ?? $pageUrl), $sel, $engine, $used) : [];
+            $parseMs = (int)round((microtime(true) - $parseStart) * 1000);
+            if ($used !== '') $usedLayers[$used] = true;
+            $new = 0;
+            $sample = [];
+            foreach ($products as $k => $p) {
+                $totalParsed++;
+                if (count($sample) < 3) {
+                    $sample[] = [
+                        'title' => (string)($p['title'] ?? ''),
+                        'link'  => (string)($p['link'] ?? ''),
+                        'price' => (string)($p['price'] ?? ''),
+                    ];
+                }
+                if (isset($seen[$k])) continue;
+                $seen[$k] = true; $new++;
+            }
+            $unique = count($seen);
+            $perr = '';
+            if (empty($res['ok'])) {
+                $perr = (string)($res['error'] ?? ('HTTP ' . (int)($res['code'] ?? 0)));
+                $errors[] = 'page ' . $page . ': ' . $perr;
+            }
+            $pageRows[] = [
+                'page' => $page, 'ok' => !empty($res['ok']), 'code' => (int)($res['code'] ?? 0),
+                'url' => $pageUrl, 'final_url' => (string)($res['url'] ?? ''),
+                'bytes' => strlen($html), 'products' => count($products), 'new' => $new,
+                'used_engine' => $used, 'fetch_ms' => $fetchMs, 'parse_ms' => $parseMs,
+                'sample' => $sample,
+                'error' => $perr,
+            ];
+            if ($pt === 'next_selector' && !empty($pv) && !empty($res['ok'])) {
+                [$dom, $xp] = load_dom($html);
+                $xpath = cssToXpath($pv);
+                $nodes = $xpath ? @$xp->query($xpath) : null;
+                if ($nodes && $nodes->length && $nodes->item(0) instanceof DOMElement) {
+                    $href = $nodes->item(0)->getAttribute('href');
+                    $nextUrl = ($href && $href !== '#' && !preg_match('~^(javascript:|data:)~i', $href))
+                        ? make_absolute_url($href, (string)($res['url'] ?? $pageUrl)) : null;
+                } else $nextUrl = null;
+            }
+        }
+        $elapsedMs = (int)round((microtime(true) - $rowStart) * 1000);
+        $duplicates = max(0, $totalParsed - $unique);
+        $ppm = $elapsedMs > 0 ? (int)round(($unique * 60000) / max(1, $elapsedMs)) : 0;
+        $results[] = [
+            'engine' => $engine, 'label' => extractionEngineLabel($engine),
+            'ok' => $unique > 0 && count($errors) === 0,
+            'pages_scanned' => count($pageRows), 'products_total' => $totalParsed,
+            'products_unique' => $unique, 'products_duplicate' => $duplicates,
+            'elapsed_ms' => $elapsedMs,
+            'products_per_minute' => $ppm, 'errors' => $errors,
+            'pages' => $pageRows, 'used_layers' => array_keys($usedLayers),
+            'hint' => $unique > 0 ? ($totalParsed > $unique ? 'بعضی محصولات بین صفحات تکراری بودند؛ unique معیار بهتر است.' : 'محصول یکتا پیدا شد.') : 'این موتور روی سه صفحهٔ اول محصولی پیدا نکرد.',
+        ];
+    }
+    $fastest = null;
+    foreach ($results as $r) {
+        if (($r['products_unique'] ?? 0) <= 0) continue;
+        if ($fastest === null || (int)$r['products_per_minute'] > (int)$fastest['products_per_minute']) $fastest = $r;
+    }
+    echo json_encode([
+        'ok' => true, 'url' => $u, 'pages_target' => $benchPages,
+        'took_ms' => (int)round((microtime(true) - $startedAll) * 1000),
+        'results' => $results,
+        'fastest' => $fastest ? ['engine' => $fastest['engine'], 'label' => $fastest['label'], 'products_per_minute' => $fastest['products_per_minute'], 'products_unique' => $fastest['products_unique']] : null,
+    ], JSON_UNESCAPED_UNICODE); exit;
+}
+
 /* v10.174: آزمون اتصال به سرویس رندر (browser/) — مانند src_probe ولی به
    اندپوینتِ /health خودِ سرویس نه به یک صفحهٔ وب. */
 if (isset($_GET['render_probe'])) {
@@ -35007,6 +35132,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.181', 'ورودیِ 10.181 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "181'") !== false
       && version_compare(APP_VERSION, '10.' . '181', '>='));
+
+    /* ---------- v10.182: تست سه‌صفحه‌ای موتورهای استخراج + سرعت زنده ---------- */
+    $add('10.182', 'اندپوینت benchmark سه‌صفحه‌ای موتورها وجود دارد',
+         strpos($selfSrc, "isset(\$_GET['engine_" . "benchmark'])") !== false
+      && strpos($selfSrc, 'products_per_minute') !== false
+      && strpos($selfSrc, 'products_duplicate') !== false
+      && strpos($selfSrc, 'pages_scanned') !== false);
+    $add('10.182', 'دکمه و جدول تست سه‌صفحه‌ای در صفحه شروع هست',
+         strpos($selfSrc, 'id="engine' . 'BenchmarkBtn"') !== false
+      && strpos($selfSrc, 'function engine' . 'BenchmarkStart(){') !== false
+      && strpos($selfSrc, 'function renderEngine' . 'Benchmark(rep){') !== false);
+    $add('10.182', 'کارت سرعت محصول/دقیقه در آمار شروع هست و با poll به‌روز می‌شود',
+         strpos($selfSrc, 'id="num' . 'Speed"') !== false
+      && strpos($selfSrc, 'function update' . 'SpeedCard') !== false
+      && strpos($selfSrc, 'updateSpeedCard(extracted, d.started_at||0)') !== false);
+    $add('10.182', 'شروع بک‌اند برای موتورهای Auto/Heuristic به container اجباری گیر نمی‌دهد',
+         strpos($selfSrc, "const profEngine=prof.extraction" . "Engine||'selectors';") !== false
+      && strpos($selfSrc, "if(profEngine==='selectors'&&(!sels.container") !== false);
+    $add('10.182', 'ورودیِ 10.182 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "182'") !== false
+      && version_compare(APP_VERSION, '10.' . '182', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -58999,6 +59145,11 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             <div class="row" style="margin-top:6px">
                 <button class="btn btn-purple" id="startBackendBtn" onclick="startBackendSync()" style="flex:1;font-size:13px;padding:8px 12px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;border:none;border-radius:8px;cursor:pointer">⚡ استخراج بک‌اند</button>
             </div>
+            <!-- v10.182: benchmark all PHP-native extraction engines on first three pages -->
+            <div class="row" style="margin-top:6px">
+                <button class="btn btn-orange" id="engineBenchmarkBtn" onclick="engineBenchmarkStart()" style="flex:1;font-size:12px;padding:8px 12px;font-weight:800">🏁 تست سه‌صفحه‌ای همهٔ موتورها</button>
+            </div>
+            <div id="engineBenchmarkBox" style="display:none;margin-top:8px"></div>
 
             <!-- v10.35 (۴۷ه): همگام‌سازیِ دستی — یک دکمه برای کلِ زنجیره -->
             <div id="manualSyncBox" style="margin-top:8px;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:10px">
@@ -59063,6 +59214,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             <div class="stat"><b id="numP">۰</b><span>محصول</span></div>
             <div class="stat"><b id="numPg">۰</b><span>صفحه</span></div>
             <div class="stat"><b id="numD">۰</b><span>جزئیات</span></div>
+            <div class="stat"><b id="numSpeed">۰</b><span>محصول/دقیقه</span></div>
         </div>
     </div>
 </div>
@@ -60142,7 +60294,7 @@ try{var d=document.getElementById('_dbg');if(d)d.insertAdjacentHTML('beforeend',
 </script>
 <script>
 const $=id=>document.getElementById(id);
-let es=null,detailEs=null,products=new Map(),order=[],pages=0,details=0,running=false,detailRunning=false,mode='auto';
+let es=null,detailEs=null,products=new Map(),order=[],pages=0,details=0,running=false,detailRunning=false,mode='auto',extractSpeedStartMs=0;
 // v8.77: نگهبانِ توقفِ استخراج تفصیلی
 let detailWatch=null, detailLastBeat=0;
 let sel={container:'',title:'',price:'',link:'',image:''};
@@ -61356,6 +61508,75 @@ function pagProbe(){
         if(d.ok)showToast('✓ الگوی صفحه‌بندی سالم است');
     })
     .catch(()=>{box.textContent='❌ خطا در ارتباط با رابطِ آزمایش';});
+}
+
+function engineBenchmarkStart(){
+    const box=$('engineBenchmarkBox');
+    const btn=$('engineBenchmarkBtn');
+    if(!box)return;
+    let d={};
+    try{d=collectProfileData();}catch(e){box.style.display='block';box.innerHTML='<div class="alert alert-danger">خطا در خواندن فرم: '+esc(e.message||e)+'</div>';return;}
+    if(!d.url){showToast('ابتدا آدرس پروفایل را وارد کنید',1);return;}
+    box.style.display='block';
+    box.innerHTML='<div style="padding:10px;background:#0f172a;border:1px solid #f59e0b;border-radius:10px;color:#fde68a;font-size:12px">⏳ تست سه‌صفحه‌ای موتورها شروع شد… هر موتور فقط سه صفحهٔ اول را می‌خواند و چیزی ذخیره نمی‌کند.</div>';
+    if(btn){btn.disabled=true;btn.textContent='⏳ در حال تست موتورها…';}
+    const fd=new FormData();
+    fd.append('url',d.url||'');
+    fd.append('pages','3');
+    fd.append('pagType',d.pagType||'query_page');
+    fd.append('pagVal',d.pagVal||'');
+    fd.append('selectors',JSON.stringify(d.selectors||{}));
+    fetch('?engine_benchmark=1',{method:'POST',body:fd})
+      .then(r=>r.json()).then(rep=>{
+        if(!rep||!rep.ok){throw Error((rep&&rep.error)||'پاسخ نامعتبر');}
+        renderEngineBenchmark(rep);
+        if(rep.fastest)showToast('🏁 سریع‌ترین موتور: '+rep.fastest.engine+' — '+toFa(rep.fastest.products_per_minute)+' محصول/دقیقه');
+      }).catch(e=>{
+        box.innerHTML='<div class="alert alert-danger">❌ خطای تست موتورها: '+esc(e.message||e)+'</div>';
+      }).finally(()=>{if(btn){btn.disabled=false;btn.textContent='🏁 تست سه‌صفحه‌ای همهٔ موتورها';}});
+}
+function renderEngineBenchmark(rep){
+    const box=$('engineBenchmarkBox'); if(!box)return;
+    const rows=rep.results||[];
+    const fast=rep.fastest&&rep.fastest.engine;
+    let h='<div style="background:linear-gradient(135deg,#0f172a,#42200655);border:1px solid #f59e0b;border-radius:12px;padding:12px;color:#e2e8f0">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
+    h+='<b style="color:#fde68a;font-size:13px">🏁 نتیجهٔ تست سه‌صفحه‌ای موتورهای استخراج</b>';
+    h+='<span style="font-size:10px;color:#94a3b8">صفحات هدف: '+toFa(rep.pages_target||3)+' · زمان کل: '+toFa(rep.took_ms||0)+'ms</span></div>';
+    if(rep.fastest){
+        h+='<div style="margin-bottom:8px;padding:8px 10px;background:#14532d55;border:1px solid #22c55e66;border-radius:8px;font-size:11px;color:#bbf7d0">';
+        h+='✅ سریع‌ترین موتورِ دارای محصول: <b>'+esc(rep.fastest.label||rep.fastest.engine)+'</b> — '+toFa(rep.fastest.products_per_minute||0)+' محصول/دقیقه · '+toFa(rep.fastest.products_unique||0)+' محصول یکتا';
+        h+='</div>';
+    }
+    h+='<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px">';
+    h+='<thead><tr style="background:#1e293b;color:#cbd5e1"><th style="padding:7px;border:1px solid #334155">موتور</th><th style="padding:7px;border:1px solid #334155">وضعیت</th><th style="padding:7px;border:1px solid #334155">صفحات</th><th style="padding:7px;border:1px solid #334155">کل کارت‌ها</th><th style="padding:7px;border:1px solid #334155">محصول یکتا</th><th style="padding:7px;border:1px solid #334155">تکراری</th><th style="padding:7px;border:1px solid #334155">سرعت میانگین</th><th style="padding:7px;border:1px solid #334155">زمان</th><th style="padding:7px;border:1px solid #334155">لایه/خطا</th><th style="padding:7px;border:1px solid #334155">جزئیات صفحه‌ها</th></tr></thead><tbody>';
+    rows.forEach(r=>{
+        const ok=(r.products_unique||0)>0;
+        const isFast=fast&&fast===r.engine;
+        const status=ok?(isFast?'🏆 سریع‌ترین':'✓ محصول دارد'):'✗ بی‌نتیجه';
+        const errs=(r.errors||[]).join(' | ');
+        const layers=(r.used_layers||[]).join('، ');
+        const pg=(r.pages||[]).map(p=>{
+          const sam=(p.sample||[]).map(s=>((s.title||'').slice(0,80))+(s.price?(' — '+s.price):'')+(s.link?(' — '+s.link):'')).join(' | ');
+          return 'ص'+p.page+': '+(p.ok?'HTTP '+p.code:'خطا')+' · '+(p.products||0)+' کارت · '+(p.new||0)+' تازه · fetch '+(p.fetch_ms||0)+'ms · parse '+(p.parse_ms||0)+'ms'+(p.final_url&&p.final_url!==p.url?' · نهایی: '+p.final_url:'' )+(p.used_engine?' · موتور: '+p.used_engine:'')+(sam?'\nنمونه‌ها: '+sam:'')+(p.error?' · '+p.error:'');
+        });
+        h+='<tr style="background:'+(isFast?'#14532d33':'#0f172a')+'">';
+        h+='<td style="padding:7px;border:1px solid #334155;color:#fde68a"><b>'+esc(r.label||r.engine)+'</b><br><span dir="ltr" style="color:#94a3b8">'+esc(r.engine)+'</span></td>';
+        h+='<td style="padding:7px;border:1px solid #334155;color:'+(ok?'#86efac':'#fca5a5')+'">'+status+'</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;text-align:center">'+toFa(r.pages_scanned||0)+'</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;text-align:center">'+toFa(r.products_total||0)+'</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;text-align:center;font-weight:800">'+toFa(r.products_unique||0)+'</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;text-align:center;color:#fbbf24">'+toFa(r.products_duplicate||0)+'</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;text-align:center;color:#67e8f9;font-weight:800">'+toFa(r.products_per_minute||0)+' / دقیقه</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;text-align:center">'+toFa(r.elapsed_ms||0)+'ms</td>';
+        h+='<td style="padding:7px;border:1px solid #334155;max-width:220px">'+(layers?('لایه: '+esc(layers)+'<br>'):'')+(errs?('<span style="color:#fca5a5">'+esc(errs)+'</span>'):('<span style="color:#94a3b8">'+esc(r.hint||'—')+'</span>'))+'</td>';
+        h+='<td style="padding:7px;border:1px solid #334155"><details><summary style="cursor:pointer;color:#93c5fd">نمایش</summary><div style="direction:rtl;white-space:pre-wrap;color:#cbd5e1;line-height:1.8">'+esc(pg.join('\n')||'—')+'</div></details></td>';
+        h+='</tr>';
+    });
+    h+='</tbody></table></div>';
+    h+='<div style="font-size:10px;color:#94a3b8;margin-top:8px;line-height:1.8">این تست فقط فهرست سه صفحهٔ اول را می‌خواند؛ گالری/جزئیات محصول و ارسال به مقصد انجام نمی‌شود. معیار سرعت = محصول یکتای یافت‌شده ÷ زمان کل موتور.</div>';
+    h+='</div>';
+    box.innerHTML=h;
 }
 
 function onUrlChange() {
@@ -62841,6 +63062,18 @@ function log(m,t='info'){
   logs.scrollTop = logs.scrollHeight;
 }
 
+function updateSpeedCard(count, startedAtSec){
+  const el=$('numSpeed'); if(!el)return;
+  let startedMs=startedAtSec?startedAtSec*1000:extractSpeedStartMs;
+  let ppm=0;
+  if(startedMs&&count>0){
+    const mins=Math.max((Date.now()-startedMs)/60000, 1/60);
+    ppm=Math.max(0, Math.round(count/mins));
+  }
+  fxSetNum('numSpeed', toFa(ppm));
+  el.title=ppm?('میانگین از شروع اجرا: '+ppm+' محصول/دقیقه'):'در انتظار استخراج';
+}
+
 function update(){
   /* v10.06: fxSetNum فقط وقتی می‌نویسد که عدد واقعاً عوض شده باشد و همان‌جا
      تپشِ کوتاهِ fx-bump را می‌زند — هم DOM کمتر دست می‌خورد، هم تغییرِ عدد
@@ -62848,6 +63081,7 @@ function update(){
   fxSetNum('numP',  toFa(products.size));
   fxSetNum('numPg', toFa(pages));
   fxSetNum('numD',  toFa(details));
+  if(extractSpeedStartMs) updateSpeedCard(products.size, 0);
 
   const badge = $('resultsBadge');
   const _bPrev = badge.textContent;
@@ -63588,8 +63822,9 @@ function backendExtractFor(url,panelTitle,phase){
         if(!d.ok||!d.profile){showToast('خطا: پروفایل یافت نشد — اول ذخیره کنید',1);return;}
         const prof=d.profile||{};
         const sels=prof.selectors||{};
-        if(!sels.container||sels.container===''){
-            showToast('⚠️ سلکتورها ذخیره نشده — ابتدا سلکتور انتخاب و پروفایل را ذخیره کنید',1);
+        const profEngine=prof.extractionEngine||'selectors';
+        if(profEngine==='selectors'&&(!sels.container||sels.container==='')){
+            showToast('⚠️ سلکتورها ذخیره نشده — برای این موتور CSS selector لازم است؛ یا موتور Auto/Heuristic را انتخاب و ذخیره کنید',1);
             switchMainTab('selectors');
             return;
         }
@@ -64583,6 +64818,7 @@ function pollExtractProgress(){
         const removed=d.removed||0;
         const unchanged=d.unchanged||0;
         const page=d.page||0;
+        updateSpeedCard(extracted, d.started_at||0);
 
         // Update progress bar
         $('extractProgressBar').style.width=(total>0?Math.min(current/total*100,100):0)+'%';
@@ -64742,7 +64978,7 @@ function start(useSel=false){
 
   if (isDirty) saveProfileSilent();
 
-  products.clear();order=[];pages=0;details=0;running=true;
+  products.clear();order=[];pages=0;details=0;running=true;extractSpeedStartMs=Date.now();
   /* v10.31 (۴۴): استخراجِ زنده محصولات را تک‌تک می‌نشاند، پس هر دو نما
      از همین حالا «تازه» حساب می‌شوند و نباید بعداً دوباره ساخته شوند. */
   rvCancelChunks();
@@ -64787,7 +65023,7 @@ function start(useSel=false){
 }
 
 function stop(){if(es)es.close();log('⏹ متوقف شد','err');finish();}
-function finish(){running=false;if(es){es.close();es=null;}$('startBtn').classList.remove('hidden');$('startManualBtn').classList.remove('hidden');$('stopBtn').classList.add('hidden');$('txtContent').textContent=genTxt();showLiveComparison();fxBusy($('status'),false);}
+function finish(){updateSpeedCard(products.size,0);extractSpeedStartMs=0;running=false;if(es){es.close();es=null;}$('startBtn').classList.remove('hidden');$('startManualBtn').classList.remove('hidden');$('stopBtn').classList.add('hidden');$('txtContent').textContent=genTxt();showLiveComparison();fxBusy($('status'),false);}
 
 function startDetailExtraction(){
     if(detailRunning)return;
@@ -64974,7 +65210,7 @@ function finishDetailExtraction(){
 function clearResults(){
   if(!confirm('پاک کردن همه نتایج؟ (تنظیمات و سلکتورها حفظ می‌شوند)')) return;
   resetResultFilter();
-  products.clear();order=[];pages=0;details=0;
+  products.clear();order=[];pages=0;details=0;extractSpeedStartMs=0;updateSpeedCard(0,0);
   $('vGrid').innerHTML='<div class="empty-state" id="emptyState"><div class="icon">📭</div><p>هنوز محصولی اسکرپ نشده است.</p></div>';
   $('tBody').innerHTML='';$('txtContent').textContent='';
   $('emptyState')||0;
@@ -65080,6 +65316,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.182', t:'🏁 تست سه‌صفحه‌ای موتورهای استخراج + کارت سرعت محصول/دقیقه', items:[
+    'در صفحهٔ شروع دکمهٔ «🏁 تست سه‌صفحه‌ای همهٔ موتورها» اضافه شد؛ روی پروفایل فعلی، هر موتور PHP-native فقط سه صفحهٔ اول را می‌خواند و چیزی ذخیره یا ارسال نمی‌کند',
+    'گزارش تست به‌صورت جدول نشان می‌دهد: وضعیت هر موتور، تعداد صفحات، کل کارت‌ها، محصول یکتا، تعداد تکراری، سرعت میانگین محصول/دقیقه، زمان کل، لایهٔ استفاده‌شده، خطاها و جزئیات هر صفحه شامل HTTP/fetch/parse',
+    'سریع‌ترین موتورِ دارای محصول با نشان 🏆 مشخص می‌شود تا برای پروفایل انتخابش ساده باشد',
+    'کارت شمارندهٔ «محصول/دقیقه» به آمار صفحهٔ شروع اضافه شد و در استخراج زنده/بک‌اند میانگین سرعت از شروع اجرا را نشان می‌دهد',
+    'گارد فرانت‌اند استخراج بک‌اند با موتورهای بدون سلکتور سازگار شد: اگر موتور Auto/Heuristic باشد، نبودِ container دیگر جلوی شروع را نمی‌گیرد',
+  ]},
   {v:'10.181', t:'⚡ موتورهای استخراج PHP-native + اجرای طولانی‌تر و سریع‌تر روی کنسول', items:[
     'علتِ قطعِ بعد از چند صفحه شفاف شد: وقتی max_execution_time صفر است (PHP CLI/Console)، خودِ برنامه قبلاً برای احتیاط بعد از حدود ۱۲۰ ثانیه فاز فهرست را pause می‌کرد؛ این کرش نبود، محافظِ resume بود. پیش‌فرض کنسول حالا ۹۰۰ ثانیه است و از تنظیمات هم قابل تغییر شد',
     'مکث ثابت ۵۰۰ms بین صفحات حذف و به تنظیم قابل کنترل «مکث بین صفحات» تبدیل شد؛ پیش‌فرض ۸۰ms است. اگر سایتی بلاک می‌کند، از تنظیم «فاصلهٔ درخواست‌ها» برای همان دامنه استفاده کنید',
