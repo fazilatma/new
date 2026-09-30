@@ -1,0 +1,26 @@
+{
+  "name": "arena-agent-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Arena AI Coding Agent — Cloudflare Workers edition (port of the Python/FastAPI agent)",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "build": "wrangler deploy --dry-run --outdir=dist",
+    "db:init:local": "wrangler d1 execute arena-agent-db --local --file=./migrations/0001_init.sql",
+    "db:init:remote": "wrangler d1 execute arena-agent-db --remote --file=./migrations/0001_init.sql",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241224.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.99.0"
+  }
+}

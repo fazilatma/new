@@ -1,0 +1,40 @@
+# -----------------------------------------------------------------------------
+# Local development secrets for `wrangler dev`.
+# Copy to `.dev.vars` (git-ignored) and fill in what you need.
+# In production every one of these is set with: wrangler secret put <NAME>
+# -----------------------------------------------------------------------------
+
+# Encrypts provider API keys stored in KV (AES-GCM-256). Set a long random value.
+AGENT_MASTER_KEY=""
+
+# Optional master bearer token. Any request carrying it is treated as Admin,
+# and POST /api/auth/login {"token": "..."} exchanges it for a session.
+AGENT_AUTH_TOKEN=""
+
+# -------------------------- LLM provider keys --------------------------------
+OPENROUTER_API_KEY=""
+GROQ_API_KEY=""
+TOGETHER_API_KEY=""
+MISTRAL_API_KEY=""
+GEMINI_API_KEY=""
+DEEPSEEK_API_KEY=""
+ANTHROPIC_API_KEY=""
+OPENAI_API_KEY=""
+
+# Base URL of an Ollama server reachable from the public internet
+# (127.0.0.1 is NOT reachable from a Cloudflare Worker).
+OLLAMA_BASE_URL=""
+
+# ---------------------- Cloudflare platform features -------------------------
+# Needed for Browser Rendering (real Chromium screenshots / page content).
+CLOUDFLARE_ACCOUNT_ID=""
+CLOUDFLARE_API_TOKEN=""
+
+# ------------------------------- GitHub --------------------------------------
+# Fine-grained PAT with Contents + Pull requests + Actions scopes.
+# Powers every /api/git/* and /api/github/* route.
+GITHUB_TOKEN=""
+
+# ------------------------------- Bootstrap -----------------------------------
+# Password for the auto-created `admin` account (default: admin123).
+AGENT_INITIAL_ADMIN_PASSWORD=""
