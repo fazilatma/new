@@ -6,12 +6,16 @@ PORT="${PORT:-5500}"
 export PORT
 export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 
-# Agent Canvas npm/source launcher serves the UI from the origin root.
-# HostConsole must strip /openhands/ before proxying to this local port.
+# Agent Canvas serves the UI from the origin root. HostConsole should strip
+# /openhands/ before proxying to this local port.
 unset AGENT_CANVAS_BASE_PATH VITE_BASE_PATH
 
-# Dynamically select three consecutive free loopback ports. This prevents
-# stale Agent Canvas processes from blocking startup.
+# Create the workspace root expected by AutomationService.
+export OPENHANDS_WORKSPACE_ROOT="${OPENHANDS_WORKSPACE_ROOT:-$HOME/.openhands/agent-canvas/workspaces}"
+export OPENHANDS_AUTOMATION_WORKSPACE_ROOT="${OPENHANDS_AUTOMATION_WORKSPACE_ROOT:-$OPENHANDS_WORKSPACE_ROOT/automation-runs}"
+mkdir -p "$OPENHANDS_AUTOMATION_WORKSPACE_ROOT" "$OPENHANDS_WORKSPACE_ROOT" 2>/dev/null || true
+
+# Dynamically select three consecutive free loopback ports.
 read -r OH_CANVAS_SAFE_BACKEND_PORT OH_CANVAS_SAFE_AUTOMATION_PORT OH_CANVAS_SAFE_VITE_PORT <<EOF
 $(node <<'NODE'
 const net = require('net');
@@ -38,6 +42,27 @@ NODE
 EOF
 export OH_CANVAS_SAFE_BACKEND_PORT OH_CANVAS_SAFE_AUTOMATION_PORT OH_CANVAS_SAFE_VITE_PORT
 
+# Lightweight diagnostics for shared-host resource kills (code 137).
+DIAG_DIR="${OPENHANDS_DIAG_DIR:-$HOME/.openhands/agent-canvas}"
+mkdir -p "$DIAG_DIR" 2>/dev/null || true
+DIAG_LOG="$DIAG_DIR/resource.log"
+diag_loop() {
+  while :; do
+    {
+      printf '[%s] pid=%s ports=%s,%s,%s ' "$(date '+%Y-%m-%d %H:%M:%S')" "$$"         "$OH_CANVAS_SAFE_BACKEND_PORT" "$OH_CANVAS_SAFE_AUTOMATION_PORT" "$OH_CANVAS_SAFE_VITE_PORT"
+      if [ -r /proc/meminfo ]; then
+        awk '/MemTotal:|MemAvailable:|SwapTotal:|SwapFree:/{printf "%s=%sKB ", $1, $2}' /proc/meminfo
+      fi
+      printf '\n'
+    } >> "$DIAG_LOG" 2>/dev/null || true
+    sleep 30
+  done
+}
+diag_loop &
+DIAG_PID=$!
+cleanup() { kill "$DIAG_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
 if [ ! -s ".openhands-backend-key" ]; then
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr -d '\n' > .openhands-backend-key
@@ -63,6 +88,8 @@ fi
 
 echo "[openhands] Starting Agent Canvas on port $PORT"
 echo "[openhands] Internal ports: backend=$OH_CANVAS_SAFE_BACKEND_PORT automation=$OH_CANVAS_SAFE_AUTOMATION_PORT frontend=$OH_CANVAS_SAFE_VITE_PORT"
+echo "[openhands] Workspace: $OPENHANDS_AUTOMATION_WORKSPACE_ROOT"
+echo "[openhands] Resource diagnostics: $DIAG_LOG"
 echo "[openhands] Ensuring Agent Canvas ${AGENT_CANVAS_VERSION:-1.24.0} is installed..."
 npm install --no-audit --no-fund --include=prod --prefer-online
 
