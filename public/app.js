@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.12.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.13.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -125,7 +125,7 @@ let agentMode='auto';
 let activeAgentRunId='';
 let agentTelemetryTimer=null;
 let lastAgentChanges=[];
-let agentTaskHistory=[];
+let agentTaskHistory=[];\nlet reviewDecisions={};
 
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
@@ -270,7 +270,7 @@ async function revertToCheckpoint(){if(!confirm('Revert workspace to the latest 
 async function openFileDiff(file){try{const d=await api('/api/workspace/diff?'+new URLSearchParams({path:file}).toString());$('diffTitle').textContent=file;const body=$('diffBody');$('diffKind').textContent=d.kind==='added'?'New file':d.kind==='deleted'?'Deleted file':'Checkpoint → current workspace';body.innerHTML=(d.lines||[]).map(x=>'<div class="diff-line '+x.type+'"><span>'+(x.lineA??'')+'</span><span>'+(x.lineB??'')+'</span><code>'+esc(x.text||'')+'</code></div>').join('')||'<div class="diff-empty">No differences.</div>';$('diffModal').classList.add('open')}catch(e){setActivity('Diff error',e.message)}}
 function closeDiffModal(){$('diffModal').classList.remove('open')}
 function saveAgentTask(record){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]');agentTaskHistory.unshift(record);agentTaskHistory=agentTaskHistory.slice(0,20);localStorage.setItem('arena.agent.tasks.v1',JSON.stringify(agentTaskHistory))}catch{}}
-function toggleTaskHistory(){const body=$('taskHistoryBody');if(!body)return;body.classList.toggle('hidden');if(!body.classList.contains('hidden')){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}body.innerHTML=renderTaskHistory()}}
+loadReviewDecisions();\nfunction toggleTaskHistory(){const body=$('taskHistoryBody');if(!body)return;body.classList.toggle('hidden');if(!body.classList.contains('hidden')){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}body.innerHTML=renderTaskHistory()}}
 function renderTaskHistory(){const history=agentTaskHistory.length?agentTaskHistory.map(x=>'<div class="task-history-item"><div><b>'+esc(x.prompt)+'</b><small>'+new Date(x.createdAt).toLocaleString()+' · '+(x.success?'completed':'review needed')+'</small></div><span>'+esc(String(x.iterations||0))+' iter</span></div>').join(''):'<div class="task-history-empty">No previous Agent runs.</div>';return '<div class="task-history">'+history+'</div>'}
 async function refreshGitState(){await loadGitState()}
 function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentChanges.length){
@@ -283,13 +283,14 @@ function renderReviewSummary(changes=[]){
   const counts=changes.reduce((m,x)=>(m[x.status]=(m[x.status]||0)+1,m),{});
   el.innerHTML='<span class="review-pill added">+'+(counts.added||0)+'</span><span class="review-pill modified">~'+(counts.modified||0)+'</span><span class="review-pill deleted">−'+(counts.deleted||0)+'</span>';
 }
+function loadReviewDecisions(){try{reviewDecisions=JSON.parse(localStorage.getItem('arena.review.decisions.v1')||'{}')}catch{reviewDecisions={}}}
+function setReviewDecision(file,decision){reviewDecisions[file]=decision;try{localStorage.setItem('arena.review.decisions.v1',JSON.stringify(reviewDecisions))}catch{}renderWorkspaceChanges(lastAgentChanges)}
+async function revertFileToCheckpoint(file){if(!confirm('Revert only '+file+' to the latest checkpoint?'))return;try{await api('/api/workspace/revert-file',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path:file})});setReviewDecision(file,'reverted');setActivity('File reverted',file);await loadFiles();await refreshGitState()}catch(e){setActivity('File revert error',e.message)}}
 function renderWorkspaceChanges(changes=[]){
-  lastAgentChanges=changes||[];
-  renderReviewSummary(lastAgentChanges);
+  lastAgentChanges=changes||[];renderReviewSummary(lastAgentChanges);
   const el=$('changesView');if(!el)return;
   if(!changes.length){el.innerHTML='<div class="activity-empty"><span>⌁</span><p>No workspace changes</p><small>The latest run did not modify tracked workspace files.</small></div>';return}
-  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>'<div class="change-item"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code>'+esc(x.path)+'</code><small>'+esc(x.status)+(x.bytesAfter!=null?' · '+x.bytesAfter+' B':'')+'</small><button class="terminal-mini" onclick="openFileDiff('+JSON.stringify(x.path)+')">Diff</button></div>').join('')+'</div>';
-  
+  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>{const d=reviewDecisions[x.path]||'pending';const label=d==='approved'?'Approved':d==='reverted'?'Reverted':'Pending';return '<div class="change-item '+d+'"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code title="'+esc(x.path)+'">'+esc(x.path)+'</code><small>'+esc(label)+'</small><div class="change-actions"><button class="terminal-mini" onclick="openFileDiff('+JSON.stringify(x.path)+')">Diff</button><button class="terminal-mini review-approve" onclick="setReviewDecision('+JSON.stringify(x.path)+',\'approved\')">✓</button><button class="terminal-mini review-revert" onclick="revertFileToCheckpoint('+JSON.stringify(x.path)+')">↶</button></div></div>'}).join('')+'</div>';
 }
 function renderAgentChecks(history=[]){
   const el=$('checksView');if(!el)return;
