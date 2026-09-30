@@ -23,6 +23,37 @@ app.post('/api/mkdir',async(q,r)=>{await fs.mkdir(safePath(root,String(q.body.pa
 app.delete('/api/file',async(q,r)=>{await fs.rm(safePath(root,String(q.body.path||'')),{recursive:true});send(r,{ok:true})});
 app.post('/api/terminal',async(q,r)=>{const command=String(q.body.command||'').trim();if(!command)return r.status(400).json({error:'command required'});if(isDangerousCommand(command))return r.status(403).json({error:'Blocked by safety policy'});const child=spawn('/bin/sh',['-lc',command],{cwd:root,env:{...process.env,HOME:process.env.HOME||root},stdio:['ignore','pipe','pipe']});let out='',err='';const max=Number(process.env.MAX_OUTPUT_BYTES||200000);child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);const t=setTimeout(()=>child.kill('SIGTERM'),Number(q.body.timeout||process.env.COMMAND_TIMEOUT_MS||120000));child.on('close',code=>{clearTimeout(t);send(r,{code,stdout:out.slice(-max),stderr:err.slice(-max)})})});
 app.get('/api/providers',async(_,r)=>{try{send(r,JSON.parse(await fs.readFile(providersFile,'utf8')))}catch{send(r,{})}});app.put('/api/providers',async(q,r)=>{const p=providerNormalize(q.body);await fs.mkdir(path.dirname(providersFile),{recursive:true});await fs.writeFile(providersFile,JSON.stringify(p,null,2));send(r,{ok:true,providers:p})});
+app.get('/api/models/recommend',async(q,r)=>{
+  const ram=Math.max(4,Number(q.query.ramGb||16)), vram=Math.max(0,Number(q.query.vramGb||0)), cpu=Math.max(1,Number(q.query.cpuThreads||8));
+  const context=Math.min(131072,Math.max(2048,Number(q.query.context||8192))), disk=Math.max(2,Number(q.query.diskGb||30));
+  const useCase=String(q.query.useCase||'coding'), priority=String(q.query.priority||'balanced'), quant=String(q.query.quant||'auto');
+  const catalog=[
+    {name:'Qwen3 4B',family:'Qwen3',params:'4B',size:{Q4_K_M:2.5,Q5_K_M:2.9,Q8_0:4.3},ram:6,vram:4,score:{coding:78,general:82,reasoning:72,translation:84},file:{Q4_K_M:'Qwen3-4B-Q4_K_M.gguf',Q5_K_M:'Qwen3-4B-Q5_K_M.gguf',Q8_0:'Qwen3-4B-Q8_0.gguf'},repo:'Qwen/Qwen3-4B-GGUF'},
+    {name:'Qwen3 8B',family:'Qwen3',params:'8B',size:{Q4_K_M:5.0,Q5_K_M:5.9,Q8_0:8.7},ram:9,vram:7,score:{coding:88,general:91,reasoning:87,translation:92},file:{Q4_K_M:'Qwen3-8B-Q4_K_M.gguf',Q5_K_M:'Qwen3-8B-Q5_K_M.gguf',Q8_0:'Qwen3-8B-Q8_0.gguf'},repo:'Qwen/Qwen3-8B-GGUF'},
+    {name:'Qwen3 14B',family:'Qwen3',params:'14B',size:{Q4_K_M:9.0,Q5_K_M:10.5,Q8_0:15.7},ram:14,vram:11,score:{coding:93,general:94,reasoning:95,translation:95},file:{Q4_K_M:'Qwen3-14B-Q4_K_M.gguf',Q5_K_M:'Qwen3-14B-Q5_K_M.gguf',Q8_0:'Qwen3-14B-Q8_0.gguf'},repo:'Qwen/Qwen3-14B-GGUF'},
+    {name:'Qwen3 Coder 30B A3B',family:'Qwen3 Coder MoE',params:'30B / 3B active',size:{Q4_K_M:18.6,Q5_K_M:21.7,Q8_0:32.5},ram:24,vram:20,score:{coding:100,general:94,reasoning:98,translation:96},file:{Q4_K_M:'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf',Q5_K_M:'qwen3-coder-30b-a3b-instruct-q5_k_m.gguf',Q8_0:'qwen3-coder-30b-a3b-instruct-q8_0.gguf'},repo:'ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF'}
+  ];
+  const pickQuant=m=>{
+    if(quant!=='auto')return quant;
+    if(priority==='quality' && m.size.Q8_0+4<=Math.max(ram,vram||0))return 'Q8_0';
+    if(priority==='quality' && m.size.Q5_K_M+3<=Math.max(ram,vram||0))return 'Q5_K_M';
+    return 'Q4_K_M';
+  };
+  const out=catalog.map(m=>{
+    const qn=pickQuant(m), size=m.size[qn], memoryTarget=vram>0?vram:ram, overhead=(context/8192)*1.2+2;
+    const fitsDisk=disk>=size+1, fitsMemory=memoryTarget>=size+overhead;
+    const cpuFactor=cpu>=12?1:cpu>=8?.9:cpu>=4?.78:.65;
+    const useScore=m.score[useCase]||80;
+    let fitPenalty=(fitsMemory?0:45)+(fitsDisk?0:25);
+    if(vram>0 && vram<size+overhead)fitPenalty+=15;
+    let score=useScore*cpuFactor-fitPenalty;
+    if(priority==='speed')score+=(m.params==='4B'?8:m.params==='8B'?5:m.params==='14B'?1:-4);
+    if(priority==='quality')score+=(qn==='Q8_0'?8:qn==='Q5_K_M'?5:0);
+    return {...m,quant:qn,sizeGb:size,ramGb:Math.ceil(Math.max(m.ram, size+overhead)),vramGb:Math.ceil(Math.max(0,m.vram)),context,score,fitLabel:fitsMemory&&fitsDisk?'مناسب':'نیازمند منابع بیشتر',
+      url:'https://huggingface.co/'+m.repo+'/resolve/main/'+m.file[qn]+'?download=true',reason:fitsMemory&&fitsDisk?'با توجه به مشخصات واردشده، حافظه و فضای دیسک برای این انتخاب در محدوده مناسب است.':'برای اجرای پایدار، RAM/VRAM یا فضای دیسک بیشتری لازم است.'};
+  }).filter(m=>m.score>0).sort((a,b)=>b.score-a.score).slice(0,4);
+  send(r,{ok:true,input:{ram,vram,cpu,context,disk,useCase,priority,quant},recommendations:out});
+});
 app.get('/api/models',async(_,r)=>{const e=await fs.readdir(modelsRoot,{withFileTypes:true});send(r,e.filter(x=>x.isFile()&&/\\.gguf$/i.test(x.name)).map(x=>({name:x.name})))});
 app.post('/api/models/download',async(q,r)=>{const url=String(q.body.url||'');const name=path.basename(new URL(url).pathname);if(!/\\.gguf$/i.test(name))return r.status(400).json({error:'Only GGUF downloads are supported'});const dest=safePath(modelsRoot,name);const x=await fetch(url);if(!x.ok)return r.status(x.status).json({error:'download failed'});const fh=await fs.open(dest,'w');try{const rd=x.body.getReader();while(true){const z=await rd.read();if(z.done)break;await fh.write(z.value)}}finally{await fh.close()}send(r,{ok:true,name})});
 app.post('/api/models/test-all',async(q,r)=>{
