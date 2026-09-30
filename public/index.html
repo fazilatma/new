@@ -19,7 +19,7 @@
 </header>
 
 <div class="workspace-bar">
-  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.5.2</span></div>
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.6.0</span></div>
   <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
 </div>
 
@@ -47,16 +47,26 @@
   <div class="agent-panel">
     <div class="agent-header">
       <div class="agent-heading"><div class="agent-title"><span class="pulse"></span> AI Coding Agent <em>ACTIVE</em></div><small>هدف را توضیح بده؛ Agent تحلیل، اجرا، تست و اصلاح را انجام می‌دهد.</small></div>
-      <div class="agent-tools"><span>ITERATIONS</span><input id="maxIterations" type="number" min="1" max="20" value="8"></div>
+      
     </div>
-    <div class="prompt-row"><textarea id="prompt" placeholder="چه چیزی می‌خواهید بسازیم؟  مثلاً: API احراز هویت را بساز، تست بنویس و خطاها را خودت اصلاح کن…"></textarea><button class="run-agent" onclick="runAgentLoop()"><span>▶</span> اجرای Agent</button></div>
+    <div class="prompt-row"><textarea id="prompt" placeholder="Describe the task… e.g. inspect the project, implement the feature, run tests and fix failures."></textarea><button class="run-agent" onclick="runAgentLoop()"><span>▶</span> Run Agent</button></div>
+    <div class="agent-modelbar">
+      <label>Model<select id="agentModel" onchange="selectAgentModel()"><option value="">Loading models…</option></select></label>
+      <label>Iterations<input id="maxIterations" type="number" min="1" max="20" value="8"></label>
+      <button class="agent-advanced-btn" onclick="toggleAgentAdvanced()">⚙ Advanced</button>
+    </div>
+    <div id="agentAdvanced" class="agent-advanced">
+      <label>Temperature<input id="agentTemperature" type="number" min="0" max="2" step="0.1" value="0.1"></label>
+      <label>Max output<input id="agentMaxTokens" type="number" min="256" max="12000" value="6000"></label>
+      <label>Command timeout<input id="agentCommandTimeout" type="number" min="1000" max="300000" value="120000"></label>
+    </div>
     <div class="quick-prompts"><button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">⌁ بررسی پروژه</button><button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">✓ تست و رفع خطا</button><button onclick="setPrompt('کد را تمیز، سریع و حرفه‌ای کن بدون تغییر رفتار اصلی.')">✦ بهینه‌سازی</button></div>
     <div id="answer" class="agent-output"><div class="empty-agent"><div class="agent-orbit">✦</div><p>Agent آماده است</p><small>یک وظیفه وارد کنید تا چرخه خودکار شروع شود.</small></div></div>
   </div>
 </section>
 
 <aside class="right-panel">
-  <div class="panel-head"><div><strong>ACTIVITY</strong><small>گزارش زنده اجرای Agent</small></div><button class="ghost" onclick="clearActivity()">پاک کردن</button></div>
+  <div class="panel-head"><div><strong>ACTIVITY</strong><small>Agent / Terminal</small></div><button class="ghost" onclick="clearActivity()">پاک کردن</button></div>
   <div id="activity" class="activity"><div class="activity-empty"><span>◌</span><p>هنوز فعالیتی ثبت نشده</p><small>اجرای Agent و Terminal اینجا نمایش داده می‌شود.</small></div></div>
   <div class="terminal-panel">
     <div class="terminal-head"><span>⌘ TERMINAL</span><span id="terminalState">READY</span></div>
