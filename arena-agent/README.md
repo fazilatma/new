@@ -3,7 +3,7 @@
 A self-hosted, multi-provider AI chat and coding workspace in plain PHP.
 No Composer, no build step, no framework — copy the folder to a host and open it.
 
-Version **2.2.0**. See [CHANGELOG.md](CHANGELOG.md).
+Version **2.3.0**. See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
