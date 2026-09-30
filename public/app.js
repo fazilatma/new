@@ -125,7 +125,10 @@ let agentMode='auto';
 let activeAgentRunId='';
 let agentTelemetryTimer=null;
 let lastAgentChanges=[];
-let agentTaskHistory=[];\nlet reviewDecisions={};\nlet activeReviewCheckpointId='';\nlet projectCheckHistory=[];
+let agentTaskHistory=[];
+let reviewDecisions={};
+let activeReviewCheckpointId='';
+let projectCheckHistory=[];
 
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
