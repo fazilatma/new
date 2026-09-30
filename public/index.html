@@ -19,7 +19,7 @@
 </header>
 
 <div class="workspace-bar">
-  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.2.3</span></div>
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.3.0</span></div>
   <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
 </div>
 
@@ -93,7 +93,7 @@
           <label>اولویت<select id="recPriority"><option value="balanced">تعادل کیفیت و سرعت</option><option value="quality">کیفیت بیشتر</option><option value="speed">سرعت بیشتر</option></select></label>
           <label>Quantization<select id="recQuant"><option value="auto">خودکار</option><option value="Q4_K_M">Q4_K_M</option><option value="Q5_K_M">Q5_K_M</option><option value="Q8_0">Q8_0</option></select></label>
         </div>
-        <div id="recommendations" class="recommendations"><div class="benchmark-empty">RAM، VRAM، Context و کاربری را وارد کنید.</div></div>
+        <div id="recommendations" class="recommendations"><div id="modelInstallStatus" class="model-install-status" aria-live="polite"></div><div class="benchmark-empty">RAM، VRAM، Context و کاربری را وارد کنید.</div></div>
       </div>
       <label>نام مدل نصب‌شده<input id="modelName" placeholder="نام مدل"></label>
       <button class="secondary-setting" onclick="launchModel()">اجرای مدل محلی</button>
