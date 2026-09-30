@@ -74,7 +74,7 @@ const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat
 const clamp=(n,min,max,fallback)=>{const x=Number(n);return Number.isFinite(x)?Math.min(max,Math.max(min,x)):fallback};
 const safeTimeout=v=>clamp(v,1000,300000,120000);
 const validLocalPort=v=>{const p=clamp(v,1024,65535,8080);return Math.floor(p)};
-const APP_VERSION='1.12.0';
+const APP_VERSION='1.13.0';
 const CHECKPOINT_DIR=path.join(root,'.arena','checkpoints');
 const CHECKPOINT_MAX_FILES=200;
 const CHECKPOINT_MAX_BYTES=20*1024*1024;
@@ -112,6 +112,19 @@ app.get('/api/workspace/checkpoint',async(_,r)=>{const cp=await readCheckpoint()
 app.post('/api/workspace/checkpoint',async(q,r)=>{try{send(r,{ok:true,checkpoint:await createCheckpoint(q.body?.label||'Manual checkpoint')})}catch(e){r.status(500).json({error:e.message||'Checkpoint failed'})}});
 app.post('/api/workspace/revert',async(_,r)=>{try{const result=await restoreCheckpoint();if(!result.ok)return r.status(404).json(result);send(r,result)}catch(e){r.status(500).json({error:e.message||'Revert failed'})}});
 app.get('/api/workspace/diff',async(q,r)=>{const name=String(q.query.path||'');if(!name)return r.status(400).json({error:'path required'});const cp=await readCheckpoint();if(!cp)return r.status(404).json({error:'No checkpoint exists'});try{const before=Object.prototype.hasOwnProperty.call(cp.files||{},name)?String(cp.files[name]):null;let after=null;try{after=await fs.readFile(safePath(root,name),'utf8')}catch(e){if(e.code!=='ENOENT')throw e}if(before===null&&after===null)return r.status(404).json({error:'File is not available in checkpoint or workspace'});send(r,{path:name,before,after,kind:before===null?'added':after===null?'deleted':'modified',lines:diffText(before||'',after||'')})}catch(e){r.status(500).json({error:e.message||'Diff failed'})}});
+app.post('/api/workspace/revert-file',async(q,r)=>{
+  const name=String(q.body.path||'');
+  if(!name)return r.status(400).json({error:'path required'});
+  const cp=await readCheckpoint();
+  if(!cp||cp.truncated)return r.status(409).json({error:'A complete checkpoint is required for per-file revert'});
+  const has=Object.prototype.hasOwnProperty.call(cp.files||{},name);
+  const p=safePath(root,name);
+  try{
+    if(has){await fs.mkdir(path.dirname(p),{recursive:true});await fs.writeFile(p,String(cp.files[name]??''));return send(r,{ok:true,path:name,action:'restored'})}
+    await fs.rm(p,{recursive:true,force:true});
+    return send(r,{ok:true,path:name,action:'removed'})
+  }catch(e){return r.status(500).json({error:e.message||'File revert failed'})}
+});
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
 app.get('/api/files',async(q,r)=>{const d=safePath(root,String(q.query.path||''));const e=await fs.readdir(d,{withFileTypes:true});send(r,e.map(x=>({name:x.name,type:x.isDirectory()?'dir':'file'})).sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name)))});
 app.get('/api/file',async(q,r)=>{const p=safePath(root,String(q.query.path||''));send(r,{path:path.relative(root,p),content:await fs.readFile(p,'utf8')})});
