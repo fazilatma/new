@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.14.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.14.2'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -122,7 +122,8 @@ const AGENT_CHAT_KEY='arena.agent.chat.v1';
 let agentConversation=[];
 let agentRunStartedAt=0;
 let agentMode='auto';
-let activeAgentRunId='';
+let closeAgentEventStream();
+    activeAgentRunId='';
 let agentTelemetryTimer=null;
 let lastAgentChanges=[];
 let agentTaskHistory=[];
@@ -375,6 +376,9 @@ function setAgentMode(mode){
 function newAgentRunId(){
   try{return crypto.randomUUID()}catch{return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
 }
+let activeAgentEventSource=null;
+function connectAgentEventStream(runId){if(activeAgentEventSource){try{activeAgentEventSource.close()}catch{}}if(!runId||!window.EventSource)return;const source=new EventSource(apiUrl('/api/agent/events/'+encodeURIComponent(runId)));activeAgentEventSource=source;source.onmessage=e=>{try{const v=JSON.parse(e.data);if(v.type==='connected')return;const labels={planning:'Planning',checkpoint:'Checkpoint',iteration:'Iteration',plan:'Plan',write:'Write',command:'Command',check:'Verification',completed:'Completed',cancelled:'Cancelled'};const label=labels[v.type]||v.type;let detail=v.path||v.command||v.message||'';if(v.type==='plan')detail=(v.actions||0)+' action(s)'+(v.message?' · '+v.message:'');if(v.type==='check')detail=(v.ok?'PASS':'FAIL')+' · '+(v.failures||0)+' failure(s)';setActivity(label,detail);updateAgentTelemetry(v.type==='check'?(v.ok?'CHECKING':'ERROR'):v.type==='completed'?(v.ok?'DONE':'REVIEW'):'RUNNING',v.iteration||'—',lastAgentChanges.length)}catch{}};source.onerror=()=>{if(activeAgentRunId===runId)setActivity('Live events','Reconnecting…')}}
+function closeAgentEventStream(){if(activeAgentEventSource){try{activeAgentEventSource.close()}catch{}activeAgentEventSource=null}}
 async function stopAgentRun(){
   if(!activeAgentRunId)return;
   const id=activeAgentRunId;
@@ -504,7 +508,7 @@ async function runAgentLoop(){
   resizeAgentPrompt($('prompt'));
   renderConversation();
   setAgentRunState('RUNNING');
-  setActivity('Agent started',p);
+  setActivity('Agent started',p);connectAgentEventStream(activeAgentRunId);
   agentRunStartedAt=Date.now();
   saveAgentChat();
   try{
