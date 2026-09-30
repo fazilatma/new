@@ -6,9 +6,9 @@ PORT="${PORT:-5500}"
 export PORT
 export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 
-# HostConsole publishes this app under /openhands/ using its htaccess proxy.
-export AGENT_CANVAS_BASE_PATH="${AGENT_CANVAS_BASE_PATH:-/openhands}"
-export VITE_BASE_PATH="${VITE_BASE_PATH:-$AGENT_CANVAS_BASE_PATH}"
+# Agent Canvas npm/source launcher serves the UI from the origin root.
+# HostConsole must strip /openhands/ before proxying to this local port.
+unset AGENT_CANVAS_BASE_PATH VITE_BASE_PATH
 
 # Dedicated internal ports prevent stale/default OpenHands instances on
 # 18000/18001/3001 from blocking this instance.
