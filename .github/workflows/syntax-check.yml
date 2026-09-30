@@ -22,10 +22,17 @@ jobs:
           PORT=3137 HOST=127.0.0.1 WORKSPACE_ROOT="$RUNNER_TEMP/arena-workspace" MODELS_ROOT="$RUNNER_TEMP/arena-models" node server/index.js >/tmp/arena-agent.log 2>&1 &
           PID=$!
           trap 'kill $PID 2>/dev/null || true' EXIT
+          ready=0
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3137/api/health >/tmp/health.json; then break; fi
+            if curl -fsS http://127.0.0.1:3137/api/health >/tmp/health.json 2>/tmp/health.err; then ready=1; break; fi
             sleep 1
           done
+          if [ "$ready" -ne 1 ]; then
+            echo "Arena server did not become ready."
+            cat /tmp/arena-agent.log || true
+            cat /tmp/health.err || true
+            exit 1
+          fi
           grep -q '"ok":true' /tmp/health.json
           curl -fsS http://127.0.0.1:3137/api/project/commands >/tmp/project-commands.json
           grep -q '"commands"' /tmp/project-commands.json
