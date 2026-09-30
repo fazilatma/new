@@ -224,7 +224,11 @@ async function testProvider(id) {
 /* ------------------------------------------------------------ import */
 function openImport() {
   $('#imText').value = '';
+  $('#imFile').value = '';
   $('#imReplace').checked = false;
+  S.importFile = null;
+  const sel = $('#imProvider');
+  sel.innerHTML = S.providers.filter((p) => p.enabled).map((p) => '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>').join('');
   $('#imResult').innerHTML = '';
   $('#importDlg').showModal();
 }
@@ -236,6 +240,9 @@ async function runImport(e) {
   const text = $('#imText').value.trim();
   const file = S.importFile;
   const replace = $('#imReplace').checked;
+  const modelsOnly = $('#imModelsOnly').checked;
+  const providerId = $('#imProvider').value;
+  if (modelsOnly && !providerId) return bad('برای درون‌ریزی مدل، یک ارائه‌دهنده مقصد انتخاب کنید.');
   if (!file && !text) return bad('فایل یا متن JSON را وارد کنید.');
   if (!file) {
     try { JSON.parse(text); } catch (err) { return bad('متن، JSON معتبر نیست: ' + err.message); }
@@ -253,10 +260,12 @@ async function runImport(e) {
       fd.append('replace', replace ? '1' : '0');
       r = await api('/api/providers/import', { method: 'POST', body: fd });
     } else {
-      r = await api('/api/providers/import', { method: 'POST', body: { json: text, replace } });
+      const body = { json: text, replace };
+      if (modelsOnly) { body.modelsOnly = true; body.providerId = providerId; }
+      r = await api('/api/providers/import', { method: 'POST', body });
     }
     $('#imResult').innerHTML = '<div class="card" style="margin:0">' +
-      '<h2>' + (r.providers || 0) + ' ارائه‌دهنده و ' + (r.models || 0) + ' مدل درون‌ریزی شد</h2>' +
+      '<h2>' + (modelsOnly ? (r.models || 0) + ' مدل درون‌ریزی شد' : (r.providers || 0) + ' ارائه‌دهنده و ' + (r.models || 0) + ' مدل درون‌ریزی شد') + '</h2>' +
       (r.created?.length ? '<p class="hint">تازه: ' + esc(r.created.join('، ')) + '</p>' : '') +
       (r.updated?.length ? '<p class="hint">به‌روزشده: ' + esc(r.updated.join('، ')) + '</p>' : '') +
       (r.skipped?.length ? '<p class="hint">رد شد: ' + esc(r.skipped.map((s) => s.key).join('، ')) + '</p>' : '') +
