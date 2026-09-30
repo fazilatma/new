@@ -62,7 +62,8 @@ function setPrompt(v){$('prompt').value=v;$('prompt').focus()}
 async function runAgentLoop(){const p=$('prompt').value.trim();if(!p)return;const out=$('answer');out.innerHTML='<div class="empty-agent"><span>◌</span><p>Agent در حال کار است…</p><small>تحلیل → اجرا → تست → اصلاح</small></div>';setActivity('Agent started',p);try{const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:p,modelUrl:window.modelUrlApi?.value||'http://127.0.0.1:8080/v1/chat/completions',maxIterations:Number($('maxIterations').value||8)})});out.innerHTML=(d.history||[]).map(x=>'<div class="activity-item"><b>Iteration '+x.iteration+' · '+esc(x.message||'')+'</b><p>'+esc(JSON.stringify(x.verification||x.actions||[]))+'</p></div>').join('')||'<div class="empty-agent">پاسخی دریافت نشد.</div>';setActivity(d.success?'Agent completed':'Agent stopped',d.success?'نسخه تأیید شد':'به سقف تکرار رسید')}catch(e){out.innerHTML='<div class="empty-agent"><p>'+esc(e.message)+'</p></div>';setActivity('Agent error',e.message)}}
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveFile()}});
 window.modelUrlApi={value:'http://127.0.0.1:8080/v1/chat/completions'};
-async function refresh(){try{await loadFiles();await loadModels();await loadProviders();$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
+async function loadVersion(){try{const d=await api('/api/version');if($('appVersion'))$('appVersion').textContent='v'+d.version}catch{}}
+async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion()]);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
 refresh();
 
 function toggleSettings(){const o=$('settingsOverlay');if(o)o.classList.toggle('open')}
