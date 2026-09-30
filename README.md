@@ -131,7 +131,48 @@ The `wcp` command is globally installed across Linux, Codespaces, and Termux:
 
 ---
 
-## 🐳 Rootless Docker Helper (No `sudo` / No `apt`)
+## 🐍 Latest Python + Rootless AI Agent Helper (No `sudo`, `apt`, or Docker)
+
+`install-python-agent.sh` is the supported path for restricted hosting accounts. It installs or upgrades `uv`, the latest stable CPython, and Open WebUI Computer (`cptr`) entirely under the account home. It also makes the new user-level `python` and `python3` launchers the defaults in future login and Bash sessions, without modifying `/usr/bin`.
+
+Download and run the helper:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-python-agent.sh -o "$HOME/install-python-agent.sh"
+```
+
+```bash
+bash "$HOME/install-python-agent.sh" install --home "$HOME"
+```
+
+If WebConsole provides an invalid `HOME`, use the real account path explicitly:
+
+```bash
+bash install-python-agent.sh install --home /home/USERNAME
+```
+
+After the first installation, all runtime operations use the installed helper command:
+
+```bash
+python-agent status
+python-agent update
+python-agent restart
+python-agent logs --follow
+python-agent doctor
+python-agent python-version
+```
+
+By default the helper installs the most reliable base `cptr` package. Optional feature sets are available during installation or update:
+
+```bash
+python-agent update --extras recommended
+```
+
+The accepted feature sets are `base`, `mcp`, `agents`, `recommended`, and `all`. The helper stores the virtual environment, data, PID, logs, and generated configuration in private account-owned paths under `~/.local` and `~/.config`.
+
+The included `open-webui-computer-rootless-project.json` imports the same helper into WebConsole, installs the newest stable Python automatically, and uses `python-agent run` for foreground process supervision.
+
+## 🐳 Rootless Docker Helper (Provider Features Required)
 
 Restricted Linux hosts can run the prerequisite check and install Docker under the hosting account with the helper below. The host must already provide `newuidmap`, `newgidmap`, subordinate UID/GID ranges, unprivileged user namespaces, and container networking support.
 

