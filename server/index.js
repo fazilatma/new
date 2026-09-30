@@ -106,7 +106,67 @@ app.post('/api/models/test-all',async(q,r)=>{
     else if(m?.id||m?.name) imported.push({provider:p.name||p.id,id:String(m.id||m.name),name:String(m.name||m.id),url:m.url||p.url,apiKey:m.apiKey||p.apiKey||p.apiKeys?.[0]||'',vendor:m.vendor||p.vendor||p.id});
   }
   const prompt=String(q.body.prompt||'سلام! در یک جمله خودت را معرفی کن.').slice(0,400), context=Math.min(32768,Math.max(512,Number(q.body.context||4096))), maxTokens=Math.min(1024,Math.max(1,Number(q.body.maxTokens||64))), temperature=Math.min(2,Math.max(0,Number(q.body.temperature??0.2))), results=[];
-  const testLocal=async name=>{const started=Date.now(),port=10080+(results.length%1000),modelPath=safePath(modelsRoot,name);let child=null,logs='';try{const llama=process.env.LLAMA_BIN||'llama-server',args=['-m',modelPath,'--host','127.0.0.1','--port',String(port),'-c',String(context)];if(Number(q.body.gpuLayers)>=0)args.push('-ngl',String(Math.floor(Number(q.body.gpuLayers))));child=spawn(llama,args,{cwd:root,stdio:['ignore','pipe','pipe']});child.stderr?.on('data',b=>{logs+=b.toString().slice(-4000)});const deadline=Date.now()+60000;let ready=false;while(Date.now()<deadline){try{const z=await fetch('http://127.0.0.1:'+port+'/v1/models',{signal:AbortSignal.timeout(1500)});if(z.ok){ready=true;break}}catch{}if(child.exitCode!==null)break;await new Promise(x=>setTimeout(x,350))}if(!ready)throw Error(child.exitCode!==null?'llama-server exited before becoming ready':'Model startup timeout');const readyAt=Date.now(),x=await fetch('http://127.0.0.1:'+port+'/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name,messages:[{role:'user',content:prompt}],temperature,max_tokens:maxTokens,stream:false}),signal:AbortSignal.timeout(120000)}),d=await x.json().catch(()=>({}));if(!x.ok)throw Error(d.error?.message||d.message||('HTTP '+x.status));const text=d.choices?.[0]?.message?.content||d.choices?.[0]?.text||d.response||'',usage=d.usage||{},elapsed=Date.now()-readyAt,ct=Number(usage.completion_tokens||0);return{name,source:'local',ok:true,startupMs:readyAt-started,latencyMs:elapsed,response:String(text).slice(0,2000),promptTokens:usage.prompt_tokens??null,completionTokens:ct||null,tokensPerSecond:ct&&elapsed>0?Math.round(ct*1000/elapsed*10)/10}}catch(e){return{name,source:'local',ok:false,error:e.message+(logs?': '+logs.slice(-600):''),startupMs:Date.now()-started,latencyMs:Date.now()-started}}finally{if(child){try{child.kill('SIGTERM')}catch{}}}};
+  const testLocal=async name=>{
+    const started=Date.now();
+    const port=10080+(results.length%1000);
+    const modelPath=safePath(modelsRoot,name);
+    let child=null;
+    let logs='';
+    try{
+      const llama=process.env.LLAMA_BIN||'llama-server';
+      const args=['-m',modelPath,'--host','127.0.0.1','--port',String(port),'-c',String(context)];
+      const gpuLayers=Number(q.body.gpuLayers);
+      if(Number.isFinite(gpuLayers)&&gpuLayers>=0)args.push('-ngl',String(Math.floor(gpuLayers)));
+      child=spawn(llama,args,{cwd:root,stdio:['ignore','pipe','pipe']});
+      child.stderr?.on('data',b=>{logs+=b.toString().slice(-4000)});
+      const deadline=Date.now()+60000;
+      let ready=false;
+      while(Date.now()<deadline){
+        try{
+          const z=await fetch('http://127.0.0.1:'+port+'/v1/models',{signal:AbortSignal.timeout(1500)});
+          if(z.ok){ready=true;break}
+        }catch{}
+        if(child.exitCode!==null)break;
+        await new Promise(x=>setTimeout(x,350));
+      }
+      if(!ready)throw Error(child.exitCode!==null?'llama-server exited before becoming ready':'Model startup timeout');
+      const readyAt=Date.now();
+      const x=await fetch('http://127.0.0.1:'+port+'/v1/chat/completions',{
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({model:name,messages:[{role:'user',content:prompt}],temperature,max_tokens:maxTokens,stream:false}),
+        signal:AbortSignal.timeout(120000)
+      });
+      const d=await x.json().catch(()=>({}));
+      if(!x.ok)throw Error(d.error?.message||d.message||('HTTP '+x.status));
+      const text=d.choices?.[0]?.message?.content||d.choices?.[0]?.text||d.response||'';
+      const usage=d.usage||{};
+      const elapsed=Date.now()-readyAt;
+      const completionTokens=Number(usage.completion_tokens||0);
+      return {
+        name,
+        source:'local',
+        ok:true,
+        startupMs:readyAt-started,
+        latencyMs:elapsed,
+        response:String(text).slice(0,2000),
+        promptTokens:usage.prompt_tokens??null,
+        completionTokens:completionTokens||null,
+        tokensPerSecond:completionTokens&&elapsed>0?Math.round(completionTokens*1000/elapsed*10)/10:null
+      };
+    }catch(e){
+      return {
+        name,
+        source:'local',
+        ok:false,
+        error:e.message+(logs?': '+logs.slice(-600):''),
+        startupMs:Date.now()-started,
+        latencyMs:Date.now()-started
+      };
+    }finally{
+      if(child){try{child.kill('SIGTERM')}catch{}}
+    }
+  };
   const testImported=async item=>{
     const started=Date.now();
     try{
