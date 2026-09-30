@@ -547,6 +547,33 @@
       background: var(--bg-elevated);
       flex-wrap: wrap;
     }
+    /* The collapse control only exists on narrow/zoomed viewports; on a
+       roomy desktop the selects are always visible. */
+    .chat-controls-toggle {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      flex: 1 1 100%;
+      min-width: 0;
+      padding: 4px 6px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      font-size: 12px;
+      cursor: pointer;
+      text-align: start;
+    }
+    .chat-controls-toggle:hover { background: var(--bg-highlight); color: var(--text-main); }
+    .chat-controls-summary {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+      color: var(--text-main);
+    }
     .chat-messages {
       flex: 1;
       overflow-y: auto;
@@ -2138,6 +2165,17 @@
         font-size: 11px;
         padding: 3px 8px;
       }
+      /* Model-picker header becomes collapsible: on a phone (or a desktop
+         zoomed past ~150%, which is what max-height catches) these three
+         controls otherwise eat most of the chat area. */
+      .chat-top-controls { padding: 6px 8px; gap: 6px; }
+      .chat-controls-toggle { display: flex; }
+      .chat-top-controls.collapsed .chat-controls-field { display: none !important; }
+      .chat-top-controls.collapsed { padding-bottom: 6px; }
+      .chat-top-controls .chat-controls-field { flex: 1 1 100%; }
+      .chat-top-controls #chatProvider,
+      .chat-top-controls #chatModel { width: 100% !important; }
+      .chat-top-controls label.chat-controls-field { margin-left: 0 !important; }
     }
   </style>
 </head>
@@ -2178,6 +2216,9 @@
       </button>
       <button class="nav-btn" data-view="providers" onclick="navigate('providers')">
         <span class="icon">🤖</span><span class="nav-text">Providers & Models</span>
+      </button>
+      <button class="nav-btn" data-view="localai" onclick="openLocalAi()" title="نصب و اجرای مدل هوش مصنوعی روی همین سرور (Local AI installer)">
+        <span class="icon">🧠</span><span class="nav-text">Local AI Installer</span>
       </button>
       <button class="nav-btn" data-view="changesets" onclick="navigate('changesets')">
         <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
@@ -2258,10 +2299,17 @@
         </div>
 
         <div class="chat-main">
-          <div class="chat-top-controls">
-            <select id="chatProvider" class="input-control" style="width:160px" onchange="onChatProviderChange()"></select>
-            <select id="chatModel" class="input-control" style="width:200px" onchange="onChatModelChange()"></select>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;">
+          <div class="chat-top-controls" id="chatTopControls">
+            <button type="button" class="chat-controls-toggle" id="chatControlsToggle"
+                    onclick="toggleChatControls()"
+                    title="تا کردن یا باز کردن هدر انتخاب مدل (Collapse/Expand model header)"
+                    aria-expanded="true" aria-controls="chatTopControls">
+              <span id="chatControlsArrow">▲</span>
+              <span class="chat-controls-summary" id="chatControlsSummary"></span>
+            </button>
+            <select id="chatProvider" class="input-control chat-controls-field" style="width:160px" onchange="onChatProviderChange()"></select>
+            <select id="chatModel" class="input-control chat-controls-field" style="width:200px" onchange="onChatModelChange()"></select>
+            <label class="chat-controls-field" style="display:flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;">
               <input type="checkbox" id="requireApprovalCheck" onchange="onApprovalToggle()" checked>
               <span>Require Approval on File Writes</span>
             </label>
@@ -3834,6 +3882,68 @@ function toggleTopBarCollapse() {
   }
 }
 
+/* ---- Local AI installer lives on its own page (keeps the 347 KB SPA lean) */
+function openLocalAi() {
+  window.location.href = window.apiUrl('/localai');
+}
+
+/* ---- Collapsible model-picker header (mobile / high zoom) --------------- */
+const CHAT_CONTROLS_KEY = 'arena_chat_controls_collapsed';
+
+function updateChatControlsSummary() {
+  const el = document.getElementById('chatControlsSummary');
+  if (!el) return;
+  const pSel = document.getElementById('chatProvider');
+  const mSel = document.getElementById('chatModel');
+  const provider = pSel?.options[pSel.selectedIndex]?.textContent?.trim() || '—';
+  const model = mSel?.options[mSel.selectedIndex]?.textContent?.trim() || '—';
+  const approve = document.getElementById('requireApprovalCheck')?.checked ? ' · 🛡️' : '';
+  el.textContent = `${provider} / ${model}${approve}`;
+}
+
+function setChatControlsCollapsed(collapsed, persist = true) {
+  const box = document.getElementById('chatTopControls');
+  const arrow = document.getElementById('chatControlsArrow');
+  const btn = document.getElementById('chatControlsToggle');
+  if (!box) return;
+  box.classList.toggle('collapsed', collapsed);
+  if (arrow) arrow.textContent = collapsed ? '▼' : '▲';
+  if (btn) btn.setAttribute('aria-expanded', String(!collapsed));
+  if (persist) {
+    try { localStorage.setItem(CHAT_CONTROLS_KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
+  }
+  updateChatControlsSummary();
+}
+
+function toggleChatControls() {
+  const box = document.getElementById('chatTopControls');
+  if (box) setChatControlsCollapsed(!box.classList.contains('collapsed'));
+}
+
+/** Matches the CSS breakpoint so JS and CSS can never disagree. */
+function isCompactViewport() {
+  return window.matchMedia('(max-width: 768px), (max-height: 550px)').matches;
+}
+
+function initChatControlsCollapse() {
+  let stored = null;
+  try { stored = localStorage.getItem(CHAT_CONTROLS_KEY); } catch (e) { /* ignore */ }
+  // Default: collapsed on a compact viewport, expanded otherwise.
+  const collapsed = stored === null ? isCompactViewport() : stored === '1';
+  setChatControlsCollapsed(collapsed, false);
+
+  const mq = window.matchMedia('(max-width: 768px), (max-height: 550px)');
+  const onChange = () => {
+    // Re-apply the default when the user has expressed no preference, so
+    // zooming in on a phone folds the header away by itself.
+    let pref = null;
+    try { pref = localStorage.getItem(CHAT_CONTROLS_KEY); } catch (e) { /* ignore */ }
+    if (pref === null) setChatControlsCollapsed(mq.matches, false);
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onChange);
+  else if (mq.addListener) mq.addListener(onChange);
+}
+
 function toggleChatReferencesBar() {
   const bar = $('#chatReferencesBar');
   const arrow = $('#chatRefToggleArrow');
@@ -3930,6 +4040,9 @@ async function initApp() {
   if (savedApproval !== null) {
     $('#requireApprovalCheck').checked = (savedApproval === 'true');
   }
+
+  // Model-picker header: collapsed by default on phones / high zoom
+  initChatControlsCollapse();
 
   // Restore Workspace Sidebar collapsed state
   const isTreeCollapsed = localStorage.getItem('ws_tree_collapsed') === '1';
@@ -5718,11 +5831,13 @@ function onChatModelChange(save = true) {
   const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
   const badge = $('#activeProviderBadge');
   if (badge) badge.textContent = `⚡ ${p?.name || 'Agent'} / ${mid || 'Model'}`;
+  updateChatControlsSummary();
 }
 
 function onApprovalToggle() {
   localStorage.setItem('arena_require_approval', $('#requireApprovalCheck').checked);
   flashAutoSave();
+  updateChatControlsSummary();
 }
 
 let chatHistory = [];

@@ -138,7 +138,7 @@
     <h1>🧠 نصب و مدیریت هوش مصنوعی محلی</h1>
     <span class="tag" id="rt-badge">در حال بررسی…</span>
     <span class="sp"></span>
-    <a class="btn sm" href="/">بازگشت به دستیار</a>
+    <a class="btn sm" href="/" data-home-link>بازگشت به دستیار</a>
     <button class="btn sm" id="btn-rescan">🔄 اسکن مجدد سخت‌افزار</button>
   </header>
 
@@ -571,6 +571,14 @@ $('#q').onkeydown = (e) => { if (e.key === 'Enter') $('#btn-search').click(); };
 /* ───────────────────────────────────────── boot */
 loadHost(false).then(loadModels);
 setInterval(refreshRuntime, 15000);
+</script>
+<script>
+/* The install prefix is unknown at build time (root, /agent, or no-rewrite
+   /agent/index.php), so resolve home links through window.apiUrl at runtime. */
+(function () {
+  var home = (window.apiUrl ? window.apiUrl('/') : '/');
+  document.querySelectorAll('[data-home-link]').forEach(function (a) { a.setAttribute('href', home); });
+})();
 </script>
 </body>
 </html>

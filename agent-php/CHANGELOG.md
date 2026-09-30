@@ -12,6 +12,40 @@ depends on those response shapes.
 
 ---
 
+## [1.3.1] — 2026-09-30
+
+User-interface fixes. No API, schema or response-shape changes.
+
+### Fixed
+- **The Local AI installer was unreachable.** `/localai` (shipped in 1.2.0) was
+  fully functional but nothing in the SPA ever linked to it — the page could
+  only be opened by typing the URL. Added a **🧠 Local AI Installer** entry to
+  the sidebar, directly below *Providers & Models*. It navigates through
+  `window.apiUrl('/localai')`, so it resolves correctly for root,
+  subdirectory and no-rewrite (`/index.php/localai`) installs.
+- **Back-links in the secondary pages were hard-coded to `/`.** `localai.html`
+  and `chat.html` sent the user to the server root, which is the wrong place
+  for a subdirectory install. Both now resolve their home link through
+  `window.apiUrl('/')` at load time (`[data-home-link]`).
+
+### Changed
+- **The chat model-picker header is now collapsible on narrow viewports.**
+  On phones — and on desktops zoomed past roughly 150 %, which is what the
+  existing `(max-height: 550px)` branch catches — the provider select, model
+  select and *Require Approval* checkbox wrap onto three rows and consume most
+  of the chat area. They now fold into a single summary row reading
+  `<provider> / <model> · 🛡️`, toggled by the header itself.
+  - Collapsed by default on a compact viewport, expanded otherwise; zooming in
+    and out re-applies that default until the user clicks the toggle.
+  - An explicit click is remembered in
+    `localStorage['arena_chat_controls_collapsed']` and then wins over the
+    viewport default.
+  - The toggle does not exist at all on roomy viewports, so desktop behaviour
+    is byte-for-byte unchanged.
+  - Carries `aria-expanded` / `aria-controls`.
+
+---
+
 ## [1.3.0] — 2026-09-30
 
 Deployment hardening. The app now adapts to the host instead of requiring the
