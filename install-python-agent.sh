@@ -13,7 +13,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="python-agent-helper"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/main/install-python-agent.sh"
 
 ACTION="install"
@@ -415,6 +415,7 @@ install_agent() {
 
     [[ -x "$VENV_DIR/bin/cptr" ]] || die 'cptr installation completed without creating its executable.'
     cptr_version="$($VENV_DIR/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("cptr"))')"
+    write_browser_recovery_page
     validate_frontend_files
     log "Open WebUI Computer ready: cptr $cptr_version"
     save_config
@@ -424,11 +425,100 @@ frontend_build_dir() {
     "$VENV_DIR/bin/python" -c 'from pathlib import Path; import cptr; print(Path(cptr.__file__).resolve().parent / "frontend" / "build")' 2>/dev/null
 }
 
+write_browser_recovery_page() {
+    local frontend_dir recovery_file
+    frontend_dir="$(frontend_build_dir)"
+    recovery_file="$frontend_dir/helper-recovery.html"
+    [[ -d "$frontend_dir" ]] || die "cptr frontend directory is missing: $frontend_dir"
+    cat > "$recovery_file" <<'HTML'
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Computer UI Recovery</title>
+  <style>
+    :root{color-scheme:dark}body{margin:0;background:#080b12;color:#e8edf7;font:15px/1.8 system-ui,sans-serif}
+    main{max-width:900px;margin:32px auto;padding:20px}.card{background:#121826;border:1px solid #2b3750;border-radius:14px;padding:20px}
+    h1{margin-top:0;font-size:22px}button,a{display:inline-block;border:0;border-radius:9px;padding:10px 14px;background:#2563eb;color:#fff;text-decoration:none;cursor:pointer;margin:4px}
+    button.danger{background:#b91c1c}pre{direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-all;background:#05070c;border:1px solid #263149;border-radius:9px;padding:14px;min-height:180px}
+    .ok{color:#6ee7b7}.bad{color:#fca5a5}.hint{color:#a8b3c7}
+  </style>
+</head>
+<body>
+<main><div class="card">
+  <h1>بازیابی و آزمایش رابط Computer</h1>
+  <p class="hint">این صفحه توسط هلپر نصب شده و رابط اصلی، API و فایل‌های JavaScript/CSS را از داخل همان مرورگر بررسی می‌کند.</p>
+  <button id="test">اجرای دوباره آزمایش</button>
+  <button id="reset" class="danger">پاک‌کردن Cache و Service Worker</button>
+  <a href="/">بازگشت به صفحه اصلی</a>
+  <pre id="report">در حال اجرای آزمایش مرورگر… اگر این متن تغییر نکرد، سیاست امنیتی میزبان اجرای JavaScript داخلی را مسدود کرده است.</pre>
+</div></main>
+<script>
+const report=document.getElementById('report');
+const lines=[];
+const say=(text,ok=true)=>{lines.push((ok?'OK   ':'FAIL ')+text);report.textContent=lines.join('\n')};
+async function request(path, expected){
+  try{
+    const response=await fetch(path+(path.includes('?')?'&':'?')+'helper_probe='+Date.now(),{cache:'no-store',credentials:'include'});
+    const type=response.headers.get('content-type')||'missing';
+    const text=await response.text();
+    const valid=response.ok&&(!expected||type.includes(expected));
+    say(`${path} -> HTTP ${response.status}, ${type}, ${text.length} bytes`,valid);
+    return {response,type,text,valid};
+  }catch(error){say(`${path} -> ${error}`,false);return null}
+}
+async function test(){
+  lines.length=0;
+  say(`URL: ${location.origin}`);
+  say(`Browser: ${navigator.userAgent}`);
+  await request('/api/health','application/json');
+  await request('/api/config','application/json');
+  await request('/api/auth','application/json');
+  const root=await request('/','text/html');
+  if(root){
+    const doc=new DOMParser().parseFromString(root.text,'text/html');
+    const assets=[...doc.querySelectorAll('script[src],link[href]')].map(node=>node.src||node.href).filter(url=>url&&new URL(url,location.href).origin===location.origin);
+    say(`Assets referenced by HTML: ${assets.length}`,assets.length>0);
+    for(const absolute of assets){
+      const url=new URL(absolute); const path=url.pathname+url.search;
+      const expected=/\.css(?:\?|$)/.test(path)?'text/css':/\.js(?:\?|$)/.test(path)?'javascript':'';
+      await request(path,expected);
+    }
+  }
+  if('serviceWorker' in navigator){
+    const registrations=await navigator.serviceWorker.getRegistrations();
+    say(`Service workers: ${registrations.length}`);
+  }
+  say('Browser-side check completed.');
+}
+async function reset(){
+  lines.length=0;
+  try{
+    if('serviceWorker' in navigator){for(const registration of await navigator.serviceWorker.getRegistrations())await registration.unregister()}
+    if('caches' in window){for(const key of await caches.keys())await caches.delete(key)}
+    say('Cache and service workers were removed. Reloading…');
+    setTimeout(()=>location.replace('/?helper_reset='+Date.now()),800);
+  }catch(error){say(String(error),false)}
+}
+document.getElementById('test').onclick=test;
+document.getElementById('reset').onclick=reset;
+window.addEventListener('error',event=>say(`JavaScript error: ${event.message}`,false));
+window.addEventListener('unhandledrejection',event=>say(`Promise error: ${event.reason}`,false));
+test();
+</script>
+</body>
+</html>
+HTML
+    chmod 600 "$recovery_file"
+}
+
 validate_frontend_files() {
     local frontend_dir index_file js_count css_count
     frontend_dir="$(frontend_build_dir)"
     index_file="$frontend_dir/index.html"
     [[ -s "$index_file" ]] || die "cptr frontend index is missing: $index_file"
+    [[ -s "$frontend_dir/helper-recovery.html" ]] || die 'The helper browser recovery page is missing.'
     js_count="$(find "$frontend_dir/_app" -type f -name '*.js' 2>/dev/null | wc -l | tr -d ' ')"
     css_count="$(find "$frontend_dir/_app" -type f -name '*.css' 2>/dev/null | wc -l | tr -d ' ')"
     ((js_count > 0)) || die 'cptr frontend JavaScript files are missing from the installed wheel.'
@@ -699,6 +789,8 @@ web_check() {
         printf 'config_response=%s\n' "$(tr -d '\r\n' < "$tmp_dir/body" | head -c 500)"
         printf '\n'
     fi
+    probe_web_path auth '/api/auth' || true
+    probe_web_path recovery '/helper-recovery.html' || true
     if probe_web_path html '/'; then
         cp "$tmp_dir/body" "$tmp_dir/index.html"
         grep -Fq '<!doctype html>' "$tmp_dir/index.html" || {
@@ -730,9 +822,9 @@ web_check() {
     probe_web_path service_worker '/service-worker.js' || true
 
     if ((failed == 0)); then
-        log 'Web check passed: backend, HTML, JavaScript, CSS, and service worker are available.'
-        log 'If the browser is still black, open browser_token_path from: python-agent access-url'
-        log 'Also clear site data/service worker for this host and reload once.'
+        log 'Web check passed: backend, auth, HTML, JavaScript, CSS, and service worker are available.'
+        log "Browser recovery page: $base_url/helper-recovery.html"
+        log 'If the browser is still black, use the recovery page, then open browser_token_path from: python-agent access-url'
         return 0
     fi
     die 'Web check failed. Copy this complete report for diagnosis.'
