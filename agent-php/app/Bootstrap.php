@@ -10,7 +10,18 @@ declare(strict_types=1);
 
 namespace Arena;
 
-const APP_VERSION = '1.0.0';
+/**
+ * Single source of truth for the application version.
+ *
+ * Reported by /health, /api/version and /api/__diag, and sent as the
+ * outbound User-Agent. See CHANGELOG.md. Semantic versioning: bump the minor
+ * for new capability, the patch for fixes.
+ *
+ * APP_API_VERSION is the HTTP contract version and is intentionally pinned:
+ * the bundled single-page UI depends on those response shapes.
+ */
+const APP_VERSION = '1.3.0';
+const APP_API_VERSION = 'v1';
 const PORTED_FROM_VERSION = '0.16.1';
 
 final class Bootstrap

@@ -21,6 +21,13 @@ original: every route path, HTTP verb and JSON response shape was preserved.
 
 ---
 
+Version **1.3.0** — see [CHANGELOG.md](CHANGELOG.md). `APP_VERSION` in
+`app/Bootstrap.php` is the single source of truth and is reported by `/health`,
+`/api/version` and `/api/__diag`; the HTTP contract version (`apiVersion: v1`)
+is pinned separately because the bundled UI depends on those response shapes.
+
+---
+
 ## 1. Requirements
 
 **Required**

@@ -74,6 +74,13 @@ switch ($cmd) {
             : 'not installed — run `php bin/console.php ai:install <model>`'));
         break;
 
+    case 'version':
+        $out('Arena Coding Agent (PHP) ' . APP_VERSION);
+        $out('  API contract   : ' . APP_API_VERSION);
+        $out('  ported from    : Python ' . PORTED_FROM_VERSION);
+        $out('  PHP runtime    : ' . PHP_VERSION);
+        break;
+
     case 'migrate':
         Database::init();
         $out('Schema is up to date at ' . Database::path());
@@ -307,6 +314,7 @@ switch ($cmd) {
         $out(<<<TXT
 Arena Coding Agent — PHP edition console
 
+  version                       Show application / API / PHP versions
   doctor                        Runtime capability report
   migrate                       Create/update the SQLite schema
   serve [port] [host]           PHP built-in development server

@@ -80,7 +80,7 @@ final class Routes
         $r->get('/api/version', static fn(Request $req): array => [
             'name' => 'Arena Coding Agent',
             'version' => APP_VERSION,
-            'apiVersion' => 'v1',
+            'apiVersion' => APP_API_VERSION,
             'status' => 'ok',
         ]);
 
