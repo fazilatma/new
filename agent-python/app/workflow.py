@@ -31,3 +31,7 @@ def backup(path: str) -> str:
 
 def rollback(path: str, version_id: str):
     return rollback_to_version(path, version_id)
+
+def backups() -> list:
+    from .changesets import list_file_versions
+    return []
