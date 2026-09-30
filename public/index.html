@@ -1,1 +1,56 @@
-<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local Coding Agent</title><link rel="stylesheet" href="/style.css"></head><body><header><b>⚡ Local Coding Agent</b><span id="status">در حال اتصال…</span></header><main><aside><h3>فایل‌ها</h3><button onclick="newFile()">+ فایل</button><button onclick="newFolder()">+ پوشه</button><div id="files"></div><h3>مدل‌های محلی</h3><h3>ارائه‌دهنده‌ها</h3><input type="file" id="providerFile" accept=".json,application/json" onchange="importProviders(event)"><button onclick="exportProviders()">برون‌ریزی JSON</button><button onclick="loadProviders()">بارگذاری</button><div id="providers"></div><div id="models"></div><input id="modelUrl" placeholder="GGUF URL"><button onclick="downloadModel()">نصب</button><input id="modelName" placeholder="نام GGUF"><button onclick="launchModel()">اجرای مدل</button></aside><section class="workspace"><div class="tabs"><span id="current">بدون فایل</span><button onclick="saveFile()">ذخیره</button></div><textarea id="editor" spellcheck="false"></textarea><div class="agent"><b>AI Coding Agent</b><input id="modelUrlApi" value="http://127.0.0.1:8080/v1/chat/completions"><textarea id="prompt" placeholder="وظیفه کدنویسی را بنویس…"></textarea><button onclick="askAgent()">تحلیل</button><button onclick="runAgentLoop()">اجرای حلقه خودکار</button><label>حداکثر تکرار <input id="maxIterations" type="number" min="1" max="20" value="8"></label><pre id="answer"></pre></div></section><section class="terminal"><b>Terminal</b><input id="command" value="pwd && ls -la"><button onclick="runCommand()">اجرا</button><pre id="termout"></pre></section></main><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arena Coding Agent</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app-shell">
+<header class="topbar">
+  <div class="brand"><div class="brand-mark">✦</div><div><strong>Arena Agent</strong><span>Autonomous Coding Workspace</span></div></div>
+  <div class="top-actions"><span class="connection"><i id="statusDot"></i><span id="status">در حال اتصال…</span></span><button class="ghost" onclick="loadProviders()">⟳ همگام‌سازی</button><button class="avatar">M</button></div>
+</header>
+<div class="layout">
+<aside class="sidebar">
+  <div class="side-head"><span>Workspace</span><button onclick="newFile()">＋</button></div>
+  <div class="workspace-name">⌁ پروژه فعلی</div>
+  <div id="files" class="file-tree"></div>
+  <div class="side-section">
+    <div class="side-title"><span>مدل‌های محلی</span><span class="count" id="modelCount">0</span></div>
+    <div id="models"></div>
+    <div class="model-actions"><input id="modelUrl" placeholder="آدرس فایل GGUF"><button onclick="downloadModel()">دانلود مدل</button></div>
+    <div class="model-actions"><input id="modelName" placeholder="نام مدل نصب‌شده"><button onclick="launchModel()">اجرای مدل</button></div>
+  </div>
+  <div class="side-section providers">
+    <div class="side-title"><span>Providers</span><label class="upload-btn">＋<input type="file" id="providerFile" accept=".json,application/json" onchange="importProviders(event)"></label></div>
+    <div id="providers"></div>
+    <button class="wide ghost" onclick="exportProviders()">↗ برون‌ریزی تنظیمات</button>
+  </div>
+  <div class="sidebar-footer">Local-first • Secure workspace</div>
+</aside>
+<section class="center">
+  <div class="editor-top">
+    <div class="breadcrumbs"><span>workspace</span><b>/</b><span id="current">بدون فایل</span></div>
+    <div class="editor-actions"><button class="ghost" onclick="newFolder()">＋ پوشه</button><button class="save" onclick="saveFile()">ذخیره <kbd>Ctrl S</kbd></button></div>
+  </div>
+  <div class="editor-wrap"><textarea id="editor" spellcheck="false" placeholder="یک فایل را از سمت چپ باز کنید…"></textarea><div class="editor-status"><span id="editorMode">Plain Text</span><span>UTF-8</span><span>Ln 1, Col 1</span></div></div>
+  <div class="agent-panel">
+    <div class="agent-header"><div><div class="agent-title"><span class="pulse"></span> AI Coding Agent</div><small>عامل خودکار پروژه را تحلیل، اجرا و اصلاح می‌کند.</small></div><div class="agent-tools"><label>Iterations <input id="maxIterations" type="number" min="1" max="20" value="8"></label></div></div>
+    <div class="prompt-row"><textarea id="prompt" placeholder="چه چیزی می‌خواهید بسازیم؟ مثلاً: یک API احراز هویت برای پروژه ایجاد کن، تست بنویس و خطاها را خودت اصلاح کن…"></textarea><button class="run-agent" onclick="runAgentLoop()">▶ اجرای Agent</button></div>
+    <div class="quick-prompts"><button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">بررسی پروژه</button><button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">تست و رفع خطا</button><button onclick="setPrompt('کد را تمیز، سریع و حرفه‌ای کن بدون تغییر رفتار اصلی.')">بهینه‌سازی</button></div>
+    <div id="answer" class="agent-output"><div class="empty-agent"><span>✦</span><p>Agent آماده است</p><small>وظیفه‌ای بنویس تا چرخه تحلیل → اجرا → تست → اصلاح شروع شود.</small></div></div>
+  </div>
+</section>
+<aside class="right-panel">
+  <div class="panel-head"><div><strong>Activity</strong><small>گزارش زنده اجرای Agent</small></div><button class="ghost" onclick="clearActivity()">پاک کردن</button></div>
+  <div id="activity" class="activity"><div class="activity-empty">هنوز فعالیتی ثبت نشده است.</div></div>
+  <div class="terminal-panel">
+    <div class="terminal-head"><span>⌘ Terminal</span><span id="terminalState">Ready</span></div>
+    <div class="terminal-input"><input id="command" value="pwd && ls -la"><button onclick="runCommand()">اجرا</button></div>
+    <pre id="termout">ترمینال آماده است…</pre>
+  </div>
+</aside>
+</div>
+</div>
+<script src="/app.js"></script>
+</body></html>
