@@ -2,29 +2,38 @@
 
 راهنمای کنسول شاخهٔ `hostconsole-nvm-node20` (فایل `hostconsole.php`، سوئیت
 WebConsole Pro نسخهٔ 2.19.0). فایل `hostconsole-project.json` کنار همین سند یک
-«خروجی تنظیمات» آمادهٔ درون‌ریزی است که پروژهٔ `agent-php` را **بدون رمز ورود** و
-با تنظیمات کامل «هوش مصنوعی محلی» به کنسول اضافه می‌کند.
+**پروفایل تک‌پروژه** است که مستقیماً در تب «📄 ورود JSON» پنجرهٔ پروژه پیست
+می‌شود و فرم را با تنظیمات کامل `agent-php` — **بدون رمز ورود** و با پیکربندی
+«هوش مصنوعی محلی» — پر می‌کند.
 
 ---
 
-## ۱) درون‌ریزی مستقیم JSON
+## ۱) درون‌ریزی JSON پروژه
 
-1. کنسول → تب **⚙️ تنظیمات** → بخش برون‌ریزی/درون‌ریزی → دکمهٔ **درون‌ریزی (Import)**.
-2. کل محتوای `hostconsole-project.json` را در کادر بچسبانید.
-3. تیک‌ها: ✅ **پروژه‌ها** — ❌ تنظیمات عمومی — ❌ پروفایل‌های پشتیبان.
-4. حالت پروژه‌ها روی **ادغام (merge)**، نه جایگزینی (وگرنه پروژه‌های فعلی پاک می‌شوند).
-5. تأیید. رکورد پروژه با شناسهٔ `agphp` ساخته می‌شود.
+1. کنسول → تب **📦 پروژه‌ها** → **➕ پروژه جدید**.
+2. در بالای پنجره روی **📄 ورود JSON** بزنید.
+3. کل محتوای `hostconsole-project.json` را در کادر بچسبانید (یا خود فایل را
+   انتخاب کنید) و **اعمال در فرم برای بازبینی** را بزنید.
+4. فرم پر می‌شود؛ مقادیر را ببینید و **ذخیره پروفایل** را بزنید.
+5. سپس **🚀 دیپلوی و به‌روزرسانی** → **▶️ شروع سرویس**.
 
-معادل با API:
+آدرس برنامه: `http://SERVER:8099/` و صفحهٔ هوش مصنوعی محلی:
+`http://SERVER:8099/localai`
 
-```bash
-curl -s -X POST 'http://SERVER:8888/hostconsole.php?api=settings.import' \
-  -H 'Content-Type: application/json' -b 'wcp_sess=YOUR_SESSION' \
-  -d "{\"data\":$(cat hostconsole-project.json),\"import_projects\":true,\"merge_projects\":true}"
-```
-
-سپس تب **📦 پروژه‌ها** → **🚀 دیپلوی و به‌روزرسانی** → **▶️ شروع سرویس**.
-آدرس: `http://SERVER:8099/` و صفحهٔ هوش مصنوعی محلی: `http://SERVER:8099/localai`
+> **چرا این قالب؟** اعتبارسنج کنسول (`parseProjectJson`) فقط این کلیدها را
+> می‌شناسد و هر کلید دیگری را با خطای «فیلد ناشناخته: …» رد می‌کند:
+> `name, type, repo_url, branch, subfolder, deploy_path, install_cmd,
+> build_cmd, start_cmd, auth_token, domain, domain_mode, domain_path,
+> domain_docroot, bind_host, domain_kind, node_version, id, port, env,
+> auto_start, is_daemon, auto_update, auto_update_interval, preserve_configs,
+> domain_enabled, domain_ws, domain_https, domain_timeout`.
+> پس کلیدهای پوششی مثل `magic`, `version`, `exported_at`, `host`, `projects`,
+> `created`, `keep_git`, `python_version` در این فایل نیامده‌اند.
+>
+> همچنین مقدار همهٔ فیلدهای متنی باید **تک‌خطی** باشد؛ به همین دلیل
+> `install_cmd` و `start_cmd` با `;` و `&&` در یک خط نوشته شده‌اند (کنسول
+> آن‌ها را داخل یک اسکریپت `#!/bin/bash` با `set -e` اجرا می‌کند، پس `exec`،
+> اجرای پس‌زمینه با `&` و پرانتز زیرپوسته همگی کار می‌کنند).
 
 ---
 
