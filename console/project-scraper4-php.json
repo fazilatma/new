@@ -1,0 +1,20 @@
+{
+  "name": "Scraper4 — PHP Server (legacy UI)",
+  "type": "php",
+  "repo_url": "https://github.com/fazilatma/new",
+  "branch": "arena/01a0ebf7-new",
+  "subfolder": "",
+  "deploy_path": "",
+  "port": "8000",
+  "install_cmd": "",
+  "build_cmd": "",
+  "start_cmd": "php -d max_execution_time=0 -d max_input_time=-1 -d memory_limit=512M -d ignore_user_abort=1 -d variables_order=EGPCS -S 0.0.0.0:8000 server.php",
+  "env": {
+    "PHP_CLI_SERVER_WORKERS": "4",
+    "TZ": "Asia/Tehran"
+  },
+  "auto_start": true,
+  "is_daemon": true,
+  "preserve_configs": true,
+  "auto_update": false
+}

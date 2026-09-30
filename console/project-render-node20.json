@@ -1,0 +1,27 @@
+{
+  "name": "Scraper4 Render — Playwright/Selenium sidecar",
+  "type": "node",
+  "repo_url": "https://github.com/fazilatma/new",
+  "branch": "arena/01a0ebf7-new",
+  "subfolder": "browser",
+  "deploy_path": "",
+  "port": "3100",
+  "node_version": "20",
+  "install_cmd": "npm install --no-audit --no-fund && npx playwright install chromium",
+  "build_cmd": "",
+  "start_cmd": "node server.js",
+  "env": {
+    "NODE_ENV": "production",
+    "RENDER_HOST": "127.0.0.1",
+    "RENDER_PORT": "3100",
+    "RENDER_TOKEN": "a9f27c1e4d3b88f0612c95e7d44a6b03",
+    "RENDER_DRIVER": "auto",
+    "RENDER_MAX_CONCURRENCY": "3",
+    "RENDER_NAV_TIMEOUT": "45000",
+    "RENDER_HEADLESS": "true"
+  },
+  "auto_start": true,
+  "is_daemon": true,
+  "preserve_configs": true,
+  "auto_update": false
+}
