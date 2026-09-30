@@ -13,7 +13,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="python-agent-helper"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/main/install-python-agent.sh"
 
 ACTION="install"
@@ -51,6 +51,8 @@ Actions:
   run              Run cptr in the foreground (for WebConsole supervision).
   status           Show Python, cptr, process, and health status.
   logs             Show the last 100 agent log lines.
+  access-url       Print the latest startup URL, including its access token.
+  web-check        Test health, config, HTML, JS, CSS, and frontend files.
   doctor           Diagnose the installed user-level runtime.
   python-version   Print the helper-managed Python path and version.
   uninstall        Remove the agent environment; keeps Python and uv.
@@ -73,12 +75,14 @@ After the first installation, use only these short helper commands:
   python-agent status
   python-agent restart
   python-agent logs --follow
+  python-agent access-url
+  python-agent web-check
 EOF
 }
 
 while (($#)); do
     case "$1" in
-        install|update|python|start|stop|restart|run|status|logs|doctor|python-version|uninstall)
+        install|update|python|start|stop|restart|run|status|logs|access-url|web-check|doctor|python-version|uninstall)
             [[ "$ACTION_SET" == false ]] || die "More than one action was supplied: $1"
             ACTION="$1"; ACTION_SET=true; shift ;;
         --home)
@@ -411,8 +415,26 @@ install_agent() {
 
     [[ -x "$VENV_DIR/bin/cptr" ]] || die 'cptr installation completed without creating its executable.'
     cptr_version="$($VENV_DIR/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("cptr"))')"
+    validate_frontend_files
     log "Open WebUI Computer ready: cptr $cptr_version"
     save_config
+}
+
+frontend_build_dir() {
+    "$VENV_DIR/bin/python" -c 'from pathlib import Path; import cptr; print(Path(cptr.__file__).resolve().parent / "frontend" / "build")' 2>/dev/null
+}
+
+validate_frontend_files() {
+    local frontend_dir index_file js_count css_count
+    frontend_dir="$(frontend_build_dir)"
+    index_file="$frontend_dir/index.html"
+    [[ -s "$index_file" ]] || die "cptr frontend index is missing: $index_file"
+    js_count="$(find "$frontend_dir/_app" -type f -name '*.js' 2>/dev/null | wc -l | tr -d ' ')"
+    css_count="$(find "$frontend_dir/_app" -type f -name '*.css' 2>/dev/null | wc -l | tr -d ' ')"
+    ((js_count > 0)) || die 'cptr frontend JavaScript files are missing from the installed wheel.'
+    ((css_count > 0)) || die 'cptr frontend CSS files are missing from the installed wheel.'
+    grep -Fq '/_app/' "$index_file" || die 'cptr frontend index does not reference its application assets.'
+    log "Frontend bundle verified: $js_count JavaScript and $css_count CSS files"
 }
 
 pid_is_alive() {
@@ -551,18 +573,26 @@ stop_agent() {
 }
 
 run_agent_foreground() {
+    local cptr_status
     require_agent
+    prepare_dirs
     mkdir -p "$DATA_DIR" "$WORKSPACE"
     cd "$WORKSPACE"
+    : > "$LOG_FILE"
     log "Handing foreground supervision to cptr on $LISTEN_HOST:$PORT..."
-    exec env \
+    set +e
+    env \
         HOME="$HOME" \
         PATH="$HOME/.local/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}" \
         CPTR_DATA_DIR="$DATA_DIR" \
         "$VENV_DIR/bin/cptr" run \
             --host "$LISTEN_HOST" \
             --port "$PORT" \
-            --headless
+            --headless \
+        2>&1 | tee -a "$LOG_FILE"
+    cptr_status="${PIPESTATUS[0]}"
+    set -e
+    return "$cptr_status"
 }
 
 show_python_version() {
@@ -616,6 +646,96 @@ show_logs() {
         exec tail -n 100 -f "$LOG_FILE"
     fi
     tail -n 100 "$LOG_FILE"
+}
+
+show_access_url() {
+    local startup_url="" token=""
+    [[ -s "$LOG_FILE" ]] || die "No captured startup log exists yet: $LOG_FILE"
+    startup_url="$(grep -Eao 'http://(localhost|127\.0\.0\.1|0\.0\.0\.0):[0-9]+/\?token=[[:xdigit:]]{32,}' "$LOG_FILE" | tail -n 1 || true)"
+    [[ -n "$startup_url" ]] || die 'No startup token URL was found. Restart the project once, then retry this action.'
+    token="${startup_url##*token=}"
+    printf 'local_startup_url=%s\n' "$startup_url"
+    printf 'browser_token_path=/?token=%s\n' "$token"
+    warn 'Append browser_token_path to the public host/port URL. Keep this token private.'
+}
+
+web_check() {
+    local base_url tmp_dir failed=0 index_asset="" css_asset=""
+    local code content_type bytes
+    require_agent
+    require_curl
+    validate_frontend_files
+    base_url="$(health_url)"
+    base_url="${base_url%/api/health}"
+    tmp_dir="$CACHE_DIR/web-check"
+    mkdir -p "$tmp_dir"
+
+    probe_web_path() {
+        local label="$1" path="$2" body="$tmp_dir/body" headers="$tmp_dir/headers"
+        : > "$body"; : > "$headers"
+        if ! code="$(env NO_PROXY='127.0.0.1,localhost,::1' curl -sS --max-time 10 \
+            -D "$headers" -o "$body" -w '%{http_code}' "$base_url$path")"; then
+            warn "$label request failed: $base_url$path"
+            failed=1
+            return 1
+        fi
+        content_type="$(awk 'BEGIN{IGNORECASE=1} /^content-type:/{sub(/^[^:]*:[[:space:]]*/,""); sub(/\r$/,""); value=$0} END{print value}' "$headers")"
+        bytes="$(wc -c < "$body" | tr -d ' ')"
+        printf '%s: HTTP %s, %s bytes, content-type=%s\n' "$label" "$code" "$bytes" "${content_type:-missing}"
+        if [[ "$code" != "200" || "$bytes" == "0" ]]; then
+            failed=1
+            return 1
+        fi
+        return 0
+    }
+
+    log "Checking the local web application at: $base_url"
+    if probe_web_path health '/api/health'; then
+        grep -Fq '"status":"ok"' "$tmp_dir/body" || grep -Fq '"status": "ok"' "$tmp_dir/body" || {
+            warn 'Health response does not contain status=ok.'; failed=1;
+        }
+    fi
+    if probe_web_path config '/api/config'; then
+        printf 'config_response=%s\n' "$(tr -d '\r\n' < "$tmp_dir/body" | head -c 500)"
+        printf '\n'
+    fi
+    if probe_web_path html '/'; then
+        cp "$tmp_dir/body" "$tmp_dir/index.html"
+        grep -Fq '<!doctype html>' "$tmp_dir/index.html" || {
+            warn 'The root response is not the expected cptr HTML document.'; failed=1;
+        }
+        index_asset="$(grep -Eo '/_app/[^"[:space:]]+\.js' "$tmp_dir/index.html" | head -n 1 || true)"
+        css_asset="$(grep -Eo '/_app/[^"[:space:]]+\.css' "$tmp_dir/index.html" | head -n 1 || true)"
+    fi
+    if [[ -n "$index_asset" ]]; then
+        probe_web_path javascript "$index_asset" || true
+        if [[ "$content_type" == text/html* ]]; then
+            warn 'The JavaScript URL returned HTML; this causes a blank black page.'
+            failed=1
+        fi
+    else
+        warn 'No JavaScript application asset was found in the served HTML.'
+        failed=1
+    fi
+    if [[ -n "$css_asset" ]]; then
+        probe_web_path css "$css_asset" || true
+        if [[ "$content_type" == text/html* ]]; then
+            warn 'The CSS URL returned HTML instead of CSS.'
+            failed=1
+        fi
+    else
+        warn 'No CSS application asset was found in the served HTML.'
+        failed=1
+    fi
+    probe_web_path service_worker '/service-worker.js' || true
+
+    if ((failed == 0)); then
+        log 'Web check passed: backend, HTML, JavaScript, CSS, and service worker are available.'
+        log 'If the browser is still black, open browser_token_path from: python-agent access-url'
+        log 'Also clear site data/service worker for this host and reload once.'
+        return 0
+    fi
+    die 'Web check failed. Copy this complete report for diagnosis.'
 }
 
 doctor() {
@@ -713,6 +833,8 @@ case "$ACTION" in
     run) run_agent_foreground ;;
     status) show_status ;;
     logs) show_logs ;;
+    access-url) show_access_url ;;
+    web-check) web_check ;;
     doctor) doctor ;;
     python-version) show_python_version ;;
     uninstall) uninstall_agent ;;
