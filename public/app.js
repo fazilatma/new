@@ -153,7 +153,7 @@ function compactAgentHistory(history){
 
 function saveAgentChat(){
   try{
-    localStorage.setItem(AGENT_CHAT_KEY,JSON.stringify(agentConversation.slice(-16)));
+    localStorage.setItem(AGENT_CHAT_KEY,JSON.stringify(agentConversation.filter(x=>x.type!=='working').slice(-16)));
   }catch{}
 }
 
