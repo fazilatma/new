@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.7.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.8.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -118,14 +118,166 @@ function showBenchmarkDetail(index){const x=(window.lastBenchmarkResults||[])[in
 function closeBenchmarkDetail(){$('benchmarkDetailModal').classList.remove('open')}
 async function testAllModels(){const box=$('benchmarkResults'),status=$('benchmarkStatus'),btn=document.querySelector('.test-all-btn');if(btn){btn.disabled=true;btn.textContent='⏳ در حال تست…'}status.textContent='در حال اجرای benchmark…';box.innerHTML='<div class="benchmark-empty">در حال تست GGUF و Providerها؛ مدل‌های محلی به‌صورت موقت اجرا و سپس خاموش می‌شوند.</div>';try{const d=await api('/api/models/test-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:$('testPrompt').value,context:Number($('testContext').value||4096),maxTokens:Number($('testMaxTokens').value||64),temperature:Number($('testTemperature').value||0.2),gpuLayers:Number($('testGpuLayers')?.value??-1)})});if(!d.results?.length){box.innerHTML='<div class="benchmark-empty">هیچ مدل نصب‌شده یا Provider واردشده‌ای برای تست پیدا نشد.</div>';status.textContent='مدلی موجود نیست';return}renderBenchmarkResults(d);setActivity('Model benchmark',d.results.filter(x=>x.ok).length+' / '+d.total+' مدل با موفقیت تست شدند')}catch(e){box.innerHTML='<div class="benchmark-empty">'+esc(e.message)+'</div>';status.textContent='خطا در تست'}finally{if(btn){btn.disabled=false;btn.textContent='▶ تست همه مدل‌ها'}}}
 function clearBenchmark(){window.lastBenchmarkResults=[];$('benchmarkResults').innerHTML='<div class="benchmark-empty">نتایج پاک شد.</div>';$('benchmarkStatus').textContent='آماده تست';closeBenchmarkModal();closeBenchmarkDetail()}
+const AGENT_CHAT_KEY='arena.agent.chat.v1';
+let agentConversation=[];
+let agentRunStartedAt=0;
+
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
+
+function scrollAgentChat(){
+  const box=$('answer');
+  if(box)box.scrollTop=box.scrollHeight;
+}
+
+function compactAgentHistory(history){
+  return (history||[]).map(x=>({
+    iteration:x.iteration,
+    message:x.message||x.error||'',
+    done:Boolean(x.done),
+    actions:(x.actions||[]).map(a=>({
+      type:a.type,
+      path:a.path,
+      command:a.type==='command'?String(a.command||'').slice(0,240):undefined,
+      ok:a.ok,
+      code:a.code
+    })),
+    verification:(x.verification||[]).map(v=>({
+      file:v.file,
+      code:v.code,
+      stdout:String(v.stdout||'').slice(-240),
+      stderr:String(v.stderr||'').slice(-240)
+    }))
+  }));
+}
+
+function saveAgentChat(){
+  try{
+    localStorage.setItem(AGENT_CHAT_KEY,JSON.stringify(agentConversation.slice(-16)));
+  }catch{}
+}
+
+function renderAgentSummary(history,success){
+  const safeHistory=history||[];
+  const last=safeHistory[safeHistory.length-1]||{};
+  const actions=safeHistory.flatMap(x=>Array.isArray(x.actions)?x.actions:[]);
+  const writes=actions.filter(a=>a.type==='write'&&a.ok).length;
+  const commands=actions.filter(a=>a.type==='command').length;
+  const checks=safeHistory.reduce((n,x)=>n+(Array.isArray(x.verification)?x.verification.length:0),0);
+  const failures=safeHistory.reduce((n,x)=>n+(Array.isArray(x.verification)?x.verification.filter(v=>v.code!==0).length:0),0)+actions.filter(a=>a.ok===false).length;
+  const state=success?'done':failures?'error':'paused';
+  const title=success?'Task completed':failures?'Agent found issues':'Iteration limit reached';
+  const details=[
+    '<span><b>'+safeHistory.length+'</b> iterations</span>',
+    '<span><b>'+writes+'</b> file writes</span>',
+    '<span><b>'+commands+'</b> commands</span>',
+    '<span><b>'+checks+'</b> checks</span>'
+  ].join('');
+  return '<div class="agent-message agent-message-agent">'+
+    '<div class="message-avatar agent-avatar-small">✦</div>'+
+    '<div class="message-content">'+
+      '<div class="message-meta"><b>Arena Agent</b><span>'+title+'</span></div>'+
+      '<div class="agent-result '+state+'">'+
+        '<div class="agent-result-head"><span class="result-icon">'+(success?'✓':failures?'!':'↻')+'</span><div><b>'+title+'</b><small>'+(last.message?esc(last.message):'The agent finished its current execution cycle.')+'</small></div></div>'+
+        '<div class="agent-result-stats">'+details+'</div>'+
+        (failures?'<div class="agent-result-warning">'+esc('Some verification or actions failed. Review the latest iteration details below.')+'</div>':'')+
+      '</div>'+
+      '<div class="agent-iterations">'+safeHistory.map(renderAgentIteration).join('')+'</div>'+
+    '</div>'+
+  '</div>';
+}
+
+function renderAgentIteration(x){
+  const actions=Array.isArray(x.actions)?x.actions:[];
+  const verification=Array.isArray(x.verification)?x.verification:[];
+  const writes=actions.filter(a=>a.type==='write'&&a.ok).length;
+  const commands=actions.filter(a=>a.type==='command').length;
+  const failed=verification.filter(v=>v.code!==0).length+actions.filter(a=>a.ok===false).length;
+  const state=x.done?'done':failed?'error':'running';
+  return '<details class="agent-iteration '+state+'">'+
+    '<summary><span class="iteration-index">'+esc(String(x.iteration||'?'))+'</span><b>Iteration '+esc(String(x.iteration||'?'))+'</b><small>'+(writes?'✎ '+writes+' ':'')+(commands?'⌘ '+commands+' ':'')+(verification.length?'✓ '+(verification.length-failed)+' checks':'')+'</small></summary>'+
+    '<div class="iteration-body">'+
+      '<div class="iteration-message">'+esc(x.message||x.error||'No message')+'</div>'+
+      (actions.length?'<div class="iteration-actions">'+actions.slice(0,10).map(renderAgentAction).join('')+'</div>':'')+
+      (failed?'<div class="iteration-errors">'+esc(JSON.stringify(actions.filter(a=>a.ok===false).concat(verification.filter(v=>v.code!==0)).slice(0,5),null,2))+'</div>':'')+
+    '</div>'+
+  '</details>';
+}
+
+function renderAgentAction(a){
+  const label=a.type==='write'?'FILE':'CMD';
+  const name=a.type==='write'?(a.path||'file'):(a.command||'command');
+  const ok=a.type==='write'?a.ok!==false:a.code===0;
+  return '<div class="agent-action '+(ok?'ok':'fail')+'"><span>'+label+'</span><code>'+esc(String(name).slice(0,260))+'</code><i>'+(ok?'✓':'×')+'</i></div>';
+}
+
+function renderConversation(){
+  const box=$('answer');
+  if(!box)return;
+  if(!agentConversation.length){
+    box.innerHTML='<div class="agent-welcome">'+
+      '<div class="welcome-orb">✦</div>'+
+      '<h3>What should we build?</h3>'+
+      '<p>Ask for a feature, bug fix, refactor, test run, code review, or full project investigation.</p>'+
+      '<div class="welcome-grid">'+
+        '<button onclick="setPrompt(\'Inspect the project structure, identify the most important issues, and fix the safe ones.\')"><b>Inspect project</b><span>Find problems and improve the workspace.</span></button>'+
+        '<button onclick="setPrompt(\'Run the available tests and syntax checks, fix failures, then verify everything again.\')"><b>Test & repair</b><span>Execute checks and iterate on failures.</span></button>'+
+        '<button onclick="setPrompt(\'Refactor the project for cleaner code, better performance, and better error handling without changing the intended behavior.\')"><b>Refactor</b><span>Improve quality without changing the goal.</span></button>'+
+      '</div></div>';
+    return;
+  }
+  box.innerHTML=agentConversation.map(entry=>{
+    if(entry.type==='user'){
+      return '<div class="agent-message agent-message-user"><div class="message-avatar user-avatar">M</div><div class="message-content"><div class="message-meta"><b>You</b><span>'+esc(entry.time||'Now')+'</span></div><div class="user-bubble">'+esc(entry.text)+'</div></div></div>';
+    }
+    if(entry.type==='working'){
+      return '<div class="agent-message agent-message-agent working-message"><div class="message-avatar agent-avatar-small">✦</div><div class="message-content"><div class="message-meta"><b>Arena Agent</b><span>Working…</span></div><div class="agent-working-card"><span class="working-dots"><i></i><i></i><i></i></span><div><b>Agent is working through the task</b><small>Analyze → execute → verify → repair</small></div></div></div></div>';
+    }
+    return renderAgentSummary(entry.history||[],Boolean(entry.success));
+  }).join('');
+  scrollAgentChat();
+}
+
+function restoreAgentChat(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(AGENT_CHAT_KEY)||'[]');
+    if(Array.isArray(saved))agentConversation=saved;
+  }catch{agentConversation=[]}
+  renderConversation();
+}
+
+function clearAgentChat(){
+  agentConversation=[];
+  saveAgentChat();
+  renderConversation();
+  setActivity('Agent chat','New session started');
+}
+
+function resizeAgentPrompt(el){
+  if(!el)return;
+  el.style.height='auto';
+  el.style.height=Math.min(Math.max(el.scrollHeight,58),150)+'px';
+}
+
+function handleAgentPromptKey(event){
+  if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){
+    event.preventDefault();
+    runAgentLoop();
+    return;
+  }
+}
+
+function updateAgentContextState(){
+  const ctx=Number($('agentContext')?.value||8192);
+  const label=ctx>=1024?((ctx/1024)%1===0?String(ctx/1024):String(Math.round(ctx/1024*10)/10))+'K context':ctx+' context';
+  if($('agentContextState'))$('agentContextState').textContent=label;
+}
 
 async function loadAgentModels(){
   const select=$('agentModel'); if(!select)return;
   try{
     const [locals,providers]=await Promise.all([api('/api/models'),api('/api/providers')]);
-    const options=['<option value="">انتخاب مدل…</option>'];
+    const options=['<option value="">Select a model…</option>'];
     for(const m of locals||[]){
       const value=encodeAgentSelection({kind:'local',name:m.name});
       options.push('<option value="'+value+'">Local · '+esc(m.name)+'</option>');
@@ -142,6 +294,8 @@ async function loadAgentModels(){
     }
     select.innerHTML=options.join('');
     if(window.selectedAgentModel)select.value=window.selectedAgentModel;
+    const selected=decodeAgentSelection(select.value);
+    if($('agentModelState'))$('agentModelState').textContent=selected?selected.name:'No model selected';
   }catch(e){select.innerHTML='<option value="">No models available</option>';setActivity('Model selector',e.message)}
 }
 
@@ -149,45 +303,58 @@ async function selectAgentModel(){
   const value=$('agentModel')?.value||'';
   const selected=decodeAgentSelection(value);
   window.selectedAgentModel=value;
+  if($('agentModelState'))$('agentModelState').textContent=selected?selected.name:'No model selected';
   if(!selected)return;
   if(selected.kind==='local'){
     try{
+      setAgentRunState('STARTING');
       setActivity('Local model','Starting '+selected.name+'…');
       const d=await api('/api/models/launch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:selected.name,port:8080,context:Number($('agentContext')?.value||8192)})});
       window.modelUrlApi={value:d.baseUrl+'/chat/completions'};
       window.activeAgentModel=selected.name;
+      setAgentRunState('READY');
       setActivity('Local model','Started: '+selected.name);
-    }catch(e){setActivity('Local model error',e.message)}
+    }catch(e){
+      setAgentRunState('ERROR');
+      setActivity('Local model error',e.message);
+    }
   }else{
+    setAgentRunState('READY');
     setActivity('Provider model',selected.name+' selected');
   }
 }
 
+function setAgentRunState(state){
+  const el=$('agentRunState');
+  if(!el)return;
+  el.textContent=state;
+  el.className='agent-state '+String(state).toLowerCase();
+}
+
 function toggleAgentAdvanced(){document.getElementById('agentAdvanced')?.classList.toggle('open')}
-function setPrompt(v){$('prompt').value=v;$('prompt').focus()}
-function renderAgentHistory(history){
-  return (history||[]).map(x=>{
-    const actions=Array.isArray(x.actions)?x.actions:[];
-    const verification=Array.isArray(x.verification)?x.verification:[];
-    const writes=actions.filter(a=>a.type==='write'&&a.ok).length;
-    const commands=actions.filter(a=>a.type==='command').length;
-    const failed=verification.filter(v=>v.code!==0).length+actions.filter(a=>a.ok===false).length;
-    const state=x.done?'done':failed?'error':'running';
-    const icon=x.done?'✓':failed?'!':'•';
-    return '<div class="agent-history-card '+state+'"><div class="agent-history-head"><b><span>'+icon+'</span> Iteration '+x.iteration+'</b><small>'+(writes?'✎ '+writes+' files ':'')+(commands?'⌘ '+commands+' commands ':'')+(verification.length?'✓ '+(verification.length-failed)+' checks':'')+'</small></div>'+
-      '<div class="agent-history-message">'+esc(x.message||x.error||'No message')+'</div>'+
-      (failed?'<div class="agent-history-error">'+esc(JSON.stringify(actions.filter(a=>a.ok===false).concat(verification.filter(v=>v.code!==0)).slice(0,4)))+'</div>':'')+
-    '</div>'
-  }).join('');
+function setPrompt(v){
+  const p=$('prompt');
+  if(!p)return;
+  p.value=v;
+  resizeAgentPrompt(p);
+  p.focus();
 }
 async function runAgentLoop(){
   const p=$('prompt').value.trim(); if(!p)return;
   const selected=decodeAgentSelection($('agentModel')?.value||'');
   if(!selected){setActivity('Agent','Select a model first');return}
   const out=$('answer'),button=document.querySelector('.run-agent');
-  if(button){button.disabled=true;button.dataset.running='1';button.innerHTML='<span>◌</span> Agent running…'}
-  out.innerHTML='<div class="empty-agent"><span>◌</span><p>Agent working…</p><small>Analyze → execute → test → repair</small></div>';
+  if(button){button.disabled=true;button.dataset.running='1';button.innerHTML='<span>◌</span><b>Running…</b><small>Working</small>'}
+  const now=new Date();
+  agentConversation.push({type:'user',text:p,time:now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}),model:selected.name});
+  agentConversation.push({type:'working'});
+  $('prompt').value='';
+  resizeAgentPrompt($('prompt'));
+  renderConversation();
+  setAgentRunState('RUNNING');
   setActivity('Agent started',p);
+  agentRunStartedAt=Date.now();
+  saveAgentChat();
   try{
     const body={
       prompt:p,
@@ -200,21 +367,30 @@ async function runAgentLoop(){
     if(selected.kind==='local'){body.modelType='local';body.model=selected.name}
     else {body.modelType='provider';body.providerId=selected.providerId;body.model=selected.name}
     const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-    out.innerHTML=renderAgentHistory(d.history||[])||'<div class="empty-agent">No response.</div>';
+    agentConversation=agentConversation.filter(x=>x.type!=='working');
+    agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),durationMs:Date.now()-agentRunStartedAt});
+    renderConversation();
+    setAgentRunState(d.success?'READY':'PAUSED');
     setActivity(d.success?'Agent completed':'Agent stopped',d.success?'Verification passed':'Maximum iterations reached');
     if($('settingIterations'))$('settingIterations').textContent=String(body.maxIterations);
+    saveAgentChat();
   }catch(e){
-    out.innerHTML='<div class="empty-agent"><p>'+esc(e.message)+'</p></div>';setActivity('Agent error',e.message)
+    agentConversation=agentConversation.filter(x=>x.type!=='working');
+    agentConversation.push({type:'agent',history:[{iteration:1,message:e.message,actions:[],verification:[]}],success:false,error:true});
+    renderConversation();
+    setAgentRunState('ERROR');
+    setActivity('Agent error',e.message);
+    saveAgentChat();
   }finally{
-    if(button){button.disabled=false;button.dataset.running='';button.innerHTML='<span>▶</span> Run Agent'}
+    if(button){button.disabled=false;button.dataset.running='';button.innerHTML='<span>➜</span><b>Run Agent</b><small>Ctrl + Enter</small>'}
   }
 }
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveFile()}});
 window.modelUrlApi={value:'http://127.0.0.1:8080/v1/chat/completions'};
 window.selectedAgentModel='';
 async function loadVersion(){try{const d=await api('/api/version');if($('appVersion'))$('appVersion').textContent='v'+d.version}catch{}}
-async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels()]);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
-refresh();
+async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels()]);updateAgentContextState();resizeAgentPrompt($('prompt'));$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
+refresh();restoreAgentChat();updateAgentContextState();resizeAgentPrompt($('prompt'));
 
 function toggleSettings(){const o=$('settingsOverlay');if(o)o.classList.toggle('open')}
 function closeSettings(e){if(e.target===$('settingsOverlay'))toggleSettings()}
