@@ -1,0 +1,15 @@
+{
+  "name": "openhands-agent-canvas-host",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenHands Agent Canvas project for WebConsole Pro shared hosting",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@openhands/agent-canvas": "1.24.0"
+  },
+  "scripts": {
+    "start": "bash start.sh"
+  }
+}
