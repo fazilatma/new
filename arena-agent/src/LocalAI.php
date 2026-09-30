@@ -261,6 +261,11 @@ final class LocalAI
         }
 
         $cpu = self::readCpu();
+        if (!in_array($cpu['arch'], ['arm64', 'amd64'], true)) {
+            throw new HttpError(400,
+                "Automatic install is not available for CPU architecture '{$cpu['arch']}'. "
+                . 'Install Ollama manually and set AGENT_OLLAMA_BIN.');
+        }
         $asset = $cpu['arch'] === 'arm64' ? 'ollama-linux-arm64.tgz' : 'ollama-linux-amd64.tgz';
         $url = 'https://ollama.com/download/' . $asset;
 
@@ -383,9 +388,18 @@ final class LocalAI
         $pidFile = self::rootDir() . '/server.pid';
         $pid = is_file($pidFile) ? (int) trim((string) file_get_contents($pidFile)) : 0;
         if ($pid > 1) {
-            @posix_kill($pid, 15);
-            usleep(300000);
-            @posix_kill($pid, 9);
+            if (function_exists('posix_kill')) {
+                @posix_kill($pid, 15);
+                usleep(300000);
+                @posix_kill($pid, 9);
+            } else {
+                // posix_kill is often disabled on shared hosting. Fall back
+                // to the OS utility using an argument array, never a shell
+                // command assembled from user input.
+                self::exec(['kill', '-TERM', (string) $pid], null, 5);
+                usleep(300000);
+                self::exec(['kill', '-KILL', (string) $pid], null, 5);
+            }
             @unlink($pidFile);
         }
         // Also try pkill for system-started instances we own under our root.
