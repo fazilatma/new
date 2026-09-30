@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Services\Scraping\CssToXpath;
 use App\Services\Scraping\HtmlFetcher;
+use App\Services\Scraping\SmartFetcher;
 use App\Services\Scraping\PaginationUrlBuilder;
 use App\Services\Scraping\ProductParser;
 use App\Services\Support\Url;
@@ -30,7 +31,10 @@ class ScrapeStreamController extends Controller
             'pagType' => ['nullable', 'in:query_page,query_custom,path_pattern,full_pattern,next_selector'],
             'pagVal' => ['nullable', 'string', 'max:1024'],
             'selectors' => ['nullable', 'string', 'max:8192'],
+            // حالت واکش: static (ایستا) | auto (تشخیص خودکار پوستهٔ JS) | js (رندر همیشگی)
+            'render' => ['nullable', 'in:static,auto,js'],
         ]);
+        $renderMode = (string) ($data['render'] ?? (string) config('scraper.renderer.default_mode', 'static'));
 
         $url = trim($data['url']);
         $maxPages = max(1, min(100, (int) ($data['pages'] ?? 20)));
@@ -38,7 +42,7 @@ class ScrapeStreamController extends Controller
         $pagType = $data['pagType'] ?? PaginationUrlBuilder::QUERY_PAGE;
         $pagVal = trim((string) ($data['pagVal'] ?? ''));
 
-        return response()->stream(function () use ($url, $maxPages, $selectors, $pagType, $pagVal): void {
+        return response()->stream(function () use ($url, $maxPages, $selectors, $pagType, $pagVal, $renderMode): void {
             while (ob_get_level() > 0) {
                 @ob_end_clean();
             }
@@ -59,7 +63,7 @@ class ScrapeStreamController extends Controller
                     $pageUrl = PaginationUrlBuilder::build($url, $url, $page, $pagType, $pagVal);
                 }
 
-                $res = $this->fetch($pageUrl);
+                $res = $this->fetch($pageUrl, $renderMode);
                 $this->sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok']]);
 
                 if (!$res['ok']) {
@@ -114,10 +118,19 @@ class ScrapeStreamController extends Controller
         ]);
     }
 
-    private function fetch(string $url): array
+    private function fetch(string $url, string $renderMode = 'static'): array
     {
         $net = (array) config('scraper.fetch.net', []);
-        return HtmlFetcher::get($url, (int) config('scraper.fetch.timeout', 25), $net);
+        if ($renderMode === 'static' || $renderMode === '') {
+            return HtmlFetcher::get($url, (int) config('scraper.fetch.timeout', 25), $net);
+        }
+        return SmartFetcher::get(
+            $url,
+            (int) config('scraper.fetch.timeout', 25),
+            $net,
+            $renderMode,
+            ['scroll' => (bool) config('scraper.renderer.scroll', false)]
+        );
     }
 
     private function sse(string $event, array $payload): void

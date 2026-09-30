@@ -32,6 +32,17 @@ return [
         'concurrency' => (int) env('BASALAM_CONCURRENCY', 4),
     ],
 
+    // سرویس رندرِ جاوااسکریپت (پوشهٔ browser/ — Playwright یا Selenium)
+    'renderer' => [
+        'url' => env('SCRAPER_RENDER_URL', 'http://127.0.0.1:3100'),
+        'token' => env('SCRAPER_RENDER_TOKEN', ''),
+        'timeout_ms' => (int) env('SCRAPER_RENDER_TIMEOUT_MS', 60000),
+        'wait_until' => env('SCRAPER_RENDER_WAIT_UNTIL', 'domcontentloaded'), // load|domcontentloaded|networkidle
+        'scroll' => (bool) env('SCRAPER_RENDER_SCROLL', false),
+        // auto = ایستا اول، اگر «پوستهٔ JS» بود رندر | js = همیشه رندر | static = هرگز
+        'default_mode' => env('SCRAPER_RENDER_MODE', 'auto'),
+    ],
+
     // پیش‌فرض صفحه‌بندی درصورت نبودِ انتخاب کاربر
     'pagination' => [
         'default_type' => 'query_page',
