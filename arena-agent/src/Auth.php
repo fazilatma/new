@@ -37,11 +37,15 @@ final class Auth
         if ($token === '') {
             return;
         }
+        // Store only a SHA-256 digest of the bearer token at rest. Keep a
+        // legacy fallback for sessions created by older releases, and upgrade
+        // those rows as soon as their owner makes a request.
+        $digest = hash('sha256', $token);
         $row = Db::one(
-            'SELECT u.id, u.username, u.role, s.expires_at
+            'SELECT u.id, u.username, u.role, s.expires_at, s.token AS session_token
                FROM sessions s JOIN users u ON u.id = s.user_id
-              WHERE s.token = ?',
-            [$token]
+              WHERE s.token = ? OR s.token = ?',
+            [$digest, $token]
         );
         if ($row === null) {
             return;
@@ -50,7 +54,10 @@ final class Auth
             Db::run('DELETE FROM sessions WHERE token = ?', [$token]);
             return;
         }
-        unset($row['expires_at']);
+        if (($row['session_token'] ?? '') !== $digest) {
+            Db::run('UPDATE sessions SET token = ? WHERE token = ?', [$digest, $row['session_token']]);
+        }
+        unset($row['expires_at'], $row['session_token']);
         $req->user = $row;
         self::$current = $row;
     }
@@ -75,7 +82,7 @@ final class Auth
         }
         $token = bin2hex(random_bytes(32));
         Db::run('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)', [
-            $token, $user['id'], time() + self::TTL, Db::now(),
+            hash('sha256', $token), $user['id'], time() + self::TTL, Db::now(),
         ]);
         self::setCookie($token, time() + self::TTL);
         Db::audit($username, 'login.ok');
@@ -88,7 +95,9 @@ final class Auth
     {
         $token = self::tokenFrom($req);
         if ($token !== '') {
-            Db::run('DELETE FROM sessions WHERE token = ?', [$token]);
+            $digest = hash('sha256', $token);
+            // Keep logout compatible with pre-2.4 sessions.
+            Db::run('DELETE FROM sessions WHERE token = ? OR token = ?', [$digest, $token]);
         }
         self::setCookie('', time() - 3600);
     }
