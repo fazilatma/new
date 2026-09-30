@@ -224,9 +224,23 @@ final class Routes
                 throw new HttpError(400, 'Nothing to import.');
             }
 
+            $maxImport = 10 * 1024 * 1024;
+            if (strlen($text) > $maxImport) {
+                throw new HttpError(413, 'Import file is too large. Maximum size is 10 MB.');
+            }
+
             if (!empty($body['probe'])) {
                 return ['ok' => true, 'probe' => true, 'bytesReceived' => strlen($text),
                         'parses' => json_decode($text) !== null];
+            }
+
+            $providerId = trim((string) ($body['providerId'] ?? ''));
+            if (!empty($body['modelsOnly'])) {
+                if ($providerId === '') throw new HttpError(400, 'Select a provider for model import.');
+                $report = Providers::importModels($text, $providerId, !empty($body['replace']));
+                Db::audit($q->user['username'] ?? null, 'model.import',
+                    $report['models'] . ' models into ' . $providerId);
+                return $report;
             }
 
             $report = Providers::import($text, !empty($body['replace']));
