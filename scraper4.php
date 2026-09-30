@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.179';
+const APP_VERSION = '10.180';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -15116,7 +15116,14 @@ extractWriteQueue($queue);
 
 // v8.22: نسخهٔ قبلی را همین ابتدا بخوان تا مقایسه بتواند زنده انجام شود
 $livePrevMap=extractPrevMap($profile);
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>['⏳ شروع استخراج بک‌اند...'],'total_log_count'=>1,'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
+/* v10.180: خطِ آغازِ هر اجرا — برای resumeها برچسب «ادامه» تا در لاگ
+   راه‌افتادنِ جدید از تکرارِ خطِ قدیمی تشخیص داده شود. */
+$_rsmHint = !empty($profile['_extract_list_incomplete']) || !empty($profile['_extract_resume_req'])
+    || in_array((string)$trigger, ['manual_resume','watchdog_resume','auto_resume'], true);
+$__startLine = $_rsmHint ? '⏯ ادامهٔ استخراج بک‌اند…' : '⏳ شروع استخراج بک‌اند...';
+unset($_rsmHint);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>[$__startLine],'total_log_count'=>1,'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
+unset($__startLine);
 
 // v8.27: پاسخ زودهنگام فقط برای درخواست مرورگر معنا دارد تا کاربر منتظر
 // نماند و بقیهٔ کار در پس‌زمینه ادامه یابد. وقتی کران‌جاب این تابع را
@@ -34795,6 +34802,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.179', 'ورودیِ 10.179 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "179'") !== false
       && version_compare(APP_VERSION, '10.' . '179', '>='));
+
+    /* ---------- v10.180: لاگِ استخراج بدونِ خطوطِ مکرر + UI خوش‌تر ---------- */
+    $__pe = strpos($selfSrc, "function pollExtractProgress(){\n    // v8.20");
+    $__peEnd = $__pe !== false ? strpos($selfSrc, "\nfunction ", $__pe + 10) : false;
+    $add('10.180', 'الحاقِ کورِ لاگِ استخراج حذف شده (علتِ تکرار)',
+         $__pe !== false && $__peEnd !== false
+      && strpos(substr($selfSrc, $__pe, $__peEnd - $__pe), "insertAdjacentHT" . "ML('beforeend'") === false
+      && strpos(substr($selfSrc, $__pe, $__peEnd - $__pe), '__lastH') !== false);
+    unset($__pe, $__peEnd);
+    $add('10.180', 'رندرِ idempotent لاگ هست',
+         strpos($selfSrc, 'function extractLogRow(m){') !== false
+      && strpos($selfSrc, '__lastH') !== false);
+    $add('10.180', 'خطِ آغازِ resume با برچسبِ «ادامه» متمايز است',
+         strpos($selfSrc, '⏯ ادامهٔ استخراج بک‌اند') !== false);
+    $add('10.180', 'ورودیِ 10.180 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "180'") !== false
+      && version_compare(APP_VERSION, '10.' . '180', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63656,14 +63680,54 @@ function srClear(){
  * پنل خودش را می‌ساخت و «اجرای حالا» نه شمارنده داشت نه دکمهٔ توقف و
  * نه اصلاً polling را شروع می‌کرد، برای همین به نظر می‌رسید کاری نمی‌کند.
  */
+/* v10.180: جعبهٔ لاگِ استخراج — رندرِ یک‌باره و رنگی به‌جای «الحاقِ کور»
+   قبلاً هر ۱/۵ ثانیه کلِ recent_log دوباره به انتهای جعبه چسبانده می‌شد و
+   خطِ ⏳ شروع ناگهان ده‌ها بار تکرار می‌شد. حالا HTML ساخته‌شده فقط وقتی
+   عوض می‌شود که محتوا واقعاً فرق کرده باشد — تکرار غیرممکن است. */
+function ensureExtractLogStyles(){
+    if($('exlStyle'))return;
+    const st=document.createElement('style');st.id='exlStyle';
+    st.textContent='.exl{padding:2px 6px;margin:1px 0;border-right:3px solid transparent;border-radius:4px;line-height:1.8;white-space:pre-wrap;word-break:break-word;direction:rtl;background:rgba(148,163,184,.05)}'
+        +'.exl:hover{background:rgba(148,163,184,.11)}'
+        +'.exl-btn{font-size:11px;line-height:1;padding:5px 10px;border-radius:6px;border:1px solid #47556966;background:#1e293b;color:#cbd5e1;cursor:pointer}'
+        +'.exl-btn:hover{background:#334155}';
+    document.head.appendChild(st);
+}
+function extractLogRow(m){
+    const s=String(m);let c='#94a3b8';
+    if(s.includes('✅')||s.includes('✓'))c='#4ade80';
+    else if(s.includes('❌'))c='#f87171';
+    else if(s.includes('🛡')||s.includes('⚠'))c='#fbbf24';
+    else if(s.includes('🔍')||s.includes('🧪'))c='#67e8f9';
+    else if(s.includes('📄'))c='#facc15';
+    else if(s.includes('⛳')||s.includes('⏸')||s.includes('⏹'))c='#fb923c';
+    else if(s.includes('⏯')||s.includes('⏭')||s.includes('🔄'))c='#c4b5fd';
+    else if(s.includes('⏳'))c='#a78bfa';
+    return '<div class="exl" style="color:'+c+';border-right-color:'+c+'">'+esc(s)+'</div>';
+}
+function extractLogCopy(){
+    const d=$('extractLog');if(!d)return;
+    navigator.clipboard.writeText(d.innerText).then(()=>showToast('📋 لاگ کپی شد'));
+}
+function extractLogClear(){
+    const d=$('extractLog');if(!d)return;
+    d.innerHTML='';d.__lastH='';
+}
+
 function openExtractPanel(title){
     switchMainTab('start');
     const panel=$('extractProgressPanel');
     if(panel){
+        ensureExtractLogStyles();
         panel.style.display='block';
         panel.innerHTML='<div style="color:#a855f7;font-weight:bold;padding:8px;margin-bottom:4px;background:#2e106530;border-radius:6px">'+esc(title)+'</div>'
             +'<div id="liveCounters" class="live-cnt"></div>'
-            +'<div id="extractLog" style="max-height:400px;overflow-y:auto;font-size:11px;color:#e2e8f0"></div>'
+            +'<div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px">'
+            +'<span style="font-size:12px;color:#a5b4fc;font-weight:bold">📜 گزارش زندهٔ اجرا</span><span style="flex:1"></span>'
+            +'<button type="button" class="exl-btn" onclick="extractLogCopy()" title="همهٔ خطوطِ لاگ به حافظه کپی می‌شود">📋 کپی لاگ</button>'
+            +'<button type="button" class="exl-btn" onclick="extractLogClear()" title="فقط نمایشِ این جعبه پاک می‌شود؛ اجرا ادامه دارد">🧹 پاک‌کردن نمایش</button>'
+            +'</div>'
+            +'<div id="extractLog" style="max-height:400px;overflow-y:auto;font-size:11px;color:#e2e8f0;background:#0f172a80;border:1px solid #33415555;border-radius:8px;padding:6px 8px"></div>'
             +'<div id="extractStats" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-top:10px"></div>'
             +'<div style="text-align:center;margin-top:8px"><button class="btn btn-red" onclick="stopBackendExtract()">⏹ توقف</button></div>';
     }
@@ -64316,18 +64380,16 @@ function pollExtractProgress(){
         }
         $('extractStatusText').textContent=statusText;
 
-        // Show logs
+        // Show logs — v10.180: رندرِ idempotent؛ اگر محتوا همان است هیچ‌کاری
+        // نکن. دیگر هیچ خطی هر ۱/۵ ثانیه به انتها اضافه نمی‌شود.
         const logDiv=$('extractLog');
-        if(logDiv&&logs.length>0){
-            logs.forEach(m=>{
-                let cls='color:#64748b;font-size:11px';
-                if(m.includes('✅')||m.includes('✓'))cls='color:#4ade80;font-size:11px';
-                if(m.includes('❌'))cls='color:#f87171;font-size:11px';
-                if(m.includes('🔍'))cls='color:#67e8f9;font-size:11px';
-                if(m.includes('📄'))cls='color:#facc15;font-size:11px';
-                logDiv.insertAdjacentHTML('beforeend','<div style="'+cls+'">'+esc(m)+'</div>');
-            });
-            scrollElBottom(logDiv);
+        if(logDiv){
+            const html=logs.slice(-40).map(extractLogRow).join('');
+            if(logDiv.__lastH!==html){
+                const nearBottom=(logDiv.scrollHeight-logDiv.scrollTop-logDiv.clientHeight)<48;
+                logDiv.innerHTML=html;logDiv.__lastH=html;
+                if(nearBottom)scrollElBottom(logDiv);
+            }
         }
 
         // Show comparison stats when done
@@ -64792,6 +64854,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.180', t:'🧹 لاگِ استخراج: دیگر هیچ خطی (مثل «⏳ شروع استخراج بک‌اند…») تکرار نمی‌شود + UI بهتر', items:[
+    'علتِ خطوطِ مکرر پیدا شد: رندرِ مرورگر هر ۱/۵ ثانیه کلِ recent_log را دوباره به انتهای جعبه می‌چسباند (الحاقِ کور) — خطِ آغاز که همیشه در دُم می‌ماند ده‌ها بار تکرار می‌شد؛ باگِ نمایشی محض بود، دادهٔ اجرا سالم بود',
+    'حالا رندر idempotent است: HTML لاگ فقط وقتی بازنویسی می‌شود که واقعاً فرق کرده باشد؛ اسکرولِ خودکار هم فقط وقتی پایین جعبه هستید اعمال می‌شود تا خواندنِ بالاتر نپرد',
+    'هر خط با رنگِ معنایی و حاشیهٔ کناری (صفحه‌ها زرد، موفقیت سبز، خطا قرمز، توقف نارنجی و…) و کارتِ تیرهٔ مرتب؛ دکمه‌های 📋 «کپی لاگ» و 🧹 «پاک‌کردن نمایش» روی تیترِ جعبه',
+    'اجراهای resume حالا با «⏯ ادامهٔ استخراج بک‌اند…» شروع می‌شوند تا راه‌افتادنِ جدید در لاگ از تکرار تشخیص داده شود',
+    'پاسخ به سؤال «قابل حذف است؟»: آن خط خودشِ مارکرِ شروعِ هر اجراست و مفید است؛ چیزِ حذفی، باگِ تکرارش بود — که ریشه‌ای حذف شد',
+  ]},
   {v:'10.179', t:'🔍 ریشهٔ واقعیِ توقفِ ایمالز: سلکتور به‌جای گرید، نوارِ ثابتِ ۴۰تاییِ بالا را می‌گرفت', items:[
     'مقایسهٔ زندهٔ HTML: هر صفحهٔ ایمالز دو بخش دارد — نوارِ پیشنهادهای ثابتِ ~۴۰تایی (در همهٔ صفحات یکی) و گریدِ محصولِ صفحه‌بندی‌شونده (کارت‌های «مشاهده فروشندگان» با لینکِ ~id~) که در هر صفحه عوض می‌شود؛ سلکتورِ پروفایل روی نوارِ ثابت بود، برای همین صفحهٔ ۲ هیچ محصولِ تازه‌ای نمی‌داد و توقف می‌شد',
     'آزمایشگرِ صفحه‌بندی حالا این دو حالت را از هم تفکیک می‌کند: «سند متفاوت ولی کارت‌ها یکی» = مشکلِ سلکتور (نه الگو، نه ربات) با پیشنهادِ نامزدهای ظرفِ گرید',
