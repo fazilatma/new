@@ -197,6 +197,28 @@ final class Db
         self::pdo()->prepare($sql)->execute($args);
     }
 
+    /** Execute a group of writes atomically. Safe to call from another transaction. */
+    public static function transaction(callable $work): mixed
+    {
+        $pdo = self::pdo();
+        $nested = $pdo->inTransaction();
+        if (!$nested) {
+            $pdo->beginTransaction();
+        }
+        try {
+            $result = $work();
+            if (!$nested) {
+                $pdo->commit();
+            }
+            return $result;
+        } catch (\\Throwable $e) {
+            if (!$nested && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
     public static function setting(string $key, ?string $default = null): ?string
     {
         $row = self::one('SELECT value FROM settings WHERE key = ?', [$key]);
