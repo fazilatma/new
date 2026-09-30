@@ -1,10 +1,7 @@
 {
-  "name":"local-coding-agent",
-  "source":{"type":"github","repository":"fazilatma/new","branch":"arena/coding-agent-local-models"},
-  "runtime":{"type":"node","version":"22","install":"npm install","start":"node server/index.js"},
-  "port":3000,
-  "host":"0.0.0.0",
-  "environment":{"NODE_ENV":"production","HOST":"0.0.0.0","PORT":"3000","WORKSPACE_ROOT":"./workspace","MODELS_ROOT":"./models","PYTHON_BIN":"python3","LLAMA_BIN":"llama-server","AGENT_TOKEN":"CHANGE_ME"},
-  "healthcheck":"/api/health",
-  "persistent_paths":["workspace","models"]
+  "repository": "fazilatma/new",
+  "branch": "arena/coding-agent-local-models",
+  "install": "npm install",
+  "start": "node server/index.js",
+  "port": 3000
 }
