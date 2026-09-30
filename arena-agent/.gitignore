@@ -5,3 +5,5 @@ data/master.key
 storage/
 .env
 tools/node_modules
+.tmp-git-test/
+.devstate/

@@ -36,6 +36,7 @@ final class Tools
                 ], []),
                 'writes' => false,
                 'needsShell' => false,
+                'needsGit' => false,
             ],
             [
                 'name' => 'read_file',
@@ -45,6 +46,7 @@ final class Tools
                     'path' => ['string', 'File path relative to the workspace root.'],
                 ], ['path']),
                 'writes' => false,
+                'needsGit' => false,
                 'needsShell' => false,
             ],
             [
@@ -56,6 +58,7 @@ final class Tools
                     'path' => ['string', 'Folder to search under. Empty means the whole workspace.'],
                 ], ['query']),
                 'writes' => false,
+                'needsGit' => false,
                 'needsShell' => false,
             ],
             [
@@ -67,6 +70,7 @@ final class Tools
                     'content' => ['string', 'The complete new contents of the file.'],
                 ], ['path', 'content']),
                 'writes' => true,
+                'needsGit' => false,
                 'needsShell' => false,
             ],
             [
@@ -80,6 +84,7 @@ final class Tools
                     'replace' => ['string', 'Text to put in its place.'],
                 ], ['path', 'find', 'replace']),
                 'writes' => true,
+                'needsGit' => false,
                 'needsShell' => false,
             ],
             [
@@ -89,7 +94,55 @@ final class Tools
                     'path' => ['string', 'File path relative to the workspace root.'],
                 ], ['path']),
                 'writes' => true,
+                'needsGit' => false,
                 'needsShell' => false,
+            ],
+            [
+                'name' => 'git_status',
+                'description' => 'Show the current branch and which files have changed. Use this '
+                    . 'before committing so you know what you are about to include.',
+                'parameters' => self::schema([], []),
+                'writes' => false,
+                'needsShell' => false,
+                'needsGit' => true,
+            ],
+            [
+                'name' => 'git_diff',
+                'description' => 'Show what actually changed, as a unified diff. Read this before '
+                    . 'writing a commit message so the message describes the real change.',
+                'parameters' => self::schema([
+                    'path' => ['string', 'Limit the diff to one file. Empty means everything.'],
+                    'staged' => ['boolean', 'Show what is staged rather than the working tree.'],
+                ], []),
+                'writes' => false,
+                'needsShell' => false,
+                'needsGit' => true,
+            ],
+            [
+                'name' => 'git_log',
+                'description' => 'List recent commits, newest first, to see how the project has '
+                    . 'been changing and how its commit messages are usually written.',
+                'parameters' => self::schema([
+                    'limit' => ['integer', 'How many commits. Default 10.'],
+                    'path' => ['string', 'Only commits touching this file.'],
+                ], []),
+                'writes' => false,
+                'needsShell' => false,
+                'needsGit' => true,
+            ],
+            [
+                'name' => 'git_commit',
+                'description' => 'Stage the given files and commit them. Write a message that says '
+                    . 'why the change was made, not just what changed. Only commit work you have '
+                    . 'verified; never commit to hide a failure.',
+                'parameters' => self::schema([
+                    'message' => ['string', 'The commit message. A short subject line, then a blank '
+                        . 'line, then the reasoning if it needs one.'],
+                    'paths' => ['array', 'Files to include. Omit to commit everything already staged.'],
+                ], ['message']),
+                'writes' => true,
+                'needsShell' => false,
+                'needsGit' => true,
             ],
             [
                 'name' => 'run_command',
@@ -102,33 +155,27 @@ final class Tools
                     'timeout' => ['integer', 'Seconds to allow before giving up. Default 60.'],
                 ], ['command']),
                 'writes' => false,
+                'needsGit' => false,
                 'needsShell' => true,
             ],
         ];
-    }
-
-    /** Names of the tools this host can actually offer right now. @return array<int,string> */
-    public static function availableNames(): array
-    {
-        $shell = Shell::enabled() && Shell::available();
-        $names = [];
-        foreach (self::declarations() as $d) {
-            if ($d['needsShell'] && !$shell) {
-                continue;
-            }
-            $names[] = $d['name'];
-        }
-        return $names;
     }
 
     /** Declarations filtered to what this host can offer. @return array<int,array<string,mixed>> */
     public static function available(): array
     {
         $shell = Shell::enabled() && Shell::available();
+        $git = Git::enabled() && Git::isRepo();
         return array_values(array_filter(
             self::declarations(),
-            static fn(array $d): bool => !$d['needsShell'] || $shell
+            static fn(array $d): bool => (!$d['needsShell'] || $shell) && (!$d['needsGit'] || $git)
         ));
+    }
+
+    /** Names of the tools this host can actually offer right now. @return array<int,string> */
+    public static function availableNames(): array
+    {
+        return array_column(self::available(), 'name');
     }
 
     /**
@@ -152,6 +199,10 @@ final class Tools
                 'edit_file' => self::editFile($args, $conversationId),
                 'delete_file' => self::deleteFile($args, $conversationId),
                 'run_command' => self::runCommand($args),
+                'git_status' => self::gitStatus(),
+                'git_diff' => self::gitDiff($args),
+                'git_log' => self::gitLog($args),
+                'git_commit' => self::gitCommit($args),
                 default => self::fail("There is no tool called '{$name}'. Available tools: "
                     . implode(', ', self::availableNames())),
             };
@@ -343,6 +394,74 @@ final class Tools
             'result' => self::clip($text),
             'change' => null,
         ];
+    }
+
+    // ------------------------------------------------------------------ git
+
+    /** @return array<string,mixed> */
+    private static function gitStatus(): array
+    {
+        $st = Git::status();
+        if ($st['clean']) {
+            return self::ok('clean', "On branch {$st['branch']}. Nothing has changed.");
+        }
+        $lines = ["On branch {$st['branch']}."];
+        if ($st['ahead'] || $st['behind']) {
+            $lines[] = "Ahead {$st['ahead']}, behind {$st['behind']} of {$st['upstream']}.";
+        }
+        foreach ($st['files'] as $f) {
+            $lines[] = sprintf('  %-12s %s%s', $f['label'], $f['path'],
+                $f['staged'] ? ' (staged)' : '');
+        }
+        return self::ok(
+            $st['staged'] . ' staged, ' . $st['unstaged'] . ' unstaged',
+            implode("\n", $lines)
+        );
+    }
+
+    /** @param array<string,mixed> $args @return array<string,mixed> */
+    private static function gitDiff(array $args): array
+    {
+        $diff = Git::diff(trim((string) ($args['path'] ?? ''), '/'), (bool) ($args['staged'] ?? false));
+        if (trim($diff) === '') {
+            return self::ok('no differences', 'There are no differences to show.');
+        }
+        return self::ok(substr_count($diff, "\n") . ' lines of diff', $diff);
+    }
+
+    /** @param array<string,mixed> $args @return array<string,mixed> */
+    private static function gitLog(array $args): array
+    {
+        $commits = Git::log(max(1, min(100, (int) ($args['limit'] ?? 10))),
+            trim((string) ($args['path'] ?? ''), '/'));
+        if ($commits === []) {
+            return self::ok('no commits', 'This repository has no commits yet.');
+        }
+        $lines = [];
+        foreach ($commits as $c) {
+            $lines[] = sprintf('%s  %s  %s  %s', $c['short'], substr($c['date'], 0, 10),
+                $c['author'], $c['subject']);
+        }
+        return self::ok(count($commits) . ' commits', implode("\n", $lines));
+    }
+
+    /** @param array<string,mixed> $args @return array<string,mixed> */
+    private static function gitCommit(array $args): array
+    {
+        $message = trim((string) ($args['message'] ?? ''));
+        if ($message === '') {
+            return self::fail('git_commit needs a message.');
+        }
+        $paths = $args['paths'] ?? [];
+        if (is_string($paths)) {
+            $paths = [$paths];
+        }
+        $result = Git::commit($message, is_array($paths) ? $paths : []);
+        $commit = $result['commit'] ?? null;
+        return self::ok(
+            $commit ? (string) $commit['short'] : 'committed',
+            'Committed ' . ($commit ? $commit['short'] . ' ' . $commit['subject'] : $message)
+        );
     }
 
     // --------------------------------------------------------------- shared

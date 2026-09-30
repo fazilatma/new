@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace Arena;
 
 const APP_NAME = 'Arena Agent';
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.2.0';
 /** HTTP contract version. The bundled UI is written against this. */
 const APP_API_VERSION = 'v1';
 

@@ -3,7 +3,7 @@
 A self-hosted, multi-provider AI chat and coding workspace in plain PHP.
 No Composer, no build step, no framework — copy the folder to a host and open it.
 
-Version **2.1.0**. See [CHANGELOG.md](CHANGELOG.md).
+Version **2.2.0**. See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -65,7 +65,8 @@ Everything the app needs is in that list. There is nothing else to configure.
 | `pdo_sqlite` | all state lives in one SQLite file |
 | `curl` *or* `allow_url_fopen` | talking to providers; cURL also enables streaming |
 | `openssl` *or* `sodium` | encrypting stored API keys |
-| `proc_open` | only for the terminal view; optional |
+| `proc_open` | the terminal and git; optional |
+| `git` | the Git view and the git tools; optional |
 
 ---
 
@@ -85,6 +86,12 @@ compatible, Anthropic, Google Gemini, Ollama, Mistral, Azure OpenAI.
 
 **Files** — a sandboxed workspace browser and editor. Paths are resolved
 lexically and then checked against the root, so traversal fails closed.
+
+**Git** — branch, stage, diff, commit, push and pull from the interface, and
+from the agent. Every git call is made with an argument array rather than a
+shell string, so a branch or filename containing shell syntax is data, not
+code. A token for https push is encrypted at rest and never written into
+`.git/config`.
 
 **Change approval** — the agent does not write to your files. It proposes, and
 you see a unified diff with accept and reject buttons. The previous contents
@@ -112,9 +119,13 @@ actually survive the trip through your host.
 | `edit_file` | Replace one exact passage — refused if it is missing or ambiguous |
 | `delete_file` | Remove a file |
 | `run_command` | Run a command and report its output and exit code |
+| `git_status` | Branch and what has changed |
+| `git_diff` | What actually changed, as a diff |
+| `git_log` | Recent commits |
+| `git_commit` | Stage the named files and commit them |
 
-`run_command` appears only when `ARENA_SHELL=true` and the host permits
-`proc_open`. When it is absent the model is told so, rather than being left to
+The four git tools appear only once the workspace is a git repository, and
+`run_command` only when `ARENA_SHELL=true` and the host permits `proc_open`. When it is absent the model is told so, rather than being left to
 call a tool that is not there.
 
 Every tool goes through the same guards as the web interface: nothing reaches
@@ -186,6 +197,7 @@ src/Llm.php             the six protocol adapters
 src/Chat.php            conversations and SSE streaming
 src/Workspace.php       sandboxed file access
 src/Shell.php           command execution
+src/Git.php             git, via argument arrays rather than a shell
 src/Routes.php          the whole HTTP surface
 bin/console.php         command line companion
 tools/                  test harness and dev server
@@ -210,6 +222,9 @@ node ../agent-php/tools/phprun.mjs --root=. tools/tests/smoke.php
 
 # 101 checks over the agent, its tools, diffs and the approval gate
 node ../agent-php/tools/phprun.mjs --root=. tools/tests/agent.php
+
+# 87 checks against the real git binary (--spawn lets PHP start processes)
+node ../agent-php/tools/phprun.mjs --root=. --spawn tools/tests/git.php
 
 # browse the app locally (real PHP 8.3, no system install)
 node tools/devserver.mjs 3000

@@ -89,8 +89,8 @@ function navigate(view) {
   $('.scrim')?.remove();
   const loaders = {
     chat: loadChat, providers: loadProviders, files: () => loadFiles(''),
-    changes: loadChanges, terminal: loadTerminal, diag: loadDiag,
-    settings: () => { loadSettings(); loadAgentInfo(); },
+    changes: loadChanges, terminal: loadTerminal, diag: loadDiag, git: loadGit,
+    settings: () => { loadSettings(); loadAgentInfo(); loadGitSettings(); },
   };
   loaders[view]?.();
 }
@@ -662,6 +662,265 @@ async function setApprovalMode(mode) {
   } catch (err) { bad(err.message); }
 }
 
+/* -------------------------------------------------------------------- git */
+
+const G = { status: null, selected: '', staged: false };
+
+async function loadGit() {
+  const box = $('#gitBody');
+  box.innerHTML = '<div class="hint">در حال بارگذاری…</div>';
+  try {
+    const info = await api('/api/git');
+    G.info = info;
+
+    if (!info.installed) {
+      box.innerHTML = `<div class="card"><h2>گیت در دسترس نیست</h2>
+        <p class="hint">روی این میزبان گیت نصب نیست، یا PHP اجازهٔ ساختن فرایند ندارد.
+        با <code>php bin/console.php doctor</code> بررسی کنید.</p></div>`;
+      return;
+    }
+    if (!info.enabled) {
+      box.innerHTML = `<div class="card"><h2>گیت خاموش است</h2>
+        <p class="hint"><code>ARENA_GIT=false</code> را از <code>.env</code> بردارید.</p></div>`;
+      return;
+    }
+    if (!info.repo) {
+      box.innerHTML = `<div class="card"><h2>هنوز مخزنی نیست</h2>
+        <p class="hint">ورک‌اسپیس یک مخزن گیت نیست. یکی بسازید تا بتوانید تغییرها را
+        پیگیری کنید. (${esc(info.version)})</p>
+        <button class="btn primary" onclick="gitInit()">ساخت مخزن</button></div>`;
+      return;
+    }
+
+    G.status = info.status;
+    box.innerHTML = gitLayout(info);
+    bindGitParts();
+    if (G.selected) showGitDiff(G.selected, G.staged);
+  } catch (err) {
+    box.innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
+  }
+}
+
+function gitLayout(info) {
+  const st = info.status;
+  const staged = st.files.filter((f) => f.staged);
+  const unstaged = st.files.filter((f) => !f.staged);
+
+  const fileRow = (f, isStaged) => `
+    <div class="git-file${G.selected === f.path && G.staged === isStaged ? ' on' : ''}"
+         data-path="${esc(f.path)}" data-staged="${isStaged ? '1' : ''}">
+      <span class="git-mark ${f.label}">${esc(f.label[0].toUpperCase())}</span>
+      <span class="git-path mono">${esc(f.path)}</span>
+      <span class="git-btns">
+        ${isStaged
+          ? `<button class="btn xs" data-act="unstage" title="بیرون بردن از ایندکس">−</button>`
+          : `<button class="btn xs" data-act="stage" title="افزودن به ایندکس">+</button>
+             <button class="btn xs danger" data-act="discard" title="دور ریختن تغییر">↺</button>`}
+      </span>
+    </div>`;
+
+  return `
+    <div class="git-bar">
+      <span class="git-branch" title="شاخهٔ جاری">⎇ ${esc(st.branch)}</span>
+      ${st.upstream ? `<span class="hint mono">${esc(st.upstream)}</span>` : ''}
+      ${st.ahead ? `<span class="badge">${st.ahead} ↑</span>` : ''}
+      ${st.behind ? `<span class="badge">${st.behind} ↓</span>` : ''}
+      <span class="spacer"></span>
+      <select class="input sm" id="gitBranch">
+        ${info.branches.local.map((b) =>
+          `<option${b === st.branch ? ' selected' : ''}>${esc(b)}</option>`).join('')}
+      </select>
+      <button class="btn sm" onclick="gitNewBranch()">شاخهٔ تازه</button>
+      <button class="btn sm" onclick="gitPull()">⬇ pull</button>
+      <button class="btn sm" onclick="gitPush()">⬆ push</button>
+      <button class="btn sm" onclick="loadGit()">تازه‌سازی</button>
+    </div>
+
+    <div class="git-grid">
+      <div class="git-col">
+        <h3>ایندکس <span class="hint">(${staged.length})</span>
+          ${staged.length ? '<button class="btn xs" onclick="gitUnstageAll()">همه بیرون</button>' : ''}</h3>
+        <div class="git-list">${staged.map((f) => fileRow(f, true)).join('') ||
+          '<div class="hint pad">چیزی برای کامیت آماده نیست.</div>'}</div>
+
+        <h3>تغییرهای کاری <span class="hint">(${unstaged.length})</span>
+          ${unstaged.length ? '<button class="btn xs" onclick="gitStageAll()">همه اضافه</button>' : ''}</h3>
+        <div class="git-list">${unstaged.map((f) => fileRow(f, false)).join('') ||
+          '<div class="hint pad">هیچ تغییری نیست.</div>'}</div>
+
+        <form class="git-commit" id="gitCommitForm">
+          <textarea class="input" id="gitMessage" rows="3"
+                    placeholder="پیام کامیت — بگویید چرا، نه فقط چه."></textarea>
+          <button class="btn primary" type="submit" ${staged.length ? '' : 'disabled'}>
+            کامیت ${staged.length ? `(${staged.length} فایل)` : ''}</button>
+        </form>
+      </div>
+
+      <div class="git-col">
+        <h3 id="gitDiffTitle">تفاوت</h3>
+        <div id="gitDiff"><div class="hint pad">یک فایل را انتخاب کنید.</div></div>
+        <h3>تاریخچه</h3>
+        <div class="git-log">${info.log.map((c) => `
+          <div class="git-commit-row">
+            <code class="mono">${esc(c.short)}</code>
+            <span class="git-subject">${esc(c.subject)}</span>
+            <span class="hint">${esc(c.author)} · ${esc(c.date.slice(0, 10))}</span>
+          </div>`).join('') || '<div class="hint pad">هنوز کامیتی نیست.</div>'}</div>
+      </div>
+    </div>`;
+}
+
+function bindGitParts() {
+  $$('#gitBody .git-file').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      const act = e.target.dataset?.act;
+      const path = row.dataset.path;
+      if (act) { e.stopPropagation(); return gitFileAction(act, path); }
+      G.selected = path;
+      G.staged = row.dataset.staged === '1';
+      $$('#gitBody .git-file').forEach((r) => r.classList.remove('on'));
+      row.classList.add('on');
+      showGitDiff(path, G.staged);
+    });
+  });
+  $('#gitCommitForm')?.addEventListener('submit', gitCommit);
+  $('#gitBranch')?.addEventListener('change', (e) => gitCheckout(e.target.value));
+}
+
+async function showGitDiff(path, staged) {
+  $('#gitDiffTitle').textContent = 'تفاوت — ' + path;
+  const box = $('#gitDiff');
+  box.innerHTML = '<div class="hint pad">…</div>';
+  try {
+    const r = await api('/api/git/diff', { query: { path, staged: staged ? '1' : '0' } });
+    box.innerHTML = r.diff ? renderDiff(r.diff) : '<div class="hint pad">بدون تفاوت.</div>';
+  } catch (err) {
+    box.innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
+  }
+}
+
+async function gitFileAction(act, path) {
+  if (act === 'discard' && !confirm(`تغییرهای «${path}» دور ریخته شود؟ برگشت‌پذیر نیست.`)) return;
+  try {
+    await api('/api/git/' + act, { method: 'POST', body: { paths: [path] } });
+    if (act === 'discard') ok('دور ریخته شد');
+    loadGit();
+  } catch (err) { bad(err.message); }
+}
+
+const gitStageAll = () => gitBulk('stage');
+const gitUnstageAll = () => gitBulk('unstage');
+
+async function gitBulk(act) {
+  const want = act === 'stage' ? (f) => !f.staged : (f) => f.staged;
+  const paths = (G.status?.files || []).filter(want).map((f) => f.path);
+  if (!paths.length) return;
+  try { await api('/api/git/' + act, { method: 'POST', body: { paths } }); loadGit(); }
+  catch (err) { bad(err.message); }
+}
+
+async function gitCommit(e) {
+  e.preventDefault();
+  const message = $('#gitMessage').value.trim();
+  if (!message) return bad('کامیت به پیام نیاز دارد.');
+  try {
+    const r = await api('/api/git/commit', { method: 'POST', body: { message } });
+    ok('کامیت شد: ' + (r.commit?.short || ''));
+    G.selected = '';
+    loadGit();
+  } catch (err) { bad(err.message); }
+}
+
+async function gitInit() {
+  try { await api('/api/git/init', { method: 'POST' }); ok('مخزن ساخته شد'); loadGit(); }
+  catch (err) { bad(err.message); }
+}
+
+async function gitCheckout(branch) {
+  if (branch === G.status?.branch) return;
+  try { await api('/api/git/checkout', { method: 'POST', body: { branch } }); loadGit(); }
+  catch (err) { bad(err.message); loadGit(); }
+}
+
+async function gitNewBranch() {
+  const branch = prompt('نام شاخهٔ تازه:');
+  if (!branch) return;
+  try {
+    await api('/api/git/checkout', { method: 'POST', body: { branch, create: true } });
+    ok('روی ' + branch);
+    loadGit();
+  } catch (err) { bad(err.message); }
+}
+
+async function gitPush() {
+  const first = !G.status?.upstream;
+  try {
+    const r = await api('/api/git/push', { method: 'POST', body: { setUpstream: first } });
+    ok('push شد');
+    if (r.output) toast(r.output.split('\n')[0], 'ok');
+    loadGit();
+  } catch (err) { bad(err.message); }
+}
+
+async function gitPull() {
+  try {
+    const r = await api('/api/git/pull', { method: 'POST' });
+    ok(r.output?.split('\n')[0] || 'pull شد');
+    loadGit();
+    if (S.fsFile) openFile(S.fsFile);
+  } catch (err) { bad(err.message); }
+}
+
+async function saveGitConfig(e) {
+  e.preventDefault();
+  const body = { name: $('#gitName').value, email: $('#gitEmail').value };
+  const token = $('#gitToken').value;
+  if (token) body.token = token;
+  try {
+    await api('/api/git/config', { method: 'PUT', body });
+    $('#gitToken').value = '';
+    ok('ذخیره شد');
+    loadGitSettings();
+  } catch (err) { bad(err.message); }
+}
+
+async function saveGitRemote(e) {
+  e.preventDefault();
+  try {
+    await api('/api/git/remote', { method: 'POST',
+      body: { name: $('#gitRemoteName').value || 'origin', url: $('#gitRemoteUrl').value } });
+    ok('مخزن دوردست ذخیره شد');
+    loadGitSettings();
+  } catch (err) { bad(err.message); }
+}
+
+async function loadGitSettings() {
+  try {
+    const info = await api('/api/git');
+    $('#gitName').value = info.identity.name;
+    $('#gitEmail').value = info.identity.email;
+    $('#gitTokenState').textContent = info.hasToken
+      ? 'یک توکن ذخیره شده است. برای جایگزینی، توکن تازه را بنویسید؛ برای پاک کردن، «حذف توکن».'
+      : 'توکنی ذخیره نشده.';
+    $('#gitClearToken').hidden = !info.hasToken;
+    const remote = (info.remotes || [])[0];
+    if (remote) {
+      $('#gitRemoteName').value = remote.name;
+      $('#gitRemoteUrl').value = remote.url;
+    }
+    $('#gitRemoteForm').hidden = !info.repo;
+  } catch { /* the settings page still works without it */ }
+}
+
+async function clearGitToken() {
+  try {
+    await api('/api/git/config', { method: 'PUT',
+      body: { name: $('#gitName').value, email: $('#gitEmail').value, token: '' } });
+    ok('توکن حذف شد');
+    loadGitSettings();
+  } catch (err) { bad(err.message); }
+}
+
 async function loadAgentInfo() {
   try {
     const info = await api('/api/agent/tools');
@@ -877,6 +1136,8 @@ function bindUi() {
   $('#passwordForm').addEventListener('submit', changePassword);
   $('#termForm').addEventListener('submit', runCommand);
   $('#changeFilter').addEventListener('change', loadChanges);
+  $('#gitConfigForm').addEventListener('submit', saveGitConfig);
+  $('#gitRemoteForm').addEventListener('submit', saveGitRemote);
   $('#approvalMode').addEventListener('change', (e) => setApprovalMode(e.target.value));
 
   // Agent mode is a per-browser preference, not a server setting.

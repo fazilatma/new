@@ -406,6 +406,121 @@ final class Routes
             Db::audit(Auth::currentName(), 'changes.mode', $mode);
             return ['ok' => true, 'approval' => Changes::mode()];
         });
+
+        // -------------------------------------------------------------- git
+
+        $r->get('/api/git', static function (Request $q): array {
+            Auth::require($q);
+            return Git::overview();
+        });
+
+        $r->post('/api/git/init', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::init();
+        });
+
+        $r->get('/api/git/status', static function (Request $q): array {
+            Auth::require($q);
+            return Git::status();
+        });
+
+        $r->get('/api/git/diff', static function (Request $q): array {
+            Auth::require($q);
+            return [
+                'path' => (string) ($q->query['path'] ?? ''),
+                'staged' => ($q->query['staged'] ?? '') === '1',
+                'diff' => Git::diff(
+                    (string) ($q->query['path'] ?? ''),
+                    ($q->query['staged'] ?? '') === '1'
+                ),
+            ];
+        });
+
+        $r->get('/api/git/log', static function (Request $q): array {
+            Auth::require($q);
+            return ['commits' => Git::log(
+                (int) ($q->query['limit'] ?? 30),
+                (string) ($q->query['path'] ?? '')
+            )];
+        });
+
+        $r->post('/api/git/stage', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::stage(self::paths($q));
+        });
+
+        $r->post('/api/git/unstage', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::unstage(self::paths($q));
+        });
+
+        $r->post('/api/git/discard', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::discard(self::paths($q));
+        });
+
+        $r->post('/api/git/commit', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            $paths = $q->input('paths', []);
+            return Git::commit(
+                (string) $q->input('message', ''),
+                is_array($paths) ? $paths : [],
+                (bool) $q->input('all', false)
+            );
+        });
+
+        $r->get('/api/git/branches', static function (Request $q): array {
+            Auth::require($q);
+            return Git::branches();
+        });
+
+        $r->post('/api/git/checkout', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::checkout((string) $q->input('branch', ''), (bool) $q->input('create', false));
+        });
+
+        $r->post('/api/git/push', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::push(
+                (string) $q->input('remote', 'origin'),
+                (string) $q->input('branch', ''),
+                (bool) $q->input('setUpstream', false)
+            );
+        });
+
+        $r->post('/api/git/pull', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Git::pull((string) $q->input('remote', 'origin'), (string) $q->input('branch', ''));
+        });
+
+        $r->post('/api/git/remote', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return Git::setRemote((string) $q->input('name', 'origin'), (string) $q->input('url', ''));
+        });
+
+        $r->put('/api/git/config', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            Git::setIdentity((string) $q->input('name', ''), (string) $q->input('email', ''));
+            if ($q->input('token') !== null) {
+                Git::setToken((string) $q->input('token', ''));
+            }
+            return ['ok' => true, 'identity' => Git::identity(), 'hasToken' => Git::hasToken()];
+        });
+    }
+
+    /**
+     * Accept either one path or a list, because both spellings are natural.
+     *
+     * @return array<int,string>
+     */
+    private static function paths(Request $q): array
+    {
+        $paths = $q->input('paths', null);
+        if ($paths === null) {
+            $one = (string) $q->input('path', '');
+            return $one === '' ? [] : [$one];
+        }
+        return is_array($paths) ? array_map('strval', $paths) : [(string) $paths];
     }
 
     private static function workspace(Router $r): void

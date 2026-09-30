@@ -9,6 +9,73 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [2.2.0] — 2026-09-30
+
+Git, run as real processes.
+
+### Added
+- **A Git view**: current branch and how far it is from its upstream, the
+  index and the working tree as two lists, per-file stage / unstage / discard,
+  a diff pane, a commit box, branch switching and creation, push and pull, and
+  recent history.
+- **Four more agent tools** — `git_status`, `git_diff`, `git_log` and
+  `git_commit` — offered only once the workspace is actually a repository. The
+  agent is told to read the diff before writing a commit message, and not to
+  commit work it has not verified.
+- Routes: `GET /api/git`, `/api/git/{status,diff,log,branches}`, and
+  `POST /api/git/{init,stage,unstage,discard,commit,checkout,push,pull,remote}`
+  plus `PUT /api/git/config`.
+- A personal access token can be stored for https push and pull. It is
+  encrypted at rest with the same key as the provider keys, injected into the
+  remote URL for the duration of one command, never written to `.git/config`,
+  and scrubbed out of anything shown to a person or returned by the API.
+- Settings gains a git identity form and a remote form. A credential pasted
+  into a remote URL is stripped before the URL is stored.
+
+### Security
+- Every git invocation uses `proc_open` with an **argument array**, so no
+  shell is involved. A branch named `evil;touch-pwned` or a file named
+  `a; touch pwned.txt; b.md` is one argument, not two commands. There is a
+  test for exactly that.
+- Git has its own switch (`ARENA_GIT`) rather than riding on `ARENA_SHELL`:
+  running `git status` is not the same risk as running arbitrary shell, and
+  most people will want one without the other.
+
+### Fixed
+Found by running against the real binary, and serious:
+- **Exit codes were being discarded.** `proc_get_status()` reaps the status on
+  the first poll after a process ends; every later read, including
+  `proc_close()`, then reports something useless. Both `Shell::run()` and the
+  git runner took the `proc_close()` value, so a *failed* push was reported as
+  a success — the output said "Could not resolve host" and the return said
+  `ok: true`. The exit code is now taken at the only moment it is valid.
+- `git restore --staged` needs a HEAD, so unstaging before the very first
+  commit silently did nothing. The right command is now chosen by asking
+  whether the repository has any commits.
+- Before the first commit git reports the branch as `## No commits yet on
+  main`, which the status parser read as a branch called "No".
+- `git commit` with an empty index says "nothing added to commit but untracked
+  files present" when untracked files exist; only two of the three wordings
+  were recognised, so that case surfaced as a generic failure instead of a
+  409 explaining that nothing was staged.
+
+### Development
+- `agent-php/tools/phprun.mjs` gains `--spawn`, wiring PHP's `proc_open` to
+  Node's `child_process` so code that shells out can be tested against the
+  real binaries. Opt-in, because it lets the script under test run commands.
+- `tools/devserver.mjs` now keeps its state in `.devstate/` on the host and
+  installs the same spawn bridge, so the preview has a working terminal and a
+  working git. Previously any attempt to spawn took the server down.
+
+### Verified
+`tools/tests/git.php` — 87 checks against git 2.39.5: the shell, python and
+node; creating a repository; staging, unstaging, committing, discarding;
+diffs including untracked files; branches; remotes; token storage and
+scrubbing; and a **real push and pull** to a real bare repository. Plus the
+101 agent checks and the 38 smoke checks, all still passing.
+
+---
+
 ## [2.1.0] — 2026-09-30
 
 Turns the chat application into an actual agent.

@@ -81,12 +81,17 @@ final class Shell
         $stdout = '';
         $stderr = '';
         $timedOut = false;
+        $exit = null;
         $deadline = $started + $timeout;
         while (true) {
             $status = proc_get_status($proc);
             $stdout .= (string) stream_get_contents($pipes[1]);
             $stderr .= (string) stream_get_contents($pipes[2]);
             if (!$status['running']) {
+                // The first poll after the process ends is the only one that
+                // reports the exit code; afterwards, and from proc_close(),
+                // it is gone.
+                $exit = (int) $status['exitcode'];
                 break;
             }
             if (microtime(true) > $deadline) {
@@ -100,7 +105,8 @@ final class Shell
         $stderr .= (string) stream_get_contents($pipes[2]);
         fclose($pipes[1]);
         fclose($pipes[2]);
-        $exit = proc_close($proc);
+        $closed = proc_close($proc);
+        $exit ??= ($closed < 0 ? 1 : $closed);
 
         return [
             'command' => $command,

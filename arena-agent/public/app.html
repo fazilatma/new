@@ -16,6 +16,7 @@
       <button data-view="providers" data-title="ارائه‌دهنده‌ها و مدل‌ها"><span class="ico">🤖</span>ارائه‌دهنده‌ها</button>
       <button data-view="files"     data-title="فایل‌های ورک‌اسپیس"><span class="ico">📁</span>فایل‌ها</button>
       <button data-view="changes"   data-title="تغییرهای پیشنهادی"><span class="ico">📝</span>تغییرها<span class="pending-badge" id="pendingBadge" hidden></span></button>
+      <button data-view="git"       data-title="گیت"><span class="ico">🌿</span>گیت</button>
       <button data-view="terminal"  data-title="ترمینال"><span class="ico">💻</span>ترمینال</button>
       <button data-view="settings"  data-title="تنظیمات"><span class="ico">⚙️</span>تنظیمات</button>
       <button data-view="diag"      data-title="تشخیص اتصال"><span class="ico">🩺</span>تشخیص</button>
@@ -126,6 +127,11 @@
       <div id="changeList"></div>
     </section>
 
+    <!-- ============================================ git -->
+    <section class="view" id="view-git" hidden>
+      <div id="gitBody"></div>
+    </section>
+
     <!-- ============================================ terminal -->
     <section class="view" id="view-terminal" hidden>
       <div class="card">
@@ -147,6 +153,37 @@
           <textarea class="input" id="setPrompt" rows="4"></textarea></label>
         <label class="field"><span>پوسته</span>
           <select class="input" id="setTheme"><option value="dark">تیره</option><option value="light">روشن</option></select></label>
+        <button class="btn primary" type="submit">ذخیره</button>
+      </form>
+
+      <form class="card" id="gitConfigForm">
+        <h2>گیت</h2>
+        <p class="hint">این نام و نشانی روی کامیت‌هایی می‌نشیند که از اینجا ساخته می‌شوند.</p>
+        <label class="field"><span>نام</span>
+          <input class="input" id="gitName" autocomplete="off"></label>
+        <label class="field"><span>رایانامه</span>
+          <input class="input" id="gitEmail" autocomplete="off"></label>
+        <label class="field"><span>توکن دسترسی (برای push روی https)</span>
+          <input class="input mono" id="gitToken" type="password" autocomplete="off"
+                 placeholder="نمایش داده نمی‌شود؛ رمزنگاری‌شده ذخیره می‌شود"></label>
+        <p class="hint" id="gitTokenState"></p>
+        <div class="row">
+          <button class="btn primary" type="submit">ذخیره</button>
+          <button class="btn danger" type="button" id="gitClearToken" hidden
+                  onclick="clearGitToken()">حذف توکن</button>
+        </div>
+      </form>
+
+      <form class="card" id="gitRemoteForm" hidden>
+        <h2>مخزن دوردست</h2>
+        <div class="row">
+          <label class="field" style="flex:0 0 140px"><span>نام</span>
+            <input class="input" id="gitRemoteName" value="origin"></label>
+          <label class="field" style="flex:1"><span>نشانی</span>
+            <input class="input mono" id="gitRemoteUrl"
+                   placeholder="https://github.com/user/repo.git"></label>
+        </div>
+        <p class="hint">اگر نشانی شامل نام کاربری و گذرواژه باشد، آن بخش ذخیره نمی‌شود.</p>
         <button class="btn primary" type="submit">ذخیره</button>
       </form>
 
