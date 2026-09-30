@@ -6,7 +6,7 @@ function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activ
 function clearActivity(){$('activity').innerHTML='<div class="activity-empty">فعالیت‌ها پاک شدند.</div>'}
 async function loadFiles(){const d=await api('/api/files');$('files').innerHTML=d.map(x=>x.type==='dir'?'<div>📁 '+esc(x.name)+'</div>':'<div onclick="openFile(\''+encodeURIComponent(x.name)+'\')">📄 '+esc(x.name)+'</div>').join('')||'<div class="activity-empty">پوشه خالی است</div>'}
 async function openFile(p){const d=await api('/api/file?path='+p);current=d.path;$('current').textContent=current;$('editor').value=d.content;$('editorMode').textContent=(current.split('.').pop()||'text').toUpperCase()}
-async function saveFile(){if(!current)return;await api('/api/file',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({path:current,content:$('editor').value})});setActivity('فایل ذخیره شد',current)}
+async function saveFile(){if(!current)return;await api('/api/file',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({path:current,content:$('editor').value})});setActivity('فایل ذخیره شد',current);await loadProjectCommands()}
 async function newFile(){const p=prompt('مسیر فایل جدید؟');if(p){await api('/api/file',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({path:p,content:''})});await loadFiles();await openFile(encodeURIComponent(p))}}
 async function newFolder(){const p=prompt('مسیر پوشه جدید؟');if(p){await api('/api/mkdir',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path:p})});await loadFiles()}}
 async function runCommand(){const cmd=$('command').value.trim();if(!cmd)return;$('terminalState').textContent='Running…';try{const d=await api('/api/terminal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command:cmd})});$('termout').textContent=(d.stdout||'')+(d.stderr?'\n'+d.stderr:'');setActivity('Terminal',cmd+' → exit '+d.code)}catch(e){$('termout').textContent=e.message;setActivity('Terminal error',e.message)}finally{$('terminalState').textContent='Ready'}}
@@ -524,7 +524,7 @@ async function runAgentLoop(){
     agentConversation=agentConversation.filter(x=>x.type!=='working');
     agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),planOnly:Boolean(d.planOnly),changes:d.changes||[],durationMs:Date.now()-agentRunStartedAt});
     saveAgentTask({prompt,success:Boolean(d.success),iterations:d.iterations||d.history?.length||0,createdAt:new Date().toISOString(),changes:(d.changes||[]).length});
-    renderWorkspaceChanges(d.changes||[]);renderAgentChecks(d.history||[]);updateAgentTelemetry(d.success?'DONE':'REVIEW',String((d.iterations||d.history?.length||0)),(d.changes||[]).length);
+    renderWorkspaceChanges(d.changes||[]);renderAgentChecks(d.history||[]);await loadProjectCommands();updateAgentTelemetry(d.success?'DONE':'REVIEW',String((d.iterations||d.history?.length||0)),(d.changes||[]).length);
     renderConversation();
     setAgentRunState(d.success?'READY':'PAUSED');
     setActivity(d.success?'Agent completed':'Agent stopped',d.success?'Verification passed':'Maximum iterations reached');
