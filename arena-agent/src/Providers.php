@@ -143,7 +143,7 @@ final class Providers
                     (int) (bool) ($m['toolCalling'] ?? false), (int) (bool) ($m['vision'] ?? false),
                     (int) ($m['maxInputTokens'] ?? 0), (int) ($m['maxOutputTokens'] ?? 0),
                     (float) ($m['inputCostPer1M'] ?? 0), (float) ($m['outputCostPer1M'] ?? 0),
-                    (string) json_encode($extra ?: new \\stdClass(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    (string) json_encode($extra ?: new \stdClass(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 ]);
                 $n++;
             }
