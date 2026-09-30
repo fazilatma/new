@@ -6,21 +6,15 @@ PORT="${PORT:-5500}"
 export PORT
 export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 
-# Agent Canvas serves the UI from the origin root. HostConsole should strip
-# /openhands/ before proxying to this local port.
-# HostConsole exposes this process under /openhands/. Agent Canvas 1.24.0
-# supports a runtime base path for its prebuilt static server; without it,
-# the SPA loads at "/" while the proxy exposes it below /openhands/ and the
-# browser ends up with a blank page/assets 404s.
-export AGENT_CANVAS_BASE_PATH="${AGENT_CANVAS_BASE_PATH:-/openhands}"
-export VITE_BASE_PATH="${VITE_BASE_PATH:-$AGENT_CANVAS_BASE_PATH}"
+# HostConsole publishes this process at /openhands/ and handles the external
+# prefix. The published npm build is root-served, so setting a second runtime
+# base path can create a redirect loop behind the HostConsole htaccess proxy.
+unset AGENT_CANVAS_BASE_PATH VITE_BASE_PATH
 
-# Create the workspace root expected by AutomationService.
 export OPENHANDS_WORKSPACE_ROOT="${OPENHANDS_WORKSPACE_ROOT:-$HOME/.openhands/agent-canvas/workspaces}"
 export OPENHANDS_AUTOMATION_WORKSPACE_ROOT="${OPENHANDS_AUTOMATION_WORKSPACE_ROOT:-$OPENHANDS_WORKSPACE_ROOT/automation-runs}"
 mkdir -p "$OPENHANDS_AUTOMATION_WORKSPACE_ROOT" "$OPENHANDS_WORKSPACE_ROOT" 2>/dev/null || true
 
-# Dynamically select three consecutive free loopback ports.
 read -r OH_CANVAS_SAFE_BACKEND_PORT OH_CANVAS_SAFE_AUTOMATION_PORT OH_CANVAS_SAFE_VITE_PORT <<EOF
 $(node <<'NODE'
 const net = require('net');
@@ -47,7 +41,6 @@ NODE
 EOF
 export OH_CANVAS_SAFE_BACKEND_PORT OH_CANVAS_SAFE_AUTOMATION_PORT OH_CANVAS_SAFE_VITE_PORT
 
-# Lightweight diagnostics for shared-host resource kills (code 137).
 DIAG_DIR="${OPENHANDS_DIAG_DIR:-$HOME/.openhands/agent-canvas}"
 mkdir -p "$DIAG_DIR" 2>/dev/null || true
 DIAG_LOG="$DIAG_DIR/resource.log"
