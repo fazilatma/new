@@ -3902,7 +3902,8 @@ async function api(path, opts = {}) {
             '  ' + dir + '/index.php?__path=/api/__diag\n\n' +
             'این سه آدرس را مستقیماً در مرورگر باز کنید — هر کدام JSON برگرداند، ' +
             'مسیر درست همان است.\n' +
-            'اگر هر سه HTML دادند، فایل index.php در پوشهٔ نصب نیست یا .htaccess اعمال نمی‌شود.';
+            'اگر هر سه HTML دادند، فایل index.php در پوشهٔ نصب نیست یا .htaccess اعمال نمی‌شود.\n\n' +
+            'صفحهٔ تشخیص خودکار:\n  ' + dir + '/diag   (یا ' + dir + '/index.php?__path=/diag)';
         })(),
         __routing: true
       };
@@ -4447,16 +4448,49 @@ async function handleImportProvidersSubmit(e) {
       '\n\nA truncated copy/paste is the usual cause — use "Choose file" instead.');
   }
 
-  try {
-    const res = await api('/api/providers/import-text', {
+  // Some shared hosts run a WAF that inspects request bodies and rejects
+  // anything holding API keys or URLs, answering with an HTML error page that
+  // has nothing to do with this app. The catalog is the only payload big
+  // enough and suspicious enough to trip those rules, so if the plain POST is
+  // refused at the transport level the same bytes are re-sent base64-encoded.
+  function b64(str) {
+    return btoa(unescape(encodeURIComponent(str)));
+  }
+  async function postImport(body) {
+    return api('/api/providers/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ json: rawJson, replace })
+      body: JSON.stringify(body)
     });
+  }
+
+  try {
+    let res, viaFallback = false;
+    try {
+      res = await postImport({ json: rawJson, replace });
+    } catch (first) {
+      // Only worth retrying when the app never saw the request.
+      const transportFailure = /مسیر API پیدا نشد|HTTP 40[034]|HTTP 41[13]|Failed to fetch/i
+        .test(first?.message || '');
+      if (!transportFailure) throw first;
+      try {
+        res = await postImport({ jsonB64: b64(rawJson), replace });
+        viaFallback = true;
+      } catch (second) {
+        throw new Error((first.message || first) +
+          '\n\nتلاش دوم با بدنهٔ base64 هم رد شد:\n' + (second?.message || second) +
+          '\n\nصفحهٔ تشخیص را باز کنید تا معلوم شود کجا مسدود می‌شود:\n  ' +
+          window.apiUrl('/diag'));
+      }
+    }
+    if (viaFallback) {
+      console.info('[arena] provider import succeeded via the base64 transport fallback');
+    }
     closeModal('importProvidersModal');
     await loadProvidersList();
     renderChatProviders();
     const parts = [`Imported ${res?.providers ?? 0} provider(s) and ${res?.models ?? 0} model(s).`];
+    if (viaFallback) parts.push('(ارسال عادی را فایروال میزبان مسدود کرد؛ با بدنهٔ base64 انجام شد.)');
     if (res?.created?.length) parts.push('Added: ' + res.created.join(', '));
     if (res?.updated?.length) parts.push('Updated: ' + res.updated.join(', '));
     if (res?.skipped?.length) parts.push('Skipped: ' + res.skipped.map(s => `${s.key} (${s.reason})`).join('; '));

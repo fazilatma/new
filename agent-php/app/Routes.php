@@ -1407,6 +1407,33 @@ final class Routes
             $payload = $p['json'] ?? $p['text'] ?? $p['data'] ?? $p['providers'] ?? '';
             // Some clients POST the already-parsed object instead of a string.
             $text = is_array($payload) ? (string) json_encode($payload) : (string) $payload;
+
+            // Shared hosts often run a WAF that inspects request bodies and
+            // rejects anything containing API keys or URLs, answering with its
+            // own HTML error page. The catalog is the only payload here that
+            // trips those rules, so the client may re-send it base64-encoded.
+            if ($text === '') {
+                $b64 = $p['jsonB64'] ?? $p['b64'] ?? '';
+                if (is_string($b64) && $b64 !== '') {
+                    $decoded = base64_decode(strtr($b64, '-_', '+/'), true);
+                    if ($decoded === false) {
+                        throw new HttpError(400, 'jsonB64 is not valid base64');
+                    }
+                    $text = $decoded;
+                }
+            }
+
+            // A probe proves the request survived the network, the web server
+            // and any WAF, without changing stored data.
+            if (!empty($p['probe'])) {
+                return [
+                    'ok' => true,
+                    'probe' => true,
+                    'bytesReceived' => strlen($text),
+                    'parses' => $text !== '' && json_decode($text) !== null,
+                    'transport' => isset($p['jsonB64']) || isset($p['b64']) ? 'base64' : 'plain',
+                ];
+            }
             if ($text === '') {
                 // Either nothing was pasted, or PHP discarded an oversized body
                 // (post_max_size) and handed us an empty $_POST/php://input.
@@ -1781,6 +1808,19 @@ final class Routes
                 $page = Bootstrap::$publicDir . '/localai.html';
                 if (!is_file($page)) {
                     Response::json(['detail' => 'localai.html is missing'], 404);
+                    return;
+                }
+                Response::raw(self::withApiBase(Files::read($page)), 'text/html; charset=utf-8');
+            });
+        }
+
+        // Connectivity self-test. Deliberately unauthenticated and read-only:
+        // it has to be reachable precisely when the rest of the app is not.
+        foreach (['/diag', '/diagnostics'] as $p) {
+            $r->get($p, static function (Request $req): void {
+                $page = Bootstrap::$publicDir . '/diag.html';
+                if (!is_file($page)) {
+                    Response::json(['detail' => 'diag.html is missing'], 404);
                     return;
                 }
                 Response::raw(self::withApiBase(Files::read($page)), 'text/html; charset=utf-8');

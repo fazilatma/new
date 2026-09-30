@@ -12,6 +12,45 @@ depends on those response shapes.
 
 ---
 
+## [1.4.0] — 2026-09-30
+
+Import kept failing with the host's own "page not found" page even after
+1.3.2, so this release stops guessing and adds the means to find out where a
+request actually dies.
+
+### Added
+- **`/diag` — a standalone connectivity self-test.** One page, no
+  dependencies, reachable at `/diag`, `/index.php/diag` or
+  `/index.php?__path=/diag`. It probes all three URL shapes, then POSTs four
+  payloads (tiny, realistic-with-API-key, base64, ~250 KB) and reports which
+  combination the host accepts, ending in a plain-language verdict and a
+  copy-pasteable report. Unauthenticated and read-only by design — it has to
+  work precisely when the rest of the app does not.
+- **Probe mode on `POST /api/providers/import-text`.** `{"probe": true}`
+  reports how many bytes survived the trip and whether they parse, without
+  touching stored data. This separates "the request never arrived" from "the
+  catalog is malformed", which the old error message could not do.
+- **Base64 transport for the catalog.** `jsonB64` / `b64` (standard or
+  URL-safe alphabet) are accepted alongside `json`. Shared hosts frequently
+  run a WAF that inspects request bodies and rejects anything containing API
+  keys or URLs, answering with an HTML error page; the provider catalog is
+  the only payload in the app that trips those rules.
+- **Automatic fallback in the import dialog.** When the plain POST fails at
+  the transport level the same bytes are re-sent base64-encoded, and the
+  success message says so. If both fail, the error names `/diag`.
+
+### Fixed
+- The routing error message now also prints the `/diag` URL.
+
+### Notes
+- `tools/tests/import-transport.php` covers all six transport cases under
+  real PHP 8.3. Two of its failures were harness artefacts worth recording:
+  `Response::$headersSent` is a latch that must be cleared between dispatches
+  in a multi-request test process, and `Database::init()` has to run before
+  an import that persists.
+
+---
+
 ## [1.3.2] — 2026-09-30
 
 Fixes a routing dead end that made provider import (and every other API call)
