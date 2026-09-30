@@ -19,7 +19,7 @@
 </header>
 
 <div class="workspace-bar">
-  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.8.0</span></div>
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="git-chip" id="gitState">Git · checking…</span><span class="app-version" id="appVersion">v1.9.0</span></div>
   <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
 </div>
 
@@ -55,6 +55,7 @@
       </div>
       <div class="agent-head-actions">
         <span class="agent-session-chip"><i></i><span id="agentSessionLabel">Local coding session</span></span>
+        <button class="agent-stop-button" id="agentStopButton" onclick="stopAgentRun()" disabled title="Stop current agent run">■ Stop</button>
         <button class="agent-icon-button" onclick="clearAgentChat()" title="New chat">＋</button>
       </div>
     </div>
@@ -74,6 +75,7 @@
 
     <div class="agent-composer">
       <div class="composer-quickbar">
+        <div class="mode-switch" role="group" aria-label="Agent mode"><button id="modeAuto" class="active" onclick="setAgentMode('auto')">⚡ Auto</button><button id="modePlan" onclick="setAgentMode('plan')">◫ Plan only</button></div>
         <div class="quick-prompts">
           <button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">⌁ بررسی</button>
           <button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">✓ تست</button>
