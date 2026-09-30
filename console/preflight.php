@@ -1,0 +1,79 @@
+<?php
+/**
+ * console/preflight.php — بررسی محیطِ PHP قبل از استقرار scraper4
+ * ------------------------------------------------------------------
+ * این فایل را کنسول به‌عنوان install_cmd اجرا می‌کند تا اگر محیط برای اجرای
+ * اپ ناقص است، دیپلوی با پیامِ واضح شکست بخورد به‌جای «HTTP 500» دیرهنگام.
+ * خروج با کد غیرصفر یعنی مشکل یافت شد.
+ */
+error_reporting(E_ALL);
+
+$fails = [];
+$warns = [];
+$oks = [];
+
+$phpv = PHP_VERSION;
+if (version_compare($phpv, '7.4.0', '>=')) {
+    $oks[] = "نسخهٔ PHP $phpv — همراستا (نیاز: 7.4+) و سرورِ داخلی چندکارگر را هم پشتیبانی می‌کند";
+} elseif (version_compare($phpv, '7.2.0', '>=')) {
+    $warns[] = "نسخهٔ PHP $phpv — اپ کار می‌کند ولی سرورِ داخلی تک‌کارگر است (PHP < 7.4)";
+} else {
+    $fails[] = "نسخهٔ PHP $phpv خیلی قدیمی است؛ حداقل 7.2 لازم است (توصیه: 8.1+)";
+}
+
+/* افزونه‌های الزامیِ خودِ اپ */
+$required = [
+    'curl'     => 'برای واکشیِ صفحات و هر اتصال HTTP',
+    'json'     => 'برای connections.json و APIها',
+    'mbstring' => 'برای متنِ فارسی/یونیکد',
+    'openssl'  => 'برای https و امضای درخواست‌ها',
+];
+foreach ($required as $ext => $why) {
+    if (extension_loaded($ext)) $oks[] = "افزونهٔ $ext — موجود ($why)";
+    else $fails[] = "افزونهٔ $ext پیدا نشد — $why. نصب: apt install php-" . $ext . ' (یا <php-ver>-' . $ext . ')';
+}
+
+/* SQLite برای دفتر کارهای محلی (v10.170) */
+if (extension_loaded('sqlite3') || extension_loaded('pdo_sqlite')) {
+    $oks[] = 'افزونهٔ sqlite3/pdo_sqlite — موجود (دفتر کارهای محلی v10.170)';
+} else {
+    $fails[] = 'هم sqlite3 هم pdo_sqlite نیست — دفترِ کارهای محلیِ اپ (v10.170) بدون آن‌ها HTTP 500 می‌دهد. نصب: apt install php-sqlite3';
+}
+
+/* مفید ولی اختیاری */
+foreach ([
+    'zip'      => 'خروجی/بازگردانی فایل‌های فشرده',
+    'dom'      => 'تحلیل HTML سمت سرور',
+    'intl'     => 'عملیات چندزبانهٔ پیشرفته',
+    'gd'       => 'پردازش تصویر',
+] as $ext => $why) {
+    if (extension_loaded($ext)) $oks[] = "اختیاری $ext — موجود ($why)";
+    else $warns[] = "اختیاری $ext نیست — $why (دردسر نمی‌سازد ولی هشدار)";
+}
+
+/* نوشتنی‌بودنِ پوشهٔ نصب — connections.json و لاگ‌ها همین‌جا ساخته می‌شوند */
+$dir = realpath(__DIR__ . '/..');
+if ($dir && is_writable($dir)) {
+    $oks[] = "پوشهٔ نصب نوشتنی‌است: $dir";
+} else {
+    $fails[] = "پوشهٔ نصب نوشتنی نیست: " . ($dir ?: __DIR__) . ' — دسترسی فایل را اصلاح کنید';
+}
+
+$tz = ini_get('date.timezone');
+if ($tz === '' || $tz === 'UTC') {
+    $warns[] = "date.timezone خالی است؛ برای گزارش‌های شمسی/ساعت‌ها «TZ=Asia/Tehran» را در env کنسول بگذارید (همان جی‌سونی که دادید همین را ست کرده)";
+}
+
+echo "════════════════ scraper4 preflight ════════════════\n";
+foreach ($oks as $m)   echo "✓ $m\n";
+foreach ($warns as $m) echo "⚠ $m\n";
+$lvl = 'OK';
+if ($fails) {
+    $lvl = 'FAIL';
+    echo "─────────────────────────────────────────\n";
+    foreach ($fails as $m) echo "✗ $m\n";
+    echo "\nاین موارد صراحتاً باعث HTTP 500 هنگام بازکردن اپ می‌شوند.\n";
+    echo "پیش از تلاش مجدد: افزونه‌ها را نصب و دیپلوی را دوباره بزنید.\n";
+}
+echo "══════════════════ status: $lvl ══════════════════\n";
+exit($fails ? 1 : 0);

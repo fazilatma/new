@@ -6,7 +6,7 @@
   "subfolder": "",
   "deploy_path": "",
   "port": "8000",
-  "install_cmd": "",
+  "install_cmd": "php console/preflight.php",
   "build_cmd": "",
   "start_cmd": "php -d max_execution_time=0 -d max_input_time=-1 -d memory_limit=512M -d ignore_user_abort=1 -d variables_order=EGPCS -S 0.0.0.0:8000 server.php",
   "env": {

@@ -22,7 +22,7 @@ What it does, in plain terms:
 | Field | Value | Why |
 |---|---|---|
 | `type` | `php` | Single-file app, no composer step |
-| `branch` | `arena/01a0ebf7-new` | Contains v10.174 + browser/ sidecar |
+| `branch` | `arena/01a0ebf7-new` | Contains v10.174 + browser-php/ pure-PHP renderer |
 | `start_cmd` | `php -d max_execution_time=0 … -S 0.0.0.0:8000 server.php` | Runs the app through the built-in PHP server with **no time limit** (required for SSE streams) — same runtime flags as `server.sh` |
 | `port` | `8000` | The console maps the domain publishing & PORT env to this |
 | `env.PHP_CLI_SERVER_WORKERS` | `4` | **Real multi-process concurrency** — PHP ≥ 7.4 forks 4 workers, so a long SSE scrape never locks the admin UI |
@@ -46,44 +46,82 @@ What it does, in plain terms:
 
 ---
 
-## 2) `project-render-node20.json` — Playwright/Selenium sidecar (hostconsole with NVM)
+## 1b) HTTP 500 after deploy — how to diagnose (and the built-in guard)
 
-The JS-rendering microservice that scraper4 calls for SPA sites
-(P**laywright first, Selenium fallback**). Install it **second**, and prefer the
-`hostconsole-nvm-node20` console: it can install **Node 20 via NVM** per project
-(`node_version: "20"` is in the JSON).
+The PHP project's `install_cmd` now runs **`php console/preflight.php`**:
+an environment check that fails the deploy loudly — *before* you ever see a
+blank 500 page — with a Persian readout of exactly what is missing (PHP version,
+`curl` / `mbstring` / `json` / `openssl`, and crucially **`sqlite3`/`pdo_sqlite`
+which the v10.170 task ledger needs**), plus writability of the install dir.
+
+If you already got a 500:
+
+1. In the console open the project's **log** — the PHP fatal is printed there
+   (the service prints PHP errors to stderr by default).
+2. Match it to the preflight list; the usual suspects on a minimal `php-cli`
+   install are **`php-sqlite3`**, **`php-mbstring`**, **`php-curl`**:
+   ```bash
+   sudo apt install -y php-sqlite3 php-mbstring php-curl
+   # نصب فول‌استک کنسول هم همه را می‌آورد: bash install-webconsole.sh
+   ```
+3. Redeploy. The preflight step will now pass and the app will come up.
+
+If the 500 persists, paste the service log's fatal line — that line names the
+exact function/file, and we fix from there instead of guessing.
+
+---
+
+## 2) `project-render-php.json` — Playwright/Selenium with **no Node/Python**
+
+The JS-rendering microservice, rewritten to need **nothing but PHP itself**
+(lives in `/browser-php` of the repo):
+
+- **CDP engine ("Playwright")** — the service launches Chromium with
+  `--remote-debugging-port=0` and speaks raw **Chrome DevTools Protocol over a
+  hand-rolled PHP WebSocket client** (`browser-php/cdp.php`). That is exactly
+  what Playwright does internally — minus the Node runtime.
+- **Selenium engine** (fallback) — talks the standard **W3C WebDriver HTTP**
+  protocol to the single native **`chromedriver` binary** (no Java, no npm).
+- Browser binaries:
+  `install_cmd` runs `bash bootstrap.sh` which detects any system
+  Chrome/Chromium, and if none exists downloads the portable
+  **Chrome-for-Testing** zip archives (plain files, no package runtime) into
+  `browser-php/bin/`. Only system tools needed: `curl` + `unzip`.
+- Service start: `bash start.sh` runs `php -S 127.0.0.1:3100 render.php` with
+  `PHP_CLI_SERVER_WORKERS` matching `RENDER_MAX_CONCURRENCY` → real parallel
+  renders + an `flock` semaphore that answers `503 Retry-After` when saturated.
+- **API is byte-compatible** with the old Node service — scraper4's
+  `render_probe` button and `fetch_html_render()` keep working untouched.
 
 | Field | Value | Notes |
 |---|---|---|
-| `subfolder` | `browser` | Service lives in `/browser` of the repo |
-| `install_cmd` | `npm install … && npx playwright install chromium` | Downloads the Playwright Chromium build |
-| `start_cmd` | `node server.js` | Plain-HTTP render API (`/render`, `/health`) |
-| `env.RENDER_HOST` | `127.0.0.1` | **Loopback only** — only the PHP server on the same machine may call it |
-| `env.RENDER_PORT` | `3100` | Must not collide with 8000 / 8888 |
-| `env.RENDER_TOKEN` | `a9f27c1e4d3b88f0612c95e7d44a6b03` | Bearer token — copy **exactly this** into scraper4 admin (below) |
-| `env.RENDER_DRIVER` | `auto` | Pl​​aywright, falling back to Selenium (`SELENIUM_URL` if you run one) |
-| `env.RENDER_MAX_CONCURRENCY` | `3` | ~200–400 MB RAM per browser tab |
-| `is_daemon` | `true` | Console restarts it on crash |
-
-### Chromium system libraries
-`npx playwright install chromium` fetches the browser, but the OS libraries it
-needs must exist. If `/health` reports launch failures, run once from the
-console's **Terminal** tab (as root):
-```bash
-cd <deploy_path>/browser && npx playwright install --with-deps chromium
-```
+| `type` | `php` | Works in **both** consoles (only universal keys are used) |
+| `subfolder` | `browser-php` | The pure-PHP engine |
+| `install_cmd` | `bash bootstrap.sh` | Fetches chromium + chromedriver binaries |
+| `start_cmd` | `bash start.sh` | Exports env, then `php -S` |
+| `env.RENDER_TOKEN` | `a9f27c1e4d3b88f0612c95e7d44a6b03` | Copy **exactly** into scraper4 admin |
+| `env.RENDER_DRIVER` | `auto` | CDP first, chromedriver fallback |
 
 ### Wire it into scraper4
-1. In the scraper4 admin UI → connection settings → **🧩 رندر جاوااسکریپت**
-   (v10.174 panel).
-2. Tick **✅ فعال**, set **آدرس سرویس** to `http://127.0.0.1:3100`,
-   paste `a9f27c1e4d3b88f0612c95e7d44a6b03` as **توکن**, mode **خودکار**.
-3. Save and press **🧪 آزمایش اتصال** — it should answer with
-   `موتور فعال: playwright`.
+1. Admin UI → **🧩 رندر جاوااسکریپت**: tick **✅ فعال**, URL
+   `http://127.0.0.1:3100`, paste the token, mode **خودکار**.
+2. Save → **🧪 آزمایش اتصال** should answer with
+   `موتور فعال: playwright(CDP)`.
 
-The committed token above is only reachable on `127.0.0.1`; it cannot be used
-from outside the host. If you still prefer your own secret, edit the `env`
-before importing and use the same value in the admin panel.
+### If Chromium won't start (missing system libraries)
+`find_chrome_bin()` failure surfaces in `/health` (`available.cdp: false`) and in
+the service log. From the console's Terminal (as root) run:
+
+```bash
+cd <deploy>/browser-php && php -S 127.0.0.1:3100 render.php   # test manually
+bash bootstrap.sh    # re-check downloads and library hints
+```
+
+`bootstrap.sh` prints the exact `apt install -y libnss3 …` line when it detects
+the chromium binary cannot execute.
+
+> The previous Node-based service still exists in `browser/` for hosts that
+> already run Node — it is simply no longer required for anything.
 
 ---
 
