@@ -12,7 +12,7 @@ unset AGENT_CANVAS_BASE_PATH
 # The HostConsole proxy keeps /openhands/ in the request path. Tell the
 # static server to mount the prebuilt SPA at the same prefix. API/WebSocket
 # routes remain /api and /sockets and are handled by the Agent Canvas ingress.
-export VITE_BASE_PATH="${VITE_BASE_PATH:-/openhands}"
+unset VITE_BASE_PATH
 
 # Create the workspace root expected by AutomationService.
 export OPENHANDS_WORKSPACE_ROOT="${OPENHANDS_WORKSPACE_ROOT:-$HOME/.openhands/agent-canvas/workspaces}"
@@ -97,4 +97,4 @@ echo "[openhands] Resource diagnostics: $DIAG_LOG"
 echo "[openhands] Ensuring Agent Canvas ${AGENT_CANVAS_VERSION:-1.24.0} is installed..."
 npm install --no-audit --no-fund --include=prod --prefer-online
 
-exec npm exec --yes --package="@openhands/agent-canvas@${AGENT_CANVAS_VERSION:-1.24.0}" -- agent-canvas --public
+exec npm exec --yes --package="@openhands/agent-canvas@${AGENT_CANVAS_VERSION:-1.24.0}" -- agent-canvas
