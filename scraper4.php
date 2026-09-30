@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.175';
+const APP_VERSION = '10.176';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -34478,7 +34478,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          function_exists('looks_like_js_' . 'shell') && !looks_like_js_shell($_tReal));
     // URLِ پیش‌فرضِ سرویس تعریف شده و پیکربندی از connections.json خوانده می‌شود
     $add('10.173', 'پیکربندی رندر از connections.json خوانده می‌شود',
-         strpos($selfSrc, "(array)(\\$cn['ren" . "der'] ?? [])") !== false);
+         strpos($selfSrc, "(array)(\$cn['ren" . "der'] ?? [])") !== false);
     // هر دو مسیرِ واکشِ فهرست (SSE و استخراج بک‌اند) به نسخهٔ هوشمند سوییچ شده‌اند
     $add('10.173', 'هر دو مسیر واکش فهرست از fetch_html_smart استفاده می‌کنند',
          substr_count($selfSrc, '$res = fetch_html_smart($pageUrl, ' . '20);') === 1
@@ -34500,10 +34500,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'function render' . 'Collect(){') !== false
       && strpos($selfSrc, 'function render' . 'Test(){') !== false);
     $add('10.174', 'ذخیرهٔ render از POST انجام می‌شود',
-         strpos($selfSrc, "isset(\\$_POST['ren" . "der'])") !== false
-      && strpos($selfSrc, "\\$conn['ren" . "der'] = [") !== false);
+         strpos($selfSrc, "isset(\$_POST['ren" . "der'])") !== false
+      && strpos($selfSrc, "\$conn['ren" . "der'] = [") !== false);
     $add('10.174', 'اندپوینت آزمایش سرویس رندر (render_probe) هست',
-         strpos($selfSrc, "isset(\\$_GET['render_" . "probe'])") !== false
+         strpos($selfSrc, "isset(\$_GET['render_" . "probe'])") !== false
       && function_exists('fetch_html_render_' . 'health'));
     $add('10.174', 'تنظیمات در جریانِ ذخیره و بارگذاریِ فرم چرخهٔ کامل دارد',
          strpos($selfSrc, "fd.append('ren" . "der',JSON.stringify(renderCollect()))") !== false
@@ -34528,6 +34528,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "175'") !== false
       && version_compare(APP_VERSION, '10.' . '175', '>='));
     unset($__srv, $__srvSrc);
+
+    /* ---------- v10.176: ریشه‌کنی بایتِ سمیِ اوراسکیپ (علتِ 500ِ خاموش) ---------- */
+    $add('10.176', 'بایتِ سمیِ دو بک‌اسلش+دلار در needleهای render ریشه‌کن شده',
+         substr_count($selfSrc, '\\' . '\\' . '$_' . "POST['ren") === 0
+      && substr_count($selfSrc, '\\' . '\\' . '$co' . "nn['ren") === 0
+      && substr_count($selfSrc, '\\' . '\\' . '$_' . "GET['render_") === 0
+      && substr_count($selfSrc, '\\' . '\\' . '$c' . "n['ren") === 0);
+    $add('10.176', 'needleهای تصحیح‌شده همان متنِ واقعیِ سورس را می‌یابند',
+         strpos($selfSrc, "isset(\$_POST['ren" . "der'])") !== false
+      && strpos($selfSrc, "\$conn['ren" . "der'] = [") !== false
+      && strpos($selfSrc, "isset(\$_GET['render_" . "probe'])") !== false
+      && strpos($selfSrc, "(array)(\$cn['ren" . "der'] ?? [])") !== false);
+    $add('10.176', 'ورودیِ 10.176 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "176'") !== false
+      && version_compare(APP_VERSION, '10.' . '176', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -64488,6 +64503,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.176', t:'🩹 رفع Parse Error سراسری — ریشهٔ واقعیِ 500ِ خاموش از اولین نصب کنسول پیدا و حذف شد', items:[
+    'در needleهای selftestِ نسخه‌های 10.173/10.174 چهار رشتهٔ دوتایی با دو بک‌اسلشِ اضافه (\\\\$) نوشته شده بود؛ PHP بعد از \\\\ِ تحت‌اللفظی، $ را interpolation با کلیدِ نقل‌قولی ([\'render\']) می‌دید و کلِ فایل ParseError می‌داد',
+    'یعنی اپ از اولین دیپلویِ کنسول اصلاً کامپایل نمی‌شد — هیچ‌کدام از اکستنشن‌ها (sqlite/curl/…) مقصر نبودند؛ نگهبانِ v10.175 بالاخره متنِ دقیق را نشان داد',
+    'هر چهار مورد تصحیح شد و کلِ فایل (به‌همراه server.php/preflight/render) با تجزیه‌گرِ نحویِ واقعی lint شد — نه صرفاً تخمین',
+    'سه بررسیِ selftestِ جدید: نبودِ بایتِ سمی، یافتنِ needleهای تصحیح‌شده در سورس، و ثبتِ CHANGELOG',
+    'بعد از دیپلوی: /?ping=1 باید boot-ok v10.176 بگوید و ?selftest=1 همهٔ بررسی‌ها را سبز نشان دهد',
+  ]},
   {v:'10.175', t:'🛟 نگهبانِ سکوت‌شکسته — هیچ خطای 500ای دیگر بدون متن نمی‌ماند', items:[
     'server.php پیش از هر چیز نگهبانِ full-fatal می‌گذارد: E_ERROR، E_PARSE هنگام include و استثناهای گیرنیافتاده — همه شکار می‌شوند',
     'هر خطا سه‌جا می‌رود: فایل اختصاصی console-error.log کنار اپ (با سقف حجم)، stderr لاگ سرویس کنسول، و بدنهٔ خودِ پاسخ HTTP — پس حتی اگر پنل لاگ چیزی نشان نداد، مرورگر علت را می‌گوید',
