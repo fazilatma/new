@@ -24,6 +24,7 @@ const S = {
   streaming: false,
   fsPath: '',
   fsFile: null,
+  importFile: null,
 };
 
 function url(path, query) {
@@ -233,52 +234,49 @@ function b64(str) { return btoa(unescape(encodeURIComponent(str))); }
 async function runImport(e) {
   e.preventDefault();
   const text = $('#imText').value.trim();
-  if (!text) return bad('چیزی برای درون‌ریزی نیست.');
-  try { JSON.parse(text); }
-  catch (err) {
-    return bad('متن، JSON معتبر نیست: ' + err.message + '\nاگر کپی ناقص بوده، فایل را انتخاب کنید.');
-  }
+  const file = S.importFile;
   const replace = $('#imReplace').checked;
+  if (!file && !text) return bad('فایل یا متن JSON را وارد کنید.');
+  if (!file) {
+    try { JSON.parse(text); } catch (err) { return bad('متن، JSON معتبر نیست: ' + err.message); }
+  }
   const btn = $('#imBtn');
   btn.disabled = true;
-  $('#imResult').innerHTML = '<p class="hint">در حال ارسال…</p>';
+  $('#imResult').innerHTML = '<p class="hint">در حال پردازش…</p>';
   try {
-    let r, fallback = false;
-    try {
+    let r;
+    if (file) {
+      // Avoid FileReader + base64 + JSON.stringify: the browser streams the
+      // selected file to PHP as multipart/form-data, using much less memory.
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      fd.append('replace', replace ? '1' : '0');
+      r = await api('/api/providers/import', { method: 'POST', body: fd });
+    } else {
       r = await api('/api/providers/import', { method: 'POST', body: { json: text, replace } });
-    } catch (first) {
-      // If the app never saw the request, try again with the payload encoded —
-      // some hosts run a firewall that rejects bodies holding API keys.
-      if (!/صفحهٔ \d+|اتصال به سرور/.test(first.message)) throw first;
-      r = await api('/api/providers/import', { method: 'POST', body: { jsonB64: b64(text), replace } });
-      fallback = true;
     }
-    $('#imResult').innerHTML = `<div class="card" style="margin:0">
-      <h2>${r.providers} ارائه‌دهنده و ${r.models} مدل درون‌ریزی شد</h2>
-      ${r.created.length ? `<p class="hint">تازه: ${esc(r.created.join('، '))}</p>` : ''}
-      ${r.updated.length ? `<p class="hint">به‌روزشده: ${esc(r.updated.join('، '))}</p>` : ''}
-      ${r.skipped.length ? `<p class="hint">رد شد: ${esc(r.skipped.map((s) => s.key).join('، '))}</p>` : ''}
-      ${fallback ? '<p class="hint">(ارسال عادی را فایروال میزبان مسدود کرد؛ با بدنهٔ base64 انجام شد.)</p>' : ''}
-    </div>`;
+    $('#imResult').innerHTML = '<div class="card" style="margin:0">' +
+      '<h2>' + (r.providers || 0) + ' ارائه‌دهنده و ' + (r.models || 0) + ' مدل درون‌ریزی شد</h2>' +
+      (r.created?.length ? '<p class="hint">تازه: ' + esc(r.created.join('، ')) + '</p>' : '') +
+      (r.updated?.length ? '<p class="hint">به‌روزشده: ' + esc(r.updated.join('، ')) + '</p>' : '') +
+      (r.skipped?.length ? '<p class="hint">رد شد: ' + esc(r.skipped.map((s) => s.key).join('، ')) + '</p>' : '') +
+      '</div>';
     ok('درون‌ریزی انجام شد');
     loadProviders();
   } catch (err) {
-    $('#imResult').innerHTML = `<div class="card" style="margin:0;border-color:#5a2a32">
-      <h2>درون‌ریزی نشد</h2><p class="hint" style="white-space:pre-wrap">${esc(err.message)}</p>
-      <button class="btn sm" onclick="navigate('diag');document.getElementById('importDlg').close()">
-        اجرای تشخیص اتصال</button></div>`;
+    $('#imResult').innerHTML = '<div class="card" style="margin:0;border-color:#5a2a32">' +
+      '<h2>درون‌ریزی نشد</h2><p class="hint" style="white-space:pre-wrap">' + esc(err.message) + '</p></div>';
   } finally { btn.disabled = false; }
 }
 
 function pickImportFile(input) {
-  const f = input.files[0];
-  if (!f) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => { $('#imText').value = ev.target.result; };
-  reader.readAsText(f);
+  S.importFile = input.files[0] || null;
+  if (S.importFile) {
+    $('#imText').value = '';
+    $('#imResult').innerHTML = '<p class="hint">فایل ' + esc(S.importFile.name) + ' آماده است؛ بدون تبدیل به base64 ارسال می‌شود.</p>';
+  }
 }
 
-/* -------------------------------------------------------------- chat */
 function renderPicker() {
   const ps = $('#pickProvider');
   const enabled = S.providers.filter((p) => p.enabled);
