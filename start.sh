@@ -7,10 +7,14 @@ export PORT
 export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 
 # HostConsole publishes this app under /openhands/ using its htaccess proxy.
-# Agent Canvas must know its public base path or the SPA assets/routes point
-# to the domain root and the result is a blank page.
 export AGENT_CANVAS_BASE_PATH="${AGENT_CANVAS_BASE_PATH:-/openhands}"
 export VITE_BASE_PATH="${VITE_BASE_PATH:-$AGENT_CANVAS_BASE_PATH}"
+
+# Dedicated internal ports prevent stale/default OpenHands instances on
+# 18000/18001/3001 from blocking this instance.
+export OH_CANVAS_SAFE_BACKEND_PORT="${OH_CANVAS_SAFE_BACKEND_PORT:-19000}"
+export OH_CANVAS_SAFE_AUTOMATION_PORT="${OH_CANVAS_SAFE_AUTOMATION_PORT:-19001}"
+export OH_CANVAS_SAFE_VITE_PORT="${OH_CANVAS_SAFE_VITE_PORT:-19002}"
 
 if [ ! -s ".openhands-backend-key" ]; then
   if command -v openssl >/dev/null 2>&1; then
@@ -36,6 +40,7 @@ if [ -x "${HOME}/.local/bin/uv" ]; then
 fi
 
 echo "[openhands] Starting Agent Canvas on port $PORT with base path $AGENT_CANVAS_BASE_PATH"
+echo "[openhands] Internal ports: backend=$OH_CANVAS_SAFE_BACKEND_PORT automation=$OH_CANVAS_SAFE_AUTOMATION_PORT frontend=$OH_CANVAS_SAFE_VITE_PORT"
 echo "[openhands] Ensuring Agent Canvas ${AGENT_CANVAS_VERSION:-1.24.0} is installed..."
 npm install --no-audit --no-fund --include=prod --prefer-online
 
