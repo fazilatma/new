@@ -8,7 +8,11 @@ export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 
 # Agent Canvas serves the UI from the origin root. HostConsole should strip
 # /openhands/ before proxying to this local port.
-unset AGENT_CANVAS_BASE_PATH VITE_BASE_PATH
+unset AGENT_CANVAS_BASE_PATH
+# The HostConsole proxy keeps /openhands/ in the request path. Tell the
+# static server to mount the prebuilt SPA at the same prefix. API/WebSocket
+# routes remain /api and /sockets and are handled by the Agent Canvas ingress.
+export VITE_BASE_PATH="${VITE_BASE_PATH:-/openhands}"
 
 # Create the workspace root expected by AutomationService.
 export OPENHANDS_WORKSPACE_ROOT="${OPENHANDS_WORKSPACE_ROOT:-$HOME/.openhands/agent-canvas/workspaces}"
