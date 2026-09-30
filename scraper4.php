@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.183';
+const APP_VERSION = '10.184';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -18900,6 +18900,24 @@ if (isCliRun()) {
     }
 }
 
+/* v10.184: در CLI، آرگومان‌ها تازه در بلوک بالا به $_GET تبدیل می‌شوند.
+   endpoint اولیهٔ worker_status/worker_run بالاتر از این نقطه است و برای HTTP
+   کافی است، اما برای `php scraper4.php worker` باید بعد از parse دوباره اجرا شود. */
+if (isset($_GET['worker_status'])) {
+    $q = s4WorkerLoadQueue(); $st = s4WorkerStateLoad();
+    echo json_encode(['ok'=>true,'active'=>s4WorkerIsActive(),'state'=>$st,'queue'=>$q], JSON_UNESCAPED_UNICODE) . PHP_EOL;
+    exit;
+}
+if (isset($_GET['worker_run'])) {
+    if (!isCliRun()) {
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(['ok'=>false,'error'=>'worker فقط از CLI اجرا می‌شود: php scraper4.php worker'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    s4WorkerLoopFromCli();
+    exit;
+}
+
 /* =====================================================================
  *  v10.35 (۴۷ه): «همگام‌سازیِ دستی» — یک دکمه، کلِ زنجیره
  *
@@ -35566,6 +35584,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "183'") !== false
       && version_compare(APP_VERSION, '10.' . '183', '>='));
     unset($__serverSh183, $__serverShSrc183);
+
+    /* ---------- v10.184: CLI worker بعد از parse آرگومان اجرا می‌شود ---------- */
+    $__cliParserPos184 = strpos($selfSrc, "\$_cliCmd  = strtolower");
+    $__postWorkerPos184 = strpos($selfSrc, '/* v10.184: در CLI، آرگومان‌ها تازه');
+    $add('10.184', 'دستور CLI worker بعد از parse آرگومان‌ها دوباره dispatch می‌شود',
+         $__cliParserPos184 !== false && $__postWorkerPos184 !== false
+      && $__postWorkerPos184 > $__cliParserPos184
+      && strpos($selfSrc, 'php scraper4.php worker_status') !== false
+      && strpos($selfSrc, 's4WorkerLoop' . 'FromCli();') !== false);
+    $add('10.184', 'ورودیِ 10.184 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "184'") !== false
+      && version_compare(APP_VERSION, '10.' . '184', '>='));
+    unset($__cliParserPos184, $__postWorkerPos184);
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65729,6 +65760,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.184', t:'🧵 اصلاح اجرای CLI worker بعد از parse آرگومان‌ها', items:[
+    'مسیر CLI برای php scraper4.php worker بعد از خواندن آرگومان‌ها دوباره بررسی می‌شود؛ چون endpoint HTTP بالاتر از بلوک parse بود و در CLI قبل از set شدن $_GET رد می‌شد',
+    'دستور php scraper4.php worker_status هم از CLI خروجی JSON وضعیت worker/queue می‌دهد',
+    'این اصلاح باعث می‌شود server.sh واقعاً بتواند worker دائمی عملیات را بالا نگه دارد، نه فقط وب‌سرور را',
+  ]},
   {v:'10.183', t:'🧵 worker دائمی سرور برای اجرای عملیات مثل Python/Node', items:[
     'server.sh حالا کنار وب‌سرور یک worker دائمی CLI با php scraper4.php worker بالا می‌آورد؛ اگر worker سقوط کند، سوپروایزر دوباره زنده‌اش می‌کند',
     'وقتی worker heartbeat فعال باشد، دکمهٔ استخراج بک‌اند و همگام‌سازی دستی دیگر کار طولانی را داخل request وب اجرا نمی‌کنند؛ job در worker_queue.json ثبت می‌شود و worker بیرون از مرورگر آن را اجرا می‌کند',
