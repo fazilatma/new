@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.173';
+const APP_VERSION = '10.174';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9026,6 +9026,30 @@ function fetch_html_render(string $url, array $rcfg, array $opts = []): array {
             'mode'=>'render','driver'=>(string)($j['driver'] ?? ''),'took_ms'=>(int)($j['took_ms'] ?? 0)];
 }
 
+/* v10.174: پینگِ /health سرویس رندر — برای دکمهٔ «آزمایش اتصال» در تنظیمات */
+function fetch_html_render_health(array $rcfg): array {
+    $base = (string)($rcfg['url'] ?? '');
+    if ($base === '' || !preg_match('~^https?://~i', $base)) {
+        return ['ok'=>false,'error'=>'renderer url not configured'];
+    }
+    $ch = curl_init($base . '/health');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 6,
+    ]);
+    $body = curl_exec($ch);
+    $err  = curl_error($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    if ($body === false) return ['ok'=>false,'error'=>$err !== '' ? $err : 'connect failed'];
+    if ($code < 200 || $code >= 300) return ['ok'=>false,'error'=>'HTTP ' . $code];
+    $j = json_decode($body, true);
+    if (!is_array($j)) return ['ok'=>false,'error'=>'invalid health response'];
+    return ['ok'=>true,'driver'=>(string)($j['driver'] ?? ''),
+            'max_concurrency'=>(int)($j['max_concurrency'] ?? 0),
+            'active'=>(int)($j['active'] ?? 0)];
+}
+
 /* لایهٔ تصمیم: واکشِ ایستا یا رندر. فقط برای صفحه‌های فهرست استفاده می‌شود
    (همان جایی که خروجیِ خالی معنای «صفر محصول» می‌گرفت). */
 function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): array {
@@ -14186,6 +14210,19 @@ if (isset($_POST['src_net'])) {
         'inherit_ai' => !empty($sn['inherit_ai']),
         // v9.77: اگر روش اصلی شکست خورد، روش‌های جایگزینِ فعال را هم امتحان کن
         'fallback'   => !empty($sn['fallback']),
+    ];
+}
+// v10.174: تنظیمات سرویس رندرِ جاوااسکریپت (browser/ — Playwright/Selenium)
+if (isset($_POST['render'])) {
+    $rr = json_decode($_POST['render'], true) ?: [];
+    $conn['render'] = [
+        'enabled'    => !empty($rr['enabled']),
+        'url'        => rtrim(trim((string)($rr['url'] ?? '')), '/'),
+        'token'      => (string)($rr['token'] ?? ''),
+        'timeout_ms' => max(5000, min(120000, (int)($rr['timeout_ms'] ?? 60000))),
+        'mode'       => in_array(($rr['mode'] ?? 'auto'), ['auto','js'], true) ? (string)$rr['mode'] : 'auto',
+        'scroll'     => !empty($rr['scroll']),
+        'wait_until' => in_array(($wuRndr = (string)($rr['wait_until'] ?? 'domcontentloaded')), ['load','domcontentloaded','networkidle'], true) ? $wuRndr : 'domcontentloaded',
     ];
 }
 // v8.37: فاصلهٔ پینگ کران (دقیقه) — صفر یعنی هر اجرا
@@ -26366,6 +26403,33 @@ if (isset($_GET['recon_result'])) {
 /* v9.00: آزمایش اتصال به سایت مبدأ با تنظیمات فعلی.
    می‌گوید صفحهٔ فهرست و یک صفحهٔ محصول از روی سرور باز می‌شوند یا نه —
    چون همین دو تا هستند که استخراج به آن‌ها نیاز دارد. */
+/* v10.174: آزمون اتصال به سرویس رندر (browser/) — مانند src_probe ولی به
+   اندپوینتِ /health خودِ سرویس نه به یک صفحهٔ وب. */
+if (isset($_GET['render_probe'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $rc = renderCfg();
+    $out = ['ok' => false, 'enabled' => !empty($rc['enabled']), 'url' => (string)($rc['url'] ?? '')];
+    if (empty($rc['enabled'])) {
+        $out['diagnosis'] = 'رندر در تنظیمات فعال نیست — اول تیک «فعال» را بزنید و ذخیره کنید، بعد دوباره امتحان کنید.';
+        echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+    }
+    if ((string)$rc['url'] === '' || !preg_match('~^https?://~i', (string)$rc['url'])) {
+        $out['diagnosis'] = 'آدرس سرویس رندر تنظیم نشده است (پیش‌فرض: http://127.0.0.1:3100).';
+        echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+    }
+    $t0 = microtime(true);
+    $hc = function_exists('fetch_html_render_health') ? fetch_html_render_health($rc) : ['ok' => false, 'error' => 'fn missing'];
+    $out['ms'] = (int)round((microtime(true) - $t0) * 1000);
+    $out = array_merge($out, $hc);
+    if (empty($out['ok'])) {
+        $out['diagnosis'] = 'به سرویس رندر وصل نشد — آیا با «cd browser && ./browser.sh start» یا «docker compose up -d render» بالاست؟'
+                          . ' خطا: ' . mb_substr((string)($out['error'] ?? ''), 0, 120);
+    } else {
+        $out['diagnosis'] = 'سرویس رندر سالم است؛ در حالتِ خودکار فقط صفحه‌های «پوستهٔ JS» رندر می‌شوند.';
+    }
+    echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+}
+
 if (isset($_GET['src_probe'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $u = trim((string)($_GET['url'] ?? ''));
@@ -34425,6 +34489,28 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.173', 'ورودیِ 10.173 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "173'") !== false
       && version_compare(APP_VERSION, '10.' . '173', '>='));
+
+    /* ---------- v10.174: رابط کاربری سرویس رندر در تنظیمات ---------- */
+    $add('10.174', 'فرم تنظیمات رندر در رابط هست',
+         strpos($selfSrc, 'id="render' . 'Enabled"') !== false
+      && strpos($selfSrc, 'id="render' . 'Mode"') !== false
+      && strpos($selfSrc, 'id="render' . 'Badge"') !== false);
+    $add('10.174', 'توابع JS جمع/پاش/آزمایش رندر وجود دارند',
+         strpos($selfSrc, 'function render' . 'Apply(rr){') !== false
+      && strpos($selfSrc, 'function render' . 'Collect(){') !== false
+      && strpos($selfSrc, 'function render' . 'Test(){') !== false);
+    $add('10.174', 'ذخیرهٔ render از POST انجام می‌شود',
+         strpos($selfSrc, "isset(\\$_POST['ren" . "der'])") !== false
+      && strpos($selfSrc, "\\$conn['ren" . "der'] = [") !== false);
+    $add('10.174', 'اندپوینت آزمایش سرویس رندر (render_probe) هست',
+         strpos($selfSrc, "isset(\\$_GET['render_" . "probe'])") !== false
+      && function_exists('fetch_html_render_' . 'health'));
+    $add('10.174', 'تنظیمات در جریانِ ذخیره و بارگذاریِ فرم چرخهٔ کامل دارد',
+         strpos($selfSrc, "fd.append('ren" . "der',JSON.stringify(renderCollect()))") !== false
+      && strpos($selfSrc, 'renderApply(cn.ren' . 'der||{});') !== false);
+    $add('10.174', 'ورودیِ 10.174 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "174'") !== false
+      && version_compare(APP_VERSION, '10.' . '174', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -57608,6 +57694,50 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 </div></div>
 
 <div class="smenu">
+<div class="smenu-hdr" onclick="toggleSmenu(this)"><h3>🧩 رندر جاوااسکریپت (Playwright/Selenium)</h3><span class="cst off" id="renderBadge">—</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<div style="font-size:10.5px;color:#94a3b8;line-height:1.9;margin-bottom:10px">
+برخی سایت‌ها (React/Vue/Next/Nuxt) با واکشِ معمولی فقط «پوستهٔ خالی» می‌دهند و نتیجهٔ اسکرپ صفر محصول می‌شود.
+با سرویسِ رندر (پوشهٔ <b>browser/</b> روی همین سرور یا کانتینر) صفحه با مرورگرِ واقعی باز می‌شود —
+موتورِ اصلی <b>Playwright</b> و اگر در دسترس نبود خودکار <b>Selenium</b>.
+</div>
+<div class="crow" style="align-items:center">
+<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:#cbd5e1">
+<input type="checkbox" id="renderEnabled" style="width:15px;height:15px">
+<span>✅ فعال (فقط برای صفحهٔ فهرستِ محصولات استفاده می‌شود)</span>
+</label></div>
+<div class="crow"><label>آدرس سرویس:</label><input type="text" id="renderUrl" placeholder="http://127.0.0.1:3100" style="flex:1" dir="ltr"></div>
+<div class="crow"><label>توکن:</label><input type="text" id="renderToken" placeholder="اختیاری — باید با RENDER_TOKEN سرویس یکی باشد" style="flex:1" dir="ltr"></div>
+<div class="crow"><label>مهلت (ms):</label><input type="number" id="renderTimeout" value="60000" min="5000" max="120000" step="1000" style="max-width:90px" dir="ltr"><span style="font-size:10px;color:#64748b">هر رندر معمولاً ۱۵ تا ۶۰ ثانیه است</span></div>
+<div class="crow"><label>حالت:</label>
+<select id="renderMode" style="flex:1">
+<option value="auto">خودکار — فقط اگر «پوستهٔ JS» تشخیص داده شد رندر کن (پیشنهادی)</option>
+<option value="js">همیشه — همهٔ صفحه‌های فهرست را رندر کن (فقط برای سایت‌های SPAِ شناخته‌شده)</option>
+</select></div>
+<div class="crow"><label>انتظارِ بارشدن:</label>
+<select id="renderWaitUntil" style="flex:1">
+<option value="domcontentloaded">domcontentloaded — سریع (پیش‌فرض)</option>
+<option value="load">load — کندتر و کامل‌تر</option>
+<option value="networkidle">networkidle — آرام‌شدن شبکه (کندترین و محکم‌ترین)</option>
+</select></div>
+<div class="crow" style="align-items:center">
+<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:#cbd5e1">
+<input type="checkbox" id="renderScroll" style="width:15px;height:15px">
+<span>🖱 اسکرولِ صفحه برای بارشدن لیزی‌لود</span>
+</label></div>
+<div style="font-size:10px;color:#64748b;line-height:1.8;margin:4px 0 8px">
+در حالتِ خودکار تنها صفحه‌ای رندر می‌شود که متنِ معنی‌دارِ کمی دارد اما ظرفِ خالیِ SPA (مثل div#root یا __next)
+یا پیامِ «جاوااسکریپت را فعال کنید» دارد؛ صفحه‌های معمولی هرگز رندر نمی‌شوند تا سرعتِ اصلیِ اسکرپ حفظ شود.
+راه‌اندازیِ سرویس: <span dir="ltr">cd browser &amp;&amp; ./browser.sh start</span>
+</div>
+<div class="row" style="margin-top:6px"><button class="btn btn-purple" onclick="renderTest()" style="flex:1">🧪 آزمایش اتصال به سرویس رندر</button></div>
+<div id="renderResult" style="margin-top:6px;font-size:11px"></div>
+<div class="cact">
+<button class="btn btn-cyan" onclick="saveConn()" style="flex:1">💾 ذخیره</button>
+</div>
+</div></div>
+
+<div class="smenu">
 <div class="smenu-hdr" onclick="toggleSmenu(this)"><h3>🔍 مغایرت‌گیری با مقصد</h3><span class="cst off" id="reconAutoBadge">دوره‌ای</span><span class="arrow">▼</span></div>
 <div class="smenu-body">
 <details class="hint-mini" style="margin-bottom:8px"><summary>این بررسی چه می‌کند؟ (v10.107)</summary>
@@ -64341,6 +64471,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.174', t:'🧩 رابط کاربری سرویس رندر در تب اتصال‌ها — بدون ویرایش دستی JSON', items:[
+    'بخش جدید «رندر جاوااسکریپت (Playwright/Selenium)» در تنظیمات: تیک فعال، آدرس سرویس، توکن، مهلت، حالت (خودکار/همیشه)، انتظارِ بارشدن، اسکرولِ لیزی‌لود',
+    'تنظیمات همان‌جا در connections.json ← render ذخیره می‌شود؛ دیگر ویرایش دستی فایل لازم نیست',
+    'دکمهٔ «آزمایش اتصال به سرویس رندر» با اندپوینت سروریِ /render_probe — موتورِ فعال (playwright/selenium) و ظرفیت همزمانی را نشان می‌دهد',
+    'نشانِ روشن/خاموش روی تیترِ بخش',
+    'این نسخه دقیقاً روی خطِ لِگاسی (ادامهٔ ۱۰.۱۷۱/۱۰.۱۷۲/۱۰.۱۷۳) اعمال شد؛ هیچ رابط کاربریِ فعلی دست نخورده است',
+  ]},
   {v:'10.173', t:'🧭 رندر جاوااسکریپت (Playwright/Selenium) برای سایت‌های «جاوی» — واکش هوشمند فهرست', items:[
     'سرویس رندرِ مستقل (پوشهٔ browser/): Playwright به‌عنوان موتور اصلی و Selenium (W3C WebDriver) به‌عنوان جایگزین خودکار در صورت شکست',
     'سایت‌های React/Vue/Nuxt/Next که قبلاً «پوستهٔ خالی» می‌دادند و صفر محصول برمی‌گرداندند، حالا با مرورگرِ واقعی رندر می‌شوند',
@@ -72262,7 +72399,7 @@ const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enable
 const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
 const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
-if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});updateRetireBadge();updateStallBadge();
+if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();if(b.token&&bslAllCats.length===0){loadBslCats();}
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
 arApplyCfg(cn.autoreply||{});arLoad();
@@ -72698,7 +72835,7 @@ fd.append('ai_net',JSON.stringify(getAiNet()));
 fd.append('baleh',JSON.stringify({enabled:$('balehEnabled')?.checked?1:0,token:$('balehToken')?.value||'',chat_id:$('balehChatId')?.value||''}));
 fd.append('rubika',JSON.stringify({enabled:$('rubikaEnabled')?.checked?1:0,token:$('rubikaToken')?.value||'',chat_id:$('rubikaChatId')?.value||''}));
 fd.append('telegram',JSON.stringify({enabled:$('telegramEnabled')?.checked?1:0,token:$('telegramToken')?.value||'',chat_id:$('telegramChatId')?.value||''}));
-fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
+fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
   web_search:!!($('aiContentAutoWeb')&&$('aiContentAutoWeb').checked),
@@ -79574,6 +79711,55 @@ function srcNetTest(){
             h+='<br><span style="color:#64748b;font-size:10px">روش: '+esc(d.mode||'direct')
              +(d.applies?' (اعمال شد)':' (اعمال نشد)')
              +' · فاصله: '+toFa(d.gap_ms||0)+'ms · حجم: '+toFa(d.bytes||0)+' بایت</span>';
+            h+='</div>';
+            box.innerHTML=h;
+        }).catch(()=>{box.innerHTML='<span style="color:#f87171">خطای شبکه</span>';});
+    },600);
+}
+
+/* v10.174: تنظیمات سرویس رندر (Playwright ← Selenium) */
+function renderApply(rr){
+    rr=rr||{};
+    const set=(id,v)=>{const e=$(id);if(e)e.value=v;};
+    set('renderUrl',       rr.url||'http://127.0.0.1:3100');
+    set('renderToken',     rr.token||'');
+    set('renderTimeout',   rr.timeout_ms||60000);
+    set('renderMode',      rr.mode||'auto');
+    set('renderWaitUntil', rr.wait_until||'domcontentloaded');
+    if($('renderEnabled'))$('renderEnabled').checked=!!rr.enabled;
+    if($('renderScroll')) $('renderScroll').checked=!!rr.scroll;
+    if($('renderBadge')){ $('renderBadge').textContent=rr.enabled?'روشن':'خاموش';
+                         $('renderBadge').className='cst '+(rr.enabled?'on':'off'); }
+}
+function renderCollect(){
+    const g=id=>$(id)||{};
+    let to=parseInt(g('renderTimeout').value||'60000')||60000;
+    if(to<5000)to=5000; if(to>120000)to=120000;
+    return {
+        enabled:    !!(g('renderEnabled')&&$('renderEnabled').checked),
+        url:        (g('renderUrl').value||'').trim(),
+        token:      (g('renderToken').value||'').trim(),
+        timeout_ms: to,
+        mode:       g('renderMode').value||'auto',
+        scroll:     !!(g('renderScroll')&&$('renderScroll').checked),
+        wait_until: g('renderWaitUntil').value||'domcontentloaded'
+    };
+}
+function renderTest(){
+    const box=$('renderResult'); if(!box)return;
+    box.innerHTML='<span style="color:#94a3b8">⏳ در حال آزمایش...</span>';
+    if(typeof saveConn==='function')saveConn();   // اول ذخیره تا آزمایش با همین مقادیر باشد
+    setTimeout(()=>{
+        fetch('?render_probe=1').then(r=>r.json()).then(d=>{
+            if(!d){box.innerHTML='<span style="color:#f87171">پاسخی نیامد</span>';return;}
+            const okc=d.ok?'#4ade80':'#f87171';
+            let h='<div style="padding:8px;background:#1e293b;border-radius:8px;line-height:1.9">';
+            h+='<b style="color:'+okc+'">'+(d.ok?'✅ سرویس رندر پاسخ می‌دهد':'❌ اتصال ناموفق')+'</b>';
+            if(d.ms)h+=' <span style="color:#64748b">· '+toFa(d.ms)+'ms</span>';
+            if(d.driver)h+='<br><span style="color:#cbd5e1">موتور فعال: <b style="color:#67e8f9">'+esc(d.driver)+'</b></span>';
+            if(d.max_concurrency!==undefined&&d.max_concurrency)h+=' <span style="color:#64748b">· حداکثر همزمان: '+toFa(d.max_concurrency)+'</span>';
+            if(d.error)h+='<br><span style="color:#fca5a5">'+esc(d.error)+'</span>';
+            if(d.diagnosis)h+='<br><span style="color:#cbd5e1;font-size:10.5px">'+esc(d.diagnosis)+'</span>';
             h+='</div>';
             box.innerHTML=h;
         }).catch(()=>{box.innerHTML='<span style="color:#f87171">خطای شبکه</span>';});
