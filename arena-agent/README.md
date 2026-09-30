@@ -51,6 +51,7 @@ php bin/console.php doctor
  ok  pdo_sqlite
  ok  curl
  ok  openssl
+ ok  mbstring
  ok  data writable
 FAIL storage writable
 ```
@@ -63,6 +64,7 @@ Everything the app needs is in that list. There is nothing else to configure.
 |---|---|
 | PHP 8.1+ | typed properties, enums in match, `array_is_list` |
 | `pdo_sqlite` | all state lives in one SQLite file |
+| `mbstring` | UTF-8 titles, binary-file detection, and safe string lengths |
 | `curl` *or* `allow_url_fopen` | talking to providers; cURL also enables streaming |
 | `openssl` *or* `sodium` | encrypting stored API keys |
 | `proc_open` | the terminal and git; optional |

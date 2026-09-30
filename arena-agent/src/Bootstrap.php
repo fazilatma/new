@@ -3,9 +3,9 @@
 /**
  * Arena Agent — application bootstrap.
  *
- * Deliberately dependency-free: no Composer, no extensions beyond pdo_sqlite
- * and one of openssl/sodium. Everything below assumes the app may live in a
- * subdirectory of a shared host with no rewrite rules whatsoever.
+ * Deliberately dependency-free: no Composer. Needs pdo_sqlite, mbstring, and
+ * one of openssl/sodium (curl recommended). Everything below assumes the app
+ * may live in a subdirectory of a shared host with no rewrite rules whatsoever.
  */
 
 declare(strict_types=1);
