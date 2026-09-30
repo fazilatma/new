@@ -19,7 +19,7 @@
 </header>
 
 <div class="workspace-bar">
-  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.7.0</span></div>
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.8.0</span></div>
   <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
 </div>
 
@@ -45,24 +45,67 @@
   </div>
 
   <div class="agent-panel">
-    <div class="agent-header">
-      <div class="agent-heading"><div class="agent-title"><span class="pulse"></span> AI Coding Agent <em>ACTIVE</em></div><small>هدف را توضیح بده؛ Agent تحلیل، اجرا، تست و اصلاح را انجام می‌دهد.</small></div>
-      
+    <div class="agent-headline">
+      <div class="agent-identity">
+        <div class="agent-avatar">✦</div>
+        <div>
+          <div class="agent-title-line"><strong>AI Coding Agent</strong><span class="agent-state active" id="agentRunState">READY</span></div>
+          <small>Describe the goal. The agent plans, edits, executes, verifies, and repairs.</small>
+        </div>
+      </div>
+      <div class="agent-head-actions">
+        <span class="agent-session-chip"><i></i><span id="agentSessionLabel">Local coding session</span></span>
+        <button class="agent-icon-button" onclick="clearAgentChat()" title="New chat">＋</button>
+      </div>
     </div>
-    <div class="prompt-row"><textarea id="prompt" placeholder="Describe the task… e.g. inspect the project, implement the feature, run tests and fix failures."></textarea><button class="run-agent" onclick="runAgentLoop()"><span>▶</span> Run Agent</button></div>
-    <div class="agent-modelbar">
-      <label>Model<select id="agentModel" onchange="selectAgentModel()"><option value="">Loading models…</option></select></label>
-      <label>Iterations<input id="maxIterations" type="number" min="1" max="20" value="8"></label>
-      <button class="agent-advanced-btn" onclick="toggleAgentAdvanced()">⚙ Advanced</button>
+
+    <div id="answer" class="agent-chat" aria-live="polite">
+      <div class="agent-welcome">
+        <div class="welcome-orb">✦</div>
+        <h3>What should we build?</h3>
+        <p>Ask for a feature, bug fix, refactor, test run, code review, or full project investigation.</p>
+        <div class="welcome-grid">
+          <button onclick="setPrompt('Inspect the project structure, identify the most important issues, and fix the safe ones.')"><b>Inspect project</b><span>Find problems and improve the workspace.</span></button>
+          <button onclick="setPrompt('Run the available tests and syntax checks, fix failures, then verify everything again.')"><b>Test & repair</b><span>Execute checks and iterate on failures.</span></button>
+          <button onclick="setPrompt('Refactor the project for cleaner code, better performance, and better error handling without changing the intended behavior.')"><b>Refactor</b><span>Improve quality without changing the goal.</span></button>
+        </div>
+      </div>
     </div>
-    <div id="agentAdvanced" class="agent-advanced">
-      <label>Temperature<input id="agentTemperature" type="number" min="0" max="2" step="0.1" value="0.1"></label>
-      <label>Max output<input id="agentMaxTokens" type="number" min="256" max="12000" value="6000"></label>
-      <label>Context<input id="agentContext" type="number" min="2048" max="131072" value="8192"></label>
-      <label>Command timeout<input id="agentCommandTimeout" type="number" min="1000" max="300000" value="120000"></label>
+
+    <div class="agent-composer">
+      <div class="composer-quickbar">
+        <div class="quick-prompts">
+          <button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">⌁ بررسی</button>
+          <button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">✓ تست</button>
+          <button onclick="setPrompt('کد را تمیز، سریع و حرفه‌ای کن بدون تغییر رفتار اصلی.')">✦ بهینه‌سازی</button>
+        </div>
+        <button class="advanced-toggle" onclick="toggleAgentAdvanced()">⚙ Advanced</button>
+      </div>
+
+      <div class="composer-box">
+        <textarea id="prompt" rows="2" oninput="resizeAgentPrompt(this)" onkeydown="handleAgentPromptKey(event)" placeholder="Tell the agent what you want to build, change, debug, or verify…"></textarea>
+        <button class="run-agent" onclick="runAgentLoop()"><span>➜</span><b>Run Agent</b><small>Ctrl + Enter</small></button>
+      </div>
+
+      <div class="agent-modelbar">
+        <label><span>Model</span><select id="agentModel" onchange="selectAgentModel()"><option value="">Loading models…</option></select></label>
+        <label class="iterations-field"><span>Iterations</span><input id="maxIterations" type="number" min="1" max="20" value="8"></label>
+        <div class="composer-meta"><span id="agentModelState">No model selected</span><span>·</span><span id="agentContextState">8K context</span></div>
+      </div>
+
+      <div id="agentAdvanced" class="agent-advanced">
+        <label>Temperature<input id="agentTemperature" type="number" min="0" max="2" step="0.1" value="0.1"></label>
+        <label>Max output<input id="agentMaxTokens" type="number" min="256" max="12000" value="6000"></label>
+        <label>Context<input id="agentContext" type="number" min="2048" max="131072" value="8192" oninput="updateAgentContextState()"></label>
+        <label>Command timeout<input id="agentCommandTimeout" type="number" min="1000" max="300000" value="120000"></label>
+      </div>
+
+      <div class="composer-footer">
+        <span>Agent mode · iterative verification enabled</span>
+        <span id="agentHint">Enter adds a new line · Ctrl+Enter runs</span>
+      </div>
     </div>
-    <div class="quick-prompts"><button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">⌁ بررسی پروژه</button><button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">✓ تست و رفع خطا</button><button onclick="setPrompt('کد را تمیز، سریع و حرفه‌ای کن بدون تغییر رفتار اصلی.')">✦ بهینه‌سازی</button></div>
-    <div id="answer" class="agent-output"><div class="empty-agent"><div class="agent-orbit">✦</div><p>Agent آماده است</p><small>یک وظیفه وارد کنید تا چرخه خودکار شروع شود.</small></div></div>
+  </div>
   </div>
 </section>
 
