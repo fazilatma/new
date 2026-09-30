@@ -11,16 +11,73 @@ const execFileAsync=promisify(execFile); const __dirname=path.dirname(fileURLToP
 const root=path.resolve(process.env.WORKSPACE_ROOT||path.join(__dirname,'..','workspace')); const modelsRoot=path.resolve(process.env.MODELS_ROOT||path.join(__dirname,'..','models')); const port=Number(process.env.PORT||3000),host=process.env.HOST||'127.0.0.1';
 await fs.mkdir(root,{recursive:true}); await fs.mkdir(modelsRoot,{recursive:true}); const providersFile=path.resolve(process.env.PROVIDERS_FILE||path.join(modelsRoot,'providers.json'));
 
-async function runCommand(command,timeout=120000){if(isDangerousCommand(command))return {code:403,stdout:'',stderr:'Blocked by safety policy'};return await new Promise(resolve=>{const c=spawn('/bin/sh',['-lc',command],{cwd:root,env:{...process.env,HOME:process.env.HOME||root},stdio:['ignore','pipe','pipe']});let stdout='',stderr='';const max=Number(process.env.MAX_OUTPUT_BYTES||200000);c.stdout.on('data',b=>stdout+=b);c.stderr.on('data',b=>stderr+=b);const t=setTimeout(()=>c.kill('SIGTERM'),timeout);c.on('close',code=>{clearTimeout(t);resolve({code,stdout:stdout.slice(-max),stderr:stderr.slice(-max)})})})}
+async function runCommand(command,timeout=120000,signal){
+  if(isDangerousCommand(command))return {code:403,stdout:'',stderr:'Blocked by safety policy'};
+  if(signal?.aborted)return {code:130,stdout:'',stderr:'Command cancelled'};
+  return await new Promise(resolve=>{
+    const c=spawn('/bin/sh',['-lc',command],{cwd:root,env:{...process.env,HOME:process.env.HOME||root},stdio:['ignore','pipe','pipe']});
+    let stdout='',stderr='';const max=Number(process.env.MAX_OUTPUT_BYTES||200000);let settled=false;
+    const finish=code=>{if(settled)return;settled=true;clearTimeout(t);signal?.removeEventListener('abort',onAbort);resolve({code,stdout:stdout.slice(-max),stderr:stderr.slice(-max)})};
+    const onAbort=()=>{try{c.kill('SIGTERM')}catch{}};
+    c.stdout.on('data',b=>stdout+=b);c.stderr.on('data',b=>stderr+=b);
+    const t=setTimeout(()=>c.kill('SIGTERM'),timeout);
+    if(signal)signal.addEventListener('abort',onAbort,{once:true});
+    c.on('close',finish);
+  });
+}
 async function verifyWorkspace(){const results=[];let entries=[];try{entries=await fs.readdir(root,{withFileTypes:true})}catch{};const files=entries.filter(e=>e.isFile()).map(e=>e.name);for(const f of files){if(f.endsWith('.js'))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});if(f.endsWith('.py'))results.push({file:f,...await runCommand('python3 -m py_compile '+JSON.stringify(f),30000)});if(f.endsWith('.php'))results.push({file:f,...await runCommand('php -l '+JSON.stringify(f),30000)})}try{const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));if(pkg.scripts?.test)results.push({file:'package.json',...await runCommand('npm test -- --runInBand',120000)})}catch{}return results}
+const agentRunControllers=new Map();
+
+async function snapshotWorkspace(){
+  const files=new Map();let count=0;
+  const ignored=new Set(['.git','node_modules','.cache','dist','build','.wconsole_data']);
+  async function walk(dir,rel=''){
+    if(count>=500)return;
+    let entries=[];
+    try{entries=await fs.readdir(dir,{withFileTypes:true})}catch{return}
+    for(const entry of entries){
+      if(count>=500)break;
+      if(ignored.has(entry.name))continue;
+      const abs=path.join(dir,entry.name),r=rel?path.join(rel,entry.name):entry.name;
+      if(entry.isDirectory()){await walk(abs,r);continue}
+      try{
+        const st=await fs.stat(abs);
+        if(st.size>1024*1024)continue;
+        files.set(r,await fs.readFile(abs,'utf8'));count++;
+      }catch{}
+    }
+  }
+  await walk(root);return files;
+}
+function workspaceChanges(before,after){
+  const changed=[];
+  const names=new Set([...before.keys(),...after.keys()]);
+  for(const name of names){
+    const a=before.get(name),b=after.get(name);
+    if(a===undefined&&b!==undefined)changed.push({path:name,status:'added',bytesAfter:Buffer.byteLength(b)});
+    else if(a!==undefined&&b===undefined)changed.push({path:name,status:'deleted',bytesBefore:Buffer.byteLength(a)});
+    else if(a!==b)changed.push({path:name,status:'modified',bytesBefore:Buffer.byteLength(a||''),bytesAfter:Buffer.byteLength(b||'')});
+  }
+  return changed.sort((a,b)=>a.path.localeCompare(b.path));
+}
+async function gitWorkspaceInfo(){
+  try{
+    const status=await execFileAsync('git',['status','--short'],{cwd:root,timeout:5000});
+    const diff=await execFileAsync('git',['diff','--stat'],{cwd:root,timeout:5000});
+    const branch=await execFileAsync('git',['branch','--show-current'],{cwd:root,timeout:5000});
+    return {isGit:true,branch:(branch.stdout||'').trim(),status:(status.stdout||'').trim(),diffStat:(diff.stdout||'').trim()};
+  }catch{return {isGit:false,branch:'',status:'',diffStat:''}}
+}
+
 function providerNormalize(input){if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Provider JSON must be an object');const out={};for(const [id,v] of Object.entries(input)){if(!v||typeof v!=='object'||Array.isArray(v))continue;const models=Array.isArray(v.models)?v.models.map(m=>typeof m==='string'?m:(m&&typeof m==='object'?m:{})):[];out[String(id)]={id:String(v.id||id),name:String(v.name||id),vendor:String(v.vendor||''),url:String(v.url||''),apiKey:String(v.apiKey||''),enabled:Boolean(v.enabled),models,relayUrl:String(v.relayUrl||''),relayToken:String(v.relayToken||''),relayEnabled:Boolean(v.relayEnabled),useGlobalRelay:Boolean(v.useGlobalRelay),proxyUrl:String(v.proxyUrl||''),proxyType:String(v.proxyType||'http')};if(Array.isArray(v.apiKeys))out[String(id)].apiKeys=v.apiKeys.map(x=>String(x));}return out}
 const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat'||req.url.startsWith('/chat/')){req.url=req.url.slice(5)||'/';}next()}); app.use(express.json({limit:'2mb'})); app.use(securityMiddleware); app.use(express.static(path.join(__dirname,'..','public'))); const send=(r,d)=>r.json(d);
 const clamp=(n,min,max,fallback)=>{const x=Number(n);return Number.isFinite(x)?Math.min(max,Math.max(min,x)):fallback};
 const safeTimeout=v=>clamp(v,1000,300000,120000);
 const validLocalPort=v=>{const p=clamp(v,1024,65535,8080);return Math.floor(p)};
-const APP_VERSION='1.8.0';
+const APP_VERSION='1.9.0';
 app.get('/api/version',async(_,r)=>send(r,{version:APP_VERSION,name:'local-coding-agent',channel:'stable'}));
 app.get('/api/health',async(_,r)=>send(r,{ok:true,node:process.version,version:APP_VERSION}));
+app.get('/api/workspace/git',async(_,r)=>send(r,await gitWorkspaceInfo()));
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
 app.get('/api/files',async(q,r)=>{const d=safePath(root,String(q.query.path||''));const e=await fs.readdir(d,{withFileTypes:true});send(r,e.map(x=>({name:x.name,type:x.isDirectory()?'dir':'file'})).sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name)))});
 app.get('/api/file',async(q,r)=>{const p=safePath(root,String(q.query.path||''));send(r,{path:path.relative(root,p),content:await fs.readFile(p,'utf8')})});
@@ -332,8 +389,9 @@ app.post('/api/models/test-all',async(q,r)=>{
 });
 app.post('/api/models/launch',async(q,r)=>{const name=String(q.body.name||'');if(!name||path.basename(name)!==name||!name.toLowerCase().endsWith('.gguf'))return r.status(400).json({error:'GGUF required'});const model=safePath(modelsRoot,name);if(!(await fs.stat(model).catch(()=>null))?.isFile())return r.status(404).json({error:'Model not found'});const port=validLocalPort(q.body.port);if(port<1024||port>65535)return r.status(400).json({error:'Invalid port'});const c=spawn(process.env.LLAMA_BIN||'llama-server',['-m',model,'--host','127.0.0.1','--port',String(port),'-c',String(q.body.context||8192)],{cwd:root,detached:true,stdio:'ignore'});c.unref();send(r,{ok:true,pid:c.pid,baseUrl:'http://127.0.0.1:'+port+'/v1'})});
 app.post('/api/agent',async(q,r)=>{const prompt=String(q.body.prompt||'').trim();const url=String(q.body.modelUrl||'http://127.0.0.1:8080/v1/chat/completions');const x=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:q.body.model||'local',messages:[{role:'system',content:'You are a professional autonomous coding agent. Work iteratively until verification passes. Return ONLY valid JSON: {"message":"...","actions":[{"type":"write","path":"relative/path","content":"complete file content"},{"type":"command","command":"safe command"}],"done":true}. You may inspect via command actions. After every execution result, use the feedback to fix errors. Never claim success without verification. Paths must stay inside the workspace.'},{role:'user',content:prompt}],temperature:.1,max_tokens:Number(q.body.maxTokens||4096)})});const d=await x.json();if(!x.ok)return r.status(x.status).json(d);send(r,{ok:true,text:d.choices?.[0]?.message?.content||JSON.stringify(d)})});
+app.post('/api/agent/cancel/:runId',async(q,r)=>{const id=String(q.params.runId||'');const controller=agentRunControllers.get(id);if(!controller)return r.status(404).json({error:'Agent run not found'});controller.abort();agentRunControllers.delete(id);send(r,{ok:true,cancelled:true,runId:id})});
 app.post('/api/agent/loop',async(q,r)=>{
-  const prompt=String(q.body.prompt||'').trim();if(!prompt)return r.status(400).json({error:'prompt required'});const maxIterations=clamp(q.body.maxIterations,1,20,8);const temperature=clamp(q.body.temperature,0,2,.1);const maxTokens=clamp(q.body.maxTokens,256,12000,6000);const commandTimeout=safeTimeout(q.body.commandTimeout);const context=clamp(q.body.context,2048,131072,8192);
+  const prompt=String(q.body.prompt||'').trim();if(!prompt)return r.status(400).json({error:'prompt required'});const maxIterations=clamp(q.body.maxIterations,1,20,8);const temperature=clamp(q.body.temperature,0,2,.1);const maxTokens=clamp(q.body.maxTokens,256,12000,6000);const commandTimeout=safeTimeout(q.body.commandTimeout);const context=clamp(q.body.context,2048,131072,8192);const planOnly=Boolean(q.body.planOnly);const runId=String(q.get('x-agent-run-id')||'').trim();const controller=new AbortController();if(runId)agentRunControllers.set(runId,controller);const beforeSnapshot=await snapshotWorkspace();
   let modelUrl=String(q.body.modelUrl||'');
   let resolvedModel=String(q.body.model||'local');
   let providerKind='openai-compatible';
@@ -344,12 +402,12 @@ app.post('/api/agent/loop',async(q,r)=>{
     if(!(await fs.stat(model).catch(()=>null))?.isFile())return r.status(404).json({error:'Local model not found: '+name});
     const port=validLocalPort(8080);
     const health='http://127.0.0.1:'+port+'/v1/models';
-    try{const z=await fetch(health,{signal:AbortSignal.timeout(1200)});if(!z.ok)throw Error('not ready')}catch{
+    try{const z=await fetch(health,{signal:AbortSignal.any([AbortSignal.timeout(1200),controller.signal])});if(!z.ok)throw Error('not ready')}catch{
       const child=spawn(process.env.LLAMA_BIN||'llama-server',['-m',model,'--host','127.0.0.1','--port',String(port),'-c',String(q.body.context||8192)],{cwd:root,detached:true,stdio:'ignore'});
       child.unref();
       const deadline=Date.now()+60000;let ready=false;
-      while(Date.now()<deadline){try{const z=await fetch(health,{signal:AbortSignal.timeout(1200)});if(z.ok){ready=true;break}}catch{}await new Promise(x=>setTimeout(x,400))}
-      if(!ready)return r.status(504).json({error:'Local model startup timeout'});
+      while(Date.now()<deadline&&!controller.signal.aborted){try{const z=await fetch(health,{signal:AbortSignal.any([AbortSignal.timeout(1200),controller.signal])});if(z.ok){ready=true;break}}catch{}await new Promise(x=>setTimeout(x,400))}
+      if(controller.signal.aborted)return r.status(499).json({error:'Agent run cancelled'});if(!ready)return r.status(504).json({error:'Local model startup timeout'});
     }
     modelUrl='http://127.0.0.1:'+port+'/v1/chat/completions';
     resolvedModel=name;
@@ -374,5 +432,5 @@ app.post('/api/agent/loop',async(q,r)=>{
     }
     q.body.model=q.body.model||modelItem.id;modelUrl=url;resolvedModel=String(q.body.model);
   }else if(!modelUrl)modelUrl='http://127.0.0.1:8080/v1/chat/completions';
-  try{const u=new URL(modelUrl);if(!/^https?:$/.test(u.protocol))throw Error('Invalid model URL')}catch(e){return r.status(400).json({error:e.message})}const messages=[{role:'system',content:'You are an autonomous senior coding agent. Execute a feedback loop. Return ONLY valid JSON: {"message":"...","actions":[{"type":"write","path":"relative/path","content":"complete file content"},{"type":"command","command":"safe command"}],"done":false}. Use commands to inspect and test. After tool results, fix every error you can. Stop only when verification is clean or you need user input. Never claim a change was made unless its write action was executed. Never use paths outside workspace.'},{role:'user',content:prompt}];const history=[];for(let i=1;i<=maxIterations;i++){const x=await fetch(modelUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(providerKind==='gemini'?{systemInstruction:{parts:[{text:messages.filter(m=>m.role==='system').map(m=>m.content).join('\\n')}]} ,contents:messages.filter(m=>m.role!=='system').map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]})),generationConfig:{temperature,maxOutputTokens:maxTokens}}:{model:resolvedModel,messages,temperature,max_tokens:maxTokens})});const d=await x.json();if(!x.ok)return r.status(x.status).json({error:d});const raw=providerKind==='gemini'?(d.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||''):((d.choices?.[0]?.message?.content||d.choices?.[0]?.text)||'');let plan;try{plan=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''))}catch{messages.push({role:'user',content:'Your previous response was not valid JSON. Return only the required JSON object.'});history.push({iteration:i,error:'invalid JSON'});continue}const results=[];if(!plan||typeof plan!=='object'||!Array.isArray(plan.actions)){history.push({iteration:i,error:'invalid action plan'});messages.push({role:'user',content:'Return a JSON object with an actions array.'});continue}for(const a of plan.actions.slice(0,30)){if(a.type==='write'){try{const p=safePath(root,String(a.path));await fs.mkdir(path.dirname(p),{recursive:true});const content=String(a.content??'');if(content.length>2*1024*1024)throw Error('File write exceeds 2 MB limit');await fs.writeFile(p,content);results.push({type:'write',path:a.path,ok:true})}catch(e){results.push({type:'write',path:a.path,ok:false,error:e.message})}}else if(a.type==='command'){const z=await runCommand(String(a.command||''),commandTimeout);results.push({type:'command',command:a.command,code:z.code,stdout:z.stdout,stderr:z.stderr})}}const verification=await verifyWorkspace();const clean=verification.every(x=>x.code===0);history.push({iteration:i,message:plan.message,actions:results,verification,done:Boolean(plan.done&&clean)});if(plan.done&&clean)return send(r,{ok:true,success:true,iterations:i,history});messages.push({role:'assistant',content:JSON.stringify(plan)});messages.push({role:'user',content:JSON.stringify({executionResults:results,automaticVerification:verification,feedback:clean?'Verification is clean. If the requested work is complete, finish; otherwise continue.':'Verification has failures. Diagnose and fix them, then verify again.'})})}send(r,{ok:true,success:false,iterations:maxIterations,history,message:'Maximum iterations reached; review the latest verification results.'})});
+  try{const u=new URL(modelUrl);if(!/^https?:$/.test(u.protocol))throw Error('Invalid model URL')}catch(e){return r.status(400).json({error:e.message})}const messages=[{role:'system',content:'You are an autonomous senior coding agent. Execute a feedback loop. Return ONLY valid JSON: {"message":"...","actions":[{"type":"write","path":"relative/path","content":"complete file content"},{"type":"command","command":"safe command"}],"done":false}. Use commands to inspect and test. After tool results, fix every error you can. Stop only when verification is clean or you need user input. Never claim a change was made unless its write action was executed. Never use paths outside workspace.'},{role:'user',content:prompt}];const history=[];for(let i=1;i<=maxIterations;i++){if(controller.signal.aborted)return r.status(499).json({error:'Agent run cancelled'});const x=await fetch(modelUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(providerKind==='gemini'?{systemInstruction:{parts:[{text:messages.filter(m=>m.role==='system').map(m=>m.content).join('\\n')}]} ,contents:messages.filter(m=>m.role!=='system').map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]})),generationConfig:{temperature,maxOutputTokens:maxTokens}}:{model:resolvedModel,messages,temperature,max_tokens:maxTokens}),signal:controller.signal});const d=await x.json();if(!x.ok)return r.status(x.status).json({error:d});const raw=providerKind==='gemini'?(d.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||''):((d.choices?.[0]?.message?.content||d.choices?.[0]?.text)||'');let plan;try{plan=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''))}catch{messages.push({role:'user',content:'Your previous response was not valid JSON. Return only the required JSON object.'});history.push({iteration:i,error:'invalid JSON'});continue}const results=[];if(planOnly){history.push({iteration:i,message:plan.message,actions:plan.actions.slice(0,30).map(a=>({...a,preview:true})),verification:[],done:false,planOnly:true});return send(r,{ok:true,success:false,planOnly:true,iterations:i,history,changes:workspaceChanges(beforeSnapshot,await snapshotWorkspace()),message:'Plan generated; no workspace changes were executed.'})}if(!plan||typeof plan!=='object'||!Array.isArray(plan.actions)){history.push({iteration:i,error:'invalid action plan'});messages.push({role:'user',content:'Return a JSON object with an actions array.'});continue}for(const a of plan.actions.slice(0,30)){if(a.type==='write'){try{const p=safePath(root,String(a.path));await fs.mkdir(path.dirname(p),{recursive:true});const content=String(a.content??'');if(content.length>2*1024*1024)throw Error('File write exceeds 2 MB limit');await fs.writeFile(p,content);results.push({type:'write',path:a.path,ok:true})}catch(e){results.push({type:'write',path:a.path,ok:false,error:e.message})}}else if(a.type==='command'){const z=await runCommand(String(a.command||''),commandTimeout,controller.signal);results.push({type:'command',command:a.command,code:z.code,stdout:z.stdout,stderr:z.stderr})}}const verification=await verifyWorkspace();const clean=verification.every(x=>x.code===0);history.push({iteration:i,message:plan.message,actions:results,verification,done:Boolean(plan.done&&clean)});if(plan.done&&clean){const changes=workspaceChanges(beforeSnapshot,await snapshotWorkspace());if(runId)agentRunControllers.delete(runId);return send(r,{ok:true,success:true,iterations:i,history,changes});}messages.push({role:'assistant',content:JSON.stringify(plan)});messages.push({role:'user',content:JSON.stringify({executionResults:results,automaticVerification:verification,feedback:clean?'Verification is clean. If the requested work is complete, finish; otherwise continue.':'Verification has failures. Diagnose and fix them, then verify again.'})})}const changes=workspaceChanges(beforeSnapshot,await snapshotWorkspace());if(runId)agentRunControllers.delete(runId);send(r,{ok:true,success:false,iterations:maxIterations,history,changes,message:'Maximum iterations reached; review the latest verification results.'})});
 app.use((req,res,next)=>{if(req.method==='GET'&&!req.path.startsWith('/api/'))return res.sendFile(path.join(__dirname,'..','public','index.html'));next()});app.use((e,_,r,__)=>{console.error(e);if(r.headersSent)return __();r.status(e.status||500).json({error:e.message||'Internal server error'})});app.listen(port,host,()=>console.log('Local Coding Agent on '+host+':'+port));
