@@ -1,9 +1,32 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.14.2'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.15.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
-function clearActivity(){$('activity').innerHTML='<div class="activity-empty">فعالیت‌ها پاک شدند.</div>'}
+const MAX_ACTIVITY_ITEMS=120;
+let activitySeq=0;
+function activityKind(title){
+  const t=String(title||'').toLowerCase();
+  if(/error|fail|stop|cancel/.test(t))return 'error';
+  if(/pass|ready|complete|done|saved|success/.test(t))return 'success';
+  if(/check|verif|test/.test(t))return 'check';
+  if(/write|file|revert|change/.test(t))return 'write';
+  if(/command|terminal|run/.test(t))return 'command';
+  return 'info';
+}
+function setActivity(title,msg,meta={}){
+  const a=$('activity');if(!a)return;
+  if(a.querySelector('.activity-empty'))a.innerHTML='';
+  const d=document.createElement('div');
+  const kind=meta.kind||activityKind(title);
+  d.className='activity-item activity-'+kind;
+  d.dataset.activityId=meta.id||String(++activitySeq);
+  const time=meta.ts?new Date(meta.ts):new Date();
+  const stamp=Number.isNaN(time.getTime())?'Now':time.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  d.innerHTML='<div class="activity-row"><b>'+esc(title)+'</b><time>'+stamp+'</time></div><p>'+esc(msg)+'</p>';
+  a.prepend(d);
+  while(a.children.length>MAX_ACTIVITY_ITEMS)a.lastElementChild?.remove();
+}
+function clearActivity(){$('activity').innerHTML='<div class="activity-empty"><span>⌁</span><p>No activity yet</p><small>Agent execution events will appear here.</small></div>';}
 async function loadFiles(){const d=await api('/api/files');$('files').innerHTML=d.map(x=>x.type==='dir'?'<div>📁 '+esc(x.name)+'</div>':'<div onclick="openFile(\''+encodeURIComponent(x.name)+'\')">📄 '+esc(x.name)+'</div>').join('')||'<div class="activity-empty">پوشه خالی است</div>'}
 async function openFile(p){const d=await api('/api/file?path='+p);current=d.path;$('current').textContent=current;$('editor').value=d.content;$('editorMode').textContent=(current.split('.').pop()||'text').toUpperCase()}
 async function saveFile(){if(!current)return;await api('/api/file',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({path:current,content:$('editor').value})});setActivity('فایل ذخیره شد',current);await loadProjectCommands()}
@@ -377,7 +400,7 @@ function newAgentRunId(){
   try{return crypto.randomUUID()}catch{return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
 }
 let activeAgentEventSource=null;
-function connectAgentEventStream(runId){if(activeAgentEventSource){try{activeAgentEventSource.close()}catch{}}if(!runId||!window.EventSource)return;const token=localStorage.agentToken||'';const streamUrl=apiUrl('/api/agent/events/'+encodeURIComponent(runId))+(token?'?token='+encodeURIComponent(token):'');const source=new EventSource(streamUrl);activeAgentEventSource=source;source.onmessage=e=>{try{const v=JSON.parse(e.data);if(v.type==='connected')return;const labels={planning:'Planning',checkpoint:'Checkpoint',iteration:'Iteration',plan:'Plan',write:'Write',command:'Command',check:'Verification',completed:'Completed',cancelled:'Cancelled'};const label=labels[v.type]||v.type;let detail=v.path||v.command||v.message||'';if(v.type==='plan')detail=(v.actions||0)+' action(s)'+(v.message?' · '+v.message:'');if(v.type==='check')detail=(v.ok?'PASS':'FAIL')+' · '+(v.failures||0)+' failure(s)';setActivity(label,detail);updateAgentTelemetry(v.type==='check'?(v.ok?'CHECKING':'ERROR'):v.type==='completed'?(v.ok?'DONE':'REVIEW'):'RUNNING',v.iteration||'—',lastAgentChanges.length)}catch{}};source.onerror=()=>{if(activeAgentRunId===runId)setActivity('Live events','Reconnecting…')}}
+function connectAgentEventStream(runId){if(activeAgentEventSource){try{activeAgentEventSource.close()}catch{}}if(!runId||!window.EventSource)return;const token=localStorage.agentToken||'';const streamUrl=apiUrl('/api/agent/events/'+encodeURIComponent(runId))+(token?'?token='+encodeURIComponent(token):'');const source=new EventSource(streamUrl);activeAgentEventSource=source;source.onmessage=e=>{try{const v=JSON.parse(e.data);if(v.type==='connected')return;const labels={planning:'Planning',checkpoint:'Checkpoint',iteration:'Iteration',plan:'Plan',write:'Write',command:'Command',check:'Verification',completed:'Completed',cancelled:'Cancelled'};const label=labels[v.type]||v.type;let detail=v.path||v.command||v.message||'';if(v.type==='plan')detail=(v.actions||0)+' action(s)'+(v.message?' · '+v.message:'');if(v.type==='check')detail=(v.ok?'PASS':'FAIL')+' · '+(v.failures||0)+' failure(s)';setActivity(label,detail,{id:v.id,ts:v.ts,kind:activityKind(label)});updateAgentTelemetry(v.type==='check'?(v.ok?'CHECKING':'ERROR'):v.type==='completed'?(v.ok?'DONE':'REVIEW'):'RUNNING',v.iteration||'—',lastAgentChanges.length)}catch{}};source.onerror=()=>{if(activeAgentRunId===runId)setActivity('Live events','Reconnecting…')}}
 function closeAgentEventStream(){if(activeAgentEventSource){try{activeAgentEventSource.close()}catch{}activeAgentEventSource=null}}
 async function stopAgentRun(){
   if(!activeAgentRunId)return;
