@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.174';
+const APP_VERSION = '10.175';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -34512,6 +34512,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "174'") !== false
       && version_compare(APP_VERSION, '10.' . '174', '>='));
 
+    /* ---------- v10.175: نگهبان راه‌اندازی — هیچ 500ای بی‌صدا نمی‌ماند ---------- */
+    $__srv = dirname(__FILE__) . '/server.php';
+    $__srvSrc = is_file($__srv) ? (string)@file_get_contents($__srv) : '';
+    $add('10.175', 'server.php نگهبانِ راه‌اندازی دارد',
+         $__srvSrc !== ''
+      && strpos($__srvSrc, 'register_shutdown' . '_function') !== false
+      && strpos($__srvSrc, 'set_exception' . '_handler') !== false);
+    $add('10.175', 'خطاها به console-error.log اختصاصی و بدنهٔ پاسخ می‌روند',
+         strpos($__srvSrc, 'console-error' . '.log') !== false
+      && strpos($__srvSrc, "S4_BOOT" . "_DEBUG") !== false);
+    $add('10.175', 'فرمان تریست ping بدون لودِ اپ هست',
+         strpos($__srvSrc, "isset(\$_GET['p" . "ing'])") !== false);
+    $add('10.175', 'ورودیِ 10.175 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "175'") !== false
+      && version_compare(APP_VERSION, '10.' . '175', '>='));
+    unset($__srv, $__srvSrc);
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -64471,6 +64488,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.175', t:'🛟 نگهبانِ سکوت‌شکسته — هیچ خطای 500ای دیگر بدون متن نمی‌ماند', items:[
+    'server.php پیش از هر چیز نگهبانِ full-fatal می‌گذارد: E_ERROR، E_PARSE هنگام include و استثناهای گیرنیافتاده — همه شکار می‌شوند',
+    'هر خطا سه‌جا می‌رود: فایل اختصاصی console-error.log کنار اپ (با سقف حجم)، stderr لاگ سرویس کنسول، و بدنهٔ خودِ پاسخ HTTP — پس حتی اگر پنل لاگ چیزی نشان نداد، مرورگر علت را می‌گوید',
+    'فرمان تریست /?ping=1 بدون لود اپ جواب می‌دهد: اگر ping کار کرد ولی صفحهٔ اصلی 500 داد یعنی مشکل داخل اپ است و متنش همان‌جاست؛ اگر ping هم نیاورد، سرویس بالا نیامده یا پروکسی قطع است',
+    'نمایش متن خطا در بدنه با S4_BOOT_DEBUG=0 خاموش می‌شود (پیشنهاد: بعد از رفع مشکل)',
+    'selftest چهار بررسی جدید برای وجود نگهبان و مسیر لاگ اختصاصی دارد',
+  ]},
   {v:'10.174', t:'🧩 رابط کاربری سرویس رندر در تب اتصال‌ها — بدون ویرایش دستی JSON', items:[
     'بخش جدید «رندر جاوااسکریپت (Playwright/Selenium)» در تنظیمات: تیک فعال، آدرس سرویس، توکن، مهلت، حالت (خودکار/همیشه)، انتظارِ بارشدن، اسکرولِ لیزی‌لود',
     'تنظیمات همان‌جا در connections.json ← render ذخیره می‌شود؛ دیگر ویرایش دستی فایل لازم نیست',

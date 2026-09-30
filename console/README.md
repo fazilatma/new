@@ -46,39 +46,46 @@ What it does, in plain terms:
 
 ---
 
-## 1b) HTTP 500 after deploy — how to diagnose (and the built-in guard)
+## 1b) HTTP 500 with an *empty* log — the boot guard (v10.175)
 
-The PHP project's `install_cmd` runs **`php console/preflight.php`**: an
-environment check that fails the deploy loudly — *before* you ever see a blank
-500 page — with a Persian readout of missing PHP extensions plus install-dir
-writability.
+Since **v10.175** the app cannot die silently any more. `server.php` installs a
+boot guard *before anything else runs*, and every fatal
+(E_ERROR / parse error during include / uncaught Throwable) is reported to
+**all three** channels at once:
 
-Facts that narrow the search down on a HostConsole/WebConsole host:
+1. **`console-error.log`** — a dedicated file next to `scraper4.php` (falls back
+   to the system temp dir when the deploy dir isn’t writable; capped at 256 KB);
+2. **stderr** — the channel that the console’s «لاگ سرویس» tails;
+3. **the browser itself** — the HTTP 500 response body now *contains* the exact
+   error message, file and line. You don’t need log access at all to see it.
 
-- **`sqlite3` is *not* a 500 cause.** The app's v10.170 ledger is explicitly
-  tolerant: "Hosts without either extension continue to use the existing
-  atomic JSON path instead of failing hard" (see `scraper4.php` →
-  `localTaskDbOpen()`). The preflight reports it only as a warning.
-- **`curl`/`mbstring`/`json`/`openssl` are almost always present**, because
-  the console itself is PHP and feeds on the same extensions. If the console
-  works, these exist.
-- **The actual fatal is printed in the project's service log.** Open the
-  project → **لاگ سرویس** and read the last PHP line — that names the exact
-  function/file. No guessing needed.
+### Two-hit triage (30 seconds, from the browser)
 
-So in order:
+| Hit | Result | Meaning |
+|---|---|---|
+| `http://<host>:8000/?ping=1` | answers `boot-ok \| scraper4 v10.175 …` | PHP + router are fine; the tail of `console-error.log` is printed right below |
+| `http://<host>:8000/` | 500 **with the error text in the body** | the fatal *inside the app* — that line is the fix target |
 
-1. Open the service log, read the fatal line.
-2. If a missing extension is named and the host has no `apt`/root, use the
-   console's own full-stack installer (its setup brings PHP with the standard
-   extension set) — or ask the host admin to enable it.
-3. If the fatal is about paths/permissions (`connections.json`, `PROFILES_DIR`),
-   switch the project to the console-managed writable deploy path via
-   **استفاده از مسیر قابل‌نوشتن مدیریت‌شده** in the project form.
-4. Redeploy — the preflight step will now pass before the service starts.
+If even `?ping=1` doesn’t answer, the app isn’t the problem: the service never
+started or the console proxy can’t reach port 8000. Confirm from the console
+Terminal (bypasses the proxy):
 
-If the 500 persists, paste the service log's fatal line — that line is the
-exact pointer, and we fix from there instead of guessing.
+```bash
+curl -i http://127.0.0.1:8000/?ping=1
+```
+
+- answers → service fine; fix the console’s domain/port mapping instead.
+- connection refused → service down; the console’s **install** log (not the
+  service log) then holds the truth — e.g. the preflight failing the deploy.
+
+### After the fix
+
+Set `S4_BOOT_DEBUG` to `0` in the project’s env (the shipped JSON enables it on
+purpose during bring-up). The file log keeps working either way.
+
+> Also in v10.175: `server.php` refuses to serve `console-error.log`,
+> `connections.json` and `profiles.json` as static downloads — the built-in
+> server would otherwise happily hand them out.
 
 ---
 
