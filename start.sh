@@ -10,11 +10,33 @@ export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 # HostConsole must strip /openhands/ before proxying to this local port.
 unset AGENT_CANVAS_BASE_PATH VITE_BASE_PATH
 
-# Dedicated internal ports prevent stale/default OpenHands instances on
-# 18000/18001/3001 from blocking this instance.
-export OH_CANVAS_SAFE_BACKEND_PORT="${OH_CANVAS_SAFE_BACKEND_PORT:-19000}"
-export OH_CANVAS_SAFE_AUTOMATION_PORT="${OH_CANVAS_SAFE_AUTOMATION_PORT:-19001}"
-export OH_CANVAS_SAFE_VITE_PORT="${OH_CANVAS_SAFE_VITE_PORT:-19002}"
+# Dynamically select three consecutive free loopback ports. This prevents
+# stale Agent Canvas processes from blocking startup.
+read -r OH_CANVAS_SAFE_BACKEND_PORT OH_CANVAS_SAFE_AUTOMATION_PORT OH_CANVAS_SAFE_VITE_PORT <<EOF
+$(node <<'NODE'
+const net = require('net');
+const start = Number(process.env.OH_CANVAS_PORT_START || 19000);
+function free(port) {
+  return new Promise(resolve => {
+    const s = net.createServer();
+    s.once('error', () => resolve(false));
+    s.once('listening', () => s.close(() => resolve(true)));
+    s.listen(port, '127.0.0.1');
+  });
+}
+(async () => {
+  for (let p = start; p < start + 1000; p++) {
+    if (await free(p) && await free(p + 1) && await free(p + 2)) {
+      process.stdout.write(`${p} ${p + 1} ${p + 2}`);
+      return;
+    }
+  }
+  process.exit(1);
+})().catch(() => process.exit(1));
+NODE
+)
+EOF
+export OH_CANVAS_SAFE_BACKEND_PORT OH_CANVAS_SAFE_AUTOMATION_PORT OH_CANVAS_SAFE_VITE_PORT
 
 if [ ! -s ".openhands-backend-key" ]; then
   if command -v openssl >/dev/null 2>&1; then
