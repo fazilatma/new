@@ -349,9 +349,24 @@ function renderWorkspaceChanges(changes=[]){
 function renderAgentChecks(history=[]){
   const el=$('checksView');if(!el)return;
   const checks=[];
-  history.forEach(h=>(h.verification||[]).forEach(v=>checks.push(v)));
-  if(!checks.length){el.innerHTML='<div class="activity-empty"><span>✓</span><p>No verification results</p><small>Checks will appear here after an Agent run.</small></div>';return}
-  el.innerHTML=checks.map(v=>{const ok=Number(v.code)===0;const text=(v.stderr||v.stdout||v.error||'Completed').slice(-300);return '<div class="check-item"><span class="check-icon">'+(ok?'✓':'!')+'</span><div><b>'+esc(v.file||'Verification')+'</b><small>'+esc(text)+'</small></div></div>'}).join('');
+  history.forEach(h=>(h.verification||[]).forEach(v=>checks.push({...v,iteration:h.iteration})));
+  const diagnostics=history.flatMap(h=>(h.diagnostics||[]).map(d=>({...d,iteration:h.iteration})));
+  if(!checks.length&&!diagnostics.length){el.innerHTML='<div class="activity-empty"><span>✓</span><p>No verification results</p><small>Checks will appear here after an Agent run.</small></div>';return}
+  const cards=checks.map(v=>{const ok=Number(v.code)===0;const text=String(v.stderr||v.stdout||v.error||'Completed').trim().slice(-500);return '<div class="check-item '+(ok?'check-pass':'check-fail')+'"><span class="check-icon">'+(ok?'✓':'!')+'</span><div><b>'+esc(v.file||'Verification')+'</b><small>Iteration '+esc(String(v.iteration||'—'))+' · '+esc(ok?'PASS':'FAIL')+' · exit '+esc(String(v.code??''))+'</small><pre>'+esc(text)+'</pre></div></div>'}).join('');
+  const diagCards=diagnostics.map(d=>'<div class="diagnostic-card"><div><b>Diagnosis · iteration '+esc(String(d.iteration||'—'))+'</b><span>'+esc(d.kind||'check')+'</span></div><p>'+esc(d.message||'No diagnostic message')+'</p>'+(d.locations||[]).slice(0,5).map(x=>'<button class="diagnostic-location" onclick="openFileDiff('+JSON.stringify(x.path)+')"><code>'+esc(x.path)+':'+esc(String(x.line))+(x.column?':'+esc(String(x.column)):'')+'</code></button>').join('')+'</div>').join('');
+  el.innerHTML=diagCards+cards;
+}
+function buildAgentReport(){
+  const history=agentLastHistory||[];
+  const changes=lastAgentChanges||[];
+  const failures=history.flatMap(h=>(h.verification||[]).filter(v=>Number(v.code)!==0));
+  const diagnostics=history.flatMap(h=>h.diagnostics||[]);
+  return ['ARENA CODING AGENT REPORT','='.repeat(28),'Status: '+(history.length&&history[history.length-1].done?'VERIFIED':'REVIEW REQUIRED'),'Iterations: '+history.length,'Workspace changes: '+changes.length,'Verification failures: '+failures.length,'Diagnostics: '+diagnostics.length,'','CHANGES',...changes.map(x=>x.status+' '+x.path),'','FAILURES',...failures.slice(0,20).map(x=>(x.file||x.type||'check')+' exit '+x.code+' :: '+String(x.stderr||x.stdout||x.error||'').trim().replace(/\s+/g,' ').slice(0,300))].join('\n');
+}
+async function copyAgentReport(){
+  const report=buildAgentReport();
+  try{await navigator.clipboard.writeText(report);setActivity('Report copied','Agent run summary copied to clipboard',{kind:'success'})}
+  catch{setActivity('Report unavailable','Clipboard access was denied',{kind:'error'})}
 }
 function renderProjectCommands(data){
   const box=$('projectChecks');if(!box)return;
