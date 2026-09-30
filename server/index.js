@@ -120,7 +120,7 @@ const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat
 const clamp=(n,min,max,fallback)=>{const x=Number(n);return Number.isFinite(x)?Math.min(max,Math.max(min,x)):fallback};
 const safeTimeout=v=>clamp(v,1000,300000,120000);
 const validLocalPort=v=>{const p=clamp(v,1024,65535,8080);return Math.floor(p)};
-const APP_VERSION='1.14.0';
+const APP_VERSION='1.14.1';
 const CHECKPOINT_DIR=path.join(root,'.arena','checkpoints');
 const CHECKPOINT_MAX_FILES=200;
 const CHECKPOINT_MAX_BYTES=20*1024*1024;
