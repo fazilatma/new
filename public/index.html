@@ -105,7 +105,7 @@
       <label class="file-import">＋ ورود JSON تنظیمات<input type="file" id="providerFile" accept=".json,application/json" onchange="importProviders(event)"></label>
       <button class="secondary-setting" onclick="exportProviders()">↗ برون‌ریزی تنظیمات</button>
       <div class="provider-test-box">
-        <div class="provider-test-head"><div><b>Model Lab</b><small>تست و Benchmark تمام مدل‌های GGUF آپلودشده</small></div><button class="primary-setting test-all-btn" onclick="testAllModels()">▶ تست همه مدل‌ها</button></div>
+        <div class="provider-test-head"><div><b>Model Lab</b><small>Benchmark تمام مدل‌های محلی و درون‌ریزی‌شده</small></div><button class="primary-setting test-all-btn" onclick="testAllModels()">▶ تست همه مدل‌ها</button></div>
         <div class="benchmark-grid">
           <label>Context<input id="testContext" type="number" value="4096" min="512" max="32768"></label>
           <label>Max tokens<input id="testMaxTokens" type="number" value="64" min="1" max="1024"></label>
@@ -113,7 +113,7 @@
         </div>
         <label>Prompt تست<textarea id="testPrompt" class="test-prompt">سلام! در یک جمله خودت را معرفی کن.</textarea></label>
         <div class="benchmark-toolbar"><span id="benchmarkStatus">آماده تست</span><button class="secondary-setting" onclick="clearBenchmark()">پاک کردن نتایج</button></div>
-        <div id="benchmarkResults" class="benchmark-results"><div class="benchmark-empty">برای مقایسه سرعت، زمان آماده‌سازی، پاسخ و نرخ توکن، «تست همه مدل‌ها» را اجرا کنید.</div></div>
+        <div id="benchmarkResults" class="benchmark-results"><div class="benchmark-empty">برای مقایسه سرعت، زمان آماده‌سازی، پاسخ و نرخ توکن، همه مدل‌های GGUF و مدل‌های Provider درون‌ریزی‌شده را تست کنید.</div></div>
       </div>
       <div class="setting-note">کلیدهای API را در ریپو ذخیره نکنید؛ از متغیر محیطی یا تنظیمات امن سرور استفاده کنید.</div>
     </section>
