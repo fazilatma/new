@@ -240,7 +240,7 @@ async function runImport(e) {
   const text = $('#imText').value.trim();
   const file = S.importFile;
   const replace = $('#imReplace').checked;
-  const modelsOnly = $('#imModelsOnly').checked;
+  const modelsOnly = $('#imModelsOnly').value === '1';
   const providerId = $('#imProvider').value;
   if (modelsOnly && !providerId) return bad('برای درون‌ریزی مدل، یک ارائه‌دهنده مقصد انتخاب کنید.');
   if (!file && !text) return bad('فایل یا متن JSON را وارد کنید.');
