@@ -496,3 +496,22 @@
 .task-history-panel{margin:9px 0 0;border:1px solid #1d2737;border-radius:10px;background:#0c121d;overflow:hidden}.task-history-head{height:34px;padding:0 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #182232}.task-history-head>b{font-size:9px;letter-spacing:.08em;color:#78869c}.task-history-panel #taskHistoryBody{max-height:180px;overflow:auto}.task-history-panel #taskHistoryBody.hidden{display:none}.task-history-panel .task-history{margin:0;border:0;padding:0}.task-history-panel .task-history-item{padding:8px 10px}.task-history-panel .task-history-item:hover{background:#111927}
 .review-summary{display:flex;align-items:center;justify-content:space-between;padding:5px 7px;border-bottom:1px solid #192437;background:#080e16}.review-summary>span{font-size:6px;letter-spacing:.1em;color:#526178}.review-summary>div{display:flex;gap:4px}.review-pill{display:inline-flex;min-width:23px;height:16px;align-items:center;justify-content:center;border-radius:5px;font:700 7px ui-monospace,monospace;border:1px solid #243047;background:#0c1420}.review-pill.added{color:#62d8aa;border-color:#204b3b}.review-pill.modified{color:#e6c36d;border-color:#514321}.review-pill.deleted{color:#ef8998;border-color:#542b34}.change-item{grid-template-columns:18px minmax(0,1fr) auto auto!important}.change-item button{margin:0!important}
 \n.change-item.pending{background:#0a1119}.change-item.approved{background:#0b1814}.change-item.reverted{opacity:.72}.change-actions{display:flex;gap:2px;align-items:center}.review-approve{color:#68d8ad!important}.review-revert{color:#ef9ba6!important}.change-item code[title]{cursor:help}\n
+/* v1.14 project verification + scoped review */
+.project-check-strip{margin:10px 0 0;border:1px solid #1f2937;background:#0b1220;border-radius:12px;padding:9px 10px}
+.project-check-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.project-check-title b{font-size:10px;letter-spacing:.14em;color:#94a3b8}
+.project-check-title span{font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-checks{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.project-check-btn,.project-check-refresh{border:1px solid #263244;background:#111a2a;color:#cbd5e1;border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer;transition:.16s}
+.project-check-btn{display:inline-flex;align-items:center;gap:5px}
+.project-check-btn:hover,.project-check-refresh:hover{background:#172235;border-color:#3b4a60}
+.project-check-btn.safe span{color:#67e8f9}.project-check-btn.confirm span{color:#fbbf24}
+.project-check-empty{font-size:11px;color:#64748b;padding:4px 0}
+.project-check-refresh{margin-left:auto}
+.review-decision-count{display:inline-block;margin-inline-start:7px;color:#64748b;font-size:9px;white-space:nowrap}
+.project-check-result pre{margin:6px 0 0;max-height:150px;overflow:auto;background:#070b12;border:1px solid #182131;border-radius:7px;padding:7px;color:#a7b0bf;font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+@media (max-width:900px){
+  .project-check-title span{display:none}
+  .project-check-strip{margin-top:8px}
+  .project-check-btn{font-size:10px;padding:6px 7px}
+}
