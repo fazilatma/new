@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.5.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.5.3'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -83,8 +83,8 @@ function renderBenchmarkResults(d){
   if(body)body.innerHTML=
     '<div class="benchmark-modal-tools">'+
       '<input id="benchmarkFilter" placeholder="جستجوی مدل یا Provider…" oninput="filterBenchmarkTable(this.value)">'+
-      '<select id="benchmarkStatusFilter" onchange="filterBenchmarkTable(document.getElementById(\\'benchmarkFilter\\')?.value||\\'\\')"><option value="all">همه</option><option value="ok">موفق</option><option value="fail">خطادار</option></select>'+
-      '<select id="benchmarkSourceFilter" onchange="filterBenchmarkTable(document.getElementById(\\'benchmarkFilter\\')?.value||\\'\\')"><option value="all">همه منابع</option><option value="local">Local GGUF</option><option value="imported">Provider</option></select>'+
+      '<select id="benchmarkStatusFilter" onchange="filterBenchmarkTable()"><option value="all">همه</option><option value="ok">موفق</option><option value="fail">خطادار</option></select>'+
+      '<select id="benchmarkSourceFilter" onchange="filterBenchmarkTable()"><option value="all">همه منابع</option><option value="local">Local GGUF</option><option value="imported">Provider</option></select>'+
     '</div>'+\
     '<div class="benchmark-table-wrap"><table class="benchmark-table modal-table"><thead><tr><th>مدل</th><th>وضعیت</th><th>Startup</th><th>Latency</th><th>Prompt tok</th><th>Output tok</th><th>tok/s</th><th></th></tr></thead><tbody id="benchmarkTableBody">'+results.map((x,k)=>benchmarkRow(x,k).replace('<td>'+formatNum(x.completionTokens)+'</td>','<td>'+formatNum(x.promptTokens)+'</td><td>'+formatNum(x.completionTokens)+'</td>')).join('')+'</tbody></table></div>';
   openBenchmarkModal();
