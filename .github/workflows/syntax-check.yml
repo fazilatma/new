@@ -19,6 +19,8 @@ jobs:
       - name: Runtime smoke test
         run: |
           set -e
+          mkdir -p "$RUNNER_TEMP/arena-workspace" "$RUNNER_TEMP/arena-models"
+          printf "console.log('smoke');\\n" > "$RUNNER_TEMP/arena-workspace/smoke.js"
           PORT=3137 HOST=127.0.0.1 WORKSPACE_ROOT="$RUNNER_TEMP/arena-workspace" MODELS_ROOT="$RUNNER_TEMP/arena-models" node server/index.js >/tmp/arena-agent.log 2>&1 &
           PID=$!
           trap 'kill $PID 2>/dev/null || true' EXIT
