@@ -1,0 +1,19 @@
+{
+  "name": "Open WebUI Computer (Rootless AI Agent)",
+  "type": "other",
+  "repo_url": "https://github.com/open-webui/computer.git",
+  "branch": "main",
+  "subfolder": "",
+  "deploy_path": "",
+  "port": "8000",
+  "install_cmd": "if ! command -v python3 >/dev/null 2>&1; then echo 'ERROR: Python 3 is required.' >&2; exit 1; fi; python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' || { echo 'ERROR: Python 3.10 or newer is required.' >&2; exit 1; }; if ! python3 -m pip --version >/dev/null 2>&1; then python3 -m ensurepip --user || { echo 'ERROR: pip is unavailable and ensurepip is disabled by the host.' >&2; exit 1; }; fi; mkdir -p storage data; if [ ! -x storage/venv/bin/python ]; then python3 -m venv storage/venv 2>/dev/null || { python3 -m pip install --user --upgrade virtualenv && python3 -m virtualenv storage/venv; }; fi; storage/venv/bin/python -m pip install --upgrade pip wheel; storage/venv/bin/python -m pip install --upgrade cptr; echo 'Open WebUI Computer installed without sudo, apt, or Docker.'",
+  "build_cmd": "",
+  "start_cmd": "mkdir -p data; export CPTR_DATA_DIR=\"$PWD/data\"; exec storage/venv/bin/cptr run --host 0.0.0.0 --port \"${PORT:-8000}\" --headless",
+  "env": {
+    "PYTHONUNBUFFERED": "1",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1"
+  },
+  "auto_start": true,
+  "is_daemon": true,
+  "preserve_configs": true
+}

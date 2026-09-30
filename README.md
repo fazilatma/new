@@ -131,6 +131,30 @@ The `wcp` command is globally installed across Linux, Codespaces, and Termux:
 
 ---
 
+## 🐳 Rootless Docker Helper (No `sudo` / No `apt`)
+
+Restricted Linux hosts can run the prerequisite check and install Docker under the hosting account with the helper below. The host must already provide `newuidmap`, `newgidmap`, subordinate UID/GID ranges, unprivileged user namespaces, and container networking support.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-rootless-docker.sh | bash
+```
+
+Install Docker and then deploy Agent Zero on port `50080`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-rootless-docker.sh | bash -s -- --install-agent-zero
+```
+
+For a WebConsole session whose `HOME` is unset or invalid, provide the real account home explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-rootless-docker.sh | bash -s -- --home /home/USERNAME --install-agent-zero
+```
+
+The helper fails safely when the hosting provider has disabled a required kernel/account feature; a `curl` installer cannot bypass those restrictions.
+
+---
+
 ## 📄 License
 
 Open-source under the MIT License. Developed for automated web operations, cloud scraping, and edge computing.

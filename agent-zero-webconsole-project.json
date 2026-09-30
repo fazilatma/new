@@ -1,0 +1,19 @@
+{
+  "name": "Agent Zero",
+  "type": "other",
+  "repo_url": "https://github.com/agent0ai/agent-zero.git",
+  "branch": "main",
+  "subfolder": "",
+  "deploy_path": "",
+  "port": "",
+  "install_cmd": "if ! command -v docker >/dev/null 2>&1; then echo 'ERROR: Docker is not installed. Install Docker on the host, then run this deployment again.' >&2; exit 1; fi; if docker info >/dev/null 2>&1; then DKR='docker'; elif sudo -n docker info >/dev/null 2>&1; then DKR='sudo -n docker'; else echo 'ERROR: Docker daemon is unavailable, or the WebConsole account has no Docker permission/passwordless sudo.' >&2; exit 1; fi; $DKR pull agent0ai/agent-zero:latest; $DKR volume create a0_usr >/dev/null; $DKR rm -f agent-zero >/dev/null 2>&1 || true; $DKR create --name agent-zero --restart unless-stopped --add-host host.docker.internal:host-gateway --ulimit nofile=65535:65535 -p \"${AGENT_ZERO_PORT:-50080}:80\" -v a0_usr:/a0/usr agent0ai/agent-zero:latest >/dev/null; echo 'Agent Zero container was created successfully; WebConsole will start it automatically.'",
+  "build_cmd": "",
+  "start_cmd": "if docker info >/dev/null 2>&1; then DKR='docker'; elif sudo -n docker info >/dev/null 2>&1; then DKR='sudo -n docker'; else echo 'ERROR: Docker is unavailable.' >&2; exit 1; fi; cleanup(){ $DKR stop -t 2 agent-zero >/dev/null 2>&1 || true; }; trap cleanup EXIT TERM INT; $DKR start agent-zero >/dev/null; $DKR logs -f --tail 200 agent-zero & LOG_PID=$!; $DKR wait agent-zero >/dev/null & WAIT_PID=$!; wait \"$WAIT_PID\"; RC=$?; kill \"$LOG_PID\" >/dev/null 2>&1 || true; wait \"$LOG_PID\" 2>/dev/null || true; exit \"$RC\"",
+  "env": {
+    "AGENT_ZERO_PORT": "50080",
+    "PORT_NUMBER": "65534"
+  },
+  "auto_start": true,
+  "is_daemon": true,
+  "preserve_configs": true
+}
