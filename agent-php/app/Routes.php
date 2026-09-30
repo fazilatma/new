@@ -29,6 +29,7 @@ final class Routes
         self::providers($r);
         self::config($r);
         self::observability($r);
+        self::localAi($r);
         self::staticUi($r);
     }
 
@@ -1548,6 +1549,112 @@ final class Routes
     }
 
     /* ------------------------------------------------------------ */
+    /* Local AI (Ollama) — install, tune and register local models   */
+    /* ------------------------------------------------------------ */
+
+    private static function localAi(Router $r): void
+    {
+        $r->get('/api/localai/host', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::hostScan($req->bool('refresh', false));
+        });
+
+        $r->get('/api/localai/runtime', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::runtimeStatus();
+        });
+
+        $r->post('/api/localai/runtime/install', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            return LocalAI::installRuntime();
+        });
+
+        $r->post('/api/localai/runtime/start', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            $body = $req->json();
+            return LocalAI::startServer((array) ($body['env'] ?? []));
+        });
+
+        $r->post('/api/localai/runtime/stop', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            return LocalAI::stopServer();
+        });
+
+        $r->get('/api/localai/catalog', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::catalog($req->bool('refresh', false));
+        });
+
+        $r->post('/api/localai/search', static function (Request $req): array {
+            Auth::requireViewer($req);
+            $body = $req->json();
+            return LocalAI::search(
+                (string) ($body['query'] ?? ''),
+                (int) ($body['limit'] ?? 25),
+                (bool) ($body['remote'] ?? true)
+            );
+        });
+
+        $r->get('/api/localai/tags/{name*}', static function (Request $req): array {
+            Auth::requireViewer($req);
+            $name = (string) ($req->params['name'] ?? '');
+            return ['name' => $name, 'tags' => LocalAI::registryTags($name)];
+        });
+
+        $r->post('/api/localai/recommend', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::recommend($req->json());
+        });
+
+        $r->post('/api/localai/install', static function (Request $req): array {
+            $user = Auth::requireAdmin($req);
+            return LocalAI::enqueueInstall($req->json(), (string) ($user['id'] ?? 'user'));
+        });
+
+        $r->get('/api/localai/models', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::installed();
+        });
+
+        $r->delete('/api/localai/models/{name*}', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            return LocalAI::remove((string) ($req->params['name'] ?? ''));
+        });
+
+        $r->post('/api/localai/test', static function (Request $req): array {
+            Auth::requireDeveloper($req);
+            $body = $req->json();
+            return LocalAI::benchmark(
+                (string) ($body['model'] ?? ''),
+                (string) ($body['prompt'] ?? 'Say OK.'),
+                (int) ($body['numPredict'] ?? 48)
+            );
+        });
+
+        $r->post('/api/localai/register', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            $body = $req->json();
+            return LocalAI::registerProvider((string) ($body['model'] ?? ''), (array) ($body['meta'] ?? []));
+        });
+
+        $r->get('/api/localai/profiles', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::profiles();
+        });
+
+        $r->post('/api/localai/profiles', static function (Request $req): array {
+            Auth::requireDeveloper($req);
+            $body = $req->json();
+            return LocalAI::saveProfile((string) ($body['name'] ?? 'default'), (array) ($body['profile'] ?? []));
+        });
+
+        $r->delete('/api/localai/profiles/{name}', static function (Request $req): array {
+            Auth::requireDeveloper($req);
+            return LocalAI::deleteProfile((string) ($req->params['name'] ?? ''));
+        });
+    }
+
+    /* ------------------------------------------------------------ */
     /* Static UI                                                     */
     /* ------------------------------------------------------------ */
 
@@ -1566,6 +1673,18 @@ final class Routes
         foreach (['/', '/chat', '/ui'] as $p) {
             $r->get($p, static function (Request $req): void {
                 self::serveSpa();
+            });
+        }
+
+        // Local-AI wizard: a separate page so the 347 KB SPA stays untouched.
+        foreach (['/localai', '/local-ai'] as $p) {
+            $r->get($p, static function (Request $req): void {
+                $page = Bootstrap::$publicDir . '/localai.html';
+                if (!is_file($page)) {
+                    Response::json(['detail' => 'localai.html is missing'], 404);
+                    return;
+                }
+                Response::raw(Files::read($page), 'text/html; charset=utf-8');
             });
         }
 

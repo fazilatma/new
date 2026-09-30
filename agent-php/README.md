@@ -69,6 +69,7 @@ agent-php/
 │   ├── index.php          Front controller (CORS → boot → auth → router)
 │   ├── .htaccess          Apache rewrite + SSE/no-buffering rules
 │   ├── index.html         The SPA (unchanged, 347 KB)
+│   ├── localai.html       Local-AI wizard (hardware scan → pick → install)
 │   └── chat.html
 ├── app/
 │   ├── Bootstrap.php      Paths, autoloader, error handling, capability probe
@@ -97,6 +98,8 @@ agent-php/
 │   ├── AgentTools.php     The 11 tool definitions + dispatcher
 │   ├── Chat.php           LLM engine: SSE streaming, agent loop, self-healing
 │   ├── Jobs.php           Background job queue
+│   ├── LocalAI.php        Local model installer: host scan, sizing model,
+│   │                      recommendation engine, Ollama runtime, benchmark
 │   └── Observability.php  Logs, metrics, CSV export
 ├── bin/
 │   ├── worker.php         Job worker daemon (`--once`, `--job <id>`)
@@ -104,6 +107,7 @@ agent-php/
 ├── scripts/browser_agent.py   Playwright bridge (single-JSON stdout protocol)
 ├── migrations/0001_init.sql   Full schema
 ├── data/providers.json        Seed provider catalog (9 providers)
+├── data/model_catalog.json    Local-model catalog (23 models / 54 variants)
 └── storage/                   Workspaces, uploads, job artifacts, backups
 ```
 
@@ -186,6 +190,13 @@ php bin/console.php config:set OPENROUTER_API_KEY sk-...
 php bin/console.php provider:test openrouter
 php bin/console.php jobs:drain
 php bin/console.php routes
+
+# local AI
+php bin/console.php ai:host
+php bin/console.php ai:recommend '{"tasks":["code","agent"],"ramBudgetGb":8,"languages":["fa","en"]}'
+php bin/console.php ai:install qwen2.5-coder:7b
+php bin/console.php ai:models
+php bin/console.php ai:test qwen2.5-coder-7b-agent
 ```
 
 ## 7. Worker
@@ -202,7 +213,74 @@ is atomic, so the two never collide.
 
 ---
 
-## 8. Security notes
+## 8. Local AI — pick and install an offline model
+
+`app/LocalAI.php` + `public/localai.html` + the `ai:*` console commands turn the
+host into a self-contained inference box. Open **`/localai`** in the browser.
+
+**1 — Hardware scan.** `/api/localai/host` reads `/proc/meminfo` (honouring
+cgroup limits), `/proc/cpuinfo`, `nvidia-smi` / `rocm-smi` / Apple unified
+memory, and free disk on the model directory. It proposes a RAM budget that
+already reserves 15 % (1–4 GB) for the OS, PHP and the agent itself.
+
+**2 — Your intent.** Task (code / agent / chat / reasoning / summarise /
+translate / vision / embedding), RAM budget, VRAM, disk budget, context length,
+concurrent requests, minimum tokens/s, languages (Persian is scored
+separately), licence policy, and a speed ↔ quality priority.
+
+**3 — Sizing & ranking.** Every variant in `data/model_catalog.json`
+(23 models, 54 quantised variants) is scored:
+
+```
+weights = diskGb × 1.08                      dequantisation buffers
+active  = activeGb × 1.08                    MoE reads only its live experts
+kv      = kvGbPer1k × ctx/1024 × parallel     halved by OLLAMA_KV_CACHE_TYPE=q8_0
+ram     = weights + kv + 0.6 GB               0.6 GB = graph + server
+tok/s   ≈ bandwidth ÷ active × 0.72           local LLMs are memory-bandwidth bound
+```
+
+with `bandwidth` blended harmonically between GPU and CPU according to how much
+of the model actually fits in VRAM. The speed score is *satisficing*
+(`log`-shaped, saturating near 14 tok/s, halved below 1.5 tok/s) and quality is
+raised to the power 1.6, then every candidate is demoted by
+`0.6 + 0.4 × quality/bestFeasibleQuality` — so a 0.6 B toy never outranks a 8 B
+model that also fits the same budget just because it is faster. Anything that does not fit the RAM/disk
+budget, the context window, the tool-calling/vision requirement or the licence
+policy is moved to a `rejected` list **with the reason**, so the answer is never
+a silent empty result. Weights of the five score components (quality, speed,
+task match, language, budget fit) change with the chosen priority.
+
+**4 — Install.** `POST /api/localai/install` enqueues a background job
+(`payload.kind = "localai_install"`, executed by `bin/worker.php`) that:
+
+1. installs the Ollama runtime **without root** — the official static tarball is
+   unpacked into `storage/localai/` (`~/.nvm`-style private install);
+2. starts the server on `127.0.0.1:11434` with tuned env
+   (`OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_FLASH_ATTENTION=1`, parallelism,
+   context length, private `OLLAMA_MODELS` directory);
+3. pulls the model, streaming real NDJSON progress into the job's progress bar
+   and logs;
+4. derives a tuned copy (`<model>-agent`) with the requested `num_ctx`;
+5. benchmarks it and records the measured tokens/s;
+6. registers it in `ProviderStore` under the `ollama` provider so it shows up in
+   the normal chat model picker.
+
+**Endpoints:** `GET /api/localai/{host,runtime,catalog,models,profiles}`,
+`POST /api/localai/{recommend,install,search,test,register,profiles}`,
+`POST /api/localai/runtime/{install,start,stop}`,
+`DELETE /api/localai/models/{name}`, `GET /api/localai/tags/{name}`.
+
+Search covers both the curated catalog and live sources: `registry.ollama.ai`
+(real tag lists and exact manifest byte sizes) and the Hugging Face API filtered
+to GGUF repositories (installable as `hf.co/<repo>`).
+
+**Storage.** Models land in `storage/localai/models`, which the host console's
+deploy step never overwrites. Point `AGENT_LOCALAI_DIR` / `OLLAMA_MODELS` at a
+larger volume when the project partition is small.
+
+---
+
+## 9. Security notes
 
 * Sessions: `arena_session` cookie, 24 h sliding expiry, DB-backed; `Bearer`
   and `X-Auth-Token` headers work too.
@@ -222,7 +300,7 @@ is atomic, so the two never collide.
 
 ---
 
-## 9. Verification status
+## 10. Verification status
 
 This port was authored in an environment with **no PHP runtime available**, so
 it could not be executed here. What *was* verified mechanically:

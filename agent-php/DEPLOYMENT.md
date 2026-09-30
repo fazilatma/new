@@ -219,6 +219,31 @@ curl -s -b /tmp/c.txt $BASE/api/jobs/stats
 
 ---
 
+## 6b. Local AI runtime
+
+```bash
+php bin/console.php ai:host                 # RAM / CPU / GPU / disk / engine
+php bin/console.php ai:recommend '{"tasks":["code","agent"],"ramBudgetGb":8}'
+php bin/console.php ai:install qwen2.5-coder:7b
+curl -s localhost:8080/api/localai/models | jq .
+```
+
+The runtime installs **without root** into `storage/localai/` and listens on
+`127.0.0.1:11434`. Keep that port closed to the outside world — it has no auth
+of its own. The install job needs `tar`, outbound HTTPS to `ollama.com`, and
+free disk for the model. Under systemd add:
+
+```ini
+Environment=AGENT_LOCALAI_DIR=/var/lib/arena-agent/localai
+Environment=OLLAMA_MODELS=/var/lib/arena-agent/localai/models
+```
+
+and make sure the unit's `ReadWritePaths` covers that directory. For the web
+process, `php bin/console.php ai:serve` (or the wizard's ▶️ button) starts the
+engine detached with `setsid`, so it survives an FPM reload.
+
+---
+
 ## 7. Hardening
 
 * `chmod 600 .env data/master.key data/environment.json`

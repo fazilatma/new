@@ -59,6 +59,19 @@ switch ($cmd) {
         $out('Browser engine  : ' . Browser::engineName());
         $out('Git available   : ' . (Git::available() ? 'yes' : 'no'));
         $out('Database        : ' . Database::path());
+        $scan = LocalAI::hostScan(true);
+        $out('RAM             : ' . $scan['memory']['totalGb'] . ' GB total / '
+            . $scan['memory']['availableGb'] . ' GB available (budget suggestion: '
+            . $scan['suggestedRamBudgetGb'] . ' GB)');
+        $out('CPU             : ' . $scan['cpu']['cores'] . ' cores, ' . $scan['cpu']['arch']
+            . ($scan['cpu']['avx2'] ? ', avx2' : ''));
+        $out('GPU             : ' . ($scan['gpu']['present']
+            ? $scan['gpu']['name'] . ' (' . $scan['gpu']['vramGb'] . ' GB VRAM)'
+            : 'none detected'));
+        $out('Model disk      : ' . $scan['disk']['freeGb'] . ' GB free at ' . $scan['disk']['path']);
+        $out('Local AI engine : ' . ($scan['runtime']['installed']
+            ? 'ollama ' . ($scan['runtime']['version'] ?: '?') . ($scan['runtime']['running'] ? ' (running)' : ' (stopped)')
+            : 'not installed — run `php bin/console.php ai:install <model>`'));
         break;
 
     case 'migrate':
@@ -163,6 +176,89 @@ switch ($cmd) {
         $json(Observability::logs(null, null, (int) ($argv[2] ?? 50)));
         break;
 
+    /* -------------------------------------------------- local AI ---- */
+
+    case 'ai:host':
+        $json(LocalAI::hostScan(true));
+        break;
+
+    case 'ai:runtime':
+        $json(LocalAI::runtimeStatus());
+        break;
+
+    case 'ai:serve':
+        Database::init();
+        $json(LocalAI::startServer([], $out));
+        break;
+
+    case 'ai:stop':
+        Database::init();
+        $json(LocalAI::stopServer());
+        break;
+
+    case 'ai:recommend':
+        Database::init();
+        $profileArg = (string) ($argv[2] ?? '');
+        $profile = $profileArg !== '' ? (json_decode($profileArg, true) ?: []) : [];
+        if (!is_array($profile)) {
+            $out('Usage: php bin/console.php ai:recommend \'{"tasks":["code"],"ramBudgetGb":8,"languages":["fa","en"]}\'');
+            exit(1);
+        }
+        $rec = LocalAI::recommend($profile);
+        $out('Host: ' . $rec['host']['memory']['totalGb'] . ' GB RAM, '
+            . $rec['host']['cpu']['cores'] . ' cores, GPU: '
+            . ($rec['host']['gpu']['present'] ? $rec['host']['gpu']['name'] . ' (' . $rec['host']['gpu']['vramGb'] . ' GB)' : 'none'));
+        $out('Budget: ' . $rec['profile']['ramBudgetGb'] . ' GB RAM / ' . $rec['profile']['diskBudgetGb'] . ' GB disk');
+        $out('');
+        foreach ($rec['recommendations'] as $i => $m) {
+            $out(sprintf(
+                '%2d. %-34s %3d%%  ram %5.1fGB  disk %5.1fGB  ~%5.1f tok/s  %s',
+                $i + 1,
+                $m['ref'],
+                $m['scorePct'],
+                $m['estimate']['ramGb'],
+                $m['estimate']['diskGb'],
+                $m['estimate']['tokensPerSec'],
+                $m['license']
+            ));
+        }
+        break;
+
+    case 'ai:install':
+        Database::init();
+        $ref = (string) ($argv[2] ?? '');
+        if ($ref === '') {
+            $out('Usage: php bin/console.php ai:install <model:tag> [profileJson]');
+            exit(1);
+        }
+        $prof = isset($argv[3]) ? (json_decode((string) $argv[3], true) ?: []) : [];
+        $res = LocalAI::enqueueInstall(['ref' => $ref, 'profile' => $prof, 'force' => true]);
+        $jobId = (string) ($res['job']['id'] ?? '');
+        $out('Queued install job ' . $jobId . ' for ' . $ref);
+        foreach ($res['plan'] as $stepPlan) {
+            $out('  • ' . $stepPlan['title'] . ' — ' . $stepPlan['detail']);
+        }
+        $out('Running it inline (Ctrl-C is safe, the job is resumable):');
+        Jobs::execute($jobId);
+        $done = Jobs::details($jobId) ?? [];
+        $out('Status: ' . (string) ($done['status'] ?? '?') . ' — ' . (string) ($done['summary'] ?? $done['error'] ?? ''));
+        break;
+
+    case 'ai:models':
+        Database::init();
+        $json(LocalAI::installed());
+        break;
+
+    case 'ai:rm':
+        Database::init();
+        $json(LocalAI::remove((string) ($argv[2] ?? '')));
+        break;
+
+    case 'ai:test':
+        Database::init();
+        $json(LocalAI::benchmark((string) ($argv[2] ?? ''), (string) ($argv[3] ?? 'Say OK.')));
+        break;
+
     case 'routes':
         $router = new Router();
         Routes::register($router);
@@ -191,6 +287,16 @@ Arena Coding Agent — PHP edition console
   jobs:list [limit]             List jobs
   logs [limit]                  Show application logs
   routes                        Dump the route table
+
+ Local AI (Ollama runtime, no root required)
+  ai:host                       Scan RAM / CPU / GPU / disk / runtime
+  ai:runtime                    Local engine status
+  ai:serve | ai:stop            Start / stop the local model server
+  ai:recommend '<profileJson>'  Rank models for a RAM budget + task
+  ai:install <model:tag> [prof] Install, tune, benchmark and register a model
+  ai:models                     List installed local models
+  ai:rm <model>                 Delete a local model
+  ai:test <model> [prompt]      Benchmark a local model
 
 TXT);
         break;
