@@ -111,10 +111,19 @@
 </section>
 
 <aside class="right-panel">
-  <div class="panel-head"><div><strong>ACTIVITY</strong><small>Agent / Terminal</small></div><button class="ghost" onclick="clearActivity()">پاک کردن</button></div>
-  <div id="activity" class="activity"><div class="activity-empty"><span>◌</span><p>هنوز فعالیتی ثبت نشده</p><small>اجرای Agent و Terminal اینجا نمایش داده می‌شود.</small></div></div>
+  <div class="panel-head"><div><strong>ACTIVITY</strong><small>Agent / Terminal / Tests</small></div><div class="panel-head-actions"><button class="ghost" onclick="refreshGitState()">↻</button><button class="ghost" onclick="clearActivity()">پاک کردن</button></div></div>
+  <div class="task-telemetry" id="taskTelemetry">
+    <div><span>STATE</span><b id="telemetryState">READY</b></div>
+    <div><span>ITERATION</span><b id="telemetryIteration">—</b></div>
+    <div><span>CHANGES</span><b id="telemetryChanges">0</b></div>
+    <div><span>ELAPSED</span><b id="telemetryElapsed">00:00</b></div>
+  </div>
+  <div class="activity-tabs"><button class="active" onclick="showActivityTab('activity',this)">Activity</button><button onclick="showActivityTab('changes',this)">Changes</button><button onclick="showActivityTab('checks',this)">Checks</button></div>
+  <div id="activity" class="activity activity-view"><div class="activity-empty"><span>◌</span><p>هنوز فعالیتی ثبت نشده</p><small>اجرای Agent و Terminal اینجا نمایش داده می‌شود.</small></div></div>
+  <div id="changesView" class="activity activity-view hidden"><div class="activity-empty"><span>⌁</span><p>تغییری ثبت نشده</p><small>پس از اجرای Agent، فایل‌های تغییرکرده اینجا نمایش داده می‌شوند.</small></div></div>
+  <div id="checksView" class="activity activity-view hidden"><div class="activity-empty"><span>✓</span><p>هنوز تستی اجرا نشده</p><small>نتایج verification و terminal checks اینجا نمایش داده می‌شوند.</small></div></div>
   <div class="terminal-panel">
-    <div class="terminal-head"><span>⌘ TERMINAL</span><span id="terminalState">READY</span></div>
+    <div class="terminal-head"><span>⌘ TERMINAL</span><div><button class="terminal-mini" onclick="clearTerminal()">Clear</button><span id="terminalState">READY</span></div></div>
     <div class="terminal-input"><input id="command" value="pwd && ls -la"><button onclick="runCommand()">اجرا</button></div>
     <pre id="termout">ترمینال آماده است…</pre>
   </div>
