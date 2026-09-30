@@ -123,6 +123,7 @@
   <div id="changesView" class="activity activity-view hidden"><div class="activity-empty"><span>⌁</span><p>تغییری ثبت نشده</p><small>پس از اجرای Agent، فایل‌های تغییرکرده اینجا نمایش داده می‌شوند.</small></div></div>
   <div id="checksView" class="activity activity-view hidden"><div class="activity-empty"><span>✓</span><p>هنوز تستی اجرا نشده</p><small>نتایج verification و terminal checks اینجا نمایش داده می‌شوند.</small></div></div>
   <div class="checkpoint-bar"><div><span class="checkpoint-dot"></span><div><b id="checkpointState">No checkpoint</b><small id="checkpointMeta">A checkpoint is created automatically before an Agent run.</small></div></div><div><button class="terminal-mini" onclick="createManualCheckpoint()">Checkpoint</button><button class="terminal-mini danger" onclick="revertToCheckpoint()">Revert</button></div></div>
+  <div id="taskHistoryView" class="task-history-panel"><div class="task-history-head"><b>RECENT RUNS</b><button class="terminal-mini" onclick="toggleTaskHistory()">History</button></div><div id="taskHistoryBody" class="hidden"></div></div>
   <div class="terminal-panel">
     <div class="terminal-head"><span>⌘ TERMINAL</span><div><button class="terminal-mini" onclick="clearTerminal()">Clear</button><span id="terminalState">READY</span></div></div>
     <div class="terminal-input"><input id="command" value="pwd && ls -la"><button onclick="runCommand()">اجرا</button></div>
