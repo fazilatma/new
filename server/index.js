@@ -25,7 +25,53 @@ async function runCommand(command,timeout=120000,signal){
     c.on('close',finish);
   });
 }
-async function verifyWorkspace(){const results=[];let entries=[];try{entries=await fs.readdir(root,{withFileTypes:true})}catch{};const files=entries.filter(e=>e.isFile()).map(e=>e.name);for(const f of files){if(f.endsWith('.js'))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});if(f.endsWith('.py'))results.push({file:f,...await runCommand('python3 -m py_compile '+JSON.stringify(f),30000)});if(f.endsWith('.php'))results.push({file:f,...await runCommand('php -l '+JSON.stringify(f),30000)})}try{const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));if(pkg.scripts?.test)results.push({file:'package.json',...await runCommand('npm test -- --runInBand',120000)})}catch{}return results}
+async function collectSourceFiles(maxFiles=240){
+  const out=[];const ignored=new Set(['.git','node_modules','.cache','dist','build','.wconsole_data','.arena']);
+  async function walk(dir,rel=''){
+    if(out.length>=maxFiles)return;
+    let entries=[];try{entries=await fs.readdir(dir,{withFileTypes:true})}catch{return}
+    for(const entry of entries){
+      if(out.length>=maxFiles)break;
+      if(ignored.has(entry.name))continue;
+      const abs=path.join(dir,entry.name),name=rel?path.join(rel,entry.name):entry.name;
+      if(entry.isDirectory()){await walk(abs,name);continue}
+      if(/\.(js|mjs|cjs|py|php)$/i.test(entry.name))out.push(name);
+    }
+  }
+  await walk(root);return out;
+}
+async function discoverProjectCommands(){
+  const commands=[];
+  let pkgData=null;
+  try{pkgData=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'))}catch{}
+  const sourceFiles=await collectSourceFiles(240);
+  const hasJs=sourceFiles.some(x=>/\.(js|mjs|cjs)$/i.test(x));
+  const hasPy=sourceFiles.some(x=>/\.py$/i.test(x));
+  const hasPhp=sourceFiles.some(x=>/\.php$/i.test(x));
+  if(hasJs)commands.push({id:'node-check',label:'JS syntax',group:'Verify',risk:'safe'});
+  if(hasPy)commands.push({id:'python-compile',label:'Python syntax',group:'Verify',risk:'safe'});
+  if(hasPhp)commands.push({id:'php-lint',label:'PHP syntax',group:'Verify',risk:'safe'});
+  if(pkgData?.scripts&&typeof pkgData.scripts==='object'){
+    for(const [name,script] of Object.entries(pkgData.scripts)){
+      if(typeof script!=='string'||/^pre|^post/.test(name))continue;
+      const lower=name.toLowerCase();
+      const safe=/^(test|check|lint|typecheck|types|verify|format|format:check|compile|build)(:|$)/.test(lower);
+      commands.push({id:'npm-script',name,script:String(script).slice(0,240),label:'npm · '+name,group:safe?'Project checks':'Project scripts',risk:safe?'safe':'confirm'});
+    }
+  }
+  return {commands,sourceFiles:sourceFiles.length,limits:{maxFiles:240}};
+}
+async function verifyWorkspace(){
+  const results=[];const files=await collectSourceFiles(160);
+  for(const f of files){
+    if(/\.(js|mjs|cjs)$/i.test(f))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});
+    else if(/\.py$/i.test(f))results.push({file:f,...await runCommand('python3 -m py_compile '+JSON.stringify(f),30000)});
+    else if(/\.php$/i.test(f))results.push({file:f,...await runCommand('php -l '+JSON.stringify(f),30000)});
+    if(results.length>=160)break;
+  }
+  try{const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));if(pkg.scripts?.test)results.push({file:'package.json · npm test',...await runCommand('npm test',120000)})}catch{}
+  return results
+}
 const agentRunControllers=new Map();
 
 async function snapshotWorkspace(){
@@ -74,7 +120,7 @@ const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat
 const clamp=(n,min,max,fallback)=>{const x=Number(n);return Number.isFinite(x)?Math.min(max,Math.max(min,x)):fallback};
 const safeTimeout=v=>clamp(v,1000,300000,120000);
 const validLocalPort=v=>{const p=clamp(v,1024,65535,8080);return Math.floor(p)};
-const APP_VERSION='1.13.0';
+const APP_VERSION='1.14.0';
 const CHECKPOINT_DIR=path.join(root,'.arena','checkpoints');
 const CHECKPOINT_MAX_FILES=200;
 const CHECKPOINT_MAX_BYTES=20*1024*1024;
@@ -124,6 +170,44 @@ app.post('/api/workspace/revert-file',async(q,r)=>{
     await fs.rm(p,{recursive:true,force:true});
     return send(r,{ok:true,path:name,action:'removed'})
   }catch(e){return r.status(500).json({error:e.message||'File revert failed'})}
+});
+app.get('/api/project/commands',async(_,r)=>{
+  try{send(r,{ok:true,...await discoverProjectCommands()})}
+  catch(e){r.status(500).json({error:e.message||'Command discovery failed'})}
+});
+app.post('/api/project/check',async(q,r)=>{
+  const kind=String(q.body?.kind||'').trim();
+  const name=String(q.body?.name||'').trim();
+  const timeout=safeTimeout(q.body?.timeout);
+  const started=Date.now();
+  try{
+    let command='';
+    if(kind==='node-check'||kind==='python-compile'||kind==='php-lint'){
+      const files=await collectSourceFiles(160);
+      const selected=kind==='node-check'?files.filter(x=>/\.(js|mjs|cjs)$/i.test(x)):kind==='python-compile'?files.filter(x=>/\.py$/i.test(x)):files.filter(x=>/\.php$/i.test(x));
+      if(!selected.length)return send(r,{ok:true,kind,name:'',code:0,stdout:'No matching source files were found.',stderr:'',durationMs:0,files:0});
+      const results=[];
+      for(const file of selected.slice(0,160)){
+        const check=kind==='node-check'?'node --check '+JSON.stringify(file):kind==='python-compile'?'python3 -m py_compile '+JSON.stringify(file):'php -l '+JSON.stringify(file);
+        const result=await runCommand(check,Math.min(timeout,30000));
+        results.push({file,code:result.code,stdout:result.stdout,stderr:result.stderr});
+        if(result.code!==0)break;
+      }
+      const failed=results.find(x=>x.code!==0);
+      return send(r,{ok:!failed,kind,name:kind==='node-check'?'JS syntax':kind==='python-compile'?'Python syntax':'PHP syntax',code:failed?.code||0,stdout:results.map(x=>x.file+': '+(x.stdout||'OK')).join('\\n'),stderr:failed?.stderr||'',durationMs:Date.now()-started,files:results.length});
+    }
+    if(kind==='npm-script'){
+      if(!name||!/^[a-z0-9][a-z0-9:@._+/-]{0,120}$/i.test(name))return r.status(400).json({error:'Invalid npm script name'});
+      const discovered=await discoverProjectCommands();
+      const item=discovered.commands.find(x=>x.id==='npm-script'&&x.name===name);
+      if(!item)return r.status(404).json({error:'Project script not found'});
+      command='npm run '+JSON.stringify(name);
+    }else if(kind==='npm-test'){
+      command='npm test';
+    }else return r.status(400).json({error:'Unsupported project check'});
+    const result=await runCommand(command,timeout);
+    return send(r,{ok:result.code===0,kind,name:name||kind,command,code:result.code,stdout:result.stdout,stderr:result.stderr,durationMs:Date.now()-started});
+  }catch(e){return r.status(500).json({error:e.message||'Project check failed'})}
 });
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
 app.get('/api/files',async(q,r)=>{const d=safePath(root,String(q.query.path||''));const e=await fs.readdir(d,{withFileTypes:true});send(r,e.map(x=>({name:x.name,type:x.isDirectory()?'dir':'file'})).sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name)))});
