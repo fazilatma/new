@@ -1,4 +1,4 @@
 import path from 'node:path';
 export function safePath(root,rel){const r=path.resolve(root,rel||'.');if(r!==root&&!r.startsWith(root+path.sep))throw Error('Path outside workspace');return r}
 export function isDangerousCommand(c){const x=c.toLowerCase();return [/\\brm\\s+-rf\\s+\\//,/\\bmkfs\\b/,/\\bdd\\s+if=.*\\bof=\\/dev\\b/,/\\bshutdown\\b/,/\\breboot\\b/,/\\bcurl\\b[^\\n|;&]*\\|\\s*(sh|bash)/,/\\bwget\\b[^\\n|;&]*\\|\\s*(sh|bash)/].some(r=>r.test(x))}
-export function securityMiddleware(req,res,next){const t=process.env.AGENT_TOKEN;if(!t||req.path==='/api/health'||req.path==='/')return next();if((req.get('x-agent-token')||req.query.token)!==t)return res.status(401).json({error:'Unauthorized'});next()}
+export function securityMiddleware(req,res,next){const t=process.env.AGENT_TOKEN;if(!t||!req.path.startsWith('/api/')||req.path==='/api/health'return next();if((req.get('x-agent-token')||req.query.token)!==t)return res.status(401).json({error:'Unauthorized'});next()}
