@@ -16,10 +16,19 @@ export function isDangerousCommand(command) {
     /\bmkfs\b/,
     /\bdd\s+if=.*\bof=\/dev\b/,
     /\bshutdown\b/,
+    /\bpoweroff\b/,
+    /\bhalt\b/,
+    /\bkill\s+-9\b/,
+    /\b(chown|chmod)\s+-R\b/,
+    /\buseradd\b|\buserdel\b/,
+    /\bmount\b|\bumount\b/,
+    /\biptables\b|\bnft\b/,
+    /\bpkill\b|\bkillall\b/,
     /\breboot\b/,
     /\bcurl\b[^\n|;&]*\|\s*(sh|bash)/,
     /\bwget\b[^\n|;&]*\|\s*(sh|bash)/
   ];
+  if (/\b(rm|mv|cp)\b[^\n]*\s+\/etc\b|\b(rm|mv|cp)\b[^\n]*\s+\/home\b/.test(x)) return true;
   return patterns.some((pattern) => pattern.test(x));
 }
 
