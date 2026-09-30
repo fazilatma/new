@@ -161,6 +161,40 @@ switch ($cmd) {
         $json(Models::testProviderModel($store, $provider, $model));
         break;
 
+    case 'provider:import':
+        Database::init();
+        $path = (string) ($argv[2] ?? '');
+        if ($path === '' || !is_file($path)) {
+            $out('Usage: php bin/console.php provider:import <providers.json> [--replace]');
+            exit(1);
+        }
+        $replace = in_array('--replace', array_slice($argv, 3), true);
+        $store = ProviderStore::load();
+        $report = $store->importJson((string) file_get_contents($path), $replace);
+        $out(sprintf(
+            'Imported %d provider(s), %d model(s) — created: %s | updated: %s',
+            $report['providers'],
+            $report['models'],
+            implode(', ', $report['created']) ?: '-',
+            implode(', ', $report['updated']) ?: '-'
+        ));
+        foreach ($report['skipped'] as $skip) {
+            $out('  skipped ' . $skip['key'] . ': ' . $skip['reason']);
+        }
+        break;
+
+    case 'provider:export':
+        Database::init();
+        $dest = (string) ($argv[2] ?? '');
+        $body = ProviderStore::load()->exportJson();
+        if ($dest === '') {
+            $out($body);
+        } else {
+            file_put_contents($dest, $body);
+            $out('Wrote ' . $dest . ' (' . strlen($body) . ' bytes)');
+        }
+        break;
+
     case 'jobs:drain':
         Database::init();
         $json(Jobs::drain());
@@ -283,6 +317,9 @@ Arena Coding Agent — PHP edition console
   config:set KEY VALUE          Write configuration to .env
   provider:list                 List providers (keys masked)
   provider:test <providerId>    Health-test the first model of a provider
+  provider:import <file> [--replace]
+                                Import a providers catalog of any shape (no upload size limit)
+  provider:export [file]        Export the catalog (API keys stripped)
   jobs:drain                    Run one queue drain tick
   jobs:list [limit]             List jobs
   logs [limit]                  Show application logs

@@ -161,6 +161,41 @@ provider by priority. Rate-limit errors switch models immediately; network
 errors retry with exponential backoff capped by `MAX_RETRY_SLEEP_SEC`. A circuit
 breaker trips after 5 failures in 60 s.
 
+#### Importing a catalog
+
+`POST /api/providers/import-text` (paste) and `POST /api/providers/import`
+(file upload) both accept **any** of these layouts — the payload is sniffed,
+not validated against one fixed schema:
+
+```jsonc
+{"openrouter": {...}, "ollama": {...}}   // object keyed by provider id
+[{"id": "openrouter", ...}, ...]         // list of providers
+{"providers": <either of the above>}     // wrapped (also data/result/config/catalog/items)
+{"id": "openrouter", "models": [...]}    // one single provider
+{"version": 3, "exportedAt": "...", "providers": {...}}   // export envelope
+```
+
+* Unknown per-model keys (`tested`, `available`, `rateLimited`, `testDetails`,
+  `nonChat`, …) are **kept** in `model.extra` instead of being dropped, so a
+  catalog exported from another tool round-trips intact.
+* `nonChat: true` disables the model so it never reaches the chat picker.
+* A missing `protocol` is inferred from the id/vendor/url (`ollama` → `ollama`,
+  `…/anthropic/…` → `anthropic`, `generativelanguage` → `gemini`, …).
+* Missing `id` is derived from `slug`, then the object key, then `name`.
+* Merge mode (default) merges **models by id** and never overwrites a stored
+  API key with an empty one; tick *replace* to swap the whole catalog.
+* The response reports `{providers, models, created[], updated[], skipped[]}`.
+
+Large catalogs (thousands of models with test metadata) can exceed
+`post_max_size`; the API then answers `413` with the exact limits. Import it
+server-side instead:
+
+```bash
+php bin/console.php provider:import providers.json            # merge
+php bin/console.php provider:import providers.json --replace  # swap
+php bin/console.php provider:export backup.json               # keys stripped
+```
+
 ---
 
 ## 5. Configuration
@@ -188,6 +223,8 @@ php bin/console.php user:add bob s3cret Developer
 php bin/console.php user:passwd admin newpass
 php bin/console.php config:set OPENROUTER_API_KEY sk-...
 php bin/console.php provider:test openrouter
+php bin/console.php provider:import providers.json [--replace]
+php bin/console.php provider:export backup.json
 php bin/console.php jobs:drain
 php bin/console.php routes
 

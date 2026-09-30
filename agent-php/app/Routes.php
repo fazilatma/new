@@ -1351,20 +1351,47 @@ final class Routes
         $r->post('/api/providers/import-text', static function (Request $req): array {
             Auth::requireAdmin($req);
             $p = $req->json();
+            $payload = $p['json'] ?? $p['text'] ?? $p['data'] ?? $p['providers'] ?? '';
+            // Some clients POST the already-parsed object instead of a string.
+            $text = is_array($payload) ? (string) json_encode($payload) : (string) $payload;
+            if ($text === '') {
+                // Either nothing was pasted, or PHP discarded an oversized body
+                // (post_max_size) and handed us an empty $_POST/php://input.
+                $declared = (int) $req->header('content-length', '0');
+                if ($declared > 0 && $req->body() === '') {
+                    throw new HttpError(413, sprintf(
+                        'The request body (%s) was dropped by PHP before the app saw it. Raise post_max_size '
+                        . '(currently %s) and upload_max_filesize (currently %s), or import the file from the '
+                        . 'CLI: php bin/console.php provider:import providers.json',
+                        Files::humanSize($declared),
+                        ini_get('post_max_size') ?: '?',
+                        ini_get('upload_max_filesize') ?: '?'
+                    ));
+                }
+            }
             $store = ProviderStore::load();
-            $store->importJson((string) ($p['json'] ?? ''), (bool) ($p['replace'] ?? false));
-            return ['ok' => true, 'count' => count($store->data)];
+            $report = $store->importJson($text, (bool) ($p['replace'] ?? false));
+            return ['ok' => true, 'count' => count($store->data)] + $report;
         });
 
         $r->post('/api/providers/import', static function (Request $req): array {
             Auth::requireAdmin($req);
             $file = $_FILES['file'] ?? null;
             if (!is_array($file) || !isset($file['tmp_name']) || !is_uploaded_file((string) $file['tmp_name'])) {
+                $code = is_array($file) ? (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) : UPLOAD_ERR_NO_FILE;
+                if (in_array($code, [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+                    throw new HttpError(413, 'The uploaded file is larger than upload_max_filesize ('
+                        . (ini_get('upload_max_filesize') ?: '?') . '). Raise it, or run '
+                        . '"php bin/console.php provider:import <file>" on the server.');
+                }
                 throw new HttpError(400, 'A providers.json upload is required');
             }
             $store = ProviderStore::load();
-            $store->importJson((string) file_get_contents((string) $file['tmp_name']), self::q($req, 'replace') === 'true');
-            return ['ok' => true, 'count' => count($store->data)];
+            $report = $store->importJson(
+                (string) file_get_contents((string) $file['tmp_name']),
+                self::q($req, 'replace') === 'true'
+            );
+            return ['ok' => true, 'count' => count($store->data)] + $report;
         });
 
         $r->post('/api/providers/test-all', static function (Request $req): array {

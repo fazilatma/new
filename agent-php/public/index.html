@@ -4190,9 +4190,17 @@ async function handleImportProvidersSubmit(e) {
   if (!rawJson) return alert('Please upload a JSON file or paste JSON configuration text.');
   const replace = $('#importReplaceCheck').checked;
 
+  // Client-side parse first, so a truncated paste is reported as such instead
+  // of being blamed on the server.
   try {
     JSON.parse(rawJson);
-    await api('/api/providers/import-text', {
+  } catch (err) {
+    return alert('The pasted text is not valid JSON: ' + err.message +
+      '\n\nA truncated copy/paste is the usual cause — use "Choose file" instead.');
+  }
+
+  try {
+    const res = await api('/api/providers/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ json: rawJson, replace })
@@ -4200,9 +4208,13 @@ async function handleImportProvidersSubmit(e) {
     closeModal('importProvidersModal');
     await loadProvidersList();
     renderChatProviders();
-    alert('Providers imported successfully!');
+    const parts = [`Imported ${res?.providers ?? 0} provider(s) and ${res?.models ?? 0} model(s).`];
+    if (res?.created?.length) parts.push('Added: ' + res.created.join(', '));
+    if (res?.updated?.length) parts.push('Updated: ' + res.updated.join(', '));
+    if (res?.skipped?.length) parts.push('Skipped: ' + res.skipped.map(s => `${s.key} (${s.reason})`).join('; '));
+    alert(parts.join('\n'));
   } catch (err) {
-    alert('Invalid JSON format: ' + err.message);
+    alert('Import failed: ' + (err?.message || err));
   }
 }
 

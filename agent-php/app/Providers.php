@@ -131,46 +131,105 @@ final class ProviderStore
 
     // -------------------------------------------------------- normalising
 
+    /** Keys the agent understands on a model record; everything else is kept in `extra`. */
+    private const MODEL_KEYS = [
+        'id', 'name', 'toolCalling', 'vision', 'free', 'maxInputTokens', 'maxOutputTokens',
+        'enabled', 'inputCostPer1M', 'outputCostPer1M', 'extra',
+    ];
+
     public static function normalizeModel(array|string $raw): array
     {
         if (is_string($raw)) {
             $raw = ['id' => $raw];
         }
+
+        // Foreign catalogs carry per-model bookkeeping (tested / available /
+        // testDetails / nonChat / rateLimited / …). Dropping it would silently
+        // destroy the user's data on the first save, so it is parked in
+        // `extra` and re-exported verbatim.
+        $extra = (array) ($raw['extra'] ?? []);
+        foreach ($raw as $k => $v) {
+            if (!in_array((string) $k, self::MODEL_KEYS, true)) {
+                $extra[(string) $k] = $v;
+            }
+        }
+
+        $id = (string) ($raw['id'] ?? $raw['model'] ?? $raw['slug'] ?? '');
+        $enabled = !array_key_exists('enabled', $raw) || (bool) $raw['enabled'];
+        // A model the source catalog marked as "not a chat model" must not end
+        // up in the chat picker.
+        if (!empty($raw['nonChat'])) {
+            $enabled = false;
+        }
+
         return [
-            'id' => (string) ($raw['id'] ?? ''),
-            'name' => (string) ($raw['name'] ?? $raw['id'] ?? ''),
-            'toolCalling' => (bool) ($raw['toolCalling'] ?? false),
+            'id' => $id,
+            'name' => (string) ($raw['name'] ?? $id),
+            'toolCalling' => (bool) ($raw['toolCalling'] ?? $raw['tools'] ?? false),
             'vision' => (bool) ($raw['vision'] ?? false),
             'free' => (bool) ($raw['free'] ?? false),
-            'maxInputTokens' => (int) ($raw['maxInputTokens'] ?? 128000),
+            'maxInputTokens' => (int) ($raw['maxInputTokens'] ?? $raw['contextLength'] ?? 128000),
             'maxOutputTokens' => (int) ($raw['maxOutputTokens'] ?? 8192),
-            'enabled' => !array_key_exists('enabled', $raw) || (bool) $raw['enabled'],
+            'enabled' => $enabled,
             'inputCostPer1M' => (float) ($raw['inputCostPer1M'] ?? 0),
             'outputCostPer1M' => (float) ($raw['outputCostPer1M'] ?? 0),
-            'extra' => (array) ($raw['extra'] ?? []),
+            'extra' => $extra,
         ];
+    }
+
+    /** Best-effort protocol sniffing for catalogs that omit the field. */
+    private static function guessProtocol(string $id, string $vendor, string $url): string
+    {
+        $hay = strtolower($id . ' ' . $vendor . ' ' . $url);
+        foreach ([
+            'ollama' => 'ollama',
+            'anthropic' => 'anthropic',
+            'claude' => 'anthropic',
+            'generativelanguage' => 'gemini',
+            'gemini' => 'gemini',
+            'mistral' => 'mistral',
+            'azure' => 'azure',
+            'cloudflare' => 'cloudflare',
+            'workers-ai' => 'cloudflare',
+        ] as $needle => $protocol) {
+            if (str_contains($hay, $needle)) {
+                return $protocol;
+            }
+        }
+        return 'openai-compatible';
     }
 
     public static function normalizeProvider(array $raw, string $fallbackId = ''): array
     {
-        $id = (string) ($raw['id'] ?? $fallbackId);
+        $id = trim((string) ($raw['id'] ?? $raw['slug'] ?? $fallbackId));
         if ($id === '') {
-            throw new \InvalidArgumentException('Provider is missing an "id"');
+            $id = trim((string) ($raw['name'] ?? ''));
+        }
+        $id = strtolower((string) preg_replace('/[^A-Za-z0-9._-]+/', '-', $id));
+        $id = trim($id, '-');
+        if ($id === '') {
+            throw new \InvalidArgumentException('Provider is missing an "id" (and no usable name to derive one from)');
         }
         $models = [];
         foreach ((array) ($raw['models'] ?? []) as $m) {
-            if (is_array($m) || is_string($m)) {
-                $models[] = self::normalizeModel($m);
+            if (!is_array($m) && !is_string($m)) {
+                continue;
+            }
+            $model = self::normalizeModel($m);
+            if ($model['id'] !== '') {
+                $models[] = $model;
             }
         }
+        $vendor = (string) ($raw['vendor'] ?? 'custom');
+        $url = (string) ($raw['url'] ?? $raw['baseUrl'] ?? $raw['base_url'] ?? $raw['endpoint'] ?? '');
         return [
             'id' => $id,
             'name' => (string) ($raw['name'] ?? $id),
-            'vendor' => (string) ($raw['vendor'] ?? 'custom'),
-            'url' => (string) ($raw['url'] ?? ''),
-            'protocol' => (string) ($raw['protocol'] ?? 'openai-compatible'),
+            'vendor' => $vendor,
+            'url' => $url,
+            'protocol' => (string) ($raw['protocol'] ?? self::guessProtocol($id, $vendor, $url)),
             'enabled' => (bool) ($raw['enabled'] ?? false),
-            'apiKey' => (string) ($raw['apiKey'] ?? ''),
+            'apiKey' => (string) ($raw['apiKey'] ?? $raw['api_key'] ?? ''),
             'apiKeys' => array_values(array_map('strval', (array) ($raw['apiKeys'] ?? []))),
             'apiKeyEnv' => (string) ($raw['apiKeyEnv'] ?? ''),
             'proxyUrl' => (string) ($raw['proxyUrl'] ?? ''),
@@ -436,29 +495,235 @@ final class ProviderStore
         return (string) json_encode($dump, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
-    public function importJson(string $text, bool $replace = false): void
+    /**
+     * Tolerant provider import.
+     *
+     * Real-world exports come in half a dozen shapes, so instead of demanding
+     * one canonical layout we sniff the payload and accept all of these:
+     *
+     *   {"openrouter": {...}, "ollama": {...}}      object keyed by provider id
+     *   [{"id": "openrouter", ...}, ...]            list of providers
+     *   {"providers": <either of the above>}        wrapped (also data/result/config)
+     *   {"id": "openrouter", "models": [...]}       one single provider
+     *   {"version": 3, "providers": {...}}          export envelope with metadata
+     *
+     * Unknown per-model keys (`tested`, `available`, `testDetails`, `nonChat`,
+     * …) are not thrown away: they are folded into `model.extra` so a catalog
+     * exported from another tool survives the round trip untouched.
+     *
+     * @return array{providers:int,models:int,created:string[],updated:string[],skipped:array<int,array{key:string,reason:string}>}
+     */
+    public function importJson(string $text, bool $replace = false): array
     {
-        $incoming = json_decode($text, true);
-        if (!is_array($incoming)) {
-            throw new HttpError(400, 'Import JSON must be an array of providers or an object mapping.');
+        $raw = self::decodeImport($text);
+        $entries = self::collectProviderEntries($raw);
+
+        if (!$entries) {
+            throw new HttpError(400, self::importHint($raw));
         }
+
         $parsed = [];
-        if (array_is_list($incoming)) {
-            foreach ($incoming as $item) {
-                if (is_array($item)) {
-                    $p = self::normalizeProvider($item);
-                    $parsed[$p['id']] = $p;
-                }
+        $skipped = [];
+        $created = [];
+        $updated = [];
+        $modelCount = 0;
+
+        foreach ($entries as [$key, $value]) {
+            try {
+                $p = self::normalizeProvider($value, $key);
+            } catch (\Throwable $e) {
+                $skipped[] = ['key' => $key, 'reason' => $e->getMessage()];
+                continue;
             }
-        } else {
-            foreach ($incoming as $k => $v) {
-                if (is_array($v)) {
-                    $p = self::normalizeProvider($v, (string) $k);
-                    $parsed[$p['id']] = $p;
-                }
+            $existing = $replace ? null : ($this->data[$p['id']] ?? null);
+            $merged = $existing !== null ? self::mergeProvider($existing, $p, $value) : $p;
+            $parsed[$p['id']] = $merged;
+            $modelCount += count($merged['models']);
+            if ($existing !== null) {
+                $updated[] = $p['id'];
+            } else {
+                $created[] = $p['id'];
             }
         }
+
+        if (!$parsed) {
+            throw new HttpError(400, 'No importable provider was found. ' . ($skipped[0]['reason'] ?? ''));
+        }
+
         $this->data = $replace ? $parsed : array_merge($this->data, $parsed);
         $this->save();
+
+        return [
+            'providers' => count($parsed),
+            'models' => $modelCount,
+            'created' => $created,
+            'updated' => $updated,
+            'skipped' => $skipped,
+        ];
+    }
+
+    /** json_decode with an error message that actually locates the problem. */
+    private static function decodeImport(string $text): mixed
+    {
+        $text = trim($text);
+        // Tolerate a UTF-8 BOM and JS-style trailing commas from hand edits.
+        $text = preg_replace('/^\xEF\xBB\xBF/', '', $text) ?? $text;
+        if ($text === '') {
+            throw new HttpError(
+                400,
+                'The import payload was empty. If you pasted a large catalog, the web server may have '
+                . 'dropped the request body: raise post_max_size / upload_max_filesize, or import from the '
+                . 'CLI with "php bin/console.php provider:import <file>".'
+            );
+        }
+        $decoded = json_decode($text, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $decoded;
+        }
+        $relaxed = preg_replace('/,\s*([}\]])/', '$1', $text);
+        if (is_string($relaxed)) {
+            $decoded = json_decode($relaxed, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return $decoded;
+            }
+        }
+        $len = strlen($text);
+        $tail = substr($text, -60);
+        throw new HttpError(
+            400,
+            'The text is not valid JSON (' . json_last_error_msg() . '). Length ' . $len
+            . ' bytes, ends with: ' . $tail
+            . ' — a truncated paste is the usual cause; upload the file instead of pasting it.'
+        );
+    }
+
+    /**
+     * Reduce any accepted wrapper to a list of [key, providerArray] pairs.
+     *
+     * @return array<int, array{0:string,1:array}>
+     */
+    private static function collectProviderEntries(mixed $raw, int $depth = 0): array
+    {
+        if (!is_array($raw) || $depth > 3) {
+            return [];
+        }
+
+        // A single provider object.
+        if (self::looksLikeProvider($raw)) {
+            return [[(string) ($raw['id'] ?? ''), $raw]];
+        }
+
+        // A list: either of providers, or of [key => provider] singletons.
+        if (array_is_list($raw)) {
+            $out = [];
+            foreach ($raw as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                if (self::looksLikeProvider($item)) {
+                    $out[] = [(string) ($item['id'] ?? ''), $item];
+                    continue;
+                }
+                foreach (self::collectProviderEntries($item, $depth + 1) as $nested) {
+                    $out[] = $nested;
+                }
+            }
+            return $out;
+        }
+
+        // An object keyed by provider id.
+        $out = [];
+        $wrappers = [];
+        foreach ($raw as $k => $v) {
+            if (!is_array($v)) {
+                continue; // metadata such as "version" / "exportedAt"
+            }
+            if (self::looksLikeProvider($v)) {
+                $out[] = [(string) $k, $v];
+            } elseif (in_array((string) $k, ['providers', 'data', 'result', 'config', 'catalog', 'items'], true)) {
+                $wrappers[] = $v;
+            }
+        }
+        if ($out) {
+            return $out;
+        }
+        foreach ($wrappers as $w) {
+            foreach (self::collectProviderEntries($w, $depth + 1) as $nested) {
+                $out[] = $nested;
+            }
+        }
+        return $out;
+    }
+
+    /** Heuristic: does this associative array describe a provider? */
+    private static function looksLikeProvider(array $v): bool
+    {
+        if (array_is_list($v)) {
+            return false;
+        }
+        foreach (['models', 'url', 'baseUrl', 'base_url', 'protocol', 'apiKey', 'api_key', 'vendor'] as $marker) {
+            if (array_key_exists($marker, $v)) {
+                return true;
+            }
+        }
+        // {"id": "...", "name": "..."} with nothing else is still a provider.
+        return array_key_exists('id', $v) && array_key_exists('name', $v);
+    }
+
+    private static function importHint(mixed $raw): string
+    {
+        $type = get_debug_type($raw);
+        if (is_array($raw)) {
+            $keys = array_slice(array_map('strval', array_keys($raw)), 0, 8);
+            return 'The JSON parsed correctly but contains no provider object. Top-level keys were: '
+                . (count($keys) ? implode(', ', $keys) : '(empty)')
+                . '. Expected {"openrouter": {"url": "...", "models": [...]}} , a list of providers, '
+                . 'or {"providers": {...}}.';
+        }
+        return 'Expected a JSON object or array of providers, got ' . $type . '.';
+    }
+
+    /**
+     * Merge an imported provider into an existing one without losing local
+     * state: models are merged by id, and an empty incoming credential never
+     * wipes a stored one.
+     */
+    private static function mergeProvider(array $existing, array $incoming, array $rawIncoming): array
+    {
+        $merged = array_merge($existing, $incoming);
+
+        foreach (['apiKey', 'apiKeyEnv', 'proxyUrl', 'url'] as $k) {
+            if (($incoming[$k] ?? '') === '' && ($existing[$k] ?? '') !== '') {
+                $merged[$k] = $existing[$k];
+            }
+        }
+        if (!($incoming['apiKeys'] ?? []) && ($existing['apiKeys'] ?? [])) {
+            $merged['apiKeys'] = $existing['apiKeys'];
+        }
+        if (!array_key_exists('enabled', $rawIncoming)) {
+            $merged['enabled'] = (bool) ($existing['enabled'] ?? false);
+        }
+        $merged['extra'] = array_merge((array) ($existing['extra'] ?? []), (array) ($incoming['extra'] ?? []));
+
+        $byId = [];
+        foreach ((array) ($existing['models'] ?? []) as $m) {
+            if (is_array($m) && ($m['id'] ?? '') !== '') {
+                $byId[(string) $m['id']] = $m;
+            }
+        }
+        foreach ($incoming['models'] as $m) {
+            $id = (string) ($m['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $byId[$id] = isset($byId[$id])
+                ? array_merge($byId[$id], $m, [
+                    'extra' => array_merge((array) ($byId[$id]['extra'] ?? []), (array) ($m['extra'] ?? [])),
+                ])
+                : $m;
+        }
+        $merged['models'] = array_values($byId);
+
+        return $merged;
     }
 }
