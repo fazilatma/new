@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.5.3'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.6.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -94,12 +94,61 @@ function showBenchmarkDetail(index){const x=(window.lastBenchmarkResults||[])[in
 function closeBenchmarkDetail(){$('benchmarkDetailModal').classList.remove('open')}
 async function testAllModels(){const box=$('benchmarkResults'),status=$('benchmarkStatus'),btn=document.querySelector('.test-all-btn');if(btn){btn.disabled=true;btn.textContent='⏳ در حال تست…'}status.textContent='در حال اجرای benchmark…';box.innerHTML='<div class="benchmark-empty">در حال تست GGUF و Providerها؛ مدل‌های محلی به‌صورت موقت اجرا و سپس خاموش می‌شوند.</div>';try{const d=await api('/api/models/test-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:$('testPrompt').value,context:Number($('testContext').value||4096),maxTokens:Number($('testMaxTokens').value||64),temperature:Number($('testTemperature').value||0.2),gpuLayers:Number($('testGpuLayers')?.value??-1)})});if(!d.results?.length){box.innerHTML='<div class="benchmark-empty">هیچ مدل نصب‌شده یا Provider واردشده‌ای برای تست پیدا نشد.</div>';status.textContent='مدلی موجود نیست';return}renderBenchmarkResults(d);setActivity('Model benchmark',d.results.filter(x=>x.ok).length+' / '+d.total+' مدل با موفقیت تست شدند')}catch(e){box.innerHTML='<div class="benchmark-empty">'+esc(e.message)+'</div>';status.textContent='خطا در تست'}finally{if(btn){btn.disabled=false;btn.textContent='▶ تست همه مدل‌ها'}}}
 function clearBenchmark(){window.lastBenchmarkResults=[];$('benchmarkResults').innerHTML='<div class="benchmark-empty">نتایج پاک شد.</div>';$('benchmarkStatus').textContent='آماده تست';closeBenchmarkModal();closeBenchmarkDetail()}
+async function loadAgentModels(){
+  const select=$('agentModel'); if(!select)return;
+  try{
+    const [locals,providers]=await Promise.all([api('/api/models'),api('/api/providers')]);
+    const options=['<option value="">انتخاب مدل…</option>'];
+    for(const m of locals||[])options.push('<option value="local:'+esc(m.name)+'">Local · '+esc(m.name)+'</option>');
+    for(const [id,p] of Object.entries(providers||{})){
+      if(!p.enabled)continue;
+      for(const m of (p.models||[])){
+        const name=typeof m==='string'?m:String(m.id||m.name||'');
+        if(name)options.push('<option value="provider:'+esc(id)+':'+esc(name)+'">'+esc(p.name||id)+' · '+esc(name)+'</option>');
+      }
+    }
+    select.innerHTML=options.join('');
+    if(window.selectedAgentModel)select.value=window.selectedAgentModel;
+  }catch(e){select.innerHTML='<option value="">No models available</option>';setActivity('Model selector',e.message)}
+}
+async function selectAgentModel(){
+  const value=$('agentModel')?.value||'';
+  window.selectedAgentModel=value;
+  if(value.startsWith('local:')){
+    const name=value.slice(6);
+    try{
+      setActivity('Local model','Starting '+name+'…');
+      const d=await api('/api/models/launch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name,port:8080,context:8192})});
+      window.modelUrlApi={value:d.baseUrl+'/chat/completions'};
+      window.activeAgentModel=name;
+      setActivity('Local model','Ready: '+name);
+    }catch(e){setActivity('Local model error',e.message)}
+  }
+}
+function toggleAgentAdvanced(){document.getElementById('agentAdvanced')?.classList.toggle('open')}
 function setPrompt(v){$('prompt').value=v;$('prompt').focus()}
-async function runAgentLoop(){const p=$('prompt').value.trim();if(!p)return;const out=$('answer');out.innerHTML='<div class="empty-agent"><span>◌</span><p>Agent در حال کار است…</p><small>تحلیل → اجرا → تست → اصلاح</small></div>';setActivity('Agent started',p);try{const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:p,modelUrl:window.modelUrlApi?.value||'http://127.0.0.1:8080/v1/chat/completions',maxIterations:Number($('maxIterations').value||8)})});out.innerHTML=(d.history||[]).map(x=>'<div class="activity-item"><b>Iteration '+x.iteration+' · '+esc(x.message||'')+'</b><p>'+esc(JSON.stringify(x.verification||x.actions||[]))+'</p></div>').join('')||'<div class="empty-agent">پاسخی دریافت نشد.</div>';setActivity(d.success?'Agent completed':'Agent stopped',d.success?'نسخه تأیید شد':'به سقف تکرار رسید')}catch(e){out.innerHTML='<div class="empty-agent"><p>'+esc(e.message)+'</p></div>';setActivity('Agent error',e.message)}}
+async function runAgentLoop(){
+  const p=$('prompt').value.trim(); if(!p)return;
+  const selected=$('agentModel')?.value||'';
+  if(!selected){setActivity('Agent','Select a model first');return}
+  const out=$('answer');
+  out.innerHTML='<div class="empty-agent"><span>◌</span><p>Agent working…</p><small>Analyze → execute → test → repair</small></div>';
+  setActivity('Agent started',p);
+  try{
+    const [kind,provider,name]=selected.split(':');
+    const body={prompt:p,maxIterations:Number($('maxIterations').value||8),maxTokens:Number($('agentMaxTokens').value||6000),commandTimeout:Number($('agentCommandTimeout').value||120000),temperature:Number($('agentTemperature').value||0.1)};
+    if(kind==='local'){body.modelType='local';body.model=name}
+    else {body.modelType='provider';body.providerId=provider;body.model=name}
+    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    out.innerHTML=(d.history||[]).map(x=>'<div class="activity-item"><b>Iteration '+x.iteration+' · '+esc(x.message||'')+'</b><p>'+esc(JSON.stringify(x.verification||x.actions||[]))+'</p></div>').join('')||'<div class="empty-agent">No response.</div>';
+    setActivity(d.success?'Agent completed':'Agent stopped',d.success?'Verification passed':'Maximum iterations reached');
+  }catch(e){out.innerHTML='<div class="empty-agent"><p>'+esc(e.message)+'</p></div>';setActivity('Agent error',e.message)}
+}
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveFile()}});
 window.modelUrlApi={value:'http://127.0.0.1:8080/v1/chat/completions'};
+window.selectedAgentModel='';
 async function loadVersion(){try{const d=await api('/api/version');if($('appVersion'))$('appVersion').textContent='v'+d.version}catch{}}
-async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion()]);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
+async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels()]);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
 refresh();
 
 function toggleSettings(){const o=$('settingsOverlay');if(o)o.classList.toggle('open')}
