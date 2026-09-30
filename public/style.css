@@ -412,3 +412,58 @@
   .agent-advanced{grid-template-columns:1fr}
   .composer-footer span:last-child{display:none}
 }
+
+
+/* v1.9 professional agent controls */
+.git-chip{
+  display:inline-flex;align-items:center;padding:3px 7px;border-radius:10px;
+  border:1px solid #283449;background:#0d1420;color:#738198;font-size:7px;
+}
+.git-chip.clean{color:#67d8ae;border-color:#214e3e;background:#0b1c16}
+.git-chip.dirty{color:#e7c474;border-color:#5a4721;background:#1b160b}
+.git-chip.muted{color:#647188}
+.agent-stop-button{
+  height:28px;padding:0 8px;border:1px solid #512e35;border-radius:8px;
+  background:#1a1014;color:#ec9aa4;font-size:7px;cursor:pointer;
+}
+.agent-stop-button:disabled{opacity:.35;cursor:not-allowed}
+.agent-stop-button:not(:disabled):hover{background:#24141a;border-color:#71414a}
+.mode-switch{
+  display:flex;align-items:center;gap:3px;padding:3px;border:1px solid #202b3d;
+  border-radius:8px;background:#0b111a;
+}
+.mode-switch button{
+  border:0;border-radius:6px;background:transparent;color:#64738a;padding:5px 7px;
+  font-size:7px;cursor:pointer;white-space:nowrap;
+}
+.mode-switch button.active{
+  color:#dbe3ef;background:#182131;box-shadow:inset 0 1px #ffffff08;
+}
+.agent-changes{margin:7px;border:1px solid #202d41;border-radius:8px;background:#0a1119;overflow:hidden}
+.agent-changes-title{display:flex;justify-content:space-between;align-items:center;padding:7px 8px;border-bottom:1px solid #1a2535}
+.agent-changes-title b{font-size:7px;color:#b8c4d5}.agent-changes-title span{font-size:7px;color:#748198}
+.agent-change-row{
+  display:grid;grid-template-columns:16px minmax(0,1fr);gap:5px;align-items:center;
+  padding:5px 8px;border-bottom:1px solid #141f2d;
+}
+.agent-change-row:last-child{border-bottom:0}
+.agent-change-row>span{font-weight:700;font-size:8px;text-align:center}
+.agent-change-row.added>span{color:#61d8aa}.agent-change-row.deleted>span{color:#ef8998}.agent-change-row.modified>span{color:#e5c26a}
+.agent-change-row code{direction:ltr;text-align:left;color:#7f8da4;font:7px/1.4 ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-plan-note,.agent-no-changes{
+  margin:7px;padding:8px;border:1px dashed #2b3950;border-radius:8px;
+  color:#6d7c92;background:#0a111a;font-size:7px;line-height:1.5;
+}
+.agent-plan-note{border-color:#564888;color:#a998d7;background:#141025}
+@media(max-width:620px){
+  .git-chip{display:none}
+  .agent-stop-button{padding:0 7px}
+  .mode-switch{order:2}
+  .composer-quickbar{flex-wrap:wrap}
+  .composer-quickbar .quick-prompts{flex:1;min-width:0}
+}
+@media(max-width:420px){
+  .agent-head-actions .agent-stop-button{font-size:0;width:28px;padding:0}
+  .agent-head-actions .agent-stop-button::before{content:"■";font-size:9px}
+  .mode-switch button{padding:5px 6px}
+}
