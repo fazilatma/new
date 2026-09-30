@@ -48,7 +48,7 @@ async function copyModelUrl(url){
 async function downloadModel(fromAdvisor=false){
   const url=$('modelUrl').value.trim();
   if(!url){setModelInstallState('error','ابتدا لینک فایل GGUF را وارد کنید');return}
-  if(!/\\.gguf(?:\\?|$)/i.test(url)){setModelInstallState('error','لینک باید به فایل .gguf ختم شود');return}
+  if(!/\.gguf(?:\?|$)/i.test(url)){setModelInstallState('error','لینک باید به فایل .gguf ختم شود');return}
   setModelInstallState('loading','در حال بررسی لینک و فضای دیسک…');
   setActivity('Model download','در حال بررسی لینک مدل…');
   try{
