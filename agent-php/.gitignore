@@ -1,0 +1,16 @@
+# Local configuration and secrets
+.env
+data/environment.json
+data/master.key
+
+# Runtime state
+data/agent.db
+data/agent.db-wal
+data/agent.db-shm
+storage/
+!storage/.gitkeep
+
+# PHP tooling
+vendor/
+composer.lock
+*.log

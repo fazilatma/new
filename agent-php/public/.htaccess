@@ -1,0 +1,42 @@
+# Arena Coding Agent — Apache front-controller rules.
+# Everything that is not a real file in public/ is routed to index.php.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Some shared hosts need the base; uncomment and adjust if the app lives
+    # in a subdirectory, e.g. https://example.com/agent/
+    # RewriteBase /
+
+    # Never rewrite real files (index.html, assets, ...)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+
+    # Pass the Authorization header through to PHP (CGI/FastCGI drop it).
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    # SSE must not be buffered or compressed by the server.
+    <FilesMatch "index\.php$">
+        Header set X-Accel-Buffering "no"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_deflate.c>
+    SetEnvIfNoCase Request_URI "/api/chat/stream" no-gzip dont-vary
+</IfModule>
+
+# Long agent runs and big file uploads.
+<IfModule mod_php.c>
+    php_value max_execution_time 0
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value output_buffering 0
+</IfModule>
+
+DirectoryIndex index.php index.html
+Options -Indexes
