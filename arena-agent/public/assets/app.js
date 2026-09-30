@@ -1,0 +1,688 @@
+/* Arena Agent — interface logic.
+ *
+ * One API helper, one router, one state object. Every request goes through
+ * api(), which builds URLs from window.ARENA_API (the front controller path
+ * injected by the server). Nothing here guesses at install prefixes. */
+
+'use strict';
+
+const API = window.ARENA_API || 'index.php';
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const S = {
+  view: 'chat',
+  user: null,
+  authEnabled: true,
+  providers: [],
+  conversations: [],
+  conversationId: null,
+  provider: localStorage.getItem('arena.provider') || '',
+  model: localStorage.getItem('arena.model') || '',
+  streaming: false,
+  fsPath: '',
+  fsFile: null,
+};
+
+function url(path, query) {
+  let u = API + '?p=' + encodeURIComponent(path);
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null) u += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(v);
+    }
+  }
+  return u;
+}
+
+async function api(path, opts = {}) {
+  const { query, ...init } = opts;
+  init.credentials = 'same-origin';
+  if (init.body && typeof init.body !== 'string' && !(init.body instanceof FormData)) {
+    init.headers = { 'Content-Type': 'application/json', ...(init.headers || {}) };
+    init.body = JSON.stringify(init.body);
+  }
+  let res;
+  try {
+    res = await fetch(url(path, query), init);
+  } catch (e) {
+    throw new Error('اتصال به سرور برقرار نشد: ' + e.message);
+  }
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('application/json')) {
+    const text = await res.text();
+    // A non-JSON body means the web server answered instead of the app.
+    throw new Error(
+      `سرور به‌جای پاسخ برنامه یک صفحهٔ ${res.status} برگرداند.\n` +
+      `آدرسی که صدا زده شد:\n${url(path)}\n\n` +
+      `${text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`
+    );
+  }
+  const data = await res.json();
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    showLogin();
+    throw new Error(data.error || 'ابتدا وارد شوید');
+  }
+  if (!res.ok) throw new Error(data.error || data.detail || `خطای ${res.status}`);
+  return data;
+}
+
+/* ------------------------------------------------------------ toasts */
+function toast(message, kind = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = message;
+  $('#toasts').append(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 250); }, kind === 'bad' ? 7000 : 3200);
+}
+const ok = (m) => toast(m, 'good');
+const bad = (m) => toast(m, 'bad');
+
+/* ------------------------------------------------------------ router */
+function navigate(view) {
+  S.view = view;
+  $$('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
+  $$('.view').forEach((v) => { v.hidden = v.id !== 'view-' + view; });
+  $('#viewTitle').textContent = $(`.nav button[data-view="${view}"]`)?.dataset.title || view;
+  $('#side').classList.remove('open');
+  $('.scrim')?.remove();
+  const loaders = {
+    chat: loadChat, providers: loadProviders, files: () => loadFiles(''),
+    terminal: loadTerminal, settings: loadSettings, diag: loadDiag,
+  };
+  loaders[view]?.();
+}
+
+/* ------------------------------------------------------------- auth */
+function showLogin() { $('#loginDlg').showModal(); }
+
+async function doLogin(e) {
+  e.preventDefault();
+  const btn = $('#loginBtn');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/auth/login', {
+      method: 'POST',
+      body: { username: $('#loginUser').value.trim(), password: $('#loginPass').value },
+    });
+    S.user = r.user;
+    $('#loginDlg').close();
+    $('#loginPass').value = '';
+    ok('خوش آمدید، ' + r.user.username);
+    await boot();
+  } catch (err) {
+    $('#loginErr').textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function doLogout() {
+  await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
+}
+
+/* --------------------------------------------------------- providers */
+async function loadProviders() {
+  const box = $('#providerList');
+  box.innerHTML = '<div class="empty">در حال بارگذاری…</div>';
+  try {
+    const { providers } = await api('/api/providers');
+    S.providers = providers;
+    renderPicker();
+    if (!providers.length) {
+      box.innerHTML = `<div class="empty">هنوز هیچ ارائه‌دهنده‌ای اضافه نشده است.<br>
+        <button class="btn primary" style="margin-top:12px" onclick="openProvider()">افزودن ارائه‌دهنده</button>
+        <button class="btn" style="margin-top:12px" onclick="openImport()">درون‌ریزی از فایل</button></div>`;
+      return;
+    }
+    box.innerHTML = '<div class="grid">' + providers.map((p) => `
+      <div class="card">
+        <div class="row">
+          <h2 style="flex:1">${esc(p.name)}</h2>
+          <span class="tag ${p.enabled ? 'good' : ''}">${p.enabled ? 'فعال' : 'خاموش'}</span>
+        </div>
+        <p class="hint mono">${esc(p.protocol)} · ${esc(p.baseUrl || '—')}</p>
+        <div class="row" style="margin-bottom:10px">
+          <span class="tag">${p.models.length} مدل</span>
+          <span class="tag ${p.hasApiKey ? 'good' : 'warn'}">${p.hasApiKey ? 'کلید: ' + esc(p.apiKeyHint) : 'بدون کلید'}</span>
+        </div>
+        <div class="row">
+          <button class="btn sm" onclick="openProvider('${esc(p.id)}')">ویرایش</button>
+          <button class="btn sm" onclick="discover('${esc(p.id)}')">دریافت مدل‌ها</button>
+          <button class="btn sm" onclick="testProvider('${esc(p.id)}')">آزمایش</button>
+          <button class="btn sm danger" onclick="removeProvider('${esc(p.id)}')">حذف</button>
+        </div>
+      </div>`).join('') + '</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="card"><h2>بارگذاری نشد</h2><p class="hint" style="white-space:pre-wrap">${esc(e.message)}</p></div>`;
+  }
+}
+
+function openProvider(id) {
+  const p = S.providers.find((x) => x.id === id);
+  $('#pvTitle').textContent = p ? 'ویرایش ' + p.name : 'ارائه‌دهندهٔ جدید';
+  $('#pvId').value = p?.id || '';
+  $('#pvName').value = p?.name || '';
+  $('#pvProtocol').value = p?.protocol || 'openai';
+  $('#pvUrl').value = p?.baseUrl || '';
+  $('#pvKey').value = '';
+  $('#pvKey').placeholder = p?.hasApiKey ? 'ذخیره‌شده (' + p.apiKeyHint + ') — برای تغییر بنویسید' : 'sk-…';
+  $('#pvEnabled').checked = p ? p.enabled : true;
+  $('#providerDlg').showModal();
+}
+
+async function saveProvider(e) {
+  e.preventDefault();
+  const id = $('#pvId').value;
+  const body = {
+    name: $('#pvName').value.trim(),
+    protocol: $('#pvProtocol').value,
+    baseUrl: $('#pvUrl').value.trim(),
+    enabled: $('#pvEnabled').checked,
+  };
+  const key = $('#pvKey').value.trim();
+  if (key) body.apiKey = key;
+  try {
+    if (id) await api('/api/providers/' + encodeURIComponent(id), { method: 'PUT', body });
+    else await api('/api/providers', { method: 'POST', body });
+    $('#providerDlg').close();
+    ok('ذخیره شد');
+    loadProviders();
+  } catch (err) { bad(err.message); }
+}
+
+async function removeProvider(id) {
+  if (!confirm('این ارائه‌دهنده و همهٔ مدل‌هایش حذف شوند؟')) return;
+  try { await api('/api/providers/' + encodeURIComponent(id), { method: 'DELETE' }); ok('حذف شد'); loadProviders(); }
+  catch (e) { bad(e.message); }
+}
+
+async function discover(id) {
+  toast('در حال پرسیدن فهرست مدل‌ها…');
+  try {
+    const { models } = await api('/api/providers/' + encodeURIComponent(id) + '/discover');
+    if (!models.length) return bad('ارائه‌دهنده هیچ مدلی برنگرداند.');
+    await api('/api/providers/' + encodeURIComponent(id) + '/models', { method: 'POST', body: { models } });
+    ok(models.length + ' مدل افزوده شد');
+    loadProviders();
+  } catch (e) { bad(e.message); }
+}
+
+async function testProvider(id) {
+  toast('در حال آزمایش…');
+  try {
+    const r = await api('/api/providers/' + encodeURIComponent(id) + '/test', { method: 'POST', body: {} });
+    if (r.ok) ok(`پاسخ داد (${r.latencyMs} میلی‌ثانیه): ${r.reply}`);
+    else bad(`HTTP ${r.status}: ${r.error}`);
+  } catch (e) { bad(e.message); }
+}
+
+/* ------------------------------------------------------------ import */
+function openImport() {
+  $('#imText').value = '';
+  $('#imReplace').checked = false;
+  $('#imResult').innerHTML = '';
+  $('#importDlg').showModal();
+}
+
+function b64(str) { return btoa(unescape(encodeURIComponent(str))); }
+
+async function runImport(e) {
+  e.preventDefault();
+  const text = $('#imText').value.trim();
+  if (!text) return bad('چیزی برای درون‌ریزی نیست.');
+  try { JSON.parse(text); }
+  catch (err) {
+    return bad('متن، JSON معتبر نیست: ' + err.message + '\nاگر کپی ناقص بوده، فایل را انتخاب کنید.');
+  }
+  const replace = $('#imReplace').checked;
+  const btn = $('#imBtn');
+  btn.disabled = true;
+  $('#imResult').innerHTML = '<p class="hint">در حال ارسال…</p>';
+  try {
+    let r, fallback = false;
+    try {
+      r = await api('/api/providers/import', { method: 'POST', body: { json: text, replace } });
+    } catch (first) {
+      // If the app never saw the request, try again with the payload encoded —
+      // some hosts run a firewall that rejects bodies holding API keys.
+      if (!/صفحهٔ \d+|اتصال به سرور/.test(first.message)) throw first;
+      r = await api('/api/providers/import', { method: 'POST', body: { jsonB64: b64(text), replace } });
+      fallback = true;
+    }
+    $('#imResult').innerHTML = `<div class="card" style="margin:0">
+      <h2>${r.providers} ارائه‌دهنده و ${r.models} مدل درون‌ریزی شد</h2>
+      ${r.created.length ? `<p class="hint">تازه: ${esc(r.created.join('، '))}</p>` : ''}
+      ${r.updated.length ? `<p class="hint">به‌روزشده: ${esc(r.updated.join('، '))}</p>` : ''}
+      ${r.skipped.length ? `<p class="hint">رد شد: ${esc(r.skipped.map((s) => s.key).join('، '))}</p>` : ''}
+      ${fallback ? '<p class="hint">(ارسال عادی را فایروال میزبان مسدود کرد؛ با بدنهٔ base64 انجام شد.)</p>' : ''}
+    </div>`;
+    ok('درون‌ریزی انجام شد');
+    loadProviders();
+  } catch (err) {
+    $('#imResult').innerHTML = `<div class="card" style="margin:0;border-color:#5a2a32">
+      <h2>درون‌ریزی نشد</h2><p class="hint" style="white-space:pre-wrap">${esc(err.message)}</p>
+      <button class="btn sm" onclick="navigate('diag');document.getElementById('importDlg').close()">
+        اجرای تشخیص اتصال</button></div>`;
+  } finally { btn.disabled = false; }
+}
+
+function pickImportFile(input) {
+  const f = input.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => { $('#imText').value = ev.target.result; };
+  reader.readAsText(f);
+}
+
+/* -------------------------------------------------------------- chat */
+function renderPicker() {
+  const ps = $('#pickProvider');
+  const enabled = S.providers.filter((p) => p.enabled);
+  ps.innerHTML = enabled.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')
+    || '<option value="">— ارائه‌دهنده‌ای نیست —</option>';
+  if (enabled.some((p) => p.id === S.provider)) ps.value = S.provider;
+  else S.provider = ps.value;
+  renderModels();
+}
+
+function renderModels() {
+  const ms = $('#pickModel');
+  const p = S.providers.find((x) => x.id === S.provider);
+  const models = (p?.models || []).filter((m) => m.enabled);
+  ms.innerHTML = models.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')
+    || '<option value="">— مدلی نیست —</option>';
+  if (models.some((m) => m.id === S.model)) ms.value = S.model;
+  else S.model = ms.value;
+  localStorage.setItem('arena.provider', S.provider);
+  localStorage.setItem('arena.model', S.model);
+  updatePickerSummary();
+}
+
+function updatePickerSummary() {
+  const p = S.providers.find((x) => x.id === S.provider);
+  const m = (p?.models || []).find((x) => x.id === S.model);
+  $('#pickSummary').textContent = `${p?.name || '—'} / ${m?.name || '—'}`;
+}
+
+function togglePicker() {
+  const folded = $('#picker').classList.toggle('folded');
+  $('#pickArrow').textContent = folded ? '▾' : '▴';
+  localStorage.setItem('arena.pickerFolded', folded ? '1' : '0');
+}
+
+function initPicker() {
+  const stored = localStorage.getItem('arena.pickerFolded');
+  const compact = window.matchMedia('(max-width: 860px), (max-height: 560px)');
+  const apply = (folded) => {
+    $('#picker').classList.toggle('folded', folded);
+    $('#pickArrow').textContent = folded ? '▾' : '▴';
+  };
+  apply(stored === null ? compact.matches : stored === '1');
+  compact.addEventListener('change', (e) => {
+    if (localStorage.getItem('arena.pickerFolded') === null) apply(e.matches);
+  });
+}
+
+async function loadChat() {
+  if (!S.providers.length) {
+    try { S.providers = (await api('/api/providers')).providers; renderPicker(); } catch { /* shown elsewhere */ }
+  }
+  try {
+    const { conversations } = await api('/api/conversations');
+    S.conversations = conversations;
+    $('#convList').innerHTML = conversations.map((c) => `
+      <div class="conv ${c.id === S.conversationId ? 'on' : ''}" onclick="openConversation('${esc(c.id)}')">
+        <span>${esc(c.title)}</span>
+        <button class="btn sm" onclick="event.stopPropagation();deleteConversation('${esc(c.id)}')">×</button>
+      </div>`).join('') || '<div class="empty" style="font-size:12px">گفتگویی نیست</div>';
+  } catch (e) { bad(e.message); }
+}
+
+async function openConversation(id) {
+  S.conversationId = id;
+  const { messages } = await api('/api/conversations/' + encodeURIComponent(id));
+  $('#msgs').innerHTML = messages.map((m) => bubble(m.role, m.content)).join('');
+  scrollDown();
+  loadChat();
+}
+
+async function deleteConversation(id) {
+  await api('/api/conversations/' + encodeURIComponent(id), { method: 'DELETE' }).catch((e) => bad(e.message));
+  if (S.conversationId === id) { S.conversationId = null; $('#msgs').innerHTML = ''; }
+  loadChat();
+}
+
+function newConversation() {
+  S.conversationId = null;
+  $('#msgs').innerHTML = '<div class="empty">گفتگوی تازه — پیامی بنویسید.</div>';
+  loadChat();
+}
+
+function bubble(role, text) {
+  return `<div class="msg ${role}">${renderMarkdown(text)}</div>`;
+}
+
+/* Deliberately tiny: fenced code, inline code, bold. Anything more needs a
+   real parser, and an unescaped one would be an injection hole. */
+function renderMarkdown(text) {
+  let out = esc(text);
+  out = out.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${code}</code></pre>`);
+  out = out.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  return out;
+}
+
+function scrollDown() { const m = $('#msgs'); m.scrollTop = m.scrollHeight; }
+
+async function sendMessage(e) {
+  e?.preventDefault();
+  if (S.streaming) return;
+  const ta = $('#composerText');
+  const text = ta.value.trim();
+  if (!text) return;
+  if (!S.provider || !S.model) return bad('اول یک ارائه‌دهنده و مدل انتخاب کنید.');
+
+  ta.value = '';
+  ta.style.height = 'auto';
+  if ($('#msgs').querySelector('.empty')) $('#msgs').innerHTML = '';
+  $('#msgs').insertAdjacentHTML('beforeend', bubble('user', text));
+  const holder = document.createElement('div');
+  holder.className = 'msg assistant typing';
+  $('#msgs').append(holder);
+  scrollDown();
+
+  S.streaming = true;
+  $('#sendBtn').disabled = true;
+  let acc = '';
+
+  try {
+    const res = await fetch(url('/api/chat/stream'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        providerId: S.provider, modelId: S.model,
+        conversationId: S.conversationId || '', message: text,
+      }),
+    });
+    if (!res.ok && !(res.headers.get('content-type') || '').includes('event-stream')) {
+      const t = await res.text();
+      throw new Error(t.replace(/<[^>]*>/g, ' ').trim().slice(0, 300) || 'HTTP ' + res.status);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const ev = /^event:\s*(\w+)/m.exec(part)?.[1];
+        const dataLine = /^data:\s*(.*)$/m.exec(part)?.[1];
+        if (!ev || !dataLine) continue;
+        let payload = {};
+        try { payload = JSON.parse(dataLine); } catch { continue; }
+        if (ev === 'start') S.conversationId = payload.conversationId;
+        else if (ev === 'token') {
+          acc += payload.text;
+          holder.classList.remove('typing');
+          holder.innerHTML = renderMarkdown(acc);
+          scrollDown();
+        } else if (ev === 'error') {
+          holder.className = 'msg error';
+          holder.textContent = payload.message;
+        } else if (ev === 'done') {
+          holder.classList.remove('typing');
+          loadChat();
+        }
+      }
+    }
+    if (!acc && holder.className.includes('typing')) {
+      holder.className = 'msg error';
+      holder.textContent = 'پاسخی دریافت نشد.';
+    }
+  } catch (err) {
+    holder.className = 'msg error';
+    holder.textContent = err.message;
+  } finally {
+    S.streaming = false;
+    $('#sendBtn').disabled = false;
+    holder.classList.remove('typing');
+    scrollDown();
+  }
+}
+
+/* ------------------------------------------------------------- files */
+async function loadFiles(path) {
+  S.fsPath = path;
+  try {
+    const r = await api('/api/files', { query: { path } });
+    const up = path ? `<div class="fs-item" onclick="loadFiles('${esc(path.split('/').slice(0, -1).join('/'))}')">↰ بالا</div>` : '';
+    $('#fsList').innerHTML = up + (r.items.map((i) => `
+      <div class="fs-item ${S.fsFile === i.path ? 'on' : ''}" onclick="${i.isDir
+        ? `loadFiles('${esc(i.path)}')`
+        : `openFile('${esc(i.path)}')`}">
+        <span>${i.isDir ? '📁' : '📄'}</span><span style="flex:1">${esc(i.name)}</span>
+        ${i.isDir ? '' : `<span class="tag">${i.size}</span>`}
+      </div>`).join('') || '<div class="empty" style="font-size:12px">خالی</div>');
+    $('#fsCrumb').textContent = '/' + path;
+  } catch (e) { bad(e.message); }
+}
+
+async function openFile(path) {
+  try {
+    const f = await api('/api/file', { query: { path } });
+    S.fsFile = path;
+    $('#fsName').textContent = path;
+    $('#fsEditor').value = f.binary ? '' : f.content;
+    $('#fsEditor').disabled = f.binary;
+    $('#fsSave').disabled = f.binary;
+    if (f.binary) toast('این فایل باینری است و در ویرایشگر باز نمی‌شود.');
+    loadFiles(S.fsPath);
+  } catch (e) { bad(e.message); }
+}
+
+async function saveFile() {
+  if (!S.fsFile) return;
+  try {
+    await api('/api/file', { method: 'PUT', body: { path: S.fsFile, content: $('#fsEditor').value } });
+    ok('ذخیره شد');
+  } catch (e) { bad(e.message); }
+}
+
+async function newFile() {
+  const name = prompt('نام فایل تازه (نسبت به پوشهٔ فعلی):');
+  if (!name) return;
+  const path = (S.fsPath ? S.fsPath + '/' : '') + name;
+  try { await api('/api/file', { method: 'PUT', body: { path, content: '' } }); loadFiles(S.fsPath); openFile(path); }
+  catch (e) { bad(e.message); }
+}
+
+async function deleteFile() {
+  if (!S.fsFile || !confirm('حذف ' + S.fsFile + '؟')) return;
+  try {
+    await api('/api/file', { method: 'DELETE', query: { path: S.fsFile } });
+    S.fsFile = null; $('#fsEditor').value = ''; $('#fsName').textContent = '—';
+    loadFiles(S.fsPath);
+  } catch (e) { bad(e.message); }
+}
+
+/* ---------------------------------------------------------- terminal */
+async function loadTerminal() {
+  try {
+    const r = await api('/api/shell');
+    const rt = Object.entries(r.runtimes || {}).map(([k, v]) =>
+      `<span class="tag ${v ? 'good' : ''}">${esc(k)}: ${esc(v || 'نیست')}</span>`).join(' ');
+    $('#termStatus').innerHTML = r.enabled
+      ? `<span class="tag good">فعال</span> ${rt}`
+      : `<span class="tag warn">غیرفعال</span> <span class="hint">برای روشن کردن، ARENA_SHELL=true را در .env بگذارید.</span>`;
+    $('#termCmd').disabled = !r.enabled;
+    $('#termRun').disabled = !r.enabled;
+  } catch (e) { $('#termStatus').textContent = e.message; }
+}
+
+async function runCommand(e) {
+  e.preventDefault();
+  const cmd = $('#termCmd').value.trim();
+  if (!cmd) return;
+  const out = $('#termOut');
+  out.innerHTML += `<div class="cmd">$ ${esc(cmd)}</div>`;
+  $('#termCmd').value = '';
+  try {
+    const r = await api('/api/shell/exec', { method: 'POST', body: { command: cmd, cwd: S.fsPath } });
+    if (r.stdout) out.innerHTML += esc(r.stdout) + '\n';
+    if (r.stderr) out.innerHTML += `<span class="err">${esc(r.stderr)}</span>\n`;
+    out.innerHTML += `<span class="hint">exit ${r.exitCode} · ${r.durationMs}ms</span>\n\n`;
+  } catch (err) {
+    out.innerHTML += `<span class="err">${esc(err.message)}</span>\n\n`;
+  }
+  out.scrollTop = out.scrollHeight;
+}
+
+/* ---------------------------------------------------------- settings */
+async function loadSettings() {
+  try {
+    const { settings } = await api('/api/settings');
+    $('#setPrompt').value = settings.systemPrompt || '';
+    $('#setTheme').value = settings.theme || 'dark';
+  } catch (e) { bad(e.message); }
+}
+
+async function saveSettings(e) {
+  e.preventDefault();
+  try {
+    await api('/api/settings', { method: 'PUT', body: {
+      systemPrompt: $('#setPrompt').value, theme: $('#setTheme').value } });
+    applyTheme($('#setTheme').value);
+    ok('تنظیمات ذخیره شد');
+  } catch (err) { bad(err.message); }
+}
+
+async function changePassword(e) {
+  e.preventDefault();
+  try {
+    const r = await api('/api/auth/password', { method: 'POST', body: {
+      currentPassword: $('#pwCurrent').value, newPassword: $('#pwNew').value } });
+    ok(r.message);
+    setTimeout(() => location.reload(), 1400);
+  } catch (err) { bad(err.message); }
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('arena.theme', theme);
+}
+
+/* ------------------------------------------------------- diagnostics */
+async function loadDiag() {
+  const box = $('#diagOut');
+  box.innerHTML = '<div class="empty">در حال بررسی…</div>';
+  const lines = [];
+  const row = (label, good, detail) =>
+    `<tr><td>${good ? '✅' : '❌'}</td><td>${esc(label)}</td><td class="mono">${esc(detail)}</td></tr>`;
+  try {
+    const d = await api('/api/diag');
+    lines.push(row('اتصال به برنامه', true, d.routing.apiUrlExample));
+    lines.push(row('پایگاه داده', d.db.connected, d.db.connected ? d.db.file : d.db.error || ''));
+    lines.push(row('نوشتن در data/', d.paths.data.writable, d.paths.data.path));
+    lines.push(row('نوشتن در storage/', d.paths.storage.writable, d.paths.storage.path));
+    lines.push(row('pdo_sqlite', d.php.extensions.pdo_sqlite, ''));
+    lines.push(row('cURL', d.php.extensions.curl, d.php.extensions.curl ? '' : 'استریم کندتر می‌شود'));
+    lines.push(row('رمزنگاری کلیدها', d.encryption.available, d.encryption.available ? 'AES-256-GCM' : 'کلیدها رمز نمی‌شوند'));
+    lines.push(row('اجرای دستور', d.shell.available, d.shell.enabled ? 'فعال' : 'خاموش'));
+
+    // Prove a POST with a realistic body survives the host.
+    const sample = JSON.stringify({ providers: { demo: {
+      name: 'Demo', protocol: 'openai', url: 'https://api.example.com/v1',
+      apiKey: 'sk-test-0000000000', models: [{ id: 'demo' }] } } });
+    for (const [label, body] of [
+      ['POST کوچک', { hello: 1 }],
+      ['POST حاوی کلید API', { json: sample }],
+      ['POST بزرگ (۲۵۰ کیلوبایت)', { json: 'x'.repeat(250000) }],
+    ]) {
+      try {
+        const r = await api('/api/echo', { method: 'POST', body });
+        lines.push(row(label, r.bytesReceived > 0, r.bytesReceived + ' بایت رسید'));
+      } catch (err) {
+        lines.push(row(label, false, err.message.split('\n')[0]));
+      }
+    }
+
+    box.innerHTML = `<div class="card"><h2>وضعیت</h2>
+      <p class="hint">نسخه ${esc(d.version)} · PHP ${esc(d.php.version)} · ${esc(d.php.sapi)}
+      · post_max_size ${esc(d.php.postMaxSize)}</p>
+      <table>${lines.join('')}</table></div>
+      <div class="card"><h2>گزارش کامل</h2>
+      <textarea class="input mono" rows="14" readonly>${esc(JSON.stringify(d, null, 2))}</textarea></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="card"><h2>تشخیص ناموفق</h2>
+      <p class="hint" style="white-space:pre-wrap">${esc(e.message)}</p></div>`;
+  }
+}
+
+/* ------------------------------------------------------------- boot */
+async function boot() {
+  try {
+    const st = await api('/api/auth/status');
+    S.authEnabled = st.enabled;
+    S.user = st.user;
+    if (st.enabled && !st.signedIn) { showLogin(); return; }
+  } catch (e) {
+    // Reaching the app at all failed — show it plainly instead of a blank page.
+    document.body.innerHTML = `<div style="padding:40px;max-width:640px;margin:auto">
+      <h2>برنامه بالا نیامد</h2><pre style="white-space:pre-wrap">${esc(e.message)}</pre>
+      <p><a href="${url('/api/diag')}">اجرای تشخیص</a></p></div>`;
+    return;
+  }
+  $('#whoami').textContent = S.user ? `${S.user.username} (${S.user.role})` : 'بدون ورود';
+  try { S.providers = (await api('/api/providers')).providers; renderPicker(); } catch { /* view shows it */ }
+  navigate(S.view);
+}
+
+function bindUi() {
+  $$('.nav button').forEach((b) => b.addEventListener('click', () => navigate(b.dataset.view)));
+  $('#loginForm').addEventListener('submit', doLogin);
+  $('#providerForm').addEventListener('submit', saveProvider);
+  $('#importForm').addEventListener('submit', runImport);
+  $('#composer').addEventListener('submit', sendMessage);
+  $('#settingsForm').addEventListener('submit', saveSettings);
+  $('#passwordForm').addEventListener('submit', changePassword);
+  $('#termForm').addEventListener('submit', runCommand);
+
+  $('#pickProvider').addEventListener('change', (e) => { S.provider = e.target.value; renderModels(); });
+  $('#pickModel').addEventListener('change', (e) => {
+    S.model = e.target.value; localStorage.setItem('arena.model', S.model); updatePickerSummary();
+  });
+
+  const ta = $('#composerText');
+  ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(190, ta.scrollHeight) + 'px'; });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(e); }
+  });
+
+  $('#menuBtn').addEventListener('click', () => {
+    $('#side').classList.add('open');
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    scrim.onclick = () => { $('#side').classList.remove('open'); scrim.remove(); };
+    document.body.append(scrim);
+  });
+
+  applyTheme(localStorage.getItem('arena.theme') || 'dark');
+  initPicker();
+}
+
+document.addEventListener('DOMContentLoaded', () => { bindUi(); boot(); });
+
+// Handlers referenced from inline onclick attributes.
+Object.assign(window, {
+  navigate, openProvider, removeProvider, discover, testProvider, openImport,
+  pickImportFile, openConversation, deleteConversation, newConversation,
+  loadFiles, openFile, saveFile, newFile, deleteFile, doLogout, togglePicker, loadDiag,
+});

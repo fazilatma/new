@@ -1,0 +1,7 @@
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/master.key
+storage/
+.env
+tools/node_modules

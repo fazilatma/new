@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arena Agent</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+
+<div class="app">
+  <aside class="side" id="side">
+    <div class="brand">🜂 Arena Agent <small id="verTag"></small></div>
+    <nav class="nav">
+      <button data-view="chat"      data-title="گفتگو"><span class="ico">💬</span>گفتگو</button>
+      <button data-view="providers" data-title="ارائه‌دهنده‌ها و مدل‌ها"><span class="ico">🤖</span>ارائه‌دهنده‌ها</button>
+      <button data-view="files"     data-title="فایل‌های ورک‌اسپیس"><span class="ico">📁</span>فایل‌ها</button>
+      <button data-view="terminal"  data-title="ترمینال"><span class="ico">💻</span>ترمینال</button>
+      <button data-view="settings"  data-title="تنظیمات"><span class="ico">⚙️</span>تنظیمات</button>
+      <button data-view="diag"      data-title="تشخیص اتصال"><span class="ico">🩺</span>تشخیص</button>
+    </nav>
+    <div class="side-foot">
+      <span id="whoami">…</span>
+      <button class="btn sm" style="margin-inline-start:auto" onclick="doLogout()">خروج</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="top">
+      <button class="btn sm" id="menuBtn" style="display:none">☰</button>
+      <h1 id="viewTitle">گفتگو</h1>
+      <span class="spacer"></span>
+      <button class="btn sm" onclick="loadDiag();navigate('diag')">🩺 تشخیص</button>
+    </header>
+
+    <!-- ============================================ chat -->
+    <section class="view" id="view-chat" style="padding:0">
+      <div class="chat">
+        <div class="convs">
+          <div class="convs-head">
+            <button class="btn sm primary" style="width:100%" onclick="newConversation()">+ گفتگوی تازه</button>
+          </div>
+          <div class="conv-list" id="convList"></div>
+        </div>
+
+        <div class="chat-main">
+          <div class="picker" id="picker">
+            <button type="button" class="picker-toggle" onclick="togglePicker()"
+                    aria-controls="picker" title="تا کردن یا باز کردن انتخاب مدل">
+              <span id="pickArrow">▴</span><b id="pickSummary">—</b>
+            </button>
+            <select class="input picker-field" id="pickProvider"></select>
+            <select class="input picker-field" id="pickModel"></select>
+          </div>
+
+          <div class="msgs" id="msgs">
+            <div class="empty">یک ارائه‌دهنده و مدل انتخاب کنید و بنویسید.</div>
+          </div>
+
+          <form class="composer" id="composer">
+            <textarea class="input" id="composerText" rows="1"
+                      placeholder="پیام‌تان را بنویسید…  (Enter برای ارسال، Shift+Enter برای خط تازه)"></textarea>
+            <button class="btn primary" id="sendBtn" type="submit">ارسال</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ providers -->
+    <section class="view" id="view-providers" hidden>
+      <div class="row" style="margin-bottom:14px">
+        <button class="btn primary" onclick="openProvider()">+ ارائه‌دهندهٔ جدید</button>
+        <button class="btn" onclick="openImport()">⬆ درون‌ریزی</button>
+        <a class="btn" id="exportLink" href="#" onclick="this.href=window.ARENA_API+'?p=%2Fapi%2Fproviders-export'">⬇ برون‌ریزی</a>
+      </div>
+      <div id="providerList"></div>
+    </section>
+
+    <!-- ============================================ files -->
+    <section class="view" id="view-files">
+      <div class="fs">
+        <div style="display:flex;flex-direction:column;min-height:0">
+          <div class="row" style="margin-bottom:8px">
+            <span class="mono" id="fsCrumb">/</span>
+            <button class="btn sm" style="margin-inline-start:auto" onclick="newFile()">+ فایل</button>
+          </div>
+          <div class="fs-list" id="fsList"></div>
+        </div>
+        <div class="fs-edit">
+          <div class="row" style="margin-bottom:8px">
+            <strong class="mono" id="fsName">—</strong>
+            <span class="spacer"></span>
+            <button class="btn sm primary" id="fsSave" onclick="saveFile()">ذخیره</button>
+            <button class="btn sm danger" onclick="deleteFile()">حذف</button>
+          </div>
+          <textarea class="input" id="fsEditor" spellcheck="false"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ terminal -->
+    <section class="view" id="view-terminal" hidden>
+      <div class="card">
+        <h2>وضعیت</h2>
+        <div id="termStatus" class="row"></div>
+      </div>
+      <form id="termForm" class="row" style="margin-bottom:12px">
+        <input class="input mono" id="termCmd" style="flex:1" placeholder="node --version" autocomplete="off">
+        <button class="btn primary" id="termRun" type="submit">اجرا</button>
+      </form>
+      <div class="term-out" id="termOut"></div>
+    </section>
+
+    <!-- ============================================ settings -->
+    <section class="view" id="view-settings" hidden>
+      <form class="card" id="settingsForm">
+        <h2>عمومی</h2>
+        <label class="field"><span>پیام سیستمی (به هر گفتگو اضافه می‌شود)</span>
+          <textarea class="input" id="setPrompt" rows="4"></textarea></label>
+        <label class="field"><span>پوسته</span>
+          <select class="input" id="setTheme"><option value="dark">تیره</option><option value="light">روشن</option></select></label>
+        <button class="btn primary" type="submit">ذخیره</button>
+      </form>
+
+      <form class="card" id="passwordForm">
+        <h2>تغییر گذرواژه</h2>
+        <p class="hint">پس از تغییر، همهٔ نشست‌ها بسته می‌شوند.</p>
+        <label class="field"><span>گذرواژهٔ فعلی</span>
+          <input class="input" type="password" id="pwCurrent" autocomplete="current-password"></label>
+        <label class="field"><span>گذرواژهٔ تازه</span>
+          <input class="input" type="password" id="pwNew" autocomplete="new-password"></label>
+        <button class="btn primary" type="submit">تغییر گذرواژه</button>
+      </form>
+    </section>
+
+    <!-- ============================================ diagnostics -->
+    <section class="view" id="view-diag" hidden>
+      <div class="row" style="margin-bottom:14px">
+        <button class="btn primary" onclick="loadDiag()">▶ اجرای دوباره</button>
+      </div>
+      <div id="diagOut"></div>
+    </section>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<!-- ============================================ dialogs -->
+<dialog id="loginDlg">
+  <form id="loginForm" method="dialog">
+    <div class="dlg-head"><h3>ورود</h3></div>
+    <div class="dlg-body">
+      <label class="field"><span>نام کاربری</span>
+        <input class="input" id="loginUser" value="admin" autocomplete="username"></label>
+      <label class="field"><span>گذرواژه</span>
+        <input class="input" type="password" id="loginPass" autocomplete="current-password"></label>
+      <p class="hint" id="loginErr" style="color:var(--bad)"></p>
+    </div>
+    <div class="dlg-foot"><button class="btn primary" id="loginBtn" type="submit">ورود</button></div>
+  </form>
+</dialog>
+
+<dialog id="providerDlg">
+  <form id="providerForm" method="dialog">
+    <div class="dlg-head"><h3 id="pvTitle">ارائه‌دهنده</h3></div>
+    <div class="dlg-body">
+      <input type="hidden" id="pvId">
+      <label class="field"><span>نام</span><input class="input" id="pvName" required></label>
+      <label class="field"><span>پروتکل</span>
+        <select class="input" id="pvProtocol">
+          <option value="openai">OpenAI و سازگارها</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="ollama">Ollama</option>
+          <option value="mistral">Mistral</option>
+          <option value="azure">Azure OpenAI</option>
+        </select></label>
+      <label class="field"><span>آدرس پایه</span>
+        <input class="input mono" id="pvUrl" placeholder="https://api.openai.com/v1"></label>
+      <label class="field"><span>کلید API</span>
+        <input class="input mono" id="pvKey" type="password" autocomplete="off"></label>
+      <label class="row"><input type="checkbox" id="pvEnabled" checked> فعال باشد</label>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn" type="button" onclick="document.getElementById('providerDlg').close()">انصراف</button>
+      <button class="btn primary" type="submit">ذخیره</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="importDlg">
+  <form id="importForm" method="dialog">
+    <div class="dlg-head"><h3>درون‌ریزی ارائه‌دهنده‌ها</h3></div>
+    <div class="dlg-body">
+      <p class="hint">فایل JSON را انتخاب کنید یا متنش را بچسبانید. شکل‌های رایج
+        (فهرست، شیء کلیددار، یا پیچیده در «providers») همه پذیرفته می‌شوند.</p>
+      <label class="field"><span>فایل</span>
+        <input class="input" type="file" accept=".json,application/json" onchange="pickImportFile(this)"></label>
+      <label class="field"><span>یا متن JSON</span>
+        <textarea class="input mono" id="imText" rows="9" placeholder='{"providers": { … }}'></textarea></label>
+      <label class="row"><input type="checkbox" id="imReplace">
+        جایگزینی کامل (همهٔ ارائه‌دهنده‌های فعلی حذف می‌شوند)</label>
+      <div id="imResult" style="margin-top:12px"></div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn" type="button" onclick="document.getElementById('importDlg').close()">بستن</button>
+      <button class="btn primary" id="imBtn" type="submit">درون‌ریزی</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

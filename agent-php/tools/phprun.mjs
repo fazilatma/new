@@ -8,6 +8,7 @@
  *
  *   cd tools && npm install && cd ..
  *   node tools/phprun.mjs tools/tests/import.php
+ *   node tools/phprun.mjs --root=../arena-agent ../arena-agent/tools/tests/smoke.php
  *   node tools/phprun.mjs tools/tests/routing.php tools/tests/requests.php
  *
  * The repository is mounted at /app and the working directory is /app, so
@@ -23,13 +24,23 @@ import { PHP } from '@php-wasm/universal';
 import fs from 'fs';
 import path from 'path';
 
-const scripts = process.argv.slice(2);
+const args = process.argv.slice(2);
+// --root lets the same runtime exercise a sibling project without a second
+// (very large) node_modules install.
+let rootFlag = null;
+const scripts = args.filter((a) => {
+  const m = /^--root=(.+)$/.exec(a);
+  if (m) { rootFlag = m[1]; return false; }
+  return true;
+});
 if (!scripts.length) {
   console.error('usage: node tools/phprun.mjs <script.php> [more.php ...]');
   process.exit(2);
 }
 
-const appRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const appRoot = rootFlag
+  ? path.resolve(rootFlag)
+  : path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
 const rt = await loadNodeRuntime('8.3', { emscriptenOptions: { processId: 1 } });
 const php = new PHP(rt);
