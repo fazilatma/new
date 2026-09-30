@@ -1,0 +1,5 @@
+node_modules/
+.npm/
+.openhands-backend-key
+.env
+*.log
