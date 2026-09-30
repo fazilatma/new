@@ -125,6 +125,7 @@ let agentMode='auto';
 let activeAgentRunId='';
 let agentTelemetryTimer=null;
 let lastAgentChanges=[];
+let agentTaskHistory=[];
 
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
@@ -263,6 +264,13 @@ function showActivityTab(name,button){
   $(target)?.classList.remove('hidden');
 }
 function clearTerminal(){const out=$('termout');if(out)out.textContent='Terminal cleared.'}
+async function loadCheckpointState(){try{const d=await api('/api/workspace/checkpoint');const cp=d.checkpoint;if(cp){$('checkpointState').textContent='Checkpoint ready';$('checkpointMeta').textContent=(cp.fileCount||0)+' files · '+new Date(cp.createdAt).toLocaleString()}else{$('checkpointState').textContent='No checkpoint';$('checkpointMeta').textContent='A checkpoint is created automatically before an Agent run.'}}catch{}}
+async function createManualCheckpoint(){try{const d=await api('/api/workspace/checkpoint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'Manual checkpoint'})});setActivity('Checkpoint','Saved '+(d.checkpoint?.fileCount||0)+' files');await loadCheckpointState()}catch(e){setActivity('Checkpoint error',e.message)}}
+async function revertToCheckpoint(){if(!confirm('Revert workspace to the latest checkpoint? Current changes will be replaced.'))return;try{const d=await api('/api/workspace/revert',{method:'POST'});setActivity('Workspace reverted',(d.restored||0)+' files restored · '+(d.deleted||0)+' removed');await loadFiles();await loadCheckpointState();refreshGitState()}catch(e){setActivity('Revert error',e.message)}}
+async function openFileDiff(file){try{const d=await api('/api/workspace/diff?'+new URLSearchParams({path:file}).toString());$('diffTitle').textContent=file;const body=$('diffBody');body.innerHTML=(d.lines||[]).map(x=>'<div class="diff-line '+x.type+'"><span>'+(x.lineA??'')+'</span><span>'+(x.lineB??'')+'</span><code>'+esc(x.text||'')+'</code></div>').join('')||'<div class="diff-empty">No differences.</div>';$('diffModal').classList.add('open')}catch(e){setActivity('Diff error',e.message)}}
+function closeDiffModal(){$('diffModal').classList.remove('open')}
+function saveAgentTask(record){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]');agentTaskHistory.unshift(record);agentTaskHistory=agentTaskHistory.slice(0,20);localStorage.setItem('arena.agent.tasks.v1',JSON.stringify(agentTaskHistory))}catch{}}
+function renderTaskHistory(){const history=agentTaskHistory.length?agentTaskHistory.map(x=>'<div class="task-history-item"><div><b>'+esc(x.prompt)+'</b><small>'+new Date(x.createdAt).toLocaleString()+' · '+(x.success?'completed':'review needed')+'</small></div><span>'+esc(String(x.iterations||0))+' iter</span></div>').join(''):'<div class="task-history-empty">No previous Agent runs.</div>';return '<div class="task-history">'+history+'</div>'}
 async function refreshGitState(){await loadGitState()}
 function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentChanges.length){
   $('telemetryState')&&( $('telemetryState').textContent=state );
@@ -274,6 +282,7 @@ function renderWorkspaceChanges(changes=[]){
   const el=$('changesView');if(!el)return;
   if(!changes.length){el.innerHTML='<div class="activity-empty"><span>⌁</span><p>No workspace changes</p><small>The latest run did not modify tracked workspace files.</small></div>';return}
   el.innerHTML='<div class="changes-view-list">'+changes.map(x=>'<div class="change-item"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code>'+esc(x.path)+'</code><small>'+esc(x.status)+(x.bytesAfter!=null?' · '+x.bytesAfter+' B':'')+'</small></div>').join('')+'</div>';
+  const items=document.querySelectorAll('#changesView .change-item');items.forEach((el,i)=>{const path=changes[i]?.path;if(path&&!el.querySelector('button')){const b=document.createElement('button');b.className='terminal-mini';b.textContent='Diff';b.onclick=()=>openFileDiff(path);el.appendChild(b)}});
 }
 function renderAgentChecks(history=[]){
   const el=$('checksView');if(!el)return;
@@ -473,3 +482,5 @@ function toggleSettings(){const o=$('settingsOverlay');if(o)o.classList.toggle('
 function closeSettings(e){if(e.target===$('settingsOverlay'))toggleSettings()}
 function showSettingsTab(name,btn){document.querySelectorAll('.settings-section').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.settings-tabs button').forEach(x=>x.classList.remove('active'));const s=$('settings-'+name);if(s)s.classList.add('active');if(btn)btn.classList.add('active')}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')$('settingsOverlay')?.classList.remove('open')});
+
+window.addEventListener('load',()=>{loadCheckpointState();try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}});
