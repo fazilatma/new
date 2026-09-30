@@ -835,8 +835,30 @@ function gh_repo_branches(string $owner,string $repo,string $token='',?callable 
 function proj_scraper4_runtime(): array {
     return json_decode('{"type":"node","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","port":"8790","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"},"runtime_profile":"scraper4-local-deployer"}',true);
 }
+function proj_openhands_runtime(): array {
+    return [
+        'type'=>'node',
+        'node_version'=>'24',
+        'install_cmd'=>'npm install --no-audit --no-fund',
+        'build_cmd'=>'',
+        'start_cmd'=>'npm start',
+        'port'=>'8000',
+        'auto_start'=>false,
+        'is_daemon'=>true,
+        'env'=>[
+            'NODE_ENV'=>'production',
+            'AGENT_CANVAS_PORT'=>'8000',
+            'PORT'=>'8000'
+        ],
+        'runtime_profile'=>'openhands-agent-canvas'
+    ];
+}
 function gh_apply_runtime_profile(array $app,array $pkg,bool $hasLauncher): array {
-    if($hasLauncher&&($pkg['name']??'')==='scraper4-cloudflare'&&trim((string)($pkg['scripts']['deployer:ui']??''))==='node scripts/local-deployer-ui.mjs'){
+    if(($pkg['name']??'')==='openhands-agent-canvas-host' && in_array('@openhands/agent-canvas', array_keys(array_merge($pkg['dependencies']??[],$pkg['devDependencies']??[])), true)){
+        $app=array_merge($app,proj_openhands_runtime());
+        $app['name']=$pkg['name']??$app['name'];
+        $app['framework']='OpenHands Agent Canvas';
+    } elseif($hasLauncher&&($pkg['name']??'')==='scraper4-cloudflare'&&trim((string)($pkg['scripts']['deployer:ui']??''))==='node scripts/local-deployer-ui.mjs'){
         $app=array_merge($app,proj_scraper4_runtime());$app['framework']='Scraper4 Node + Local Deployer (8790 / 3000)';
     }
     return $app;
