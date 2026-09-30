@@ -1,7 +1,16 @@
 {
-  "repository": "fazilatma/new",
+  "name": "local-coding-agent",
+  "type": "node",
   "branch": "arena/coding-agent-local-models",
-  "install": "npm install",
-  "start": "node server/index.js",
-  "port": 3000
+  "subfolder": "",
+  "deploy_path": "",
+  "port": "3000",
+  "install_cmd": "npm install --no-audit --no-fund",
+  "build_cmd": "",
+  "start_cmd": "npm start",
+  "repo_url": "https://github.com/fazilatma/new.git",
+  "auto_start": false,
+  "is_daemon": true,
+  "auto_update": true,
+  "auto_update_interval": 60
 }
