@@ -104,7 +104,7 @@ async function probeModelUrl(rawUrl){
   }
   const disk=await diskInfo(modelsRoot);
   if(status<200||status>=400)throw Error('Download URL returned HTTP '+status);
-  if(!/gguf/i.test(contentType) && !/\\.gguf(?:$|\\?)/i.test(new URL(finalUrl).pathname))throw Error('URL does not appear to point to a GGUF file');
+  if(!/gguf/i.test(contentType) && !/\.gguf(?:$|\?)/i.test(new URL(finalUrl).pathname))throw Error('URL does not appear to point to a GGUF file');
   if(bytes>MODEL_DOWNLOAD_MAX_BYTES)throw Error('Model exceeds the configured download limit');
   if(Number.isFinite(disk.freeBytes) && bytes>Math.max(0,disk.freeBytes-MODEL_DOWNLOAD_FREE_RESERVE_BYTES))throw Error('Not enough free disk space for this model');
   return {ok:true,finalUrl,bytes:bytes||null,contentType,freeBytes:disk.freeBytes};
@@ -161,7 +161,7 @@ app.get('/api/models/download-check',async(q,r)=>{
   try{parsed=new URL(raw)}catch{return r.status(400).json({error:'Invalid download URL'})}
   if(!/^https?:$/.test(parsed.protocol))return r.status(400).json({error:'Only HTTP/HTTPS URLs are allowed'});
   const name=path.basename(parsed.pathname);
-  if(!/\\.gguf$/i.test(name))return r.status(400).json({error:'URL must point to a .gguf file'});
+  if(!/\.gguf$/i.test(name))return r.status(400).json({error:'URL must point to a .gguf file'});
   try{
     const d=await probeModelUrl(parsed.toString());
     send(r,{ok:true,name,finalUrl:d.finalUrl,bytes:d.bytes,contentType:d.contentType,freeBytes:d.freeBytes});
@@ -330,14 +330,13 @@ app.post('/api/models/test-all',async(q,r)=>{
   for(const item of imported)results.push(await testImported(item));
   send(r,{ok:true,total:results.length,localTotal:localModels.length,importedTotal:imported.length,results,settings:{context,maxTokens,temperature,prompt}});
 });
-app.post('/api/models/launch',async(q,r)=>{const name=String(q.body.name||'');if(!name||path.basename(name)!==name||!name.toLowerCase().endsWith('.gguf'))return r.status(400).json({error:'GGUF required'});const model=safePath(modelsRoot,name);if(!(await fs.stat(model).catch(()=>null))?.isFile())return r.status(404).json({error:'Model not found'});const port=validLocalPort(q.body.port);if(port<1024||port>65535)return r.status(400).json({error:'Invalid port'});const c=spawn(process.env.LLAMA_BIN||'llama-server',['-m',model,'--host','127.0.0.1','--port',String(port),'-c',String(context)],{cwd:root,detached:true,stdio:'ignore'});c.unref();send(r,{ok:true,pid:c.pid,baseUrl:'http://127.0.0.1:'+port+'/v1'})});
+app.post('/api/models/launch',async(q,r)=>{const name=String(q.body.name||'');if(!name||path.basename(name)!==name||!name.toLowerCase().endsWith('.gguf'))return r.status(400).json({error:'GGUF required'});const model=safePath(modelsRoot,name);if(!(await fs.stat(model).catch(()=>null))?.isFile())return r.status(404).json({error:'Model not found'});const port=validLocalPort(q.body.port);if(port<1024||port>65535)return r.status(400).json({error:'Invalid port'});const c=spawn(process.env.LLAMA_BIN||'llama-server',['-m',model,'--host','127.0.0.1','--port',String(port),'-c',String(q.body.context||8192)],{cwd:root,detached:true,stdio:'ignore'});c.unref();send(r,{ok:true,pid:c.pid,baseUrl:'http://127.0.0.1:'+port+'/v1'})});
 app.post('/api/agent',async(q,r)=>{const prompt=String(q.body.prompt||'').trim();const url=String(q.body.modelUrl||'http://127.0.0.1:8080/v1/chat/completions');const x=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:q.body.model||'local',messages:[{role:'system',content:'You are a professional autonomous coding agent. Work iteratively until verification passes. Return ONLY valid JSON: {"message":"...","actions":[{"type":"write","path":"relative/path","content":"complete file content"},{"type":"command","command":"safe command"}],"done":true}. You may inspect via command actions. After every execution result, use the feedback to fix errors. Never claim success without verification. Paths must stay inside the workspace.'},{role:'user',content:prompt}],temperature:.1,max_tokens:Number(q.body.maxTokens||4096)})});const d=await x.json();if(!x.ok)return r.status(x.status).json(d);send(r,{ok:true,text:d.choices?.[0]?.message?.content||JSON.stringify(d)})});
 app.post('/api/agent/loop',async(q,r)=>{
   const prompt=String(q.body.prompt||'').trim();if(!prompt)return r.status(400).json({error:'prompt required'});const maxIterations=clamp(q.body.maxIterations,1,20,8);const temperature=clamp(q.body.temperature,0,2,.1);const maxTokens=clamp(q.body.maxTokens,256,12000,6000);const commandTimeout=safeTimeout(q.body.commandTimeout);const context=clamp(q.body.context,2048,131072,8192);
   let modelUrl=String(q.body.modelUrl||'');
   let resolvedModel=String(q.body.model||'local');
   let providerKind='openai-compatible';
-  let providerApiKey='';
   if(q.body.modelType==='local'){
     const name=String(q.body.model||'');
     if(!name||path.basename(name)!==name||!name.toLowerCase().endsWith('.gguf'))return r.status(400).json({error:'Invalid local model'});
@@ -367,12 +366,13 @@ app.post('/api/agent/loop',async(q,r)=>{
     if(!url)throw Error('Provider URL is missing');
     if(/generativelanguage\.googleapis\.com|gemini/i.test((p.vendor||'')+' '+url)){
       if(!key)throw Error('Provider API key missing');
+      providerKind='gemini';
       if(!url.includes(':generateContent'))url+='/models/'+encodeURIComponent(modelItem.id||q.body.model)+':generateContent';
       url+=(url.includes('?')?'&':'?')+'key='+encodeURIComponent(key);
     }else{
       if(!/\/(chat\/completions|responses|generate)$/i.test(url))url+=(url.endsWith('/v1')?'/chat/completions':'/v1/chat/completions');
     }
-    q.body.model=q.body.model||modelItem.id;modelUrl=url;resolvedModel=String(q.body.model);providerApiKey=providerApiKey||key;
+    q.body.model=q.body.model||modelItem.id;modelUrl=url;resolvedModel=String(q.body.model);
   }else if(!modelUrl)modelUrl='http://127.0.0.1:8080/v1/chat/completions';
   try{const u=new URL(modelUrl);if(!/^https?:$/.test(u.protocol))throw Error('Invalid model URL')}catch(e){return r.status(400).json({error:e.message})}const messages=[{role:'system',content:'You are an autonomous senior coding agent. Execute a feedback loop. Return ONLY valid JSON: {"message":"...","actions":[{"type":"write","path":"relative/path","content":"complete file content"},{"type":"command","command":"safe command"}],"done":false}. Use commands to inspect and test. After tool results, fix every error you can. Stop only when verification is clean or you need user input. Never claim a change was made unless its write action was executed. Never use paths outside workspace.'},{role:'user',content:prompt}];const history=[];for(let i=1;i<=maxIterations;i++){const x=await fetch(modelUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(providerKind==='gemini'?{systemInstruction:{parts:[{text:messages.filter(m=>m.role==='system').map(m=>m.content).join('\\n')}]} ,contents:messages.filter(m=>m.role!=='system').map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]})),generationConfig:{temperature,maxOutputTokens:maxTokens}}:{model:resolvedModel,messages,temperature,max_tokens:maxTokens})});const d=await x.json();if(!x.ok)return r.status(x.status).json({error:d});const raw=providerKind==='gemini'?(d.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||''):((d.choices?.[0]?.message?.content||d.choices?.[0]?.text)||'');let plan;try{plan=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''))}catch{messages.push({role:'user',content:'Your previous response was not valid JSON. Return only the required JSON object.'});history.push({iteration:i,error:'invalid JSON'});continue}const results=[];if(!plan||typeof plan!=='object'||!Array.isArray(plan.actions)){history.push({iteration:i,error:'invalid action plan'});messages.push({role:'user',content:'Return a JSON object with an actions array.'});continue}for(const a of plan.actions.slice(0,30)){if(a.type==='write'){try{const p=safePath(root,String(a.path));await fs.mkdir(path.dirname(p),{recursive:true});const content=String(a.content??'');if(content.length>2*1024*1024)throw Error('File write exceeds 2 MB limit');await fs.writeFile(p,content);results.push({type:'write',path:a.path,ok:true})}catch(e){results.push({type:'write',path:a.path,ok:false,error:e.message})}}else if(a.type==='command'){const z=await runCommand(String(a.command||''),commandTimeout);results.push({type:'command',command:a.command,code:z.code,stdout:z.stdout,stderr:z.stderr})}}const verification=await verifyWorkspace();const clean=verification.every(x=>x.code===0);history.push({iteration:i,message:plan.message,actions:results,verification,done:Boolean(plan.done&&clean)});if(plan.done&&clean)return send(r,{ok:true,success:true,iterations:i,history});messages.push({role:'assistant',content:JSON.stringify(plan)});messages.push({role:'user',content:JSON.stringify({executionResults:results,automaticVerification:verification,feedback:clean?'Verification is clean. If the requested work is complete, finish; otherwise continue.':'Verification has failures. Diagnose and fix them, then verify again.'})})}send(r,{ok:true,success:false,iterations:maxIterations,history,message:'Maximum iterations reached; review the latest verification results.'})});
 app.use((req,res,next)=>{if(req.method==='GET'&&!req.path.startsWith('/api/'))return res.sendFile(path.join(__dirname,'..','public','index.html'));next()});app.use((e,_,r,__)=>{console.error(e);if(r.headersSent)return __();r.status(e.status||500).json({error:e.message||'Internal server error'})});app.listen(port,host,()=>console.log('Local Coding Agent on '+host+':'+port));
