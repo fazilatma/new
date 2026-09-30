@@ -30,14 +30,14 @@ $required = [
 ];
 foreach ($required as $ext => $why) {
     if (extension_loaded($ext)) $oks[] = "افزونهٔ $ext — موجود ($why)";
-    else $fails[] = "افزونهٔ $ext پیدا نشد — $why. نصب: apt install php-" . $ext . ' (یا <php-ver>-' . $ext . ')';
+    else $fails[] = "افزونهٔ $ext پیدا نشد — $why. جای درست‌کردن: نصب‌کنندهٔ full-stack خودِ کنسول / مدیر هاست (این محیط معمولاً apt ندارد)";
 }
 
-/* SQLite برای دفتر کارهای محلی (v10.170) */
+/* SQLite برای دفتر کارهای محلی (v10.170) — خودِ اپ بدون آن هم کار می‌کند */
 if (extension_loaded('sqlite3') || extension_loaded('pdo_sqlite')) {
     $oks[] = 'افزونهٔ sqlite3/pdo_sqlite — موجود (دفتر کارهای محلی v10.170)';
 } else {
-    $fails[] = 'هم sqlite3 هم pdo_sqlite نیست — دفترِ کارهای محلیِ اپ (v10.170) بدون آن‌ها HTTP 500 می‌دهد. نصب: apt install php-sqlite3';
+    $warns[] = 'sqlite3/pdo_sqlite نیست — خودِ اپ با مسیرِ JSONِ اتمیک کار می‌کند (v10.170 گفته: «بدون هاردِ فیل»). فقط چند قابلیت لجر از دسترس می‌افتد — علت 500 نیست';
 }
 
 /* مفید ولی اختیاری */
@@ -56,7 +56,20 @@ $dir = realpath(__DIR__ . '/..');
 if ($dir && is_writable($dir)) {
     $oks[] = "پوشهٔ نصب نوشتنی‌است: $dir";
 } else {
-    $fails[] = "پوشهٔ نصب نوشتنی نیست: " . ($dir ?: __DIR__) . ' — دسترسی فایل را اصلاح کنید';
+    $fails[] = "پوشهٔ نصب نوشتنی نیست: " . ($dir ?: __DIR__) . ' — معمولاً روی فایل‌پرمیشن فیلد پروژه با «استفاده از مسیر قابل‌نوشتن مدیریت‌شده» درست می‌شود';
+}
+
+/* چکِ کارکردِ curl — فقط موجودی افزونه کافی نیست */
+if (function_exists('curl_init')) {
+    $ch = @curl_init('https://www.google.com/generate_204');
+    if ($ch) {
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_CONNECTTIMEOUT=>5, CURLOPT_TIMEOUT=>8]);
+        @curl_exec($ch);
+        $code = (int)@curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($code > 0) $oks[] = "خروج HTTPS اینترنتی از PHP — موجود (HTTP $code)";
+        else $warns[] = 'curl به اینترنت وصل نشد — اگر پشت پروکسی/فایروال هستید، تنظیمات عبورِ خودِ اپ (دکمه‌ی src_net در رابط) پوشش می‌دهد';
+    }
 }
 
 $tz = ini_get('date.timezone');

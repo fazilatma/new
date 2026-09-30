@@ -48,26 +48,37 @@ What it does, in plain terms:
 
 ## 1b) HTTP 500 after deploy — how to diagnose (and the built-in guard)
 
-The PHP project's `install_cmd` now runs **`php console/preflight.php`**:
-an environment check that fails the deploy loudly — *before* you ever see a
-blank 500 page — with a Persian readout of exactly what is missing (PHP version,
-`curl` / `mbstring` / `json` / `openssl`, and crucially **`sqlite3`/`pdo_sqlite`
-which the v10.170 task ledger needs**), plus writability of the install dir.
+The PHP project's `install_cmd` runs **`php console/preflight.php`**: an
+environment check that fails the deploy loudly — *before* you ever see a blank
+500 page — with a Persian readout of missing PHP extensions plus install-dir
+writability.
 
-If you already got a 500:
+Facts that narrow the search down on a HostConsole/WebConsole host:
 
-1. In the console open the project's **log** — the PHP fatal is printed there
-   (the service prints PHP errors to stderr by default).
-2. Match it to the preflight list; the usual suspects on a minimal `php-cli`
-   install are **`php-sqlite3`**, **`php-mbstring`**, **`php-curl`**:
-   ```bash
-   sudo apt install -y php-sqlite3 php-mbstring php-curl
-   # نصب فول‌استک کنسول هم همه را می‌آورد: bash install-webconsole.sh
-   ```
-3. Redeploy. The preflight step will now pass and the app will come up.
+- **`sqlite3` is *not* a 500 cause.** The app's v10.170 ledger is explicitly
+  tolerant: "Hosts without either extension continue to use the existing
+  atomic JSON path instead of failing hard" (see `scraper4.php` →
+  `localTaskDbOpen()`). The preflight reports it only as a warning.
+- **`curl`/`mbstring`/`json`/`openssl` are almost always present**, because
+  the console itself is PHP and feeds on the same extensions. If the console
+  works, these exist.
+- **The actual fatal is printed in the project's service log.** Open the
+  project → **لاگ سرویس** and read the last PHP line — that names the exact
+  function/file. No guessing needed.
 
-If the 500 persists, paste the service log's fatal line — that line names the
-exact function/file, and we fix from there instead of guessing.
+So in order:
+
+1. Open the service log, read the fatal line.
+2. If a missing extension is named and the host has no `apt`/root, use the
+   console's own full-stack installer (its setup brings PHP with the standard
+   extension set) — or ask the host admin to enable it.
+3. If the fatal is about paths/permissions (`connections.json`, `PROFILES_DIR`),
+   switch the project to the console-managed writable deploy path via
+   **استفاده از مسیر قابل‌نوشتن مدیریت‌شده** in the project form.
+4. Redeploy — the preflight step will now pass before the service starts.
+
+If the 500 persists, paste the service log's fatal line — that line is the
+exact pointer, and we fix from there instead of guessing.
 
 ---
 
@@ -86,7 +97,10 @@ The JS-rendering microservice, rewritten to need **nothing but PHP itself**
   `install_cmd` runs `bash bootstrap.sh` which detects any system
   Chrome/Chromium, and if none exists downloads the portable
   **Chrome-for-Testing** zip archives (plain files, no package runtime) into
-  `browser-php/bin/`. Only system tools needed: `curl` + `unzip`.
+  `browser-php/bin/`. It prefers `chrome-headless-shell` (the minimal headless
+  build — the right choice for CDP). **No `apt`, no `unzip`, no package
+  manager needed:** downloads fall back `curl → wget → python3 urllib`, and
+  zip extraction falls back `unzip → python3 -m zipfile → php ZipArchive`.
 - Service start: `bash start.sh` runs `php -S 127.0.0.1:3100 render.php` with
   `PHP_CLI_SERVER_WORKERS` matching `RENDER_MAX_CONCURRENCY` → real parallel
   renders + an `flock` semaphore that answers `503 Retry-After` when saturated.
@@ -108,20 +122,34 @@ The JS-rendering microservice, rewritten to need **nothing but PHP itself**
 2. Save → **🧪 آزمایش اتصال** should answer with
    `موتور فعال: playwright(CDP)`.
 
-### If Chromium won't start (missing system libraries)
-`find_chrome_bin()` failure surfaces in `/health` (`available.cdp: false`) and in
-the service log. From the console's Terminal (as root) run:
+### If Chromium won't start (missing shared libraries)
+On a host without `apt`/root this is the *only* realistic failure mode: the
+binary downloads fine but the OS lacks e.g. `libnss3.so` for the full build.
+Hints on what to do:
 
-```bash
-cd <deploy>/browser-php && php -S 127.0.0.1:3100 render.php   # test manually
-bash bootstrap.sh    # re-check downloads and library hints
-```
+1. `bash bootstrap.sh` auto-picks **`chrome-headless-shell`** first — that
+   minimal build has a much smaller library footprint and usually starts where
+   full Chrome does not. Only when the full build is needed does it show a
+   "depends on …" report (`ldd`).
+2. Check availability without importing anything:
+   ```bash
+   cd <deploy>/browser-php
+   php -r "require 'render.php'; "   # or simply /health once running
+   bash bootstrap.sh                 # prints per-binary ldd hints
+   ```
+3. If the headless shell also fails to start on this host, the remaining
+   options are the host admin / the console's own full-stack installer (its
+   lamp/lemp installer can install system packages), **or the Node-based
+   `browser/` service below** — your host already has Node 20, and Playwright
+   bundles its own browser with the required libs (`npx playwright install
+   --with-deps chromium` still needs `apt`; `npx playwright install chromium`
+   alone often works if the system libs already exist, which they may not).
 
-`bootstrap.sh` prints the exact `apt install -y libnss3 …` line when it detects
-the chromium binary cannot execute.
-
-> The previous Node-based service still exists in `browser/` for hosts that
-> already run Node — it is simply no longer required for anything.
+> The Node-based service still lives in `browser/` (`project-render-node20.json`
+> on request in the history of branch `8ace7fc~1`). On your host — Node 20 is
+> installed — it is a perfectly good second way if every PHP-route browser
+> binary refuses to start; the API contract is identical, so scraper4 doesn't
+> know the difference.
 
 ---
 

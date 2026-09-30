@@ -1,84 +1,119 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  bootstrap.sh — تأمینِ باینری‌های مرورگر بدون Node/Python/Java
+#  bootstrap.sh — تأمینِ باینری‌های مرورگر بدون Node/Python/Java و بدون apt
 #
-#  اگر کروم/کرومیومی روی سیستم نباشد، نسخهٔ قابل‌حملِ «Chrome for Testing»
-#  (آرشیو zip خام از گوگل — بدون محیط اجرای اضافه) را کنار خود پوشه دانلود
-#  می‌کند:
-#     bin/chrome-linux64/chrome            ← موتور CDP (پلی‌رایتِ خالص‌PHP)
-#     bin/chromedriver-linux64/chromedriver ← موتور Selenium (W3C WebDriver)
+#  ترتیب:
+#   ۱) کرومیومِ سیستمی پیدا شود → همان.
+#   ۲) دانلود chrome-headless-shell (نسخهٔ سبکِ سر‌بی‌سر — به کتابخانه‌های GTK
+#      و سطلِ سیستمی نیاز ندارد؛ برای هاست‌های بدون apt عالی‌ترین انتخاب).
+#   ۳) در صورت دسترس‌بودن، chromedriver هم دانلود می‌شود (موتور Selenium).
 #
-#  پیش‌نیازها: curl و unzip  (وابستگی زبانی ندارد؛ فقط ابزار سیستم)
-#     Debian/Ubuntu:  apt install -y curl unzip
+#  بازکردن zip: ابتدا unzip، بعد python3 -m zipfile، بعد python -m zipfile،
+#  و در نهایت PHP خودش (اگر افزونهٔ zip را داشته باشد). خروجی در ./bin
 # =============================================================================
-set -eu
+set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HERE/bin"
 mkdir -p "$BIN"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-find_linux_sys_chrome() {
-  for n in google-chrome google-chrome-stable chromium chromium-browser chrome; do
-    have "$n" && { echo "$(command -v "$n")"; return 0; }
+fail() { echo "✗ $*"; exit 1; }
+
+download() {  # url → file
+  local url="$1" out="$2"
+  if have curl; then curl -fL --progress-bar -o "$out" "$url" && return 0; fi
+  if have wget; then wget -q -O "$out" "$url" && return 0; fi
+  if have python3; then
+    python3 - "$url" "$out" <<'PY' && return 0
+import sys, urllib.request
+urllib.request.urlretrieve(sys.argv[1], sys.argv[2])
+PY
+  fi
+  return 1
+}
+
+unzip_file() {  # zip → dir
+  local zip="$1" dest="$2"
+  if have unzip; then unzip -q -o "$zip" -d "$dest" && return 0; fi
+  if have python3; then python3 -m zipfile -e "$zip" "$dest" && return 0; fi
+  if have python;  then python  -m zipfile -e "$zip" "$dest" && return 0; fi
+  if have php; then
+    php -r '$z=new ZipArchive;return $z->open($argv[1])===true&&$z->extractTo($argv[2])&&$z->close()?0:1;' "$zip" "$dest" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+find_sys_chrome() {
+  for n in google-chrome google-chrome-stable chromium chromium-browser chrome microsoft-edge msedge; do
+    have "$n" && { command -v "$n"; return 0; }
   done
   return 1
 }
 
-echo "── scraper4 render bootstrap (pure binaries) ──"
+echo "── scraper4 render bootstrap (pure binaries, no apt) ──"
 
-NEED_CHROME=1
-if compgen -G "$BIN/*/chrome" >/dev/null; then NEED_CHROME=0; fi
-if [ "$NEED_CHROME" = "1" ]; then
-  if SYS="$(find_linux_sys_chrome)"; then
-    echo "✓ مرورگرِ سیستمی پیدا شد: $SYS  (دانلود لازم نیست)"
-    NEED_CHROME=0
+if compgen -G "$BIN/*/chrome" >/dev/null 2>&1 || compgen -G "$BIN/*/chrome-headless-shell" >/dev/null 2>&1; then
+  echo "✓ باینریِ مرورگر از قبل هست — دانلود رد شد"
+elif SYS="$(find_sys_chrome)"; then
+  echo "✓ مرورگرِ سیستمی پیدا شد: $SYS  (دانلود لازم نیست)"
+else
+  if have curl; then
+    META="$(curl -fsSL 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json' 2>/dev/null || true)"
+  elif have wget; then
+    META="$(wget -qO- 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json' 2>/dev/null || true)"
+  elif have python3; then
+    META="$(python3 -c "import urllib.request;print(urllib.request.urlopen('https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json',timeout=15).read().decode())" 2>/dev/null || true)"
   fi
-fi
+  [ -n "${META:-}" ] || fail "متادیتای Chrome-for-Testing خوانده نشد — به اینترنت دسترسی هست؟"
 
-if [ "$NEED_CHROME" = "1" ]; then
-  have curl || { echo "✗ curl نیست — ابتدا نصب کنید: apt install -y curl"; exit 1; }
-  have unzip || { echo "✗ unzip نیست — ابتدا نصب کنید: apt install -y unzip"; exit 1; }
+  HEADLESS_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-headless-shell-linux64\.zip' | head -n1 || true)"
+  DRIVER_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chromedriver-linux64\.zip' | head -n1 || true)"
+  FULL_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-linux64\.zip' | head -n1 || true)"
 
-  echo "… خواندن نسخهٔ Stable از متادیتای Chrome-for-Testing"
-  META="$(curl -fsSL 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json')"
-  CHROME_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-linux64\.zip' | head -n1)"
-  DRIVER_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chromedriver-linux64\.zip' | head -n1)"
-  [ -n "$CHROME_URL" ] || { echo "✗ نشانی دانلود کرومیوم پیدا نشد"; exit 1; }
-
-  echo "… دانلود کرومیوم: $CHROME_URL"
-  curl -fL --progress-bar -o "$BIN/chrome-linux64.zip" "$CHROME_URL"
-  unzip -q -o "$BIN/chrome-linux64.zip" -d "$BIN/"
-  rm -f "$BIN/chrome-linux64.zip"
+  if [ -n "$HEADLESS_URL" ]; then
+    echo "… دانلود chrome-headless-shell (نیازِ کتابخانه‌ایِ کم)"
+    download "$HEADLESS_URL" "$BIN/headless.zip" || fail "دانلود ناموفق بود"
+    unzip_file "$BIN/headless.zip" "$BIN/" || fail "بازکردن zip ناموفق — unzip ندارید و fallbackٔ python/php هم کار نکرد"
+    rm -f "$BIN/headless.zip"
+  elif [ -n "$FULL_URL" ]; then
+    echo "… headless-shell در متادیتا نیست؛ دانلود chrome کامل: $FULL_URL"
+    download "$FULL_URL" "$BIN/chrome.zip" || fail "دانلود ناموفق بود"
+    unzip_file "$BIN/chrome.zip" "$BIN/" || fail "بازکردن zip ناموفق"
+    rm -f "$BIN/chrome.zip"
+  else
+    fail "هیچ نشانیِ دانلودی در متادیتا پیدا نشد"
+  fi
 
   if [ -n "$DRIVER_URL" ]; then
-    echo "… دانلود chromedriver: $DRIVER_URL"
-    curl -fL --progress-bar -o "$BIN/chromedriver-linux64.zip" "$DRIVER_URL"
-    unzip -q -o "$BIN/chromedriver-linux64.zip" -d "$BIN/"
-    rm -f "$BIN/chromedriver-linux64.zip"
-  else
-    echo "⚠ chromedriver در متادیتا پیدا نشد؛ موتور Selenium از chromedriver سیستمی استفاده می‌کند"
+    echo "… دانلود chromedriver (موتور Selenium)"
+    if download "$DRIVER_URL" "$BIN/driver.zip" && unzip_file "$BIN/driver.zip" "$BIN/"; then
+      rm -f "$BIN/driver.zip"
+    else
+      echo "⚠ دانلود chromedriver ناموفق — موتور CDP کفایت می‌کند"
+    fi
   fi
 fi
 
-# اگر chromedriverِ خودمان نیست ولی سیستم دارد، فقط اطلاع بده
-if ! compgen -G "$BIN/*/chromedriver" >/dev/null; then
-  if have chromedriver; then echo "✓ chromedriver سیستمی: $(command -v chromedriver)"; else
-    echo "ℹ chromedriver نیست — موتور CDP کفایت می‌کند؛ برای Selenium این اسکریپت را وقتی اینترنت دارید دوباره بزنید"
+# گزارشِ نهایی + آزمون اجرایی
+CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
+if [ -n "$CHROME_PATH" ]; then
+  echo "✓ chrome: $CHROME_PATH"
+  if "$CHROME_PATH" --version >/dev/null 2>&1; then
+    "$CHROME_PATH" --version || true
+  else
+    echo "⚠ کروم اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص است."
+    echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
+    echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
+    echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
+    echo "   ۳) از دستور ldd روی همین باینری استفاده کنید تا نام کتابخانهٔ گمشده را ببینید:"
+    echo "      ldd \"$CHROME_PATH\" | grep 'not found'"
   fi
+else
+  echo "ℹ باینریِ دانلودشده در bin/ پیدا نشد — اگر مرورگر سیستمی هست لازم نیست."
 fi
 
-# بررسی وابستگی‌های لینکری کروم (bookworm و قدیمی‌تر ممکن است بخواهند)
-if compgen -G "$BIN/*/chrome" >/dev/null; then
-  CHR="$(ls -1 "$BIN"/*/chrome | head -n1)"
-  echo "✓ chrome: $CHR"
-  if ! "$CHR" --version >/dev/null 2>&1; then
-    echo "⚠ کروم اجرا نمی‌شود — احتمالاً کتابخانه‌های سیستمی ناقص است."
-    echo "  Debian/Ubuntu (به‌عنوان root):"
-    echo "  apt install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libx11-xcb1 libxcursor1 libxi6 libxtst6 libxss1 libglib2.0-0"
-  else
-    "$CHR" --version || true
-  fi
-fi
+CHROMEDRIVER_PATH="$(ls -1 "$BIN"/*/chromedriver 2>/dev/null | head -n1 || true)"
+[ -n "$CHROMEDRIVER_PATH" ] && echo "✓ chromedriver: $CHROMEDRIVER_PATH" || echo "ℹ chromedriver جدا نیست (اختیاری — موتور Selenium)"
 
 echo "── done — سرویس را با start.sh بالا بیاورید ──"
