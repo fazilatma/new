@@ -13,7 +13,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="python-agent-helper"
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/main/install-python-agent.sh"
 
 ACTION="install"
@@ -422,7 +422,10 @@ install_agent() {
 }
 
 frontend_build_dir() {
-    "$VENV_DIR/bin/python" -c 'from pathlib import Path; import cptr; print(Path(cptr.__file__).resolve().parent / "frontend" / "build")' 2>/dev/null
+    # Use distribution metadata instead of `import cptr`: WebConsole runs the
+    # helper from a checkout that also contains a source-only cptr directory,
+    # which would otherwise shadow the installed wheel on Python `-c` calls.
+    "$VENV_DIR/bin/python" -c 'from importlib.metadata import distribution; print(distribution("cptr").locate_file("cptr/frontend/build").resolve())' 2>/dev/null
 }
 
 write_browser_recovery_page() {
