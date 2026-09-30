@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.13.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.14.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -125,7 +125,7 @@ let agentMode='auto';
 let activeAgentRunId='';
 let agentTelemetryTimer=null;
 let lastAgentChanges=[];
-let agentTaskHistory=[];\nlet reviewDecisions={};
+let agentTaskHistory=[];\nlet reviewDecisions={};\nlet activeReviewCheckpointId='';\nlet projectCheckHistory=[];
 
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
@@ -264,13 +264,14 @@ function showActivityTab(name,button){
   $(target)?.classList.remove('hidden');
 }
 function clearTerminal(){const out=$('termout');if(out)out.textContent='Terminal cleared.'}
-async function loadCheckpointState(){try{const d=await api('/api/workspace/checkpoint');const cp=d.checkpoint;if(cp){$('checkpointState').textContent='Checkpoint ready';$('checkpointMeta').textContent=(cp.fileCount||0)+' files · '+new Date(cp.createdAt).toLocaleString()}else{$('checkpointState').textContent='No checkpoint';$('checkpointMeta').textContent='A checkpoint is created automatically before an Agent run.'}}catch{}}
-async function createManualCheckpoint(){try{const d=await api('/api/workspace/checkpoint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'Manual checkpoint'})});setActivity('Checkpoint','Saved '+(d.checkpoint?.fileCount||0)+' files');await loadCheckpointState()}catch(e){setActivity('Checkpoint error',e.message)}}
+async async function loadCheckpointState(){try{const d=await api('/api/workspace/checkpoint');const cp=d.checkpoint;if(cp){resetReviewScope(cp.id);$('checkpointState').textContent=cp.truncated?'Partial checkpoint':'Checkpoint ready';$('checkpointMeta').textContent=(cp.fileCount||0)+' files · '+new Date(cp.createdAt).toLocaleString()+(cp.truncated?' · per-file revert disabled':'')}else{resetReviewScope('');$('checkpointState').textContent='No checkpoint';$('checkpointMeta').textContent='A checkpoint is created automatically before an Agent run.'}}catch{}}
+async function createManualCheckpoint(){try{const d=await api('/api/workspace/checkpoint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'Manual checkpoint'})});if(d.checkpoint?.id)resetReviewScope(d.checkpoint.id);setActivity('Checkpoint','Saved '+(d.checkpoint?.fileCount||0)+' files');await loadCheckpointState()}catch(e){setActivity('Checkpoint error',e.message)}}
 async function revertToCheckpoint(){if(!confirm('Revert workspace to the latest checkpoint? Current changes will be replaced.'))return;try{const d=await api('/api/workspace/revert',{method:'POST'});setActivity('Workspace reverted',(d.restored||0)+' files restored · '+(d.deleted||0)+' removed');await loadFiles();await loadCheckpointState();refreshGitState()}catch(e){setActivity('Revert error',e.message)}}
 async function openFileDiff(file){try{const d=await api('/api/workspace/diff?'+new URLSearchParams({path:file}).toString());$('diffTitle').textContent=file;const body=$('diffBody');$('diffKind').textContent=d.kind==='added'?'New file':d.kind==='deleted'?'Deleted file':'Checkpoint → current workspace';body.innerHTML=(d.lines||[]).map(x=>'<div class="diff-line '+x.type+'"><span>'+(x.lineA??'')+'</span><span>'+(x.lineB??'')+'</span><code>'+esc(x.text||'')+'</code></div>').join('')||'<div class="diff-empty">No differences.</div>';$('diffModal').classList.add('open')}catch(e){setActivity('Diff error',e.message)}}
 function closeDiffModal(){$('diffModal').classList.remove('open')}
 function saveAgentTask(record){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]');agentTaskHistory.unshift(record);agentTaskHistory=agentTaskHistory.slice(0,20);localStorage.setItem('arena.agent.tasks.v1',JSON.stringify(agentTaskHistory))}catch{}}
-loadReviewDecisions();\nfunction toggleTaskHistory(){const body=$('taskHistoryBody');if(!body)return;body.classList.toggle('hidden');if(!body.classList.contains('hidden')){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}body.innerHTML=renderTaskHistory()}}
+loadReviewDecisions();
+function toggleTaskHistory(){const body=$('taskHistoryBody');if(!body)return;body.classList.toggle('hidden');if(!body.classList.contains('hidden')){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}body.innerHTML=renderTaskHistory()}}
 function renderTaskHistory(){const history=agentTaskHistory.length?agentTaskHistory.map(x=>'<div class="task-history-item"><div><b>'+esc(x.prompt)+'</b><small>'+new Date(x.createdAt).toLocaleString()+' · '+(x.success?'completed':'review needed')+'</small></div><span>'+esc(String(x.iterations||0))+' iter</span></div>').join(''):'<div class="task-history-empty">No previous Agent runs.</div>';return '<div class="task-history">'+history+'</div>'}
 async function refreshGitState(){await loadGitState()}
 function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentChanges.length){
@@ -281,16 +282,42 @@ function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentCha
 function renderReviewSummary(changes=[]){
   const el=$('reviewSummary');if(!el)return;
   const counts=changes.reduce((m,x)=>(m[x.status]=(m[x.status]||0)+1,m),{});
-  el.innerHTML='<span class="review-pill added">+'+(counts.added||0)+'</span><span class="review-pill modified">~'+(counts.modified||0)+'</span><span class="review-pill deleted">−'+(counts.deleted||0)+'</span>';
+  const scoped=activeReviewCheckpointId?(reviewDecisions[activeReviewCheckpointId]||{}):{};
+  const values=changes.map(x=>scoped[x.path]||'pending');
+  const pending=values.filter(x=>x==='pending').length,approved=values.filter(x=>x==='approved').length,reverted=values.filter(x=>x==='reverted').length;
+  el.innerHTML='<span class="review-pill added">+'+(counts.added||0)+'</span><span class="review-pill modified">~'+(counts.modified||0)+'</span><span class="review-pill deleted">−'+(counts.deleted||0)+'</span><small class="review-decision-count">'+pending+' pending · '+approved+' approved · '+reverted+' reverted</small>';
 }
-function loadReviewDecisions(){try{reviewDecisions=JSON.parse(localStorage.getItem('arena.review.decisions.v1')||'{}')}catch{reviewDecisions={}}}
-function setReviewDecision(file,decision){reviewDecisions[file]=decision;try{localStorage.setItem('arena.review.decisions.v1',JSON.stringify(reviewDecisions))}catch{}renderWorkspaceChanges(lastAgentChanges)}
-async function revertFileToCheckpoint(file){if(!confirm('Revert only '+file+' to the latest checkpoint?'))return;try{await api('/api/workspace/revert-file',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path:file})});setReviewDecision(file,'reverted');setActivity('File reverted',file);await loadFiles();await refreshGitState()}catch(e){setActivity('File revert error',e.message)}}
+function loadReviewDecisions(){
+  try{
+    const raw=JSON.parse(localStorage.getItem('arena.review.decisions.v2')||'{}');
+    reviewDecisions=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{};
+  }catch{reviewDecisions={}}
+}
+function saveReviewDecisions(){try{localStorage.setItem('arena.review.decisions.v2',JSON.stringify(reviewDecisions))}catch{}}
+function getReviewDecision(file){return activeReviewCheckpointId?(reviewDecisions[activeReviewCheckpointId]?.[file]||'pending'):'pending'}
+function setReviewDecision(file,decision){
+  if(!activeReviewCheckpointId)return;
+  reviewDecisions[activeReviewCheckpointId] ||= {};
+  reviewDecisions[activeReviewCheckpointId][file]=decision;
+  saveReviewDecisions();renderWorkspaceChanges(lastAgentChanges)
+}
+function resetReviewScope(checkpointId){
+  activeReviewCheckpointId=checkpointId||'';
+  if(activeReviewCheckpointId&&!reviewDecisions[activeReviewCheckpointId])reviewDecisions[activeReviewCheckpointId]={};
+  saveReviewDecisions();renderWorkspaceChanges(lastAgentChanges)
+}
+async function revertFileToCheckpoint(file){
+  if(!confirm('Revert only '+file+' to the latest checkpoint?'))return;
+  try{
+    await api('/api/workspace/revert-file',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path:file})});
+    setReviewDecision(file,'reverted');setActivity('File reverted',file);await loadFiles();await refreshGitState();await loadCheckpointState();
+  }catch(e){setActivity('File revert error',e.message)}
+}
 function renderWorkspaceChanges(changes=[]){
   lastAgentChanges=changes||[];renderReviewSummary(lastAgentChanges);
   const el=$('changesView');if(!el)return;
   if(!changes.length){el.innerHTML='<div class="activity-empty"><span>⌁</span><p>No workspace changes</p><small>The latest run did not modify tracked workspace files.</small></div>';return}
-  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>{const d=reviewDecisions[x.path]||'pending';const label=d==='approved'?'Approved':d==='reverted'?'Reverted':'Pending';return '<div class="change-item '+d+'"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code title="'+esc(x.path)+'">'+esc(x.path)+'</code><small>'+esc(label)+'</small><div class="change-actions"><button class="terminal-mini" onclick="openFileDiff('+JSON.stringify(x.path)+')">Diff</button><button class="terminal-mini review-approve" onclick="setReviewDecision('+JSON.stringify(x.path)+',\'approved\')">✓</button><button class="terminal-mini review-revert" onclick="revertFileToCheckpoint('+JSON.stringify(x.path)+')">↶</button></div></div>'}).join('')+'</div>';
+  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>{const d=getReviewDecision(x.path);const label=d==='approved'?'Approved':d==='reverted'?'Reverted':'Pending';return '<div class="change-item '+d+'"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code title="'+esc(x.path)+'">'+esc(x.path)+'</code><small>'+esc(label)+'</small><div class="change-actions"><button class="terminal-mini" onclick="openFileDiff('+JSON.stringify(x.path)+')">Diff</button><button class="terminal-mini review-approve" onclick="setReviewDecision('+JSON.stringify(x.path)+',\'approved\')">✓</button><button class="terminal-mini review-revert" onclick="revertFileToCheckpoint('+JSON.stringify(x.path)+')">↶</button></div></div>'}).join('')+'</div>';
 }
 function renderAgentChecks(history=[]){
   const el=$('checksView');if(!el)return;
@@ -298,6 +325,39 @@ function renderAgentChecks(history=[]){
   history.forEach(h=>(h.verification||[]).forEach(v=>checks.push(v)));
   if(!checks.length){el.innerHTML='<div class="activity-empty"><span>✓</span><p>No verification results</p><small>Checks will appear here after an Agent run.</small></div>';return}
   el.innerHTML=checks.map(v=>{const ok=Number(v.code)===0;const text=(v.stderr||v.stdout||v.error||'Completed').slice(-300);return '<div class="check-item"><span class="check-icon">'+(ok?'✓':'!')+'</span><div><b>'+esc(v.file||'Verification')+'</b><small>'+esc(text)+'</small></div></div>'}).join('');
+}
+function renderProjectCommands(data){
+  const box=$('projectChecks');if(!box)return;
+  const commands=data?.commands||[];
+  const verify=commands.filter(x=>x.group==='Verify');
+  const scripts=commands.filter(x=>x.group!=='Verify');
+  const buttons=[];
+  verify.forEach(x=>buttons.push('<button class="project-check-btn safe" onclick="runProjectCheck('+JSON.stringify(x.id)+','+JSON.stringify(x.name||'')+')"><span>✓</span>'+esc(x.label)+'</button>'));
+  scripts.slice(0,8).forEach(x=>buttons.push('<button class="project-check-btn '+(x.risk==='safe'?'safe':'confirm')+'" onclick="runProjectCheck('+JSON.stringify(x.id)+','+JSON.stringify(x.name||'')+','+JSON.stringify(x.risk||'confirm')+')"><span>'+(x.risk==='safe'?'✓':'▶')+'</span>'+esc(x.label)+'</button>'));
+  box.innerHTML=(buttons.length?buttons.join(''):'<span class="project-check-empty">No project checks detected</span>')+'<button class="project-check-refresh" onclick="loadProjectCommands()" title="Refresh project commands">↻</button>';
+}
+async function loadProjectCommands(){
+  try{const d=await api('/api/project/commands');renderProjectCommands(d)}
+  catch(e){const box=$('projectChecks');if(box)box.innerHTML='<span class="project-check-empty">'+esc(e.message)+'</span>'}
+}
+function appendProjectCheck(result){
+  const el=$('checksView');if(!el)return;
+  projectCheckHistory=[result,...projectCheckHistory].slice(0,20);
+  el.innerHTML=projectCheckHistory.map(v=>{const ok=Number(v.code)===0;const output=String(v.stderr||v.stdout||'Completed').slice(-700);return '<div class="check-item project-check-result"><span class="check-icon">'+(ok?'✓':'!')+'</span><div><b>'+esc(v.name||v.kind||'Project check')+'</b><small>'+esc((ok?'PASS':'FAIL')+' · '+(v.durationMs||0)+' ms')+'</small><pre>'+esc(output)+'</pre></div></div>'}).join('');
+}
+async function runProjectCheck(kind,name='',risk='safe'){
+  if(risk==='confirm'&&!confirm('Run project script '+name+'? The script is defined by package.json and may perform external or destructive actions.'))return;
+  const state=$('terminalState'),out=$('termout'),tab=document.querySelector('.activity-tabs button:nth-child(3)');
+  if(state)state.textContent='CHECKING…';
+  updateAgentTelemetry('CHECKING','—',lastAgentChanges.length);
+  try{
+    const d=await api('/api/project/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind,name,timeout:Number($('agentCommandTimeout')?.value||120000)})});
+    if(out)out.textContent=(d.stdout||'')+(d.stderr?'\n'+d.stderr:'');
+    appendProjectCheck(d);setActivity(d.ok?'Project check passed':'Project check failed',d.name||d.kind);
+    if(tab)showActivityTab('checks',tab);
+    await refreshGitState();
+  }catch(e){if(out)out.textContent=e.message;appendProjectCheck({ok:false,code:1,name:name||kind,stderr:e.message,durationMs:0});setActivity('Project check error',e.message)}
+  finally{if(state)state.textContent='READY';if($('telemetryState')?.textContent==='CHECKING')updateAgentTelemetry('READY','—',lastAgentChanges.length)}
 }
 function setAgentMode(mode){
   agentMode=mode==='plan'?'plan':'auto';
@@ -456,7 +516,7 @@ async function runAgentLoop(){
     };
     if(selected.kind==='local'){body.modelType='local';body.model=selected.name}
     else {body.modelType='provider';body.providerId=selected.providerId;body.model=selected.name}
-    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});
+    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});\n    if(d.checkpoint?.id)resetReviewScope(d.checkpoint.id);
     agentConversation=agentConversation.filter(x=>x.type!=='working');
     agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),planOnly:Boolean(d.planOnly),changes:d.changes||[],durationMs:Date.now()-agentRunStartedAt});
     saveAgentTask({prompt,success:Boolean(d.success),iterations:d.iterations||d.history?.length||0,createdAt:new Date().toISOString(),changes:(d.changes||[]).length});
@@ -484,7 +544,7 @@ document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLower
 window.modelUrlApi={value:'http://127.0.0.1:8080/v1/chat/completions'};
 window.selectedAgentModel='';
 async function loadVersion(){try{const d=await api('/api/version');if($('appVersion'))$('appVersion').textContent='v'+d.version}catch{}}
-async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels(),loadGitState()]);updateAgentContextState();resizeAgentPrompt($('prompt'));setAgentMode(agentMode);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
+async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels(),loadGitState(),loadProjectCommands()]);updateAgentContextState();resizeAgentPrompt($('prompt'));setAgentMode(agentMode);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
 refresh();restoreAgentChat();updateAgentContextState();resizeAgentPrompt($('prompt'));
 
 function toggleSettings(){const o=$('settingsOverlay');if(o)o.classList.toggle('open')}
