@@ -519,7 +519,8 @@ async function runAgentLoop(){
     };
     if(selected.kind==='local'){body.modelType='local';body.model=selected.name}
     else {body.modelType='provider';body.providerId=selected.providerId;body.model=selected.name}
-    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});\n    if(d.checkpoint?.id)resetReviewScope(d.checkpoint.id);
+    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});
+    if(d.checkpoint?.id)resetReviewScope(d.checkpoint.id);
     agentConversation=agentConversation.filter(x=>x.type!=='working');
     agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),planOnly:Boolean(d.planOnly),changes:d.changes||[],durationMs:Date.now()-agentRunStartedAt});
     saveAgentTask({prompt,success:Boolean(d.success),iterations:d.iterations||d.history?.length||0,createdAt:new Date().toISOString(),changes:(d.changes||[]).length});
