@@ -6,6 +6,12 @@ PORT="${PORT:-5500}"
 export PORT
 export AGENT_CANVAS_PORT="${AGENT_CANVAS_PORT:-$PORT}"
 
+# HostConsole publishes this app under /openhands/ using its htaccess proxy.
+# Agent Canvas must know its public base path or the SPA assets/routes point
+# to the domain root and the result is a blank page.
+export AGENT_CANVAS_BASE_PATH="${AGENT_CANVAS_BASE_PATH:-/openhands}"
+export VITE_BASE_PATH="${VITE_BASE_PATH:-$AGENT_CANVAS_BASE_PATH}"
+
 if [ ! -s ".openhands-backend-key" ]; then
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 32 | tr -d '\n' > .openhands-backend-key
@@ -17,7 +23,6 @@ fi
 
 export LOCAL_BACKEND_API_KEY="$(cat .openhands-backend-key)"
 
-# Agent Canvas requires Node 24+ and uv for the local agent backend.
 if ! command -v uv >/dev/null 2>&1; then
   export UV_INSTALL_DIR="${HOME}/.local/bin"
   mkdir -p "$UV_INSTALL_DIR"
@@ -30,11 +35,8 @@ if [ -x "${HOME}/.local/bin/uv" ]; then
   export PATH="${HOME}/.local/bin:$PATH"
 fi
 
-# Do not rely on a pre-existing node_modules/.bin entry. HostConsole can
-# restore/copy a project with a stale or incomplete dependency tree.
+echo "[openhands] Starting Agent Canvas on port $PORT with base path $AGENT_CANVAS_BASE_PATH"
 echo "[openhands] Ensuring Agent Canvas ${AGENT_CANVAS_VERSION:-1.24.0} is installed..."
 npm install --no-audit --no-fund --include=prod --prefer-online
 
-# Run through npm's package executor so the correct package binary is put on PATH
-# even when npm's local .bin symlink is missing or stale.
 exec npm exec --yes --package="@openhands/agent-canvas@${AGENT_CANVAS_VERSION:-1.24.0}" -- agent-canvas --public
