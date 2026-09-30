@@ -10,6 +10,34 @@ async function newFile(){const p=prompt('مسیر فایل جدید؟');if(p){aw
 async function newFolder(){const p=prompt('مسیر پوشه جدید؟');if(p){await api('/api/mkdir',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({path:p})});await loadFiles()}}
 async function runCommand(){const cmd=$('command').value.trim();if(!cmd)return;$('terminalState').textContent='Running…';try{const d=await api('/api/terminal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command:cmd})});$('termout').textContent=(d.stdout||'')+(d.stderr?'\n'+d.stderr:'');setActivity('Terminal',cmd+' → exit '+d.code)}catch(e){$('termout').textContent=e.message;setActivity('Terminal error',e.message)}finally{$('terminalState').textContent='Ready'}}
 async function loadModels(){const d=await api('/api/models');$('modelCount').textContent=d.length;$('models').innerHTML=d.map(m=>'<div class="model" title="'+esc(m.name)+'">🧠 '+esc(m.name)+'</div>').join('')||'<div class="model" style="color:#566176">مدلی نصب نشده</div>'}
+async function recommendModels(){
+  const box=$('recommendations');
+  box.innerHTML='<div class="benchmark-empty">در حال محاسبه مدل‌های مناسب…</div>';
+  try{
+    const q=new URLSearchParams({
+      ramGb:Number($('recRam').value||16),
+      vramGb:Number($('recVram').value||0),
+      cpuThreads:Number($('recCpu').value||8),
+      context:Number($('recContext').value||8192),
+      diskGb:Number($('recDisk').value||30),
+      useCase:$('recUse').value,
+      priority:$('recPriority').value,
+      quant:$('recQuant').value
+    });
+    const d=await api('/api/models/recommend?'+q.toString());
+    if(!d.recommendations?.length){box.innerHTML='<div class="benchmark-empty">مدلی با این محدودیت‌ها پیدا نشد. RAM/VRAM یا فضای دیسک را افزایش دهید.</div>';return}
+    box.innerHTML=d.recommendations.map((m,i)=>
+      '<div class="recommend-card '+(i===0?'recommended':'')+'"><div class="recommend-top"><div><b>'+esc(m.name)+'</b><small>'+esc(m.family)+' · '+m.params+' · '+esc(m.quant)+'</small></div><span>'+esc(m.fitLabel)+'</span></div>'+
+      '<div class="recommend-meta"><span>فایل <b>'+m.sizeGb+' GB</b></span><span>RAM پیشنهادی <b>'+m.ramGb+' GB</b></span><span>VRAM پیشنهادی <b>'+m.vramGb+' GB</b></span><span>Context <b>'+m.context.toLocaleString()+'</b></span></div>'+
+      '<p>'+esc(m.reason)+'</p><button class="primary-setting" onclick="installRecommended('+JSON.stringify(m.url)+','+JSON.stringify(m.file)+')">⬇ دانلود و نصب این مدل</button></div>'
+    ).join('');
+  }catch(e){box.innerHTML='<div class="benchmark-empty">'+esc(e.message)+'</div>'}
+}
+async function installRecommended(url,file){
+  $('modelUrl').value=url;
+  setActivity('Model Advisor','مدل '+file+' برای نصب انتخاب شد');
+  await downloadModel();
+}
 async function downloadModel(){const url=$('modelUrl').value.trim();if(!url)return;setActivity('Model download','در حال دانلود…');try{await api('/api/models/download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});$('modelUrl').value='';await loadModels();setActivity('Model ready','مدل با موفقیت نصب شد')}catch(e){setActivity('Model error',e.message)}}
 async function launchModel(){const name=$('modelName').value.trim();if(!name)return;try{const d=await api('/api/models/launch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name,port:8080,context:8192})});window.modelUrlApi.value=d.baseUrl+'/chat/completions';setActivity('Local model started',name+' روی پورت 8080');toggleSettings()}catch(e){setActivity('Model error',e.message)}}
 async function loadProviders(){try{const d=await api('/api/providers');$('providers').innerHTML=Object.values(d).map(p=>'<div class="model">🔌 '+esc(p.name)+' <small style="color:#566176;display:block;margin-top:2px">'+esc(p.url||'local')+'</small></div>').join('')||'<div class="model" style="color:#566176">Provider ثبت نشده</div>'}catch(e){setActivity('Provider error',e.message)}}
