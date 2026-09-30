@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.6.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.7.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -48,14 +48,38 @@ async function copyModelUrl(url){
 async function downloadModel(fromAdvisor=false){
   const url=$('modelUrl').value.trim();
   if(!url){setModelInstallState('error','ابتدا لینک فایل GGUF را وارد کنید');return}
-  if(!/\.gguf(?:\?|$)/i.test(url)){setModelInstallState('error','لینک باید به فایل .gguf ختم شود');return}
-  setModelInstallState('loading','در حال دانلود مدل…');
-  setActivity('Model download','در حال دانلود…');
+  if(!/\\.gguf(?:\\?|$)/i.test(url)){setModelInstallState('error','لینک باید به فایل .gguf ختم شود');return}
+  setModelInstallState('loading','در حال بررسی لینک و فضای دیسک…');
+  setActivity('Model download','در حال بررسی لینک مدل…');
   try{
+    const check=await api('/api/models/download-check?'+new URLSearchParams({url}).toString());
+    const sizeText=check.bytes?Math.max(0.01,check.bytes/1073741824).toFixed(2)+' GB':'حجم نامشخص';
+    setModelInstallState('loading','آماده دانلود · '+sizeText);
+    setActivity('Model download','آماده‌سازی دانلود '+(check.name||'model.gguf'));
     const d=await api('/api/models/download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});
-    $('modelUrl').value='';await loadModels();
-    setModelInstallState('success','✓ '+d.name+' نصب شد'+(d.sizeGb?' · '+d.sizeGb+' GB':''));
-    setActivity('Model ready',d.name+' با موفقیت نصب شد')
+    if(!d.jobId)throw Error('Download job was not created');
+    let lastText='';
+    for(let i=0;i<3600;i++){
+      await new Promise(resolve=>setTimeout(resolve,i===0?500:1500));
+      const job=await api('/api/models/download/'+encodeURIComponent(d.jobId));
+      if(job.status==='downloading'){
+        const progress=Number.isFinite(Number(job.progress))?Number(job.progress):null;
+        const done=Number(job.bytes||0),total=Number(job.total||0);
+        const doneText=done?Math.max(0.01,done/1073741824).toFixed(2)+' GB':'';
+        const totalText=total?Math.max(0.01,total/1073741824).toFixed(2)+' GB':'';
+        const text=progress!==null?('در حال دانلود · '+progress.toFixed(1)+'%'+(totalText?' · '+doneText+' / '+totalText:'')):'در حال دانلود…'+(doneText?' · '+doneText:'');
+        if(text!==lastText){setModelInstallState('loading',text);setActivity('Model download',text);lastText=text}
+      }else if(job.status==='completed'){
+        $('modelUrl').value='';
+        await loadModels();
+        setModelInstallState('success','✓ '+job.name+' نصب شد'+(job.sizeGb?' · '+job.sizeGb+' GB':''));
+        setActivity('Model ready',job.name+' با موفقیت نصب شد');
+        return;
+      }else if(job.status==='failed'){
+        throw Error(job.error||'Model download failed');
+      }
+    }
+    throw Error('Model download timed out while waiting for the server job');
   }catch(e){
     setModelInstallState('error','✕ '+e.message);setActivity('Model error',e.message);
     if(!fromAdvisor)throw e
@@ -94,55 +118,96 @@ function showBenchmarkDetail(index){const x=(window.lastBenchmarkResults||[])[in
 function closeBenchmarkDetail(){$('benchmarkDetailModal').classList.remove('open')}
 async function testAllModels(){const box=$('benchmarkResults'),status=$('benchmarkStatus'),btn=document.querySelector('.test-all-btn');if(btn){btn.disabled=true;btn.textContent='⏳ در حال تست…'}status.textContent='در حال اجرای benchmark…';box.innerHTML='<div class="benchmark-empty">در حال تست GGUF و Providerها؛ مدل‌های محلی به‌صورت موقت اجرا و سپس خاموش می‌شوند.</div>';try{const d=await api('/api/models/test-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:$('testPrompt').value,context:Number($('testContext').value||4096),maxTokens:Number($('testMaxTokens').value||64),temperature:Number($('testTemperature').value||0.2),gpuLayers:Number($('testGpuLayers')?.value??-1)})});if(!d.results?.length){box.innerHTML='<div class="benchmark-empty">هیچ مدل نصب‌شده یا Provider واردشده‌ای برای تست پیدا نشد.</div>';status.textContent='مدلی موجود نیست';return}renderBenchmarkResults(d);setActivity('Model benchmark',d.results.filter(x=>x.ok).length+' / '+d.total+' مدل با موفقیت تست شدند')}catch(e){box.innerHTML='<div class="benchmark-empty">'+esc(e.message)+'</div>';status.textContent='خطا در تست'}finally{if(btn){btn.disabled=false;btn.textContent='▶ تست همه مدل‌ها'}}}
 function clearBenchmark(){window.lastBenchmarkResults=[];$('benchmarkResults').innerHTML='<div class="benchmark-empty">نتایج پاک شد.</div>';$('benchmarkStatus').textContent='آماده تست';closeBenchmarkModal();closeBenchmarkDetail()}
+function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
+function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
+
 async function loadAgentModels(){
   const select=$('agentModel'); if(!select)return;
   try{
     const [locals,providers]=await Promise.all([api('/api/models'),api('/api/providers')]);
     const options=['<option value="">انتخاب مدل…</option>'];
-    for(const m of locals||[])options.push('<option value="local:'+esc(m.name)+'">Local · '+esc(m.name)+'</option>');
+    for(const m of locals||[]){
+      const value=encodeAgentSelection({kind:'local',name:m.name});
+      options.push('<option value="'+value+'">Local · '+esc(m.name)+'</option>');
+    }
     for(const [id,p] of Object.entries(providers||{})){
       if(!p.enabled)continue;
       for(const m of (p.models||[])){
         const name=typeof m==='string'?m:String(m.id||m.name||'');
-        if(name)options.push('<option value="provider:'+esc(id)+':'+esc(name)+'">'+esc(p.name||id)+' · '+esc(name)+'</option>');
+        if(name){
+          const value=encodeAgentSelection({kind:'provider',providerId:id,name});
+          options.push('<option value="'+value+'">'+esc(p.name||id)+' · '+esc(name)+'</option>');
+        }
       }
     }
     select.innerHTML=options.join('');
     if(window.selectedAgentModel)select.value=window.selectedAgentModel;
   }catch(e){select.innerHTML='<option value="">No models available</option>';setActivity('Model selector',e.message)}
 }
+
 async function selectAgentModel(){
   const value=$('agentModel')?.value||'';
+  const selected=decodeAgentSelection(value);
   window.selectedAgentModel=value;
-  if(value.startsWith('local:')){
-    const name=value.slice(6);
+  if(!selected)return;
+  if(selected.kind==='local'){
     try{
-      setActivity('Local model','Starting '+name+'…');
-      const d=await api('/api/models/launch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name,port:8080,context:8192})});
+      setActivity('Local model','Starting '+selected.name+'…');
+      const d=await api('/api/models/launch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:selected.name,port:8080,context:Number($('agentContext')?.value||8192)})});
       window.modelUrlApi={value:d.baseUrl+'/chat/completions'};
-      window.activeAgentModel=name;
-      setActivity('Local model','Ready: '+name);
+      window.activeAgentModel=selected.name;
+      setActivity('Local model','Started: '+selected.name);
     }catch(e){setActivity('Local model error',e.message)}
+  }else{
+    setActivity('Provider model',selected.name+' selected');
   }
 }
+
 function toggleAgentAdvanced(){document.getElementById('agentAdvanced')?.classList.toggle('open')}
 function setPrompt(v){$('prompt').value=v;$('prompt').focus()}
+function renderAgentHistory(history){
+  return (history||[]).map(x=>{
+    const actions=Array.isArray(x.actions)?x.actions:[];
+    const verification=Array.isArray(x.verification)?x.verification:[];
+    const writes=actions.filter(a=>a.type==='write'&&a.ok).length;
+    const commands=actions.filter(a=>a.type==='command').length;
+    const failed=verification.filter(v=>v.code!==0).length+actions.filter(a=>a.ok===false).length;
+    const state=x.done?'done':failed?'error':'running';
+    const icon=x.done?'✓':failed?'!':'•';
+    return '<div class="agent-history-card '+state+'"><div class="agent-history-head"><b><span>'+icon+'</span> Iteration '+x.iteration+'</b><small>'+(writes?'✎ '+writes+' files ':'')+(commands?'⌘ '+commands+' commands ':'')+(verification.length?'✓ '+(verification.length-failed)+' checks':'')+'</small></div>'+
+      '<div class="agent-history-message">'+esc(x.message||x.error||'No message')+'</div>'+
+      (failed?'<div class="agent-history-error">'+esc(JSON.stringify(actions.filter(a=>a.ok===false).concat(verification.filter(v=>v.code!==0)).slice(0,4)))+'</div>':'')+
+    '</div>'
+  }).join('');
+}
 async function runAgentLoop(){
   const p=$('prompt').value.trim(); if(!p)return;
-  const selected=$('agentModel')?.value||'';
+  const selected=decodeAgentSelection($('agentModel')?.value||'');
   if(!selected){setActivity('Agent','Select a model first');return}
-  const out=$('answer');
+  const out=$('answer'),button=document.querySelector('.run-agent');
+  if(button){button.disabled=true;button.dataset.running='1';button.innerHTML='<span>◌</span> Agent running…'}
   out.innerHTML='<div class="empty-agent"><span>◌</span><p>Agent working…</p><small>Analyze → execute → test → repair</small></div>';
   setActivity('Agent started',p);
   try{
-    const [kind,provider,name]=selected.split(':');
-    const body={prompt:p,maxIterations:Number($('maxIterations').value||8),maxTokens:Number($('agentMaxTokens').value||6000),commandTimeout:Number($('agentCommandTimeout').value||120000),temperature:Number($('agentTemperature').value||0.1)};
-    if(kind==='local'){body.modelType='local';body.model=name}
-    else {body.modelType='provider';body.providerId=provider;body.model=name}
+    const body={
+      prompt:p,
+      maxIterations:Number($('maxIterations').value||8),
+      maxTokens:Number($('agentMaxTokens').value||6000),
+      commandTimeout:Number($('agentCommandTimeout').value||120000),
+      temperature:Number($('agentTemperature').value||0.1),
+      context:Number($('agentContext').value||8192)
+    };
+    if(selected.kind==='local'){body.modelType='local';body.model=selected.name}
+    else {body.modelType='provider';body.providerId=selected.providerId;body.model=selected.name}
     const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-    out.innerHTML=(d.history||[]).map(x=>'<div class="activity-item"><b>Iteration '+x.iteration+' · '+esc(x.message||'')+'</b><p>'+esc(JSON.stringify(x.verification||x.actions||[]))+'</p></div>').join('')||'<div class="empty-agent">No response.</div>';
+    out.innerHTML=renderAgentHistory(d.history||[])||'<div class="empty-agent">No response.</div>';
     setActivity(d.success?'Agent completed':'Agent stopped',d.success?'Verification passed':'Maximum iterations reached');
-  }catch(e){out.innerHTML='<div class="empty-agent"><p>'+esc(e.message)+'</p></div>';setActivity('Agent error',e.message)}
+    if($('settingIterations'))$('settingIterations').textContent=String(body.maxIterations);
+  }catch(e){
+    out.innerHTML='<div class="empty-agent"><p>'+esc(e.message)+'</p></div>';setActivity('Agent error',e.message)
+  }finally{
+    if(button){button.disabled=false;button.dataset.running='';button.innerHTML='<span>▶</span> Run Agent'}
+  }
 }
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveFile()}});
 window.modelUrlApi={value:'http://127.0.0.1:8080/v1/chat/completions'};
