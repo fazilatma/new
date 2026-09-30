@@ -1,5 +1,5 @@
 const APP_BASE=location.pathname.startsWith('/chat')?'/chat':'';
-window.APP_VERSION='1.8.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
+window.APP_VERSION='1.12.0'; const apiUrl=u=>APP_BASE+(u.startsWith('/')?u:'/'.concat(u)); let current='';const $=x=>document.getElementById(x);
 async function api(u,o={}){const t=localStorage.agentToken||'';o.headers={...(o.headers||{}),...(t?{'x-agent-token':t}:{})};const r=await fetch(apiUrl(u),o),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setActivity(title,msg){const a=$('activity');if(a.querySelector('.activity-empty'))a.innerHTML='';const d=document.createElement('div');d.className='activity-item';d.innerHTML='<b>'+esc(title)+'</b><p>'+esc(msg)+'</p>';a.prepend(d)}
@@ -267,7 +267,7 @@ function clearTerminal(){const out=$('termout');if(out)out.textContent='Terminal
 async function loadCheckpointState(){try{const d=await api('/api/workspace/checkpoint');const cp=d.checkpoint;if(cp){$('checkpointState').textContent='Checkpoint ready';$('checkpointMeta').textContent=(cp.fileCount||0)+' files · '+new Date(cp.createdAt).toLocaleString()}else{$('checkpointState').textContent='No checkpoint';$('checkpointMeta').textContent='A checkpoint is created automatically before an Agent run.'}}catch{}}
 async function createManualCheckpoint(){try{const d=await api('/api/workspace/checkpoint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'Manual checkpoint'})});setActivity('Checkpoint','Saved '+(d.checkpoint?.fileCount||0)+' files');await loadCheckpointState()}catch(e){setActivity('Checkpoint error',e.message)}}
 async function revertToCheckpoint(){if(!confirm('Revert workspace to the latest checkpoint? Current changes will be replaced.'))return;try{const d=await api('/api/workspace/revert',{method:'POST'});setActivity('Workspace reverted',(d.restored||0)+' files restored · '+(d.deleted||0)+' removed');await loadFiles();await loadCheckpointState();refreshGitState()}catch(e){setActivity('Revert error',e.message)}}
-async function openFileDiff(file){try{const d=await api('/api/workspace/diff?'+new URLSearchParams({path:file}).toString());$('diffTitle').textContent=file;const body=$('diffBody');body.innerHTML=(d.lines||[]).map(x=>'<div class="diff-line '+x.type+'"><span>'+(x.lineA??'')+'</span><span>'+(x.lineB??'')+'</span><code>'+esc(x.text||'')+'</code></div>').join('')||'<div class="diff-empty">No differences.</div>';$('diffModal').classList.add('open')}catch(e){setActivity('Diff error',e.message)}}
+async function openFileDiff(file){try{const d=await api('/api/workspace/diff?'+new URLSearchParams({path:file}).toString());$('diffTitle').textContent=file;const body=$('diffBody');$('diffKind').textContent=d.kind==='added'?'New file':d.kind==='deleted'?'Deleted file':'Checkpoint → current workspace';body.innerHTML=(d.lines||[]).map(x=>'<div class="diff-line '+x.type+'"><span>'+(x.lineA??'')+'</span><span>'+(x.lineB??'')+'</span><code>'+esc(x.text||'')+'</code></div>').join('')||'<div class="diff-empty">No differences.</div>';$('diffModal').classList.add('open')}catch(e){setActivity('Diff error',e.message)}}
 function closeDiffModal(){$('diffModal').classList.remove('open')}
 function saveAgentTask(record){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]');agentTaskHistory.unshift(record);agentTaskHistory=agentTaskHistory.slice(0,20);localStorage.setItem('arena.agent.tasks.v1',JSON.stringify(agentTaskHistory))}catch{}}
 function toggleTaskHistory(){const body=$('taskHistoryBody');if(!body)return;body.classList.toggle('hidden');if(!body.classList.contains('hidden')){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}body.innerHTML=renderTaskHistory()}}
@@ -278,12 +278,18 @@ function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentCha
   $('telemetryIteration')&&( $('telemetryIteration').textContent=iteration );
   $('telemetryChanges')&&( $('telemetryChanges').textContent=String(changes) );
 }
+function renderReviewSummary(changes=[]){
+  const el=$('reviewSummary');if(!el)return;
+  const counts=changes.reduce((m,x)=>(m[x.status]=(m[x.status]||0)+1,m),{});
+  el.innerHTML='<span class="review-pill added">+'+(counts.added||0)+'</span><span class="review-pill modified">~'+(counts.modified||0)+'</span><span class="review-pill deleted">−'+(counts.deleted||0)+'</span>';
+}
 function renderWorkspaceChanges(changes=[]){
   lastAgentChanges=changes||[];
+  renderReviewSummary(lastAgentChanges);
   const el=$('changesView');if(!el)return;
   if(!changes.length){el.innerHTML='<div class="activity-empty"><span>⌁</span><p>No workspace changes</p><small>The latest run did not modify tracked workspace files.</small></div>';return}
-  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>'<div class="change-item"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code>'+esc(x.path)+'</code><small>'+esc(x.status)+(x.bytesAfter!=null?' · '+x.bytesAfter+' B':'')+'</small></div>').join('')+'</div>';
-  const items=document.querySelectorAll('#changesView .change-item');items.forEach((el,i)=>{const path=changes[i]?.path;if(path&&!el.querySelector('button')){const b=document.createElement('button');b.className='terminal-mini';b.textContent='Diff';b.onclick=()=>openFileDiff(path);el.appendChild(b)}});
+  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>'<div class="change-item"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code>'+esc(x.path)+'</code><small>'+esc(x.status)+(x.bytesAfter!=null?' · '+x.bytesAfter+' B':'')+'</small><button class="terminal-mini" onclick="openFileDiff('+JSON.stringify(x.path)+')">Diff</button></div>').join('')+'</div>';
+  
 }
 function renderAgentChecks(history=[]){
   const el=$('checksView');if(!el)return;
