@@ -18,7 +18,7 @@ const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat
 const clamp=(n,min,max,fallback)=>{const x=Number(n);return Number.isFinite(x)?Math.min(max,Math.max(min,x)):fallback};
 const safeTimeout=v=>clamp(v,1000,300000,120000);
 const validLocalPort=v=>{const p=clamp(v,1024,65535,8080);return Math.floor(p)};
-const APP_VERSION='1.7.0';
+const APP_VERSION='1.8.0';
 app.get('/api/version',async(_,r)=>send(r,{version:APP_VERSION,name:'local-coding-agent',channel:'stable'}));
 app.get('/api/health',async(_,r)=>send(r,{ok:true,node:process.version,version:APP_VERSION}));
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
