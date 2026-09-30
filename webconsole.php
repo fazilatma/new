@@ -1325,6 +1325,10 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
             cli_log("[config-guard] Preserved and merged {$cfName} settings successfully.");
         }
     }
+    foreach (['data', 'data/backups', 'data/logs', 'data/workspaces', 'data/uploads', 'data/versions', 'data/sessions', 'logs', 'storage'] as $sub) {
+        $subDir = $dest . '/' . $sub;
+        if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
+    }
     foreach (['install' => ($p['install_cmd'] ?: default_install_cmd($p['type'])), 'build' => $p['build_cmd']] as $label => $cmd) {
         if (trim($cmd) === '') continue;
         $script = "#!/bin/bash\nset -e\nset -o pipefail\ncd " . esc($dest) . "\n";
@@ -2565,6 +2569,11 @@ function cli_service(array $job): int {
                 cli_log("[service ERROR] Deployment directory does not exist: {$deployDir}. Please run 'دیپلوی و به‌روزرسانی' first.");
                 sleep(5);
                 continue;
+            }
+
+            foreach (['data', 'data/backups', 'data/logs', 'data/workspaces', 'data/uploads', 'data/versions', 'data/sessions', 'logs', 'storage'] as $sub) {
+                $subDir = $deployDir . '/' . $sub;
+                if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
             }
 
             // 1. Auto-detect all potential ports used by the project
