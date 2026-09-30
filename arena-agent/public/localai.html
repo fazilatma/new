@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>نصب هوش مصنوعی محلی — Arena Agent</title>
+<link rel="stylesheet" href="assets/app.css">
+<style>
+  .lai { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+  .lai h1 { margin: 0 0 8px; font-size: 1.4rem; }
+  .lai .lead { color: var(--muted, #8a8a9a); margin-bottom: 24px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .stat { background: var(--card, #1a1a22); border: 1px solid var(--border, #2a2a36);
+          border-radius: 10px; padding: 12px 14px; }
+  .stat b { display: block; font-size: 1.15rem; margin-top: 4px; }
+  .stat span { color: var(--muted, #8a8a9a); font-size: .85rem; }
+  .model-row { display: flex; align-items: center; gap: 12px; padding: 12px 0;
+               border-bottom: 1px solid var(--border, #2a2a36); }
+  .model-row:last-child { border-bottom: 0; }
+  .model-row .meta { flex: 1; }
+  .model-row .meta strong { display: block; }
+  .model-row .meta small { color: var(--muted, #8a8a9a); }
+  .log { background: #0d0d12; border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace;
+         font-size: .8rem; max-height: 220px; overflow: auto; white-space: pre-wrap; direction: ltr; text-align: left; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .75rem;
+          background: #2a2a36; }
+  .pill.ok { background: #1a3a2a; color: #6dcc8d; }
+  .pill.bad { background: #3a1a1a; color: #e07070; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+</style>
+</head>
+<body>
+<div class="lai">
+  <p><a class="btn sm" href="index.php">← بازگشت به Arena Agent</a></p>
+  <h1>🧠 نصب‌کنندهٔ هوش مصنوعی محلی</h1>
+  <p class="lead">بدون root، Ollama را در <code>storage/localai/</code> نصب می‌کند، سرور را روشن می‌کند
+    و مدل را می‌کشد. بعد به‌عنوان ارائه‌دهندهٔ «Local Ollama» در گفتگو ثبت می‌شود.</p>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>وضعیت میزبان</h2>
+    <div class="grid2" id="hostStats"><div class="hint">در حال خواندن…</div></div>
+    <div class="actions">
+      <button class="btn" onclick="refreshHost()">بازخوانی</button>
+      <button class="btn" id="btnInstallRt" onclick="installRuntime()">نصب runtime</button>
+      <button class="btn" id="btnStart" onclick="startRt()">روشن کردن سرور</button>
+      <button class="btn" id="btnStop" onclick="stopRt()">خاموش کردن</button>
+    </div>
+    <div id="rtStatus" class="hint"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>مدل‌های پیشنهادی</h2>
+    <p class="hint">بر اساس RAM/GPU میزبان، مدل مناسب‌تر مشخص شده. نصب ممکن است چند دقیقه طول بکشد.</p>
+    <div id="catalog"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>مدل‌های نصب‌شده</h2>
+    <div id="installed"><div class="hint">—</div></div>
+    <div class="actions">
+      <button class="btn" onclick="registerAll()">ثبت همه در ارائه‌دهنده‌ها</button>
+      <input class="input" id="customModel" placeholder="نام مدل سفارشی (مثلاً llama3.2:3b)" style="flex:1;min-width:180px">
+      <button class="btn primary" onclick="installCustom()">نصب مدل سفارشی</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>گزارش</h2>
+    <div class="log" id="log">آماده.\n</div>
+  </div>
+</div>
+
+<script>
+const API = window.ARENA_API || 'index.php';
+const $ = (s) => document.querySelector(s);
+
+function url(path) {
+  return API + '?p=' + encodeURIComponent(path);
+}
+
+async function api(path, opts = {}) {
+  const init = { credentials: 'same-origin', ...opts };
+  if (init.body && typeof init.body !== 'string') {
+    init.headers = { 'Content-Type': 'application/json', ...(init.headers || {}) };
+    init.body = JSON.stringify(init.body);
+  }
+  const res = await fetch(url(path), init);
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('application/json')) {
+    const t = await res.text();
+    throw new Error('پاسخ غیر JSON از سرور: ' + t.slice(0, 160));
+  }
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.detail || ('HTTP ' + res.status));
+  return data;
+}
+
+function log(msg) {
+  const el = $('#log');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+function gb(n) { return (n == null ? '—' : Number(n).toFixed(1) + ' GB'); }
+
+async function refreshHost() {
+  try {
+    const h = await api('/api/localai/host');
+    window.__host = h;
+    $('#hostStats').innerHTML = `
+      <div class="stat"><span>RAM آزاد / کل</span><b>${gb(h.memory.availableGb)} / ${gb(h.memory.totalGb)}</b></div>
+      <div class="stat"><span>CPU</span><b>${h.cpu.cores} هسته · ${h.cpu.arch}</b></div>
+      <div class="stat"><span>دیسک آزاد</span><b>${gb(h.disk.freeGb)}</b></div>
+      <div class="stat"><span>GPU</span><b>${h.gpu.present ? (h.gpu.name + ' · ' + gb(h.gpu.vramGb)) : 'ندارد'}</b></div>`;
+    const rt = h.runtime;
+    const pill = rt.reachable
+      ? '<span class="pill ok">در حال اجرا · ' + (rt.apiVersion || '') + '</span>'
+      : (rt.binary ? '<span class="pill">نصب شده، خاموش</span>' : '<span class="pill bad">runtime نیست</span>');
+    $('#rtStatus').innerHTML = pill + ' · host: <code>' + rt.host + '</code>'
+      + (rt.binary ? ' · bin: <code dir="ltr">' + rt.binary + '</code>' : '');
+    renderCatalog(h);
+    await refreshInstalled();
+  } catch (e) {
+    log('خطا در خواندن میزبان: ' + e.message);
+    $('#hostStats').innerHTML = '<div class="hint" style="color:#e07070">' + e.message + '</div>';
+  }
+}
+
+function renderCatalog(h) {
+  const rec = h.recommendation || '';
+  api('/api/localai/catalog').then((c) => {
+    $('#catalog').innerHTML = (c.models || []).map((m) => {
+      const recommended = m.id === rec;
+      return `<div class="model-row">
+        <div class="meta">
+          <strong>${m.name}${recommended ? ' · <span class="pill ok">پیشنهادی</span>' : ''}</strong>
+          <small dir="ltr">${m.id} · ~${m.sizeGb} GB روی دیسک · RAM ≥ ${m.ramGb} GB · ${ (m.tasks||[]).join(', ') }</small>
+        </div>
+        <button class="btn primary sm" onclick="installModel('${m.id}')">نصب</button>
+      </div>`;
+    }).join('') || '<div class="hint">کاتالوگ خالی است</div>';
+  }).catch((e) => { $('#catalog').innerHTML = '<div class="hint">' + e.message + '</div>'; });
+}
+
+async function refreshInstalled() {
+  try {
+    const d = await api('/api/localai/models');
+    if (!d.models.length) {
+      $('#installed').innerHTML = '<div class="hint">هنوز مدلی نصب نشده.</div>';
+      return;
+    }
+    $('#installed').innerHTML = d.models.map((m) => `
+      <div class="model-row">
+        <div class="meta"><strong dir="ltr">${m.name}</strong>
+          <small>${(m.size/1e9).toFixed(2)} GB</small></div>
+        <button class="btn sm" onclick="registerOne('${m.name}')">ثبت</button>
+        <button class="btn sm danger" onclick="removeModel('${m.name}')">حذف</button>
+      </div>`).join('');
+  } catch (e) {
+    $('#installed').innerHTML = '<div class="hint">' + e.message + '</div>';
+  }
+}
+
+async function installRuntime() {
+  log('نصب runtime…');
+  try {
+    const r = await api('/api/localai/runtime/install', { method: 'POST', body: {} });
+    log('runtime: ' + JSON.stringify(r));
+    await refreshHost();
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+async function startRt() {
+  log('روشن کردن سرور…');
+  try {
+    const r = await api('/api/localai/runtime/start', { method: 'POST', body: {} });
+    log('start: ' + JSON.stringify(r));
+    await refreshHost();
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+async function stopRt() {
+  log('خاموش کردن…');
+  try {
+    const r = await api('/api/localai/runtime/stop', { method: 'POST', body: {} });
+    log('stop: ' + JSON.stringify(r));
+    await refreshHost();
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+async function installModel(id) {
+  log('نصب کامل «' + id + '» (runtime + pull + ثبت)… این کار ممکن است طول بکشد.');
+  try {
+    const r = await api('/api/localai/install', { method: 'POST', body: { model: id } });
+    log('انجام شد: ' + JSON.stringify(r));
+    await refreshHost();
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+async function installCustom() {
+  const id = ($('#customModel').value || '').trim();
+  if (!id) return log('نام مدل را بنویسید.');
+  return installModel(id);
+}
+
+async function removeModel(name) {
+  if (!confirm('حذف ' + name + '؟')) return;
+  try {
+    await api('/api/localai/models/' + encodeURIComponent(name), { method: 'DELETE' });
+    log('حذف شد: ' + name);
+    await refreshInstalled();
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+async function registerOne(name) {
+  try {
+    const r = await api('/api/localai/register', { method: 'POST', body: { model: name } });
+    log('ثبت شد: ' + JSON.stringify(r));
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+async function registerAll() {
+  try {
+    const r = await api('/api/localai/register', { method: 'POST', body: {} });
+    log('ثبت همه: ' + JSON.stringify(r));
+  } catch (e) { log('خطا: ' + e.message); }
+}
+
+refreshHost();
+</script>
+</body>
+</html>

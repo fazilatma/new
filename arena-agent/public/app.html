@@ -14,6 +14,7 @@
     <nav class="nav">
       <button data-view="chat"      data-title="گفتگو"><span class="ico">💬</span>گفتگو</button>
       <button data-view="providers" data-title="ارائه‌دهنده‌ها و مدل‌ها"><span class="ico">🤖</span>ارائه‌دهنده‌ها</button>
+      <a class="nav-link" href="index.php?p=/localai" style="display:flex;align-items:center;gap:8px;padding:8px 12px;color:inherit;text-decoration:none;border-radius:8px"><span class="ico">🧠</span>هوش مصنوعی محلی</a>
       <button data-view="files"     data-title="فایل‌های ورک‌اسپیس"><span class="ico">📁</span>فایل‌ها</button>
       <button data-view="changes"   data-title="تغییرهای پیشنهادی"><span class="ico">📝</span>تغییرها<span class="pending-badge" id="pendingBadge" hidden></span></button>
       <button data-view="git"       data-title="گیت"><span class="ico">🌿</span>گیت</button>
@@ -77,6 +78,7 @@
       <div class="row" style="margin-bottom:14px">
         <button class="btn primary" onclick="openProvider()">+ ارائه‌دهندهٔ جدید</button>
         <button class="btn" onclick="openImport()">⬆ درون‌ریزی</button>
+        <a class="btn" href="index.php?p=/localai">🧠 نصب مدل محلی</a>
         <a class="btn" id="exportLink" href="#" onclick="this.href=window.ARENA_API+'?p=%2Fapi%2Fproviders-export'">⬇ برون‌ریزی</a>
       </div>
       <div id="providerList"></div>
@@ -276,6 +278,7 @@
     <div class="dlg-foot">
       <button class="btn" type="button" onclick="document.getElementById('importDlg').close()">بستن</button>
       <button class="btn primary" id="imBtn" type="submit">درون‌ریزی</button>
+        <a class="btn sm" href="index.php?p=/localai">🧠 نصب مدل محلی</a>
     </div>
   </form>
 </dialog>

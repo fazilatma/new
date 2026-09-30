@@ -9,6 +9,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [2.3.0] — 2026-09-30
+
+Local AI installer and a more tolerant provider import.
+
+### Added
+- **Local AI installer** (`src/LocalAI.php`, `public/localai.html`, `/localai`):
+  host scan (RAM/CPU/GPU/disk), root-free Ollama runtime install under
+  `storage/localai/`, start/stop the server on 127.0.0.1, pull/remove models,
+  and register them as a `Local Ollama` provider. Independent of `ARENA_SHELL`.
+- Routes: `GET /api/localai/{host,runtime,catalog,models}`,
+  `POST /api/localai/{install,pull,register}`,
+  `POST /api/localai/runtime/{install,start,stop}`,
+  `DELETE /api/localai/models/{name}`.
+- Sidebar and providers toolbar links to the installer page.
+
+### Fixed
+- **Import reported twice as many models as it stored.** `Providers::save()`
+  already persisted `models`; the import loop counted them again. Models are
+  now stripped before `save()` and counted once.
+- Import accepts more catalogue spellings: `type` / `provider` for protocol,
+  `endpoint` for base URL, and `api_key` / `key` / `token` / `secret` for the
+  credential. Protocol aliases include openrouter, together, groq, deepseek,
+  local, lmstudio, and others common in shared catalogues.
+
 ## [2.2.0] — 2026-09-30
 
 Git, run as real processes.

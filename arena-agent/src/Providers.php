@@ -79,13 +79,14 @@ final class Providers
             $storedKey = Crypto::encrypt($apiKey);
         }
 
+        $protocolRaw = (string) ($in['protocol'] ?? $in['type'] ?? $in['provider']
+            ?? $existing['protocol'] ?? '');
+        $baseRaw = (string) ($in['baseUrl'] ?? $in['url'] ?? $in['endpoint']
+            ?? $in['base_url'] ?? $existing['base_url'] ?? '');
         $row = [
             'name' => (string) ($in['name'] ?? $existing['name'] ?? $id),
-            'protocol' => self::normalizeProtocol(
-                (string) ($in['protocol'] ?? $existing['protocol'] ?? ''),
-                (string) ($in['baseUrl'] ?? $in['url'] ?? $existing['base_url'] ?? '')
-            ),
-            'base_url' => rtrim((string) ($in['baseUrl'] ?? $in['url'] ?? $existing['base_url'] ?? ''), '/'),
+            'protocol' => self::normalizeProtocol($protocolRaw, $baseRaw),
+            'base_url' => rtrim($baseRaw, '/'),
             'api_key' => $storedKey,
             'enabled' => array_key_exists('enabled', $in) ? (int) (bool) $in['enabled'] : (int) ($existing['enabled'] ?? 1),
             'position' => (int) ($in['position'] ?? $existing['position'] ?? 0),
@@ -232,9 +233,34 @@ final class Providers
             if ($existed && (($entry['apiKey'] ?? '') === '')) {
                 unset($entry['apiKey']);
             }
-            self::save($entry, $id);
+            // save() also persists models when present; count them once here
+            // after stripping so the report is not double the real number.
+            $entryModels = null;
             if (isset($entry['models']) && is_array($entry['models'])) {
-                $models += self::saveModels($id, $entry['models']);
+                $entryModels = $entry['models'];
+                unset($entry['models']);
+            }
+            // Accept common aliases used by third-party catalogues.
+            if (!isset($entry['protocol']) && isset($entry['type'])) {
+                $entry['protocol'] = $entry['type'];
+            }
+            if (!isset($entry['protocol']) && isset($entry['provider'])) {
+                $entry['protocol'] = $entry['provider'];
+            }
+            if (!isset($entry['baseUrl']) && isset($entry['endpoint'])) {
+                $entry['baseUrl'] = $entry['endpoint'];
+            }
+            if (!isset($entry['apiKey'])) {
+                foreach (['api_key', 'key', 'token', 'secret'] as $k) {
+                    if (!empty($entry[$k]) && is_string($entry[$k])) {
+                        $entry['apiKey'] = $entry[$k];
+                        break;
+                    }
+                }
+            }
+            self::save($entry, $id);
+            if ($entryModels !== null) {
+                $models += self::saveModels($id, $entryModels);
             }
             $existed ? $updated[] = $id : $created[] = $id;
         }
@@ -297,7 +323,8 @@ final class Providers
     /** @param array<mixed> $a */
     private static function looksLikeProvider(array $a): bool
     {
-        foreach (['name', 'protocol', 'baseUrl', 'url', 'base_url', 'models', 'apiKey', 'api_key'] as $k) {
+        foreach (['name', 'protocol', 'type', 'provider', 'baseUrl', 'url', 'base_url',
+                  'endpoint', 'models', 'apiKey', 'api_key', 'key', 'token'] as $k) {
             if (array_key_exists($k, $a)) {
                 return true;
             }
@@ -329,8 +356,11 @@ final class Providers
         $p = strtolower(trim($protocol));
         $alias = [
             'openai-compatible' => 'openai', 'openai_compatible' => 'openai', 'oai' => 'openai',
+            'openrouter' => 'openai', 'together' => 'openai', 'groq' => 'openai',
+            'deepseek' => 'openai', 'fireworks' => 'openai', 'perplexity' => 'openai',
             'claude' => 'anthropic', 'generativelanguage' => 'gemini', 'google' => 'gemini',
-            'workers-ai' => 'openai', 'cloudflare' => 'openai',
+            'workers-ai' => 'openai', 'cloudflare' => 'openai', 'cf' => 'openai',
+            'local' => 'ollama', 'localai' => 'ollama', 'lmstudio' => 'openai',
         ];
         $p = $alias[$p] ?? $p;
         if (in_array($p, self::PROTOCOLS, true)) {

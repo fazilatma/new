@@ -606,6 +606,54 @@ final class Routes
             Auth::require($q, 'admin');
             return ['entries' => Db::all('SELECT * FROM audit ORDER BY id DESC LIMIT 200')];
         });
+
+        // ---------------- local AI (Ollama under storage/localai/)
+        $r->get('/api/localai/host', static function (Request $q): array {
+            Auth::require($q);
+            return LocalAI::hostScan();
+        });
+        $r->get('/api/localai/runtime', static function (Request $q): array {
+            Auth::require($q);
+            return LocalAI::runtimeStatus();
+        });
+        $r->post('/api/localai/runtime/install', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return LocalAI::installRuntime();
+        });
+        $r->post('/api/localai/runtime/start', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            $env = $q->input('env', []);
+            return LocalAI::startServer(is_array($env) ? $env : []);
+        });
+        $r->post('/api/localai/runtime/stop', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return LocalAI::stopServer();
+        });
+        $r->get('/api/localai/catalog', static function (Request $q): array {
+            Auth::require($q);
+            return LocalAI::catalog();
+        });
+        $r->get('/api/localai/models', static function (Request $q): array {
+            Auth::require($q);
+            return LocalAI::installed();
+        });
+        $r->post('/api/localai/pull', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return LocalAI::pull((string) $q->input('model', ''));
+        });
+        $r->post('/api/localai/install', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return LocalAI::install((string) $q->input('model', ''));
+        });
+        $r->delete('/api/localai/models/{name*}', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return LocalAI::remove((string) ($q->params['name'] ?? ''));
+        });
+        $r->post('/api/localai/register', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            $model = $q->input('model');
+            return LocalAI::registerProvider(is_string($model) && $model !== '' ? $model : null);
+        });
     }
 
     private static function ui(Router $r): void
@@ -629,6 +677,8 @@ final class Routes
 
         $r->get('/', static fn(Request $q) => $serve('app.html', 'text/html'));
         $r->get('/app.html', static fn(Request $q) => $serve('app.html', 'text/html'));
+        $r->get('/localai', static fn(Request $q) => $serve('localai.html', 'text/html'));
+        $r->get('/local-ai', static fn(Request $q) => $serve('localai.html', 'text/html'));
         $r->get('/assets/app.css', static fn(Request $q) => $serve('assets/app.css', 'text/css'));
         $r->get('/assets/app.js', static fn(Request $q) => $serve('assets/app.js', 'text/javascript'));
 

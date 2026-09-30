@@ -172,6 +172,22 @@ php bin/console.php provider:import providers.json --replace
 
 ---
 
+
+## Local AI installer
+
+Open **`index.php?p=/localai`** (or the 🧠 link in the sidebar).
+
+1. The page scans RAM, CPU, GPU and free disk and suggests a model that fits.
+2. **نصب runtime** downloads the official Ollama static binary into
+   `storage/localai/` (no root).
+3. **روشن کردن سرور** starts it on `127.0.0.1:11434`.
+4. Pick a model — install pulls it and registers a `Local Ollama` provider so
+   it appears in the chat model picker.
+
+Environment overrides: `AGENT_LOCALAI_DIR`, `OLLAMA_MODELS`, `OLLAMA_HOST`,
+`AGENT_OLLAMA_BIN`.
+
+
 ## When something does not work
 
 Open **تشخیص** in the sidebar, or `index.php?p=/api/diag` directly. It reports
