@@ -14,7 +14,7 @@ async function runCommand(command,timeout=120000){if(isDangerousCommand(command)
 async function verifyWorkspace(){const results=[];let entries=[];try{entries=await fs.readdir(root,{withFileTypes:true})}catch{};const files=entries.filter(e=>e.isFile()).map(e=>e.name);for(const f of files){if(f.endsWith('.js'))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});if(f.endsWith('.py'))results.push({file:f,...await runCommand('python3 -m py_compile '+JSON.stringify(f),30000)});if(f.endsWith('.php'))results.push({file:f,...await runCommand('php -l '+JSON.stringify(f),30000)})}try{const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));if(pkg.scripts?.test)results.push({file:'package.json',...await runCommand('npm test -- --runInBand',120000)})}catch{}return results}
 function providerNormalize(input){if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Provider JSON must be an object');const out={};for(const [id,v] of Object.entries(input)){if(!v||typeof v!=='object'||Array.isArray(v))continue;const models=Array.isArray(v.models)?v.models.map(m=>typeof m==='string'?m:(m&&typeof m==='object'?m:{})):[];out[String(id)]={id:String(v.id||id),name:String(v.name||id),vendor:String(v.vendor||''),url:String(v.url||''),apiKey:String(v.apiKey||''),enabled:Boolean(v.enabled),models,relayUrl:String(v.relayUrl||''),relayToken:String(v.relayToken||''),relayEnabled:Boolean(v.relayEnabled),useGlobalRelay:Boolean(v.useGlobalRelay),proxyUrl:String(v.proxyUrl||''),proxyType:String(v.proxyType||'http')};if(Array.isArray(v.apiKeys))out[String(id)].apiKeys=v.apiKeys.map(x=>String(x));}return out}
 const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat'||req.url.startsWith('/chat/')){req.url=req.url.slice(5)||'/';}next()}); app.use(express.json({limit:'2mb'})); app.use(securityMiddleware); app.use(express.static(path.join(__dirname,'..','public'))); const send=(r,d)=>r.json(d);
-const APP_VERSION='1.2.3';
+const APP_VERSION='1.3.0';
 app.get('/api/version',async(_,r)=>send(r,{version:APP_VERSION,name:'local-coding-agent',channel:'stable'}));
 app.get('/api/health',async(_,r)=>send(r,{ok:true,node:process.version,version:APP_VERSION}));
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
@@ -57,7 +57,41 @@ app.get('/api/models/recommend',async(q,r)=>{
   send(r,{ok:true,input:{ram,vram,cpu,context,disk,useCase,priority,quant},recommendations:out});
 });
 app.get('/api/models',async(_,r)=>{const e=await fs.readdir(modelsRoot,{withFileTypes:true});send(r,e.filter(x=>x.isFile()&&/\.gguf$/i.test(x.name)).map(x=>({name:x.name})))});
-app.post('/api/models/download',async(q,r)=>{const url=String(q.body.url||'');const name=path.basename(new URL(url).pathname);if(!/\.gguf$/i.test(name))return r.status(400).json({error:'Only GGUF downloads are supported'});const dest=safePath(modelsRoot,name);const x=await fetch(url);if(!x.ok)return r.status(x.status).json({error:'download failed'});const fh=await fs.open(dest,'w');try{const rd=x.body.getReader();while(true){const z=await rd.read();if(z.done)break;await fh.write(z.value)}}finally{await fh.close()}send(r,{ok:true,name})});
+app.post('/api/models/download',async(q,r)=>{
+  const raw=String(q.body.url||'').trim();
+  if(!raw)return r.status(400).json({error:'URL مدل وارد نشده است'});
+  let parsed;
+  try{parsed=new URL(raw)}catch{return r.status(400).json({error:'آدرس دانلود معتبر نیست'})}
+  if(!/^https?:$/.test(parsed.protocol))return r.status(400).json({error:'فقط HTTP/HTTPS مجاز است'});
+  const name=path.basename(parsed.pathname);
+  if(!/\.gguf$/i.test(name))return r.status(400).json({error:'لینک باید به فایل GGUF ختم شود'});
+  const dest=safePath(modelsRoot,name),tmp=dest+'.part';
+  let fh=null;
+  try{
+    const x=await fetch(parsed,{redirect:'follow',signal:AbortSignal.timeout(30*60*1000),headers:{'user-agent':'Arena-Coding-Agent/1.3.0'}});
+    if(!x.ok)throw Error('دانلود ناموفق: HTTP '+x.status);
+    if(!x.body)throw Error('سرور فایل قابل دریافت ارائه نکرد');
+    const declared=Number(x.headers.get('content-length')||0);
+    const maxBytes=Number(process.env.MAX_MODEL_DOWNLOAD_BYTES||30*1024*1024*1024);
+    if(declared>maxBytes)throw Error('حجم مدل از سقف مجاز دانلود بیشتر است');
+    fh=await fs.open(tmp,'w');
+    const rd=x.body.getReader();let total=0;
+    while(true){
+      const z=await rd.read();
+      if(z.done)break;
+      total+=z.value.byteLength;
+      if(total>maxBytes)throw Error('حجم مدل از سقف مجاز دانلود بیشتر است');
+      await fh.write(z.value);
+    }
+    await fh.close();fh=null;
+    await fs.rename(tmp,dest);
+    send(r,{ok:true,name,bytes:total,sizeGb:Math.round(total/1073741824*100)/100});
+  }catch(e){
+    if(fh)await fh.close().catch(()=>{});
+    await fs.rm(tmp,{force:true}).catch(()=>{});
+    r.status(502).json({error:e.message||'دانلود مدل ناموفق بود'});
+  }
+});
 app.post('/api/models/test-all',async(q,r)=>{
   const entries=await fs.readdir(modelsRoot,{withFileTypes:true});
   const localModels=entries.filter(x=>x.isFile()&&/\.gguf$/i.test(x.name)).map(x=>x.name);
