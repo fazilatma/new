@@ -85,7 +85,7 @@ function renderBenchmarkResults(d){
       '<input id="benchmarkFilter" placeholder="جستجوی مدل یا Provider…" oninput="filterBenchmarkTable(this.value)">'+
       '<select id="benchmarkStatusFilter" onchange="filterBenchmarkTable()"><option value="all">همه</option><option value="ok">موفق</option><option value="fail">خطادار</option></select>'+
       '<select id="benchmarkSourceFilter" onchange="filterBenchmarkTable()"><option value="all">همه منابع</option><option value="local">Local GGUF</option><option value="imported">Provider</option></select>'+
-    '</div>'+\
+    '</div>'+
     '<div class="benchmark-table-wrap"><table class="benchmark-table modal-table"><thead><tr><th>مدل</th><th>وضعیت</th><th>Startup</th><th>Latency</th><th>Prompt tok</th><th>Output tok</th><th>tok/s</th><th></th></tr></thead><tbody id="benchmarkTableBody">'+results.map((x,k)=>benchmarkRow(x,k).replace('<td>'+formatNum(x.completionTokens)+'</td>','<td>'+formatNum(x.promptTokens)+'</td><td>'+formatNum(x.completionTokens)+'</td>')).join('')+'</tbody></table></div>';
   openBenchmarkModal();
 }
