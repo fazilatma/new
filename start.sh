@@ -17,16 +17,24 @@ fi
 
 export LOCAL_BACKEND_API_KEY="$(cat .openhands-backend-key)"
 
-# HostConsole may skip dependency installation when importing a project.
-# Self-heal on first start so the service does not depend on a manual npm install.
-if [ ! -x "node_modules/.bin/agent-canvas" ]; then
-  echo "[openhands] Installing Agent Canvas dependencies..."
-  npm install --no-audit --no-fund --include=prod
+# Agent Canvas requires Node 24+ and uv for the local agent backend.
+if ! command -v uv >/dev/null 2>&1; then
+  export UV_INSTALL_DIR="${HOME}/.local/bin"
+  mkdir -p "$UV_INSTALL_DIR"
+  if command -v curl >/dev/null 2>&1; then
+    echo "[openhands] Installing uv into $UV_INSTALL_DIR..."
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$UV_INSTALL_DIR" sh
+  fi
+fi
+if [ -x "${HOME}/.local/bin/uv" ]; then
+  export PATH="${HOME}/.local/bin:$PATH"
 fi
 
-if [ ! -x "node_modules/.bin/agent-canvas" ]; then
-  echo "[openhands] Agent Canvas installation did not produce node_modules/.bin/agent-canvas" >&2
-  exit 1
-fi
+# Do not rely on a pre-existing node_modules/.bin entry. HostConsole can
+# restore/copy a project with a stale or incomplete dependency tree.
+echo "[openhands] Ensuring Agent Canvas ${AGENT_CANVAS_VERSION:-1.24.0} is installed..."
+npm install --no-audit --no-fund --include=prod --prefer-online
 
-exec node_modules/.bin/agent-canvas --public
+# Run through npm's package executor so the correct package binary is put on PATH
+# even when npm's local .bin symlink is missing or stale.
+exec npm exec --yes --package="@openhands/agent-canvas@${AGENT_CANVAS_VERSION:-1.24.0}" -- agent-canvas --public
