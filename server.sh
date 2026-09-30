@@ -37,6 +37,11 @@ SCRAPER_MEMORY="${SCRAPER_MEMORY:-512M}"
 SCRAPER_RESTART_DELAY="${SCRAPER_RESTART_DELAY:-1}"   # ثانیه — نخستین مکث پس از سقوط
 SCRAPER_RESTART_DELAY_MAX="${SCRAPER_RESTART_DELAY_MAX:-30}"
 SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"  # ثانیه؛ 0 یعنی تیکِ کران خاموش
+# نگهبانِ سلامت: اگر پردازهٔ PHP زنده بود ولی به HTTP جواب نداد (هنک)، آن را
+# می‌کشد تا حلقهٔ نگهبانِ بالا سرورِ تازه بسازد. 0 = خاموش.
+SCRAPER_HEALTH_SEC="${SCRAPER_HEALTH_SEC:-30}"
+SCRAPER_HEALTH_FAILS="${SCRAPER_HEALTH_FAILS:-3}"
+SCRAPER_HEALTH_URL="${SCRAPER_HEALTH_URL:-}"  # خالی = http://127.0.0.1:$PORT/
 SCRAPER_LOG="${SCRAPER_LOG:-$HERE/logs/server.log}"
 SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-$HERE/logs/cron-tick.log}"
 # ریشهٔ سند اختیاری برای چیدمان‌های چندپوشه‌ای (مثلاً حالت لاراول:
@@ -48,6 +53,7 @@ STOP_FLAG="$RUN_DIR/STOP"
 SUP_PIDFILE="$RUN_DIR/supervisor.pid"
 SRV_PIDFILE="$RUN_DIR/php-server.pid"
 TICK_PIDFILE="$RUN_DIR/cron-tick.pid"
+HEALTH_PIDFILE="$RUN_DIR/health-probe.pid"
 
 # ویندوز (Git Bash/MSYS): چندکارگر پشتیبانی نمی‌شود
 case "$(uname -s 2>/dev/null || echo unknown)" in
@@ -116,6 +122,43 @@ stop_ticker() {
   fi
 }
 
+# --- نگهبانِ سلامت: کشتنِ سرورِ «زنده ولی هنک‌کرده» ---------------------------
+# فرق با حلقهٔ بالا: آن‌ها سقوطِ پردازه را می‌بینند؛ این‌جا پردازه زنده است ولی
+# به HTTP جواب نمی‌دهد — عیبی که فقط بازراه‌اندازی حلش می‌کند.
+health_loop() {
+  [ "$SCRAPER_HEALTH_SEC" -gt 0 ] 2>/dev/null || exit 0
+  command -v curl >/dev/null 2>&1 || { log "curl نیست؛ نگهبانِ سلامت فعال نشد."; exit 0; }
+  local url="$SCRAPER_HEALTH_URL"
+  [ -z "$url" ] && url="http://127.0.0.1:$SCRAPER_PORT/"
+  local fails=0 code
+  sleep 5   # فرصتِ بالا آمدنِ اولیه
+  while [ ! -f "$STOP_FLAG" ]; do
+    sleep "$SCRAPER_HEALTH_SEC"
+    [ -f "$STOP_FLAG" ] && break
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
+    if [ "$code" = "000" ] || [ "$code" -ge 500 ] 2>/dev/null; then
+      fails=$((fails+1))
+      log "سلامت: شکست $fails/$SCRAPER_HEALTH_FAILS (کد=$code) روی $url"
+      if [ "$fails" -ge "$SCRAPER_HEALTH_FAILS" ]; then
+        log "سلامت: سرور به $fails درخواستِ متوالی پاسخ نداد — کشتن برای بازراه‌اندازی"
+        [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
+        exit 0
+      fi
+    else
+      [ "$fails" -gt 0 ] && log "سلامت: برگشت (کد=$code)"
+      fails=0
+    fi
+  done
+}
+
+stop_health() {
+  if [ -n "${HEALTH_PID:-}" ]; then
+    kill "$HEALTH_PID" 2>/dev/null || true
+    wait "$HEALTH_PID" 2>/dev/null || true
+    HEALTH_PID=""
+  fi
+}
+
 # --- حلقهٔ نگهبانِ همیشه‌زنده ---------------------------------------------------
 supervise() {
   ensure_dirs
@@ -125,6 +168,7 @@ supervise() {
     log "سیگنال توقف دریافت شد — پایانِ سوپروایزر"
     touch "$STOP_FLAG"
     stop_ticker
+    stop_health
     [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
     exit 0
   }
@@ -143,8 +187,15 @@ supervise() {
       echo "$TICKER_PID" > "$TICK_PIDFILE"
     fi
 
+    if [ "$SCRAPER_HEALTH_SEC" -gt 0 ] 2>/dev/null; then
+      health_loop &
+      HEALTH_PID=$!
+      echo "$HEALTH_PID" > "$HEALTH_PIDFILE"
+    fi
+
     wait "$SERVER_PID"; rc=$?
     stop_ticker
+    stop_health
 
     if [ -f "$STOP_FLAG" ]; then
       log "پرچم توقف دیده شد — بازراه‌اندازی نمی‌شود."
@@ -162,7 +213,7 @@ supervise() {
       [ "$delay" -gt "$SCRAPER_RESTART_DELAY_MAX" ] && delay="$SCRAPER_RESTART_DELAY_MAX"
     fi
   done
-  rm -f "$SRV_PIDFILE" "$TICK_PIDFILE"
+  rm -f "$SRV_PIDFILE" "$TICK_PIDFILE" "$HEALTH_PIDFILE"
 }
 
 is_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -203,15 +254,17 @@ cmd_start() {
 cmd_stop() {
   ensure_dirs
   touch "$STOP_FLAG"
-  local sup="" srv="" tick="" i
-  [ -f "$SUP_PIDFILE" ]  && sup="$(cat "$SUP_PIDFILE" 2>/dev/null || true)"
-  [ -f "$SRV_PIDFILE" ]  && srv="$(cat "$SRV_PIDFILE" 2>/dev/null || true)"
-  [ -f "$TICK_PIDFILE" ] && tick="$(cat "$TICK_PIDFILE" 2>/dev/null || true)"
+  local sup="" srv="" tick="" hp="" i
+  [ -f "$SUP_PIDFILE" ]    && sup="$(cat "$SUP_PIDFILE" 2>/dev/null || true)"
+  [ -f "$SRV_PIDFILE" ]    && srv="$(cat "$SRV_PIDFILE" 2>/dev/null || true)"
+  [ -f "$TICK_PIDFILE" ]   && tick="$(cat "$TICK_PIDFILE" 2>/dev/null || true)"
+  [ -f "$HEALTH_PIDFILE" ] && hp="$(cat "$HEALTH_PIDFILE" 2>/dev/null || true)"
 
   # فرزندهای سوپروایزر را هم بگیر (اگر PID فایل‌ها جا مانده باشند)
   [ -z "$srv" ] && is_alive "$sup" && srv="$(pgrep -P "$sup" 2>/dev/null | tr '\n' ' ' || true)"
 
   kill $tick 2>/dev/null || true
+  kill $hp   2>/dev/null || true
   kill $srv  2>/dev/null || true
   kill $sup  2>/dev/null || true
 
@@ -219,8 +272,8 @@ cmd_stop() {
     is_alive "$sup" || is_alive "$srv" || break
     sleep 1
   done
-  kill -9 $tick $srv $sup 2>/dev/null || true
-  rm -f "$SUP_PIDFILE" "$SRV_PIDFILE" "$TICK_PIDFILE" "$STOP_FLAG"
+  kill -9 $tick $hp $srv $sup 2>/dev/null || true
+  rm -f "$SUP_PIDFILE" "$SRV_PIDFILE" "$TICK_PIDFILE" "$HEALTH_PIDFILE" "$STOP_FLAG"
   log "متوقف شد."
 }
 
@@ -236,6 +289,9 @@ cmd_status() {
   echo "حالت:        $(is_alive "$sup" && echo "در حال اجرا (پس‌زمینه، supervisor PID $sup)" || { is_alive "$srv" && echo "در حال اجرا (پیش‌زمینه، server PID $srv)" || echo "متوقف"; })"
   echo "وب‌سرور PHP: $(is_alive "$srv" && echo "زنده (PID $srv, workers=$SCRAPER_WORKERS)" || echo "—")"
   echo "تیکِ کران:   $([ "$SCRAPER_CRON_TICK" -gt 0 ] 2>/dev/null && { is_alive "$tick" && echo "فعال (PID $tick، هر $SCRAPER_CRON_TICK ثانیه)" || echo "پیکربندی‌شده ولی اجرا نیست"; } || echo "خاموش")"
+  local hp=""
+  [ -f "$HEALTH_PIDFILE" ] && hp="$(cat "$HEALTH_PIDFILE" 2>/dev/null || true)"
+  echo "سلامت:       $([ "$SCRAPER_HEALTH_SEC" -gt 0 ] 2>/dev/null && { is_alive "$hp" && echo "نگهبان فعال (PID $hp، هر $SCRAPER_HEALTH_SEC ثانیه، بعدِ $SCRAPER_HEALTH_FAILS شکست می‌کشد)" || echo "پیکربندی‌شده ولی اجرا نیست"; } || echo "خاموش")"
   if command -v curl >/dev/null 2>&1 && is_alive "$srv"; then
     local code
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$SCRAPER_PORT/" 2>/dev/null || echo '?')"
@@ -259,7 +315,10 @@ cmd_help() {
 
 در هر دو حالت: اگر پردازهٔ PHP سقوط کند، نگهبان تا بی‌نهایت آن را دوباره بالا
 می‌آورد (باز‌راه‌اندازیِ نامحدود با مکثِ تصاعدیِ ۱ تا $SCRAPER_RESTART_DELAY_MAX ثانیه).
+نگهبانِ سلامت هم اگر سرور «زنده ولی هنک‌کرده» باشد (به $SCRAPER_HEALTH_FAILS
+درخواستِ متوالی جواب ندهد) آن را می‌کشد تا تازه ساخته شود.
 پیکربندی در server.conf یا متغیر محیطی (نمونه: server.conf.sample).
+برای چیدمانِ چندپروسهٔ تولیدی (PHP-FPM + Nginx) نمونه‌ها در پوشهٔ deploy/ است.
 EOF
 }
 

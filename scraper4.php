@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.172';
+const APP_VERSION = '10.173';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -334,7 +334,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/07';
+const APP_VERSION_DATE = '1405/07/08';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -8935,6 +8935,123 @@ function fetch_html(string $url, int $timeout = 25): array {
     return $last ?? ['ok' => false, 'error' => 'Empty', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
 }
 
+/* =====================================================================
+ * v10.173: رندرِ جاوااسکریپت (Playwright/Selenium) برای سایت‌های SPA
+ * ---------------------------------------------------------------------
+ * بعضی سایت‌ها (React/Vue/Nuxt/Next) با واکشِ معمولی فقط یک «پوستهٔ خالی»
+ * برمی‌گردانند و محتوایشان با جاوااسکریپت ساخته می‌شود. یک میکروسرویسِ
+ * جداگانهٔ Node (پوشهٔ browser/) با Playwright (و در صورت شکست، Selenium)
+ * صفحه را واقعاً رندر می‌کند؛ این توابع کلاینتِ آن سرویس‌اند.
+ *
+ * پیکربندی در connections.json زیر کلیدِ "render":
+ *   {"render":{"enabled":true,
+ *              "url":"http://127.0.0.1:3100",
+ *              "token":"...",
+ *              "timeout_ms":60000,
+ *              "mode":"auto",        // auto | js
+ *              "scroll":false,
+ *              "wait_until":"domcontentloaded"}}   // load|domcontentloaded|networkidle
+ *
+ * mode=auto : اول واکشِ ایستا؛ فقط اگر «پوستهٔ JS» تشخیص داده شد رندر (گران است)
+ * mode=js   : همیشه رندر (وقتی می‌دانیم سایت SPA است)
+ * =================================================================== */
+function renderCfg(?array $cn = null): array {
+    if ($cn === null) $cn = function_exists('loadConnections') ? loadConnections() : [];
+    $r = (array)($cn['render'] ?? []);
+    $mode = (string)($r['mode'] ?? 'auto');
+    $wu = (string)($r['wait_until'] ?? 'domcontentloaded');
+    return [
+        'enabled'    => !empty($r['enabled']),
+        'url'        => rtrim(trim((string)($r['url'] ?? 'http://127.0.0.1:3100')), '/'),
+        'token'      => (string)($r['token'] ?? ''),
+        'timeout_ms' => max(5000, min(120000, (int)($r['timeout_ms'] ?? 60000))),
+        'mode'       => in_array($mode, ['auto','js'], true) ? $mode : 'auto',
+        'scroll'     => !empty($r['scroll']),
+        'wait_until' => in_array($wu, ['load','domcontentloaded','networkidle'], true) ? $wu : 'domcontentloaded',
+    ];
+}
+
+/* تشخیص «پوستهٔ JS»: صفحه‌ای که فقط اسکلتِ اپ را دارد. محافظ‌کار است تا
+   رندرهای اضافی انجام نشود (هر رندر ۱۵-۶۰ ثانیه طول می‌کشد). */
+function looks_like_js_shell(string $html): bool {
+    if ($html === '' || strlen($html) < 1500) return false;
+    $visible = (string)preg_replace('~<(script|style|noscript|template)[^>]*>.*?</\\1>~is', ' ', $html);
+    $visible = trim((string)strip_tags($visible));
+    $visibleLen = mb_strlen((string)preg_replace('~\\s+~u', ' ', $visible));
+    if ($visibleLen >= 400) return false;
+    // نشانهٔ ۱: متنِ «جاوااسکریپت را فعال کنید»
+    if (preg_match('~(you need to enable javascript|javascript is required|please enable javascript|جاوااسکریپت را (فعال|روشن)|لطفاً? جاوااسکریپت)~iu', $html)) return true;
+    // نشانهٔ ۲: ظرفِ خالیِ رایجِ SPA
+    if (preg_match('~<(div|main|section)[^>]+(?:id|class)=["\'][^"\']*(?:__next|__nuxt|app-root|ng-|id="root"|id="app"|\\broot\\b|\\bapp\\b)[^"\']*["\'][^>]*>\\s*(?:<[^a/][^>]*>\\s*){0,3}</(div|main|section)>~i', $html)) return true;
+    // نشانهٔ ۳: تودهٔ اسکریپتِ خارجی + نشانهٔ فریم‌ورک + متنِ تقریباً صفر
+    if ($visibleLen < 120 && preg_match_all('~<script[^>]+src=~i', $html, $m) && count($m[0]) >= 2) {
+        if (preg_match('~(data-reactroot|window\\.__NUXT__|ng-version|__NEXT_DATA__)~i', $html)) return true;
+    }
+    return false;
+}
+
+function fetch_html_render(string $url, array $rcfg, array $opts = []): array {
+    $base = (string)($rcfg['url'] ?? '');
+    if ($base === '' || !preg_match('~^https?://~i', $base)) {
+        return ['ok'=>false,'error'=>'renderer url not configured','code'=>0,'url'=>$url,'html'=>'','mode'=>'render'];
+    }
+    $payload = [
+        'url'       => $url,
+        'waitUntil' => (string)($opts['wait_until'] ?? ($rcfg['wait_until'] ?? 'domcontentloaded')),
+        'timeout'   => (int)($rcfg['timeout_ms'] ?? 60000),
+        'scroll'    => (bool)($opts['scroll'] ?? ($rcfg['scroll'] ?? false)),
+    ];
+    if (!empty($opts['selector'])) $payload['selector'] = (string)$opts['selector'];
+    $headers = ['Content-Type: application/json', 'Accept: application/json'];
+    if ((string)($rcfg['token'] ?? '') !== '') $headers[] = 'Authorization: Bearer ' . (string)$rcfg['token'];
+    $ch = curl_init($base . '/render');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT => (int)ceil(((int)$payload['timeout']) / 1000) + 10,
+    ]);
+    $body = curl_exec($ch); $err = curl_error($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    $j = is_string($body) ? json_decode($body, true) : null;
+    if ($body === false || $code < 200 || $code >= 300 || !is_array($j) || empty($j['ok'])) {
+        $e = is_array($j) ? (string)($j['error'] ?? '') : '';
+        if ($e === '') $e = $err !== '' ? $err : ('render failed (HTTP ' . $code . ')');
+        return ['ok'=>false,'error'=>$e,'code'=>$code,'url'=>$url,'html'=>'','mode'=>'render'];
+    }
+    return ['ok'=>true,'error'=>'','code'=>(int)($j['code'] ?? 200),
+            'url'=>(string)($j['url'] ?? $url) ?: $url,'html'=>(string)($j['html'] ?? ''),
+            'mode'=>'render','driver'=>(string)($j['driver'] ?? ''),'took_ms'=>(int)($j['took_ms'] ?? 0)];
+}
+
+/* لایهٔ تصمیم: واکشِ ایستا یا رندر. فقط برای صفحه‌های فهرست استفاده می‌شود
+   (همان جایی که خروجیِ خالی معنای «صفر محصول» می‌گرفت). */
+function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): array {
+    $rc = $rcfg ?? renderCfg();
+    if (empty($rc['enabled']) || (string)($rc['url'] ?? '') === '') return fetch_html($url, $timeout);
+    if (($rc['mode'] ?? 'auto') === 'js') {
+        $r = fetch_html_render($url, $rc);
+        if (!empty($r['ok'])) return $r;
+        $s = fetch_html($url, $timeout);            // رندر نشد ← ایستا تا چیزی گم نشود
+        $s['render_error'] = (string)($r['error'] ?? '');
+        return $s;
+    }
+    $s = fetch_html($url, $timeout);
+    if (!empty($s['ok']) && looks_like_js_shell((string)$s['html'])) {
+        $was = strlen((string)$s['html']);
+        $r = fetch_html_render($url, $rc);
+        if (!empty($r['ok']) && strlen((string)$r['html']) > $was) {
+            $r['js_shell_detected'] = true;
+            return $r;
+        }
+        $s['js_shell_detected'] = true;             // تشخیص دادیم ولی رندر نشد
+        $s['render_error'] = (string)($r['error'] ?? '');
+    }
+    return $s;
+}
+
 function extractImageFromHtml(string $html, string $pageUrl): string {
 if(empty($html)) return '';
 $parsed=parse_url($pageUrl);
@@ -13689,7 +13806,9 @@ break;
 $pageUrl = build_page_url_custom($url, $url, $page, $pagType, $pagVal);
 }
 
-$res = fetch_html($pageUrl, 20);
+/* v10.173: واکش هوشمند — اگر render فعال باشد و صفحه «پوستهٔ JS» بود،
+   یک بار هم با مرورگرِ واقعی (Playwright/Selenium) رندر می‌شود. */
+$res = fetch_html_smart($pageUrl, 20);
 
 send_sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok']]);
 
@@ -15130,7 +15249,9 @@ if($_listResume && $page===$_startPage && $pagType==='next_selector'){
     if($_lu!=='')$pageUrl=$_lu;
 }
 
-$res=fetch_html($pageUrl,20);
+/* v10.173: مانند مسیر SSE — فهرست با fetch_html_smart واکشی می‌شود تا
+   سایت‌های SPA (پوستهٔ خالی بدون رندر) هم محصول بدهند. */
+$res=fetch_html_smart($pageUrl,20);
 $totalPages=$page;
 $logs=['📄 صفحه '.$page.': '.($res['ok']?'✓':'✗').' — '.mb_substr($pageUrl,0,60)];
 if(!$res['ok']){
@@ -34276,6 +34397,34 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          build_page_url_custom('https://t.test/', 'https://t.test/', 2, 'path_pattern', '~page~{page}') === 'https://t.test/~page~2');
     $add('10.172', 'الگوی کامل URL هم ~page~{page} را می‌پذیرد',
          build_page_url_custom('https://t.test/shop', 'https://t.test/shop', 7, 'full_pattern', 'https://t.test/shop~page~{page}') === 'https://t.test/shop~page~7');
+
+    /* ---------- v10.173: رندر جاوااسکریپت (Playwright/Selenium) ---------- */
+    $add('10.173', 'توابع کلاینت سرویس رندر وجود دارند',
+         function_exists('render' . 'Cfg') && function_exists('fetch_html_' . 'render')
+      && function_exists('fetch_html_' . 'smart'));
+    $add('10.173', 'تشخیص پوستهٔ JS وجود دارد',
+         function_exists('looks_like_js_' . 'shell'));
+    // رفتارِ واقعیِ heuristic: پوستهٔ __next با متنِ نزدیک‌صفر تشخیص داده می‌شود
+    $_tShell = '<html><body><div id="__next"></div>' . str_repeat('<!--x-->', 300)
+      . '<script src="/a.js"></script><script src="/b.js"></script></body></html>';
+    $add('10.173', 'پوستهٔ __next با متنِ نزدیک‌صفر Shell شناخته می‌شود',
+         function_exists('looks_like_js_' . 'shell') && looks_like_js_shell($_tShell));
+    $_tReal = '<html><body>' . str_repeat('<p>محتوای واقعی صفحه با متنِ کافی برای تشخیصِ غیرپوسته</p>', 40) . '</body></html>';
+    $add('10.173', 'صفحهٔ متن‌دارِ معمولی Shell شناخته نمی‌شود',
+         function_exists('looks_like_js_' . 'shell') && !looks_like_js_shell($_tReal));
+    // URLِ پیش‌فرضِ سرویس تعریف شده و پیکربندی از connections.json خوانده می‌شود
+    $add('10.173', 'پیکربندی رندر از connections.json خوانده می‌شود',
+         strpos($selfSrc, "(array)(\\$cn['ren" . "der'] ?? [])") !== false);
+    // هر دو مسیرِ واکشِ فهرست (SSE و استخراج بک‌اند) به نسخهٔ هوشمند سوییچ شده‌اند
+    $add('10.173', 'هر دو مسیر واکش فهرست از fetch_html_smart استفاده می‌کنند',
+         substr_count($selfSrc, '$res = fetch_html_smart($pageUrl, ' . '20);') === 1
+      && substr_count($selfSrc, '$res=fetch_html_smart($pageUrl,' . '20);') === 1);
+    $add('10.173', 'کالِ قدیمیِ fetch_html در مسیر فهرست نمانده',
+         substr_count($selfSrc, '$res = fetch_html($pageUrl, ' . '20);') === 0
+      && substr_count($selfSrc, '$res=fetch_html($pageUrl,' . '20);') === 0);
+    $add('10.173', 'ورودیِ 10.173 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "173'") !== false
+      && version_compare(APP_VERSION, '10.' . '173', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -64192,6 +64341,15 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.173', t:'🧭 رندر جاوااسکریپت (Playwright/Selenium) برای سایت‌های «جاوی» — واکش هوشمند فهرست', items:[
+    'سرویس رندرِ مستقل (پوشهٔ browser/): Playwright به‌عنوان موتور اصلی و Selenium (W3C WebDriver) به‌عنوان جایگزین خودکار در صورت شکست',
+    'سایت‌های React/Vue/Nuxt/Next که قبلاً «پوستهٔ خالی» می‌دادند و صفر محصول برمی‌گرداندند، حالا با مرورگرِ واقعی رندر می‌شوند',
+    'تشخیص خودکار پوستهٔ JS (ظرف خالی __next/root نزدیک-متن‌صفر، نشانه‌های Next/Nuxt/Angular، پیام «جاوااسکریپت را فعال کنید»)',
+    'حالت‌ها در connections.json ← render: enabled / url / token / mode(auto|js) / scroll / wait_until',
+    'هر دو مسیر واکش فهرست (استریم SSE و استخراج پس‌زمینه) از fetch_html_smart استفاده می‌کنند',
+    'اگر رندر ناموفق بود به واکش ایستا برمی‌گردد و render_error را گزارش می‌دهد — هیچ صفحه‌ای گم نمی‌شود',
+    'در نسخهٔ لاراول نیز RenderedFetcher و SmartFetcher با حالت‌های static/auto/js اضافه شد (+ تست)',
+  ]},
   {v:'10.172', t:'📄 صفحه‌بندی: قالب ~page~{page} و قالب‌های مشابه (~p~{page}، پسوند) پشتیبانی می‌شوند', items:[
     'الگوی مسیر قبلاً فقط /page/N را می‌شناخت؛ حالا پاک‌سازی نشانهٔ فعلی بر اساس پیشوند/پسوندِ ثابتِ خودِ الگو انجام می‌شود',
     '~page~{page} به انتهای مسیر می‌چسبد و /shop~page~2 به /shop~page~3 می‌رسد — نشانه‌ها روی هم انباشته نمی‌شوند',

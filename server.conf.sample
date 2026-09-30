@@ -39,6 +39,15 @@ SCRAPER_RESTART_DELAY_MAX="${SCRAPER_RESTART_DELAY_MAX:-30}"
 # هم همیشه در جریان بمانند. 0 = خاموش.
 SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"
 
+# نگهبانِ سلامت: هر چند ثانیه یک درخواست HTTP به ریشهٔ اپ می‌زند؛ اگر
+# SCRAPER_HEALTH_FAILS بارِ متوالی شکست خورد (هنک)، پردازهٔ سرور کشته می‌شود
+# تا سوپروایزرِ بالا آن را تازه بسازد. مخصوص حالتی است که پردازه زنده‌ است
+# ولی به درخواست‌ها جواب نمی‌دهد. 0 = خاموش.
+SCRAPER_HEALTH_SEC="${SCRAPER_HEALTH_SEC:-30}"
+SCRAPER_HEALTH_FAILS="${SCRAPER_HEALTH_FAILS:-3}"
+# مسیرِ سلامت اگر ریشه مناسب نیست (مثلاً یک صفحهٔ سبک):
+# SCRAPER_HEALTH_URL="${SCRAPER_HEALTH_URL:-http://127.0.0.1:8000/?selftest=1}"
+
 # فایل‌های لاگ
 SCRAPER_LOG="${SCRAPER_LOG:-./logs/server.log}"
 SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-./logs/cron-tick.log}"

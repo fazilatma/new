@@ -45,6 +45,26 @@
 بدهد؛ تست‌های `tests/Unit` همین قرارداد را قفل می‌کنند. اصلاحِ v10.172
 (قالب‌های `~page~{page}`) عیناً در هر دو پیاده‌سازی هست.
 
+## 🧭 رندرِ جاوااسکریپت (سایت‌های «جاوی» / SPA)
+
+برای سایت‌هایی که HTML ایستا نمی‌دهند (React/Vue/Next/Nuxt) سرویسِ رندرِ مستقلِ
+`browser/` (Node — **Playwright** به‌عنوان موتور اصلی و **Selenium** به‌عنوان
+جایگزین خودکار است) با Web APIِ داخلی کار می‌کند:
+
+- `RenderedFetcher` — کلاینتِ /render (قرارداد مشابهِ `HtmlFetcher`، قابل fake با
+  `Http::fake`؛ توکن Bearer برای ایمن‌سازی لوکال).
+- `SmartFetcher` — لایهٔ تصمیم. حالت‌ها:
+  - `static` — مثل فاز ۱ فقط واکشِ معمولی (پیش‌فرضِ امروز)،
+  - `auto` — ایستا اول؛ فقط اگر heuristic «پوستهٔ JS» مثبت داد (ظرفِ خالیِ
+    `__next`/`root` + متنِ نزدیک‌صفر، نشانهٔ Next/Nuxt/Angular، پیامِ «جاوااسکریپت
+    را فعال کنید») یک بار رندر می‌کند؛
+  - `js` — رندرِ همیشگی.
+- فعال‌سازی در درخواست: استریم `/api/scrape/stream?...&render=auto`
+- فعال‌سازیِ پایدار از `.env`: `SCRAPER_RENDER_URL` / `SCRAPER_RENDER_TOKEN` /
+  `SCRAPER_RENDER_MODE` (نمونه‌ها در `.env.example`).
+- تست‌ها: `tests/Unit/SmartFetcherTest.php` (۶ کیس heuristic + ۵ کیس حالت‌ها) و
+  `tests/Unit/RenderedFetcherTest.php` (قراردادِ سرویس، بدون شبکهٔ واقعی).
+
 ## 🚧 فازهای بعدی (نقشهٔ راه)
 
 | فاز | بخش در نسخهٔ قدیمی | برنامهٔ لاراولی |

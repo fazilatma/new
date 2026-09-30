@@ -55,6 +55,13 @@ SCRAPER_LOG=./logs/laravel-server.log RUN_DIR=./run-laravel ./server.sh start
    `max_execution_time=0`، `max_input_time=-1`، `ignore_user_abort=1`،
    `default_socket_timeout=-1`. یعنی درخواست‌های طولانی (استخراج بزرگ، ارسال گروهی،
    استریم‌های زندهٔ SSE) نه از طرف PHP قطع می‌شوند و نه با بستنِ مرورگر می‌میرند.
+2ب. **نگهبانِ سلامت (ضدِ هنک)** — حلقهٔ بالا فقط سقوطِ پردازه را می‌بیند؛ ولی گاهی
+   پردازه زنده‌ است و **به HTTP جواب نمی‌دهد**. نگهبانِ سلامت هر
+   `SCRAPER_HEALTH_SEC` (پیش‌فرض ۳۰ ثانیه) یک درخواستِ سبک می‌زند و اگر
+   `SCRAPER_HEALTH_FAILS` (پیش‌فرض ۳) بارِ متوالی شکست خورد، پردازه را می‌کشد تا
+   سوپروایزرِ بالا سرورِ تازه بسازد. مسیرِ سلامت پیش‌فرض ریشهٔ اپ است و با
+   `SCRAPER_HEALTH_URL` قابل تغییر است (مثلاً `?selftest=1`). با `SCRAPER_HEALTH_SEC=0`
+   خاموش می‌شود.
 3. **همزمانیِ واقعی** — با `SCRAPER_WORKERS` (پیش‌فرض ۴، نیازمند PHP ≥ 7.4) چند
    کارگر سرو می‌کنند؛ پس یک استریمِ طولانی کلِ رابط را قفل نمی‌کند.
    (روی ویندوز چندکارگر پشتیبانی نمی‌شود و خودکار تک‌کارگر می‌شود.)
@@ -68,6 +75,11 @@ SCRAPER_LOG=./logs/laravel-server.log RUN_DIR=./run-laravel ./server.sh start
 6. **لایهٔ دوم اختیاری: systemd** — یونیتِ نمونه (`scraper4-server.service`) خودِ
    اسکریپت را هم `Restart=always` می‌کند؛ یعنی سقوطِ PHP را server.sh و سقوطِ
    server.sh را systemd پوشش می‌دهد و با بوتِ سرور سرویس خودش بالا می‌آید.
+7. **چیدمانِ چندپروسهٔ تولیدی (PHP-FPM + Nginx)** — برای بارِ واقعیِ چندکاربره،
+   نمونه‌کانفیگ‌های آماده در پوشهٔ **`deploy/`** است: استخرِ FPM مستقل با بازسازیِ
+   کارگر بعد از ۵۰۰ درخواست (بیمهٔ نشتِ حافظه) و بلوکِ Nginx سازگار با SSE
+   (`fastcgi_buffering off`). راهنمای کاملِ سه چیدمان و جدولِ انتخاب:
+   **[deploy/README.md](deploy/README.md)**.
 
 ## پیکربندی
 
@@ -84,6 +96,9 @@ SCRAPER_PORT=9000 SCRAPER_HOST=127.0.0.1 ./server.sh run
 | `SCRAPER_WORKERS` | `4` | کارگرهای همزمان (PHP ≥ 7.4، غیر ویندوز) |
 | `SCRAPER_MEMORY` | `512M` | سقف حافظهٔ هر پردازه |
 | `SCRAPER_CRON_TICK` | `60` | فاصلهٔ تیکِ کران (ثانیه)؛ `0` = خاموش |
+| `SCRAPER_HEALTH_SEC` | `30` | دورهٔ درخواست سلامت (ثانیه)؛ `0` = خاموش |
+| `SCRAPER_HEALTH_FAILS` | `3` | بعد از این تعداد شکستِ متوالی، پردازهٔ هنک‌کرده کشته می‌شود |
+| `SCRAPER_HEALTH_URL` | `http://127.0.0.1:$PORT/` | مسیرِ سلامت (مثلاً `?selftest=1` برای آزمونِ کامل) |
 | `SCRAPER_RESTART_DELAY` | `1` | مکث اول پس از سقوط (ثانیه) |
 | `SCRAPER_RESTART_DELAY_MAX` | `30` | سقف مکثِ تصاعدی (ثانیه) |
 | `SCRAPER_LOG` / `SCRAPER_TICK_LOG` | `logs/…` | مسیر لاگ‌ها |
