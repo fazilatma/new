@@ -14,7 +14,7 @@ async function runCommand(command,timeout=120000){if(isDangerousCommand(command)
 async function verifyWorkspace(){const results=[];let entries=[];try{entries=await fs.readdir(root,{withFileTypes:true})}catch{};const files=entries.filter(e=>e.isFile()).map(e=>e.name);for(const f of files){if(f.endsWith('.js'))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});if(f.endsWith('.py'))results.push({file:f,...await runCommand('python3 -m py_compile '+JSON.stringify(f),30000)});if(f.endsWith('.php'))results.push({file:f,...await runCommand('php -l '+JSON.stringify(f),30000)})}try{const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));if(pkg.scripts?.test)results.push({file:'package.json',...await runCommand('npm test -- --runInBand',120000)})}catch{}return results}
 function providerNormalize(input){if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Provider JSON must be an object');const out={};for(const [id,v] of Object.entries(input)){if(!v||typeof v!=='object'||Array.isArray(v))continue;const models=Array.isArray(v.models)?v.models.map(m=>typeof m==='string'?m:(m&&typeof m==='object'?m:{})):[];out[String(id)]={id:String(v.id||id),name:String(v.name||id),vendor:String(v.vendor||''),url:String(v.url||''),apiKey:String(v.apiKey||''),enabled:Boolean(v.enabled),models,relayUrl:String(v.relayUrl||''),relayToken:String(v.relayToken||''),relayEnabled:Boolean(v.relayEnabled),useGlobalRelay:Boolean(v.useGlobalRelay),proxyUrl:String(v.proxyUrl||''),proxyType:String(v.proxyType||'http')};if(Array.isArray(v.apiKeys))out[String(id)].apiKeys=v.apiKeys.map(x=>String(x));}return out}
 const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat'||req.url.startsWith('/chat/')){req.url=req.url.slice(5)||'/';}next()}); app.use(express.json({limit:'2mb'})); app.use(securityMiddleware); app.use(express.static(path.join(__dirname,'..','public'))); const send=(r,d)=>r.json(d);
-const APP_VERSION='1.2.2';
+const APP_VERSION='1.2.3';
 app.get('/api/version',async(_,r)=>send(r,{version:APP_VERSION,name:'local-coding-agent',channel:'stable'}));
 app.get('/api/health',async(_,r)=>send(r,{ok:true,node:process.version,version:APP_VERSION}));
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
@@ -68,12 +68,64 @@ app.post('/api/models/test-all',async(q,r)=>{
     else if(m?.id||m?.name) imported.push({provider:p.name||p.id,id:String(m.id||m.name),name:String(m.name||m.id),url:m.url||p.url,apiKey:m.apiKey||p.apiKey||p.apiKeys?.[0]||'',vendor:m.vendor||p.vendor||p.id});
   }
   const prompt=String(q.body.prompt||'سلام! در یک جمله خودت را معرفی کن.').slice(0,400), context=Math.min(32768,Math.max(512,Number(q.body.context||4096))), maxTokens=Math.min(1024,Math.max(1,Number(q.body.maxTokens||64))), temperature=Math.min(2,Math.max(0,Number(q.body.temperature??0.2))), results=[];
-  const testImported=async item=>{const started=Date.now();try{if(!item.url)throw Error('آدرس Provider ثبت نشده است');const key=item.apiKey||'';let url=item.url.replace(/\/$/,'');const headers={'content-type':'application/json'};let body;
-    if(/generativelanguage\.googleapis\.com|gemini/i.test(item.vendor+' '+url)){if(!key)throw Error('API key موجود نیست');const endpoint=url.includes(':generateContent')?url:(url+'/models/'+encodeURIComponent(item.id)+':generateContent');url=endpoint+(endpoint.includes('?')?'&':'?')+'key='+encodeURIComponent(key);body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature,maxOutputTokens:maxTokens}}}
-    else {if(!/\/(chat\/completions|responses|generate)$/i.test(url))url+=(url.endsWith('/v1')?'/chat/completions':'/v1/chat/completions');body={model:item.id,messages:[{role:'user',content:prompt}],temperature,max_tokens:maxTokens};if(/ollama/i.test(item.vendor+' '+url))body.stream=false;if(key)headers.authorization='Bearer '+key}
-    const t0=Date.now(),x=await fetch(url,{method:'POST',headers,body:JSON.stringify(body)}),d=await x.json().catch(()=>({}));if(!x.ok)throw Error(d.error?.message||d.message||('HTTP '+x.status));const text=d.choices?.[0]?.message?.content||d.choices?.[0]?.text||d.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||d.response||'';const usage=d.usage||d.usageMetadata||{},completionTokens=Number(usage.completion_tokens||usage.output_tokens||usage.candidatesTokenCount||0),elapsed=Date.now()-t0;return {name:item.name,provider:item.provider,source:'imported',ok:true,startupMs:0,latencyMs:elapsed,response:String(text).slice(0,1200),promptTokens:usage.prompt_tokens??usage.input_tokens??usage.promptTokenCount??null,completionTokens:completionTokens||null,tokensPerSecond:completionTokens&&elapsed>0?Math.round(completionTokens*1000/elapsed*10)/10}
-  }catch(e){return {name:item.name,provider:item.provider,source:'imported',ok:false,error:e.message,latencyMs:Date.now()-started}}};
-  for(let i=0;i<localModels.length;i++){const name=localModels[i],port=10080+i,model=safePath(modelsRoot,name);let child=null,started=Date.now(),logs='';try{child=spawn(process.env.LLAMA_BIN||'llama-server',['-m',model,'--host','127.0.0.1','--port',String(port),'-c',String(context),'-ngl',String(q.body.gpuLayers??-1)],{cwd:root,stdio:['ignore','pipe','pipe']});child.stderr.on('data',b=>{logs+=b.toString();logs=logs.slice(-5000)});const base='http://127.0.0.1:'+port+'/v1';let ready=false;for(let n=0;n<45;n++){await new Promise(x=>setTimeout(x,500));try{const z=await fetch(base+'/models');if(z.ok){ready=true;break}}catch{}}if(!ready)throw Error('مدل در مهلت تعیین‌شده آماده نشد');const t0=Date.now(),x=await fetch(base+'/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'local',messages:[{role:'user',content:prompt}],temperature,max_tokens:maxTokens})}),d=await x.json().catch(()=>({}));if(!x.ok)throw Error(d.error?.message||JSON.stringify(d).slice(0,500));const text=d.choices?.[0]?.message?.content||'',usage=d.usage||{},elapsed=Date.now()-t0,completionTokens=Number(usage.completion_tokens||0);results.push({name,provider:'Local GGUF',source:'local',ok:true,startupMs:t0-started,latencyMs:elapsed,response:text.slice(0,1200),promptTokens:usage.prompt_tokens??null,completionTokens:completionTokens||null,tokensPerSecond:completionTokens&&elapsed>0?Math.round(completionTokens*1000/elapsed*10)/10})}catch(e){results.push({name,provider:'Local GGUF',source:'local',ok:false,error:e.message,logs:logs.slice(-1200)})}finally{if(child)child.kill('SIGTERM')}}
+  const testImported=async item=>{
+    const started=Date.now();
+    try{
+      if(!item.url)throw Error('آدرس Provider ثبت نشده است');
+      const key=item.apiKey||'';
+      let url=item.url.replace(/\/$/,'');
+      const headers={'content-type':'application/json'};
+      let body;
+      if(/generativelanguage\.googleapis\.com|gemini/i.test(item.vendor+' '+url)){
+        if(!key)throw Error('API key موجود نیست');
+        const endpoint=url.includes(':generateContent')?url:(url+'/models/'+encodeURIComponent(item.id)+':generateContent');
+        url=endpoint+(endpoint.includes('?')?'&':'?')+'key='+encodeURIComponent(key);
+        body={
+          contents:[{parts:[{text:prompt}]}],
+          generationConfig:{temperature,maxOutputTokens:maxTokens}
+        };
+      }else{
+        if(!/\/(chat\/completions|responses|generate)$/i.test(url))url+=(url.endsWith('/v1')?'/chat/completions':'/v1/chat/completions');
+        body={model:item.id,messages:[{role:'user',content:prompt}],temperature,max_tokens:maxTokens};
+        if(/ollama/i.test(item.vendor+' '+url))body.stream=false;
+        if(key)headers.authorization='Bearer '+key;
+      }
+      const t0=Date.now();
+      const x=await fetch(url,{
+        method:'POST',
+        headers,
+        body:JSON.stringify(body),
+        signal:AbortSignal.timeout(60000)
+      });
+      const d=await x.json().catch(()=>({}));
+      if(!x.ok)throw Error(d.error?.message||d.message||('HTTP '+x.status));
+      const text=d.choices?.[0]?.message?.content||d.choices?.[0]?.text||d.candidates?.[0]?.content?.parts?.map(x=>x.text||'').join('')||d.response||'';
+      const usage=d.usage||d.usageMetadata||{};
+      const completionTokens=Number(usage.completion_tokens||usage.output_tokens||usage.candidatesTokenCount||0);
+      const elapsed=Date.now()-t0;
+      return {
+        name:item.name,
+        provider:item.provider,
+        source:'imported',
+        ok:true,
+        startupMs:0,
+        latencyMs:elapsed,
+        response:String(text).slice(0,1200),
+        promptTokens:usage.prompt_tokens??usage.input_tokens??usage.promptTokenCount??null,
+        completionTokens:completionTokens||null,
+        tokensPerSecond:completionTokens&&elapsed>0?Math.round(completionTokens*1000/elapsed*10)/10:null
+      };
+    }catch(e){
+      return {
+        name:item.name,
+        provider:item.provider,
+        source:'imported',
+        ok:false,
+        error:e.message,
+        latencyMs:Date.now()-started
+      };
+    }
+  };
   for(const item of imported)results.push(await testImported(item));
   send(r,{ok:true,total:results.length,localTotal:localModels.length,importedTotal:imported.length,results,settings:{context,maxTokens,temperature,prompt}});
 });
