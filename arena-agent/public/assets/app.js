@@ -258,6 +258,8 @@ async function runImport(e) {
       const fd = new FormData();
       fd.append('file', file, file.name);
       fd.append('replace', replace ? '1' : '0');
+      fd.append('modelsOnly', modelsOnly ? '1' : '0');
+      if (modelsOnly) fd.append('providerId', providerId);
       r = await api('/api/providers/import', { method: 'POST', body: fd });
     } else {
       const body = { json: text, replace };
