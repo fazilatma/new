@@ -242,6 +242,30 @@ final class ProviderStore
 
     // -------------------------------------------------------------- store
 
+    /**
+     * Fail with an actionable message *before* writing.
+     *
+     * Bootstrap turns every PHP warning into an ErrorException, so an
+     * unwritable data directory used to surface as an opaque 400 in the UI.
+     */
+    private static function assertWritable(string $file): void
+    {
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            throw new HttpError(500, 'The data directory ' . $dir . ' does not exist and could not be created.');
+        }
+        if (!is_writable($dir)) {
+            throw new HttpError(500, 'The data directory ' . $dir . ' is not writable by the PHP user ('
+                . (function_exists('posix_getpwuid') && function_exists('posix_geteuid')
+                    ? (posix_getpwuid(posix_geteuid())['name'] ?? '?')
+                    : (get_current_user() ?: '?'))
+                . '). Fix it with: chmod -R 775 ' . $dir);
+        }
+        if (is_file($file) && !is_writable($file)) {
+            throw new HttpError(500, 'The catalog file ' . $file . ' is not writable. Fix it with: chmod 664 ' . $file);
+        }
+    }
+
     public function save(): void
     {
         $dump = [];
@@ -260,9 +284,23 @@ final class ProviderStore
         }
         $file = self::file();
         Files::ensureDir(dirname($file));
-        file_put_contents($file . '.tmp', json_encode($dump, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        self::assertWritable($file);
+
+        $encoded = json_encode($dump, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($encoded === false) {
+            throw new HttpError(500, 'The provider catalog could not be encoded as JSON: ' . json_last_error_msg()
+                . ' (a model field probably contains invalid UTF-8).');
+        }
+        if (@file_put_contents($file . '.tmp', $encoded) === false) {
+            throw new HttpError(500, 'Could not write ' . $file . '.tmp — check the permissions on '
+                . dirname($file) . ' (the PHP user must own it).');
+        }
         @chmod($file . '.tmp', 0600);
-        rename($file . '.tmp', $file);
+        if (!@rename($file . '.tmp', $file)) {
+            @unlink($file . '.tmp');
+            throw new HttpError(500, 'Could not replace ' . $file . ' — the file exists but is not writable '
+                . 'by the PHP user. Fix it with: chmod 664 ' . $file);
+        }
     }
 
     public function get(string $id): ?array

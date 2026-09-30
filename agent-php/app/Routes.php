@@ -86,6 +86,59 @@ final class Routes
 
         $r->get('/health', static fn(Request $req): array => ['status' => 'ok', 'version' => APP_VERSION]);
 
+        // Self-diagnosis for deployment problems (routing prefix, writability,
+        // upload limits). Deliberately unauthenticated-safe: it exposes no
+        // secrets, only whether the plumbing works.
+        $r->get('/api/__diag', static function (Request $req): array {
+            $dataDir = Bootstrap::$dataDir;
+            $storageDir = Bootstrap::$storageDir;
+            $providersFile = ProviderStore::file();
+
+            $writable = static function (string $path): array {
+                $target = is_file($path) ? $path : dirname($path);
+                return [
+                    'path' => $path,
+                    'exists' => file_exists($path),
+                    'writable' => is_writable($target),
+                ];
+            };
+
+            return [
+                'status' => 'ok',
+                'version' => APP_VERSION,
+                'routing' => [
+                    'seenPath' => $req->path,
+                    'apiBase' => Request::$basePath,
+                    'rewriteWorking' => !Request::$viaFrontControllerPath,
+                    'requestUri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
+                    'scriptName' => (string) ($_SERVER['SCRIPT_NAME'] ?? ''),
+                    'pathInfo' => (string) ($_SERVER['PATH_INFO'] ?? ''),
+                    'serverSoftware' => (string) ($_SERVER['SERVER_SOFTWARE'] ?? ''),
+                ],
+                'limits' => [
+                    'post_max_size' => ini_get('post_max_size') ?: '',
+                    'upload_max_filesize' => ini_get('upload_max_filesize') ?: '',
+                    'memory_limit' => ini_get('memory_limit') ?: '',
+                    'max_execution_time' => ini_get('max_execution_time') ?: '',
+                ],
+                'paths' => [
+                    'data' => $writable($dataDir),
+                    'storage' => $writable($storageDir),
+                    'providers' => $writable($providersFile),
+                    'database' => $writable($dataDir . '/agent.db'),
+                ],
+                'php' => [
+                    'version' => PHP_VERSION,
+                    'procOpen' => function_exists('proc_open'),
+                    'curl' => extension_loaded('curl'),
+                    'sqlite' => extension_loaded('pdo_sqlite'),
+                    'zip' => extension_loaded('zip'),
+                    'openssl' => extension_loaded('openssl'),
+                ],
+                'auth' => ['enabled' => Config::authEnabled()],
+            ];
+        });
+
         // PHP-edition extra: what the host can actually do.
         $r->get('/api/system/capabilities', static function (Request $req): array {
             Auth::requireViewer($req);
@@ -1692,7 +1745,26 @@ final class Routes
             Response::html('<h1>Arena Coding Agent</h1><p>public/index.html is missing.</p>', 500);
             return;
         }
-        Response::raw(Files::read($index), 'text/html; charset=utf-8');
+        Response::raw(self::withApiBase(Files::read($index)), 'text/html; charset=utf-8');
+    }
+
+    /**
+     * Tell the page which URL prefix its API calls need.
+     *
+     * The front end ships with absolute `/api/...` paths, which only work when
+     * the app owns the domain root *and* URL rewriting is available. Injecting
+     * the detected prefix makes subdirectory installs and rewrite-less hosts
+     * work without touching a single call site.
+     */
+    private static function withApiBase(string $html): string
+    {
+        $snippet = '<script>window.__API_BASE__=' . json_encode(Request::$basePath, JSON_UNESCAPED_SLASHES)
+            . ';window.__NO_REWRITE__=' . (Request::$viaFrontControllerPath ? 'true' : 'false') . ';</script>';
+        $pos = stripos($html, '<head>');
+        if ($pos !== false) {
+            return substr_replace($html, '<head>' . $snippet, $pos, strlen('<head>'));
+        }
+        return $snippet . $html;
     }
 
     private static function staticUi(Router $r): void
@@ -1711,7 +1783,7 @@ final class Routes
                     Response::json(['detail' => 'localai.html is missing'], 404);
                     return;
                 }
-                Response::raw(Files::read($page), 'text/html; charset=utf-8');
+                Response::raw(self::withApiBase(Files::read($page)), 'text/html; charset=utf-8');
             });
         }
 
@@ -1730,6 +1802,10 @@ final class Routes
             $realPublic = realpath(Bootstrap::$publicDir) ?: Bootstrap::$publicDir;
             $realAbs = realpath($abs);
             if ($rel !== '' && $realAbs !== false && str_starts_with($realAbs, $realPublic) && is_file($realAbs)) {
+                if (str_ends_with(strtolower($realAbs), '.html')) {
+                    Response::raw(self::withApiBase(Files::read($realAbs)), 'text/html; charset=utf-8');
+                    return;
+                }
                 Response::file($realAbs, Files::mimeType($realAbs));
                 return;
             }

@@ -1,6 +1,73 @@
 <!doctype html>
 <html lang="fa" dir="rtl" data-theme="dark">
 <head>
+<script>
+/* ------------------------------------------------------------------ *
+ * API base resolution.
+ *
+ * The server injects window.__API_BASE__ before this runs:
+ *   ''                  app owns the domain root, rewriting works
+ *   '/agent'            installed in a subdirectory
+ *   '/agent/index.php'  host has no URL rewriting
+ *
+ * When the page itself was fetched as a plain directory URL we cannot know
+ * server-side whether rewriting works, so the first API call that comes back
+ * as a non-JSON 404 (i.e. the web server's own error page) is retried once
+ * through the front controller, and the working prefix is remembered.
+ * ------------------------------------------------------------------ */
+(function () {
+  var KEY = 'arena_api_base';
+  try {
+    var saved = sessionStorage.getItem(KEY);
+    if (saved !== null && !window.__API_BASE__) window.__API_BASE__ = saved;
+  } catch (e) { /* private mode */ }
+  if (typeof window.__API_BASE__ !== 'string') window.__API_BASE__ = '';
+
+  window.apiUrl = function (p) {
+    var b = window.__API_BASE__ || '';
+    if (!p) return b || '/';
+    if (/^[a-z]+:\/\//i.test(p)) return p;
+    if (p.charAt(0) !== '/') p = '/' + p;
+    return b + p;
+  };
+
+  // Alternate prefix to try when the current one 404s at the web-server level.
+  function frontControllerBase() {
+    var b = window.__API_BASE__ || '';
+    if (/index\.php$/.test(b)) return null;          // already using it
+    var dir = b.replace(/\/+$/, '');
+    return dir + '/index.php';
+  }
+
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var isApi = typeof url === 'string' && /(^|\/)api\//.test(url) && !/^[a-z]+:\/\//i.test(url);
+    var p = nativeFetch(input, init);
+    if (!isApi || (init && init.__arenaRetry)) return p;
+    return p.then(function (res) {
+      if (res.status !== 404) return res;
+      var ct = res.headers.get('content-type') || '';
+      if (ct.indexOf('application/json') !== -1) return res;   // a real API 404
+      var alt = frontControllerBase();
+      if (alt === null) return res;
+      // Rebuild the URL against the front controller and try once.
+      var base = window.__API_BASE__ || '';
+      var rest = base && url.indexOf(base) === 0 ? url.slice(base.length) : url;
+      var retryInit = Object.assign({}, init || {}, { __arenaRetry: true });
+      return nativeFetch(alt + rest, retryInit).then(function (res2) {
+        if (res2.ok || (res2.headers.get('content-type') || '').indexOf('application/json') !== -1) {
+          window.__API_BASE__ = alt;
+          try { sessionStorage.setItem(KEY, alt); } catch (e) { /* ignore */ }
+          return res2;
+        }
+        return res;
+      }).catch(function () { return res; });
+    });
+  };
+})();
+</script>
+
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Arena AI Coding Agent v0.11.0</title>
@@ -3691,6 +3758,7 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function api(path, opts = {}) {
+  path = window.apiUrl(path);
   let res;
   const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
   const headers = { ...(opts.headers || {}) };
@@ -4219,7 +4287,7 @@ async function handleImportProvidersSubmit(e) {
 }
 
 function exportProvidersJson() {
-  window.location.href = '/api/providers/export';
+  window.location.href = window.apiUrl('/api/providers/export');
 }
 
 // -------------------------------------------------------------
@@ -4919,7 +4987,7 @@ async function processFilesForUpload(fileList) {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const res = await fetch('/api/chat/upload', {
+      const res = await fetch(window.apiUrl('/api/chat/upload'), {
         method: 'POST',
         body: fd
       });
@@ -6060,7 +6128,7 @@ async function streamAgentResponse(retryAttempt = 0) {
     };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const res = await fetch('/api/chat/stream', {
+    const res = await fetch(window.apiUrl('/api/chat/stream'), {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -6452,7 +6520,7 @@ async function handleRejectFeedbackSubmit(e) {
 }
 
 function downloadChangesetPatch(csId) {
-  window.location.href = `/api/changesets/${csId}/patch`;
+  window.location.href = window.apiUrl(`/api/changesets/${csId}/patch`);
 }
 
 async function rollbackChangeSet(csId) {
@@ -7937,7 +8005,7 @@ async function deleteActiveFile() {
 }
 
 function downloadWorkspaceZip() {
-  window.location.href = '/api/workspace/export-zip';
+  window.location.href = window.apiUrl('/api/workspace/export-zip');
 }
 
 async function viewFileVersions() {
@@ -8275,7 +8343,7 @@ async function loadObservabilityData() {
 }
 
 function exportObservabilityLogs(fmt = 'json') {
-  window.location.href = `/api/observability/export?format=${fmt}`;
+  window.location.href = window.apiUrl(`/api/observability/export?format=${fmt}`);
 }
 
 // -------------------------------------------------------------

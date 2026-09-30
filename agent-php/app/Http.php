@@ -35,12 +35,76 @@ final class Request
     private ?array $jsonCache = null;
     public ?array $user = null;
 
+    /**
+     * URL prefix the browser must prepend to every API path.
+     *
+     * '' when the app owns the domain root and mod_rewrite works,
+     * '/agent' for a subdirectory install,
+     * '/agent/index.php' when there is no URL rewriting at all.
+     */
+    public static string $basePath = '';
+
+    /** True when this request arrived as /index.php/api/... (no rewrite engine). */
+    public static bool $viaFrontControllerPath = false;
+
     public static function capture(): self
     {
         $r = new self();
         $r->method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
-        $r->path = rawurldecode(parse_url($uri, PHP_URL_PATH) ?: '/');
+        $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+        $path = rawurldecode((string) (parse_url($uri, PHP_URL_PATH) ?: '/'));
+
+        // ------------------------------------------------ install prefix
+        // Shared hosts serve the app from a subdirectory, and plenty of them
+        // ship without mod_rewrite. Both cases are detected here instead of
+        // forcing the operator to hand-edit paths.
+        $script = (string) ($_SERVER['SCRIPT_NAME'] ?? '');
+        $frontFile = basename((string) ($_SERVER['SCRIPT_FILENAME'] ?? 'index.php'));
+        // Guard against the PHP built-in server, which reports the *requested*
+        // path in SCRIPT_NAME when a router script is used.
+        $scriptIsFrontController = $script !== ''
+            && str_ends_with($script, '.php')
+            && basename($script) === $frontFile;
+
+        $dir = $scriptIsFrontController ? rtrim(str_replace('\\', '/', dirname($script)), '/') : '';
+        if ($dir === '/' || $dir === '.') {
+            $dir = '';
+        }
+
+        $pathInfo = (string) ($_SERVER['PATH_INFO'] ?? '');
+        if ($pathInfo !== '') {
+            // /agent/index.php/api/health  →  PATH_INFO = /api/health
+            $path = $pathInfo;
+            self::$viaFrontControllerPath = true;
+            self::$basePath = $script;
+        } elseif ($scriptIsFrontController && str_starts_with($path, $script)) {
+            // Same shape, but the SAPI did not populate PATH_INFO.
+            $path = substr($path, strlen($script));
+            self::$viaFrontControllerPath = true;
+            self::$basePath = $script;
+        } elseif ($dir !== '' && ($path === $dir || str_starts_with($path, $dir . '/'))) {
+            $path = substr($path, strlen($dir));
+            self::$basePath = $dir;
+        } else {
+            self::$basePath = '';
+        }
+
+        // Last-ditch escape hatch for hosts with neither rewriting nor
+        // PATH_INFO: /index.php?__path=/api/health
+        $queryPath = $_GET['__path'] ?? null;
+        if (is_string($queryPath) && $queryPath !== '') {
+            $path = $queryPath;
+            self::$viaFrontControllerPath = true;
+            if (self::$basePath === '') {
+                self::$basePath = $script;
+            }
+            unset($_GET['__path']);
+        }
+
+        if ($path === '' || $path[0] !== '/') {
+            $path = '/' . $path;
+        }
+        $r->path = $path;
         if (strlen($r->path) > 1) {
             $r->path = rtrim($r->path, '/');
             if ($r->path === '') {

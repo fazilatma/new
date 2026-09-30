@@ -14,3 +14,7 @@ storage/
 vendor/
 composer.lock
 *.log
+
+# dev tooling deps (see tools/README)
+tools/node_modules
+tools/package-lock.json

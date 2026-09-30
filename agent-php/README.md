@@ -113,6 +113,20 @@ agent-php/
 
 ---
 
+### Development tooling
+
+`tools/` holds Node-based stand-ins for `php -l` (the project is frequently
+edited where no PHP binary exists):
+
+```bash
+cd tools && npm install && cd ..
+node tools/phplint.mjs  app bin public    # syntax
+node tools/phpcheck.mjs app bin public    # symbol + arity resolution
+node tools/routecheck.mjs                 # UI call ↔ route coverage
+```
+
+---
+
 ## 4. How the runtime pieces map
 
 | Python original | PHP edition |
@@ -317,7 +331,33 @@ larger volume when the project partition is small.
 
 ---
 
-## 9. Security notes
+## 9. Troubleshooting a deployment
+
+The app diagnoses its own plumbing. Open **`/api/__diag`** (or
+`curl -s https://your-host/api/__diag`) — it reports the routing prefix it
+detected, whether URL rewriting works, the upload limits, and which paths are
+writable. No secrets are exposed.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| UI loads but every action fails with a multi-line "Not Found" page | The host has no `mod_rewrite`, so `/api/...` never reaches `index.php` | Nothing — the UI now retries through `index.php/api/...` automatically and remembers it. `/api/__diag` shows `rewriteWorking: false`. |
+| Everything 404s, including the UI | App installed in a subdirectory | Also automatic: the server injects `window.__API_BASE__`. If you set `RewriteBase`, make it match the subdirectory. |
+| `Import failed` / any save returns 500 | `data/` not writable by the PHP user | `chmod -R 775 data storage` — the error message now names the exact path and user. |
+| Import returns 413 | Catalog bigger than `post_max_size` | Raise it, or `php bin/console.php provider:import file.json` |
+| Import says "not valid JSON … ends with" | Truncated paste | Use the file picker instead of pasting |
+
+The front controller understands three URL shapes, so at least one always
+works:
+
+```
+/api/health                     rewriting available
+/index.php/api/health           PATH_INFO (no rewriting)
+/index.php?__path=/api/health   neither
+```
+
+---
+
+## 10. Security notes
 
 * Sessions: `arena_session` cookie, 24 h sliding expiry, DB-backed; `Bearer`
   and `X-Auth-Token` headers work too.
@@ -337,7 +377,7 @@ larger volume when the project partition is small.
 
 ---
 
-## 10. Verification status
+## 11. Verification status
 
 This port was authored in an environment with **no PHP runtime available**, so
 it could not be executed here. What *was* verified mechanically:

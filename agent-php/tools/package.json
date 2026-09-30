@@ -1,0 +1,11 @@
+{
+  "name": "agent-php-tools",
+  "private": true,
+  "type": "module",
+  "description": "Static analysis helpers for hosts without a PHP binary.",
+  "scripts": {
+    "lint": "node phplint.mjs .. && node phpcheck.mjs ..",
+    "routes": "node routecheck.mjs"
+  },
+  "dependencies": { "php-parser": "3.7.0" }
+}
