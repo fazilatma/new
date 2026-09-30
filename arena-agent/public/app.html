@@ -265,14 +265,21 @@
   <form id="importForm" method="dialog">
     <div class="dlg-head"><h3>درون‌ریزی ارائه‌دهنده‌ها</h3></div>
     <div class="dlg-body">
-      <p class="hint">فایل JSON را انتخاب کنید یا متنش را بچسبانید. شکل‌های رایج
-        (فهرست، شیء کلیددار، یا پیچیده در «providers») همه پذیرفته می‌شوند.</p>
+      <p class="hint">می‌توانید کل ارائه‌دهنده‌ها را وارد کنید یا فقط فهرست مدل‌ها را به یک ارائه‌دهندهٔ موجود اضافه/جایگزین کنید.
+        فرمت‌های رایج OpenAI، Ollama، Anthropic و Gemini پذیرفته می‌شوند.</p>
+      <label class="field"><span>نوع درون‌ریزی</span>
+        <select class="input" id="imModelsOnly">
+          <option value="0">ارائه‌دهنده‌ها + مدل‌ها</option>
+          <option value="1">فقط مدل‌ها</option>
+        </select></label>
+      <label class="field"><span>ارائه‌دهندهٔ مقصد مدل‌ها</span>
+        <select class="input" id="imProvider"></select></label>
       <label class="field"><span>فایل</span>
-        <input class="input" type="file" accept=".json,application/json" onchange="pickImportFile(this)"></label>
+        <input class="input" id="imFile" type="file" accept=".json,application/json" onchange="pickImportFile(this)"></label>
       <label class="field"><span>یا متن JSON</span>
-        <textarea class="input mono" id="imText" rows="9" placeholder='{"providers": { … }}'></textarea></label>
+        <textarea class="input mono" id="imText" rows="9" placeholder='{"data":[{"id":"gpt-4o"}]}'></textarea></label>
       <label class="row"><input type="checkbox" id="imReplace">
-        جایگزینی کامل (همهٔ ارائه‌دهنده‌های فعلی حذف می‌شوند)</label>
+        جایگزینی مدل‌های مقصد / ارائه‌دهنده‌ها</label>
       <div id="imResult" style="margin-top:12px"></div>
     </div>
     <div class="dlg-foot">
