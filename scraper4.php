@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.176';
+const APP_VERSION = '10.177';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9842,9 +9842,18 @@ $syncConfig = array_key_exists('syncConfig', $_POST)
 $profiles[$key] = [
 'url' => $url,
 'name' => trim($_POST['name'] ?? '') ?: parse_url($url, PHP_URL_HOST),
-'pages' => max(1, min(100, (int)($_POST['pages'] ?? 10))),
-'pagType' => $_POST['pagType'] ?? 'query_page',
-'pagVal' => $_POST['pagVal'] ?? '',
+'pages' => array_key_exists('pages', $_POST)
+    ? max(1, min(100, (int)$_POST['pages']))
+    : (int)($profiles[$key]['pages'] ?? 10),
+// v10.177: تنظیم صفحه‌بندی هم مثل دسته‌ها (v8.43) در ذخیرهٔ جزئی حفظ شود —
+//   پیش‌تر هر ذخیره‌ای که این کلیدها را نمی‌فرستاد، الگو به حالت پیش‌فرض
+//   برمی‌گشت و کاربر «به صفحهٔ بعد نمی‌رود» می‌دید.
+'pagType' => array_key_exists('pagType', $_POST)
+    ? (string)$_POST['pagType']
+    : (string)($profiles[$key]['pagType'] ?? 'query_page'),
+'pagVal' => array_key_exists('pagVal', $_POST)
+    ? trim((string)$_POST['pagVal'])
+    : (string)($profiles[$key]['pagVal'] ?? ''),
 'selectors' => $selectorsFinal,
 'detailSelectors' => $detailSelectors,
 // v8.64: تنظیمات گالری چندعکسی — اگر در درخواست نباشد مقدار قبلی می‌ماند
@@ -15290,7 +15299,9 @@ if($_listResume && $page===$_startPage && $pagType==='next_selector'){
    سایت‌های SPA (پوستهٔ خالی بدون رندر) هم محصول بدهند. */
 $res=fetch_html_smart($pageUrl,20);
 $totalPages=$page;
-$logs=['📄 صفحه '.$page.': '.($res['ok']?'✓':'✗').' — '.mb_substr($pageUrl,0,60)];
+/* v10.177: نشانیِ کامل + کدِ HTTP در لاگ — نشانی‌های بلندِ پارسی ۶۰ کاراکترِ
+   اول هیچ‌چیزی نشان نمی‌دادند و دیباگِ صفحه‌بندی کور می‌ماند. */
+$logs=['📄 صفحه '.$page.': '.($res['ok']?'✓':'✗').' (HTTP '.(int)($res['code']??0).') — '.$pageUrl];
 if(!$res['ok']){
 $logs[]='❌ خطا: '.mb_substr($res['error']??'HTTP error',0,80);
 // v8.91: علت شکست صفحهٔ اول را نگه دار تا محافظِ پایین بداند
@@ -15442,7 +15453,26 @@ foreach($_qLive['entries'] as &$_qeL){
     }
 }unset($_qeL);
 extractWriteQueue($_qLive);
-if($page>$_startPage&&$newCount===0)break;
+/* v10.177: توقفِ صفحه‌بندی به‌خاطر «صفرِ تازه» دیگر خاموش نیست — علت و نشانی
+   ثبت می‌شود تا معلوم شود سرور نشانه را نادیده گرفت/چالش داد/فهرست تمام شد. */
+if($page>$_startPage&&$newCount===0){
+    $logs[]='⛳ صفحهٔ '.$page.' محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد.';
+    if($pagType!=='next_selector'){
+        $logs[]='   • نشانیِ امتحان‌شده: '.$pageUrl;
+        $logs[]='   • اگر این نشانی در مرورگر محتوای متفاوتی دارد، با 🧪 «آزمایش صفحه‌بندی» کنارِ فرم علت دقیق (چالش ربات/ریدایرکت/الگوی نادرست) را ببینید.';
+    }
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>null,'resumable'=>false,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>$logs,'total_log_count'=>count($logs),'profile_key'=>$pkFinal]);
+    $queue=extractReadQueue();
+    foreach($queue['entries'] as &$qe){
+        if(($qe['id']??'')===$queueId){
+            $qe['pag_stop_reason']='صفحهٔ '.$page.' محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد';
+            $qe['pag_stop_url']=$pageUrl;
+            break;
+        }
+    }unset($qe);
+    extractWriteQueue($queue);
+    break;
+}
 usleep(500000);
 }
 
@@ -26403,6 +26433,85 @@ if (isset($_GET['recon_result'])) {
 /* v9.00: آزمایش اتصال به سایت مبدأ با تنظیمات فعلی.
    می‌گوید صفحهٔ فهرست و یک صفحهٔ محصول از روی سرور باز می‌شوند یا نه —
    چون همین دو تا هستند که استخراج به آن‌ها نیاز دارد. */
+/* v10.177: آزمایش صفحه‌بندی — وقتی «به صفحهٔ بعد نمی‌رود» علت را از خودِ سرور می‌گوید.
+   سه‌گانهٔ کلاسیک: چالشِ ضدربات (آروان/ک‌لادفلر = 200 با HTML بی‌کارت)،
+   ریدایرکت/نادیده‌گرفتنِ نشانه (همان صفحهٔ ۱ برمی‌گردد)، یا الگوی ناسازگار (4xx). */
+if (isset($_GET['pag_probe'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $u = trim((string)($_GET['url'] ?? ''));
+    if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) {
+        echo json_encode(['ok' => false, 'diagnosis' => 'آدرس نامعتبر است.'], JSON_UNESCAPED_UNICODE); exit;
+    }
+    $pt = (string)($_GET['pagType'] ?? 'query_page');
+    $pv = trim((string)($_GET['pagVal'] ?? ''));
+    $built2 = ($pt === 'next_selector') ? '' : build_page_url_custom($u, $u, 2, $pt, $pv);
+    $sel = [];
+    if (!empty($_GET['selectors'])) {
+        $__tmp = json_decode((string)$_GET['selectors'], true);
+        if (is_array($__tmp)) $sel = $__tmp;
+    }
+    $pagProbeFetch = function (string $link) use ($sel): array {
+        $r = fetch_html_smart($link, 25);
+        $html = (string)($r['html'] ?? '');
+        $prods = [];
+        if (!empty($r['ok']) && $html !== '') {
+            $prods = (!empty($sel['container']))
+                ? parse_with_selectors($html, (string)($r['url'] ?? $link), $sel)
+                : parse_products($html, (string)($r['url'] ?? $link));
+        }
+        return ['r' => $r, 'keys' => array_keys($prods)];
+    };
+    $p1 = $pagProbeFetch($u);
+    $p2 = ($built2 !== '' && $built2 !== $u) ? $pagProbeFetch($built2) : null;
+    $r1 = $p1['r']; $n1 = count($p1['keys']);
+    $rc = renderCfg();
+    $out = [
+        'ok' => false, 'built_url' => $built2,
+        'page1_products' => $n1, 'render_enabled' => !empty($rc['enabled']),
+    ];
+    if (empty($r1['ok'])) {
+        $out['diagnosis'] = 'حتی صفحهٔ ۱ باز نشد: ' . (string)($r1['error'] ?? ('HTTP ' . (int)($r1['code'] ?? 0)));
+        echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+    }
+    if ($p2 === null) {
+        $out['diagnosis'] = 'برای حالتِ «' . $pt . '» نشانیِ صفحهٔ ۲ ثابت ساخته نمی‌شود — این آزمون برای الگوهای مسیر/پارامتر است.';
+        echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+    }
+    $r2 = $p2['r']; $n2 = count($p2['keys']);
+    $new2 = count(array_diff($p2['keys'], $p1['keys']));
+    $out += [
+        'final_url' => (string)($r2['url'] ?? ''),
+        'code'      => (int)($r2['code'] ?? 0),
+        'bytes'     => strlen((string)($r2['html'] ?? '')),
+        'page2_products' => $n2, 'new_in_page2' => $new2,
+    ];
+    if (empty($r2['ok'])) {
+        $c = (int)($r2['code'] ?? 0);
+        if ($c === 404 || $c === 400) {
+            $out['diagnosis'] = 'صفحهٔ ۲ → HTTP ' . $c . ': الگوی صفحه‌بندی با این سایت نمی‌خورد. نشانیِ امتحان‌شده را در مرورگر باز کنید و با نشانیِ واقعیِ «صفحهٔ ۲» مقایسه کنید و الگو را اصلاح کنید.';
+        } elseif ($c === 401 || $c === 403 || $c === 429) {
+            $out['diagnosis'] = 'صفحهٔ ۲ → HTTP ' . $c . ': سرور درخواستِ دومِ متوالی را محدود/بلاک کرد. «فاصلهٔ بین درخواست‌ها» (src_net) را چند ثانیه بالا ببرید یا سرویس رندر/پروکسی را برای این دامنه فعال کنید.';
+        } else {
+            $out['diagnosis'] = 'صفحهٔ ۲ باز نشد: ' . (string)($r2['error'] ?? ('HTTP ' . $c));
+        }
+    } elseif ($new2 > 0) {
+        $out['ok'] = true;
+        $out['diagnosis'] = 'الگو درست است! صفحهٔ ۲ با ' . $new2 . ' محصولِ تازه جواب داد (صفحهٔ ۱: ' . $n1 . '). اگر استخراجِ واقعی هنوز توقف می‌کند، پروفایل را یک‌بار کامل ذخیره و دوباره اجرا کنید تا تنظیمِ تازه خوانده شود.';
+    } elseif ($n2 > 0 && $new2 === 0) {
+        $out['diagnosis'] = 'صفحهٔ ۲ ' . $n2 . ' کارت داشت ولی همه با صفحهٔ ۱ یکی بودند — یعنی سرور نشانهٔ صفحه را نادیده می‌گیرد (ریدایرکت به صفحهٔ اول؟). «نشانی نهایی» را با نشانیِ ساخته‌شده مقایسه کنید؛ اگر متفاوت است سرعت/روش واکشیِ دامنه (src_net) را بررسی کنید.';
+    } else {
+        $h2 = (string)($r2['html'] ?? '');
+        if (looks_like_js_shell($h2)) {
+            $out['diagnosis'] = 'صفحهٔ ۲ «پوستهٔ JS» است — سرویس رندر (تنظیمات ← رندر جاوااسکریپت) را فعال و سالم نگه‌دارید تا این دامنه رندر شود.';
+        } elseif (preg_match('~(آروان|arvancloud|__arc|cf-chl|__cf_chl|checking your browser|ddos-guard|کمی صبر|لطفاً? (چند لحظه )?(صبر|منتظر))~iu', $h2)) {
+            $out['diagnosis'] = 'صفحهٔ ۲ یک «چالش ضدربات» (آروان/کلادفلر) است — مرورگرِ واقعی لازم است: سرویس رندر را فعال کنید، یا فاصلهٔ درخواست‌ها را در تنظیمات عبور (src_net) بالا ببرید و دوباره امتحان کنید.';
+        } else {
+            $out['diagnosis'] = 'در صفحهٔ ۲ هیچ کارتی شناخته نشد (بایت: ' . $out['bytes'] . '). سلکتور ظرف را بازبینی کنید یا این می‌تواند یعنی پایانِ واقعیِ فهرست/تغییر قالب روی صفحهٔ ۲.';
+        }
+    }
+    echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+}
+
 /* v10.174: آزمون اتصال به سرویس رندر (browser/) — مانند src_probe ولی به
    اندپوینتِ /health خودِ سرویس نه به یک صفحهٔ وب. */
 if (isset($_GET['render_probe'])) {
@@ -34543,6 +34652,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.176', 'ورودیِ 10.176 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "176'") !== false
       && version_compare(APP_VERSION, '10.' . '176', '>='));
+
+    /* ---------- v10.177: تشخیصِ «به صفحهٔ بعد نمی‌رود» ---------- */
+    $add('10.177', 'نشانی با ~page~{page} روی نشانه‌های ایمالز (~Category~) درست ساخته می‌شود',
+         build_page_url_custom('https://emalls.ir/list~Category~13145', 'https://emalls.ir/list~Category~13145', 2, 'path_pattern', '~page~{page}') === 'https://emalls.ir/list~Category~13145~page~2');
+    $add('10.177', 'اندپوینت آزمایش صفحه‌بندی (pag_probe) هست',
+         strpos($selfSrc, "isset(\$_GET['pag_" . "probe'])") !== false
+      && strpos($selfSrc, 'fetch_html_smart($link, 25)') !== false);
+    $add('10.177', 'توقفِ صفرمحصول با علتِ خوانا در لاگ و صف ثبت می‌شود',
+         strpos($selfSrc, 'محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد') !== false
+      && strpos($selfSrc, "pag_stop" . "_reason") !== false);
+    $add('10.177', 'تنظیم صفحه‌بندی در ذخیرهٔ جزئی حفظ می‌شود',
+         strpos($selfSrc, "array_key_exists('pagType', \$_POST)") !== false
+      && strpos($selfSrc, "array_key_exists('pagVal', \$_POST)") !== false);
+    $add('10.177', 'دکمهٔ آزمایش صفحه‌بندی در فرم هست',
+         strpos($selfSrc, 'function pag' . 'Probe(){') !== false
+      && strpos($selfSrc, 'id="pag' . 'ProbeBtn"') !== false);
+    $add('10.177', 'ورودیِ 10.177 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "177'") !== false
+      && version_compare(APP_VERSION, '10.' . '177', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -58500,6 +58628,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
         </div>
         <div class="row" id="pagValRow" style="display:none">
             <input type="text" id="pagVal" placeholder="مقدار..." oninput="scheduleSave()">
+            <button type="button" id="pagProbeBtn" onclick="pagProbe()" title="آزمایش صفحهبندی — علت «به صفحهٔ بعد نرفتن» را نشان می‌دهد" style="max-width:44px">🧪</button>
         </div>
     </div>
 
@@ -60830,6 +60959,39 @@ function updatePagUI(){
     }
 }
 updatePagUI();
+
+/* v10.177: آزمایش صفحه‌بندی — همان پیکربندیِ فعلیِ فرم را روی سرور با خودِ
+   مسیرِ واقعیِ واکشی امتحان می‌کند و علتِ توقف را فارسی می‌گوید. */
+function pagProbe(){
+    const wrap=$('pagValRow');
+    let box=$('pagProbeOut');
+    if(!box){
+        box=document.createElement('div');
+        box.id='pagProbeOut';
+        box.style.cssText='width:100%;font-size:12px;line-height:1.9;white-space:pre-wrap;word-break:break-all;background:var(--bg-2,var(--bg));border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:6px;';
+        wrap.appendChild(box);
+    }
+    const url=$('url').value.trim();
+    if(!url){box.textContent='اول آدرس فروشگاه را وارد کنید.';return;}
+    box.textContent='⏳ در حال آزمایش: صفحهٔ ۱ و صفحهٔ ۲ از خودِ سرور واکشی می‌شوند…';
+    let sel='{}';
+    try{ if(typeof collectProfileData==='function'){const d=collectProfileData(); if(d&&d.selectors)sel=JSON.stringify(d.selectors);} }catch(e){}
+    fetch('?pag_probe=1'
+        +'&url='+encodeURIComponent(url)
+        +'&pagType='+encodeURIComponent($('pagType').value)
+        +'&pagVal='+encodeURIComponent($('pagVal').value)
+        +'&selectors='+encodeURIComponent(sel))
+    .then(r=>r.json())
+    .then(d=>{
+        let t=(d.ok?'✓ ':'✗ ')+(d.diagnosis||'');
+        t+='\n— نشانیِ ساخته‌شدهٔ صفحهٔ ۲: '+(d.built_url||'—');
+        if(d.final_url) t+='\n— نشانیِ نهایی بعد از ریدایرکت: '+d.final_url;
+        if(typeof d.new_in_page2!=='undefined') t+='\n— محصول تازه در صفحهٔ ۲: '+d.new_in_page2;
+        box.textContent=t;
+        if(d.ok)showToast('✓ الگوی صفحه‌بندی سالم است');
+    })
+    .catch(()=>{box.textContent='❌ خطا در ارتباط با رابطِ آزمایش';});
+}
 
 function onUrlChange() {
     clearTimeout(urlChangeTimer);
@@ -64503,6 +64665,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.177', t:'📄 رفعِ «به صفحهٔ بعد نمی‌رود» — تشخیصِ تمام‌عیارِ صفحه‌بندی', items:[
+    'گزارشِ ایمالز (~page~{page}): ساختِ نشانی کاملاً درست است (نشانیِ صفحهٔ ۲ در مرورگر هم واکشی شد و محتوای واقعی داد)؛ توقف از پاسخِ متفاوتِ سرور به واکشیِ سرور بود — حالا قابل‌مشاهده و قابل‌تفکیک است',
+    'دکمهٔ 🧪 «آزمایش صفحه‌بندی» کنارِ مقدارِ الگو: صفحهٔ ۱ و ۲ را با پیکربندیِ فعلیِ فرم از خودِ سرور می‌گیرد و فارسی می‌گوید مشکل چیست: چالش ضدربات (آروان/کلادفلر)، نادیده‌گرفتنِ نشانه/ریدایرکت، الگوی ناسازگار (۴xx) یا پوستهٔ JS',
+    'توقفِ «صفرِ محصولِ تازه» خاموش نیست: علت + نشانیِ امتحان‌شده در لاگِ پیشرفت و رکوردِ صف (pag_stop_reason/pag_stop_url) ثبت می‌شود تا دیگر حدس زده نشود',
+    'لاگِ هر صفحه حالا کدِ HTTP و نشانیِ کامل دارد (به‌جای ۶۰ کاراکترِ بریده‌شده)',
+    'hardening: pagType/pagVal/pages هم مثل دسته‌ها در ذخیرهٔ جزئیِ پروفایل حفظ می‌شوند (الگوی v8.43)',
+  ]},
   {v:'10.176', t:'🩹 رفع Parse Error سراسری — ریشهٔ واقعیِ 500ِ خاموش از اولین نصب کنسول پیدا و حذف شد', items:[
     'در needleهای selftestِ نسخه‌های 10.173/10.174 چهار رشتهٔ دوتایی با دو بک‌اسلشِ اضافه (\\\\$) نوشته شده بود؛ PHP بعد از \\\\ِ تحت‌اللفظی، $ را interpolation با کلیدِ نقل‌قولی ([\'render\']) می‌دید و کلِ فایل ParseError می‌داد',
     'یعنی اپ از اولین دیپلویِ کنسول اصلاً کامپایل نمی‌شد — هیچ‌کدام از اکستنشن‌ها (sqlite/curl/…) مقصر نبودند؛ نگهبانِ v10.175 بالاخره متنِ دقیق را نشان داد',
