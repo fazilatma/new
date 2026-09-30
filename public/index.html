@@ -81,6 +81,20 @@
       <div id="models" class="settings-list"></div>
       <label>URL فایل GGUF<input id="modelUrl" placeholder="https://.../model.gguf"></label>
       <button class="primary-setting" onclick="downloadModel()">دانلود و نصب مدل</button>
+      <div class="model-recommender">
+        <div class="model-rec-head"><div><b>Model Advisor</b><small>با مشخصات سیستم، مدل مناسب برای نصب را پیدا کنید.</small></div><button class="secondary-setting rec-scan" onclick="recommendModels()">پیشنهاد مدل</button></div>
+        <div class="rec-grid">
+          <label>RAM سیستم (GB)<input id="recRam" type="number" min="4" max="512" value="16"></label>
+          <label>VRAM (GB)<input id="recVram" type="number" min="0" max="128" value="0"></label>
+          <label>CPU Threads<input id="recCpu" type="number" min="1" max="256" value="8"></label>
+          <label>Context<input id="recContext" type="number" min="2048" max="131072" value="8192"></label>
+          <label>فضای خالی (GB)<input id="recDisk" type="number" min="2" max="2048" value="30"></label>
+          <label>کاربری<select id="recUse"><option value="coding">کدنویسی / Agent</option><option value="general">عمومی / چت</option><option value="reasoning">استدلال / تحلیل</option><option value="translation">ترجمه / چندزبانه</option></select></label>
+          <label>اولویت<select id="recPriority"><option value="balanced">تعادل کیفیت و سرعت</option><option value="quality">کیفیت بیشتر</option><option value="speed">سرعت بیشتر</option></select></label>
+          <label>Quantization<select id="recQuant"><option value="auto">خودکار</option><option value="Q4_K_M">Q4_K_M</option><option value="Q5_K_M">Q5_K_M</option><option value="Q8_0">Q8_0</option></select></label>
+        </div>
+        <div id="recommendations" class="recommendations"><div class="benchmark-empty">RAM، VRAM، Context و کاربری را وارد کنید.</div></div>
+      </div>
       <label>نام مدل نصب‌شده<input id="modelName" placeholder="نام مدل"></label>
       <button class="secondary-setting" onclick="launchModel()">اجرای مدل محلی</button>
       <div class="setting-note">مدل اجراشده به‌صورت OpenAI-compatible در اختیار Agent قرار می‌گیرد.</div>
