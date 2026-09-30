@@ -19,7 +19,7 @@
 </header>
 
 <div class="workspace-bar">
-  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="git-chip" id="gitState">Git · checking…</span><span class="app-version" id="appVersion">v1.11.0</span></div>
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="git-chip" id="gitState">Git · checking…</span><span class="app-version" id="appVersion">v1.12.0</span></div>
   <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
 </div>
 
@@ -118,7 +118,7 @@
     <div><span>CHANGES</span><b id="telemetryChanges">0</b></div>
     <div><span>ELAPSED</span><b id="telemetryElapsed">00:00</b></div>
   </div>
-  <div class="activity-tabs"><button class="active" onclick="showActivityTab('activity',this)">Activity</button><button onclick="showActivityTab('changes',this)">Changes</button><button onclick="showActivityTab('checks',this)">Checks</button></div>
+  <div class="review-summary"><span>REVIEW</span><div id="reviewSummary"><span class="review-pill added">+0</span><span class="review-pill modified">~0</span><span class="review-pill deleted">−0</span></div></div><div class="activity-tabs"><button class="active" onclick="showActivityTab('activity',this)">Activity</button><button onclick="showActivityTab('changes',this)">Changes</button><button onclick="showActivityTab('checks',this)">Checks</button></div>
   <div id="activity" class="activity activity-view"><div class="activity-empty"><span>◌</span><p>هنوز فعالیتی ثبت نشده</p><small>اجرای Agent و Terminal اینجا نمایش داده می‌شود.</small></div></div>
   <div id="changesView" class="activity activity-view hidden"><div class="activity-empty"><span>⌁</span><p>تغییری ثبت نشده</p><small>پس از اجرای Agent، فایل‌های تغییرکرده اینجا نمایش داده می‌شوند.</small></div></div>
   <div id="checksView" class="activity activity-view hidden"><div class="activity-empty"><span>✓</span><p>هنوز تستی اجرا نشده</p><small>نتایج verification و terminal checks اینجا نمایش داده می‌شوند.</small></div></div>
@@ -133,7 +133,7 @@
 </div>
 </div>
 
-<div id="diffModal" class="diff-modal" onclick="if(event.target===this)closeDiffModal()"><div class="diff-dialog"><div class="diff-head"><div><b id="diffTitle">File diff</b><small>Checkpoint → current workspace</small></div><button onclick="closeDiffModal()">×</button></div><div id="diffBody" class="diff-body"></div></div></div>
+<div id="diffModal" class="diff-modal" onclick="if(event.target===this)closeDiffModal()"><div class="diff-dialog"><div class="diff-head"><div><b id="diffTitle">File diff</b><small id="diffKind">Checkpoint → current workspace</small></div><button onclick="closeDiffModal()">×</button></div><div id="diffBody" class="diff-body"></div></div></div>
 <div id="settingsOverlay" class="settings-overlay" onclick="closeSettings(event)">
   <aside class="settings-drawer" onclick="event.stopPropagation()">
     <div class="settings-head"><div><b>Settings</b><small>پیکربندی Arena Agent</small></div><button onclick="toggleSettings()">×</button></div>
