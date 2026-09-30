@@ -11,7 +11,7 @@
 #  تاب‌آوری): سقوطِ PHP را server.sh جبران می‌کند و سقوطِ خودِ اسکریپت را systemd.
 # ============================================================================
 [Unit]
-Description=scraper4 web app — supervised PHP server
+Description=scraper4 web app — supervised PHP server + persistent operation worker
 After=network.target
 
 [Service]
@@ -27,6 +27,7 @@ Environment=SCRAPER_PORT=8000
 Environment=SCRAPER_WORKERS=4
 Environment=SCRAPER_MEMORY=512M
 Environment=SCRAPER_CRON_TICK=60
+Environment=SCRAPER_QUEUE_WORKER=1
 
 ExecStart=/bin/bash /opt/scraper4/server.sh run
 ExecStop=/bin/bash /opt/scraper4/server.sh stop

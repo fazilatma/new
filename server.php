@@ -88,12 +88,15 @@ if (isset($_GET['ping'])) {
     if (is_string($snap) && preg_match("/APP_VERSION\\s*=\\s*'([^']+)'/", $snap, $m)) {
         $ver = $m[1];
     }
+    $wk = @json_decode((string)@file_get_contents(__DIR__ . '/worker_state.json'), true);
+    $wkActive = is_array($wk) && !empty($wk['running']) && (time() - (int)($wk['heartbeat'] ?? 0) <= 45);
     echo 'boot-ok | scraper4 v' . $ver
        . ' | php ' . PHP_VERSION
        . ' | curl' . (extension_loaded('curl') ? '+' : '-')
        . ' mb' . (extension_loaded('mbstring') ? '+' : '-')
        . ' sqlite' . ((extension_loaded('sqlite3') || extension_loaded('pdo_sqlite')) ? '+' : '-')
-       . ' | workers=' . (getenv('PHP_CLI_SERVER_WORKERS') ?: '1') . "\n";
+       . ' | workers=' . (getenv('PHP_CLI_SERVER_WORKERS') ?: '1')
+       . ' | op-worker=' . ($wkActive ? 'on' : 'off') . "\n";
     $log = $GLOBALS['S4_BOOT']['log'];
     if (is_file($log)) {
         $tail = @file_get_contents($log, false, null, max(0, (int)@filesize($log) - 2000));

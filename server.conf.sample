@@ -34,9 +34,15 @@ SCRAPER_MEMORY="${SCRAPER_MEMORY:-512M}"
 SCRAPER_RESTART_DELAY="${SCRAPER_RESTART_DELAY:-1}"
 SCRAPER_RESTART_DELAY_MAX="${SCRAPER_RESTART_DELAY_MAX:-30}"
 
-# تیکِ کران: هر چند ثانیه «php scraper4.php cron_run» اجرا شود تا کارهای
+# worker دائمی عملیات: وقتی روشن است، عملیات سنگین از request وب جدا می‌شود
+# و در پردازهٔ CLI همیشه‌زنده اجرا می‌شود (رفتار مشابه workerهای Python/Node).
+# همان worker تیکِ cron_run را هم می‌زند. اگر 0 شود، fallback قدیمیِ cron-tick
+# فعال می‌شود و درخواست‌های دستی مثل قبل مستقیم اجرا می‌شوند.
+SCRAPER_QUEUE_WORKER="${SCRAPER_QUEUE_WORKER:-1}"
+
+# فاصلهٔ تیک cron_run داخل worker دائمی (یا fallback قدیمی اگر worker خاموش باشد).
 # پس‌زمینه (استخراج دوره‌ای، پمپِ صف‌ ارسال، نگهبانِ ادامه) حتی بدون بازدید
-# هم همیشه در جریان بمانند. 0 = خاموش.
+# هم همیشه در جریان می‌ماند. 0 = خاموش.
 SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"
 
 # نگهبانِ سلامت: هر چند ثانیه یک درخواست HTTP به ریشهٔ اپ می‌زند؛ اگر
@@ -51,3 +57,4 @@ SCRAPER_HEALTH_FAILS="${SCRAPER_HEALTH_FAILS:-3}"
 # فایل‌های لاگ
 SCRAPER_LOG="${SCRAPER_LOG:-./logs/server.log}"
 SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-./logs/cron-tick.log}"
+SCRAPER_WORKER_LOG="${SCRAPER_WORKER_LOG:-./logs/worker.log}"

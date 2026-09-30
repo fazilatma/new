@@ -197,6 +197,12 @@ const AUTO_LOG_KEEP      = 50;    // چند اجرای آخرِ هر کار نگ
 const AUTO_MAX_PER_TICK  = 2;     // سقفِ کارهای اجراشده در هر تیکِ کران
 const EXTRACT_STOP_FILE = __DIR__ . '/extract_stop_signal.json';
 const EXTRACT_QUEUE_FILE = __DIR__ . '/extract_queue.json';
+/* v10.183: صفِ عملیاتِ worker دائمیِ سرور. وقتی server.sh با worker بالا باشد،
+   درخواست‌های سنگین وب فقط job می‌سازند و پردازهٔ CLI دائمی آن‌ها را اجرا می‌کند. */
+const WORKER_QUEUE_FILE = __DIR__ . '/worker_queue.json';
+const WORKER_STATE_FILE = __DIR__ . '/worker_state.json';
+const WORKER_LOCK_FILE  = __DIR__ . '/worker.lock';
+const WORKER_STOP_FILE  = __DIR__ . '/worker_stop.json';
 /* v10.32 (۴۵ب): قفلِ سراسریِ استخراج. تا اینجا dedup/agent/catfix/selagent/
    auto هرکدام قفل داشتند ولی خودِ استخراج نداشت — تنها محافظش «تکراری‌نبودنِ
    پروفایل» بود، که فقط جلوی دو اجرای *همان* پروفایل را می‌گرفت. دو پروفایلِ
@@ -320,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.182';
+const APP_VERSION = '10.183';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -868,6 +874,331 @@ function queueCfgChanged(?array $oldCfg, array $newCfg): bool {
 
 function extractWriteQueue(array $queue): void {
 @file_put_contents(EXTRACT_QUEUE_FILE, json_encode($queue, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+/* =====================================================================
+ *  v10.183: worker دائمیِ عملیاتِ سنگین
+ *
+ *  در حالتِ سروریِ جدید، وب‌درخواست‌ها نباید خودشان استخراج/سینکِ طولانی
+ *  را انجام دهند. آن‌ها فقط یک job در WORKER_QUEUE_FILE می‌گذارند؛ پردازهٔ
+ *  CLI دائمی (php scraper4.php worker) با heartbeat و flock آن را برمی‌دارد
+ *  و اجرا می‌کند. اگر worker زنده نباشد، مسیرهای قدیمی دست‌نخورده می‌مانند.
+ * ===================================================================== */
+function s4WorkerQueueDefault(): array { return ['entries' => []]; }
+
+function s4WorkerQueueReadFromHandle($fp): array {
+    if (!is_resource($fp)) return s4WorkerQueueDefault();
+    @rewind($fp);
+    $raw = stream_get_contents($fp);
+    $q = json_decode((string)$raw, true);
+    if (!is_array($q)) $q = [];
+    if (!is_array($q['entries'] ?? null)) $q['entries'] = [];
+    return $q;
+}
+
+function s4WorkerQueueWriteToHandle($fp, array $q): bool {
+    if (!is_resource($fp)) return false;
+    if (!is_array($q['entries'] ?? null)) $q['entries'] = [];
+    $json = json_encode($q, JSON_UNESCAPED_UNICODE);
+    if ($json === false) return false;
+    @rewind($fp);
+    @ftruncate($fp, 0);
+    $n = @fwrite($fp, $json);
+    @fflush($fp);
+    return $n !== false;
+}
+
+function s4WorkerQueueMutate(callable $fn): array {
+    $fp = @fopen(WORKER_QUEUE_FILE, 'c+');
+    if (!$fp) return ['ok' => false, 'error' => 'worker_queue_open'];
+    if (!@flock($fp, LOCK_EX)) { @fclose($fp); return ['ok' => false, 'error' => 'worker_queue_lock']; }
+    $q = s4WorkerQueueReadFromHandle($fp);
+    $ret = $fn($q);
+    if (!is_array($ret)) $ret = ['ok' => true];
+    s4WorkerQueueWriteToHandle($fp, $q);
+    @flock($fp, LOCK_UN); @fclose($fp);
+    return $ret;
+}
+
+function s4WorkerLoadQueue(): array {
+    if (!is_file(WORKER_QUEUE_FILE)) return s4WorkerQueueDefault();
+    $q = json_decode((string)@file_get_contents(WORKER_QUEUE_FILE), true);
+    if (!is_array($q)) $q = [];
+    if (!is_array($q['entries'] ?? null)) $q['entries'] = [];
+    return $q;
+}
+
+function s4WorkerStateLoad(): array {
+    if (!is_file(WORKER_STATE_FILE)) return [];
+    $d = json_decode((string)@file_get_contents(WORKER_STATE_FILE), true);
+    return is_array($d) ? $d : [];
+}
+
+function s4WorkerStateWrite(array $patch): void {
+    $cur = s4WorkerStateLoad();
+    $cur = array_merge($cur, $patch, ['version' => APP_VERSION, 'heartbeat' => time()]);
+    @file_put_contents(WORKER_STATE_FILE, json_encode($cur, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+function s4WorkerIsActive(int $staleSec = 45): bool {
+    $st = s4WorkerStateLoad();
+    if (empty($st['running'])) return false;
+    $hb = (int)($st['heartbeat'] ?? 0);
+    if ($hb > 0 && time() - $hb <= $staleSec) return true;
+    /* هنگام اجرای job طولانی، خودِ worker ممکن است در runBackendExtract یا child
+       منتظر بماند و heartbeat ننویسد؛ زنده‌بودن PID هنوز نشانهٔ معتبر است. */
+    $pid = (int)($st['pid'] ?? 0);
+    if ($pid > 0 && function_exists('posix_kill') && @posix_kill($pid, 0)) return true;
+    $fp = @fopen(WORKER_LOCK_FILE, 'c');
+    if ($fp) {
+        $free = @flock($fp, LOCK_EX | LOCK_NB);
+        if ($free) @flock($fp, LOCK_UN);
+        @fclose($fp);
+        if (!$free) return true;
+    }
+    return false;
+}
+
+function s4WorkerEnqueue(string $type, array $payload, string $label = ''): array {
+    $type = trim($type);
+    if ($type === '') return ['ok' => false, 'error' => 'job_type_empty'];
+    $dedup = (string)($payload['dedup_key'] ?? '');
+    return s4WorkerQueueMutate(function (&$q) use ($type, $payload, $label, $dedup) {
+        $now = time();
+        foreach ($q['entries'] as $e) {
+            if (!is_array($e)) continue;
+            if (!in_array((string)($e['status'] ?? ''), ['pending','running'], true)) continue;
+            if ($dedup !== '' && (string)($e['dedup_key'] ?? '') === $dedup) {
+                return ['ok' => true, 'queued' => true, 'duplicate' => true,
+                    'job_id' => (string)($e['id'] ?? ''), 'status' => (string)($e['status'] ?? '')];
+            }
+        }
+        $id = 'wk_' . $now . '_' . substr(bin2hex(random_bytes(4)), 0, 8);
+        $q['entries'][] = [
+            'id' => $id, 'type' => $type, 'label' => $label !== '' ? $label : $type,
+            'status' => 'pending', 'created_at' => $now, 'updated_at' => $now,
+            'attempts' => 0, 'dedup_key' => $dedup, 'payload' => $payload,
+        ];
+        return ['ok' => true, 'queued' => true, 'job_id' => $id, 'status' => 'pending'];
+    });
+}
+
+function s4WorkerClaimJob(): ?array {
+    $ret = s4WorkerQueueMutate(function (&$q) {
+        $now = time();
+        foreach ($q['entries'] as &$e) {
+            if (!is_array($e) || (string)($e['status'] ?? '') !== 'pending') continue;
+            $e['status'] = 'running';
+            $e['started_at'] = $now;
+            $e['updated_at'] = $now;
+            $e['attempts'] = (int)($e['attempts'] ?? 0) + 1;
+            $e['worker_pid'] = (int)@getmypid();
+            $job = $e;
+            unset($e);
+            return ['ok' => true, 'job' => $job];
+        }
+        unset($e);
+        return ['ok' => true, 'job' => null];
+    });
+    return is_array($ret['job'] ?? null) ? $ret['job'] : null;
+}
+
+function s4WorkerFinishJob(string $jobId, string $status, array $result = [], string $error = ''): void {
+    s4WorkerQueueMutate(function (&$q) use ($jobId, $status, $result, $error) {
+        $now = time();
+        foreach ($q['entries'] as &$e) {
+            if (!is_array($e) || (string)($e['id'] ?? '') !== $jobId) continue;
+            $e['status'] = $status;
+            $e['updated_at'] = $now;
+            $e['done_at'] = $now;
+            if ($error !== '') $e['error'] = $error;
+            if ($result) $e['result'] = $result;
+            break;
+        }
+        unset($e);
+        /* فقط آخرین ردیف‌ها بمانند؛ pending/running هرگز حذف نمی‌شوند. */
+        $done = []; $active = [];
+        foreach ($q['entries'] as $e) {
+            if (!is_array($e)) continue;
+            if (in_array((string)($e['status'] ?? ''), ['pending','running'], true)) $active[] = $e;
+            else $done[] = $e;
+        }
+        if (count($done) > 60) $done = array_slice($done, -60);
+        $q['entries'] = array_values(array_merge($active, $done));
+        return ['ok' => true];
+    });
+}
+
+function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
+    $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'all';
+    $dedup = 'backend_extract|' . $profileKey . '|' . $phase . '|' . ($forceAll ? 'force' : 'normal') . '|' . ($resume ? 'resume' : 'fresh');
+    $enq = s4WorkerEnqueue('backend_extract', [
+        'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
+        'resume' => $resume, 'dedup_key' => $dedup,
+    ], 'استخراج بک‌اند');
+    if (!empty($enq['ok'])) {
+        $logLine = !empty($enq['duplicate'])
+            ? '🧵 این عملیات از قبل در صف worker دائمی است.'
+            : '🧵 عملیات به worker دائمی سرور سپرده شد — حتی با بستن مرورگر ادامه می‌دهد.';
+        /* اگر استخراج دیگری همین حالا واقعاً lock دارد، progress زندهٔ او را خراب نکن. */
+        if (!extractLockIsHeld()) {
+            writeProgress(EXTRACT_PROGRESS_FILE, [
+                'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
+                'job_id' => (string)($enq['job_id'] ?? ''), 'profile_key' => $profileKey,
+                'total' => 0, 'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
+                'recent_log' => [$logLine], 'total_log_count' => 1,
+                'extracted' => 0, 'new' => 0, 'price_changed' => 0, 'removed' => 0, 'unchanged' => 0,
+            ]);
+        }
+    }
+    return $enq;
+}
+
+function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
+    $dedup = 'manual_sync|' . $profileKey . '|' . ($resume ? 'resume' : 'fresh');
+    $enq = s4WorkerEnqueue('manual_sync', [
+        'profile_key' => $profileKey, 'resume' => $resume, 'dedup_key' => $dedup,
+    ], 'همگام‌سازی دستی');
+    if (!empty($enq['ok'])) {
+        $line = !empty($enq['duplicate'])
+            ? '🧵 همگام‌سازی دستی از قبل در صف worker دائمی است.'
+            : '🧵 همگام‌سازی دستی به worker دائمی سپرده شد — مرورگر فقط پیشرفت را می‌خواند.';
+        writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
+            'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
+            'phase' => 'در صف worker', 'started_at' => time(), 'ts' => time(),
+            'last_progress_ts' => time(), 'total' => 4, 'current' => 0,
+            'profile_key' => $profileKey, 'profile_name' => $profileKey,
+            'job_id' => (string)($enq['job_id'] ?? ''),
+            'recent_log' => [$line], 'total_log_count' => 1,
+        ]);
+    }
+    return $enq;
+}
+
+function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
+    if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
+    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    $mem = (string)@ini_get('memory_limit'); if ($mem === '') $mem = '512M';
+    $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=' . escapeshellarg($mem)
+        . ' ' . escapeshellarg(__FILE__) . ' manual_sync ' . escapeshellarg($profileKey)
+        . ($resume ? ' --resume' : '') . ' 2>&1';
+    $out = []; $rc = 0;
+    @exec($cmd, $out, $rc);
+    $txt = trim(implode("\n", $out));
+    return ['ok' => $rc === 0, 'exit_code' => $rc, 'tail' => mb_substr($txt, -2000)];
+}
+
+function s4WorkerRunCronChild(): array {
+    if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
+    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    $mem = (string)@ini_get('memory_limit');
+    if ($mem === '') $mem = '512M';
+    $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=' . escapeshellarg($mem)
+        . ' ' . escapeshellarg(__FILE__) . ' cron_run 2>&1';
+    $out = []; $rc = 0;
+    @exec($cmd, $out, $rc);
+    $txt = trim(implode("\n", $out));
+    return ['ok' => $rc === 0, 'exit_code' => $rc, 'tail' => mb_substr($txt, -2000)];
+}
+
+function s4WorkerRunJob(array $job): array {
+    $type = (string)($job['type'] ?? '');
+    $payload = is_array($job['payload'] ?? null) ? $job['payload'] : [];
+    if ($type === 'manual_sync') {
+        $pk = trim((string)($payload['profile_key'] ?? ''));
+        return s4WorkerRunManualSyncChild($pk, !empty($payload['resume']));
+    }
+    if ($type === 'backend_extract') {
+        $pk = trim((string)($payload['profile_key'] ?? ''));
+        $phase = (string)($payload['phase'] ?? 'all');
+        if (!in_array($phase, ['all','list','detail'], true)) $phase = 'all';
+        $forceAll = !empty($payload['force_all']);
+        $reserved = '';
+        if (!empty($payload['resume'])) {
+            $prep = extractResumePrepare($pk, loadConnections());
+            if (empty($prep['ok'])) {
+                return ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? '')];
+            }
+            $phase = (string)($prep['phase'] ?? $phase);
+            $reserved = (string)($prep['queue_id'] ?? '');
+        }
+        $res = runBackendExtract($pk, 'worker', false, $phase, $forceAll, $reserved);
+        if (!empty($res['ok'])) {
+            try {
+                $cnNow = loadConnections(); $profsNow = loadProfiles();
+                notifSourceChanges($cnNow, $res, $profsNow[$pk]['name'] ?? $pk);
+            } catch (Throwable $e) {}
+        }
+        return $res;
+    }
+    return ['ok' => false, 'error' => 'نوع job ناشناخته: ' . $type];
+}
+
+function s4WorkerLoopFromCli(): void {
+    @set_time_limit(0); @ignore_user_abort(true);
+    $argv = (array)($GLOBALS['argv'] ?? $_SERVER['argv'] ?? []);
+    $tick = 60; $idle = 2; $once = !empty($_GET['worker_once']); $stopFile = '';
+    foreach ($argv as $a) {
+        $a = (string)$a;
+        if (preg_match('~^--tick=(\d+)~', $a, $m)) $tick = max(0, (int)$m[1]);
+        elseif (preg_match('~^--idle=(\d+)~', $a, $m)) $idle = max(1, min(30, (int)$m[1]));
+        elseif (preg_match('~^--stop-file=(.+)$~', $a, $m)) $stopFile = (string)$m[1];
+        elseif ($a === '--once') $once = true;
+    }
+    $lockFp = @fopen(WORKER_LOCK_FILE, 'c');
+    if (!$lockFp || !@flock($lockFp, LOCK_EX | LOCK_NB)) {
+        if ($lockFp) @fclose($lockFp);
+        echo "worker already running\n";
+        return;
+    }
+    $pid = (int)@getmypid();
+    s4WorkerStateWrite(['running' => true, 'pid' => $pid, 'phase' => 'starting',
+        'started_at' => time(), 'cron_tick' => $tick, 'last_error' => '']);
+    register_shutdown_function(function () use ($lockFp) {
+        s4WorkerStateWrite(['running' => false, 'phase' => 'stopped', 'stopped_at' => time()]);
+        if (is_resource($lockFp)) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
+    });
+    $lastCron = time();
+    echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker started (pid=$pid, tick=$tick)\n";
+    while (true) {
+        if (($stopFile !== '' && is_file($stopFile)) || is_file(WORKER_STOP_FILE)) break;
+        $job = s4WorkerClaimJob();
+        if ($job) {
+            $jid = (string)($job['id'] ?? '');
+            s4WorkerStateWrite(['running' => true, 'phase' => 'job', 'job_id' => $jid, 'job_type' => (string)($job['type'] ?? '')]);
+            echo '[' . date('Y-m-d H:i:s') . "] job start: $jid " . (string)($job['type'] ?? '') . "\n";
+            try {
+                $res = s4WorkerRunJob($job);
+                $ok = !empty($res['ok']);
+                s4WorkerFinishJob($jid, $ok ? 'done' : 'failed', ['ok' => $ok,
+                    'extracted' => (int)($res['extracted'] ?? 0), 'queue_id' => (string)($res['queue_id'] ?? '')],
+                    $ok ? '' : (string)($res['error'] ?? 'job failed'));
+                s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => $ok, 'last_error' => $ok ? '' : (string)($res['error'] ?? '')]);
+                echo '[' . date('Y-m-d H:i:s') . "] job done: $jid ok=" . ($ok ? '1' : '0') . "\n";
+            } catch (Throwable $e) {
+                s4WorkerFinishJob($jid, 'failed', [], $e->getMessage());
+                s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => false, 'last_error' => $e->getMessage()]);
+                echo '[' . date('Y-m-d H:i:s') . "] job fatal: $jid " . $e->getMessage() . "\n";
+            }
+            if ($once) break;
+            continue;
+        }
+        if ($tick > 0 && (time() - $lastCron) >= $tick) {
+            s4WorkerStateWrite(['phase' => 'cron_tick']);
+            $cr = s4WorkerRunCronChild();
+            $lastCron = time();
+            s4WorkerStateWrite(['phase' => 'idle', 'last_cron_at' => $lastCron,
+                'last_cron_ok' => !empty($cr['ok']), 'last_cron_code' => (int)($cr['exit_code'] ?? 0),
+                'last_cron_tail' => (string)($cr['tail'] ?? '')]);
+            echo '[' . date('Y-m-d H:i:s') . '] cron tick ok=' . (!empty($cr['ok']) ? '1' : '0') . ' code=' . (int)($cr['exit_code'] ?? 0) . "\n";
+            if ($once) break;
+        } else {
+            s4WorkerStateWrite(['phase' => 'idle']);
+            if ($once) break;
+            sleep($idle);
+        }
+    }
+    echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker stopped\n";
 }
 
 /* =====================================================================
@@ -16307,6 +16638,22 @@ extractLockRelease($queueId);   // v10.32 (۴۵ب)
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!empty($_ranOut),'extract_stage'=>(!empty($_ranOut)?'detail':(($phase==='list')?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
 }
 
+if(isset($_GET['worker_status'])){
+header('Content-Type: application/json; charset=UTF-8');
+$q=s4WorkerLoadQueue();
+$st=s4WorkerStateLoad();
+echo json_encode(['ok'=>true,'active'=>s4WorkerIsActive(),'state'=>$st,'queue'=>$q],JSON_UNESCAPED_UNICODE);exit;
+}
+
+if(isset($_GET['worker_run'])){
+if(!isCliRun()){
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['ok'=>false,'error'=>'worker فقط از CLI اجرا می‌شود: php scraper4.php worker'],JSON_UNESCAPED_UNICODE);exit;
+}
+s4WorkerLoopFromCli();
+exit;
+}
+
 if(isset($_GET['action']) && $_GET['action'] === 'backend_extract'){
 $profileKey=trim($_GET['profile_key']??$_POST['profile_key']??'');
 if($profileKey===''){
@@ -16317,10 +16664,26 @@ if($u!==''&&filter_var($u,FILTER_VALIDATE_URL))$profileKey=profileKey($u);
    ?phase=list | detail | all — پیش‌فرض all، پس رفتار دکمهٔ دستی عوض نمی‌شود. */
 $phaseIn = (string)($_GET['phase'] ?? $_POST['phase'] ?? 'all');
 if (!in_array($phaseIn, ['all','list','detail'], true)) $phaseIn = 'all';
+/* v9.11: دامنهٔ «همهٔ محصولات» از دکمهٔ اجرای فوریِ استخراج دوره‌ای */
+$forceAllIn = !empty($_GET['force_all']) || !empty($_POST['force_all']);
+$resumeRequested = !empty($_GET['resume']) || !empty($_POST['resume']);
+
+/* v10.183: اگر worker دائمی سرور زنده است، درخواست وب فقط job می‌سازد.
+   resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
+   قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر قدیمی مستقیم اجرا می‌شود. */
+if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
+    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
+        'queued'=>!empty($enq['queued']),'worker'=>true,'profile_key'=>$profileKey,
+        'phase'=>$phaseIn,'note'=>'operation queued for persistent worker'], $enq), JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $resumeLockQueueId = '';
 /* v10.136: resumeِ فرزند باید خودش، در همان process که worker را می‌سازد،
    lock بگیرد؛ parent فقط دیگر probe و mutation جداگانه انجام نمی‌دهد. */
-if (!empty($_GET['resume']) || !empty($_POST['resume'])) {
+if ($resumeRequested) {
     $resumePrep = extractResumePrepare($profileKey, loadConnections());
     if (empty($resumePrep['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
@@ -16331,8 +16694,6 @@ if (!empty($_GET['resume']) || !empty($_POST['resume'])) {
     $phaseIn = (string)$resumePrep['phase'];
     $resumeLockQueueId = (string)($resumePrep['queue_id'] ?? '');
 }
-/* v9.11: دامنهٔ «همهٔ محصولات» از دکمهٔ اجرای فوریِ استخراج دوره‌ای */
-$forceAllIn = !empty($_GET['force_all']) || !empty($_POST['force_all']);
 $res=runBackendExtract($profileKey,'manual',true,$phaseIn,$forceAllIn,$resumeLockQueueId);
 // v8.30: همان اعلان‌های تغییر مبدأ که کران‌جاب می‌فرستد
 if(!empty($res['ok'])){
@@ -18518,6 +18879,18 @@ if (isCliRun()) {
     $_cliCmd  = ltrim($_cliCmd, '?');                          // ?cron_run هم قبول
     if ($_cliCmd === '' || $_cliCmd === 'cron' || $_cliCmd === 'cron_run') {
         $_GET['cron_run'] = '1';
+    } elseif ($_cliCmd === 'worker' || $_cliCmd === 'queue_worker') {
+        $_GET['worker_run'] = '1';                 // php scraper4.php worker
+    } elseif ($_cliCmd === 'worker_once') {
+        $_GET['worker_run'] = '1'; $_GET['worker_once'] = '1';
+    } elseif ($_cliCmd === 'worker_status') {
+        $_GET['worker_status'] = '1';
+    } elseif ($_cliCmd === 'manual_sync') {
+        $_GET['manual_sync'] = '1';                 // php scraper4.php manual_sync <profile_key>
+        $_GET['profile'] = (string)($_cliArgs[1] ?? '');
+        $_GET['force'] = '1';
+        $_GET['direct'] = '1';                      // childِ worker دوباره enqueue نکند
+        if (in_array('resume', $_cliArgs, true) || in_array('--resume', $_cliArgs, true)) $_GET['resume'] = '1';
     } elseif ($_cliCmd === 'whoami') {
         $_GET['whoami'] = '1';
     } elseif ($_cliCmd === 'backup') {
@@ -18586,6 +18959,17 @@ if (isset($_GET['manual_sync_status'])) {
     exit;
 }
 if (isset($_GET['manual_sync'])) {
+    /* v10.183: وقتی worker دائمی زنده است، همگام‌سازی دستی هم مثل استخراج
+       از request وب جدا می‌شود. childِ CLI با direct=1 از enqueue دوباره رد می‌شود. */
+    if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
+        $_msKeyQ = trim((string)($_GET['profile'] ?? $_GET['profile_key'] ?? $_POST['profile'] ?? $_POST['profile_key'] ?? ''));
+        $_msEnq = s4WorkerEnqueueManualSync($_msKeyQ, !empty($_GET['resume']) || !empty($_POST['resume']));
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(array_merge(['ok'=>!empty($_msEnq['ok']),'started'=>!empty($_msEnq['ok']),
+            'queued'=>!empty($_msEnq['queued']),'worker'=>true,'profile_key'=>$_msKeyQ,
+            'note'=>'manual sync queued for persistent worker'], $_msEnq), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     /* قفل اختصاصی لازم است: قفلِ کران فقط اجرای دوره‌ای را می‌پوشاند و
        دو resume از مدیر وظیفه می‌توانستند هر دو از checkpoint بخوانند. */
     $_msLockFp = @fopen(MANUAL_SYNC_LOCK_FILE, 'c');
@@ -35153,6 +35537,35 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.182', 'ورودیِ 10.182 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "182'") !== false
       && version_compare(APP_VERSION, '10.' . '182', '>='));
+
+    /* ---------- v10.183: worker دائمی سرور برای عملیات سنگین ---------- */
+    $__serverSh183 = dirname(__FILE__) . '/server.sh';
+    $__serverShSrc183 = is_file($__serverSh183) ? (string)@file_get_contents($__serverSh183) : '';
+    $add('10.183', 'صف و heartbeat worker دائمی در PHP وجود دارد',
+         defined('WORKER_QUEUE_FILE') && defined('WORKER_STATE_FILE')
+      && function_exists('s4Worker' . 'LoopFromCli')
+      && function_exists('s4Worker' . 'EnqueueBackendExtract'));
+    $add('10.183', 'CLI دستور worker و worker_status را می‌شناسد',
+         strpos($selfSrc, "\$_GET['worker_" . "run'] = '1';") !== false
+      && strpos($selfSrc, "\$_GET['worker_" . "status'] = '1';") !== false);
+    $add('10.183', 'backend_extract در حضور worker زنده فقط job می‌سازد',
+         strpos($selfSrc, 's4WorkerIs' . 'Active()') !== false
+      && strpos($selfSrc, 's4WorkerEnqueue' . 'BackendExtract') !== false
+      && strpos($selfSrc, "'worker'=>true") !== false);
+    $add('10.183', 'همگام‌سازی دستی هم در worker دائمی صف می‌شود',
+         strpos($selfSrc, 's4WorkerEnqueue' . 'ManualSync') !== false
+      && strpos($selfSrc, "\$_GET['manual_" . "sync'] = '1';") !== false
+      && strpos($selfSrc, 'manual sync queued for persistent worker') !== false);
+    $add('10.183', 'server.sh worker دائمی را کنار وب‌سرور بالا می‌آورد',
+         $__serverShSrc183 !== ''
+      && strpos($__serverShSrc183, 'SCRAPER_QUEUE' . '_WORKER') !== false
+      && strpos($__serverShSrc183, 'worker_' . 'loop()') !== false
+      && strpos($__serverShSrc183, '"$SCRAPER_APP" worker --tick=') !== false
+      && strpos($__serverShSrc183, 'queue-worker' . '.pid') !== false);
+    $add('10.183', 'ورودیِ 10.183 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "183'") !== false
+      && version_compare(APP_VERSION, '10.' . '183', '>='));
+    unset($__serverSh183, $__serverShSrc183);
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65316,6 +65729,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.183', t:'🧵 worker دائمی سرور برای اجرای عملیات مثل Python/Node', items:[
+    'server.sh حالا کنار وب‌سرور یک worker دائمی CLI با php scraper4.php worker بالا می‌آورد؛ اگر worker سقوط کند، سوپروایزر دوباره زنده‌اش می‌کند',
+    'وقتی worker heartbeat فعال باشد، دکمهٔ استخراج بک‌اند و همگام‌سازی دستی دیگر کار طولانی را داخل request وب اجرا نمی‌کنند؛ job در worker_queue.json ثبت می‌شود و worker بیرون از مرورگر آن را اجرا می‌کند',
+    'worker_state.json وضعیت/heartbeat پردازهٔ دائمی را نگه می‌دارد و اندپوینت/دستور worker_status برای عیب‌یابی اضافه شد',
+    'تیک cron_run هم به داخل worker منتقل شد؛ بنابراین استخراج دوره‌ای، پمپ صف‌ها و نگهبان ادامه بدون بازدیدکننده هم مثل یک سرویس دائمی اجرا می‌شوند',
+    'server.conf.sample، SERVER.md و systemd service برای SCRAPER_QUEUE_WORKER و SCRAPER_WORKER_LOG به‌روز شدند',
+  ]},
   {v:'10.182', t:'🏁 تست سه‌صفحه‌ای موتورهای استخراج + کارت سرعت محصول/دقیقه', items:[
     'در صفحهٔ شروع دکمهٔ «🏁 تست سه‌صفحه‌ای همهٔ موتورها» اضافه شد؛ روی پروفایل فعلی، هر موتور PHP-native فقط سه صفحهٔ اول را می‌خواند و چیزی ذخیره یا ارسال نمی‌کند',
     'گزارش تست به‌صورت جدول نشان می‌دهد: وضعیت هر موتور، تعداد صفحات، کل کارت‌ها، محصول یکتا، تعداد تکراری، سرعت میانگین محصول/دقیقه، زمان کل، لایهٔ استفاده‌شده، خطاها و جزئیات هر صفحه شامل HTTP/fetch/parse',

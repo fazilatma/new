@@ -10,9 +10,10 @@
 #  (خطای مرگبار، OOM، سیگنال بیرونی) از کار بیفتد، بی‌درنگ و تا «بی‌نهایت»
 #  دوباره بالا می‌آید — تا زمانی که صریحاً stop شود. تنظیمات PHP هم طوری
 #  داده می‌شود که خودِ PHP هیچ سقف زمانی نداشته باشد (max_execution_time=0 و
-#  ignore_user_abort=1). علاوه بر وب‌سرور، یک «تیکِ کران» اختیاری هم
-#  می‌تواند هر N ثانیه دستورِ داخلیِ خودِ اپ (php scraper4.php cron_run) را
-#  اجرا کند تا کارهای پس‌زمینه (استخراج دوره‌ای، پمپِ صف، نگهبانِ ادامه)
+#  ignore_user_abort=1). علاوه بر وب‌سرور، یک worker دائمیِ CLI هم بالا
+#  می‌آید؛ وب‌درخواست‌ها کارهای سنگین را در صف می‌گذارند و worker مثل
+#  سرویس‌های Python/Node آن‌ها را بیرون از request اجرا می‌کند. همان worker
+#  تیک‌های cron_run را هم می‌زند تا استخراج دوره‌ای، پمپِ صف و نگهبانِ ادامه
 #  حتی بدون هیچ بازدیدکننده‌ای همیشه در جریان بمانند.
 #
 #  پیکربندی: فایل server.conf کنارِ همین اسکریپت (نمونه: server.conf.sample)
@@ -36,7 +37,8 @@ SCRAPER_WORKERS="${SCRAPER_WORKERS:-4}"       # PHP_CLI_SERVER_WORKERS (PHP ≥ 
 SCRAPER_MEMORY="${SCRAPER_MEMORY:-512M}"
 SCRAPER_RESTART_DELAY="${SCRAPER_RESTART_DELAY:-1}"   # ثانیه — نخستین مکث پس از سقوط
 SCRAPER_RESTART_DELAY_MAX="${SCRAPER_RESTART_DELAY_MAX:-30}"
-SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"  # ثانیه؛ 0 یعنی تیکِ کران خاموش
+SCRAPER_CRON_TICK="${SCRAPER_CRON_TICK:-60}"  # ثانیه؛ 0 یعنی تیکِ کران داخل worker خاموش
+SCRAPER_QUEUE_WORKER="${SCRAPER_QUEUE_WORKER:-1}" # 1 = worker دائمیِ عملیات روشن؛ 0 = fallback قدیمیِ cron tick
 # نگهبانِ سلامت: اگر پردازهٔ PHP زنده بود ولی به HTTP جواب نداد (هنک)، آن را
 # می‌کشد تا حلقهٔ نگهبانِ بالا سرورِ تازه بسازد. 0 = خاموش.
 SCRAPER_HEALTH_SEC="${SCRAPER_HEALTH_SEC:-30}"
@@ -44,6 +46,7 @@ SCRAPER_HEALTH_FAILS="${SCRAPER_HEALTH_FAILS:-3}"
 SCRAPER_HEALTH_URL="${SCRAPER_HEALTH_URL:-}"  # خالی = http://127.0.0.1:$PORT/
 SCRAPER_LOG="${SCRAPER_LOG:-$HERE/logs/server.log}"
 SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-$HERE/logs/cron-tick.log}"
+SCRAPER_WORKER_LOG="${SCRAPER_WORKER_LOG:-$HERE/logs/worker.log}"
 # ریشهٔ سند اختیاری برای چیدمان‌های چندپوشه‌ای (مثلاً حالت لاراول:
 #   SCRAPER_DOCROOT=laravel/public SCRAPER_ROUTER=laravel/public/index.php)
 SCRAPER_DOCROOT="${SCRAPER_DOCROOT:-}"
@@ -53,6 +56,7 @@ STOP_FLAG="$RUN_DIR/STOP"
 SUP_PIDFILE="$RUN_DIR/supervisor.pid"
 SRV_PIDFILE="$RUN_DIR/php-server.pid"
 TICK_PIDFILE="$RUN_DIR/cron-tick.pid"
+WORKER_PIDFILE="$RUN_DIR/queue-worker.pid"
 HEALTH_PIDFILE="$RUN_DIR/health-probe.pid"
 
 # ویندوز (Git Bash/MSYS): چندکارگر پشتیبانی نمی‌شود
@@ -62,7 +66,7 @@ esac
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
-ensure_dirs() { mkdir -p "$RUN_DIR" "$(dirname "$SCRAPER_LOG")" "$(dirname "$SCRAPER_TICK_LOG")"; }
+ensure_dirs() { mkdir -p "$RUN_DIR" "$(dirname "$SCRAPER_LOG")" "$(dirname "$SCRAPER_TICK_LOG")" "$(dirname "$SCRAPER_WORKER_LOG")"; }
 
 need_php() {
   if ! command -v "$SCRAPER_PHP" >/dev/null 2>&1; then
@@ -112,6 +116,36 @@ ticker_loop() {
       "$SCRAPER_APP" cron_run >>"$SCRAPER_TICK_LOG" 2>&1
     log "tickِ کران اجرا شد (هر ${SCRAPER_CRON_TICK} ثانیه) — کد خروج: $?"
   done
+}
+
+# --- worker دائمی: عملیات سنگین بیرون از request، مثل Python/Node -------------
+worker_loop() {
+  [ "$SCRAPER_QUEUE_WORKER" -gt 0 ] 2>/dev/null || exit 0
+  local delay=1 started rc up
+  while [ ! -f "$STOP_FLAG" ]; do
+    started="$(date +%s)"
+    log "راه‌اندازی worker دائمی عملیات (cron_tick=${SCRAPER_CRON_TICK}s) — لاگ: $SCRAPER_WORKER_LOG"
+    "$SCRAPER_PHP" -d max_execution_time=0 -d max_input_time=-1 -d memory_limit="$SCRAPER_MEMORY" \
+      -d ignore_user_abort=1 -d default_socket_timeout=-1 \
+      "$SCRAPER_APP" worker --tick="$SCRAPER_CRON_TICK" --stop-file="$STOP_FLAG" >>"$SCRAPER_WORKER_LOG" 2>&1
+    rc=$?
+    [ -f "$STOP_FLAG" ] && break
+    up=$(( $(date +%s) - started ))
+    [ "$up" -ge 60 ] && delay=1
+    log "worker با کد $rc از کار افتاد (پس از ${up} ثانیه) — بازراه‌اندازی تا ${delay} ثانیهٔ دیگر…"
+    sleep "$delay"
+    [ "$up" -lt 60 ] && delay=$((delay*2))
+    [ "$delay" -gt "$SCRAPER_RESTART_DELAY_MAX" ] && delay="$SCRAPER_RESTART_DELAY_MAX"
+  done
+}
+
+stop_worker() {
+  if [ -n "${WORKER_PID:-}" ]; then
+    pkill -TERM -P "$WORKER_PID" 2>/dev/null || true
+    kill "$WORKER_PID" 2>/dev/null || true
+    wait "$WORKER_PID" 2>/dev/null || true
+    WORKER_PID=""
+  fi
 }
 
 stop_ticker() {
@@ -168,6 +202,7 @@ supervise() {
     log "سیگنال توقف دریافت شد — پایانِ سوپروایزر"
     touch "$STOP_FLAG"
     stop_ticker
+    stop_worker
     stop_health
     [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
     exit 0
@@ -181,7 +216,11 @@ supervise() {
     log "راه‌اندازیِ وب‌سرور: http://$SCRAPER_HOST:$SCRAPER_PORT  (workers=$SCRAPER_WORKERS, memory=$SCRAPER_MEMORY)"
     start_php_server
 
-    if [ "$SCRAPER_CRON_TICK" -gt 0 ] 2>/dev/null; then
+    if [ "$SCRAPER_QUEUE_WORKER" -gt 0 ] 2>/dev/null; then
+      worker_loop &
+      WORKER_PID=$!
+      echo "$WORKER_PID" > "$WORKER_PIDFILE"
+    elif [ "$SCRAPER_CRON_TICK" -gt 0 ] 2>/dev/null; then
       ticker_loop &
       TICKER_PID=$!
       echo "$TICKER_PID" > "$TICK_PIDFILE"
@@ -195,6 +234,7 @@ supervise() {
 
     wait "$SERVER_PID"; rc=$?
     stop_ticker
+    stop_worker
     stop_health
 
     if [ -f "$STOP_FLAG" ]; then
@@ -213,7 +253,7 @@ supervise() {
       [ "$delay" -gt "$SCRAPER_RESTART_DELAY_MAX" ] && delay="$SCRAPER_RESTART_DELAY_MAX"
     fi
   done
-  rm -f "$SRV_PIDFILE" "$TICK_PIDFILE" "$HEALTH_PIDFILE"
+  rm -f "$SRV_PIDFILE" "$TICK_PIDFILE" "$WORKER_PIDFILE" "$HEALTH_PIDFILE"
 }
 
 is_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -254,41 +294,47 @@ cmd_start() {
 cmd_stop() {
   ensure_dirs
   touch "$STOP_FLAG"
-  local sup="" srv="" tick="" hp="" i
+  local sup="" srv="" tick="" worker="" wkids="" hp="" i
   [ -f "$SUP_PIDFILE" ]    && sup="$(cat "$SUP_PIDFILE" 2>/dev/null || true)"
   [ -f "$SRV_PIDFILE" ]    && srv="$(cat "$SRV_PIDFILE" 2>/dev/null || true)"
   [ -f "$TICK_PIDFILE" ]   && tick="$(cat "$TICK_PIDFILE" 2>/dev/null || true)"
+  [ -f "$WORKER_PIDFILE" ] && worker="$(cat "$WORKER_PIDFILE" 2>/dev/null || true)"
   [ -f "$HEALTH_PIDFILE" ] && hp="$(cat "$HEALTH_PIDFILE" 2>/dev/null || true)"
 
   # فرزندهای سوپروایزر را هم بگیر (اگر PID فایل‌ها جا مانده باشند)
   [ -z "$srv" ] && is_alive "$sup" && srv="$(pgrep -P "$sup" 2>/dev/null | tr '\n' ' ' || true)"
+  [ -n "$worker" ] && wkids="$(pgrep -P "$worker" 2>/dev/null | tr '\n' ' ' || true)"
 
-  kill $tick 2>/dev/null || true
-  kill $hp   2>/dev/null || true
-  kill $srv  2>/dev/null || true
-  kill $sup  2>/dev/null || true
+  kill $tick   2>/dev/null || true
+  kill $wkids  2>/dev/null || true
+  kill $worker 2>/dev/null || true
+  kill $hp     2>/dev/null || true
+  kill $srv    2>/dev/null || true
+  kill $sup    2>/dev/null || true
 
   for i in 1 2 3 4 5 6 7 8 9 10; do
     is_alive "$sup" || is_alive "$srv" || break
     sleep 1
   done
-  kill -9 $tick $hp $srv $sup 2>/dev/null || true
-  rm -f "$SUP_PIDFILE" "$SRV_PIDFILE" "$TICK_PIDFILE" "$HEALTH_PIDFILE" "$STOP_FLAG"
+  kill -9 $tick $wkids $worker $hp $srv $sup 2>/dev/null || true
+  rm -f "$SUP_PIDFILE" "$SRV_PIDFILE" "$TICK_PIDFILE" "$WORKER_PIDFILE" "$HEALTH_PIDFILE" "$STOP_FLAG"
   log "متوقف شد."
 }
 
 cmd_restart() { cmd_stop; sleep 1; cmd_start; }
 
 cmd_status() {
-  local sup="" srv="" tick=""
-  [ -f "$SUP_PIDFILE" ]  && sup="$(cat "$SUP_PIDFILE" 2>/dev/null || true)"
-  [ -f "$SRV_PIDFILE" ]  && srv="$(cat "$SRV_PIDFILE" 2>/dev/null || true)"
-  [ -f "$TICK_PIDFILE" ] && tick="$(cat "$TICK_PIDFILE" 2>/dev/null || true)"
+  local sup="" srv="" tick="" worker=""
+  [ -f "$SUP_PIDFILE" ]    && sup="$(cat "$SUP_PIDFILE" 2>/dev/null || true)"
+  [ -f "$SRV_PIDFILE" ]    && srv="$(cat "$SRV_PIDFILE" 2>/dev/null || true)"
+  [ -f "$TICK_PIDFILE" ]   && tick="$(cat "$TICK_PIDFILE" 2>/dev/null || true)"
+  [ -f "$WORKER_PIDFILE" ] && worker="$(cat "$WORKER_PIDFILE" 2>/dev/null || true)"
   echo "آدرس:        http://$SCRAPER_HOST:$SCRAPER_PORT"
   echo "اپ:          $SCRAPER_APP (روتر: $SCRAPER_ROUTER)"
   echo "حالت:        $(is_alive "$sup" && echo "در حال اجرا (پس‌زمینه، supervisor PID $sup)" || { is_alive "$srv" && echo "در حال اجرا (پیش‌زمینه، server PID $srv)" || echo "متوقف"; })"
   echo "وب‌سرور PHP: $(is_alive "$srv" && echo "زنده (PID $srv, workers=$SCRAPER_WORKERS)" || echo "—")"
-  echo "تیکِ کران:   $([ "$SCRAPER_CRON_TICK" -gt 0 ] 2>/dev/null && { is_alive "$tick" && echo "فعال (PID $tick، هر $SCRAPER_CRON_TICK ثانیه)" || echo "پیکربندی‌شده ولی اجرا نیست"; } || echo "خاموش")"
+  echo "worker دائم: $([ "$SCRAPER_QUEUE_WORKER" -gt 0 ] 2>/dev/null && { is_alive "$worker" && echo "فعال (PID $worker، عملیات + cron هر $SCRAPER_CRON_TICK ثانیه)" || echo "پیکربندی‌شده ولی اجرا نیست"; } || echo "خاموش")"
+  echo "تیکِ کران:   $([ "$SCRAPER_QUEUE_WORKER" -gt 0 ] 2>/dev/null && echo "داخل worker" || { [ "$SCRAPER_CRON_TICK" -gt 0 ] 2>/dev/null && { is_alive "$tick" && echo "فعال (PID $tick، هر $SCRAPER_CRON_TICK ثانیه)" || echo "پیکربندی‌شده ولی اجرا نیست"; } || echo "خاموش"; })"
   local hp=""
   [ -f "$HEALTH_PIDFILE" ] && hp="$(cat "$HEALTH_PIDFILE" 2>/dev/null || true)"
   echo "سلامت:       $([ "$SCRAPER_HEALTH_SEC" -gt 0 ] 2>/dev/null && { is_alive "$hp" && echo "نگهبان فعال (PID $hp، هر $SCRAPER_HEALTH_SEC ثانیه، بعدِ $SCRAPER_HEALTH_FAILS شکست می‌کشد)" || echo "پیکربندی‌شده ولی اجرا نیست"; } || echo "خاموش")"
@@ -298,6 +344,7 @@ cmd_status() {
     echo "پاسخ HTTP:   $code (روی 127.0.0.1:$SCRAPER_PORT)"
   fi
   echo "لاگ:         $SCRAPER_LOG"
+  echo "لاگ worker:  $SCRAPER_WORKER_LOG"
 }
 
 cmd_logs() { touch "$SCRAPER_LOG" 2>/dev/null || true; tail -n 100 -f "$SCRAPER_LOG"; }
@@ -308,13 +355,15 @@ cmd_help() {
 
   run       حالت ۱ — پیش‌زمینه: سوپروایزر + وب‌سرور با لاگِ زنده (توقف با Ctrl+C)
   start     حالت ۲ — پس‌زمینه (دیمون): همان سوپروایزر، جدا از ترمینال با PID/لاگ
-  stop      توقفِ تمیزِ دیمون (سوپروایزر + وب‌سرور + تیکِ کران)
+  stop      توقفِ تمیزِ دیمون (سوپروایزر + وب‌سرور + worker/تیکِ کران)
   restart   توقف و شروعِ دوبارهٔ حالت پس‌زمینه
   status    وضعیت پردازه‌ها و تست پاسخ HTTP
   logs      دنبال‌کردنِ لاگِ سرور
 
 در هر دو حالت: اگر پردازهٔ PHP سقوط کند، نگهبان تا بی‌نهایت آن را دوباره بالا
 می‌آورد (باز‌راه‌اندازیِ نامحدود با مکثِ تصاعدیِ ۱ تا $SCRAPER_RESTART_DELAY_MAX ثانیه).
+worker دائمی هم کنار وب‌سرور بالا می‌آید؛ بنابراین استخراج/عملیات سنگین از request
+وب جدا می‌شوند و مانند سرویس‌های Python/Node در پردازهٔ CLI همیشه‌زنده اجرا می‌شوند.
 نگهبانِ سلامت هم اگر سرور «زنده ولی هنک‌کرده» باشد (به $SCRAPER_HEALTH_FAILS
 درخواستِ متوالی جواب ندهد) آن را می‌کشد تا تازه ساخته شود.
 پیکربندی در server.conf یا متغیر محیطی (نمونه: server.conf.sample).
