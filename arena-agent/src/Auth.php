@@ -51,7 +51,7 @@ final class Auth
             return;
         }
         if ((int) $row['expires_at'] < time()) {
-            Db::run('DELETE FROM sessions WHERE token = ?', [$token]);
+            Db::run('DELETE FROM sessions WHERE token = ? OR token = ?', [$digest, $row['session_token']]);
             return;
         }
         if (($row['session_token'] ?? '') !== $digest) {
@@ -96,7 +96,7 @@ final class Auth
         $token = self::tokenFrom($req);
         if ($token !== '') {
             $digest = hash('sha256', $token);
-            // Keep logout compatible with pre-2.4 sessions.
+            // Keep logout compatible with pre-2.3 sessions.
             Db::run('DELETE FROM sessions WHERE token = ? OR token = ?', [$digest, $token]);
         }
         self::setCookie('', time() - 3600);
