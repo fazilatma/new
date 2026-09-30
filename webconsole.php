@@ -1329,6 +1329,10 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
         $subDir = $dest . '/' . $sub;
         if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
     }
+    if (is_dir($dest . '/.venv') && !file_exists($dest . '/.venv/bin/python') && !file_exists($dest . '/.venv/bin/python3')) {
+        cli_log('[python] Removing incomplete/corrupted .venv directory...');
+        sh('rm -rf ' . esc($dest . '/.venv'));
+    }
     foreach (['install' => ($p['install_cmd'] ?: default_install_cmd($p['type'])), 'build' => $p['build_cmd']] as $label => $cmd) {
         if (trim($cmd) === '') continue;
         $script = "#!/bin/bash\nset -e\nset -o pipefail\ncd " . esc($dest) . "\n";
@@ -2576,6 +2580,10 @@ function cli_service(array $job): int {
                 if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
             }
 
+            if (is_dir($deployDir . '/.venv') && !file_exists($deployDir . '/.venv/bin/python') && !file_exists($deployDir . '/.venv/bin/python3')) {
+                cli_log('[python] Removing incomplete/corrupted .venv directory...');
+                sh('rm -rf ' . esc($deployDir . '/.venv'));
+            }
             // 1. Auto-detect all potential ports used by the project
             $portsToFree = [];
             if (!empty($currentP['port']) && ctype_digit((string)$currentP['port'])) {
