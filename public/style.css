@@ -515,3 +515,6 @@
   .project-check-strip{margin-top:8px}
   .project-check-btn{font-size:10px;padding:6px 7px}
 }
+
+/* v1.14.2 live event timeline */
+.activity-item{position:relative;padding-left:28px}.activity-item::before{content:'•';position:absolute;left:10px;top:9px;color:#7c8cff;font-size:12px}.activity-item b{display:inline-flex;align-items:center;gap:5px}.activity-item b::after{content:'';width:5px;height:5px;border-radius:50%;background:#4b5563}.activity-item:first-child b::after{background:#6ee7b7;box-shadow:0 0 7px #6ee7b7}
