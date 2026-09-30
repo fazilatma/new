@@ -123,6 +123,8 @@ let agentConversation=[];
 let agentRunStartedAt=0;
 let agentMode='auto';
 let activeAgentRunId='';
+let agentTelemetryTimer=null;
+let lastAgentChanges=[];
 
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
@@ -253,6 +255,33 @@ function restoreAgentChat(){
   renderConversation();
 }
 
+function showActivityTab(name,button){
+  document.querySelectorAll('.activity-tabs button').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.activity-view').forEach(x=>x.classList.add('hidden'));
+  button?.classList.add('active');
+  const target=name==='activity'?'activity':name==='changes'?'changesView':'checksView';
+  $(target)?.classList.remove('hidden');
+}
+function clearTerminal(){const out=$('termout');if(out)out.textContent='Terminal cleared.'}
+async function refreshGitState(){await loadGitState()}
+function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentChanges.length){
+  $('telemetryState')&&( $('telemetryState').textContent=state );
+  $('telemetryIteration')&&( $('telemetryIteration').textContent=iteration );
+  $('telemetryChanges')&&( $('telemetryChanges').textContent=String(changes) );
+}
+function renderWorkspaceChanges(changes=[]){
+  lastAgentChanges=changes||[];
+  const el=$('changesView');if(!el)return;
+  if(!changes.length){el.innerHTML='<div class="activity-empty"><span>⌁</span><p>No workspace changes</p><small>The latest run did not modify tracked workspace files.</small></div>';return}
+  el.innerHTML='<div class="changes-view-list">'+changes.map(x=>'<div class="change-item"><span class="change-status '+esc(x.status)+'">'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code>'+esc(x.path)+'</code><small>'+esc(x.status)+(x.bytesAfter!=null?' · '+x.bytesAfter+' B':'')+'</small></div>').join('')+'</div>';
+}
+function renderAgentChecks(history=[]){
+  const el=$('checksView');if(!el)return;
+  const checks=[];
+  history.forEach(h=>(h.verification||[]).forEach(v=>checks.push(v)));
+  if(!checks.length){el.innerHTML='<div class="activity-empty"><span>✓</span><p>No verification results</p><small>Checks will appear here after an Agent run.</small></div>';return}
+  el.innerHTML=checks.map(v=>'<div class="check-item"><span class="check-icon">'+(v.ok?'✓':'!')+'</span><div><b>'+esc(v.command||v.name||'Verification')+'</b><small>'+esc(v.output||v.error||'Completed')+'</small></div></div>').join('');
+}
 function setAgentMode(mode){
   agentMode=mode==='plan'?'plan':'auto';
   $('modeAuto')?.classList.toggle('active',agentMode==='auto');
@@ -383,6 +412,9 @@ async function runAgentLoop(){
   if(!selected){setActivity('Agent','Select a model first');return}
   const out=$('answer'),button=document.querySelector('.run-agent');
   activeAgentRunId=newAgentRunId();
+  const telemetryStarted=Date.now();
+  updateAgentTelemetry(agentMode==='plan'?'PLANNING':'RUNNING','1',0);
+  clearInterval(agentTelemetryTimer);agentTelemetryTimer=setInterval(()=>{const sec=Math.floor((Date.now()-telemetryStarted)/1000);const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');$('telemetryElapsed')&&($('telemetryElapsed').textContent=m+':'+s)},500);
   if(button){button.disabled=true;button.dataset.running='1';button.innerHTML='<span>◌</span><b>'+ (agentMode==='plan'?'Planning…':'Running…') +'</b><small>Working</small>'}
   const stop=$('agentStopButton');if(stop)stop.disabled=false;
   const now=new Date();
@@ -410,6 +442,7 @@ async function runAgentLoop(){
     const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});
     agentConversation=agentConversation.filter(x=>x.type!=='working');
     agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),planOnly:Boolean(d.planOnly),changes:d.changes||[],durationMs:Date.now()-agentRunStartedAt});
+    renderWorkspaceChanges(d.changes||[]);renderAgentChecks(d.history||[]);updateAgentTelemetry(d.success?'DONE':'REVIEW',String((d.iterations||d.history?.length||0)),(d.changes||[]).length);
     renderConversation();
     setAgentRunState(d.success?'READY':'PAUSED');
     setActivity(d.success?'Agent completed':'Agent stopped',d.success?'Verification passed':'Maximum iterations reached');
@@ -423,6 +456,7 @@ async function runAgentLoop(){
     setActivity('Agent error',e.message);
     saveAgentChat();
   }finally{
+    clearInterval(agentTelemetryTimer);agentTelemetryTimer=null;
     activeAgentRunId='';
     const stop=$('agentStopButton');if(stop)stop.disabled=true;
     if(button){button.disabled=false;button.dataset.running='';button.innerHTML=agentMode==='plan'?'<span>◫</span><b>Generate Plan</b><small>Ctrl + Enter</small>':'<span>➜</span><b>Run Agent</b><small>Ctrl + Enter</small>'}
