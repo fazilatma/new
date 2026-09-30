@@ -122,7 +122,7 @@ const AGENT_CHAT_KEY='arena.agent.chat.v1';
 let agentConversation=[];
 let agentRunStartedAt=0;
 let agentMode='auto';
-let closeAgentEventStream();
+let activeAgentRunId='';
     activeAgentRunId='';
 let agentTelemetryTimer=null;
 let lastAgentChanges=[];
