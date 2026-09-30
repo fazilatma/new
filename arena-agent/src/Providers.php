@@ -117,71 +117,126 @@ final class Providers
     /** @param array<mixed> $models */
     public static function saveModels(string $providerId, array $models, bool $replace = false): int
     {
-        if ($replace) {
-            Db::run('DELETE FROM models WHERE provider_id = ?', [$providerId]);
-        }
-        $n = 0;
-        foreach (self::normalizeModelList($models) as $m) {
-            $modelId = trim((string) ($m['id'] ?? ''));
-            if ($modelId === '') {
-                continue;
+        return (int) Db::transaction(static function () use ($providerId, $models, $replace): int {
+            if (Db::one('SELECT id FROM providers WHERE id = ?', [$providerId]) === null) {
+                throw new HttpError(404, 'No such provider.');
             }
-            $known = ['id', 'name', 'enabled', 'toolCalling', 'vision', 'maxInputTokens',
-                      'maxOutputTokens', 'inputCostPer1M', 'outputCostPer1M', 'extra'];
-            $extra = is_array($m['extra'] ?? null) ? $m['extra'] : [];
-            foreach ($m as $k => $v) {
-                if (!in_array($k, $known, true)) {
-                    $extra[$k] = $v;      // never silently drop catalogue metadata
-                }
-            }
-            // A model that cannot hold a conversation is imported but parked.
-            $enabled = array_key_exists('enabled', $m) ? (bool) $m['enabled'] : true;
-            if (!empty($m['nonChat'])) {
-                $enabled = false;
-            }
-            Db::run(
+            if ($replace) Db::run('DELETE FROM models WHERE provider_id = ?', [$providerId]);
+            $st = Db::pdo()->prepare(
                 'INSERT INTO models (provider_id, model_id, name, enabled, tools, vision, ctx_in, ctx_out, cost_in, cost_out, extra)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                 ON CONFLICT(provider_id, model_id) DO UPDATE SET
-                    name=excluded.name, enabled=excluded.enabled, tools=excluded.tools,
-                    vision=excluded.vision, ctx_in=excluded.ctx_in, ctx_out=excluded.ctx_out,
-                    cost_in=excluded.cost_in, cost_out=excluded.cost_out, extra=excluded.extra',
-                [
+                 ON CONFLICT(provider_id, model_id) DO UPDATE SET name=excluded.name, enabled=excluded.enabled,
+                 tools=excluded.tools, vision=excluded.vision, ctx_in=excluded.ctx_in, ctx_out=excluded.ctx_out,
+                 cost_in=excluded.cost_in, cost_out=excluded.cost_out, extra=excluded.extra'
+            );
+            $n = 0;
+            foreach (self::normalizeModelList($models) as $m) {
+                $modelId = trim((string) ($m['id'] ?? ''));
+                if ($modelId === '') continue;
+                $known = ['id','name','enabled','toolCalling','vision','maxInputTokens','maxOutputTokens','inputCostPer1M','outputCostPer1M','extra'];
+                $extra = is_array($m['extra'] ?? null) ? $m['extra'] : [];
+                foreach ($m as $k => $v) if (!in_array($k, $known, true)) $extra[$k] = $v;
+                $enabled = array_key_exists('enabled', $m) ? (bool) $m['enabled'] : true;
+                if (!empty($m['nonChat'])) $enabled = false;
+                $st->execute([
                     $providerId, $modelId, (string) ($m['name'] ?? $modelId), (int) $enabled,
                     (int) (bool) ($m['toolCalling'] ?? false), (int) (bool) ($m['vision'] ?? false),
                     (int) ($m['maxInputTokens'] ?? 0), (int) ($m['maxOutputTokens'] ?? 0),
                     (float) ($m['inputCostPer1M'] ?? 0), (float) ($m['outputCostPer1M'] ?? 0),
-                    (string) json_encode($extra ?: new \stdClass()),
-                ]
-            );
-            $n++;
-        }
-        return $n;
+                    (string) json_encode($extra ?: new \\stdClass(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ]);
+                $n++;
+            }
+            return $n;
+        });
     }
 
-    /** Accepts a list, or an object keyed by model id. @param array<mixed> $models @return array<int,array<string,mixed>> */
-    private static function normalizeModelList(array $models): array
+    /** Import only a model catalogue into an existing provider. */
+    public static function importModels(string $json, string $providerId, bool $replace = false): array
     {
-        $out = [];
-        foreach ($models as $key => $m) {
-            if (is_string($m)) {
-                $out[] = ['id' => $m];
-                continue;
-            }
-            if (!is_array($m)) {
-                continue;
-            }
-            if (!isset($m['id']) && is_string($key)) {
-                $m['id'] = $key;
-            }
-            $out[] = $m;
-        }
-        return $out;
+        if (self::find($providerId) === null) throw new HttpError(404, 'No such provider.');
+        $data = self::decodeCatalogue($json);
+        $models = self::sniffModels($data);
+        if ($models === []) throw new HttpError(400, 'No models found in this catalogue.');
+        return ['ok' => true, 'provider' => $providerId, 'models' => self::saveModels($providerId, $models, $replace), 'replace' => $replace];
     }
 
     public static function delete(string $id): void
     {
         Db::run('DELETE FROM providers WHERE id = ?', [$id]);
+    }
+
+    /** Decode common hand-edited JSON catalogue variants. */
+    private static function decodeCatalogue(string $json): array
+    {
+        $json = trim($json);
+        if ($json === '') throw new HttpError(400, 'Nothing to import: the text was empty.');
+        $json = preg_replace('/^\\xEF\\xBB\\xBF/', '', $json) ?? $json;
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            $cleaned = preg_replace('/,\\s*([}\\]])/', '$1', $json) ?? $json;
+            $data = json_decode($cleaned, true);
+        }
+        if (!is_array($data)) throw new HttpError(400, 'That is not valid JSON: ' . json_last_error_msg());
+        return $data;
+    }
+
+    /** @param array<mixed> $data @return array<int,array<string,mixed>> */
+    private static function sniffModels(array $data, int $depth = 0): array
+    {
+        if ($depth > 4) return [];
+        if (array_is_list($data)) {
+            $out = [];
+            foreach ($data as $item) {
+                if (is_string($item) && trim($item) !== '') $out[] = ['id' => trim($item)];
+                elseif (is_array($item) && self::looksLikeModel($item)) $out[] = self::normalizeImportedModel($item);
+            }
+            return $out;
+        }
+        foreach (['data','models','items','results','list','entries'] as $key) {
+            if (isset($data[$key]) && is_array($data[$key])) {
+                $inner = self::sniffModels($data[$key], $depth + 1);
+                if ($inner !== []) return $inner;
+            }
+        }
+        $out = [];
+        foreach ($data as $key => $item) if (is_array($item) && self::looksLikeModel($item)) {
+            $item['id'] ??= is_string($key) ? $key : '';
+            $out[] = self::normalizeImportedModel($item);
+        }
+        return $out;
+    }
+
+    /** @param array<mixed> $a */
+    private static function looksLikeModel(array $a): bool
+    {
+        return isset($a['id']) || isset($a['name']) || isset($a['model']) || isset($a['model_id']) || isset($a['owned_by']) || isset($a['capabilities']);
+    }
+
+    /** @param array<string,mixed> $m @return array<string,mixed> */
+    private static function normalizeImportedModel(array $m): array
+    {
+        $id = trim((string) ($m['id'] ?? $m['model'] ?? $m['model_id'] ?? $m['name'] ?? ''));
+        $caps = $m['capabilities'] ?? [];
+        if (is_string($caps)) $caps = preg_split('/[,\\s]+/', strtolower($caps), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $tools = (bool) ($m['toolCalling'] ?? $m['tool_calling'] ?? $m['supports_tools'] ?? false);
+        $vision = (bool) ($m['vision'] ?? $m['supports_vision'] ?? false);
+        if (is_array($caps)) {
+            $caps = array_map(static fn($v): string => strtolower((string) $v), $caps);
+            $tools = $tools || (bool) array_intersect($caps, ['tools','tool_use','function_calling']);
+            $vision = $vision || (bool) array_intersect($caps, ['vision','image']);
+        }
+        return [
+            'id' => $id,
+            'name' => (string) ($m['name'] ?? $m['display_name'] ?? $m['title'] ?? $id),
+            'enabled' => array_key_exists('enabled', $m) ? (bool) $m['enabled'] : true,
+            'toolCalling' => $tools, 'vision' => $vision,
+            'maxInputTokens' => (int) ($m['maxInputTokens'] ?? $m['context_length'] ?? $m['context_window'] ?? $m['inputTokenLimit'] ?? 0),
+            'maxOutputTokens' => (int) ($m['maxOutputTokens'] ?? $m['output_token_limit'] ?? 0),
+            'inputCostPer1M' => (float) ($m['inputCostPer1M'] ?? $m['input_cost'] ?? 0),
+            'outputCostPer1M' => (float) ($m['outputCostPer1M'] ?? $m['output_cost'] ?? 0),
+            'extra' => $m,
+        ];
     }
 
     /**
@@ -191,21 +246,7 @@ final class Providers
      */
     public static function import(string $json, bool $replace = false): array
     {
-        $json = trim($json);
-        if ($json === '') {
-            throw new HttpError(400, 'Nothing to import: the text was empty.');
-        }
-        // Tolerate a UTF-8 BOM and trailing commas, the two things a hand-edited
-        // catalogue almost always has.
-        $json = preg_replace('/^\xEF\xBB\xBF/', '', $json) ?? $json;
-        $data = json_decode($json, true);
-        if (!is_array($data)) {
-            $cleaned = preg_replace('/,\s*([}\]])/', '$1', $json) ?? $json;
-            $data = json_decode($cleaned, true);
-        }
-        if (!is_array($data)) {
-            throw new HttpError(400, 'That is not valid JSON: ' . json_last_error_msg());
-        }
+        $data = self::decodeCatalogue($json);
 
         $list = self::sniff($data);
         if ($list === []) {
