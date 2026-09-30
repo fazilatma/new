@@ -78,17 +78,19 @@ const APP_VERSION='1.11.0';
 const CHECKPOINT_DIR=path.join(root,'.arena','checkpoints');
 const CHECKPOINT_MAX_FILES=200;
 const CHECKPOINT_MAX_BYTES=20*1024*1024;
+const CHECKPOINT_MAX_FILE_BYTES=2*1024*1024;
 async function createCheckpoint(label='Agent run'){
-  const snap=await snapshotWorkspace(); let total=0; const files={};
-  for(const [name,content] of snap){ if(Object.keys(files).length>=CHECKPOINT_MAX_FILES) break; const bytes=Buffer.byteLength(content); if(total+bytes>CHECKPOINT_MAX_BYTES) break; files[name]=content; total+=bytes; }
+  const snap=await snapshotWorkspace(); let total=0; let dataSkipped=false; const files={};
+  for(const [name,content] of snap){ if(Object.keys(files).length>=CHECKPOINT_MAX_FILES) break; const bytes=Buffer.byteLength(content); if(bytes>CHECKPOINT_MAX_FILE_BYTES) { dataSkipped=true; continue; } if(total+bytes>CHECKPOINT_MAX_BYTES) break; files[name]=content; total+=bytes; }
   await fs.mkdir(CHECKPOINT_DIR,{recursive:true});
-  const id=randomUUID(); const data={id,label:String(label).slice(0,160),createdAt:new Date().toISOString(),files,totalBytes:total,truncated:Object.keys(files).length<snap.size};
+  const id=randomUUID(); const data={id,label:String(label).slice(0,160),createdAt:new Date().toISOString(),files,totalBytes:total,truncated:dataSkipped||Object.keys(files).length<snap.size};
   await fs.writeFile(path.join(CHECKPOINT_DIR,'latest.json'),JSON.stringify(data));
   return {id,label:data.label,createdAt:data.createdAt,fileCount:Object.keys(files).length,totalBytes:total,truncated:data.truncated};
 }
 async function readCheckpoint(){try{return JSON.parse(await fs.readFile(path.join(CHECKPOINT_DIR,'latest.json'),'utf8'))}catch{return null}}
 async function restoreCheckpoint(){
   const cp=await readCheckpoint(); if(!cp)return {ok:false,error:'No checkpoint exists'};
+  if(cp.truncated)return {ok:false,error:'Checkpoint is partial and cannot be used for a destructive revert. Create a fresh checkpoint with a smaller workspace or increase the checkpoint limits.'};
   const target=new Set(Object.keys(cp.files||{})); const current=await snapshotWorkspace(); let restored=0,deleted=0;
   for(const name of target){const p=safePath(root,name);await fs.mkdir(path.dirname(p),{recursive:true});await fs.writeFile(p,String(cp.files[name]??''));restored++}
   for(const name of current.keys()){if(target.has(name))continue; if(name.startsWith('.arena'+path.sep)||name==='.arena')continue; await fs.rm(safePath(root,name),{recursive:true,force:true});deleted++}
