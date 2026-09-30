@@ -467,3 +467,27 @@
   .agent-head-actions .agent-stop-button::before{content:"■";font-size:9px}
   .mode-switch button{padding:5px 6px}
 }
+
+
+/* v1.10 agent telemetry */
+.panel-head-actions{display:flex;gap:3px}
+.task-telemetry{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:6px;border-bottom:1px solid #1a2535;background:#080e16}
+.task-telemetry>div{padding:5px 6px;border:1px solid #182437;border-radius:6px;background:#0b121c;min-width:0}
+.task-telemetry span{display:block;font-size:6px;color:#536279;letter-spacing:.08em}
+.task-telemetry b{display:block;margin-top:2px;font-size:8px;color:#b9c6d8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.activity-tabs{display:flex;gap:2px;padding:4px 6px;border-bottom:1px solid #192437;background:#0a1019}
+.activity-tabs button{flex:1;border:0;border-radius:6px;background:transparent;color:#596a82;padding:5px 3px;font-size:7px;cursor:pointer}
+.activity-tabs button.active{background:#172131;color:#c6d2e2}
+.activity-view.hidden{display:none}
+.changes-view-list{padding:5px}
+.change-item{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:5px;padding:6px 5px;border-bottom:1px solid #141f2c}
+.change-item:last-child{border-bottom:0}
+.change-status{font-weight:800;text-align:center}.change-status.added{color:#5fd5a7}.change-status.deleted{color:#eb8494}.change-status.modified{color:#e5c26c}
+.change-item code{font:7px/1.3 ui-monospace,monospace;color:#8795a9;direction:ltr;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.change-item small{font-size:6px;color:#526177}
+.check-item{display:flex;gap:7px;padding:7px;border-bottom:1px solid #141f2c}
+.check-icon{width:17px;height:17px;display:grid;place-items:center;border-radius:50%;background:#10251d;color:#5bd2a4;font-size:8px;flex:none}
+.check-item b{display:block;font-size:7px;color:#9eacc0;direction:ltr;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.check-item small{display:block;margin-top:2px;color:#526177;font-size:6px;line-height:1.35;max-height:28px;overflow:hidden}
+.terminal-mini{border:1px solid #202c3d;background:#0d1520;color:#65758b;border-radius:5px;padding:2px 5px;font-size:6px;margin-inline-end:5px;cursor:pointer}
+@media(max-width:720px){.task-telemetry{grid-template-columns:repeat(2,1fr)}}
