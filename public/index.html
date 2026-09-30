@@ -7,50 +7,103 @@
 <body>
 <div class="app-shell">
 <header class="topbar">
-  <div class="brand"><div class="brand-mark">✦</div><div><strong>Arena Agent</strong><span>Autonomous Coding Workspace</span></div></div>
-  <div class="top-actions"><span class="connection"><i id="statusDot"></i><span id="status">در حال اتصال…</span></span><button class="ghost" onclick="loadProviders()">⟳ همگام‌سازی</button><button class="avatar">M</button></div>
+  <div class="top-left">
+    <button class="menu-btn" onclick="toggleSettings()" aria-label="تنظیمات">☰</button>
+    <div class="brand"><div class="brand-mark">✦</div><div><strong>Arena Agent</strong><span>Autonomous Coding Workspace</span></div></div>
+  </div>
+  <div class="top-actions">
+    <span class="connection"><i id="statusDot"></i><span id="status">در حال اتصال…</span></span>
+    <button class="icon-btn" onclick="refresh()" title="همگام‌سازی">⟳</button>
+    <button class="avatar">M</button>
+  </div>
 </header>
+
+<div class="workspace-bar">
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span></div>
+  <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
+</div>
+
 <div class="layout">
 <aside class="sidebar">
-  <div class="side-head"><span>Workspace</span><button onclick="newFile()">＋</button></div>
-  <div class="workspace-name">⌁ پروژه فعلی</div>
+  <div class="side-head"><span>EXPLORER</span><button onclick="loadFiles()">⟳</button></div>
+  <div class="workspace-name"><span>⌁</span><div><b>پروژه فعلی</b><small>workspace</small></div></div>
   <div id="files" class="file-tree"></div>
-  <div class="side-section">
-    <div class="side-title"><span>مدل‌های محلی</span><span class="count" id="modelCount">0</span></div>
-    <div id="models"></div>
-    <div class="model-actions"><input id="modelUrl" placeholder="آدرس فایل GGUF"><button onclick="downloadModel()">دانلود مدل</button></div>
-    <div class="model-actions"><input id="modelName" placeholder="نام مدل نصب‌شده"><button onclick="launchModel()">اجرای مدل</button></div>
+  <div class="sidebar-bottom">
+    <div class="mini-card"><span>✦</span><div><b>Agent Ready</b><small>تحلیل و اجرای خودکار فعال است</small></div></div>
   </div>
-  <div class="side-section providers">
-    <div class="side-title"><span>Providers</span><label class="upload-btn">＋<input type="file" id="providerFile" accept=".json,application/json" onchange="importProviders(event)"></label></div>
-    <div id="providers"></div>
-    <button class="wide ghost" onclick="exportProviders()">↗ برون‌ریزی تنظیمات</button>
-  </div>
-  <div class="sidebar-footer">Local-first • Secure workspace</div>
 </aside>
+
 <section class="center">
   <div class="editor-top">
     <div class="breadcrumbs"><span>workspace</span><b>/</b><span id="current">بدون فایل</span></div>
-    <div class="editor-actions"><button class="ghost" onclick="newFolder()">＋ پوشه</button><button class="save" onclick="saveFile()">ذخیره <kbd>Ctrl S</kbd></button></div>
+    <div class="editor-actions"><span class="editor-badge">● Local</span><button class="save" onclick="saveFile()">ذخیره <kbd>Ctrl S</kbd></button></div>
   </div>
-  <div class="editor-wrap"><textarea id="editor" spellcheck="false" placeholder="یک فایل را از سمت چپ باز کنید…"></textarea><div class="editor-status"><span id="editorMode">Plain Text</span><span>UTF-8</span><span>Ln 1, Col 1</span></div></div>
+  <div class="editor-wrap">
+    <div class="editor-gutter"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span></div>
+    <textarea id="editor" spellcheck="false" placeholder="// یک فایل را از Explorer انتخاب کنید…"></textarea>
+    <div class="editor-status"><span id="editorMode">Plain Text</span><span>UTF-8</span><span>Ln 1, Col 1</span><span class="status-spacer"></span><span>Agent Workspace</span></div>
+  </div>
+
   <div class="agent-panel">
-    <div class="agent-header"><div><div class="agent-title"><span class="pulse"></span> AI Coding Agent</div><small>عامل خودکار پروژه را تحلیل، اجرا و اصلاح می‌کند.</small></div><div class="agent-tools"><label>Iterations <input id="maxIterations" type="number" min="1" max="20" value="8"></label></div></div>
-    <div class="prompt-row"><textarea id="prompt" placeholder="چه چیزی می‌خواهید بسازیم؟ مثلاً: یک API احراز هویت برای پروژه ایجاد کن، تست بنویس و خطاها را خودت اصلاح کن…"></textarea><button class="run-agent" onclick="runAgentLoop()">▶ اجرای Agent</button></div>
-    <div class="quick-prompts"><button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">بررسی پروژه</button><button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">تست و رفع خطا</button><button onclick="setPrompt('کد را تمیز، سریع و حرفه‌ای کن بدون تغییر رفتار اصلی.')">بهینه‌سازی</button></div>
-    <div id="answer" class="agent-output"><div class="empty-agent"><span>✦</span><p>Agent آماده است</p><small>وظیفه‌ای بنویس تا چرخه تحلیل → اجرا → تست → اصلاح شروع شود.</small></div></div>
+    <div class="agent-header">
+      <div class="agent-heading"><div class="agent-title"><span class="pulse"></span> AI Coding Agent <em>ACTIVE</em></div><small>هدف را توضیح بده؛ Agent تحلیل، اجرا، تست و اصلاح را انجام می‌دهد.</small></div>
+      <div class="agent-tools"><span>ITERATIONS</span><input id="maxIterations" type="number" min="1" max="20" value="8"></div>
+    </div>
+    <div class="prompt-row"><textarea id="prompt" placeholder="چه چیزی می‌خواهید بسازیم؟  مثلاً: API احراز هویت را بساز، تست بنویس و خطاها را خودت اصلاح کن…"></textarea><button class="run-agent" onclick="runAgentLoop()"><span>▶</span> اجرای Agent</button></div>
+    <div class="quick-prompts"><button onclick="setPrompt('ساختار پروژه را بررسی کن و مشکلات آن را پیدا و اصلاح کن.')">⌁ بررسی پروژه</button><button onclick="setPrompt('کدهای پروژه را تست کن و خطاهای قابل اصلاح را برطرف کن.')">✓ تست و رفع خطا</button><button onclick="setPrompt('کد را تمیز، سریع و حرفه‌ای کن بدون تغییر رفتار اصلی.')">✦ بهینه‌سازی</button></div>
+    <div id="answer" class="agent-output"><div class="empty-agent"><div class="agent-orbit">✦</div><p>Agent آماده است</p><small>یک وظیفه وارد کنید تا چرخه خودکار شروع شود.</small></div></div>
   </div>
 </section>
+
 <aside class="right-panel">
-  <div class="panel-head"><div><strong>Activity</strong><small>گزارش زنده اجرای Agent</small></div><button class="ghost" onclick="clearActivity()">پاک کردن</button></div>
-  <div id="activity" class="activity"><div class="activity-empty">هنوز فعالیتی ثبت نشده است.</div></div>
+  <div class="panel-head"><div><strong>ACTIVITY</strong><small>گزارش زنده اجرای Agent</small></div><button class="ghost" onclick="clearActivity()">پاک کردن</button></div>
+  <div id="activity" class="activity"><div class="activity-empty"><span>◌</span><p>هنوز فعالیتی ثبت نشده</p><small>اجرای Agent و Terminal اینجا نمایش داده می‌شود.</small></div></div>
   <div class="terminal-panel">
-    <div class="terminal-head"><span>⌘ Terminal</span><span id="terminalState">Ready</span></div>
+    <div class="terminal-head"><span>⌘ TERMINAL</span><span id="terminalState">READY</span></div>
     <div class="terminal-input"><input id="command" value="pwd && ls -la"><button onclick="runCommand()">اجرا</button></div>
     <pre id="termout">ترمینال آماده است…</pre>
   </div>
 </aside>
 </div>
+</div>
+
+<div id="settingsOverlay" class="settings-overlay" onclick="closeSettings(event)">
+  <aside class="settings-drawer" onclick="event.stopPropagation()">
+    <div class="settings-head"><div><b>Settings</b><small>پیکربندی Arena Agent</small></div><button onclick="toggleSettings()">×</button></div>
+    <nav class="settings-tabs">
+      <button class="active" onclick="showSettingsTab('models',this)">🧠 مدل‌ها</button>
+      <button onclick="showSettingsTab('providers',this)">◈ Providers</button>
+      <button onclick="showSettingsTab('agent',this)">✦ Agent</button>
+      <button onclick="showSettingsTab('security',this)">⌁ امنیت</button>
+    </nav>
+    <section id="settings-models" class="settings-section active">
+      <div class="setting-title">مدل‌های محلی <span id="modelCount">0</span></div>
+      <div id="models" class="settings-list"></div>
+      <label>URL فایل GGUF<input id="modelUrl" placeholder="https://.../model.gguf"></label>
+      <button class="primary-setting" onclick="downloadModel()">دانلود و نصب مدل</button>
+      <label>نام مدل نصب‌شده<input id="modelName" placeholder="نام مدل"></label>
+      <button class="secondary-setting" onclick="launchModel()">اجرای مدل محلی</button>
+      <div class="setting-note">مدل اجراشده به‌صورت OpenAI-compatible در اختیار Agent قرار می‌گیرد.</div>
+    </section>
+    <section id="settings-providers" class="settings-section">
+      <div class="setting-title">AI Providers</div>
+      <div id="providers" class="settings-list"></div>
+      <label class="file-import">＋ ورود JSON تنظیمات<input type="file" id="providerFile" accept=".json,application/json" onchange="importProviders(event)"></label>
+      <button class="secondary-setting" onclick="exportProviders()">↗ برون‌ریزی تنظیمات</button>
+      <div class="setting-note">کلیدهای API را در ریپو ذخیره نکنید؛ از متغیر محیطی یا تنظیمات امن سرور استفاده کنید.</div>
+    </section>
+    <section id="settings-agent" class="settings-section">
+      <div class="setting-title">Agent Runtime</div>
+      <div class="setting-row"><span>حداکثر تکرار</span><b id="settingIterations">8</b></div>
+      <div class="setting-note">مقدار Iterations از پنل Agent قابل تغییر است.</div>
+      <div class="setting-feature">✓ تحلیل ساختار پروژه<br>✓ اجرای دستورات امن<br>✓ تست و Verification<br>✓ اصلاح چندمرحله‌ای</div>
+    </section>
+    <section id="settings-security" class="settings-section">
+      <div class="setting-title">Workspace Security</div>
+      <div class="setting-feature">● مسیرها خارج از Workspace مسدود می‌شوند<br>● فرمان‌های خطرناک فیلتر می‌شوند<br>● احراز هویت API در صورت تنظیم AGENT_TOKEN فعال است</div>
+    </section>
+    <div class="settings-foot">Arena Agent · Local-first</div>
+  </aside>
 </div>
 <script src="/app.js"></script>
 </body></html>
