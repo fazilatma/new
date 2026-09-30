@@ -39,7 +39,7 @@ if [ -x "${HOME}/.local/bin/uv" ]; then
   export PATH="${HOME}/.local/bin:$PATH"
 fi
 
-echo "[openhands] Starting Agent Canvas on port $PORT with base path $AGENT_CANVAS_BASE_PATH"
+echo "[openhands] Starting Agent Canvas on port $PORT"
 echo "[openhands] Internal ports: backend=$OH_CANVAS_SAFE_BACKEND_PORT automation=$OH_CANVAS_SAFE_AUTOMATION_PORT frontend=$OH_CANVAS_SAFE_VITE_PORT"
 echo "[openhands] Ensuring Agent Canvas ${AGENT_CANVAS_VERSION:-1.24.0} is installed..."
 npm install --no-audit --no-fund --include=prod --prefer-online
