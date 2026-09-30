@@ -31,7 +31,7 @@ app.get('/api/models/recommend',async(q,r)=>{
     {name:'Qwen3 4B',family:'Qwen3',params:'4B',size:{Q4_K_M:2.5,Q5_K_M:2.9,Q8_0:4.3},ram:6,vram:4,score:{coding:78,general:82,reasoning:72,translation:84},file:{Q4_K_M:'Qwen3-4B-Q4_K_M.gguf',Q5_K_M:'Qwen3-4B-Q5_K_M.gguf',Q8_0:'Qwen3-4B-Q8_0.gguf'},repo:'Qwen/Qwen3-4B-GGUF'},
     {name:'Qwen3 8B',family:'Qwen3',params:'8B',size:{Q4_K_M:5.0,Q5_K_M:5.9,Q8_0:8.7},ram:9,vram:7,score:{coding:88,general:91,reasoning:87,translation:92},file:{Q4_K_M:'Qwen3-8B-Q4_K_M.gguf',Q5_K_M:'Qwen3-8B-Q5_K_M.gguf',Q8_0:'Qwen3-8B-Q8_0.gguf'},repo:'Qwen/Qwen3-8B-GGUF'},
     {name:'Qwen3 14B',family:'Qwen3',params:'14B',size:{Q4_K_M:9.0,Q5_K_M:10.5,Q8_0:15.7},ram:14,vram:11,score:{coding:93,general:94,reasoning:95,translation:95},file:{Q4_K_M:'Qwen3-14B-Q4_K_M.gguf',Q5_K_M:'Qwen3-14B-Q5_K_M.gguf',Q8_0:'Qwen3-14B-Q8_0.gguf'},repo:'Qwen/Qwen3-14B-GGUF'},
-    {name:'Qwen3 Coder 30B A3B',family:'Qwen3 Coder MoE',params:'30B / 3B active',size:{Q4_K_M:18.6,Q5_K_M:21.7,Q8_0:32.5},ram:24,vram:20,score:{coding:100,general:94,reasoning:98,translation:96},file:{Q4_K_M:'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf',Q5_K_M:'qwen3-coder-30b-a3b-instruct-q5_k_m.gguf',Q8_0:'qwen3-coder-30b-a3b-instruct-q8_0.gguf'},repo:'ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF'}
+    {name:'Qwen3 Coder 30B A3B',family:'Qwen3 Coder MoE',params:'30B / 3B active',size:{Q4_K_M:18.6,Q5_K_M:21.7,Q8_0:32.5},ram:24,vram:20,score:{coding:100,general:94,reasoning:98,translation:96},file:{Q4_K_M:'Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf',Q5_K_M:'Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf',Q8_0:'Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf'},repo:'tensorblock/Qwen_Qwen3-Coder-30B-A3B-Instruct-GGUF'}
   ];
   const pickQuant=m=>{
     if(quant!=='auto')return quant;
@@ -45,7 +45,7 @@ app.get('/api/models/recommend',async(q,r)=>{
     const cpuFactor=cpu>=12?1:cpu>=8?.9:cpu>=4?.78:.65;
     const useScore=m.score[useCase]||80;
     let fitPenalty=(fitsMemory?0:45)+(fitsDisk?0:25);
-    if(vram>0 && vram<size+overhead)fitPenalty+=15;
+    if(vram>0 && vram<size+overhead && ram<size+overhead)fitPenalty+=15;
     let score=useScore*cpuFactor-fitPenalty;
     if(priority==='speed')score+=(m.params==='4B'?8:m.params==='8B'?5:m.params==='14B'?1:-4);
     if(priority==='quality')score+=(qn==='Q8_0'?8:qn==='Q5_K_M'?5:0);
