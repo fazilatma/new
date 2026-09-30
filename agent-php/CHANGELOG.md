@@ -12,6 +12,40 @@ depends on those response shapes.
 
 ---
 
+## [1.3.2] — 2026-09-30
+
+Fixes a routing dead end that made provider import (and every other API call)
+fail with the web server's own "page not found" page on hosts that have
+neither URL rewriting nor `PATH_INFO`.
+
+### Fixed
+- **The client only ever tried two of the three URL shapes the server
+  supports.** `Request::capture()` has understood `/api/x`,
+  `/index.php/api/x` and `/index.php?__path=/api/x` since 1.3.0, but the
+  browser-side self-healing fetch fell back from the first to the second and
+  then gave up. On a host with rewriting *and* `PATH_INFO` disabled both
+  attempts return the web server's HTML 404, so the app could never recover —
+  the import dialog reported the host's "page not found" text and looked like
+  an import bug. The fallback chain now walks all three shapes and remembers
+  the working one in `sessionStorage` (`arena_api_base` + `arena_api_mode`).
+- **A non-JSON error body was dumped verbatim into the alert box.** A 404 that
+  carries an HTML page is now reported as what it is — a routing failure — and
+  names the three URLs that were tried plus the `/api/__diag` endpoint to open,
+  instead of pasting the host's error page into a dialog. Other non-JSON
+  bodies are stripped of tags and truncated to 300 characters.
+
+### Added
+- `window.__API_MODE__` (`'path'` | `'query'`). In query mode `window.apiUrl()`
+  emits `<front-controller>?__path=/api/x`, preserving any query string the
+  caller supplied. Path separators are left unescaped so existing
+  `path.includes('/auth/login')`-style checks keep working.
+- `tools/tests/routing.php`: two further cases for the shapes the client now
+  emits (`?__path=` at root, and `?__path=` alongside the caller's own
+  `?format=csv`) plus assertions that `__path` is removed from `$_GET` while
+  the caller's parameters survive. **13/13 shapes pass under real PHP 8.3.**
+
+---
+
 ## [1.3.1] — 2026-09-30
 
 User-interface fixes. No API, schema or response-shape changes.

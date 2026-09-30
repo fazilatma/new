@@ -17,26 +17,56 @@
  * ------------------------------------------------------------------ */
 (function () {
   var KEY = 'arena_api_base';
+  var MODE_KEY = 'arena_api_mode';
   try {
     var saved = sessionStorage.getItem(KEY);
     if (saved !== null && !window.__API_BASE__) window.__API_BASE__ = saved;
+    var savedMode = sessionStorage.getItem(MODE_KEY);
+    if (savedMode && !window.__API_MODE__) window.__API_MODE__ = savedMode;
   } catch (e) { /* private mode */ }
   if (typeof window.__API_BASE__ !== 'string') window.__API_BASE__ = '';
+  if (window.__API_MODE__ !== 'query') window.__API_MODE__ = 'path';
+
+  // Slashes are legal inside a query value, and keeping them unescaped means
+  // callers can still pattern-match the path (e.g. api() checks for
+  // '/auth/login' to decide whether a 401 should open the login modal).
+  function encPath(p) { return encodeURIComponent(p).replace(/%2F/gi, '/'); }
+
+  function build(base, mode, p) {
+    if (mode !== 'query') return base + p;
+    var qi = p.indexOf('?');
+    var only = qi === -1 ? p : p.slice(0, qi);
+    var rest = qi === -1 ? '' : p.slice(qi + 1);
+    return base + '?__path=' + encPath(only) + (rest ? '&' + rest : '');
+  }
 
   window.apiUrl = function (p) {
     var b = window.__API_BASE__ || '';
     if (!p) return b || '/';
     if (/^[a-z]+:\/\//i.test(p)) return p;
     if (p.charAt(0) !== '/') p = '/' + p;
-    return b + p;
+    return build(b, window.__API_MODE__, p);
   };
 
-  // Alternate prefix to try when the current one 404s at the web-server level.
-  function frontControllerBase() {
-    var b = window.__API_BASE__ || '';
-    if (/index\.php$/.test(b)) return null;          // already using it
-    var dir = b.replace(/\/+$/, '');
-    return dir + '/index.php';
+  // Prefixes to try when the current one 404s at the web-server level. The
+  // server understands three URL shapes; a host may support any subset, so
+  // every remaining one is attempted before giving up:
+  //   1. /api/x                     rewriting enabled
+  //   2. /index.php/api/x           PATH_INFO enabled
+  //   3. /index.php?__path=/api/x   neither
+  function candidates() {
+    var base = window.__API_BASE__ || '';
+    var mode = window.__API_MODE__ || 'path';
+    var isFc = /index\.php$/.test(base);
+    var fc = isFc ? base : (base.replace(/\/+$/, '') + '/index.php');
+    var out = [];
+    if (mode === 'path' && !isFc) out.push({ base: fc, mode: 'path' });
+    if (mode !== 'query') out.push({ base: fc, mode: 'query' });
+    return out;
+  }
+
+  function usable(res) {
+    return res.ok || (res.headers.get('content-type') || '').indexOf('application/json') !== -1;
   }
 
   var nativeFetch = window.fetch.bind(window);
@@ -49,20 +79,35 @@
       if (res.status !== 404) return res;
       var ct = res.headers.get('content-type') || '';
       if (ct.indexOf('application/json') !== -1) return res;   // a real API 404
-      var alt = frontControllerBase();
-      if (alt === null) return res;
-      // Rebuild the URL against the front controller and try once.
+
+      // Recover the request path relative to the current prefix.
       var base = window.__API_BASE__ || '';
-      var rest = base && url.indexOf(base) === 0 ? url.slice(base.length) : url;
+      var rel;
+      if (window.__API_MODE__ === 'query') {
+        var m = /[?&]__path=([^&]*)/.exec(url);
+        rel = m ? decodeURIComponent(m[1]) : url;
+      } else {
+        rel = base && url.indexOf(base) === 0 ? url.slice(base.length) : url;
+      }
+      if (rel.charAt(0) !== '/') rel = '/' + rel;
+
+      var list = candidates();
       var retryInit = Object.assign({}, init || {}, { __arenaRetry: true });
-      return nativeFetch(alt + rest, retryInit).then(function (res2) {
-        if (res2.ok || (res2.headers.get('content-type') || '').indexOf('application/json') !== -1) {
-          window.__API_BASE__ = alt;
-          try { sessionStorage.setItem(KEY, alt); } catch (e) { /* ignore */ }
-          return res2;
-        }
-        return res;
-      }).catch(function () { return res; });
+
+      return (function next(i) {
+        if (i >= list.length) return res;                      // nothing worked
+        var c = list[i];
+        return nativeFetch(build(c.base, c.mode, rel), retryInit).then(function (r2) {
+          if (!usable(r2)) return next(i + 1);
+          window.__API_BASE__ = c.base;
+          window.__API_MODE__ = c.mode;
+          try {
+            sessionStorage.setItem(KEY, c.base);
+            sessionStorage.setItem(MODE_KEY, c.mode);
+          } catch (e) { /* ignore */ }
+          return r2;
+        }).catch(function () { return next(i + 1); });
+      })(0);
     });
   };
 })();
@@ -3842,7 +3887,29 @@ async function api(path, opts = {}) {
     }
   } else {
     const text = await res.text();
-    data = { error: text || `HTTP ${res.status}` };
+    // A non-JSON body means the web server answered, not the app. Dumping a
+    // whole HTML error page into an alert() is what produced the mystifying
+    // "page not found" reports, so summarise it instead.
+    if (res.status === 404 && /<html|<!doctype/i.test(text)) {
+      data = {
+        error: (function () {
+          var dir = (window.__API_BASE__ || '').replace(/\/index\.php$/, '');
+          return 'مسیر API پیدا نشد — وب‌سرور صفحهٔ ۴۰۴ خودش را برگرداند، ' +
+            'یعنی درخواست هرگز به برنامه نرسید.\n\n' +
+            'هر سه شکل آدرس امتحان شد و هیچ‌کدام جواب نداد:\n' +
+            '  ' + dir + '/api/__diag\n' +
+            '  ' + dir + '/index.php/api/__diag\n' +
+            '  ' + dir + '/index.php?__path=/api/__diag\n\n' +
+            'این سه آدرس را مستقیماً در مرورگر باز کنید — هر کدام JSON برگرداند، ' +
+            'مسیر درست همان است.\n' +
+            'اگر هر سه HTML دادند، فایل index.php در پوشهٔ نصب نیست یا .htaccess اعمال نمی‌شود.';
+        })(),
+        __routing: true
+      };
+    } else {
+      const snippet = (text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+      data = { error: snippet || `HTTP ${res.status}` };
+    }
   }
   if (!res.ok) throw new Error(data.detail || data.error || data.message || `خطای سرور HTTP ${res.status}`);
   return data;

@@ -7,7 +7,9 @@
     "lint": "node phplint.mjs ../app ../bin ../public && node phpcheck.mjs ../app ../bin ../public",
     "routes": "node routecheck.mjs",
     "version": "node versioncheck.mjs",
-    "php": "node phprun.mjs tests/import.php tests/routing.php"
+    "php": "node phprun.mjs tests/import.php tests/routing.php",
+    "ui": "node tests/ui-selfheal.mjs && node tests/ui-collapse.mjs",
+    "check": "node phplint.mjs ../app ../bin ../public tests && node phpcheck.mjs ../app ../bin ../public && node routecheck.mjs && node versioncheck.mjs && npm run ui"
   },
   "dependencies": {
     "php-parser": "3.7.0",
