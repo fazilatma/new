@@ -121,6 +121,8 @@ function clearBenchmark(){window.lastBenchmarkResults=[];$('benchmarkResults').i
 const AGENT_CHAT_KEY='arena.agent.chat.v1';
 let agentConversation=[];
 let agentRunStartedAt=0;
+let agentMode='auto';
+let activeAgentRunId='';
 
 function encodeAgentSelection(value){return encodeURIComponent(JSON.stringify(value))}
 function decodeAgentSelection(value){try{return JSON.parse(decodeURIComponent(value))}catch{return null}}
@@ -157,7 +159,7 @@ function saveAgentChat(){
   }catch{}
 }
 
-function renderAgentSummary(history,success){
+function renderAgentSummary(history,success,changes=[],planOnly=false){
   const safeHistory=history||[];
   const last=safeHistory[safeHistory.length-1]||{};
   const actions=safeHistory.flatMap(x=>Array.isArray(x.actions)?x.actions:[]);
@@ -173,6 +175,10 @@ function renderAgentSummary(history,success){
     '<span><b>'+commands+'</b> commands</span>',
     '<span><b>'+checks+'</b> checks</span>'
   ].join('');
+  const changeList=(changes||[]).slice(0,20).map(x=>'<div class="agent-change-row '+esc(x.status)+'"><span>'+esc(x.status==='added'?'+':x.status==='deleted'?'−':'~')+'</span><code>'+esc(x.path)+'</code></div>').join('');
+  const changePanel=planOnly
+    ? '<div class="agent-plan-note">Plan generated only. No workspace files were changed.</div>'
+    : (changes&&changes.length?'<div class="agent-changes"><div class="agent-changes-title"><b>Workspace changes</b><span>'+changes.length+'</span></div>'+changeList+'</div>':'<div class="agent-no-changes">No workspace file changes detected.</div>');
   return '<div class="agent-message agent-message-agent">'+
     '<div class="message-avatar agent-avatar-small">✦</div>'+
     '<div class="message-content">'+
@@ -182,6 +188,7 @@ function renderAgentSummary(history,success){
         '<div class="agent-result-stats">'+details+'</div>'+
         (failures?'<div class="agent-result-warning">'+esc('Some verification or actions failed. Review the latest iteration details below.')+'</div>':'')+
       '</div>'+
+      changePanel+
       '<div class="agent-iterations">'+safeHistory.map(renderAgentIteration).join('')+'</div>'+
     '</div>'+
   '</div>';
@@ -233,7 +240,7 @@ function renderConversation(){
     if(entry.type==='working'){
       return '<div class="agent-message agent-message-agent working-message"><div class="message-avatar agent-avatar-small">✦</div><div class="message-content"><div class="message-meta"><b>Arena Agent</b><span>Working…</span></div><div class="agent-working-card"><span class="working-dots"><i></i><i></i><i></i></span><div><b>Agent is working through the task</b><small>Analyze → execute → verify → repair</small></div></div></div></div>';
     }
-    return renderAgentSummary(entry.history||[],Boolean(entry.success));
+    return renderAgentSummary(entry.history||[],Boolean(entry.success),entry.changes||[],Boolean(entry.planOnly));
   }).join('');
   scrollAgentChat();
 }
@@ -246,6 +253,37 @@ function restoreAgentChat(){
   renderConversation();
 }
 
+function setAgentMode(mode){
+  agentMode=mode==='plan'?'plan':'auto';
+  $('modeAuto')?.classList.toggle('active',agentMode==='auto');
+  $('modePlan')?.classList.toggle('active',agentMode==='plan');
+  const run=document.querySelector('.run-agent');
+  if(run&&!run.dataset.running){
+    run.innerHTML=agentMode==='plan'?'<span>◫</span><b>Generate Plan</b><small>Ctrl + Enter</small>':'<span>➜</span><b>Run Agent</b><small>Ctrl + Enter</small>';
+  }
+  setActivity('Agent mode',agentMode==='plan'?'Plan only — no files will be changed':'Autonomous execution');
+}
+function newAgentRunId(){
+  try{return crypto.randomUUID()}catch{return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
+}
+async function stopAgentRun(){
+  if(!activeAgentRunId)return;
+  const id=activeAgentRunId;
+  setAgentRunState('STOPPING');
+  const b=$('agentStopButton');if(b)b.disabled=true;
+  try{await api('/api/agent/cancel/'+encodeURIComponent(id),{method:'POST'});setActivity('Agent','Stop requested')}
+  catch(e){setActivity('Agent stop',e.message)}
+}
+async function loadGitState(){
+  try{
+    const d=await api('/api/workspace/git');
+    const el=$('gitState');if(!el)return;
+    if(!d.isGit){el.textContent='Git · not initialized';el.className='git-chip muted';return}
+    const dirty=Boolean(d.status);
+    el.textContent='Git · '+(d.branch||'workspace')+(dirty?' · changes':' · clean');
+    el.className='git-chip '+(dirty?'dirty':'clean');
+  }catch{}
+}
 function clearAgentChat(){
   agentConversation=[];
   saveAgentChat();
@@ -344,7 +382,9 @@ async function runAgentLoop(){
   const selected=decodeAgentSelection($('agentModel')?.value||'');
   if(!selected){setActivity('Agent','Select a model first');return}
   const out=$('answer'),button=document.querySelector('.run-agent');
-  if(button){button.disabled=true;button.dataset.running='1';button.innerHTML='<span>◌</span><b>Running…</b><small>Working</small>'}
+  activeAgentRunId=newAgentRunId();
+  if(button){button.disabled=true;button.dataset.running='1';button.innerHTML='<span>◌</span><b>'+ (agentMode==='plan'?'Planning…':'Running…') +'</b><small>Working</small>'}
+  const stop=$('agentStopButton');if(stop)stop.disabled=false;
   const now=new Date();
   agentConversation.push({type:'user',text:p,time:now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}),model:selected.name});
   agentConversation.push({type:'working'});
@@ -362,13 +402,14 @@ async function runAgentLoop(){
       maxTokens:Number($('agentMaxTokens').value||6000),
       commandTimeout:Number($('agentCommandTimeout').value||120000),
       temperature:Number($('agentTemperature').value||0.1),
-      context:Number($('agentContext').value||8192)
+      context:Number($('agentContext').value||8192),
+      planOnly:agentMode==='plan'
     };
     if(selected.kind==='local'){body.modelType='local';body.model=selected.name}
     else {body.modelType='provider';body.providerId=selected.providerId;body.model=selected.name}
-    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});
     agentConversation=agentConversation.filter(x=>x.type!=='working');
-    agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),durationMs:Date.now()-agentRunStartedAt});
+    agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),planOnly:Boolean(d.planOnly),changes:d.changes||[],durationMs:Date.now()-agentRunStartedAt});
     renderConversation();
     setAgentRunState(d.success?'READY':'PAUSED');
     setActivity(d.success?'Agent completed':'Agent stopped',d.success?'Verification passed':'Maximum iterations reached');
@@ -382,14 +423,16 @@ async function runAgentLoop(){
     setActivity('Agent error',e.message);
     saveAgentChat();
   }finally{
-    if(button){button.disabled=false;button.dataset.running='';button.innerHTML='<span>➜</span><b>Run Agent</b><small>Ctrl + Enter</small>'}
+    activeAgentRunId='';
+    const stop=$('agentStopButton');if(stop)stop.disabled=true;
+    if(button){button.disabled=false;button.dataset.running='';button.innerHTML=agentMode==='plan'?'<span>◫</span><b>Generate Plan</b><small>Ctrl + Enter</small>':'<span>➜</span><b>Run Agent</b><small>Ctrl + Enter</small>'}
   }
 }
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveFile()}});
 window.modelUrlApi={value:'http://127.0.0.1:8080/v1/chat/completions'};
 window.selectedAgentModel='';
 async function loadVersion(){try{const d=await api('/api/version');if($('appVersion'))$('appVersion').textContent='v'+d.version}catch{}}
-async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels()]);updateAgentContextState();resizeAgentPrompt($('prompt'));$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
+async function refresh(){try{await Promise.all([loadFiles(),loadModels(),loadProviders(),loadVersion(),loadAgentModels(),loadGitState()]);updateAgentContextState();resizeAgentPrompt($('prompt'));setAgentMode(agentMode);$('status').textContent='متصل';$('statusDot').parentElement.classList.add('online')}catch(e){$('status').textContent=e.message}}
 refresh();restoreAgentChat();updateAgentContextState();resizeAgentPrompt($('prompt'));
 
 function toggleSettings(){const o=$('settingsOverlay');if(o)o.classList.toggle('open')}
