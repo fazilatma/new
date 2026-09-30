@@ -19,7 +19,7 @@
 </header>
 
 <div class="workspace-bar">
-  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.3.0</span></div>
+  <div class="workspace-meta"><span class="live-dot"></span><b>LOCAL WORKSPACE</b><span>•</span><span>AI Coding Session</span><span class="app-version" id="appVersion">v1.4.0</span></div>
   <div class="workspace-actions"><button onclick="newFile()">＋ فایل</button><button onclick="newFolder()">＋ پوشه</button></div>
 </div>
 
@@ -109,12 +109,14 @@
         <div class="benchmark-grid">
           <label>Context<input id="testContext" type="number" value="4096" min="512" max="32768"></label>
           <label>Max tokens<input id="testMaxTokens" type="number" value="64" min="1" max="1024"></label>
-          <label>Temperature<input id="testTemperature" type="number" value="0.2" min="0" max="2" step="0.1"></label>
+          <label>Temperature<input id="testTemperature" type="number" value="0.2" min="0" max="2" step="0.1"></label><label>GPU Layers<input id="testGpuLayers" type="number" value="-1" min="-1" max="999"></label>
         </div>
         <label>Prompt تست<textarea id="testPrompt" class="test-prompt">سلام! در یک جمله خودت را معرفی کن.</textarea></label>
         <div class="benchmark-toolbar"><span id="benchmarkStatus">آماده تست</span><button class="secondary-setting" onclick="clearBenchmark()">پاک کردن نتایج</button></div>
         <div id="benchmarkResults" class="benchmark-results"><div class="benchmark-empty">برای مقایسه سرعت، زمان آماده‌سازی، پاسخ و نرخ توکن، همه مدل‌های GGUF و مدل‌های Provider درون‌ریزی‌شده را تست کنید.</div></div>
       </div>
+      <div id="benchmarkModal" class="benchmark-modal" onclick="if(event.target===this)closeBenchmarkModal()"><div class="benchmark-modal-dialog"><div class="benchmark-modal-head"><div><b>Model Benchmark</b><small>مقایسه کامل عملکرد مدل‌ها</small></div><button onclick="closeBenchmarkModal()">×</button></div><div id="benchmarkModalBody"></div></div></div>
+      <div id="benchmarkDetailModal" class="benchmark-modal detail-modal" onclick="if(event.target===this)closeBenchmarkDetail()"><div class="benchmark-detail-dialog"><div class="benchmark-modal-head"><div><b id="benchmarkDetailTitle">Model details</b><small>جزئیات اجرای benchmark</small></div><button onclick="closeBenchmarkDetail()">×</button></div><div id="benchmarkDetailBody"></div></div></div>
       <div class="setting-note">کلیدهای API را در ریپو ذخیره نکنید؛ از متغیر محیطی یا تنظیمات امن سرور استفاده کنید.</div>
     </section>
     <section id="settings-agent" class="settings-section">
