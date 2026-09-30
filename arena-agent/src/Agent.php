@@ -108,6 +108,7 @@ final class Agent
             $answer = '';
             $usedTools = 0;
             $step = 0;
+            $needsContinuation = false;
 
             while ($step < $maxSteps) {
                 $step++;
@@ -129,8 +130,14 @@ final class Agent
                 }
 
                 if ($reply['toolCalls'] === []) {
+                    $needsContinuation = false;
                     break;
                 }
+
+                // There is more work to do after these tool calls. If the
+                // configured step ceiling is reached, report that explicitly
+                // instead of presenting the run as a normal completion.
+                $needsContinuation = true;
 
                 $history[] = [
                     'role' => 'assistant',
@@ -176,11 +183,12 @@ final class Agent
                 }
             }
 
-            $hitCeiling = $step >= $maxSteps && $answer === '';
+            $hitCeiling = $step >= $maxSteps && $needsContinuation;
             if ($hitCeiling) {
-                $answer = "I stopped after $maxSteps steps without reaching an answer. "
-                    . 'Tell me what to focus on and I will continue.';
-                Sse::send('token', ['text' => $answer]);
+                $notice = "I stopped after $maxSteps tool steps before the task was fully completed. "
+                    . 'Tell me to continue and I will pick up from the current state.';
+                $answer = trim($answer) === '' ? $notice : $answer . "\n\n" . $notice;
+                Sse::send('token', ['text' => $notice]);
             }
             if (trim($answer) !== '') {
                 Chat::addMessage($conversationId, 'assistant', $answer);
