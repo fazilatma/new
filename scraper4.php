@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.178';
+const APP_VERSION = '10.179';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -26466,12 +26466,70 @@ if (isset($_GET['pag_probe'])) {
         $r = fetch_html_smart($link, 25);
         $html = (string)($r['html'] ?? '');
         $prods = [];
+        $samples = [];
         if (!empty($r['ok']) && $html !== '') {
             $prods = (!empty($sel['container']))
                 ? parse_with_selectors($html, (string)($r['url'] ?? $link), $sel)
                 : parse_products($html, (string)($r['url'] ?? $link));
+            foreach ($prods as $p) {
+                if (count($samples) >= 3) break;
+                $samples[] = mb_substr((string)($p['title'] ?? $p['link'] ?? ''), 0, 60);
+            }
         }
-        return ['r' => $r, 'keys' => array_keys($prods)];
+        /* <title> صفحه — می‌فهمیم سندِ متفاوت آیا اصلاً آمده */
+        $title = '';
+        if ($html !== '' && preg_match('~<title[^>]*>(.*?)</title>~is', $html, $tm)) {
+            $title = trim((string)preg_replace('~\s+~u', ' ', html_entity_decode($tm[1], ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+            $title = mb_substr($title, 0, 80);
+        }
+        return ['r' => $r, 'keys' => array_keys($prods), 'html' => $html,
+                'samples' => $samples, 'title' => $title];
+    };
+    /* v10.179: «کارتِ واقعاً صفحه‌بندی‌شونده» را پیدا کن — برای وقتی‌که کارت‌های
+       گرفته‌شده روی همهٔ صفحات یکی‌اند (بلاکِ ثابتِ بالای صفحه، مشکلِ واقعیِ
+       ایمالز: نوارِ ۴۰تاییِ پیشنهادها که روی همهٔ صفحات تکرار می‌شود). لینک‌ها
+       را بر اساس امضای جدِ تکرارشونده دسته می‌کنیم و آن‌هایی را امتیاز می‌دهیم
+       که روی صفحهٔ ۲ تازه‌اند. */
+    $pagProbeCandidates = function (string $hA, string $hB): array {
+        $collect = function (string $h): array {
+            $out = [];
+            if ($h === '') return $out;
+            [,$xp] = load_dom($h);
+            if (!$xp) return $out;
+            $nodes = @$xp->query('//a[@href]');
+            if (!$nodes) return $out;
+            foreach ($nodes as $a) {
+                $href = (string)$a->getAttribute('href');
+                if ($href === '' || strlen($href) > 400) continue;
+                $anc = $a;
+                $sig = '';
+                for ($i = 0; $i < 4 && $anc; $i++) {
+                    $anc = $anc->parentNode;
+                    if (!$anc || !($anc instanceof DOMElement)) break;
+                    $t = strtolower($anc->tagName);
+                    if (in_array($t, ['li', 'article', 'section', 'div'], true)) {
+                        $cls = preg_split('~\s+~', trim((string)$anc->getAttribute('class')) ?: '');
+                        $sig = $t . (!empty($cls[0]) ? ('.' . $cls[0]) : '');
+                        break;
+                    }
+                }
+                if ($sig === '') continue;
+                $out[$sig][md5($href)] = 1;
+            }
+            return $out;
+        };
+        $A = $collect($hA); $B = $collect($hB);
+        $cands = [];
+        foreach ($B as $sig => $hrefsB) {
+            $totalB = count($hrefsB);
+            if ($totalB < 4) continue;
+            $hrefA = $A[$sig] ?? [];
+            $newB = count(array_diff_key($hrefsB, $hrefA));
+            if ($newB < 1) continue;
+            $cands[] = ['sig' => $sig, 'on_page2' => $totalB, 'new_on_page2' => $newB];
+        }
+        usort($cands, function ($x, $y) { return $y['new_on_page2'] <=> $x['new_on_page2']; });
+        return array_slice($cands, 0, 3);
     };
     $p1 = $pagProbeFetch($u);
     $p2 = ($built2 !== '' && $built2 !== $u) ? $pagProbeFetch($built2) : null;
@@ -26519,7 +26577,27 @@ if (isset($_GET['pag_probe'])) {
         $out['ok'] = true;
         $out['diagnosis'] = 'الگو درست است! صفحهٔ ۲ با ' . $new2 . ' محصولِ تازه جواب داد (صفحهٔ ۱: ' . $n1 . '). اگر استخراجِ واقعی هنوز توقف می‌کند، پروفایل را یک‌بار کامل ذخیره و دوباره اجرا کنید تا تنظیمِ تازه خوانده شود.';
     } elseif ($n2 > 0 && $new2 === 0) {
-        $out['diagnosis'] = 'صفحهٔ ۲ ' . $n2 . ' کارت داشت ولی همه با صفحهٔ ۱ یکی بودند — یعنی سرور نشانهٔ صفحه را نادیده می‌گیرد (ریدایرکت به صفحهٔ اول؟). «نشانی نهایی» را با نشانیِ ساخته‌شده مقایسه کنید؛ اگر متفاوت است سرعت/روش واکشیِ دامنه (src_net) را بررسی کنید.';
+        /* v10.179: دو تشخیص متفاوت که قبلاً یکی شمرده می‌شدند:
+           الف) سندِ صفحهٔ ۲ متفاوت آمده ولی کارتِ سلکتور ثابت است → سلکتور روی
+              بلاکِ ثابتِ بالای صفحه (نوارِ پیشنهادها/برترین‌ها) است، نه گریدِ
+              صفحه‌بندی‌شونده — با نامزدهای کارتِ درست راهنما می‌شویم.
+           ب) سندها یکی‌اند → سرور واقعاً نشانه را نادیده گرفته. */
+        $h1 = (string)$p1['html']; $h2 = (string)$p2['html'];
+        $sameDoc = ($h1 !== '' && $h1 === $h2);
+        $cands = $pagProbeCandidates($h1, $h2);
+        $out['samples_page1'] = $p1['samples']; $out['samples_page2'] = $p2['samples'];
+        $out['title_page1'] = $p1['title']; $out['title_page2'] = $p2['title'];
+        $out['candidates'] = $cands;
+        if (!$sameDoc) {
+            $out['diagnosis'] = 'سندِ صفحهٔ ۲ واقعاً متفاوت است ولی سلکتورِ فعلی همان بلاکِ ثابتِ بالای صفحه (نوارِ پیشنهادها/برترین فروشگاه‌ها) را می‌گیرد، نه گریدِ صفحه‌بندی‌شونده را. سلکتورِ ظرف را روی کارت‌های گرید (نوعِ نامزدها را پایین همین جعبه ببینید) تنظیم کنید و دوباره امتحان کنید.';
+            if (!empty($cands)) {
+                $sugs = [];
+                foreach ($cands as $c) { $sugs[] = $c['sig'] . ' (' . $c['on_page2'] . ' کارت · ' . $c['new_on_page2'] . ' کارتِ تازه)'; }
+                $out['diagnosis'] .= ' نامزدهای گرید: ' . implode(' | ', $sugs);
+            }
+        } else {
+            $out['diagnosis'] = 'صفحهٔ ۲ ' . $n2 . ' کارت داشت ولی همه با صفحهٔ ۱ یکی بودند — یعنی سرور نشانهٔ صفحه را نادیده می‌گیرد (ریدایرکت به صفحهٔ اول؟). «نشانی نهایی» را با نشانیِ ساخته‌شده مقایسه کنید؛ اگر متفاوت است سرعت/روش واکشیِ دامنه (src_net) را بررسی کنید.';
+        }
     } else {
         $h2 = (string)($r2['html'] ?? '');
         if (looks_like_js_shell($h2)) {
@@ -34704,6 +34782,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.178', 'ورودیِ 10.178 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "178'") !== false
       && version_compare(APP_VERSION, '10.' . '178', '>='));
+
+    /* ---------- v10.179: سلکتورِ بلاکِ ثابت را از گرید تشخیص می‌دهیم ---------- */
+    $add('10.179', 'نامزدهای کارتِ صفحه‌بندی‌شونده محاسبه می‌شود',
+         strpos($selfSrc, 'pagProbe' . 'Candidates') !== false
+      && strpos($selfSrc, 'new_on_page2') !== false);
+    $add('10.179', 'نمونهٔ کارت و عنوانِ سندِ هر صفحه در پاسخ است',
+         strpos($selfSrc, 'samples' . '_page1') !== false
+      && strpos($selfSrc, 'title' . '_page2') !== false);
+    $add('10.179', 'تشخیصِ «سلکتور روی بلاکِ ثابت» از «نشانهٔ نادیده» جداست',
+         strpos($selfSrc, 'بلاکِ ثاب' . 'تِ بالای صفحه') !== false);
+    $add('10.179', 'ورودیِ 10.179 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "179'") !== false
+      && version_compare(APP_VERSION, '10.' . '179', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -61020,6 +61111,9 @@ function pagProbe(){
         t+='\n— نشانیِ ساخته‌شدهٔ صفحهٔ ۲: '+(d.built_url||'—');
         if(d.final_url) t+='\n— نشانیِ نهایی بعد از ریدایرکت: '+d.final_url;
         if(typeof d.new_in_page2!=='undefined') t+='\n— محصول تازه در صفحهٔ ۲: '+d.new_in_page2;
+        if(d.title_page1||d.title_page2) t+='\n— عنوان سند: ص۱ «'+(d.title_page1||'?')+'» | ص۲ «'+(d.title_page2||'?')+'»';
+        if(d.samples_page1&&d.samples_page1.length) t+='\n— نمونهٔ کارتِ ص۱: '+d.samples_page1.join(' ، ');
+        if(d.samples_page2&&d.samples_page2.length) t+='\n— نمونهٔ کارتِ ص۲: '+d.samples_page2.join(' ، ');
         box.textContent=t;
         if(d.ok)showToast('✓ الگوی صفحه‌بندی سالم است');
     })
@@ -64698,6 +64792,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.179', t:'🔍 ریشهٔ واقعیِ توقفِ ایمالز: سلکتور به‌جای گرید، نوارِ ثابتِ ۴۰تاییِ بالا را می‌گرفت', items:[
+    'مقایسهٔ زندهٔ HTML: هر صفحهٔ ایمالز دو بخش دارد — نوارِ پیشنهادهای ثابتِ ~۴۰تایی (در همهٔ صفحات یکی) و گریدِ محصولِ صفحه‌بندی‌شونده (کارت‌های «مشاهده فروشندگان» با لینکِ ~id~) که در هر صفحه عوض می‌شود؛ سلکتورِ پروفایل روی نوارِ ثابت بود، برای همین صفحهٔ ۲ هیچ محصولِ تازه‌ای نمی‌داد و توقف می‌شد',
+    'آزمایشگرِ صفحه‌بندی حالا این دو حالت را از هم تفکیک می‌کند: «سند متفاوت ولی کارت‌ها یکی» = مشکلِ سلکتور (نه الگو، نه ربات) با پیشنهادِ نامزدهای ظرفِ گرید',
+    'عنوانِ سند و نمونهٔ ۳ کارتِ هر صفحه در خروجیِ آزمایشگر چاپ می‌شود — خودتان می‌بینید کارت‌ها از کدام بلاک آمده‌اند',
+    'نامزدها به‌صورت عمومی محاسبه می‌شوند (هر گریدی که لینک‌هایش روی صفحهٔ ۲ تازه باشد) — مختصِ ایمالز نیست',
+    'اقدامِ کاربر: سلکتورِ ظرف را روی کارتِ گرید (کارتی که لینکش به /مشخصات_…~id~عدد می‌رود) تنظیم کنید و 🧪 را دوباره بزنید — باید «الگو درست است» بشنوید',
+  ]},
   {v:'10.178', t:'🎯 تشخیصِ ریدایرکتِ صفحه‌بندی — «به صفحهٔ بعد نرفتن» با علتِ فنیِ دقیق', items:[
     'آزمونِ زندهٔ ایمالز ثابت کرد: نشانیِ ...~Category~13145?page=2 را سرور به صفحهٔ ۱ ریدایرکت می‌کند (الگوی درست: ~page~{page} که کار هم می‌کند) — پس هر وقت روشِ صفحه‌بندیِ اجراشده «الگوی مسیر» نباشد، همهٔ صفحاتِ ۲+ همان صفحهٔ ۱ می‌آیند و با صفرِ تازه توقف می‌شود؛ دقیقاً همان علامتِ گزارش‌شده',
     'آزمایشگرِ صفحه‌بندی (🧪) حالا این ریدایرکت را صریح تشخیص می‌دهد: «الگوی فعلی از نگاه سرور معتبر نیست؛ برای ایمالز: ~page~{page}»',
