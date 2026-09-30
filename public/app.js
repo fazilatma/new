@@ -270,6 +270,7 @@ async function revertToCheckpoint(){if(!confirm('Revert workspace to the latest 
 async function openFileDiff(file){try{const d=await api('/api/workspace/diff?'+new URLSearchParams({path:file}).toString());$('diffTitle').textContent=file;const body=$('diffBody');body.innerHTML=(d.lines||[]).map(x=>'<div class="diff-line '+x.type+'"><span>'+(x.lineA??'')+'</span><span>'+(x.lineB??'')+'</span><code>'+esc(x.text||'')+'</code></div>').join('')||'<div class="diff-empty">No differences.</div>';$('diffModal').classList.add('open')}catch(e){setActivity('Diff error',e.message)}}
 function closeDiffModal(){$('diffModal').classList.remove('open')}
 function saveAgentTask(record){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]');agentTaskHistory.unshift(record);agentTaskHistory=agentTaskHistory.slice(0,20);localStorage.setItem('arena.agent.tasks.v1',JSON.stringify(agentTaskHistory))}catch{}}
+function toggleTaskHistory(){const body=$('taskHistoryBody');if(!body)return;body.classList.toggle('hidden');if(!body.classList.contains('hidden')){try{agentTaskHistory=JSON.parse(localStorage.getItem('arena.agent.tasks.v1')||'[]')}catch{agentTaskHistory=[]}body.innerHTML=renderTaskHistory()}}
 function renderTaskHistory(){const history=agentTaskHistory.length?agentTaskHistory.map(x=>'<div class="task-history-item"><div><b>'+esc(x.prompt)+'</b><small>'+new Date(x.createdAt).toLocaleString()+' · '+(x.success?'completed':'review needed')+'</small></div><span>'+esc(String(x.iterations||0))+' iter</span></div>').join(''):'<div class="task-history-empty">No previous Agent runs.</div>';return '<div class="task-history">'+history+'</div>'}
 async function refreshGitState(){await loadGitState()}
 function updateAgentTelemetry(state='READY',iteration='—',changes=lastAgentChanges.length){
@@ -289,7 +290,7 @@ function renderAgentChecks(history=[]){
   const checks=[];
   history.forEach(h=>(h.verification||[]).forEach(v=>checks.push(v)));
   if(!checks.length){el.innerHTML='<div class="activity-empty"><span>✓</span><p>No verification results</p><small>Checks will appear here after an Agent run.</small></div>';return}
-  el.innerHTML=checks.map(v=>'<div class="check-item"><span class="check-icon">'+(v.ok?'✓':'!')+'</span><div><b>'+esc(v.command||v.name||'Verification')+'</b><small>'+esc(v.output||v.error||'Completed')+'</small></div></div>').join('');
+  el.innerHTML=checks.map(v=>{const ok=Number(v.code)===0;const text=(v.stderr||v.stdout||v.error||'Completed').slice(-300);return '<div class="check-item"><span class="check-icon">'+(ok?'✓':'!')+'</span><div><b>'+esc(v.file||'Verification')+'</b><small>'+esc(text)+'</small></div></div>'}).join('');
 }
 function setAgentMode(mode){
   agentMode=mode==='plan'?'plan':'auto';
@@ -451,6 +452,7 @@ async function runAgentLoop(){
     const d=await api('/api/agent/loop',{method:'POST',headers:{'content-type':'application/json','x-agent-run-id':activeAgentRunId},body:JSON.stringify(body)});
     agentConversation=agentConversation.filter(x=>x.type!=='working');
     agentConversation.push({type:'agent',history:compactAgentHistory(d.history||[]),success:Boolean(d.success),planOnly:Boolean(d.planOnly),changes:d.changes||[],durationMs:Date.now()-agentRunStartedAt});
+    saveAgentTask({prompt,success:Boolean(d.success),iterations:d.iterations||d.history?.length||0,createdAt:new Date().toISOString(),changes:(d.changes||[]).length});
     renderWorkspaceChanges(d.changes||[]);renderAgentChecks(d.history||[]);updateAgentTelemetry(d.success?'DONE':'REVIEW',String((d.iterations||d.history?.length||0)),(d.changes||[]).length);
     renderConversation();
     setAgentRunState(d.success?'READY':'PAUSED');
