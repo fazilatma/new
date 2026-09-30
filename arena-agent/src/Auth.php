@@ -16,6 +16,13 @@ final class Auth
 {
     public const ROLES = ['viewer' => 1, 'developer' => 2, 'admin' => 3];
     private const COOKIE = 'arena_session';
+
+    /**
+     * The caller of the current request. The request object is the real home
+     * for this, but audit records are written from deep inside code that has
+     * no reason to be handed a Request, so it is mirrored here.
+     */
+    private static ?array $current = null;
     private const TTL = 86400 * 14;
 
     /** Resolve the caller and attach them to the request. Never throws. */
@@ -23,6 +30,7 @@ final class Auth
     {
         if (!Bootstrap::authEnabled()) {
             $req->user = ['id' => 'dev', 'username' => 'dev', 'role' => 'admin', 'authDisabled' => true];
+            self::$current = $req->user;
             return;
         }
         $token = self::tokenFrom($req);
@@ -44,6 +52,7 @@ final class Auth
         }
         unset($row['expires_at']);
         $req->user = $row;
+        self::$current = $row;
     }
 
     private static function tokenFrom(Request $req): string
@@ -98,6 +107,12 @@ final class Auth
             'samesite' => 'Lax',
             'secure' => $secure,
         ]);
+    }
+
+    /** Username of whoever is making this request, for the audit log. */
+    public static function currentName(): string
+    {
+        return (string) (self::$current['username'] ?? 'system');
     }
 
     public static function require(Request $req, string $role = 'viewer'): array

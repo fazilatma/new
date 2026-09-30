@@ -89,7 +89,8 @@ function navigate(view) {
   $('.scrim')?.remove();
   const loaders = {
     chat: loadChat, providers: loadProviders, files: () => loadFiles(''),
-    terminal: loadTerminal, settings: loadSettings, diag: loadDiag,
+    changes: loadChanges, terminal: loadTerminal, diag: loadDiag,
+    settings: () => { loadSettings(); loadAgentInfo(); },
   };
   loaders[view]?.();
 }
@@ -385,21 +386,39 @@ async function sendMessage(e) {
   if (!text) return;
   if (!S.provider || !S.model) return bad('اول یک ارائه‌دهنده و مدل انتخاب کنید.');
 
+  const agentMode = $('#agentToggle')?.checked;
+
   ta.value = '';
   ta.style.height = 'auto';
   if ($('#msgs').querySelector('.empty')) $('#msgs').innerHTML = '';
   $('#msgs').insertAdjacentHTML('beforeend', bubble('user', text));
-  const holder = document.createElement('div');
+
+  /* In agent mode the transcript grows sideways as well as downwards: tool
+     cards are interleaved with the model's prose, so each needs its own
+     element rather than one growing bubble. */
+  const turn = document.createElement('div');
+  turn.className = 'turn';
+  $('#msgs').append(turn);
+
+  let holder = document.createElement('div');
   holder.className = 'msg assistant typing';
-  $('#msgs').append(holder);
+  turn.append(holder);
   scrollDown();
 
   S.streaming = true;
   $('#sendBtn').disabled = true;
   let acc = '';
+  const cards = {};
+
+  const freshBubble = () => {
+    holder = document.createElement('div');
+    holder.className = 'msg assistant';
+    turn.append(holder);
+    acc = '';
+  };
 
   try {
-    const res = await fetch(url('/api/chat/stream'), {
+    const res = await fetch(url(agentMode ? '/api/agent/stream' : '/api/chat/stream'), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
@@ -428,18 +447,50 @@ async function sendMessage(e) {
         if (!ev || !dataLine) continue;
         let payload = {};
         try { payload = JSON.parse(dataLine); } catch { continue; }
-        if (ev === 'start') S.conversationId = payload.conversationId;
-        else if (ev === 'token') {
+
+        if (ev === 'start') {
+          S.conversationId = payload.conversationId;
+        } else if (ev === 'token') {
           acc += payload.text;
           holder.classList.remove('typing');
           holder.innerHTML = renderMarkdown(acc);
           scrollDown();
+        } else if (ev === 'step') {
+          holder.classList.add('typing');
+          holder.dataset.step = `گام ${payload.step} از ${payload.of}`;
+        } else if (ev === 'tool') {
+          const card = toolCard(payload);
+          cards[payload.id] = card;
+          turn.append(card);
+          /* The model may speak again after the tool, so start a new bubble
+             rather than appending to the one above the card. */
+          if (acc) freshBubble();
+          scrollDown();
+        } else if (ev === 'tool_result') {
+          fillToolCard(cards[payload.id], payload);
+          scrollDown();
+        } else if (ev === 'change') {
+          turn.append(changeCard(payload));
+          refreshPending();
+          scrollDown();
         } else if (ev === 'error') {
-          holder.className = 'msg error';
-          holder.textContent = payload.message;
+          const err = document.createElement('div');
+          err.className = 'msg error';
+          err.textContent = payload.message;
+          turn.append(err);
         } else if (ev === 'done') {
           holder.classList.remove('typing');
+          if (payload.stoppedEarly) {
+            turn.insertAdjacentHTML('beforeend',
+              `<div class="note">پس از ${payload.steps} گام متوقف شد.</div>`);
+          }
+          if (payload.toolCalls) {
+            turn.insertAdjacentHTML('beforeend',
+              `<div class="note">${payload.steps} گام، ${payload.toolCalls} ابزار` +
+              (payload.pending ? ` — ${payload.pending} تغییر در انتظار تأیید` : '') + '</div>');
+          }
           loadChat();
+          refreshPending();
         }
       }
     }
@@ -448,15 +499,185 @@ async function sendMessage(e) {
       holder.textContent = 'پاسخی دریافت نشد.';
     }
   } catch (err) {
-    holder.className = 'msg error';
-    holder.textContent = err.message;
+    const fail = document.createElement('div');
+    fail.className = 'msg error';
+    fail.textContent = err.message;
+    turn.append(fail);
   } finally {
     S.streaming = false;
     $('#sendBtn').disabled = false;
     holder.classList.remove('typing');
+    if (!holder.textContent.trim() && holder.parentElement) holder.remove();
     scrollDown();
   }
 }
+
+/* ------------------------------------------------------------------ tools */
+
+const TOOL_ICON = {
+  list_files: '📂', read_file: '📄', search_files: '🔎',
+  write_file: '✍️', edit_file: '✏️', delete_file: '🗑', run_command: '⌨️',
+};
+
+function toolArgSummary(name, args) {
+  if (!args) return '';
+  if (name === 'run_command') return args.command || '';
+  if (name === 'search_files') return `«${args.query || ''}»` + (args.path ? ` در ${args.path}` : '');
+  if (args.path !== undefined) return args.path || '/';
+  return Object.values(args).join(' ').slice(0, 80);
+}
+
+function toolCard(call) {
+  const el = document.createElement('div');
+  el.className = 'tool running';
+  el.innerHTML = `
+    <div class="tool-head">
+      <span class="tool-ico">${TOOL_ICON[call.name] || '🔧'}</span>
+      <code class="tool-name">${esc(call.name)}</code>
+      <span class="tool-arg mono">${esc(toolArgSummary(call.name, call.args))}</span>
+      <span class="tool-state">…</span>
+    </div>
+    <pre class="tool-out" hidden></pre>`;
+  el.querySelector('.tool-head').addEventListener('click', () => {
+    const out = el.querySelector('.tool-out');
+    out.hidden = !out.hidden;
+  });
+  return el;
+}
+
+function fillToolCard(el, result) {
+  if (!el) return;
+  el.classList.remove('running');
+  el.classList.add(result.ok ? 'done' : 'failed');
+  el.querySelector('.tool-state').textContent = result.ok ? result.summary : 'خطا';
+  const out = el.querySelector('.tool-out');
+  out.textContent = result.output || '';
+  /* Failures are the ones worth reading, so those open by themselves. */
+  out.hidden = result.ok;
+}
+
+/* ---------------------------------------------------------------- changes */
+
+function renderDiff(diff) {
+  if (!diff) return '<div class="hint">بدون تفاوت</div>';
+  return '<pre class="diff">' + diff.split('\n').map((line) => {
+    const cls = line.startsWith('+++') || line.startsWith('---') ? 'dh'
+      : line.startsWith('@@') ? 'dm'
+      : line.startsWith('+') ? 'da'
+      : line.startsWith('-') ? 'dd' : '';
+    return `<span class="${cls}">${esc(line)}</span>`;
+  }).join('\n') + '</pre>';
+}
+
+function changeCard(change) {
+  const el = document.createElement('div');
+  el.className = 'change';
+  el.dataset.id = change.id;
+  const verb = change.action === 'delete' ? 'حذف' : (change.existed ? 'ویرایش' : 'ایجاد');
+  el.innerHTML = `
+    <div class="change-head">
+      <b>${verb}</b>
+      <code class="mono">${esc(change.path)}</code>
+      <span class="stat"><span class="add">+${change.added}</span>
+        <span class="del">−${change.removed}</span></span>
+      <span class="spacer"></span>
+      <span class="change-actions"></span>
+    </div>
+    ${renderDiff(change.diff)}`;
+  const actions = el.querySelector('.change-actions');
+  if (change.status === 'pending') {
+    actions.innerHTML = `<button class="btn sm primary">تأیید</button>
+                         <button class="btn sm danger">رد</button>`;
+    const [yes, no] = actions.querySelectorAll('button');
+    yes.onclick = () => decideChange(el, change.id, 'approve');
+    no.onclick = () => decideChange(el, change.id, 'reject');
+  } else {
+    actions.innerHTML = `<span class="badge ${change.status}">${statusLabel(change.status)}</span>`;
+  }
+  return el;
+}
+
+function statusLabel(s) {
+  return { pending: 'در انتظار', applied: 'اعمال شد', rejected: 'رد شد', reverted: 'برگردانده شد' }[s] || s;
+}
+
+async function decideChange(el, id, decision) {
+  el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+  try {
+    const r = await api(`/api/changes/${encodeURIComponent(id)}/${decision}`, { method: 'POST' });
+    el.querySelector('.change-actions').innerHTML =
+      `<span class="badge ${r.status}">${statusLabel(r.status)}</span>`;
+    ok(decision === 'approve' ? 'اعمال شد' : 'رد شد');
+    refreshPending();
+    if (S.view === 'files') loadFiles(S.fsPath);
+  } catch (err) {
+    bad(err.message);
+    el.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+  }
+}
+
+async function refreshPending() {
+  try {
+    const { pending } = await api('/api/changes');
+    const badge = $('#pendingBadge');
+    if (!badge) return;
+    badge.textContent = pending || '';
+    badge.hidden = !pending;
+  } catch { /* the badge is decoration; never block on it */ }
+}
+
+async function loadChanges() {
+  const box = $('#changeList');
+  box.innerHTML = '<div class="hint">در حال بارگذاری…</div>';
+  try {
+    const status = $('#changeFilter').value;
+    const { changes, approval } = await api('/api/changes', { query: { status, limit: 100 } });
+    $('#approvalMode').value = approval;
+    if (!changes.length) {
+      box.innerHTML = '<div class="empty">تغییری با این وضعیت نیست.</div>';
+      return;
+    }
+    box.innerHTML = '';
+    changes.forEach((c) => box.append(changeCard(c)));
+  } catch (err) {
+    box.innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
+  }
+}
+
+async function decideAllChanges(decision) {
+  const word = decision === 'approve' ? 'تأیید' : 'رد';
+  if (!confirm(`همهٔ تغییرهای در انتظار ${word} شوند؟`)) return;
+  try {
+    const r = await api('/api/changes/decide-all', { method: 'POST', body: { decision } });
+    ok(`${r.approved + r.rejected} تغییر ${word} شد`);
+    loadChanges();
+    refreshPending();
+  } catch (err) { bad(err.message); }
+}
+
+async function setApprovalMode(mode) {
+  try {
+    await api('/api/changes/mode', { method: 'PUT', body: { mode } });
+    ok(mode === 'auto' ? 'تغییرها بی‌درنگ اعمال می‌شوند' : 'تغییرها منتظر تأیید می‌مانند');
+  } catch (err) { bad(err.message); }
+}
+
+async function loadAgentInfo() {
+  try {
+    const info = await api('/api/agent/tools');
+    const box = $('#agentTools');
+    if (!box) return;
+    box.innerHTML = info.tools.map((t) =>
+      `<div class="tool-doc"><code>${esc(t.name)}</code>` +
+      `${t.writes ? '<span class="badge pending">می‌نویسد</span>' : ''}` +
+      `<p>${esc(t.description)}</p></div>`).join('')
+      + (info.unavailable.length
+        ? `<div class="hint">در این میزبان در دسترس نیست: ${info.unavailable.join('، ')}` +
+          ' — برای روشن کردن ترمینال ARENA_SHELL=true را در .env بگذارید.</div>'
+        : '');
+  } catch { /* the settings page still works without it */ }
+}
+
 
 /* ------------------------------------------------------------- files */
 async function loadFiles(path) {
@@ -642,6 +863,7 @@ async function boot() {
   }
   $('#whoami').textContent = S.user ? `${S.user.username} (${S.user.role})` : 'بدون ورود';
   try { S.providers = (await api('/api/providers')).providers; renderPicker(); } catch { /* view shows it */ }
+  refreshPending();
   navigate(S.view);
 }
 
@@ -654,6 +876,19 @@ function bindUi() {
   $('#settingsForm').addEventListener('submit', saveSettings);
   $('#passwordForm').addEventListener('submit', changePassword);
   $('#termForm').addEventListener('submit', runCommand);
+  $('#changeFilter').addEventListener('change', loadChanges);
+  $('#approvalMode').addEventListener('change', (e) => setApprovalMode(e.target.value));
+
+  // Agent mode is a per-browser preference, not a server setting.
+  const agent = $('#agentToggle');
+  agent.checked = localStorage.getItem('arena.agent') === 'on';
+  agent.addEventListener('change', () => {
+    localStorage.setItem('arena.agent', agent.checked ? 'on' : 'off');
+    $('#composerText').placeholder = agent.checked
+      ? 'چه کاری انجام شود؟  عامل فایل‌ها را می‌خواند و تغییر پیشنهاد می‌دهد.'
+      : 'پیام‌تان را بنویسید…  (Enter برای ارسال، Shift+Enter برای خط تازه)';
+  });
+  agent.dispatchEvent(new Event('change'));
 
   $('#pickProvider').addEventListener('change', (e) => { S.provider = e.target.value; renderModels(); });
   $('#pickModel').addEventListener('change', (e) => {

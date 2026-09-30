@@ -16,6 +16,7 @@
   --warn:      #e8b64c;
   --bad:       #ef6b6b;
   --radius:    10px;
+  --mono-stack: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
   color-scheme: dark;
 }
 [data-theme="light"] {
@@ -242,4 +243,110 @@ dialog::backdrop { background: rgba(4,8,14,.72); }
   .picker.folded .picker-field { display: none !important; }
   .picker-field { flex: 1 1 100%; }
   .picker select { width: 100%; }
+}
+
+/* ------------------------------------------------------------ agent mode */
+
+.agent-switch {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: 13px; color: var(--dim); white-space: nowrap; align-self: stretch;
+}
+.agent-switch:has(input:checked) {
+  color: var(--text); border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+}
+.agent-switch input { accent-color: var(--accent); }
+
+.pending-badge {
+  margin-inline-start: auto; min-width: 20px; padding: 1px 6px;
+  border-radius: 999px; font-size: 11px; font-weight: 700; text-align: center;
+  background: var(--warn); color: #1a1205;
+}
+
+.turn { display: flex; flex-direction: column; gap: 8px; }
+
+.msg.typing::after { content: attr(data-step); opacity: .6; font-size: 12px; }
+
+.note {
+  align-self: flex-start; font-size: 12px; color: var(--dim);
+  padding: 2px 10px; border-inline-start: 2px solid var(--line);
+}
+
+/* ------------------------------------------------------------ tool cards */
+
+.tool {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--raised); overflow: hidden; font-size: 13px;
+}
+.tool-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; cursor: pointer; user-select: none;
+}
+.tool-head:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
+.tool-ico { font-size: 14px; }
+.tool-name { color: var(--text); font-weight: 600; }
+.tool-arg {
+  color: var(--dim); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; flex: 1; direction: ltr; text-align: start;
+}
+.tool-state { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.tool.running .tool-state { color: var(--accent); }
+.tool.done    { border-inline-start: 3px solid var(--good); }
+.tool.failed  { border-inline-start: 3px solid var(--bad); }
+.tool.failed .tool-state { color: var(--bad); }
+.tool-out {
+  margin: 0; padding: 10px; max-height: 320px; overflow: auto;
+  border-top: 1px solid var(--line); background: var(--bg);
+  direction: ltr; text-align: start; white-space: pre-wrap;
+  font-family: var(--mono-stack); font-size: 12px; line-height: 1.5;
+}
+
+/* --------------------------------------------------------------- changes */
+
+.change {
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--raised); overflow: hidden; margin-bottom: 12px;
+}
+.change-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+}
+.change-head code { direction: ltr; }
+.stat { font-size: 12px; font-family: var(--mono-stack); }
+.stat .add { color: var(--good); }
+.stat .del { color: var(--bad); }
+.change-actions { display: flex; gap: 6px; align-items: center; }
+
+.badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--dim);
+}
+.badge.applied  { color: var(--good); border-color: var(--good); }
+.badge.rejected { color: var(--bad); border-color: var(--bad); }
+.badge.pending  { color: var(--warn); border-color: var(--warn); }
+
+pre.diff {
+  margin: 0; padding: 10px 12px; max-height: 420px; overflow: auto;
+  direction: ltr; text-align: start; font-family: var(--mono-stack);
+  font-size: 12px; line-height: 1.55; background: var(--bg);
+}
+pre.diff span { display: block; }
+pre.diff .da { color: var(--good); background: color-mix(in oklab, var(--good) 12%, transparent); }
+pre.diff .dd { color: var(--bad);  background: color-mix(in oklab, var(--bad) 12%, transparent); }
+pre.diff .dm { color: var(--accent); }
+pre.diff .dh { color: var(--dim); }
+
+.field.inline { flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.field.inline span { white-space: nowrap; font-size: 13px; }
+
+.tool-doc { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.tool-doc:last-child { border-bottom: 0; }
+.tool-doc code { font-weight: 600; }
+.tool-doc p { margin: 4px 0 0; color: var(--dim); font-size: 13px; }
+
+@media (max-width: 720px) {
+  .agent-switch span { display: none; }
+  .change-head { font-size: 13px; }
 }

@@ -115,9 +115,27 @@ final class Db
                 action  TEXT NOT NULL,
                 detail  TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS changes (
+                id              TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                action          TEXT NOT NULL,
+                path            TEXT NOT NULL,
+                before_text     TEXT NOT NULL DEFAULT '',
+                after_text      TEXT NOT NULL DEFAULT '',
+                existed         INTEGER NOT NULL DEFAULT 0,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                note            TEXT NOT NULL DEFAULT '',
+                created_at      TEXT NOT NULL,
+                decided_at      TEXT
+            );
             CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
+            CREATE INDEX IF NOT EXISTS idx_changes_status ON changes(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
             SQL);
+
+        // Columns added after the first release. SQLite has no "ADD COLUMN IF
+        // NOT EXISTS", so ask before adding.
+        self::addColumn($pdo, 'messages', 'meta', "TEXT NOT NULL DEFAULT '{}'");
 
         // Seed the first administrator only when there are no users at all.
         $count = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
@@ -131,6 +149,18 @@ final class Db
                     self::now(),
                 ]);
         }
+    }
+
+    /** Add a column when it is not there yet. Safe to call on every boot. */
+    private static function addColumn(\PDO $pdo, string $table, string $column, string $definition): void
+    {
+        $existing = $pdo->query("PRAGMA table_info($table)")->fetchAll();
+        foreach ($existing as $col) {
+            if (($col['name'] ?? '') === $column) {
+                return;
+            }
+        }
+        $pdo->exec("ALTER TABLE $table ADD COLUMN $column $definition");
     }
 
     public static function now(): string

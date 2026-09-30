@@ -15,6 +15,7 @@
       <button data-view="chat"      data-title="گفتگو"><span class="ico">💬</span>گفتگو</button>
       <button data-view="providers" data-title="ارائه‌دهنده‌ها و مدل‌ها"><span class="ico">🤖</span>ارائه‌دهنده‌ها</button>
       <button data-view="files"     data-title="فایل‌های ورک‌اسپیس"><span class="ico">📁</span>فایل‌ها</button>
+      <button data-view="changes"   data-title="تغییرهای پیشنهادی"><span class="ico">📝</span>تغییرها<span class="pending-badge" id="pendingBadge" hidden></span></button>
       <button data-view="terminal"  data-title="ترمینال"><span class="ico">💻</span>ترمینال</button>
       <button data-view="settings"  data-title="تنظیمات"><span class="ico">⚙️</span>تنظیمات</button>
       <button data-view="diag"      data-title="تشخیص اتصال"><span class="ico">🩺</span>تشخیص</button>
@@ -58,6 +59,10 @@
           </div>
 
           <form class="composer" id="composer">
+            <label class="agent-switch" title="عامل می‌تواند فایل‌ها را بخواند، بگردد و تغییر پیشنهاد دهد">
+              <input type="checkbox" id="agentToggle">
+              <span>حالت عامل</span>
+            </label>
             <textarea class="input" id="composerText" rows="1"
                       placeholder="پیام‌تان را بنویسید…  (Enter برای ارسال، Shift+Enter برای خط تازه)"></textarea>
             <button class="btn primary" id="sendBtn" type="submit">ارسال</button>
@@ -98,6 +103,29 @@
       </div>
     </section>
 
+    <!-- ============================================ changes -->
+    <section class="view" id="view-changes" hidden>
+      <div class="row" style="margin-bottom:14px">
+        <label class="field inline"><span>وضعیت</span>
+          <select class="input" id="changeFilter">
+            <option value="pending">در انتظار</option>
+            <option value="applied">اعمال‌شده</option>
+            <option value="rejected">ردشده</option>
+            <option value="all">همه</option>
+          </select></label>
+        <label class="field inline"><span>سیاست تأیید</span>
+          <select class="input" id="approvalMode">
+            <option value="ask">هر تغییر را بپرس</option>
+            <option value="auto">بی‌درنگ اعمال کن</option>
+          </select></label>
+        <span class="spacer"></span>
+        <button class="btn sm" onclick="loadChanges()">تازه‌سازی</button>
+        <button class="btn sm primary" onclick="decideAllChanges('approve')">تأیید همه</button>
+        <button class="btn sm danger" onclick="decideAllChanges('reject')">رد همه</button>
+      </div>
+      <div id="changeList"></div>
+    </section>
+
     <!-- ============================================ terminal -->
     <section class="view" id="view-terminal" hidden>
       <div class="card">
@@ -121,6 +149,12 @@
           <select class="input" id="setTheme"><option value="dark">تیره</option><option value="light">روشن</option></select></label>
         <button class="btn primary" type="submit">ذخیره</button>
       </form>
+
+      <div class="card">
+        <h2>ابزارهای عامل</h2>
+        <p class="hint">این‌ها کارهایی هستند که عامل می‌تواند در حالت عامل انجام دهد.</p>
+        <div id="agentTools"></div>
+      </div>
 
       <form class="card" id="passwordForm">
         <h2>تغییر گذرواژه</h2>

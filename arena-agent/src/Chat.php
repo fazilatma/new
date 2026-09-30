@@ -86,7 +86,7 @@ final class Chat
         $systemPrompt = (string) $req->input('system', (string) Db::setting('system_prompt', ''));
         $temperature = (float) $req->input('temperature', 0.7);
 
-        self::openStream();
+        Sse::open();
 
         try {
             if ($text === '') {
@@ -106,7 +106,7 @@ final class Chat
             if ($conversationId === '') {
                 $conversationId = self::create();
             }
-            self::send('start', ['conversationId' => $conversationId]);
+            Sse::send('start', ['conversationId' => $conversationId]);
 
             $history = [];
             if ($systemPrompt !== '') {
@@ -133,7 +133,7 @@ final class Chat
                 $built['body'],
                 static function (string $piece) use (&$full): void {
                     $full .= $piece;
-                    self::send('token', ['text' => $piece]);
+                    Sse::send('token', ['text' => $piece]);
                 }
             );
 
@@ -141,47 +141,12 @@ final class Chat
                 throw new HttpError(502, 'The provider returned an empty response.');
             }
             self::addMessage($conversationId, 'assistant', $full);
-            self::send('done', ['conversationId' => $conversationId, 'length' => strlen($full)]);
+            Sse::send('done', ['conversationId' => $conversationId, 'length' => strlen($full)]);
         } catch (HttpError $e) {
-            self::send('error', ['message' => $e->getMessage(), 'status' => $e->status]);
+            Sse::send('error', ['message' => $e->getMessage(), 'status' => $e->status]);
         } catch (\Throwable $e) {
-            self::send('error', ['message' => $e->getMessage()]);
+            Sse::send('error', ['message' => $e->getMessage()]);
         }
-        self::endStream();
-    }
-
-    private static function openStream(): void
-    {
-        if (!Response::$started && !headers_sent()) {
-            http_response_code(200);
-            header('Content-Type: text/event-stream; charset=utf-8');
-            header('Cache-Control: no-cache, no-transform');
-            header('Connection: keep-alive');
-            header('X-Accel-Buffering: no');   // nginx would otherwise hold it all back
-        }
-        Response::$started = true;
-        while (ob_get_level() > 0) {
-            ob_end_flush();
-        }
-        // Some hosts buffer until a few KB have accumulated; this nudges them.
-        echo ': ' . str_repeat(' ', 2048) . "\n\n";
-        @ob_flush();
-        flush();
-    }
-
-    /** @param array<string,mixed> $data */
-    private static function send(string $event, array $data): void
-    {
-        echo 'event: ' . $event . "\n";
-        echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
-        @ob_flush();
-        flush();
-    }
-
-    private static function endStream(): void
-    {
-        echo "event: end\ndata: {}\n\n";
-        @ob_flush();
-        flush();
+        Sse::end();
     }
 }

@@ -3,7 +3,7 @@
 A self-hosted, multi-provider AI chat and coding workspace in plain PHP.
 No Composer, no build step, no framework — copy the folder to a host and open it.
 
-Version **2.0.0**. See [CHANGELOG.md](CHANGELOG.md).
+Version **2.1.0**. See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -74,12 +74,23 @@ Everything the app needs is in that list. There is nothing else to configure.
 **Chat** — streaming conversations against any provider, with history kept per
 conversation and titles derived from the first message.
 
+**An agent** — flip the switch in the composer and the model gets tools: it
+lists and reads files, searches the workspace, proposes edits, and runs
+commands where the host allows it. You watch each tool call and its result as
+they happen, and it stops after twelve rounds rather than looping forever.
+
 **Providers and models** — add them by hand, ask the provider for its own model
 list, or import a catalogue. Six wire protocols: OpenAI and anything
 compatible, Anthropic, Google Gemini, Ollama, Mistral, Azure OpenAI.
 
 **Files** — a sandboxed workspace browser and editor. Paths are resolved
 lexically and then checked against the root, so traversal fails closed.
+
+**Change approval** — the agent does not write to your files. It proposes, and
+you see a unified diff with accept and reject buttons. The previous contents
+are kept, so an accepted change can still be undone. If you would rather it
+just got on with things, switch the policy to *apply immediately*; the history
+and the undo work exactly the same.
 
 **Terminal** — real command execution, off by default (`ARENA_SHELL=true`),
 with a deny-list for the handful of commands that wreck a machine by accident.
@@ -89,6 +100,33 @@ permissions, extensions, and whether POST bodies of various shapes and sizes
 actually survive the trip through your host.
 
 ---
+
+## What the agent can do
+
+| Tool | What it does |
+|---|---|
+| `list_files` | List a folder |
+| `read_file` | Read a text file |
+| `search_files` | Find which files contain some text, with line numbers |
+| `write_file` | Create a file or replace it wholesale |
+| `edit_file` | Replace one exact passage — refused if it is missing or ambiguous |
+| `delete_file` | Remove a file |
+| `run_command` | Run a command and report its output and exit code |
+
+`run_command` appears only when `ARENA_SHELL=true` and the host permits
+`proc_open`. When it is absent the model is told so, rather than being left to
+call a tool that is not there.
+
+Every tool goes through the same guards as the web interface: nothing reaches
+outside the workspace, writing goes through the approval gate, and command
+execution obeys the deny-list. A tool that fails returns the reason to the
+model instead of ending the run — a missing file is something to recover from,
+not a crash.
+
+One honest limitation: a step that may contain tool calls is not streamed
+token by token. A tool call is only usable once complete, so each step's prose
+arrives whole and what you watch live is the tools working. Plain chat, with
+the agent switch off, still streams token by token.
 
 ## Importing a catalogue
 
@@ -170,8 +208,15 @@ cd ../../arena-agent
 # 38 end-to-end checks through the real router
 node ../agent-php/tools/phprun.mjs --root=. tools/tests/smoke.php
 
+# 101 checks over the agent, its tools, diffs and the approval gate
+node ../agent-php/tools/phprun.mjs --root=. tools/tests/agent.php
+
 # browse the app locally (real PHP 8.3, no system install)
 node tools/devserver.mjs 3000
+
+# drive the agent without a real provider: run this, then add a provider
+# pointing at http://127.0.0.1:8788/v1 with any key
+node tools/mockprovider.mjs 8788
 ```
 
 With a system PHP, `php bin/console.php serve 8080` is simpler.

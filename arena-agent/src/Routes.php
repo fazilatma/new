@@ -324,6 +324,88 @@ final class Routes
             Auth::require($q, 'developer');
             Chat::streamReply($q);
         });
+
+        // ------------------------------------------------------------ agent
+
+        $r->get('/api/agent/tools', static function (Request $q): array {
+            Auth::require($q);
+            return [
+                'tools' => array_map(static fn(array $t): array => [
+                    'name' => $t['name'],
+                    'description' => $t['description'],
+                    'writes' => $t['writes'],
+                    'parameters' => array_keys($t['parameters']['properties'] ?? []),
+                ], Tools::available()),
+                'unavailable' => array_values(array_diff(
+                    array_column(Tools::declarations(), 'name'),
+                    Tools::availableNames()
+                )),
+                'shell' => ['enabled' => Shell::enabled(), 'available' => Shell::available()],
+                'approval' => Changes::mode(),
+                'maxSteps' => Agent::MAX_STEPS,
+            ];
+        });
+
+        $r->post('/api/agent/stream', static function (Request $q): void {
+            Auth::require($q, 'developer');
+            Agent::run($q);
+        });
+
+        // ---------------------------------------------------------- changes
+
+        $r->get('/api/changes', static function (Request $q): array {
+            Auth::require($q);
+            return [
+                'changes' => Changes::list(
+                    (string) ($q->query['status'] ?? 'pending'),
+                    (string) ($q->query['conversationId'] ?? ''),
+                    (int) ($q->query['limit'] ?? 100)
+                ),
+                'pending' => Changes::pendingCount(),
+                'approval' => Changes::mode(),
+            ];
+        });
+
+        $r->get('/api/changes/{id}', static function (Request $q): array {
+            Auth::require($q);
+            return Changes::get($q->param('id'));
+        });
+
+        $r->post('/api/changes/{id}/approve', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Changes::approve($q->param('id'));
+        });
+
+        $r->post('/api/changes/{id}/reject', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Changes::reject($q->param('id'));
+        });
+
+        $r->post('/api/changes/{id}/revert', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            return Changes::revert($q->param('id'));
+        });
+
+        $r->post('/api/changes/decide-all', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            $decision = (string) $q->input('decision', 'approve');
+            if (!in_array($decision, ['approve', 'reject'], true)) {
+                throw new HttpError(400, "decision must be 'approve' or 'reject'.");
+            }
+            $done = Changes::decideAll($decision, (string) $q->input('conversationId', ''));
+            return ['ok' => true] + $done + ['pending' => Changes::pendingCount()];
+        });
+
+        $r->put('/api/changes/mode', static function (Request $q): array {
+            Auth::require($q, 'developer');
+            $mode = (string) $q->input('mode', 'ask');
+            if (!in_array($mode, ['ask', 'auto'], true)) {
+                throw new HttpError(400, "mode must be 'ask' or 'auto'.");
+            }
+            Changes::setMode($mode);
+            Db::audit(Auth::currentName(), 'changes.mode', $mode);
+            return ['ok' => true, 'approval' => Changes::mode()];
+        });
     }
 
     private static function workspace(Router $r): void

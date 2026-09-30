@@ -14,6 +14,14 @@ namespace Arena;
 
 final class Llm
 {
+    /**
+     * Replaces the HTTP call in tests. Signature:
+     * fn(string $url, array $headers, string $body, int $timeout): array{0:int,1:string}
+     *
+     * @var null|callable(string,array<int,string>,string,int):array{0:int,1:string}
+     */
+    public static $transport = null;
+
     /** Default endpoints used when a provider does not carry its own. */
     private const DEFAULT_URL = [
         'openai' => 'https://api.openai.com/v1',
@@ -25,12 +33,27 @@ final class Llm
     ];
 
     /**
+     * Build one request.
+     *
+     * Messages are in this project's neutral shape:
+     *   ['role' => 'system'|'user'|'assistant', 'content' => string]
+     *   ['role' => 'assistant', 'content' => string, 'toolCalls' => [['id','name','args']]]
+     *   ['role' => 'tool', 'toolCallId' => string, 'name' => string, 'content' => string]
+     * Each adapter below converts that into whatever its provider expects.
+     *
      * @param array<string,mixed> $provider
-     * @param array<int,array{role:string,content:string}> $messages
+     * @param array<int,array<string,mixed>> $messages
+     * @param array<int,array<string,mixed>> $tools neutral declarations from Tools
      * @return array{url:string,headers:array<int,string>,body:string}
      */
-    public static function build(array $provider, string $model, array $messages, bool $stream, float $temperature = 0.7): array
-    {
+    public static function build(
+        array $provider,
+        string $model,
+        array $messages,
+        bool $stream,
+        float $temperature = 0.7,
+        array $tools = []
+    ): array {
         $protocol = (string) $provider['protocol'];
         $base = rtrim((string) ($provider['baseUrl'] ?: self::DEFAULT_URL[$protocol] ?? ''), '/');
         $key = (string) ($provider['apiKey'] ?? '');
@@ -43,17 +66,51 @@ final class Llm
                 $system = '';
                 $turns = [];
                 foreach ($messages as $m) {
-                    if ($m['role'] === 'system') {
+                    $role = (string) $m['role'];
+                    if ($role === 'system') {
                         $system .= ($system === '' ? '' : "\n\n") . $m['content'];
-                    } else {
-                        $turns[] = ['role' => $m['role'] === 'assistant' ? 'assistant' : 'user',
-                                    'content' => $m['content']];
+                        continue;
                     }
+                    if ($role === 'tool') {
+                        // Anthropic returns tool output as a user turn holding
+                        // a tool_result block, not as a role of its own.
+                        $turns[] = ['role' => 'user', 'content' => [[
+                            'type' => 'tool_result',
+                            'tool_use_id' => (string) $m['toolCallId'],
+                            'content' => (string) $m['content'],
+                        ]]];
+                        continue;
+                    }
+                    if ($role === 'assistant' && !empty($m['toolCalls'])) {
+                        $blocks = [];
+                        if (trim((string) $m['content']) !== '') {
+                            $blocks[] = ['type' => 'text', 'text' => (string) $m['content']];
+                        }
+                        foreach ($m['toolCalls'] as $call) {
+                            $blocks[] = [
+                                'type' => 'tool_use',
+                                'id' => (string) $call['id'],
+                                'name' => (string) $call['name'],
+                                'input' => (object) $call['args'],
+                            ];
+                        }
+                        $turns[] = ['role' => 'assistant', 'content' => $blocks];
+                        continue;
+                    }
+                    $turns[] = ['role' => $role === 'assistant' ? 'assistant' : 'user',
+                                'content' => (string) $m['content']];
                 }
                 $payload = ['model' => $model, 'max_tokens' => 4096, 'messages' => $turns,
                             'stream' => $stream, 'temperature' => $temperature];
                 if ($system !== '') {
                     $payload['system'] = $system;
+                }
+                if ($tools !== []) {
+                    $payload['tools'] = array_map(static fn(array $t): array => [
+                        'name' => $t['name'],
+                        'description' => $t['description'],
+                        'input_schema' => $t['parameters'],
+                    ], $tools);
                 }
                 return [
                     'url' => $base . '/messages',
@@ -66,17 +123,51 @@ final class Llm
                 $contents = [];
                 $systemText = '';
                 foreach ($messages as $m) {
-                    if ($m['role'] === 'system') {
+                    $role = (string) $m['role'];
+                    if ($role === 'system') {
                         $systemText .= ($systemText === '' ? '' : "\n\n") . $m['content'];
                         continue;
                     }
-                    $contents[] = ['role' => $m['role'] === 'assistant' ? 'model' : 'user',
-                                   'parts' => [['text' => $m['content']]]];
+                    if ($role === 'tool') {
+                        $contents[] = ['role' => 'user', 'parts' => [[
+                            'functionResponse' => [
+                                'name' => (string) $m['name'],
+                                'response' => ['result' => (string) $m['content']],
+                            ],
+                        ]]];
+                        continue;
+                    }
+                    if ($role === 'assistant' && !empty($m['toolCalls'])) {
+                        $parts = [];
+                        if (trim((string) $m['content']) !== '') {
+                            $parts[] = ['text' => (string) $m['content']];
+                        }
+                        foreach ($m['toolCalls'] as $call) {
+                            $parts[] = ['functionCall' => [
+                                'name' => (string) $call['name'],
+                                'args' => (object) $call['args'],
+                            ]];
+                        }
+                        $contents[] = ['role' => 'model', 'parts' => $parts];
+                        continue;
+                    }
+                    $contents[] = ['role' => $role === 'assistant' ? 'model' : 'user',
+                                   'parts' => [['text' => (string) $m['content']]]];
                 }
                 $payload = ['contents' => $contents,
                             'generationConfig' => ['temperature' => $temperature]];
                 if ($systemText !== '') {
                     $payload['systemInstruction'] = ['parts' => [['text' => $systemText]]];
+                }
+                if ($tools !== []) {
+                    $payload['tools'] = [['functionDeclarations' => array_map(
+                        static fn(array $t): array => [
+                            'name' => $t['name'],
+                            'description' => $t['description'],
+                            'parameters' => $t['parameters'],
+                        ],
+                        $tools
+                    )]];
                 }
                 $verb = $stream ? 'streamGenerateContent?alt=sse&key=' : 'generateContent?key=';
                 return [
@@ -86,13 +177,22 @@ final class Llm
                 ];
 
             case 'ollama':
+                $payload = [
+                    'model' => $model,
+                    'messages' => self::openAiMessages($messages, true),
+                    'stream' => $stream,
+                    'options' => ['temperature' => $temperature],
+                ];
+                if ($tools !== []) {
+                    $payload['tools'] = self::openAiTools($tools);
+                    // Ollama does not stream tool calls; asking for both gets
+                    // you neither, so the caller gets a complete response.
+                    $payload['stream'] = false;
+                }
                 return [
                     'url' => $base . '/api/chat',
                     'headers' => ['content-type: application/json'],
-                    'body' => (string) json_encode([
-                        'model' => $model, 'messages' => $messages, 'stream' => $stream,
-                        'options' => ['temperature' => $temperature],
-                    ]),
+                    'body' => (string) json_encode($payload),
                 ];
 
             default:   // openai, mistral, azure and every compatible gateway
@@ -101,15 +201,190 @@ final class Llm
                     $headers[] = $protocol === 'azure' ? 'api-key: ' . $key : 'authorization: Bearer ' . $key;
                 }
                 $url = str_contains($base, '/chat/completions') ? $base : $base . '/chat/completions';
+                $payload = [
+                    'model' => $model,
+                    'messages' => self::openAiMessages($messages, false),
+                    'stream' => $stream,
+                    'temperature' => $temperature,
+                ];
+                if ($tools !== []) {
+                    $payload['tools'] = self::openAiTools($tools);
+                    $payload['tool_choice'] = 'auto';
+                }
                 return [
                     'url' => $url,
                     'headers' => $headers,
-                    'body' => (string) json_encode([
-                        'model' => $model, 'messages' => $messages,
-                        'stream' => $stream, 'temperature' => $temperature,
-                    ]),
+                    'body' => (string) json_encode($payload),
                 ];
         }
+    }
+
+    /**
+     * Neutral messages in the OpenAI chat shape, which Ollama also speaks.
+     *
+     * The one difference: OpenAI wants tool arguments as a JSON *string*,
+     * Ollama wants them as an object. Getting this backwards produces a
+     * confusing "invalid arguments" from one and silence from the other.
+     *
+     * @param array<int,array<string,mixed>> $messages
+     * @return array<int,array<string,mixed>>
+     */
+    private static function openAiMessages(array $messages, bool $argsAsObject): array
+    {
+        $out = [];
+        foreach ($messages as $m) {
+            $role = (string) $m['role'];
+            if ($role === 'tool') {
+                $out[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => (string) $m['toolCallId'],
+                    'name' => (string) $m['name'],
+                    'content' => (string) $m['content'],
+                ];
+                continue;
+            }
+            if ($role === 'assistant' && !empty($m['toolCalls'])) {
+                $calls = [];
+                foreach ($m['toolCalls'] as $call) {
+                    $calls[] = [
+                        'id' => (string) $call['id'],
+                        'type' => 'function',
+                        'function' => [
+                            'name' => (string) $call['name'],
+                            'arguments' => $argsAsObject
+                                ? (object) $call['args']
+                                : (string) json_encode((object) $call['args']),
+                        ],
+                    ];
+                }
+                $out[] = ['role' => 'assistant', 'content' => (string) $m['content'], 'tool_calls' => $calls];
+                continue;
+            }
+            $out[] = ['role' => $role, 'content' => (string) $m['content']];
+        }
+        return $out;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $tools
+     * @return array<int,array<string,mixed>>
+     */
+    private static function openAiTools(array $tools): array
+    {
+        return array_map(static fn(array $t): array => [
+            'type' => 'function',
+            'function' => [
+                'name' => $t['name'],
+                'description' => $t['description'],
+                'parameters' => $t['parameters'],
+            ],
+        ], $tools);
+    }
+
+    /**
+     * Pull both the text and any tool calls out of a complete response.
+     *
+     * @return array{text:string,toolCalls:array<int,array{id:string,name:string,args:array<string,mixed>}>,finish:string}
+     */
+    public static function parseReply(string $protocol, string $body): array
+    {
+        $j = json_decode($body, true);
+        if (!is_array($j)) {
+            throw new HttpError(502, 'The provider sent a reply that is not JSON.');
+        }
+        if (isset($j['error'])) {
+            $msg = is_array($j['error']) ? ($j['error']['message'] ?? json_encode($j['error'])) : $j['error'];
+            throw new HttpError(502, 'Provider error: ' . (string) $msg);
+        }
+
+        $text = '';
+        $calls = [];
+        $finish = '';
+
+        switch ($protocol) {
+            case 'anthropic':
+                $finish = (string) ($j['stop_reason'] ?? '');
+                foreach ($j['content'] ?? [] as $block) {
+                    if (($block['type'] ?? '') === 'text') {
+                        $text .= (string) $block['text'];
+                    } elseif (($block['type'] ?? '') === 'tool_use') {
+                        $calls[] = [
+                            'id' => (string) ($block['id'] ?? Db::uid('call')),
+                            'name' => (string) ($block['name'] ?? ''),
+                            'args' => is_array($block['input'] ?? null) ? $block['input'] : [],
+                        ];
+                    }
+                }
+                break;
+
+            case 'gemini':
+                $candidate = $j['candidates'][0] ?? [];
+                $finish = (string) ($candidate['finishReason'] ?? '');
+                foreach ($candidate['content']['parts'] ?? [] as $part) {
+                    if (isset($part['text'])) {
+                        $text .= (string) $part['text'];
+                    }
+                    if (isset($part['functionCall'])) {
+                        $calls[] = [
+                            // Gemini does not issue call ids, so make one that
+                            // is stable for the length of this exchange.
+                            'id' => 'call_' . count($calls) . '_' . (string) ($part['functionCall']['name'] ?? ''),
+                            'name' => (string) ($part['functionCall']['name'] ?? ''),
+                            'args' => is_array($part['functionCall']['args'] ?? null)
+                                ? $part['functionCall']['args'] : [],
+                        ];
+                    }
+                }
+                break;
+
+            case 'ollama':
+                $message = $j['message'] ?? [];
+                $finish = (string) ($j['done_reason'] ?? '');
+                $text = (string) ($message['content'] ?? '');
+                foreach ($message['tool_calls'] ?? [] as $i => $call) {
+                    $args = $call['function']['arguments'] ?? [];
+                    $calls[] = [
+                        'id' => (string) ($call['id'] ?? 'call_' . $i),
+                        'name' => (string) ($call['function']['name'] ?? ''),
+                        'args' => self::decodeArgs($args),
+                    ];
+                }
+                break;
+
+            default:
+                $choice = $j['choices'][0] ?? [];
+                $finish = (string) ($choice['finish_reason'] ?? '');
+                $text = (string) ($choice['message']['content'] ?? '');
+                foreach ($choice['message']['tool_calls'] ?? [] as $i => $call) {
+                    $calls[] = [
+                        'id' => (string) ($call['id'] ?? 'call_' . $i),
+                        'name' => (string) ($call['function']['name'] ?? ''),
+                        'args' => self::decodeArgs($call['function']['arguments'] ?? []),
+                    ];
+                }
+        }
+
+        return ['text' => $text, 'toolCalls' => $calls, 'finish' => $finish];
+    }
+
+    /**
+     * Tool arguments arrive as an object from some providers and as a JSON
+     * string from others — and occasionally as a string of "{}" or "".
+     *
+     * @return array<string,mixed>
+     */
+    private static function decodeArgs(mixed $args): array
+    {
+        if (is_array($args)) {
+            return $args;
+        }
+        if (is_string($args) && trim($args) !== '') {
+            $decoded = json_decode($args, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+        return [];
     }
 
     /** Extract the assistant text from one streamed data line. */
@@ -154,6 +429,13 @@ final class Llm
      */
     public static function send(string $url, array $headers, string $body, int $timeout = 120): array
     {
+        // A seam, not a feature: the test suite substitutes a transport so the
+        // whole agent loop can be exercised without a provider or a network.
+        // Nothing in the application ever sets this.
+        if (self::$transport !== null) {
+            return (self::$transport)($url, $headers, $body, $timeout);
+        }
+
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
