@@ -61,7 +61,8 @@ async function discoverProjectCommands(){
   }
   return {commands,sourceFiles:sourceFiles.length,limits:{maxFiles:240}};
 }
-function parseDiagnostics(results){const out=[];for(const r of results||[]){if(r.code===0)continue;const text=String(r.stderr||r.stdout||r.error||'').trim();const lines=text.split(/\r?\n/).filter(Boolean);const hits=[];for(const line of lines){const m=line.match(/(?:^|[ (])((?:[^\\s:()]+\\/)*[^\\s:()]+):(\\d+)(?::(\\d+))?/);if(m)hits.push({path:m[1],line:Number(m[2]),column:m[3]?Number(m[3]):null});if(hits.length>=5)break}out.push({kind:r.type||'check',file:r.file||null,code:r.code,message:lines.slice(0,4).join(' ').slice(0,1200),locations:hits})}return out.slice(0,20)}\nasync function verifyWorkspace(){
+function parseDiagnostics(results){const out=[];for(const r of results||[]){if(r.code===0)continue;const text=String(r.stderr||r.stdout||r.error||'').trim();const lines=text.split(/\r?\n/).filter(Boolean);const hits=[];for(const line of lines){const m=line.match(/([^\s:()]+):(\d+)(?::(\d+))?/);if(m)hits.push({path:m[1],line:Number(m[2]),column:m[3]?Number(m[3]):null});if(hits.length>=5)break}out.push({kind:r.type||'check',file:r.file||null,code:r.code,message:lines.slice(0,4).join(' ').slice(0,1200),locations:hits})}return out.slice(0,20)}
+async function verifyWorkspace(){
   const results=[];const files=await collectSourceFiles(160);
   for(const f of files){
     if(/\.(js|mjs|cjs)$/i.test(f))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});
