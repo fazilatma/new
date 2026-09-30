@@ -30,7 +30,7 @@ const agentRunControllers=new Map();
 
 async function snapshotWorkspace(){
   const files=new Map();let count=0;
-  const ignored=new Set(['.git','node_modules','.cache','dist','build','.wconsole_data']);
+  const ignored=new Set(['.git','node_modules','.cache','dist','build','.wconsole_data','.arena']);
   async function walk(dir,rel=''){
     if(count>=500)return;
     let entries=[];
