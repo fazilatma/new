@@ -320,7 +320,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.180';
+const APP_VERSION = '10.181';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9855,6 +9855,10 @@ $profiles[$key] = [
     ? trim((string)$_POST['pagVal'])
     : (string)($profiles[$key]['pagVal'] ?? ''),
 'selectors' => $selectorsFinal,
+// v10.181: PHP-native extraction engine; missing key preserves legacy CSS-selector behavior.
+'extractionEngine' => array_key_exists('extractionEngine', $_POST)
+    ? normalizeExtractionEngine((string)$_POST['extractionEngine'])
+    : normalizeExtractionEngine((string)($profiles[$key]['extractionEngine'] ?? 'selectors')),
 'detailSelectors' => $detailSelectors,
 // v8.64: تنظیمات گالری چندعکسی — اگر در درخواست نباشد مقدار قبلی می‌ماند
 'gallery' => $galleryFinal,
@@ -13326,6 +13330,48 @@ $nodes[] = $n;
 }
 }
 
+/* v10.181: structural/heuristic engine must not miss Persian marketplace grids
+   whose stable product signal is the detail href itself (e.g. emalls ...~id~123).
+   The old generic query could stop at a static top strip; by additionally walking
+   product-like anchors up to their card, later pages still contribute fresh links. */
+$anchorSignals = [
+    "//a[contains(@href,'~id~')]",
+    "//a[contains(@href,'/product/') or contains(@href,'/products/') or contains(@href,'/p/')]",
+    "//a[contains(@href,'/کالا/') or contains(@href,'/مشخصات_')]",
+];
+foreach ($anchorSignals as $_aq) {
+    $_as = @$xp->query($_aq);
+    if (!$_as) continue;
+    foreach ($_as as $_a) {
+        if (!($_a instanceof DOMElement)) continue;
+        $_card = $_a;
+        $_foundCard = false;
+        for ($_depth = 0; $_depth < 6 && $_card instanceof DOMElement; $_depth++) {
+            $_txt = normalize_text($_card->textContent ?? '');
+            $_hasImg = false;
+            $_imgQ = @$xp->query('.//img', $_card);
+            if ($_imgQ && $_imgQ->length) $_hasImg = true;
+            $_hasPrice = (extractPrice($_txt) !== '' && extractPrice($_txt) !== null)
+                || mb_stripos($_txt, 'تومان') !== false || mb_stripos($_txt, 'ریال') !== false;
+            $_tag = strtolower($_card->tagName);
+            $_cls = strtolower((string)$_card->getAttribute('class'));
+            $_looksCard = in_array($_tag, ['li','article','section'], true)
+                || preg_match('~(product|card|item|goods|commodity|prd|list)~i', $_cls);
+            if (($_hasImg && ($_hasPrice || $_looksCard)) || ($_looksCard && $_depth > 0 && $_hasPrice)) { $_foundCard = true; break; }
+            if (!($_card->parentNode instanceof DOMElement)) break;
+            $_card = $_card->parentNode;
+        }
+        if (!$_foundCard) {
+            $_aImg = @$xp->query('.//img', $_a);
+            if ($_aImg && $_aImg->length) $_card = $_a; else continue;
+        }
+        if (!($_card instanceof DOMElement)) $_card = $_a;
+        $h = spl_object_hash($_card);
+        if (!isset($seen[$h])) { $seen[$h] = 1; $nodes[] = $_card; }
+    }
+}
+unset($_aq, $_as, $_a, $_card, $_foundCard, $_aImg, $_depth, $_txt, $_hasImg, $_imgQ, $_hasPrice, $_tag, $_cls, $_looksCard);
+
 if (empty($nodes)) {
 $result = @$xp->query("//a[.//img][contains(@href,'product') or contains(@href,'/p/') or contains(@href,'/کالا/')]");
 if ($result) {
@@ -13366,6 +13412,13 @@ if ($text && mb_strlen($text) > 2 && mb_strlen($text) < 200) {
 $p['title'] = $text;
 break;
 }
+}
+}
+if (!$p['title']) {
+$imgAlt = @$xp->query('.//img[@alt]', $node);
+if ($imgAlt && $imgAlt->length && $imgAlt->item(0) instanceof DOMElement) {
+$text = normalize_text($imgAlt->item(0)->getAttribute('alt'));
+if ($text && mb_strlen($text) > 2 && mb_strlen($text) < 200) $p['title'] = $text;
 }
 }
 
@@ -13438,6 +13491,102 @@ if (!isset($products[$key])) $products[$key] = $p;
 }
 
 return $products;
+}
+
+/* v10.181: PHP-native extraction-engine layer.  The Node project has a larger
+   engine matrix; this single-file build exposes only engines that can run on the
+   no-apt/no-Node production PHP host, and leaves browser rendering to the
+   existing pure-PHP render service. */
+function extractionEngineAllowed(): array {
+    return ['selectors', 'auto', 'heuristic', 'jsonld'];
+}
+function normalizeExtractionEngine($v): string {
+    $v = strtolower(trim((string)$v));
+    if ($v === '' || $v === 'css' || $v === 'cheerio' || $v === 'htmlrewriter') return 'selectors';
+    if (!in_array($v, extractionEngineAllowed(), true)) return 'selectors';
+    return $v;
+}
+function extractionEngineLabel(string $engine): string {
+    $engine = normalizeExtractionEngine($engine);
+    $map = [
+        'selectors' => 'CSS selectors (legacy)',
+        'auto'      => 'Auto smart (JSON-LD → heuristic → selectors)',
+        'heuristic' => 'Structural / heuristic cards',
+        'jsonld'    => 'JSON-LD Product',
+    ];
+    return $map[$engine] ?? $engine;
+}
+function parse_jsonld_products(string $html, string $baseUrl): array {
+    [$dom, $xp] = load_dom($html);
+    $products = [];
+    $scripts = $xp ? @$xp->query("//script[@type='application/ld+json']") : null;
+    if (!$scripts) return [];
+    $walk = function ($d) use (&$walk, &$products, $baseUrl) {
+        if (!is_array($d)) return;
+        $type = $d['@type'] ?? '';
+        $types = is_array($type) ? $type : [$type];
+        $isProduct = false;
+        foreach ($types as $t) { if (stripos((string)$t, 'Product') !== false) { $isProduct = true; break; } }
+        if ($isProduct) {
+            $img = $d['image'] ?? '';
+            if (is_array($img)) $img = $img[0] ?? '';
+            $offers = $d['offers'] ?? [];
+            if (is_array($offers) && isset($offers[0]) && is_array($offers[0])) $offers = $offers[0];
+            $price = '';
+            if (is_array($offers)) {
+                $price = (string)($offers['price'] ?? ($offers['lowPrice'] ?? ($offers['highPrice'] ?? '')));
+            }
+            $url = (string)($d['url'] ?? (is_array($offers) ? ($offers['url'] ?? '') : ''));
+            $p = [
+                'title' => trim((string)($d['name'] ?? '')),
+                'price' => $price !== '' ? ($price . ' تومان') : '',
+                'link'  => $url !== '' ? make_absolute_url($url, $baseUrl) : '',
+                'image' => trim((string)$img) !== '' ? make_absolute_url((string)$img, $baseUrl) : '',
+                'sku'   => (string)($d['sku'] ?? ''),
+            ];
+            if ($p['title'] !== '' || $p['link'] !== '') {
+                $key = productKey($p);
+                if (!isset($products[$key])) $products[$key] = $p;
+            }
+        }
+        foreach ($d as $v) if (is_array($v)) $walk($v);
+    };
+    foreach ($scripts as $script) {
+        $raw = html_entity_decode((string)$script->textContent, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $data = @json_decode($raw, true);
+        if (!is_array($data)) continue;
+        $walk($data);
+    }
+    return $products;
+}
+function parse_list_by_engine(string $html, string $baseUrl, array $sel, string $engine, ?string &$usedEngine = null): array {
+    $engine = normalizeExtractionEngine($engine);
+    $usedEngine = $engine;
+    $hasSelectors = !empty($sel['container']);
+    if ($engine === 'selectors') {
+        $usedEngine = 'selectors';
+        return $hasSelectors ? parse_with_selectors($html, $baseUrl, $sel) : [];
+    }
+    if ($engine === 'jsonld') {
+        $usedEngine = 'jsonld';
+        return parse_jsonld_products($html, $baseUrl);
+    }
+    if ($engine === 'heuristic') {
+        $usedEngine = 'heuristic';
+        return parse_products($html, $baseUrl);
+    }
+    // Auto mirrors the Node app's idea without depending on Node packages:
+    // structured data first, structural/heuristic cards next, saved selectors last.
+    $rows = parse_jsonld_products($html, $baseUrl);
+    if (!empty($rows)) { $usedEngine = 'jsonld'; return $rows; }
+    $rows = parse_products($html, $baseUrl);
+    if (!empty($rows)) { $usedEngine = 'heuristic'; return $rows; }
+    if ($hasSelectors) {
+        $rows = parse_with_selectors($html, $baseUrl, $sel);
+        if (!empty($rows)) { $usedEngine = 'selectors'; return $rows; }
+    }
+    $usedEngine = 'auto';
+    return [];
 }
 
 function build_page_url_custom(string $currentUrl, string $baseUrl, int $page, string $type, string $val): string {
@@ -13814,6 +13963,7 @@ while (@ob_get_level()) @ob_end_clean();
 $url = trim($_GET['url'] ?? DEFAULT_URL);
 $maxPages = max(1, min(100, (int)($_GET['pages'] ?? 20)));
 $selectors = isset($_GET['selectors']) ? json_decode($_GET['selectors'], true) : null;
+$streamEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (($selectors && !empty($selectors['container'])) ? 'selectors' : 'heuristic')));
 $pagType = $_GET['pagType'] ?? 'query_page';
 $pagVal = trim($_GET['pagVal'] ?? '');
 
@@ -13850,9 +14000,8 @@ if ($page === 1) send_sse('error', ['message' => 'Failed: ' . $res['error']]);
 break;
 }
 
-$pageProducts = ($selectors && !empty($selectors['container']))
-? parse_with_selectors($res['html'], $res['url'], $selectors)
-: parse_products($res['html'], $res['url']);
+$_streamUsed='';
+$pageProducts = parse_list_by_engine($res['html'], $res['url'], is_array($selectors)?$selectors:[], $streamEngine, $_streamUsed);
 
 $newCount = 0;
 foreach ($pageProducts as $key => $p) {
@@ -13882,7 +14031,8 @@ $nextUrl = null;
 }
 
 if ($page > 1 && $newCount === 0) break;
-usleep(300000);
+$__sp = max(0, min(5000, (int)((loadConnections()['extract_page_pause_ms'] ?? 80))));
+if ($__sp > 0) usleep($__sp * 1000);
 }
 
 if (FETCH_MISSING_IMAGES) {
@@ -14201,6 +14351,10 @@ if (isset($_POST['bsl_catalog_auto']))  $conn['bsl_catalog_auto']  = !empty($_PO
 if (isset($_POST['bsl_catalog_ttl_h'])) $conn['bsl_catalog_ttl_h'] = max(0.25, min(168, (float)$_POST['bsl_catalog_ttl_h']));
 // v8.97: سقف زمانی فاز جزئیات در هر نوبت — جلوی کشته شدن پردازه توسط هاست
 if (isset($_POST['detail_budget_sec'])) $conn['detail_budget_sec'] = max(0, min(3600, (int)$_POST['detail_budget_sec']));
+// v10.181: فهرست هم قابل تنظیم شد؛ 0 = خودکار (روی PHP CLI/Console طولانی‌تر از هاست اشتراکی)
+if (isset($_POST['list_budget_sec'])) $conn['list_budget_sec'] = max(0, min(3600, (int)$_POST['list_budget_sec']));
+// v10.181: مکث legacy بین صفحات از 500ms ثابت به مقدار قابل تنظیم تبدیل شد.
+if (isset($_POST['extract_page_pause_ms'])) $conn['extract_page_pause_ms'] = max(0, min(5000, (int)$_POST['extract_page_pause_ms']));
 // v8.99: مهلت گرفتن صفحه از روی سرور (انتخابگر بصری و انتخابگر جزئیات)
 if (isset($_POST['proxy_timeout_sec'])) $conn['proxy_timeout_sec'] = max(0, min(180, (int)$_POST['proxy_timeout_sec']));
 /* v9.00: راه عبور برای «سایت مبدأ» — جدا از هوش مصنوعی */
@@ -14990,6 +15144,7 @@ return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'پروفایل
 $url=$profile['url']??'';
 $maxPages=max(1,min(100,(int)($profile['pages']??10)));
 $selectors=$profile['selectors']??[];
+$extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
 $pagType=$profile['pagType']??'query_page';
 $pagVal=$profile['pagVal']??'';
 $detailSelectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
@@ -15012,8 +15167,8 @@ writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>'س�
 $releaseResumeReservation();
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'سلکتورِ جزئیات ذخیره نشده'];
 }
-} elseif(empty($selectors)||empty($selectors['container'])){
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>'سلکتورها ذخیره نشده — ابتدا با فرانت‌اند استخراج کنید','total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ سلکتورها ذخیره نشده'],'total_log_count'=>1]);
+} elseif($extractEngine==='selectors' && (empty($selectors)||empty($selectors['container']))){
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>'سلکتورها ذخیره نشده — ابتدا سلکتور بگذارید یا موتور Auto/Heuristic را انتخاب کنید','total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ سلکتورها ذخیره نشده — موتور فعلی به CSS selector نیاز دارد'],'total_log_count'=>1]);
 $releaseResumeReservation();
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'سلکتورها ذخیره نشده'];
 }
@@ -15121,9 +15276,10 @@ $livePrevMap=extractPrevMap($profile);
 $_rsmHint = !empty($profile['_extract_list_incomplete']) || !empty($profile['_extract_resume_req'])
     || in_array((string)$trigger, ['manual_resume','watchdog_resume','auto_resume'], true);
 $__startLine = $_rsmHint ? '⏯ ادامهٔ استخراج بک‌اند…' : '⏳ شروع استخراج بک‌اند...';
+$__startLogs = [$__startLine, '⚙ موتور استخراج: ' . extractionEngineLabel($extractEngine)];
 unset($_rsmHint);
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>[$__startLine],'total_log_count'=>1,'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
-unset($__startLine);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>$__startLogs,'total_log_count'=>count($__startLogs),'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
+unset($__startLine, $__startLogs);
 
 // v8.27: پاسخ زودهنگام فقط برای درخواست مرورگر معنا دارد تا کاربر منتظر
 // نماند و بقیهٔ کار در پس‌زمینه ادامه یابد. وقتی کران‌جاب این تابع را
@@ -15186,9 +15342,12 @@ if($phase!=='detail'){
     $_listBudget=(int)($cnList['list_budget_sec']??0);
     if($_listBudget<=0){
         $_ini=(int)@ini_get('max_execution_time');
-        $_listBudget=$_ini>0?max(45,(int)($_ini*0.65)):120;
+        // v10.181: console/PHP built-in deployments run with max_execution_time=0;
+        // the previous 120s artificial budget made long catalogues pause every few pages.
+        $_listBudget=$_ini>0?max(45,(int)($_ini*0.65)):900;
     }
     $_listBudget=max(40,min(3600,$_listBudget));
+    $_pagePauseMs=max(0,min(5000,(int)($cnList['extract_page_pause_ms']??80)));
     $_listDeadline=time()+$_listBudget;
 }
 /* v9.01: در حالت «فقط جزئیات» صفحهٔ فهرست اصلاً باز نمی‌شود؛ محصولات
@@ -15355,7 +15514,11 @@ continue;
 $_pageFailStreak=0;
 
 
-$pageProducts=parse_with_selectors($res['html'],$res['url'],$selectors);
+$_usedEngine='';
+$pageProducts=parse_list_by_engine($res['html'],$res['url'],$selectors,$extractEngine,$_usedEngine);
+if($_usedEngine!=='' && ($_usedEngine!==$extractEngine || $page===1)){
+    $logs[]='⚙ موتورِ استفاده‌شده: '.extractionEngineLabel($_usedEngine);
+}
 
 /* 🔍 v9.88 — تشخیصِ «مرورگر ۲۰ تا نشان می‌دهد ولی استخراج کم می‌آورد».
    انتخابگرِ بصری سایت را داخل iframe و با جاوااسکریپتِ کامل بارگذاری می‌کند،
@@ -15364,7 +15527,7 @@ $pageProducts=parse_with_selectors($res['html'],$res['url'],$selectors);
    سایت‌های SPA / اسکرول بی‌نهایت / لِیزی‌لود، آن HTML خام یا هیچ کارتی ندارد
    یا فقط چند کارتِ اول را دارد. آن‌وقت سلکتور کاملاً درست است ولی خروجی صفر
    یا ۱ محصول می‌شود — بدون هیچ توضیحی. اینجا اختلاف را صریح گزارش می‌کنیم. */
-if ($page === 1) {
+if ($page === 1 && !empty($selectors['container'])) {
     $_diagN = 0;
     if (!empty($selectors['container'])) {
         [$_dDom, $_dXp] = load_dom($res['html']);
@@ -15492,7 +15655,7 @@ if($page>$_startPage&&$newCount===0){
     extractWriteQueue($queue);
     break;
 }
-usleep(500000);
+if(isset($_pagePauseMs) && $_pagePauseMs>0) usleep($_pagePauseMs*1000);
 }
 
 /* =====================================================================
@@ -26469,15 +26632,15 @@ if (isset($_GET['pag_probe'])) {
         $__tmp = json_decode((string)$_GET['selectors'], true);
         if (is_array($__tmp)) $sel = $__tmp;
     }
-    $pagProbeFetch = function (string $link) use ($sel): array {
+    $probeEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (!empty($sel['container']) ? 'selectors' : 'heuristic')));
+    $pagProbeFetch = function (string $link) use ($sel, $probeEngine): array {
         $r = fetch_html_smart($link, 25);
         $html = (string)($r['html'] ?? '');
         $prods = [];
         $samples = [];
         if (!empty($r['ok']) && $html !== '') {
-            $prods = (!empty($sel['container']))
-                ? parse_with_selectors($html, (string)($r['url'] ?? $link), $sel)
-                : parse_products($html, (string)($r['url'] ?? $link));
+            $_probeUsed = '';
+            $prods = parse_list_by_engine($html, (string)($r['url'] ?? $link), $sel, $probeEngine, $_probeUsed);
             foreach ($prods as $p) {
                 if (count($samples) >= 3) break;
                 $samples[] = mb_substr((string)($p['title'] ?? $p['link'] ?? ''), 0, 60);
@@ -26544,7 +26707,7 @@ if (isset($_GET['pag_probe'])) {
     $rc = renderCfg();
     $out = [
         'ok' => false, 'built_url' => $built2,
-        'page1_products' => $n1, 'render_enabled' => !empty($rc['enabled']),
+        'page1_products' => $n1, 'engine' => $probeEngine, 'render_enabled' => !empty($rc['enabled']),
     ];
     if (empty($r1['ok'])) {
         $out['diagnosis'] = 'حتی صفحهٔ ۱ باز نشد: ' . (string)($r1['error'] ?? ('HTTP ' . (int)($r1['code'] ?? 0)));
@@ -34819,6 +34982,31 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.180', 'ورودیِ 10.180 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "180'") !== false
       && version_compare(APP_VERSION, '10.' . '180', '>='));
+
+    /* ---------- v10.181: موتورهای استخراج PHP-native + سرعت فهرست ---------- */
+    $add('10.181', 'لایهٔ موتور استخراج PHP-native وجود دارد',
+         function_exists('parse_list_by_' . 'engine')
+      && function_exists('normalizeExtraction' . 'Engine')
+      && normalizeExtractionEngine('cheerio') === 'selectors'
+      && normalizeExtractionEngine('heuristic') === 'heuristic');
+    $_t181h = '<div class="grid"><div class="row"><a href="/مشخصات_بوت~id~123"><img alt="بوت دخترانه"></a><span>۱۲۳٬۰۰۰ تومان</span></div><div class="row"><a href="/مشخصات_صندل~id~124"><img alt="صندل مینیمال"></a><span>۲۳۴٬۰۰۰ تومان</span></div></div>';
+    $_t181u = '';
+    $_t181p = function_exists('parse_list_by_' . 'engine') ? parse_list_by_engine($_t181h, 'https://emalls.ir/', [], 'heuristic', $_t181u) : [];
+    $add('10.181', 'موتور heuristic لینک‌های ~id~ ایمالز را کارت محصول می‌بیند',
+         count($_t181p) >= 2 && $_t181u === 'heuristic');
+    unset($_t181h, $_t181u, $_t181p);
+    $add('10.181', 'دو دراپ‌داون موتور استخراج در UI همگام هستند و ذخیره می‌شوند',
+         strpos($selfSrc, 'id="extraction' . 'Engine"') !== false
+      && strpos($selfSrc, 'id="extraction' . 'Engine2"') !== false
+      && strpos($selfSrc, 'function syncExtraction' . 'Engine') !== false
+      && strpos($selfSrc, "array_key_exists('extraction" . "Engine', \$_POST)") !== false);
+    $add('10.181', 'بودجهٔ فهرست و مکث بین صفحات قابل تنظیم و سریع‌تر شده‌اند',
+         strpos($selfSrc, "['list_budget" . "_sec']??0") !== false
+      && strpos($selfSrc, "['extract_page" . "_pause_ms']??80") !== false
+      && strpos($selfSrc, 'max_execution_time=0') !== false);
+    $add('10.181', 'ورودیِ 10.181 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "181'") !== false
+      && version_compare(APP_VERSION, '10.' . '181', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -57946,6 +58134,8 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 </div>
 
 <div class="crow"><label>سقف فاز جزئیات (ثانیه):</label><input type="number" id="detailBudget" value="0" min="0" max="3600" style="max-width:90px" dir="ltr"><span style="font-size:10px;color:#64748b">۰ = خودکار · هر نوبت تا این مدت جزئیات می‌گیرد و بقیه را به نوبت بعد می‌سپارد</span></div>
+<div class="crow"><label>سقف فاز فهرست (ثانیه):</label><input type="number" id="listBudget" value="0" min="0" max="3600" style="max-width:90px" dir="ltr"><span style="font-size:10px;color:#64748b">۰ = خودکار · روی کنسول/PHP CLI تا ۹۰۰ ثانیه، روی هاست محدود بر اساس max_execution_time</span></div>
+<div class="crow"><label>مکث بین صفحات (ms):</label><input type="number" id="extractPagePause" value="80" min="0" max="5000" style="max-width:90px" dir="ltr"><span style="font-size:10px;color:#64748b">۸۰ = سریع · اگر سایت محدود کرد از «فاصلهٔ درخواست‌ها» استفاده کنید</span></div>
 <div class="crow"><label>مهلت بارگذاری صفحه (ثانیه):</label><input type="number" id="proxyTimeout" value="45" min="10" max="180" style="max-width:90px" dir="ltr"><span style="font-size:10px;color:#64748b">برای «🔄 بارگذاری صفحه» در تب سلکتور · اگر تایم‌اوت می‌دهد بالاتر ببرید</span></div>
 
 <div class="cact">
@@ -58764,6 +58954,19 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             <select id="pages" onchange="scheduleSave()" style="max-width:120px"><?php for($i=1;$i<=100;$i++): ?><option value="<?=$i?>"<?=$i==10?'selected':''?>><?=$i?> صفحه</option><?php endfor;?></select>
         </div>
 
+        <div class="row" style="align-items:center;margin-top:6px">
+            <label>موتور استخراج:</label>
+            <select id="extractionEngine" onchange="syncExtractionEngine(this.value,'extractionEngine');scheduleSave()" style="flex:1">
+                <option value="selectors" selected>CSS selectors — حالت فعلی/Legacy (دقیق و سریع وقتی سلکتور درست است)</option>
+                <option value="auto">Auto smart — JSON-LD → ساختاری/Heuristic → سلکتورها</option>
+                <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
+                <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
+            </select>
+        </div>
+        <div style="font-size:10px;color:#64748b;line-height:1.7;margin:-2px 0 6px">
+            موتورهای Playwright/Puppeteer/Network API پروژهٔ Node به بسته‌های Node نیاز دارند؛ در این نسخهٔ PHP، معادل‌های بدون Node فعال‌اند و رندر مرورگر از بخش «🧩 رندر جاوااسکریپت» انجام می‌شود.
+        </div>
+
         <div class="row" style="align-items:center;margin-top:4px">
             <label>صفحه‌بندی:</label>
             <select id="pagType" onchange="updatePagUI();scheduleSave()" style="flex:1">
@@ -59089,6 +59292,15 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
                 <input type="checkbox" id="fullMode" onchange="scheduleSave()"> <b style="color:#fbbf24">⚡ بارگذاری کامل (JS)</b>
             </label>
             <span style="font-size:10px;color:#64748b">برای سایت‌های اسکرولی و React (مثل باسلام)</span>
+        </div>
+        <div class="row" style="align-items:center;margin-bottom:8px">
+            <label style="min-width:92px">موتور استخراج:</label>
+            <select id="extractionEngine2" onchange="syncExtractionEngine(this.value,'extractionEngine2');scheduleSave()" style="flex:1">
+                <option value="selectors" selected>CSS selectors — حالت فعلی/Legacy (دقیق و سریع وقتی سلکتور درست است)</option>
+                <option value="auto">Auto smart — JSON-LD → ساختاری/Heuristic → سلکتورها</option>
+                <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
+                <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
+            </select>
         </div>
         <div class="row">
             <button class="btn btn-orange" onclick="loadVisual()" style="flex:1">🔄 بارگذاری صفحه</button>
@@ -61128,10 +61340,12 @@ function pagProbe(){
         +'&url='+encodeURIComponent(url)
         +'&pagType='+encodeURIComponent($('pagType').value)
         +'&pagVal='+encodeURIComponent($('pagVal').value)
+        +'&extractionEngine='+encodeURIComponent(s4EngineValue())
         +'&selectors='+encodeURIComponent(sel))
     .then(r=>r.json())
     .then(d=>{
         let t=(d.ok?'✓ ':'✗ ')+(d.diagnosis||'');
+        t+='\n— موتور آزمون: '+(d.engine||s4EngineValue());
         t+='\n— نشانیِ ساخته‌شدهٔ صفحهٔ ۲: '+(d.built_url||'—');
         if(d.final_url) t+='\n— نشانیِ نهایی بعد از ریدایرکت: '+d.final_url;
         if(typeof d.new_in_page2!=='undefined') t+='\n— محصول تازه در صفحهٔ ۲: '+d.new_in_page2;
@@ -61194,6 +61408,16 @@ renderProfileDropdown();
  *  و موقع باز شدن دوباره بارگذاری می‌شود.
  * ===================================================================== */
 const LAST_PROFILE_KEY = 'scraper_last_profile_url';
+const EXTRACTION_ENGINE_DEFAULT = 'selectors';
+function s4EngineValue(){
+    return ($('extractionEngine')&&$('extractionEngine').value) || ($('extractionEngine2')&&$('extractionEngine2').value) || EXTRACTION_ENGINE_DEFAULT;
+}
+function syncExtractionEngine(v, src){
+    v = v || EXTRACTION_ENGINE_DEFAULT;
+    const ref=$('extractionEngine')||$('extractionEngine2');
+    if(ref && !Array.from(ref.options).some(o=>o.value===v)) v=EXTRACTION_ENGINE_DEFAULT;
+    ['extractionEngine','extractionEngine2'].forEach(id=>{ const el=$(id); if(el) el.value=v; });
+}
 
 function rememberProfile(url) {
     try { if (url) localStorage.setItem(LAST_PROFILE_KEY, url); } catch (e) {}
@@ -61248,6 +61472,7 @@ function applyProfile(p, keepTab) {
     $('url').value = p.url || '';
     $('profileName').value = p.name || '';
     $('pages').value = p.pages || 10;
+    syncExtractionEngine(p.extractionEngine || EXTRACTION_ENGINE_DEFAULT, 'load');
     $('pagType').value = p.pagType || 'query_page';
     $('pagVal').value = p.pagVal || '';
     $('titleSuffix').value = p.titleSuffix || '';
@@ -61405,6 +61630,7 @@ function collectProfileData() {
         url: $('url').value.trim(),
         name: $('profileName').value.trim(),
         pages: parseInt($('pages').value) || 10,
+        extractionEngine: s4EngineValue(),
         pagType: $('pagType').value,
         pagVal: $('pagVal').value,
         selectors: {...sel},
@@ -64530,7 +64756,7 @@ function start(useSel=false){
   update();
   fxBusy($('status'),true);          // v10.06: نوارِ نورِ «در حال کار»
 
-  let sUrl=`?stream=1&url=${encodeURIComponent(url)}&pages=${$('pages').value}&pagType=${encodeURIComponent($('pagType').value)}&pagVal=${encodeURIComponent($('pagVal').value)}`;
+  let sUrl=`?stream=1&url=${encodeURIComponent(url)}&pages=${$('pages').value}&pagType=${encodeURIComponent($('pagType').value)}&pagVal=${encodeURIComponent($('pagVal').value)}&extractionEngine=${encodeURIComponent(s4EngineValue())}`;
   if(useSel&&sel.container){
     sUrl+='&selectors='+encodeURIComponent(JSON.stringify(sel));
     log('🎯 سلکتور: '+sel.container,'info');
@@ -64854,6 +65080,13 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.181', t:'⚡ موتورهای استخراج PHP-native + اجرای طولانی‌تر و سریع‌تر روی کنسول', items:[
+    'علتِ قطعِ بعد از چند صفحه شفاف شد: وقتی max_execution_time صفر است (PHP CLI/Console)، خودِ برنامه قبلاً برای احتیاط بعد از حدود ۱۲۰ ثانیه فاز فهرست را pause می‌کرد؛ این کرش نبود، محافظِ resume بود. پیش‌فرض کنسول حالا ۹۰۰ ثانیه است و از تنظیمات هم قابل تغییر شد',
+    'مکث ثابت ۵۰۰ms بین صفحات حذف و به تنظیم قابل کنترل «مکث بین صفحات» تبدیل شد؛ پیش‌فرض ۸۰ms است. اگر سایتی بلاک می‌کند، از تنظیم «فاصلهٔ درخواست‌ها» برای همان دامنه استفاده کنید',
+    'دو دراپ‌داون «موتور استخراج» به صفحهٔ شروع و تب سلکتورها اضافه شد و با هم sync می‌مانند: CSS selectors legacy، Auto smart، Structural/heuristic، و JSON-LD',
+    'در این تک‌فایل PHP موتورهای Node-only مثل Playwright/Puppeteer/Crawlee/Network API مستقیم کپی نشده‌اند؛ رندر مرورگر همچنان از سرویس pure-PHP موجود (Playwright/Selenium معادل از طریق CDP/WebDriver) انجام می‌شود',
+    'موتور heuristic برای بازارهای فارسی مثل ایمالز تقویت شد: لینک‌های محصولِ دارای ~id~ را از گرید واقعی پیدا می‌کند تا انتخاب اشتباه نوار ثابتِ بالای صفحه کمتر باعث توقف صفر-محصول شود',
+  ]},
   {v:'10.180', t:'🧹 لاگِ استخراج: دیگر هیچ خطی (مثل «⏳ شروع استخراج بک‌اند…») تکرار نمی‌شود + UI بهتر', items:[
     'علتِ خطوطِ مکرر پیدا شد: رندرِ مرورگر هر ۱/۵ ثانیه کلِ recent_log را دوباره به انتهای جعبه می‌چسباند (الحاقِ کور) — خطِ آغاز که همیشه در دُم می‌ماند ده‌ها بار تکرار می‌شد؛ باگِ نمایشی محض بود، دادهٔ اجرا سالم بود',
     'حالا رندر idempotent است: HTML لاگ فقط وقتی بازنویسی می‌شود که واقعاً فرق کرده باشد؛ اسکرولِ خودکار هم فقط وقتی پایین جعبه هستید اعمال می‌شود تا خواندنِ بالاتر نپرد',
@@ -72823,7 +73056,7 @@ const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enable
 const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
 const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
-if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
+if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();if(b.token&&bslAllCats.length===0){loadBslCats();}
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
 arApplyCfg(cn.autoreply||{});arLoad();
@@ -73259,7 +73492,7 @@ fd.append('ai_net',JSON.stringify(getAiNet()));
 fd.append('baleh',JSON.stringify({enabled:$('balehEnabled')?.checked?1:0,token:$('balehToken')?.value||'',chat_id:$('balehChatId')?.value||''}));
 fd.append('rubika',JSON.stringify({enabled:$('rubikaEnabled')?.checked?1:0,token:$('rubikaToken')?.value||'',chat_id:$('rubikaChatId')?.value||''}));
 fd.append('telegram',JSON.stringify({enabled:$('telegramEnabled')?.checked?1:0,token:$('telegramToken')?.value||'',chat_id:$('telegramChatId')?.value||''}));
-fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
+fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
   web_search:!!($('aiContentAutoWeb')&&$('aiContentAutoWeb').checked),
