@@ -14,7 +14,7 @@ async function runCommand(command,timeout=120000){if(isDangerousCommand(command)
 async function verifyWorkspace(){const results=[];let entries=[];try{entries=await fs.readdir(root,{withFileTypes:true})}catch{};const files=entries.filter(e=>e.isFile()).map(e=>e.name);for(const f of files){if(f.endsWith('.js'))results.push({file:f,...await runCommand('node --check '+JSON.stringify(f),30000)});if(f.endsWith('.py'))results.push({file:f,...await runCommand('python3 -m py_compile '+JSON.stringify(f),30000)});if(f.endsWith('.php'))results.push({file:f,...await runCommand('php -l '+JSON.stringify(f),30000)})}try{const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));if(pkg.scripts?.test)results.push({file:'package.json',...await runCommand('npm test -- --runInBand',120000)})}catch{}return results}
 function providerNormalize(input){if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Provider JSON must be an object');const out={};for(const [id,v] of Object.entries(input)){if(!v||typeof v!=='object'||Array.isArray(v))continue;const models=Array.isArray(v.models)?v.models.map(m=>typeof m==='string'?m:(m&&typeof m==='object'?m:{})):[];out[String(id)]={id:String(v.id||id),name:String(v.name||id),vendor:String(v.vendor||''),url:String(v.url||''),apiKey:String(v.apiKey||''),enabled:Boolean(v.enabled),models,relayUrl:String(v.relayUrl||''),relayToken:String(v.relayToken||''),relayEnabled:Boolean(v.relayEnabled),useGlobalRelay:Boolean(v.useGlobalRelay),proxyUrl:String(v.proxyUrl||''),proxyType:String(v.proxyType||'http')};if(Array.isArray(v.apiKeys))out[String(id)].apiKeys=v.apiKeys.map(x=>String(x));}return out}
 const app=express(); app.use(cors()); app.use((req,_,next)=>{if(req.url==='/chat'||req.url.startsWith('/chat/')){req.url=req.url.slice(5)||'/';}next()}); app.use(express.json({limit:'2mb'})); app.use(securityMiddleware); app.use(express.static(path.join(__dirname,'..','public'))); const send=(r,d)=>r.json(d);
-const APP_VERSION='1.3.0';
+const APP_VERSION='1.4.0';
 app.get('/api/version',async(_,r)=>send(r,{version:APP_VERSION,name:'local-coding-agent',channel:'stable'}));
 app.get('/api/health',async(_,r)=>send(r,{ok:true,node:process.version,version:APP_VERSION}));
 app.get('/api/runtime',async(_,r)=>{const cmds=[['node','--version'],[process.env.PYTHON_BIN||'python3','--version'],['php','-v'],[process.env.LLAMA_BIN||'llama-server','--version']];const o={};for(const[c,a]of cmds){try{const x=await execFileAsync(c,[a],{timeout:5000});o[c]=(x.stdout||x.stderr).trim().split('\\n')[0]}catch{o[c]=null}}send(r,o)});
@@ -68,7 +68,7 @@ app.post('/api/models/download',async(q,r)=>{
   const dest=safePath(modelsRoot,name),tmp=dest+'.part';
   let fh=null;
   try{
-    const x=await fetch(parsed,{redirect:'follow',signal:AbortSignal.timeout(30*60*1000),headers:{'user-agent':'Arena-Coding-Agent/1.3.0'}});
+    const x=await fetch(parsed,{redirect:'follow',signal:AbortSignal.timeout(30*60*1000),headers:{'user-agent':'Arena-Coding-Agent/1.4.0'}});
     if(!x.ok)throw Error('دانلود ناموفق: HTTP '+x.status);
     if(!x.body)throw Error('سرور فایل قابل دریافت ارائه نکرد');
     const declared=Number(x.headers.get('content-length')||0);
@@ -102,6 +102,7 @@ app.post('/api/models/test-all',async(q,r)=>{
     else if(m?.id||m?.name) imported.push({provider:p.name||p.id,id:String(m.id||m.name),name:String(m.name||m.id),url:m.url||p.url,apiKey:m.apiKey||p.apiKey||p.apiKeys?.[0]||'',vendor:m.vendor||p.vendor||p.id});
   }
   const prompt=String(q.body.prompt||'سلام! در یک جمله خودت را معرفی کن.').slice(0,400), context=Math.min(32768,Math.max(512,Number(q.body.context||4096))), maxTokens=Math.min(1024,Math.max(1,Number(q.body.maxTokens||64))), temperature=Math.min(2,Math.max(0,Number(q.body.temperature??0.2))), results=[];
+  const testLocal=async name=>{const started=Date.now(),port=10080+(results.length%1000),modelPath=safePath(modelsRoot,name);let child=null,logs='';try{const llama=process.env.LLAMA_BIN||'llama-server',args=['-m',modelPath,'--host','127.0.0.1','--port',String(port),'-c',String(context)];if(Number(q.body.gpuLayers)>=0)args.push('-ngl',String(Math.floor(Number(q.body.gpuLayers))));child=spawn(llama,args,{cwd:root,stdio:['ignore','pipe','pipe']});child.stderr?.on('data',b=>{logs+=b.toString().slice(-4000)});const deadline=Date.now()+60000;let ready=false;while(Date.now()<deadline){try{const z=await fetch('http://127.0.0.1:'+port+'/v1/models',{signal:AbortSignal.timeout(1500)});if(z.ok){ready=true;break}}catch{}if(child.exitCode!==null)break;await new Promise(x=>setTimeout(x,350))}if(!ready)throw Error(child.exitCode!==null?'llama-server exited before becoming ready':'Model startup timeout');const readyAt=Date.now(),x=await fetch('http://127.0.0.1:'+port+'/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name,messages:[{role:'user',content:prompt}],temperature,max_tokens:maxTokens,stream:false}),signal:AbortSignal.timeout(120000)}),d=await x.json().catch(()=>({}));if(!x.ok)throw Error(d.error?.message||d.message||('HTTP '+x.status));const text=d.choices?.[0]?.message?.content||d.choices?.[0]?.text||d.response||'',usage=d.usage||{},elapsed=Date.now()-readyAt,ct=Number(usage.completion_tokens||0);return{name,source:'local',ok:true,startupMs:readyAt-started,latencyMs:elapsed,response:String(text).slice(0,2000),promptTokens:usage.prompt_tokens??null,completionTokens:ct||null,tokensPerSecond:ct&&elapsed>0?Math.round(ct*1000/elapsed*10)/10}}catch(e){return{name,source:'local',ok:false,error:e.message+(logs?': '+logs.slice(-600):''),startupMs:Date.now()-started,latencyMs:Date.now()-started}}finally{if(child){try{child.kill('SIGTERM')}catch{}}}};
   const testImported=async item=>{
     const started=Date.now();
     try{
@@ -160,6 +161,7 @@ app.post('/api/models/test-all',async(q,r)=>{
       };
     }
   };
+  for(const name of localModels)results.push(await testLocal(name));
   for(const item of imported)results.push(await testImported(item));
   send(r,{ok:true,total:results.length,localTotal:localModels.length,importedTotal:imported.length,results,settings:{context,maxTokens,temperature,prompt}});
 });
