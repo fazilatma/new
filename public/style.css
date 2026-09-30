@@ -12,3 +12,81 @@
 .recommendations{display:flex;flex-direction:column;gap:7px;margin-top:8px}.recommend-card{border:1px solid #263247;border-radius:8px;background:#080d16;padding:9px}.recommend-card.recommended{border-color:#594b91;box-shadow:0 0 18px #6d42d414}.recommend-top{display:flex;justify-content:space-between;gap:7px}.recommend-top b{font-size:9px;color:#cfd8e8}.recommend-top small{display:block;color:#68768c;font-size:7px;margin-top:3px}.recommend-top>span{font-size:7px;color:#58d6a4;white-space:nowrap}.recommend-meta{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:7px 0}.recommend-meta span{padding:5px;border-radius:6px;background:#0d1420;color:#68768c;font-size:7px}.recommend-meta b{display:block;color:#cbd5e5;font-size:8px;margin-top:2px}.recommend-card p{margin:5px 0 8px;color:#78869c;font-size:8px;line-height:1.7}
 @media(max-width:420px){.rec-grid{grid-template-columns:1fr}.model-rec-head{align-items:flex-start;flex-direction:column}.rec-scan{width:100%!important}}
 .app-version{display:inline-block;margin-right:5px;padding:2px 6px;border:1px solid #293449;border-radius:10px;color:#8d99ad;font-size:7px;background:#0d1420}
+
+/* High-zoom/mobile resilience */
+@media (max-width:620px){
+  html{font-size:16px}
+  body{overflow:auto;overflow-x:hidden}
+  .app-shell{min-height:100dvh;height:auto}
+  .topbar{min-height:58px;height:auto;padding:8px 10px;gap:8px;flex-wrap:wrap}
+  .top-left{min-width:0;flex:1}
+  .brand{min-width:0}
+  .brand strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .top-actions{margin-right:auto}
+  .layout{min-height:calc(100dvh - 58px);height:auto;display:block}
+  .center{min-height:calc(100dvh - 58px)}
+  .editor-top{min-height:43px;height:auto;padding:7px 10px;gap:7px;flex-wrap:wrap}
+  .breadcrumbs{min-width:0;max-width:100%;overflow:hidden}
+  .breadcrumbs span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .editor-actions{margin-right:auto;flex-wrap:wrap}
+  .agent-panel{padding:10px}
+  .agent-header{gap:8px;align-items:flex-start}
+  .agent-heading{min-width:0}
+  .agent-heading small{display:block;line-height:1.6}
+  .agent-tools{flex:none}
+  .prompt-row{flex-direction:column}
+  .run-agent{width:100%;min-height:42px}
+  .settings-drawer{padding:12px;overflow:hidden}
+  .settings-head{flex:none}
+  .settings-tabs{flex:none}
+  .settings-section{min-height:0;max-height:none}
+  .settings-section input:not([type=file]),.rec-grid select,.test-prompt{font-size:16px;min-height:42px}
+  .settings-section label{font-size:10px}
+  .primary-setting,.secondary-setting{min-height:42px}
+  .provider-test-head,.model-rec-head{gap:10px}
+  .benchmark-card-head{align-items:flex-start}
+  .benchmark-card-head>div{min-width:0}
+  .benchmark-card-head b{overflow-wrap:anywhere}
+  #editor{font-size:14px;line-height:1.7;padding:16px 14px 38px}
+}
+
+@media (max-width:380px){
+  .topbar{padding-inline:7px}
+  .top-left{gap:7px}
+  .menu-btn{width:34px;height:34px}
+  .brand-mark{width:30px;height:30px}
+  .brand{gap:7px}
+  .brand strong{font-size:12px}
+  .top-actions{gap:5px}
+  .icon-btn{width:30px}
+  .avatar{width:29px;height:29px}
+  .editor-actions{width:100%;justify-content:flex-end}
+  .save{flex:1;min-width:0}
+  .editor-badge{white-space:nowrap}
+  .agent-title{font-size:11px}
+  .agent-tools>span{display:none}
+  .agent-tools input{width:46px;min-height:34px}
+  .settings-drawer{padding:9px}
+  .settings-head b{font-size:14px}
+  .settings-tabs button{min-height:40px;font-size:9px}
+  .provider-test-box,.model-recommender{padding:8px}
+  .benchmark-metrics{grid-template-columns:1fr}
+  .recommend-meta{grid-template-columns:1fr}
+  .benchmark-card pre{max-height:140px}
+}
+
+@media (max-width:320px){
+  .brand strong{max-width:118px}
+  .settings-tabs{grid-template-columns:1fr}
+  .settings-tabs button{width:100%}
+  .settings-head small{max-width:180px}
+  .agent-title em{display:none}
+  .workspace-actions{display:none}
+}
+
+/* Browser zoom can create a narrow visual viewport even on otherwise large phones. */
+@media (min-resolution: 1.5dppx) and (max-width:700px){
+  .topbar,.editor-top,.agent-header{flex-wrap:wrap}
+  .prompt-row{flex-direction:column}
+  .run-agent{width:100%}
+}
