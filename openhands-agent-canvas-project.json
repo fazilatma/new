@@ -11,7 +11,7 @@
   "start_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; exec \"$ACCOUNT_HOME/.local/bin/openhands-host\" run --port \"${PORT:-8810}\" --host 0.0.0.0 --access-host \"${OPENHANDS_ACCESS_HOST:-sabashopping.ir}\" --canvas-version \"${OPENHANDS_CANVAS_VERSION:-latest}\"",
   "env": {
     "ACCOUNT_HOME": "/home/sabashop",
-    "HELPER_URL": "https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/host-helpers/install-openhands-host.sh",
+    "HELPER_URL": "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh",
     "OPENHANDS_ACCESS_HOST": "sabashopping.ir",
     "OPENHANDS_CANVAS_VERSION": "latest",
     "NODE_ENV": "production",
