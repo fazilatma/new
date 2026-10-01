@@ -170,12 +170,164 @@ define('DATA_DIR', wcp_init_data_dir());
 define('JOBS_DIR', DATA_DIR . '/jobs');
 define('CACHE_DIR', DATA_DIR . '/cache');
 define('TERM_DIR', DATA_DIR . '/term');
+define('SHARED_CACHE_DIR', DATA_DIR . '/shared_cache');
 define('MAX_EDIT', 3 * 1024 * 1024);
 define('SPLIT_BYTES', 80 * 1024 * 1024);
-foreach ([JOBS_DIR, CACHE_DIR, TERM_DIR] as $d) if (!is_dir($d)) @mkdir($d, 0777, true);
+foreach ([JOBS_DIR, CACHE_DIR, TERM_DIR, SHARED_CACHE_DIR] as $d) if (!is_dir($d)) @mkdir($d, 0777, true);
 @wcp_put_contents(DATA_DIR . '/.htaccess', "Require all denied\nDeny from all\n");
 @wcp_put_contents(DATA_DIR . '/index.html', '');
 $GLOBALS['__NOEXEC'] = !function_exists('exec');
+
+function shared_cache_dir(): string {
+    $dir = defined('SHARED_CACHE_DIR') ? SHARED_CACHE_DIR : (DATA_DIR . '/shared_cache');
+    if (!is_dir($dir)) @mkdir($dir, 0777, true);
+    foreach (['pip', 'npm', 'composer', 'ms-playwright', 'huggingface', 'torch', 'cargo', 'rustup', 'go-build', 'go-mod', 'uv'] as $sub) {
+        $subDir = $dir . '/' . $sub;
+        if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
+    }
+    return safe_path($dir);
+}
+
+function cache_merge_and_clean(): array {
+    $sharedDir = shared_cache_dir();
+    $freedBytes = 0;
+    $migratedCount = 0;
+    $cleanedFolders = [];
+
+    $mergeCopy = function(string $src, string $dst) use (&$mergeCopy, &$freedBytes, &$migratedCount): void {
+        if (!is_dir($src)) return;
+        if (!is_dir($dst)) @mkdir($dst, 0777, true);
+        $items = @scandir($src) ?: [];
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') continue;
+            $s = $src . '/' . $item;
+            $d = $dst . '/' . $item;
+            if (is_dir($s) && !is_link($s)) {
+                $mergeCopy($s, $d);
+            } elseif (is_file($s)) {
+                $sz = (int)@filesize($s);
+                if (!file_exists($d)) {
+                    if (@rename($s, $d) || @copy($s, $d)) {
+                        $migratedCount++;
+                        $freedBytes += $sz;
+                    }
+                } else {
+                    $freedBytes += $sz;
+                }
+                @unlink($s);
+            }
+        }
+    };
+
+    $removeDir = function(string $dir) use (&$removeDir): void {
+        if (!is_dir($dir) || is_link($dir)) return;
+        $items = @scandir($dir) ?: [];
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') continue;
+            $p = $dir . '/' . $item;
+            if (is_dir($p) && !is_link($p)) {
+                $removeDir($p);
+            } else {
+                @unlink($p);
+            }
+        }
+        @rmdir($dir);
+    };
+
+    // 1. Migrate and clean project runtimes inside DATA_DIR/runtime/*
+    $runtimeBase = DATA_DIR . '/runtime';
+    if (is_dir($runtimeBase)) {
+        foreach (glob($runtimeBase . '/*', GLOB_ONLYDIR) ?: [] as $rtDir) {
+            $rtCache = $rtDir . '/cache';
+            if (is_dir($rtCache) && realpath($rtCache) !== realpath($sharedDir)) {
+                if (is_dir($rtCache . '/pip')) $mergeCopy($rtCache . '/pip', $sharedDir . '/pip');
+                if (is_dir($rtCache . '/npm')) $mergeCopy($rtCache . '/npm', $sharedDir . '/npm');
+                if (is_dir($rtCache . '/composer')) $mergeCopy($rtCache . '/composer', $sharedDir . '/composer');
+                if (is_dir($rtCache . '/ms-playwright')) $mergeCopy($rtCache . '/ms-playwright', $sharedDir . '/ms-playwright');
+                $mergeCopy($rtCache, $sharedDir);
+                $removeDir($rtCache);
+                $cleanedFolders[] = $rtCache;
+            }
+        }
+    }
+
+    // 2. Migrate and clean project deployment paths
+    $projects = function_exists('proj_all') ? proj_all() : [];
+    foreach ($projects as $p) {
+        $deployPath = (string)($p['deploy_path'] ?? '');
+        if ($deployPath === '' || !is_dir($deployPath)) continue;
+
+        foreach (['.cache', '.npm', 'pip-cache', '.pip_cache', 'cache', '.tmp_cache'] as $sub) {
+            $projCache = rtrim($deployPath, '/') . '/' . $sub;
+            if (is_dir($projCache) && !is_link($projCache) && realpath($projCache) !== realpath($sharedDir)) {
+                if (is_dir($projCache . '/pip')) $mergeCopy($projCache . '/pip', $sharedDir . '/pip');
+                if (is_dir($projCache . '/npm')) $mergeCopy($projCache . '/npm', $sharedDir . '/npm');
+                if (is_dir($projCache . '/ms-playwright')) $mergeCopy($projCache . '/ms-playwright', $sharedDir . '/ms-playwright');
+                $mergeCopy($projCache, $sharedDir);
+                $removeDir($projCache);
+                $cleanedFolders[] = $projCache;
+            }
+        }
+    }
+
+    // 3. Clean temporary files in CACHE_DIR
+    foreach (glob(CACHE_DIR . '/svc-run-*.sh') ?: [] as $f) {
+        if (time() - (int)@filemtime($f) > 86400) @unlink($f);
+    }
+    foreach (glob(CACHE_DIR . '/deploy-step-*.sh') ?: [] as $f) {
+        if (time() - (int)@filemtime($f) > 86400) @unlink($f);
+    }
+    foreach (glob(CACHE_DIR . '/wcp-update-*.php') ?: [] as $f) {
+        if (time() - (int)@filemtime($f) > 86400) @unlink($f);
+    }
+    foreach (glob(CACHE_DIR . '/dl-*.zip') ?: [] as $f) {
+        if (time() - (int)@filemtime($f) > 3600) @unlink($f);
+    }
+
+    $formattedFreed = $freedBytes >= 1073741824 ? round($freedBytes / 1073741824, 2) . ' GB' : ($freedBytes >= 1048576 ? round($freedBytes / 1048576, 2) . ' MB' : round($freedBytes / 1024, 2) . ' KB');
+
+    return [
+        'ok' => true,
+        'freed_bytes' => $freedBytes,
+        'freed_human' => $formattedFreed,
+        'migrated_files' => $migratedCount,
+        'cleaned_folders' => $cleanedFolders,
+        'shared_cache' => $sharedDir,
+    ];
+}
+
+function cache_status(): array {
+    $sharedDir = shared_cache_dir();
+    $totalSize = 0;
+    $breakdown = [];
+    foreach (['pip', 'npm', 'composer', 'ms-playwright', 'huggingface', 'torch', 'cargo', 'rustup', 'go-build', 'go-mod', 'uv'] as $sub) {
+        $subDir = $sharedDir . '/' . $sub;
+        $sz = 0;
+        if (is_dir($subDir)) {
+            $iter = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($subDir, FilesystemIterator::SKIP_DOTS));
+            foreach ($iter as $file) {
+                if ($file->isFile()) $sz += $file->getSize();
+            }
+        }
+        $totalSize += $sz;
+        $breakdown[$sub] = $sz >= 1048576 ? round($sz / 1048576, 2) . ' MB' : round($sz / 1024, 2) . ' KB';
+    }
+    $totalHuman = $totalSize >= 1073741824 ? round($totalSize / 1073741824, 2) . ' GB' : ($totalSize >= 1048576 ? round($totalSize / 1048576, 2) . ' MB' : round($totalSize / 1024, 2) . ' KB');
+    return [
+        'enabled' => !empty(cfg()['shared_cache']),
+        'path' => $sharedDir,
+        'total_bytes' => $totalSize,
+        'total_human' => $totalHuman,
+        'breakdown' => $breakdown
+    ];
+}
+
+// Auto-consolidate & clean shared cache on boot/upgrade
+$lastConsolidationVersion = @file_get_contents(DATA_DIR . '/.cache_consolidated_version');
+if ($lastConsolidationVersion !== WCP_VERSION) {
+    @cache_merge_and_clean();
+    @wcp_put_contents(DATA_DIR . '/.cache_consolidated_version', WCP_VERSION, true);
+}
 if (!function_exists('mb_strtolower')) { function mb_strtolower($s) { return strtolower((string)$s); } }
 if (!function_exists('mb_substr')) { function mb_substr($s, $start, $len = null) { return $len === null ? substr((string)$s, $start) : substr((string)$s, $start, $len); } }
 if (!function_exists('mb_check_encoding')) { function mb_check_encoding($s, $enc = 'UTF-8') { return $enc !== 'UTF-8' ? true : preg_match('//u', (string)$s) === 1; } }
@@ -210,7 +362,7 @@ function act_log($m) { $who=PHP_SAPI==='cli'?'cli':($_SESSION['wcp_user']??'anon
 function wcp_random($n=8) { return bin2hex(random_bytes($n)); }
 function cfg(): array {
     if (!empty($GLOBALS['__CFG'])) return $GLOBALS['__CFG'];
-    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page'];
+    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','shared_cache'=>true];
     $j=json_decode((string)@file_get_contents(DATA_DIR.'/config.json'),true); if(is_array($j))$d=array_merge($d,$j); return $GLOBALS['__CFG']=$d;
 }
 function cfg_save(array $new) {
@@ -1184,12 +1336,42 @@ function proj_resolve_deploy_path(array $p, ?array $existing = null): string {
 }
 function proj_runtime_env(array $p): array {
     $base = DATA_DIR . '/runtime/' . gh_slug((string)$p['id']);
+    $useShared = !empty(cfg()['shared_cache']);
+    $sharedDir = shared_cache_dir();
+
     foreach ([$base, $base . '/home', $base . '/cache', $base . '/tmp'] as $dir) {
         if (is_link($dir) || (!is_dir($dir) && !@mkdir($dir, 0700, true)) || !wcp_is_dir_writable($dir)) {
             throw new RuntimeException('Private project runtime directory is not writable: ' . $dir);
         }
     }
-    $defaults = ['XDG_CACHE_HOME' => $base . '/cache', 'npm_config_cache' => $base . '/cache/npm', 'PIP_CACHE_DIR' => $base . '/cache/pip', 'TMPDIR' => $base . '/tmp'];
+
+    $cacheBase = $useShared ? $sharedDir : ($base . '/cache');
+    $pipCache = $useShared ? ($sharedDir . '/pip') : ($base . '/cache/pip');
+    $npmCache = $useShared ? ($sharedDir . '/npm') : ($base . '/cache/npm');
+    $composerCache = $useShared ? ($sharedDir . '/composer') : ($base . '/cache/composer');
+    $playwrightCache = $useShared ? ($sharedDir . '/ms-playwright') : ($base . '/cache/ms-playwright');
+    $hfCache = $useShared ? ($sharedDir . '/huggingface') : ($base . '/cache/huggingface');
+    $torchCache = $useShared ? ($sharedDir . '/torch') : ($base . '/cache/torch');
+    $cargoCache = $useShared ? ($sharedDir . '/cargo') : ($base . '/cache/cargo');
+    $rustupCache = $useShared ? ($sharedDir . '/rustup') : ($base . '/cache/rustup');
+    $uvCache = $useShared ? ($sharedDir . '/uv') : ($base . '/cache/uv');
+
+    $defaults = [
+        'XDG_CACHE_HOME' => $cacheBase,
+        'npm_config_cache' => $npmCache,
+        'NPM_CONFIG_CACHE' => $npmCache,
+        'PIP_CACHE_DIR' => $pipCache,
+        'COMPOSER_CACHE_DIR' => $composerCache,
+        'PLAYWRIGHT_BROWSERS_PATH' => $playwrightCache,
+        'HF_HOME' => $hfCache,
+        'TORCH_HOME' => $torchCache,
+        'CARGO_HOME' => $cargoCache,
+        'RUSTUP_HOME' => $rustupCache,
+        'UV_CACHE_DIR' => $uvCache,
+        'TMPDIR' => $base . '/tmp',
+        'TEMP' => $base . '/tmp',
+        'TMP' => $base . '/tmp',
+    ];
     if (strpos((string)($p['deploy_path'] ?? ''), rtrim(norm_path((string)cfg()['project_root']), '/') . '/') === 0) $defaults['HOME'] = $base . '/home';
     $port = !empty($p['port']) ? (string)$p['port'] : '8000';
     $defaults['PORT'] = $port;
@@ -1515,6 +1697,7 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
         'time' => date('c'),
         'by' => 'webconsole'
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    @cache_merge_and_clean();
     return $p;
 }
 function proj_service_job(array $p): ?array {
@@ -2427,9 +2610,14 @@ function handle_api() {
         ]);
 
     case 'settings.get':
-        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','noexec'=>$GLOBALS['__NOEXEC']]);
+        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','noexec'=>$GLOBALS['__NOEXEC'],'shared_cache'=>$c['shared_cache']??true]);
     case 'settings.save':
-        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}cfg_save($new);jout(true);
+        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}if(isset($in['shared_cache'])){$new['shared_cache']=!empty($in['shared_cache']);}cfg_save($new);jout(true);
+    case 'cache.status':
+        jout(true, cache_status());
+    case 'cache.consolidate':
+    case 'cache.clean':
+        jout(true, cache_merge_and_clean());
     case 'proxy.test':
         $testUrl = trim((string)($in['target_url'] ?? 'https://api.github.com/zen'));
         if ($testUrl === '') $testUrl = 'https://api.github.com/zen';
@@ -5901,7 +6089,31 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
     <button class="btn sm pri" onclick="copyText($('#wcp-proxy-live-url').value, 'آدرس اندپوینت پروکسی کپی شد')">📋 کپی اندپوینت</button>
   </div>
 </div>
-<label class="lb">حالت اتصال پروکسی (Proxy Mode)</label><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="direct" ${s.proxy_mode==='direct'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🌐 مستقیم (Direct)</div><div class="hint" style="font-size:12px;margin:0">اتصال بدون پروکسی (برای سرورهای خارج از کشور یا اینترنت بدون فیلتر و تحریم)</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="auto" ${s.proxy_mode==='auto'||!s.proxy_mode?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">⚡ خودکار و هوشمند (Auto / Smart Fallback) — پیشنهادی</div><div class="hint" style="font-size:12px;margin:0">تلاش اتصال مستقیم؛ در صورت خطا، مسدودی، تحریم یا HTTP 403 به طور خودکار از ورکر کلودفلر عبور می‌کند</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="cf_proxy" ${s.proxy_mode==='cf_proxy'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🛡️ پروکسی کلودفلر (Cloudflare Worker Proxy)</div><div class="hint" style="font-size:12px;margin:0">هدایت اجباری تمامی درخواست‌های مخازن، دیپلوی، دانلودها و ارتباطات خارجی از طریق ورکر کلودفلر</div></div></label></div><label class="lb">آدرس ورکر پروکسی کلودفلر (Worker Proxy URL)</label><input class="inp ltr" id="st_proxy_cf_url" placeholder="https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page" value="${esc(s.proxy_cf_url||'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page')}"><p class="hint">می‌توانید ورکر پیش‌فرض را استفاده کنید یا آدرس Cloudflare Worker اختصاصی خودتان را وارد فرمایید.</p><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="st_proxy_save_btn">💾 ذخیره تنظیمات پروکسی</button><button class="btn" id="st_proxy_test_btn">🔍 تست اتصال و سلامت پروکسی</button></div><div id="proxy-test-box" style="margin-top:10px;display:none"></div></div><div class="card">
+<label class="lb">حالت اتصال پروکسی (Proxy Mode)</label><div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="direct" ${s.proxy_mode==='direct'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🌐 مستقیم (Direct)</div><div class="hint" style="font-size:12px;margin:0">اتصال بدون پروکسی (برای سرورهای خارج از کشور یا اینترنت بدون فیلتر و تحریم)</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="auto" ${s.proxy_mode==='auto'||!s.proxy_mode?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">⚡ خودکار و هوشمند (Auto / Smart Fallback) — پیشنهادی</div><div class="hint" style="font-size:12px;margin:0">تلاش اتصال مستقیم؛ در صورت خطا، مسدودی، تحریم یا HTTP 403 به طور خودکار از ورکر کلودفلر عبور می‌کند</div></div></label><label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--panel2)"><input type="radio" name="st_proxy_mode" value="cf_proxy" ${s.proxy_mode==='cf_proxy'?'checked':''} style="margin-top:3px"><div><div style="font-weight:700">🛡️ پروکسی کلودفلر (Cloudflare Worker Proxy)</div><div class="hint" style="font-size:12px;margin:0">هدایت اجباری تمامی درخواست‌های مخازن، دیپلوی، دانلودها و ارتباطات خارجی از طریق ورکر کلودفلر</div></div></label></div><label class="lb">آدرس ورکر پروکسی کلودفلر (Worker Proxy URL)</label><input class="inp ltr" id="st_proxy_cf_url" placeholder="https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page" value="${esc(s.proxy_cf_url||'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page')}"><p class="hint">می‌توانید ورکر پیش‌فرض را استفاده کنید یا آدرس Cloudflare Worker اختصاصی خودتان را وارد فرمایید.</p><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="st_proxy_save_btn">💾 ذخیره تنظیمات پروکسی</button><button class="btn" id="st_proxy_test_btn">🔍 تست اتصال و سلامت پروکسی</button></div><div id="proxy-test-box" style="margin-top:10px;display:none"></div></div><div class="card" style="border-right: 3px solid var(--acc)">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <h3 style="margin:0">📦 کش مشترک و بهینه‌سازی دیسک (Shared Global Cache)</h3>
+      <p class="hint" style="margin:4px 0">یکپارچه‌سازی کش پکیج‌ها (Pip / Npm / Composer / Playwright) در یک پوشه مشترک جهت جلوگیری از دانلود تکراری و پرشدن سریع دیسک.</p>
+    </div>
+    <span class="tag ok" id="cache-status-tag">${s.shared_cache !== false ? '✓ کش اشتراکی فعال' : 'کش مجزا'}</span>
+  </div>
+
+  <div style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0">
+    <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+      <input type="checkbox" id="st_shared_cache" ${s.shared_cache !== false ? 'checked' : ''} style="margin-top:3px">
+      <div>
+        <div style="font-weight:700">✅ فعال‌سازی کش مشترک برای تمام پروژه‌ها (.cache / pip / npm / composer) — پیش‌فرض فعال</div>
+        <div class="hint" style="font-size:12px;margin:2px 0">تمامی پروژه‌ها از یک کش مرکزی استفاده می‌کنند و پکیج‌های نصب‌شده مجدداً دانلود نمی‌شوند.</div>
+      </div>
+    </label>
+  </div>
+
+  <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap">
+    <button class="btn sm pri" id="cache_save_btn">💾 ذخیره تنظیمات کش</button>
+    <button class="btn sm ok" id="cache_consolidate_btn">🧹 ادغام کش و پاکسازی فضای پروژه‌ها (Consolidate & Clean)</button>
+  </div>
+  <div id="cache-clean-status" style="margin-top:10px;display:none"></div>
+</div><div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <div>
       <h3 style="margin:0">📦 درون‌ریزی و برون‌بری تنظیمات (Import / Export)</h3>
@@ -5947,6 +6159,8 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
       toast(e.message,'err');
     }
   };
+  $('#cache_save_btn').onclick=async()=>{try{const shared=$('#st_shared_cache').checked;await api('settings.save',{shared_cache:shared});$('#cache-status-tag').textContent=shared?'✓ کش اشتراکی فعال':'کش مجزا';toast('تنظیمات کش مشترک ذخیره شد','ok')}catch(e){toast(e.message,'err')}};
+  $('#cache_consolidate_btn').onclick=async()=>{const box=$('#cache-clean-status');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال اسکن، ادغام کش‌ها و آزادسازی فضای دیسک...</div>';try{const res=await api('cache.consolidate');box.innerHTML=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--ok);color:var(--ok)"><b>✅ ادغام کش با موفقیت انجام شد!</b><br><span style="font-size:12px;color:var(--text)">حجم آزاد شده: <b>${esc(res.freed_human||'0 B')}</b> (${res.migrated_files||0} فایل به کش مشترک منتقل شد).</span></div>`;toast(`ادغام کش انجام شد (${res.freed_human||'0 B'} آزاد شد)`,'ok')}catch(e){box.innerHTML=`<div class="hint" style="color:var(--err)">خطا در ادغام کش: ${esc(e.message)}</div>`;toast(e.message,'err')}};
   $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
 const ARENA_AGENT_PHP_PRESET={"name":"Arena Coding Agent PHP","type":"php","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0ed4c-new","subfolder":"agent-php","deploy_path":"","port":"8099","install_cmd":"mkdir -p data storage storage/workspaces storage/localai/models; chmod -R 775 data storage 2>/dev/null; \"${PHP_BIN:-php}\" -v && \"${PHP_BIN:-php}\" bin/console.php migrate && (\"${PHP_BIN:-php}\" bin/console.php doctor || true)","build_cmd":"","start_cmd":"\"${PHP_BIN:-php}\" bin/console.php migrate; (\"${PHP_BIN:-php}\" bin/console.php ai:serve >> storage/localai-boot.log 2>&1 || true); (\"${PHP_BIN:-php}\" bin/worker.php --interval 2 >> storage/worker.log 2>&1 &); exec \"${PHP_BIN:-php}\" -S \"${HOST:-0.0.0.0}:${PORT:-8099}\" -t public public/index.php","auto_start":false,"is_daemon":true,"auto_update":true,"auto_update_interval":60,"env":{"PHP_BIN":"php","PHP_CLI_SERVER_WORKERS":"8","AGENT_TZ":"Asia/Tehran","AGENT_MEMORY_LIMIT":"512M","AUTH_ENABLED":"false","CORS_ORIGINS":"*","REQUIRE_FILE_APPROVAL":"false","MAX_CONCURRENT_JOBS":"3","RATE_LIMIT_PER_MINUTE":"200","AGENT_WORKER_AUTOSPAWN":"true","AGENT_LOCALAI_DIR":"storage/localai","OLLAMA_MODELS":"storage/localai/models","AGENT_LOCALAI_HOST":"http://127.0.0.1:11434","OLLAMA_BASE_URL":"http://127.0.0.1:11434","OLLAMA_KEEP_ALIVE":"10m","OLLAMA_MAX_LOADED_MODELS":"1","OLLAMA_NUM_PARALLEL":"1","OLLAMA_FLASH_ATTENTION":"1","OLLAMA_KV_CACHE_TYPE":"q8_0","AGENT_PROXY_ENABLED":"false","AGENT_PROXY_URL":"https://proxy.fazilat-ma.workers.dev/?url={url}","OPENROUTER_API_KEY":"","GEMINI_API_KEY":"","GITHUB_TOKEN":"","GIT_AUTHOR_NAME":"Arena Agent","GIT_AUTHOR_EMAIL":"agent@localhost"}};
 const ARENA_AGENT_PYTHON_PRESET={"name":"Arena Python Agent2","type":"python","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0ed4c-new","subfolder":"agent-python","deploy_path":"","port":"8788","install_cmd":"find_python() { for cand in /usr/local/bin/python3.11 /usr/local/bin/python3.10 /opt/alt/python311/bin/python3 /opt/alt/python310/bin/python3 /opt/cpanel/ea-python311/root/usr/bin/python3 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3.9 python3.11 python3.10 python3.9 python3; do if command -v \"$cand\" >/dev/null 2>&1; then command -v \"$cand\"; return 0; elif [ -x \"$cand\" ]; then echo \"$cand\"; return 0; fi; done; echo \"python3\"; }; PYBIN=$(find_python); echo \"[deploy] Using Python: $PYBIN\"; if [ ! -d \".venv\" ]; then ($PYBIN -m venv .venv 2>/dev/null || $PYBIN -m venv --without-pip .venv); fi; if [ ! -f \".venv/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | .venv/bin/python3 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | .venv/bin/python3 2>/dev/null || true); fi; .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt","build_cmd":"","start_cmd":".venv/bin/python3 main.py","auto_start":false,"is_daemon":true,"auto_update":true,"auto_update_interval":60,"env":{"PORT":"8788","HOST":"0.0.0.0","ENVIRONMENT":"production","APP_VERSION":"2.1.0"}};

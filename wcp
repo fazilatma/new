@@ -21,7 +21,8 @@ CLR_GRAY="\033[0;90m"
 
 # Find WebConsole Data Directory
 find_wcp_data_dir() {
-    for d in /var/www/html/.wconsole_data \
+    for d in "$PWD/.wconsole_data" \
+             /var/www/html/.wconsole_data \
              /workspaces/*/.wconsole_data \
              /workspaces/.wconsole_data \
              /var/www/.wconsole_data \
@@ -31,7 +32,13 @@ find_wcp_data_dir() {
             return
         fi
     done
-    echo "/var/www/html/.wconsole_data"
+    if [ -w "/var/www/html" ]; then
+        echo "/var/www/html/.wconsole_data"
+    elif [ -w "$PWD" ]; then
+        echo "$PWD/.wconsole_data"
+    else
+        echo "${HOME}/.wconsole_data"
+    fi
 }
 
 WCP_DATA_DIR=$(find_wcp_data_dir)
@@ -167,6 +174,7 @@ cmd_table() {
     echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp ports${CLR_RESET}            ${CLR_GRAY}│${CLR_RESET} List all active listening TCP ports, sockets & PIDs    ${CLR_GRAY}│${CLR_RESET}"
     echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp killport <port>${CLR_RESET}  ${CLR_GRAY}│${CLR_RESET} Forcefully free and kill process listening on a port   ${CLR_GRAY}│${CLR_RESET}"
     echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp swap [size_mb]${CLR_RESET}   ${CLR_GRAY}│${CLR_RESET} View or dynamically resize virtual Swap memory (MB)    ${CLR_GRAY}│${CLR_RESET}"
+    echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp cache [clean]${CLR_RESET}    ${CLR_GRAY}│${CLR_RESET} Manage/clean centralized shared package cache (MB/GB)  ${CLR_GRAY}│${CLR_RESET}"
     echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp pass [password]${CLR_RESET}  ${CLR_GRAY}│${CLR_RESET} Set or reset WebConsole master administrator password  ${CLR_GRAY}│${CLR_RESET}"
     echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp update${CLR_RESET}           ${CLR_GRAY}│${CLR_RESET} 1-click self-update to latest WebConsole release       ${CLR_GRAY}│${CLR_RESET}"
     echo -e "${CLR_GRAY}│${CLR_RESET} ${CLR_GREEN}wcp doctor${CLR_RESET}           ${CLR_GRAY}│${CLR_RESET} Run system health diagnostics for Apache, PHP, Python  ${CLR_GRAY}│${CLR_RESET}"
@@ -657,6 +665,104 @@ cmd_swap() {
     echo -e "${CLR_GREEN}✓ Swap memory resized to ${sz}MB and activated.${CLR_RESET}"
 }
 
+cmd_cache() {
+    banner
+    local action="${1:-status}"
+    echo -e "${CLR_BOLD}📦 Shared Global Cache Manager:${CLR_RESET}"
+    echo "--------------------------------------------------------------------------------"
+    python3 -c "
+import os, sys, shutil
+
+data_dir = '$WCP_DATA_DIR'
+shared_dir = os.path.join(data_dir, 'shared_cache')
+action = '$action'.strip().lower()
+
+subdirs = ['pip', 'npm', 'composer', 'ms-playwright', 'huggingface', 'torch', 'cargo', 'rustup', 'go-build', 'go-mod', 'uv']
+
+for sub in subdirs:
+    p = os.path.join(shared_dir, sub)
+    try: os.makedirs(p, exist_ok=True)
+    except: pass
+
+def fmt_size(sz):
+    if sz >= 1073741824: return f'{sz/1073741824:.2f} GB'
+    if sz >= 1048576: return f'{sz/1048576:.2f} MB'
+    if sz >= 1024: return f'{sz/1024:.2f} KB'
+    return f'{sz} B'
+
+def get_dir_size(d):
+    total = 0
+    if not os.path.isdir(d): return 0
+    for root, dirs, files in os.walk(d):
+        for f in files:
+            fp = os.path.join(root, f)
+            if not os.path.islink(fp):
+                try: total += os.path.getsize(fp)
+                except: pass
+    return total
+
+if action in ['clean', 'consolidate', 'merge']:
+    freed = 0
+    migrated = 0
+    # Clean runtime cache
+    rt_base = os.path.join(data_dir, 'runtime')
+    if os.path.isdir(rt_base):
+        for rt in os.listdir(rt_base):
+            c_dir = os.path.join(rt_base, rt, 'cache')
+            if os.path.isdir(c_dir) and os.path.abspath(c_dir) != os.path.abspath(shared_dir):
+                for sub in ['pip', 'npm', 'composer', 'ms-playwright']:
+                    src = os.path.join(c_dir, sub)
+                    dst = os.path.join(shared_dir, sub)
+                    if os.path.isdir(src):
+                        for r, ds, fs in os.walk(src):
+                            for f in fs:
+                                sf = os.path.join(r, f)
+                                rf = os.path.relpath(sf, src)
+                                df = os.path.join(dst, rf)
+                                os.makedirs(os.path.dirname(df), exist_ok=True)
+                                sz = os.path.getsize(sf) if os.path.exists(sf) else 0
+                                if not os.path.exists(df):
+                                    try:
+                                        shutil.move(sf, df)
+                                        migrated += 1
+                                        freed += sz
+                                    except: pass
+                                else:
+                                    try:
+                                        os.remove(sf)
+                                        freed += sz
+                                    except: pass
+                try: shutil.rmtree(c_dir, ignore_errors=True)
+                except: pass
+
+    # Clean tmp script cache
+    cache_base = os.path.join(data_dir, 'cache')
+    if os.path.isdir(cache_base):
+        for f in os.listdir(cache_base):
+            if f.startswith('deploy-step-') or f.startswith('svc-run-') or f.startswith('wcp-update-'):
+                fp = os.path.join(cache_base, f)
+                try:
+                    freed += os.path.getsize(fp)
+                    os.remove(fp)
+                except: pass
+
+    print(f'\033[1;32m✓ Cache consolidation and cleanup complete!\033[0m')
+    print(f'  • Freed disk space: \033[1;36m{fmt_size(freed)}\033[0m')
+    print(f'  • Migrated files:   \033[1;36m{migrated}\033[0m')
+    print(f'  • Central location: \033[1;33m{shared_dir}\033[0m\n')
+
+total_shared = get_dir_size(shared_dir)
+print(f'  • \033[1mShared Cache Directory:\033[0m {shared_dir}')
+print(f'  • \033[1mTotal Shared Storage:\033[0m   \033[1;32m{fmt_size(total_shared)}\033[0m\n')
+print('  \033[1mBreakdown by Package Manager:\033[0m')
+for sub in subdirs:
+    sub_path = os.path.join(shared_dir, sub)
+    sz = get_dir_size(sub_path)
+    print(f'    - {sub:<15} {fmt_size(sz)}')
+print('')
+"
+}
+
 cmd_pass() {
     local new_pass="${1:-}"
     if [ -z "$new_pass" ]; then
@@ -800,6 +906,9 @@ case "${1:-}" in
         ;;
     swap)
         cmd_swap "${2:-}"
+        ;;
+    cache|shared-cache|clean)
+        cmd_cache "${2:-}"
         ;;
     pass|password)
         cmd_pass "${2:-}"
