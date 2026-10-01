@@ -21,6 +21,7 @@ The accepted archive is stored in `../runtime/` because release-asset upload is 
 
 - an existing Provider Connection is rotated with `PATCH`;
 - every existing Profile for that provider and every imported Profile is linked;
+- a bare `codestral-2508` Profile becomes `mistral/codestral-2508` and receives its model-level endpoint without overwrite;
 - a Profile from another provider remains untouched;
 - Profile writes use `include_secrets=false` and never contain inline `api_key`;
 - snapshot, safe export, manager stdout, and manager stderr do not contain the sentinel key;

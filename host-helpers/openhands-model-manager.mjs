@@ -323,6 +323,43 @@ function collectProviderDocuments(document) {
   return found;
 }
 
+const ENDPOINT_FIELDS = ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "apiUrl", "api_url", "apiEndpoint", "api_endpoint", "endpoint", "endpointUrl", "endpointURL", "endpoint_url", "url"];
+const PROVIDER_ALIASES = Object.freeze({
+  "mistral-ai": "mistral", mistralai: "mistral",
+  "x-ai": "xai", google: "gemini", googleai: "gemini",
+  "open-router": "openrouter", openrouterai: "openrouter",
+  "open-ai": "openai", "openai-compatible": "openai", openaicompatible: "openai",
+});
+const LITELLM_PROVIDERS = new Set([
+  "anthropic", "azure", "bedrock", "cerebras", "cohere", "deepinfra", "fireworks_ai", "gemini",
+  "github", "groq", "huggingface", "mistral", "ollama", "openai", "openrouter", "perplexity",
+  "replicate", "sambanova", "together_ai", "vertex_ai", "vllm", "watsonx", "xai",
+]);
+
+function endpointFrom(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return "";
+  const nested = source.connection || source.credentials || source.config || source.settings || {};
+  return firstString(source, ENDPOINT_FIELDS) || firstString(nested, ENDPOINT_FIELDS);
+}
+
+function normalizeImportedProvider(value, baseUrl = "") {
+  let provider = slug(value, "");
+  provider = PROVIDER_ALIASES[provider] || provider;
+  const endpoint = String(baseUrl || "").toLowerCase();
+  if (/openrouter\.ai/.test(endpoint)) return "openrouter";
+  if (/api\.mistral\.ai/.test(endpoint)) return "mistral";
+  if (/api\.anthropic\.com/.test(endpoint)) return "anthropic";
+  if (/api\.openai\.com/.test(endpoint)) return "openai";
+  if (/api\.groq\.com/.test(endpoint)) return "groq";
+  if (/api\.x\.ai/.test(endpoint)) return "xai";
+  if (/generativelanguage\.googleapis\.com/.test(endpoint)) return "gemini";
+  if (LITELLM_PROVIDERS.has(provider)) return provider;
+  // An explicit custom endpoint is treated as OpenAI-compatible. This gives
+  // LiteLLM the required provider prefix while retaining the exact endpoint.
+  if (endpoint) return "openai";
+  return provider || "openai";
+}
+
 function providerInfo(candidate) {
   const source = candidate.source || {};
   const sample = candidate.models.find((item) => item && typeof item === "object" && !Array.isArray(item)) || {};
@@ -330,15 +367,14 @@ function providerInfo(candidate) {
   const explicitProvider = firstString(source, ["provider", "providerName", "provider_name", "providerId", "provider_id", "type", "vendor", "id", "slug"])
     || firstString(sample, ["provider", "providerName", "provider_name", "providerId", "provider_id", "type", "vendor"]);
   const parentProvider = GENERIC_PARENT_NAMES.has(String(candidate.parentName || "").toLowerCase()) ? "" : candidate.parentName;
-  let baseUrl = firstString(source, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "apiUrl", "api_url", "endpoint", "url"])
-    || firstString(nested, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "endpoint"])
-    || firstString(sample, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "endpoint"]);
+  const providerBaseUrl = firstString(source, ENDPOINT_FIELDS) || firstString(nested, ENDPOINT_FIELDS);
+  let baseUrl = providerBaseUrl || endpointFrom(sample);
   let providerHint = explicitProvider || parentProvider || "";
   if (!providerHint && /openrouter\.ai/i.test(baseUrl)) providerHint = "openrouter";
   if (!providerHint && candidate.models.some((item) => /^openrouter\//i.test(modelInfo(item).id))) providerHint = "openrouter";
   const displayName = firstString(source, ["name", "displayName", "display_name", "label", "providerName", "provider_name"])
     || providerHint || candidate.parentName || "Imported Provider";
-  const provider = slug(providerHint || displayName, "custom");
+  const provider = normalizeImportedProvider(providerHint || displayName, baseUrl);
   if (!baseUrl && provider === "openrouter") baseUrl = "https://openrouter.ai/api/v1";
   let apiKey = firstString(source, ["apiKey", "api_key", "key", "token", "secret"])
     || firstString(nested, ["apiKey", "api_key", "key", "token", "secret"])
@@ -347,7 +383,7 @@ function providerInfo(candidate) {
   if (!apiKey && Array.isArray(apiKeys) && apiKeys.length) {
     apiKey = typeof apiKeys[0] === "string" ? apiKeys[0] : firstString(apiKeys[0], ["apiKey", "api_key", "key", "token", "value"]);
   }
-  return { displayName, provider, baseUrl, apiKey };
+  return { displayName, provider, providerBaseUrl, baseUrl, apiKey };
 }
 
 function comparableBaseUrl(value) {
@@ -381,14 +417,15 @@ function profileBelongsToImportedProvider(config, info) {
 function canonicalModel(provider, id) {
   let model = String(id || "").trim();
   if (!model) return "";
-  if (provider === "openrouter" || provider.includes("openrouter")) {
+  const prefix = normalizeImportedProvider(provider);
+  if (prefix === "openrouter") {
     if (!model.startsWith("openrouter/")) model = `openrouter/${model}`;
     return model;
   }
   if (model.includes("/")) return model;
-  const prefixes = { xai: "xai", "x-ai": "xai", groq: "groq", cerebras: "cerebras", cohere: "cohere", openai: "openai", anthropic: "anthropic", gemini: "gemini" };
-  const prefix = prefixes[provider];
-  return prefix ? `${prefix}/${model}` : model;
+  // LiteLLM requires every model to identify its provider. Never persist a
+  // bare model ID such as codestral-2508.
+  return `${prefix}/${model}`;
 }
 
 function numericField(source, names) {
@@ -402,8 +439,12 @@ function numericField(source, names) {
 function routeForBase(provider, displayName, baseUrl, mode) {
   const parsed = new URL(baseUrl);
   if (parsed.protocol !== "https:") throw new Error(`Provider ${displayName} must use an HTTPS base URL`);
-  const routeId = slug(provider, "provider");
   const config = loadConfig();
+  const preferredRouteId = slug(provider, "provider");
+  const preferredRoute = config.routes[preferredRouteId];
+  const routeId = preferredRoute && comparableBaseUrl(preferredRoute.targetBaseUrl) !== comparableBaseUrl(parsed.origin)
+    ? slug(`${preferredRouteId}-${crypto.createHash("sha256").update(parsed.origin).digest("hex").slice(0, 8)}`, "provider")
+    : preferredRouteId;
   config.routes[routeId] = {
     id: routeId,
     name: displayName,
@@ -444,6 +485,8 @@ async function importProviders(body) {
     profilesExisting: 0,
     profilesLinked: 0,
     profilesUpdated: 0,
+    modelsNormalized: 0,
+    endpointsAttached: 0,
     contextWindowsAdjusted: 0,
     skipped: 0,
     profileNames: [],
@@ -515,7 +558,6 @@ async function importProviders(body) {
           ...config,
           api_key: undefined,
           provider_connection_id: connectionId,
-          ...(effectiveBase ? { base_url: effectiveBase } : {}),
           ...(shortContext ? { max_input_tokens: MIN_CONTEXT_WINDOW } : {}),
         };
         await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
@@ -530,8 +572,17 @@ async function importProviders(body) {
 
     for (const rawModel of candidate.models) {
       const model = modelInfo(rawModel);
-      const modelId = canonicalModel(info.provider, model.id);
+      const modelEndpoint = endpointFrom(model.source) || info.providerBaseUrl || info.baseUrl;
+      const modelProviderHint = firstString(model.source, ["provider", "providerName", "provider_name", "providerId", "provider_id", "type", "vendor"]);
+      const modelProvider = normalizeImportedProvider(modelProviderHint || info.provider, modelEndpoint);
+      const modelId = canonicalModel(modelProvider, model.id);
       if (!modelId) { summary.skipped += 1; continue; }
+      let modelEffectiveBase = modelEndpoint;
+      if (modelEndpoint && comparableBaseUrl(modelEndpoint) === comparableBaseUrl(info.baseUrl)) {
+        modelEffectiveBase = effectiveBase;
+      } else if (modelEndpoint && !/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(modelEndpoint)) {
+        modelEffectiveBase = routeForBase(modelProvider, `${info.displayName}: ${model.name || model.id}`, modelEndpoint, mode).adapterBaseUrl;
+      }
       const requestedProfileName = firstString(model.source, ["profileName", "profile_name"]);
       const preferredName = slug(requestedProfileName || `${info.provider}-${model.name || model.id}`, "imported-model").slice(0, 64);
       const profileName = existing.has(preferredName) || requestedProfileName
@@ -544,7 +595,8 @@ async function importProviders(body) {
         const detail = await getProfileDetail(profileName);
         existingConfig = detail.config || {};
         if (!overwrite) {
-          if (existingConfig.model !== modelId) {
+          const normalizeBareModel = existingConfig.model === model.id && modelId.endsWith(`/${model.id}`);
+          if (existingConfig.model !== modelId && !normalizeBareModel) {
             summary.warnings.push(`Name conflict skipped without overwrite: ${profileName}`);
             summary.skipped += 1;
             continue;
@@ -557,13 +609,15 @@ async function importProviders(body) {
           const shortContext = Number(existingConfig.max_input_tokens || 0) > 0
             && Number(existingConfig.max_input_tokens) < MIN_CONTEXT_WINDOW;
           const linkProviderConnection = Boolean(connectionId && existingConfig.provider_connection_id !== connectionId);
+          const attachEndpoint = Boolean(modelEffectiveBase && comparableBaseUrl(existingConfig.base_url) !== comparableBaseUrl(modelEffectiveBase));
           const canRewriteWithoutSecretLoss = !detail.api_key_set || Boolean(existingConfig.provider_connection_id) || linkProviderConnection;
-          if ((shortContext || linkProviderConnection) && canRewriteWithoutSecretLoss) {
+          if ((shortContext || linkProviderConnection || attachEndpoint || normalizeBareModel) && canRewriteWithoutSecretLoss) {
             const llm = {
               ...existingConfig,
               api_key: undefined,
+              ...(normalizeBareModel ? { model: modelId } : {}),
               ...(shortContext ? { max_input_tokens: MIN_CONTEXT_WINDOW } : {}),
-              ...(linkProviderConnection && effectiveBase ? { base_url: effectiveBase } : {}),
+              ...(attachEndpoint ? { base_url: modelEffectiveBase } : {}),
               ...(linkProviderConnection ? { provider_connection_id: connectionId } : {}),
             };
             await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
@@ -573,6 +627,8 @@ async function importProviders(body) {
             profileDetails.set(profileName, { ...detail, config: llm, api_key_set: Boolean(linkProviderConnection || detail.api_key_set) });
             if (shortContext) summary.contextWindowsAdjusted += 1;
             if (linkProviderConnection) summary.profilesLinked += 1;
+            if (normalizeBareModel) summary.modelsNormalized += 1;
+            if (attachEndpoint) summary.endpointsAttached += 1;
           }
           if (!connectionId && !detail.api_key_set) {
             summary.warnings.push(`Profile ${profileName} has no API key in the imported document or encrypted Provider Connection.`);
@@ -601,7 +657,7 @@ async function importProviders(body) {
         ...existingConfig,
         api_key: undefined,
         model: modelId,
-        ...(effectiveBase ? { base_url: effectiveBase } : {}),
+        ...(modelEffectiveBase ? { base_url: modelEffectiveBase } : {}),
         ...(connectionId ? { provider_connection_id: connectionId } : {}),
         max_input_tokens: maxInput,
         ...(maxOutput ? { max_output_tokens: maxOutput } : {}),
@@ -617,6 +673,7 @@ async function importProviders(body) {
       summary.profileNames.push(profileName);
       if (replacing) summary.profilesUpdated += 1;
       else summary.profilesCreated += 1;
+      if (modelEffectiveBase && (!replacing || comparableBaseUrl(existingConfig.base_url) !== comparableBaseUrl(modelEffectiveBase))) summary.endpointsAttached += 1;
       if (connectionId && (!replacing || existingConfig.provider_connection_id !== connectionId)) summary.profilesLinked += 1;
       else if (!connectionId) summary.warnings.push(`Profile ${profileName} has no API key in the imported document or encrypted Provider Connection.`);
     }
@@ -627,6 +684,12 @@ async function importProviders(body) {
   // strip credential fields before it touches disk.
   atomicJson(importedSnapshotFile, { importedAt: new Date().toISOString(), document: redactDocument(document) });
   return summary;
+}
+
+async function reconcileLastImportedProviders() {
+  const snapshot = readJson(importedSnapshotFile, null);
+  if (!snapshot?.document || typeof snapshot.document !== "object") return null;
+  return importProviders({ document: snapshot.document, overwrite: false });
 }
 
 function portableBaseUrl(value) {
@@ -1672,7 +1735,7 @@ function managerPage() {
 <nav class="tabs-wrap" aria-label="بخش‌های مدیریت"><div class="tabs" role="tablist"><button class="tab" type="button" role="tab" data-tab="overview">نمای کلی</button><button class="tab" type="button" role="tab" data-tab="providers">Import / Export</button><button class="tab" type="button" role="tab" data-tab="proxy">Proxy</button><button class="tab" type="button" role="tab" data-tab="local">GGUF محلی</button><button class="tab" type="button" role="tab" data-tab="endpoint">OpenAI Endpoint</button><button class="tab" type="button" role="tab" data-tab="tests">تست مدل‌ها</button></div></nav>
 <main>
 <section class="panel" data-panel="overview"><div class="section-head"><div><h2>نمای کلی مدل‌ها</h2><p>وضعیت Profileها و مدل‌های محلی این نصب را یک‌جا مشاهده کنید.</p></div></div><div class="grid"><div class="card span-4"><h2>وضعیت نصب</h2><div id="profile-limit" class="status ok"></div><p class="muted">این پنل فقط در مرورگر Pair‌شده فعال است. هیچ کلید یا tokenی در URL، خروجی یا log قرار نمی‌گیرد.</p></div><div class="card span-8"><div class="metric-grid"><div class="metric"><span>LLM Profile</span><strong id="profile-count">—</strong></div><div class="metric"><span>مدل GGUF نصب‌شده</span><strong id="local-count">—</strong></div><div class="metric"><span>وضعیت llama.cpp</span><strong id="runtime-state">—</strong></div></div></div><div class="card span-12"><h2>LLM Profileهای موجود</h2><p class="muted">پس از ایجاد یا Import مدل، برای مشاهده آن در Canvas صفحه اصلی را تازه‌سازی کنید.</p><div id="profiles" class="scroll"></div></div></div></section>
-<section class="panel" data-panel="providers" hidden><div class="section-head"><div><h2>درون‌ریزی و برون‌ریزی</h2><p>فایل JSON ارائه‌دهنده را با انتقال خودکار و امن secretها مدیریت کنید.</p></div></div><div class="grid"><div class="card span-7"><h2>Import JSON</h2><div class="notice">هر API key موجود در فایل به‌طور خودکار داخل Provider Connection رمزنگاری‌شده ذخیره و به همه مدل‌های مرتبط متصل می‌شود. کلید هرگز وارد snapshot، export یا log نمی‌شود. Context خالی یا کمتر از ۱۶٬۳۸۴ نیز خودکار به حداقل قابل‌اجرای OpenHands تبدیل می‌شود.</div><label for="file">فایل JSON ارائه‌دهنده</label><input id="file" type="file" accept="application/json,.json"><label class="check"><input id="overwrite" type="checkbox"><span>به‌روزرسانی تنظیمات Profileهای هم‌نام؛ اتصال credential بدون این گزینه نیز انجام می‌شود</span></label><div class="actions"><button id="import" type="button">درون‌ریزی و بررسی</button></div><div id="io-status" class="status" role="status"></div></div><div class="card span-5"><h2>Export امن</h2><p class="muted">Providerها و Profileها با قالب سازگار و مقدار <code>secretsIncluded=false</code> دریافت می‌شوند.</p><div class="actions"><button class="alt" id="export" type="button">دریافت JSON بدون secret</button></div></div></div></section>
+<section class="panel" data-panel="providers" hidden><div class="section-head"><div><h2>درون‌ریزی و برون‌ریزی</h2><p>فایل JSON ارائه‌دهنده را با انتقال خودکار و امن secretها مدیریت کنید.</p></div></div><div class="grid"><div class="card span-7"><h2>Import JSON</h2><div class="notice">هر API key موجود در فایل به‌طور خودکار داخل Provider Connection رمزنگاری‌شده ذخیره و به همه مدل‌های مرتبط متصل می‌شود. endpoint هر مدل نیز به همان Profile الصاق و شناسه‌های بدون Provider به قالب LiteLLM مثل mistral/codestral-2508 تبدیل می‌شوند. کلید هرگز وارد snapshot، export یا log نمی‌شود. Context خالی یا کمتر از ۱۶٬۳۸۴ نیز خودکار به حداقل قابل‌اجرای OpenHands تبدیل می‌شود.</div><label for="file">فایل JSON ارائه‌دهنده</label><input id="file" type="file" accept="application/json,.json"><label class="check"><input id="overwrite" type="checkbox"><span>به‌روزرسانی تنظیمات Profileهای هم‌نام؛ اتصال credential بدون این گزینه نیز انجام می‌شود</span></label><div class="actions"><button id="import" type="button">درون‌ریزی و بررسی</button></div><div id="io-status" class="status" role="status"></div></div><div class="card span-5"><h2>Export امن</h2><p class="muted">Providerها و Profileها با قالب سازگار و مقدار <code>secretsIncluded=false</code> دریافت می‌شوند.</p><div class="actions"><button class="alt" id="export" type="button">دریافت JSON بدون secret</button></div></div></div></section>
 <section class="panel" data-panel="proxy" hidden><div class="section-head"><div><h2>مسیر خروجی و Proxy</h2><p>اتصال مستقیم، fallback خودکار یا عبور اجباری از Proxy را انتخاب کنید.</p></div></div><div class="grid"><div class="card span-7"><div class="notice">در حالت Proxy، سرویس واسط prompt، پاسخ و هدر احراز هویت ارائه‌دهنده را دریافت می‌کند؛ فقط از واسط مورد اعتماد استفاده کنید.</div><div class="form-grid"><div class="field full"><label for="mode">حالت پیش‌فرض</label><select id="mode"><option value="direct">اتصال مستقیم</option><option value="direct-fallback">مستقیم، سپس Proxy در صورت خطا</option><option value="proxy-only">فقط Proxy</option></select></div><div class="field full"><label for="template">URL template</label><input id="template" class="ltr" spellcheck="false"></div></div><div class="actions"><button id="save-proxy" type="button">ذخیره تنظیمات</button><button class="alt" id="apply-openrouter" type="button">اعمال روی همه مدل‌های OpenRouter</button></div><div id="proxy-status" class="status" role="status"></div></div><div class="card span-5"><h2>Routeهای فعال</h2><div id="routes"></div></div></div></section>
 <section class="panel" data-panel="local" hidden><div class="section-head"><div><h2>مدل محلی GGUF و llama.cpp</h2><p>مدل مناسب را جست‌وجو، فایل را انتخاب و دانلود قابل‌ادامه را مدیریت کنید.</p></div></div><div class="grid"><div class="card span-12"><div id="resources" class="notice"></div></div><div class="card span-6"><h2>۱. جست‌وجوی Hugging Face</h2><p class="muted">فیلترها اختیاری‌اند. Quantization و سقف حجم روی فایل‌های واقعی هر repository نیز بررسی می‌شوند.</p><div class="form-grid"><div class="field full"><label for="hf-search">عبارت جست‌وجو</label><input id="hf-search" class="ltr" placeholder="coder instruct persian"></div><div class="field"><label for="hf-family">خانواده یا معماری</label><input id="hf-family" class="ltr" placeholder="Qwen"></div><div class="field"><label for="hf-params">اندازه پارامتر</label><input id="hf-params" class="ltr" placeholder="7B"></div><div class="field"><label for="hf-quant">Quantization</label><input id="hf-quant" class="ltr" placeholder="Q4_K_M"></div><div class="field"><label for="hf-max-gb">حداکثر حجم فایل (GB)</label><input id="hf-max-gb" type="number" min="0.1" max="20" step="0.1" placeholder="8"></div><div class="field"><label for="hf-license">License</label><input id="hf-license" class="ltr" placeholder="apache-2.0"></div><div class="field"><label for="hf-language">زبان</label><input id="hf-language" class="ltr" placeholder="fa"></div><div class="field"><label for="hf-author">سازنده یا سازمان</label><input id="hf-author" class="ltr" placeholder="bartowski"></div><div class="field third"><label for="hf-sort">مرتب‌سازی</label><select id="hf-sort"><option value="downloads">بیشترین دانلود</option><option value="likes">بیشترین پسند</option><option value="updated">جدیدترین</option></select></div><div class="field third"><label for="hf-limit">تعداد</label><input id="hf-limit" type="number" value="20" min="1" max="50"></div></div><div class="actions"><button id="hf-search-button" type="button">جست‌وجوی مدل‌های GGUF</button></div><div id="hf-search-status" class="status" role="status"></div><div id="hf-search-results" class="scroll"></div></div>
 <div class="card span-6" id="install-card"><h2>۲. انتخاب فایل و نصب</h2><div class="notice">حداقل Context موردنیاز OpenHands برابر ۱۶٬۳۸۴ است. مقدار کمتر در API و Profile به‌طور خودکار اصلاح می‌شود.</div><div class="form-grid"><div class="field"><label for="gguf-name">نام کوتاه</label><input id="gguf-name" class="ltr" placeholder="qwen-small"></div><div class="field"><label for="gguf-revision">Revision</label><input id="gguf-revision" class="ltr" value="main"></div><div class="field full"><label for="gguf-url">URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" spellcheck="false" placeholder="https://huggingface.co/.../resolve/main/model.gguf"></div><div class="field full"><label for="gguf-repo">یا Hugging Face repository</label><input id="gguf-repo" class="ltr" spellcheck="false" placeholder="Qwen/Qwen3-GGUF"></div><div class="field full"><label for="gguf-file">نام فایل GGUF</label><input id="gguf-file" class="ltr" spellcheck="false" placeholder="model-Q4_K_M.gguf"></div></div><div class="actions"><button id="hf-files" class="alt" type="button">نمایش فایل‌های منطبق مخزن</button></div><div id="hf-results" class="scroll"></div><div class="form-grid"><div class="field full"><label for="gguf-sha">SHA-256 اختیاری</label><input id="gguf-sha" class="ltr" spellcheck="false" maxlength="64"></div><div class="field third"><label for="gguf-context">Context</label><input id="gguf-context" type="number" value="16384" min="16384"></div><div class="field third"><label for="gguf-threads">CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div class="field third"><label for="gguf-parallel">Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div><div class="field"><label for="gguf-batch">Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div class="field"><label for="gguf-ubatch">Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label class="check"><input id="gguf-mmap" type="checkbox" checked><span>استفاده از mmap برای کاهش مصرف RAM</span></label><label class="check"><input id="gguf-mlock" type="checkbox"><span>قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</span></label><label class="check"><input id="gguf-replace" type="checkbox"><span>نصب مجدد و جایگزینی مدل هم‌نام</span></label><div class="actions"><button id="install" type="button">دانلود یا ادامه دانلود و نصب</button><button id="save-local-config" class="alt" type="button">ذخیره تنظیمات</button><button id="stop-local" class="ghost" type="button">توقف مدل</button><button id="cancel-install" class="warn" type="button" disabled>لغو امن دانلود</button></div><div id="install-status" class="status" role="status"></div></div>
@@ -1692,7 +1755,7 @@ async function refresh(){
  const partials=s.local.partialDownloads.length?"<p class=muted>دانلودهای قابل ادامه: "+s.local.partialDownloads.map(p=>esc(p.name)+" ("+bytes(p.bytes)+")").join("، ")+"</p>":"";q("locals").innerHTML=partials+(s.local.models.length?"<table><tr><th>مدل</th><th>حجم/نسخه</th><th>تنظیمات</th><th>عملیات</th></tr>"+s.local.models.map(m=>"<tr><td class=ltr>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✅":" ⏳"):"")+(m.partialBytes?"<br><small>دانلود ناقص: "+bytes(m.partialBytes)+"</small>":"")+"</td><td>"+bytes(m.bytes)+"<br>GGUF v"+esc(m.gguf?.version||"?")+"</td><td>ctx "+esc(m.contextLength)+"<br>threads "+esc(m.threads)+" / batch "+esc(m.batchSize)+"</td><td><button data-start="+esc(m.name)+">اجرا</button><button class=alt data-edit="+esc(m.name)+">تنظیم</button><button class=warn data-delete="+esc(m.name)+">حذف</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>");
  document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{try{show("install-status","در حال اجرای مدل…");await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});await refresh()}catch(e){show("install-status",e.message,false)}});document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>loadLocalForm(s.local.models.find(m=>m.name===b.dataset.edit)));document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=async()=>{if(!confirm("مدل "+b.dataset.delete+"، فایل GGUF و Profile مدیریت‌شده آن حذف شود؟"))return;try{await call("/local/models/"+encodeURIComponent(b.dataset.delete),{method:"DELETE"});show("install-status","مدل حذف شد.");await refresh()}catch(e){show("install-status",e.message,false)}})
 }
-q("import").onclick=()=>busy(q("import"),async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,overwrite:q("overwrite").checked})});const message="شناسایی: "+r.detectedModels+" مدل؛ جدید: "+r.profilesCreated+"؛ از قبل موجود: "+r.profilesExisting+"؛ متصل به Provider: "+r.profilesLinked+"؛ به‌روزشده: "+r.profilesUpdated+"؛ Context اصلاح‌شده: "+r.contextWindowsAdjusted+"؛ اتصال جدید: "+r.connectionsCreated+"؛ اتصال به‌روزشده: "+r.connectionsUpdated+"؛ ردشده: "+r.skipped+(r.warnings.length?" — "+r.warnings.join(" | "):"");show("io-status",message,r.skipped===0);await refresh()}catch(e){show("io-status",e.message,false)}});
+q("import").onclick=()=>busy(q("import"),async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,overwrite:q("overwrite").checked})});const message="شناسایی: "+r.detectedModels+" مدل؛ جدید: "+r.profilesCreated+"؛ از قبل موجود: "+r.profilesExisting+"؛ متصل به Provider: "+r.profilesLinked+"؛ به‌روزشده: "+r.profilesUpdated+"؛ Provider مدل اصلاح‌شده: "+r.modelsNormalized+"؛ endpoint متصل‌شده: "+r.endpointsAttached+"؛ Context اصلاح‌شده: "+r.contextWindowsAdjusted+"؛ اتصال جدید: "+r.connectionsCreated+"؛ اتصال به‌روزشده: "+r.connectionsUpdated+"؛ ردشده: "+r.skipped+(r.warnings.length?" — "+r.warnings.join(" | "):"");show("io-status",message,r.skipped===0);await refresh()}catch(e){show("io-status",e.message,false)}});
 q("export").onclick=()=>busy(q("export"),async()=>{try{const d=await call("/providers/export");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:"application/json"}));a.download="openhands-providers.json";a.hidden=true;document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);show("io-status","فایل امن بدون API key ساخته شد.")}catch(e){show("io-status",e.message,false)}});
 q("save-proxy").onclick=()=>busy(q("save-proxy"),async()=>{try{await call("/proxy",{method:"PUT",body:JSON.stringify({defaultMode:q("mode").value,proxyTemplate:q("template").value})});show("proxy-status","ذخیره شد؛ Routeهای موجود نیز به حالت جدید تغییر کردند.");refresh()}catch(e){show("proxy-status",e.message,false)}});
 q("apply-openrouter").onclick=()=>busy(q("apply-openrouter"),async()=>{try{if(!state)await refresh();const profiles=(state?.profiles||[]).filter(p=>String(p.model||"").startsWith("openrouter/")).map(p=>p.name);const r=await call("/proxy/apply",{method:"POST",body:JSON.stringify({routeId:"openrouter",basePath:"/api/v1",provider:"openrouter",profiles})});show("proxy-status",r.updated.length+" Profile و "+r.connectionsUpdated.length+" اتصال به Route متصل شد؛ "+r.skipped.length+" مورد رد شد.");refresh()}catch(e){show("proxy-status",e.message,false)}});
@@ -1798,6 +1861,12 @@ server.listen(managerPort, "127.0.0.1", async () => {
   console.log(`[openhands-model-manager] Internal manager listening on 127.0.0.1:${managerPort}`);
   try { await migrateSeededOpenRouterProfiles(); }
   catch (error) { console.error(`[openhands-model-manager] Seeded profile route migration skipped: ${publicError(error)}`); }
+  try {
+    const reconciled = await reconcileLastImportedProviders();
+    if (reconciled && (reconciled.modelsNormalized || reconciled.endpointsAttached || reconciled.profilesLinked)) {
+      console.log(`[openhands-model-manager] Reconciled last import: ${reconciled.modelsNormalized} model provider(s), ${reconciled.endpointsAttached} endpoint(s), ${reconciled.profilesLinked} connection link(s).`);
+    }
+  } catch (error) { console.error(`[openhands-model-manager] Last provider import reconciliation skipped: ${publicError(error)}`); }
   try {
     const repaired = await reconcileMinimumContextWindows();
     if (repaired) console.log(`[openhands-model-manager] Raised ${repaired} profile context window(s) to ${MIN_CONTEXT_WINDOW}.`);

@@ -11,6 +11,7 @@ const labDir = path.dirname(fileURLToPath(import.meta.url));
 const managerScript = path.resolve(labDir, "..", "openhands-model-manager.mjs");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openhands-provider-lab-"));
 const importedApiKey = "LAB_ONLY_SECRET_MUST_NEVER_LEAK_92741";
+const mistralApiKey = "LAB_CODESTRAL_SECRET_MUST_NEVER_LEAK_48150";
 const failedApiKey = "LAB_FAILED_SECRET_MUST_NEVER_LEAK_61802";
 const sessionKey = "lab-session-key";
 const profileWrites = [];
@@ -28,12 +29,27 @@ const profiles = new Map([
     config: { model: "anthropic/claude-test", max_input_tokens: 16384 },
     api_key_set: false,
   }],
+  ["codestral-imported", {
+    config: { model: "codestral-2508", max_input_tokens: 16384 },
+    api_key_set: false,
+  }],
+  ["codestral-startup", {
+    config: { model: "codestral-2508", max_input_tokens: 16384 },
+    api_key_set: false,
+  }],
 ]);
 let connection = {
   id: "connection-openrouter-existing",
   display_name: "Legacy OpenRouter Label",
   provider: "openrouter",
   base_url: "https://openrouter.ai/api/v1",
+  api_key_set: true,
+};
+let mistralConnection = {
+  id: "connection-mistral-existing",
+  display_name: "Mistral AI",
+  provider: "mistral",
+  base_url: "https://api.mistral.ai/v1",
   api_key_set: true,
 };
 
@@ -78,11 +94,22 @@ const backend = http.createServer(async (req, res) => {
     }
   }
   if (req.method === "GET" && url.pathname === "/api/llm/provider-connections") {
-    json(res, 200, [connection]);
+    json(res, 200, [connection, ...(mistralConnection ? [mistralConnection] : [])]);
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/llm/provider-connections") {
     const body = await requestBody(req);
+    if (body.provider === "mistral") {
+      mistralConnection = {
+        id: "connection-mistral-created",
+        display_name: body.display_name,
+        provider: body.provider,
+        base_url: body.base_url,
+        api_key_set: Boolean(body.api_key),
+      };
+      json(res, 201, mistralConnection);
+      return;
+    }
     json(res, 400, { error: `Rejected api_key:${body.api_key}` });
     return;
   }
@@ -91,6 +118,13 @@ const backend = http.createServer(async (req, res) => {
     connectionPatches.push(body);
     connection = { ...connection, base_url: body.base_url, api_key_set: Boolean(body.api_key) };
     json(res, 200, connection);
+    return;
+  }
+  if (req.method === "PATCH" && url.pathname === `/api/llm/provider-connections/${mistralConnection.id}`) {
+    const body = await requestBody(req);
+    connectionPatches.push(body);
+    mistralConnection = { ...mistralConnection, base_url: body.base_url, api_key_set: Boolean(body.api_key) };
+    json(res, 200, mistralConnection);
     return;
   }
   json(res, 404, { error: `Unhandled laboratory endpoint: ${req.method} ${url.pathname}` });
@@ -134,6 +168,21 @@ try {
   const toolsDir = path.join(tempDir, "tools");
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(toolsDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "providers-last-import.json"), `${JSON.stringify({
+    importedAt: "2026-10-01T00:00:00.000Z",
+    document: {
+      providers: [{
+        name: "Mistral AI",
+        provider: "mistral",
+        models: [{
+          id: "codestral-2508",
+          profileName: "codestral-startup",
+          endpoint: "https://api.mistral.ai/v1",
+          apiKey: null,
+        }],
+      }],
+    },
+  }, null, 2)}\n`);
 
   child = spawn(process.execPath, [managerScript], {
     env: {
@@ -153,6 +202,10 @@ try {
   child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   await waitForReady(managerPort, child);
+  const startupCodestral = profiles.get("codestral-startup")?.config || {};
+  assert.equal(startupCodestral.model, "mistral/codestral-2508", "startup must reconcile the last redacted import snapshot");
+  assert.equal(startupCodestral.provider_connection_id, mistralConnection.id);
+  assert.match(startupCodestral.base_url, new RegExp(`/routes/mistral/v1$`));
 
   const document = {
     providers: [{
@@ -187,16 +240,48 @@ try {
   assert.equal(profiles.get("anthropic-untouched").config.provider_connection_id, undefined, "unrelated providers must remain untouched");
   assert.ok(profileWrites.length >= 3, "laboratory must observe real profile API writes");
 
+  const codestralResponse = await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/providers/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-session-api-key": sessionKey },
+    body: JSON.stringify({
+      document: {
+        providers: [{
+          name: "Mistral AI",
+          provider: "mistral",
+          models: [{
+            id: "codestral-2508",
+            name: "Codestral",
+            profileName: "codestral-imported",
+            endpoint: "https://api.mistral.ai/v1",
+            apiKey: mistralApiKey,
+          }],
+        }],
+      },
+      overwrite: false,
+    }),
+  });
+  const codestralResult = await codestralResponse.json();
+  assert.equal(codestralResponse.status, 200, JSON.stringify(codestralResult));
+  assert.equal(codestralResult.connectionsUpdated, 1, "model-level credential must rotate the encrypted Mistral connection");
+  assert.equal(codestralResult.modelsNormalized, 1, "bare Codestral model ID must receive its LiteLLM provider prefix");
+  assert.equal(codestralResult.endpointsAttached, 1, "model-level endpoint must be attached without overwrite");
+  assert.equal(codestralResult.profilesLinked, 1, "Codestral profile must use the encrypted connection");
+  const codestral = profiles.get("codestral-imported")?.config || {};
+  assert.equal(codestral.model, "mistral/codestral-2508");
+  assert.equal(codestral.provider_connection_id, mistralConnection.id);
+  assert.match(codestral.base_url, new RegExp(`/routes/mistral/v1$`));
+
   const snapshot = fs.readFileSync(path.join(dataDir, "providers-last-import.json"), "utf8");
-  assert.ok(!snapshot.includes(importedApiKey), "redacted import snapshot must not contain the API key");
-  assert.ok(!stdout.includes(importedApiKey) && !stderr.includes(importedApiKey), "manager logs must not contain the API key");
+  assert.ok(!snapshot.includes(importedApiKey) && !snapshot.includes(mistralApiKey), "redacted import snapshot must not contain API keys");
+  assert.ok(!stdout.includes(importedApiKey) && !stderr.includes(importedApiKey)
+    && !stdout.includes(mistralApiKey) && !stderr.includes(mistralApiKey), "manager logs must not contain API keys");
 
   const exportResponse = await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/providers/export`, {
     headers: { "x-session-api-key": sessionKey },
   });
   const exported = await exportResponse.text();
   assert.equal(exportResponse.status, 200, exported);
-  assert.ok(!exported.includes(importedApiKey), "safe export must not contain the API key");
+  assert.ok(!exported.includes(importedApiKey) && !exported.includes(mistralApiKey), "safe export must not contain API keys");
   assert.equal(JSON.parse(exported).secretsIncluded, false);
 
   const failedResponse = await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/providers/import`, {
@@ -230,8 +315,13 @@ try {
       exportSecretLeak: false,
       logSecretLeak: false,
       failedCredentialErrorRedacted: true,
+      bareModelProviderNormalized: true,
+      modelLevelEndpointAttached: true,
+      modelLevelCredentialEncrypted: true,
+      startupSnapshotReconciled: true,
     },
     summary: result,
+    codestralSummary: codestralResult,
   };
   fs.writeFileSync(path.join(tempDir, "provider-import-result.json"), `${JSON.stringify(evidence, null, 2)}\n`);
   process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);

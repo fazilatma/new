@@ -9,7 +9,11 @@
     "snapshotSecretLeak": false,
     "exportSecretLeak": false,
     "logSecretLeak": false,
-    "failedCredentialErrorRedacted": true
+    "failedCredentialErrorRedacted": true,
+    "bareModelProviderNormalized": true,
+    "modelLevelEndpointAttached": true,
+    "modelLevelCredentialEncrypted": true,
+    "startupSnapshotReconciled": true
   },
   "summary": {
     "providers": 1,
@@ -20,11 +24,31 @@
     "profilesExisting": 1,
     "profilesLinked": 3,
     "profilesUpdated": 0,
+    "modelsNormalized": 0,
+    "endpointsAttached": 1,
     "contextWindowsAdjusted": 0,
     "skipped": 0,
     "profileNames": [
       "openrouter-existing-a",
       "openrouter-new"
+    ],
+    "warnings": []
+  },
+  "codestralSummary": {
+    "providers": 1,
+    "detectedModels": 1,
+    "connectionsCreated": 0,
+    "connectionsUpdated": 1,
+    "profilesCreated": 0,
+    "profilesExisting": 1,
+    "profilesLinked": 1,
+    "profilesUpdated": 0,
+    "modelsNormalized": 1,
+    "endpointsAttached": 1,
+    "contextWindowsAdjusted": 0,
+    "skipped": 0,
+    "profileNames": [
+      "codestral-imported"
     ],
     "warnings": []
   }
